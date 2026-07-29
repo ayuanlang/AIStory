@@ -176,6 +176,9 @@ def _resolve_poll_credentials(job: Dict[str, Any]) -> Tuple[str, str, str, str]:
     if "grsai" in provider_l and not query_endpoint:
         root = base_url or "https://grsaiapi.com"
         query_endpoint = f"{root.rstrip('/')}/v1/draw/result"
+    if ("nukoai" in provider_l or "nokoai" in provider_l or "nokuai" in provider_l) and not query_endpoint:
+        root = base_url or "https://www.nukoai.com/api/ext/v1"
+        query_endpoint = f"{root.rstrip('/')}/videos" if not root.rstrip("/").lower().endswith("/videos") else root
 
     return api_key, query_endpoint, provider, base_url
 

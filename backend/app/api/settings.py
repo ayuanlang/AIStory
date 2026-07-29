@@ -1931,7 +1931,81 @@ def _extract_provider_key_pool_from_row(row: SystemAPISetting) -> List[str]:
 
 
 def _normalize_system_provider_name(provider: Any) -> str:
-    return str(provider or "").strip().lower()
+    raw = str(provider or "").strip().lower()
+    # Canonical provider code for NukoAi (reject common typos / short forms).
+    if raw in {
+        "nukoai",
+        "nokoai",
+        "nokuai",
+        "nuko",
+        "noko",
+        "noku",
+        "nuko ai",
+        "noko ai",
+        "noku ai",
+    }:
+        return "nukoai"
+    return raw
+
+
+def _canonicalize_nukoai_provider_rows(db: Session) -> int:
+    """Rewrite legacy NukoAi provider spellings to canonical ``nukoai``.
+
+    Returns number of rows updated across system_api_settings + provider_key_pool.
+    """
+    aliases = {
+        "nokoai",
+        "nokuai",
+        "nuko",
+        "noko",
+        "noku",
+        "nuko ai",
+        "noko ai",
+        "noku ai",
+    }
+    updated = 0
+
+    try:
+        setting_rows = db.query(SystemAPISetting).filter(SystemAPISetting.provider.isnot(None)).all()
+        for row in setting_rows:
+            raw = str(getattr(row, "provider", "") or "").strip().lower()
+            if raw in aliases:
+                row.provider = "nukoai"
+                updated += 1
+    except Exception as exc:
+        logger.warning("Failed to canonicalize nukoai system_api_settings providers: %s", exc)
+
+    try:
+        if _db_has_table(db, "provider_key_pool"):
+            canonical = db.query(ProviderKeyPool).filter(ProviderKeyPool.provider == "nukoai").first()
+            alias_rows = (
+                db.query(ProviderKeyPool)
+                .filter(func.lower(func.trim(ProviderKeyPool.provider)).in_(sorted(aliases)))
+                .all()
+            )
+            for row in alias_rows:
+                if canonical is None:
+                    row.provider = "nukoai"
+                    if not str(getattr(row, "provider_alias", "") or "").strip():
+                        row.provider_alias = "NukoAi"
+                    canonical = row
+                    updated += 1
+                    continue
+                # Merge keys into the canonical pool, then drop the alias row.
+                existing_keys = _normalize_api_keys(getattr(canonical, "api_keys", None) or [])
+                alias_keys = _normalize_api_keys(getattr(row, "api_keys", None) or [])
+                merged = list(dict.fromkeys([*existing_keys, *alias_keys]))
+                canonical.api_keys = merged
+                if not str(getattr(canonical, "provider_alias", "") or "").strip():
+                    canonical.provider_alias = str(getattr(row, "provider_alias", "") or "").strip() or "NukoAi"
+                db.delete(row)
+                updated += 1
+            if canonical is not None and not str(getattr(canonical, "provider_alias", "") or "").strip():
+                canonical.provider_alias = "NukoAi"
+    except Exception as exc:
+        logger.warning("Failed to canonicalize nukoai provider_key_pool providers: %s", exc)
+
+    return updated
 
 
 def _allows_empty_sync_model(category: str, model: str) -> bool:
@@ -7310,7 +7384,7 @@ def create_system_setting_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    provider = (payload.provider or "").strip()
+    provider = _normalize_system_provider_name(payload.provider)
     if not provider:
         raise HTTPException(status_code=400, detail="provider is required")
 
@@ -7432,6 +7506,10 @@ def update_system_setting_for_manage(
         raise HTTPException(status_code=400, detail="System_* categories are reserved for infrastructure settings and cannot be managed as AIGC System API")
 
     update_data = payload.dict(exclude_unset=True) if hasattr(payload, "dict") else payload.model_dump(exclude_unset=True)
+    if "provider" in update_data:
+        update_data["provider"] = _normalize_system_provider_name(update_data.get("provider"))
+        if not update_data["provider"]:
+            raise HTTPException(status_code=400, detail="provider cannot be empty")
     billing_keys = (
         "billing_unit_type",
         "billing_cost",
@@ -10288,7 +10366,7 @@ def create_provider_key_pool(
 
     record = ProviderKeyPool(
         provider=provider_name,
-        provider_alias=str(payload.provider_alias or "").strip() or None,
+        provider_alias=str(payload.provider_alias or "").strip() or ("NukoAi" if provider_name == "nukoai" else None),
         api_keys=keys,
         strategy=strategy,
         weights=weights,
@@ -10336,6 +10414,8 @@ def update_provider_key_pool(
             if dup:
                 raise HTTPException(status_code=409, detail=f"Provider '{new_provider}' already exists in key pool")
             record.provider = new_provider
+            if new_provider == "nukoai" and not str(getattr(record, "provider_alias", "") or "").strip():
+                record.provider_alias = "NukoAi"
     if payload.api_keys is not None:
         record.api_keys = _normalize_api_keys(payload.api_keys)
     if payload.provider_alias is not None:

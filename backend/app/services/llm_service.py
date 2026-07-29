@@ -3,6 +3,8 @@ import httpx
 import json
 import asyncio
 import time
+import contextvars
+from contextlib import contextmanager
 from typing import Dict, Any, List, Optional, AsyncGenerator, Tuple
 import logging
 import os
@@ -12,6 +14,14 @@ from app.core.config import settings
 from app.core.prompts.skills_loader import get_skill_prompt_text
 
 logger = logging.getLogger(__name__)
+
+# Request-scoped LLM audit fields (__resolved_user_id / __resolved_action / ...).
+# Set around chat/stream entry points so _safe_log_json can fill llm_call_logs columns
+# even when individual log payloads omit "config".
+_llm_log_trace_ctx: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+    "llm_log_trace_ctx",
+    default=None,
+)
 
 # Some providers (e.g., Ark/Doubao) can take several minutes for large prompts.
 # Default timeout set to 300s, with env override support.
@@ -202,6 +212,18 @@ If the user's request is not clear or does not require a tool, return an empty p
 """
 
 class LLMService:
+    @contextmanager
+    def _llm_log_trace(self, extra_config: Optional[Dict[str, Any]]):
+        """Bind audit/tracing fields from extra_config for nested _safe_log_json calls."""
+        if not isinstance(extra_config, dict) or not extra_config:
+            yield
+            return
+        token = _llm_log_trace_ctx.set(extra_config)
+        try:
+            yield
+        finally:
+            _llm_log_trace_ctx.reset(token)
+
     def _should_drop_runtime_override_key(
         self,
         key: Any,
@@ -393,8 +415,18 @@ class LLMService:
                 model = payload.get("request", {}).get("model", "")
             api_url = payload.get("url") or payload.get("request", {}).get("url", "")
             
-            # Find tracing context natively in the payload or config
-            cfg = payload.get("config", {}) or payload.get("request", {}).get("config", {})
+            # Find tracing context natively in the payload, request.config, or request-scoped ctx
+            cfg_raw = payload.get("config")
+            if not isinstance(cfg_raw, dict):
+                req_obj = payload.get("request")
+                cfg_raw = req_obj.get("config") if isinstance(req_obj, dict) else None
+            if not isinstance(cfg_raw, dict):
+                cfg_raw = {}
+            trace_ctx = _llm_log_trace_ctx.get() or {}
+            if not isinstance(trace_ctx, dict):
+                trace_ctx = {}
+            # Explicit log payload/config wins over ambient request-scoped trace.
+            cfg = {**trace_ctx, **cfg_raw}
             user_id = payload.get("user_id") or cfg.get("__resolved_user_id")
             user_name = payload.get("user_name") or cfg.get("__resolved_user_name")
             project_id = payload.get("project_id") or cfg.get("__resolved_project_id")
@@ -2168,58 +2200,59 @@ class LLMService:
         extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
         provider = extra_config.get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
 
-        try:
-            if str(provider or "").strip().lower() in {"kie", "n1n", "zlhub", "apiyi", "apiyi2", "openai", "deepseek", "grsai", "zimaocloud"}:
-                logger.info(
-                    "chat_completion routing: provider=%s model=%s mode=stream_aggregate",
-                    provider,
-                    model,
-                )
-                return await self._collect_openai_compatible_text_response(
-                    base_url,
-                    api_key,
-                    model,
-                    messages,
-                    extra_config,
-                )
+        with self._llm_log_trace(extra_config):
+            try:
+                if str(provider or "").strip().lower() in {"kie", "n1n", "zlhub", "apiyi", "apiyi2", "openai", "deepseek", "grsai", "zimaocloud"}:
+                    logger.info(
+                        "chat_completion routing: provider=%s model=%s mode=stream_aggregate",
+                        provider,
+                        model,
+                    )
+                    return await self._collect_openai_compatible_text_response(
+                        base_url,
+                        api_key,
+                        model,
+                        messages,
+                        extra_config,
+                    )
 
-            full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
-            raw_content = self._extract_text_from_response(full_response)
-            content = self._sanitize_response_content(raw_content)
-            finish_reason = self._extract_finish_reason_from_response(full_response)
-            usage = self._normalize_provider_llm_usage(full_response.get("usage", {}))
-            token_limit_hints = full_response.get("_token_limit_hints", []) if isinstance(full_response, dict) else []
-            extraction_diagnostics = self._build_extraction_diagnostics(full_response)
-            self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if extra_config else None,
-                "provider": provider,
-                "model": model,
-                "response": {
+                full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
+                raw_content = self._extract_text_from_response(full_response)
+                content = self._sanitize_response_content(raw_content)
+                finish_reason = self._extract_finish_reason_from_response(full_response)
+                usage = self._normalize_provider_llm_usage(full_response.get("usage", {}))
+                token_limit_hints = full_response.get("_token_limit_hints", []) if isinstance(full_response, dict) else []
+                extraction_diagnostics = self._build_extraction_diagnostics(full_response)
+                self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if extra_config else None,
+                    "provider": provider,
+                    "model": model,
+                    "response": {
+                        "content": content,
+                        "finish_reason": finish_reason,
+                    }
+                })
+                return {
+                    "raw_content": raw_content,
                     "content": content,
+                    "usage": usage,
                     "finish_reason": finish_reason,
+                    "token_limit_hints": token_limit_hints,
+                    "extraction_diagnostics": extraction_diagnostics,
                 }
-            })
-            return {
-                "raw_content": raw_content,
-                "content": content,
-                "usage": usage,
-                "finish_reason": finish_reason,
-                "token_limit_hints": token_limit_hints,
-                "extraction_diagnostics": extraction_diagnostics,
-            }
-        except AmbiguousLLMTransportError:
-            raise
-        except Exception as e:
-            if str(provider or "").strip().lower() in {"kie", "n1n"} and self._is_ambiguous_submit_transport_error(e):
-                self._raise_ambiguous_submit_error(provider, model, e, base_url)
-            logger.error(f"LLM Raw Completion failed: {e}")
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
-                "provider": provider,
-                "model": model,
-                "request": {"url": base_url, "messages": messages, "config": extra_config},
-                "error": str(e),
-                "human_summary": self._vendor_failed_message(provider, e)
-            })
-            raise Exception(self._vendor_failed_message(provider, e))
+            except AmbiguousLLMTransportError:
+                raise
+            except Exception as e:
+                if str(provider or "").strip().lower() in {"kie", "n1n"} and self._is_ambiguous_submit_transport_error(e):
+                    self._raise_ambiguous_submit_error(provider, model, e, base_url)
+                logger.error(f"LLM Raw Completion failed: {e}")
+                self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
+                    "provider": provider,
+                    "model": model,
+                    "request": {"url": base_url, "messages": messages, "config": extra_config},
+                    "error": str(e),
+                    "human_summary": self._vendor_failed_message(provider, e)
+                })
+                raise Exception(self._vendor_failed_message(provider, e))
 
     def _to_positive_int(self, value: Any, default: int = 0) -> int:
         try:
@@ -2460,52 +2493,53 @@ class LLMService:
         if not extra_config.get("request_id"):
             extra_config["request_id"] = uuid.uuid4().hex[:12]
 
-        try:
-            extra_config_stream = dict(extra_config or {})
-            extra_config_stream["stream"] = True
+        with self._llm_log_trace(extra_config):
+            try:
+                extra_config_stream = dict(extra_config or {})
+                extra_config_stream["stream"] = True
 
-            async for chunk in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config_stream):
-                parts_count += 1
-                if chunk.get("type") == "token":
-                    raw_content += str(chunk.get("content", ""))
-                elif chunk.get("type") == "done":
-                    if chunk.get("usage"):
-                        usage = self._normalize_provider_llm_usage(chunk.get("usage"))
-                    if chunk.get("finish_reason"):
-                        finish_reason = chunk["finish_reason"]
+                async for chunk in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config_stream):
+                    parts_count += 1
+                    if chunk.get("type") == "token":
+                        raw_content += str(chunk.get("content", ""))
+                    elif chunk.get("type") == "done":
+                        if chunk.get("usage"):
+                            usage = self._normalize_provider_llm_usage(chunk.get("usage"))
+                        if chunk.get("finish_reason"):
+                            finish_reason = chunk["finish_reason"]
 
-        except AmbiguousLLMTransportError:
-            raise
-        except Exception as _collect_exc:
-            logger.warning(
-                "[_collect_openai_compatible_text_response] request failed; partial content parts=%d err=%s",
-                parts_count, _collect_exc,
+            except AmbiguousLLMTransportError:
+                raise
+            except Exception as _collect_exc:
+                logger.warning(
+                    "[_collect_openai_compatible_text_response] request failed; partial content parts=%d err=%s",
+                    parts_count, _collect_exc,
+                )
+                finish_reason = "incomplete"
+
+            content = self._sanitize_response_content(raw_content)
+            usage = self._normalize_provider_llm_usage(usage)
+            logger.info(
+                "[COLLECT] parts=%d raw_len=%d content_len=%d finish_reason=%s usage=%s snippet=%r",
+                parts_count, len(raw_content), len(content or ""), finish_reason, usage, (content or "")[:120],
             )
-            finish_reason = "incomplete"
-
-        content = self._sanitize_response_content(raw_content)
-        usage = self._normalize_provider_llm_usage(usage)
-        logger.info(
-            "[COLLECT] parts=%d raw_len=%d content_len=%d finish_reason=%s usage=%s snippet=%r",
-            parts_count, len(raw_content), len(content or ""), finish_reason, usage, (content or "")[:120],
-        )
-        provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
-        self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if extra_config else None,
-            "provider": provider,
-            "category": str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper(),
-            "model": model,
-            "response": {
+            provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
+            self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if extra_config else None,
+                "provider": provider,
+                "category": str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper(),
+                "model": model,
+                "response": {
+                    "content": content,
+                    "finish_reason": finish_reason,
+                    "usage": usage,
+                }
+            })
+            return {
+                "raw_content": raw_content,
                 "content": content,
-                "finish_reason": finish_reason,
                 "usage": usage,
+                "finish_reason": finish_reason,
             }
-        })
-        return {
-            "raw_content": raw_content,
-            "content": content,
-            "usage": usage,
-            "finish_reason": finish_reason,
-        }
 
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
         # Internally use streaming to bypass gateway 60s/300s idle timeouts
@@ -2676,29 +2710,30 @@ class LLMService:
              # If provider is Doubao/Grsai Video, we might need specific payload.
              pass
 
-        try:
-             # Using the generic call which handles standard messages
-             response = await self._call_openai_compatible(base_url, api_key, model, messages, extra_config)
-             
-             # Unpack
-             content = response.get("reply", "")
-             usage = response.get("usage", {})
-             finish_reason = response.get("finish_reason")
-             if not content and "content" in response:
-                 content = response["content"] # fallback if _call_openai_compatible returns typical dict
-             
-             return {"content": content, "usage": usage, "finish_reason": finish_reason}
+        with self._llm_log_trace(extra_config):
+            try:
+                 # Using the generic call which handles standard messages
+                 response = await self._call_openai_compatible(base_url, api_key, model, messages, extra_config)
+                 
+                 # Unpack
+                 content = response.get("reply", "")
+                 usage = response.get("usage", {})
+                 finish_reason = response.get("finish_reason")
+                 if not content and "content" in response:
+                     content = response["content"] # fallback if _call_openai_compatible returns typical dict
+                 
+                 return {"content": content, "usage": usage, "finish_reason": finish_reason}
 
-        except Exception as e:
-             logger.error(f"Generate Content Error: {e}")
-             provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
-             self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
-                 "provider": provider,
-                 "model": model,
-                 "error": str(e),
-                 "human_summary": self._vendor_failed_message(provider, e)
-             })
-             return {"content": f"Error: {self._vendor_failed_message(provider, e)}", "usage": {}, "finish_reason": None}
+            except Exception as e:
+                 logger.error(f"Generate Content Error: {e}")
+                 provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
+                 self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
+                     "provider": provider,
+                     "model": model,
+                     "error": str(e),
+                     "human_summary": self._vendor_failed_message(provider, e)
+                 })
+                 return {"content": f"Error: {self._vendor_failed_message(provider, e)}", "usage": {}, "finish_reason": None}
 
     async def _raw_llm_request(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> str:
         data = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
@@ -2920,6 +2955,7 @@ class LLMService:
             "model": model,
             "headers": redacted_headers,
             "payload": payload,
+            "config": extra_config,
             "message_count": len(messages or []),
             "prompt_chars": prompt_chars,
             "max_tokens": effective_max_tokens,
@@ -3414,6 +3450,7 @@ class LLMService:
                 "Authorization": "Bearer ***REDACTED***",
             },
             "payload": payload,
+            "config": extra_config,
             "message_count": len(messages or []),
             "stream": True,
             "resolved_source": (extra_config or {}).get("__resolved_source"),

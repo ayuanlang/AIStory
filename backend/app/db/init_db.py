@@ -2683,6 +2683,124 @@ def init_system_api_settings(db):
     except Exception as e:
         logger.warning(f"Failed to seed default vidu billing rules: {e}")
 
+    # Seed NukoAi video adapter models (names are account-specific; these match a common SD2.0 lineup).
+    nukoai_provider = "nukoai"
+    nukoai_base_url = "https://www.nukoai.com/api/ext/v1"
+    from app.services.modality_utils import migrate_legacy_modality_string
+
+    nukoai_model_items = [
+        ("NukoAi SD 2.0 720P_官转", "SD 2.0 720P_官转"),
+        ("NukoAi SD2.0 480P", "SD2.0 480P"),
+        ("NukoAi SD2.0 720P", "SD2.0 720P"),
+        ("NukoAi SD2.0 Fast 480P", "SD2.0 Fast 480P"),
+        ("NukoAi SD2.0 Fast 720P", "SD2.0 Fast 720P"),
+    ]
+    existing_nukoai_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.provider == nukoai_provider,
+        SystemAPISetting.category == "Video",
+    ).all()
+    existing_nukoai_models = {
+        str(row.model or "").strip().lower()
+        for row in existing_nukoai_rows
+    }
+    nukoai_shared_api_key = ""
+    for row in existing_nukoai_rows:
+        if (row.api_key or "").strip():
+            nukoai_shared_api_key = row.api_key.strip()
+            break
+
+    nukoai_added = 0
+    for display_name, model_name in nukoai_model_items:
+        key = str(model_name or "").strip().lower()
+        if not key or key in existing_nukoai_models:
+            continue
+        db.add(SystemAPISetting(
+            name=display_name,
+            category="Video",
+            provider=nukoai_provider,
+            api_key=nukoai_shared_api_key,
+            base_url=nukoai_base_url,
+            model=model_name,
+            base_model="seedance-2",
+            modality=migrate_legacy_modality_string("text-to-video,image-to-video"),
+            config={
+                "provider_api_key_strategy": "random",
+                "poll_interval_seconds": 4,
+                "poll_timeout_seconds": 600,
+                "endpoint": f"{nukoai_base_url}/videos",
+                "query_endpoint": f"{nukoai_base_url}/videos",
+                "poll_only": True,
+                "notes": "NukoAi poll-only. Confirm model via GET /models for this account.",
+            },
+            is_active=False,
+        ))
+        existing_nukoai_models.add(key)
+        nukoai_added += 1
+
+    if nukoai_added > 0:
+        db.commit()
+        logger.info("Seeded %s nukoai video models into system_api_settings", nukoai_added)
+    else:
+        logger.info("System nukoai video settings already initialized")
+
+    # Unify legacy NukoAi provider spellings (nokuai/nokoai/...) -> nukoai.
+    try:
+        aliases = {
+            "nokoai",
+            "nokuai",
+            "nuko",
+            "noko",
+            "noku",
+            "nuko ai",
+            "noko ai",
+            "noku ai",
+        }
+        updated = 0
+        for row in db.query(SystemAPISetting).filter(SystemAPISetting.provider.isnot(None)).all():
+            raw = str(row.provider or "").strip().lower()
+            if raw in aliases:
+                row.provider = "nukoai"
+                updated += 1
+
+        try:
+            from sqlalchemy import func as sa_func
+
+            canonical = db.query(ProviderKeyPool).filter(ProviderKeyPool.provider == "nukoai").first()
+            alias_rows = (
+                db.query(ProviderKeyPool)
+                .filter(sa_func.lower(sa_func.trim(ProviderKeyPool.provider)).in_(sorted(aliases)))
+                .all()
+            )
+            for row in alias_rows:
+                if canonical is None:
+                    row.provider = "nukoai"
+                    if not str(getattr(row, "provider_alias", "") or "").strip():
+                        row.provider_alias = "NukoAi"
+                    canonical = row
+                    updated += 1
+                    continue
+                existing_keys = []
+                for src in (getattr(canonical, "api_keys", None) or [], getattr(row, "api_keys", None) or []):
+                    if isinstance(src, list):
+                        existing_keys.extend([str(k).strip() for k in src if str(k).strip()])
+                    elif isinstance(src, str) and src.strip():
+                        existing_keys.append(src.strip())
+                canonical.api_keys = list(dict.fromkeys(existing_keys))
+                if not str(getattr(canonical, "provider_alias", "") or "").strip():
+                    canonical.provider_alias = str(getattr(row, "provider_alias", "") or "").strip() or "NukoAi"
+                db.delete(row)
+                updated += 1
+            if canonical is not None and not str(getattr(canonical, "provider_alias", "") or "").strip():
+                canonical.provider_alias = "NukoAi"
+        except Exception as pool_err:
+            logger.warning("Failed to canonicalize nukoai provider_key_pool: %s", pool_err)
+
+        if updated > 0:
+            db.commit()
+            logger.info("Canonicalized %s NukoAi provider rows to nukoai", updated)
+    except Exception as e:
+        logger.warning(f"Failed to canonicalize NukoAi provider names: {e}")
+
 
 def init_initial_data():
     db = SessionLocal()

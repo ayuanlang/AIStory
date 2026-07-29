@@ -20,8 +20,10 @@ from app.services.model_invocation_billing import _apply_llm_routing_to_billing_
 from app.services.project_access import _require_project_access
 from app.services.prompt_resolve import _resolve_prompt_text
 from app.services.script_analysis_llm_config import (
+    _inject_llm_call_log_trace,
     _inject_project_creativity_temperature,
     _resolve_script_analysis_dropdown_llm_config,
+    _script_analysis_action_label,
 )
 from app.services.shot_generation_prompts import (
     _build_shot_prompts,
@@ -135,6 +137,13 @@ async def execute_ai_generate_shots(
             llm_config,
             project.global_info,
             context="ai_generate_shots",
+        )
+        llm_config = _inject_llm_call_log_trace(
+            llm_config,
+            user_id=current_user_id,
+            user_name=getattr(current_user, "username", None),
+            project_id=getattr(project, "id", None) or getattr(scene, "project_id", None),
+            action_name=_script_analysis_action_label(context="ai_generate_shots"),
         )
         
         # Billing (Reserve for token pricing)
@@ -486,6 +495,13 @@ async def execute_ai_regenerate_shots(
             llm_config,
             project.global_info,
             context="ai_regenerate_shots",
+        )
+        llm_config = _inject_llm_call_log_trace(
+            llm_config,
+            user_id=current_user_id,
+            user_name=getattr(current_user, "username", None),
+            project_id=getattr(project, "id", None) or getattr(scene, "project_id", None),
+            action_name=_script_analysis_action_label(context="ai_regenerate_shots"),
         )
 
         provider = llm_config.get("provider")

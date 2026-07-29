@@ -87,8 +87,10 @@ from app.services.script_analysis_flow.subject_index_name_align import (
     apply_text_name_replacements,
 )
 from app.services.script_analysis_llm_config import (
+    _inject_llm_call_log_trace,
     _inject_project_creativity_temperature,
     _resolve_script_analysis_dropdown_llm_config,
+    _script_analysis_action_label,
 )
 from app.services.shot_generation_prompts import _build_project_prompt_context
 from app.services.soft_delete import _active_entity_clause
@@ -808,6 +810,26 @@ async def execute_analyze_scene(
             config,
             request.project_metadata,
             context="analyze_scene",
+        )
+        _trace_project_id = None
+        try:
+            _trace_project_id = (
+                int(getattr(request, "project_id", None) or 0)
+                or int(getattr(request_episode, "project_id", None) or 0)
+                or None
+            )
+        except Exception:
+            _trace_project_id = None
+        config = _inject_llm_call_log_trace(
+            config,
+            user_id=current_user_id,
+            user_name=getattr(current_user_snapshot, "username", None),
+            project_id=_trace_project_id,
+            action_name=_script_analysis_action_label(
+                stage_key=getattr(stage_ctx, "stage_key", None),
+                context="analyze_scene",
+                function_name=getattr(request, "function_name", None),
+            ),
         )
         logger.info(
             "[analyze_scene][routing] source=dropdown_priority function_name=%s requested_system_api_id=%s selected_system_api_id=%s fallback_ids=%s provider=%s model=%s episode_id=%s trace_id=%s",

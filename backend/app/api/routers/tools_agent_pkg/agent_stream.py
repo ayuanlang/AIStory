@@ -75,6 +75,15 @@ async def stream_agent_command(
     if not resolved_llm_config or not resolved_llm_config.get("api_key"):
         raise HTTPException(status_code=400, detail="No active LLM API config found. Please check your LLM settings.")
 
+    from app.services.script_analysis_llm_config import _inject_llm_call_log_trace
+    resolved_llm_config = _inject_llm_call_log_trace(
+        resolved_llm_config,
+        user_id=current_user_id,
+        user_name=current_user_username,
+        project_id=(request.context or {}).get("project_id"),
+        action_name="Agent对话",
+    )
+
     provider = resolved_llm_config.get("provider")
     model = resolved_llm_config.get("model")
 
@@ -160,6 +169,14 @@ async def stream_system_management_agent_command(
     )
     if not resolved_llm_config or not resolved_llm_config.get("api_key"):
         raise HTTPException(status_code=400, detail="No active LLM API config found. Please check your LLM settings.")
+
+    from app.services.script_analysis_llm_config import _inject_llm_call_log_trace
+    resolved_llm_config = _inject_llm_call_log_trace(
+        resolved_llm_config,
+        user_id=current_user_id,
+        user_name=current_user_username,
+        action_name="系统管理Agent",
+    )
 
     provider = resolved_llm_config.get("provider")
     model = resolved_llm_config.get("model")

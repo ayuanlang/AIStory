@@ -25,6 +25,7 @@ It separates two different callback layers:
 | RunningHub | Yes | Yes | Current standard-model integration now forwards upstream `webhookUrl` for image and video when explicitly configured or when AIStory auto-assigns a public callback URL. Submit-then-query polling remains in place as the fallback completion path. |
 | APIYI | No | No upstream callback in current adapter | Current image adapter uses synchronous `/v1/images/generations`. Current video adapter uses submit-and-poll style `/v1/videos` handling. |
 | Doubao | No | Yes | Current image path uses synchronous `/images/generations` style submission. Current video path forwards `callback_url` when present. |
+| NukoAi | N/A | No (poll-only) | Submit `POST /videos` then poll `GET /videos/{id}`. Adapter ignores pure-callback mode; no upstream webhook. |
 
 ## AIStory Internal Callback Layer
 
@@ -78,6 +79,13 @@ This means the frontend may still observe callback-based completion from AIStory
 - Current image adapter uses `/images/generations` request path and does not attach callback.
 - Current video adapter forwards `callback_url` when present.
 
+### NukoAi
+
+- Video only. Upstream is **poll-only** (`POST /videos` → `GET /videos/{id}`); no upstream webhook.
+- AIStory adapter always submits then polls (default interval 3–5s) and **never** returns `pending_callback`, even when global pure-callback mode is enabled.
+- Reference images/audio/video must be public `https` URLs (provider downloads them server-side).
+- Model / duration / ratio are account-specific; configure `SystemAPISetting.model` from the provider `GET /models` list.
+
 ## Practical Rule Of Thumb
 
 When debugging callback behavior, check in this order:
@@ -91,4 +99,5 @@ When debugging callback behavior, check in this order:
 
 - GRSAI image upstream callback forwarding has been enabled in code.
 - RunningHub standard-model image/video upstream callback forwarding is now enabled through `webhookUrl`, with polling fallback preserved.
+- NukoAi video is integrated as a hard poll-only provider (no upstream callback).
 - Failure propagation has been improved so moderation-like upstream errors can surface with richer detail, including `failure_reason` when available.

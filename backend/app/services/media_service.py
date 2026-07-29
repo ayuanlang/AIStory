@@ -694,6 +694,8 @@ class MediaGenerationService:
         normalized = raw.lower()
         if normalized in {"lzhbu", "zlhub", "zhonglian"}:
             return "zlhub"
+        if normalized in {"nukoai", "nokoai", "nokuai", "nuko", "noko", "noku", "nuko ai", "noko ai", "noku ai"}:
+            return "nukoai"
         return raw or "unknown"
 
     def _vendor_failed_message(self, provider: Any, reason: Any) -> str:
@@ -2608,9 +2610,69 @@ class MediaGenerationService:
             or "volces.com" in str(endpoint or base or "").lower()
             or "/contents/generations/tasks" in str(endpoint or "").lower()
         )
+        is_nukoai = (
+            "nukoai" in provider_l
+            or "nokoai" in provider_l
+            or "nokuai" in provider_l
+            or "nukoai.com" in str(endpoint or base or "").lower()
+        )
 
         try:
             raw_payload: Dict[str, Any] = {}
+
+            if is_nukoai:
+                root = base or "https://www.nukoai.com/api/ext/v1"
+                if not endpoint:
+                    endpoint = f"{root.rstrip('/')}/videos" if not root.rstrip("/").lower().endswith("/videos") else root
+                elif endpoint.startswith("/"):
+                    endpoint = f"{root.rstrip('/')}{endpoint}"
+                elif "nukoai.com" in endpoint.lower() and not endpoint.rstrip("/").lower().endswith("/videos") and "/videos/" not in endpoint.lower():
+                    endpoint = f"{endpoint.rstrip('/')}/videos"
+                headers = {
+                    "Authorization": f"Bearer {stable_key}",
+                    "X-API-Key": stable_key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                }
+                target_url = f"{endpoint.rstrip('/')}/{urllib.parse.quote(stable_task_id)}"
+
+                def _nuko_get(use_proxy: bool = True):
+                    kwargs = {"headers": headers, "timeout": 30, "verify": False}
+                    if not use_proxy:
+                        kwargs["proxies"] = {"http": None, "https": None}
+                    return requests.get(target_url, **kwargs)
+
+                try:
+                    resp = _nuko_get(True)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    resp = _nuko_get(False)
+                if resp is None or getattr(resp, "status_code", None) not in {200, 201}:
+                    return {"error": f"nukoai_http_{getattr(resp, 'status_code', None)}"}
+                try:
+                    raw_payload = resp.json() if resp.content else {}
+                except Exception:
+                    return {"error": "nukoai_invalid_json"}
+                if not isinstance(raw_payload, dict):
+                    return {"error": "nukoai_invalid_payload"}
+                if raw_payload.get("success") is False:
+                    err = raw_payload.get("error") if isinstance(raw_payload.get("error"), dict) else {}
+                    msg = str(err.get("message") or err.get("code") or "nukoai_query_failed").strip()
+                    return _pack(raw_payload, status="failed", error=msg)
+
+                data_obj = raw_payload.get("data") if isinstance(raw_payload.get("data"), dict) else {}
+                status = _normalize_status(
+                    data_obj.get("status")
+                    or data_obj.get("state")
+                    or raw_payload.get("status")
+                    or raw_payload.get("state")
+                )
+                url = str(data_obj.get("video_url") or data_obj.get("videoUrl") or "").strip() or _pick_url(raw_payload)
+                if url and status not in {"failed", "canceled"}:
+                    return _pack(raw_payload, status="succeeded", url=url)
+                if status in {"failed", "canceled"}:
+                    err_msg = str(data_obj.get("error_message") or data_obj.get("errorMessage") or status).strip()
+                    return _pack(raw_payload, status=status, error=err_msg)
+                return _pack(raw_payload, status=status or "running", pending=True)
 
             if is_runninghub:
                 if not endpoint:
@@ -4722,6 +4784,15 @@ class MediaGenerationService:
             "lzhbu": "zlhub",
             "lzhbu video": "zlhub",
             "zhonglian": "zlhub",
+            "nukoai": "nukoai",
+            "nuko ai": "nukoai",
+            "nuko": "nukoai",
+            "nokoai": "nukoai",
+            "noko ai": "nukoai",
+            "noko": "nukoai",
+            "nokuai": "nukoai",
+            "noku ai": "nukoai",
+            "noku": "nukoai",
         }
         if raw in mapping:
             return mapping[raw]
@@ -4794,7 +4865,9 @@ class MediaGenerationService:
         elif resolved_category == "Image" and "/v1/images/generations" in endpoint_hint_lower:
             runtime_activation = "image_openai_compatible"
         elif resolved_category == "Video" and ("/v1/videos" in endpoint_hint_lower or "/v1/chat/completions" in endpoint_hint_lower):
-            runtime_activation = "video_openai_compatible"
+            # NukoAi uses `/api/ext/v1/videos` but is a native poll API, not OpenAI-compatible.
+            if resolved_provider != "nukoai":
+                runtime_activation = "video_openai_compatible"
         elif resolved_category == "Voice" and "voice-clone" in endpoint_hint_lower:
             runtime_activation = "audio_runninghub_compatible"
         elif resolved_category == "Voice" and any(token in endpoint_hint_lower for token in ("tts", "text-to-speech", "voice", "/audio")):
@@ -5217,6 +5290,20 @@ class MediaGenerationService:
         keyframes: Optional[List[str]],
         negative_prompt: Optional[str],
     ) -> Optional[Dict[str, Any]]:
+        # Native poll-only providers must not be stolen by OpenAI-compatible activation
+        # (e.g. NukoAi endpoint paths also contain "/v1/videos").
+        normalized = self._normalize_provider_name(provider, "Video")
+        if normalized == "nukoai":
+            return await self._handle_nukoai_generation(
+                "video",
+                prompt,
+                active_config,
+                reference_image_url,
+                last_frame_url=last_frame_url,
+                duration=duration,
+                aspect_ratio=aspect_ratio,
+                negative_prompt=negative_prompt,
+            )
         runtime_activation = self._get_runtime_activation(active_config)
         if runtime_activation == "video_openai_compatible":
             return await self._handle_apiyi_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
@@ -5320,6 +5407,7 @@ class MediaGenerationService:
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
             "runninghub": {"base_url": "https://www.runninghub.cn", "model": "runninghub-model"},
             "pixelmove": {"base_url": "https://portal.pixelmove.ai", "model": "seedance-2.0"},
+            "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
         }
 
         rows = self._system_setting_query(session, category=category).order_by(SystemAPISetting.id.asc()).all()
@@ -5664,6 +5752,17 @@ class MediaGenerationService:
                     )
                 if effective_provider == "pixelmove":
                     return await self._handle_pixelmove_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        last_frame_url=effective_last_frame_url,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                    )
+                if effective_provider == "nukoai":
+                    return await self._handle_nukoai_generation(
                         "video",
                         prompt,
                         active_config,
@@ -6262,6 +6361,7 @@ class MediaGenerationService:
             "wanxiang": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis", "model": "wanx2.1-i2v-plus"},
             "happyhorse": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis", "model": "happyhorse-1.0-r2v"},
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
+            "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
         }
 
         try:
@@ -10390,6 +10490,542 @@ class MediaGenerationService:
                 }
 
         return {"error": f"Pixelmove polling timeout after {poll_timeout_seconds}s", "submit_failed": False}
+
+    async def _handle_nukoai_generation(
+        self,
+        gen_type,
+        prompt,
+        config,
+        ref_image=None,
+        last_frame_url=None,
+        duration=5,
+        aspect_ratio=None,
+        negative_prompt: Optional[str] = None,
+    ):
+        """NukoAi video API: submit then poll only (no upstream webhook)."""
+        if str(gen_type or "").strip().lower() != "video":
+            return {"error": "NukoAi currently supports video generation only", "submit_failed": True}
+
+        api_key = str(config.get("api_key") or config.get("clientApiKey") or "").strip()
+        if not api_key:
+            return {"error": "No NukoAi API Key", "submit_failed": True}
+
+        tool_conf = config.get("config", {}) or {}
+        # Poll-only provider: ignore pure-callback even when the runner injects it.
+        # Returning pending_callback would hang forever because NukoAi has no webhook.
+        if tool_conf.get("_pure_callback_mode"):
+            logger.info("NukoAi ignoring pure_callback_mode | reason=poll_only_provider")
+
+        base_url = str(
+            config.get("base_url")
+            or tool_conf.get("base_url")
+            or "https://www.nukoai.com/api/ext/v1"
+        ).strip().rstrip("/")
+        # Allow admin to paste either root or .../videos as base_url.
+        if base_url.lower().endswith("/videos"):
+            root_url = base_url[: -len("/videos")].rstrip("/")
+            submit_url = base_url
+        else:
+            root_url = base_url
+            submit_url = str(tool_conf.get("endpoint") or f"{root_url}/videos").strip() or f"{root_url}/videos"
+        query_root = str(tool_conf.get("query_endpoint") or tool_conf.get("poll_endpoint") or f"{root_url}/videos").strip()
+        if "{task" in query_root.lower():
+            poll_template = query_root
+            query_endpoint_base = query_root.split("{")[0].rstrip("/")
+        else:
+            query_endpoint_base = query_root.rstrip("/")
+            if query_endpoint_base.lower().endswith("/videos"):
+                pass
+            else:
+                query_endpoint_base = f"{query_endpoint_base}/videos"
+            poll_template = f"{query_endpoint_base}/{{task_id}}"
+
+        model = str(
+            config.get("model")
+            or tool_conf.get("model")
+            or config.get("base_model")
+            or tool_conf.get("base_model")
+            or tool_conf.get("runtime_model")
+            or ""
+        ).strip()
+        if not model:
+            return {
+                "error": "NukoAi model is required (set SystemAPISetting.model to a name from GET /models)",
+                "submit_failed": True,
+            }
+        if not str(api_key).strip().startswith("sk_"):
+            logger.warning(
+                "NukoAi api key does not look like sk_... | model=%s key_prefix=%s",
+                model,
+                (api_key[:6] + "...") if api_key else None,
+            )
+
+        prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+        prompt_text = str(prompt_text or "").strip()
+        if not prompt_text:
+            return {"error": "NukoAi prompt is required", "submit_failed": True}
+        if len(prompt_text) > 5000:
+            prompt_text = prompt_text[:5000]
+
+        allowed_duration_values = self._normalize_duration_enum_values(
+            tool_conf.get("durations_seconds")
+            or tool_conf.get("duration_values")
+            or tool_conf.get("allowed_durations")
+            or tool_conf.get("durations")
+            or []
+        )
+        try:
+            duration_in = int(float(duration if duration is not None else (tool_conf.get("duration") or 4)))
+        except Exception:
+            duration_in = 4
+        if duration_in <= 0:
+            duration_in = 4
+        if allowed_duration_values:
+            mapped_duration = self._map_duration_nearest(duration_in, allowed_duration_values, prefer_higher_on_tie=False)
+            if mapped_duration is not None:
+                duration_in = int(mapped_duration)
+
+        allowed_ratios = self._normalize_str_list(
+            tool_conf.get("ratios")
+            or tool_conf.get("allowed_ratios")
+            or tool_conf.get("aspect_ratios")
+            or []
+        )
+        normalized_ratio = self._normalize_aspect_ratio_value(
+            aspect_ratio or tool_conf.get("ratio") or tool_conf.get("aspect_ratio")
+        )
+        if not normalized_ratio or normalized_ratio == "adaptive":
+            normalized_ratio = "16:9"
+        if allowed_ratios and normalized_ratio not in allowed_ratios:
+            # Prefer exact match; otherwise keep requested and let provider validate.
+            for candidate in allowed_ratios:
+                if str(candidate).strip() == normalized_ratio:
+                    normalized_ratio = str(candidate).strip()
+                    break
+
+        def _https_public_only(urls: List[str]) -> List[str]:
+            out: List[str] = []
+            for item in urls:
+                text = str(item or "").strip()
+                if not text.lower().startswith("https://"):
+                    continue
+                if self._is_public_http_url(text) and text not in out:
+                    out.append(text)
+            return out
+
+        image_refs = self._resolve_ref_list_for_api(
+            ref_image,
+            force_data_uri_for_local=True,
+            prefer_public_upload_url=True,
+        )
+        image_refs = _https_public_only([u for u in image_refs if u])
+
+        extra_image_refs = self._resolve_ref_list_for_api(
+            tool_conf.get("image_urls")
+            or tool_conf.get("referenceImageUrls")
+            or tool_conf.get("reference_image_urls")
+            or [],
+            force_data_uri_for_local=True,
+            prefer_public_upload_url=True,
+        )
+        for item in _https_public_only([u for u in extra_image_refs if u]):
+            if item not in image_refs:
+                image_refs.append(item)
+
+        last_frame_resolved = None
+        if last_frame_url:
+            last_frame_resolved = self._resolve_ref_for_api(
+                last_frame_url,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+            )
+            last_https = _https_public_only([last_frame_resolved] if last_frame_resolved else [])
+            last_frame_resolved = last_https[0] if last_https else None
+            if last_frame_resolved and last_frame_resolved not in image_refs:
+                image_refs.append(last_frame_resolved)
+
+        image_refs = image_refs[:9]
+
+        video_refs = _https_public_only(
+            self._normalize_str_list(
+                tool_conf.get("video_urls")
+                or tool_conf.get("referenceVideoUrls")
+                or tool_conf.get("reference_video_urls")
+                or []
+            )
+        )[:3]
+        audio_refs = _https_public_only(
+            self._normalize_str_list(
+                tool_conf.get("audio_urls")
+                or tool_conf.get("referenceAudioUrls")
+                or tool_conf.get("reference_audio_urls")
+                or []
+            )
+        )[:3]
+
+        video_durations_raw = tool_conf.get("video_durations") or tool_conf.get("videoDurations") or []
+        video_durations: List[float] = []
+        if isinstance(video_durations_raw, list) and video_refs:
+            for idx, _url in enumerate(video_refs):
+                if idx >= len(video_durations_raw):
+                    break
+                try:
+                    video_durations.append(float(video_durations_raw[idx]))
+                except Exception:
+                    continue
+
+        payload: Dict[str, Any] = {
+            "prompt": prompt_text,
+            "model": model,
+            "duration": int(duration_in),
+            "ratio": normalized_ratio,
+        }
+        if image_refs:
+            payload["image_urls"] = image_refs
+        if audio_refs:
+            payload["audio_urls"] = audio_refs
+        if video_refs:
+            payload["video_urls"] = video_refs
+            if video_durations:
+                payload["video_durations"] = video_durations[: len(video_refs)]
+
+        poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        # Docs recommend 3–5s; default 4s for poll-only latency balance.
+        poll_interval_seconds = 4
+        try:
+            if tool_conf.get("poll_timeout_seconds") is not None:
+                poll_timeout_seconds = min(900, max(60, int(tool_conf.get("poll_timeout_seconds"))))
+        except Exception:
+            poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        try:
+            if tool_conf.get("poll_interval_seconds") is not None:
+                poll_interval_seconds = max(3, min(10, int(tool_conf.get("poll_interval_seconds"))))
+        except Exception:
+            poll_interval_seconds = 4
+
+        base_metadata = {
+            "provider": "nukoai",
+            "model": model,
+            "prompt": prompt_text,
+            "submit_url": submit_url,
+            "query_endpoint": query_endpoint_base,
+            "poll_only": True,
+            "duration": int(duration_in),
+            "ratio": normalized_ratio,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "X-API-Key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        def _extract_error_message(data: Any, fallback: str = "") -> str:
+            if not isinstance(data, dict):
+                return fallback
+            err = data.get("error")
+            if isinstance(err, dict):
+                msg = str(err.get("message") or err.get("msg") or "").strip()
+                code = str(err.get("code") or "").strip()
+                if msg and code:
+                    return f"{code}: {msg}"
+                if msg:
+                    return msg
+                if code:
+                    return code
+            if isinstance(err, str) and err.strip():
+                return err.strip()
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            for key in ("error_message", "errorMessage", "message", "msg"):
+                text = str(data.get(key) or inner.get(key) or "").strip()
+                if text:
+                    return text
+            return fallback
+
+        def _extract_task_payload(data: Any) -> Dict[str, Any]:
+            if not isinstance(data, dict):
+                return {}
+            inner = data.get("data")
+            if isinstance(inner, dict):
+                return inner
+            return data
+
+        def _extract_task_id(data: Any) -> Optional[str]:
+            payload_obj = _extract_task_payload(data)
+            for key in ("id", "task_id", "taskId"):
+                val = payload_obj.get(key) if isinstance(payload_obj, dict) else None
+                if val:
+                    return str(val).strip()
+            if isinstance(data, dict):
+                for key in ("id", "task_id", "taskId"):
+                    val = data.get(key)
+                    if val:
+                        return str(val).strip()
+            return None
+
+        def _extract_status(data: Any) -> str:
+            payload_obj = _extract_task_payload(data)
+            raw_status = ""
+            if isinstance(payload_obj, dict):
+                raw_status = str(payload_obj.get("status") or payload_obj.get("state") or "").strip()
+            if not raw_status and isinstance(data, dict):
+                raw_status = str(data.get("status") or data.get("state") or "").strip()
+            return raw_status.lower()
+
+        def _extract_video_url(data: Any) -> Optional[str]:
+            payload_obj = _extract_task_payload(data)
+            candidates = []
+            if isinstance(payload_obj, dict):
+                candidates.extend(
+                    [
+                        payload_obj.get("video_url"),
+                        payload_obj.get("videoUrl"),
+                        payload_obj.get("url"),
+                        payload_obj.get("result_url"),
+                        payload_obj.get("resultUrl"),
+                    ]
+                )
+            if isinstance(data, dict):
+                candidates.extend(
+                    [
+                        data.get("video_url"),
+                        data.get("videoUrl"),
+                        data.get("url"),
+                    ]
+                )
+            for item in candidates:
+                text_item = str(item or "").strip()
+                if text_item.startswith(("http://", "https://")):
+                    return text_item
+            return None
+
+        submit_timeouts = _media_submit_timeout_pair(
+            connect_timeout=20,
+            io_timeout=max(120, int(tool_conf.get("submit_timeout_seconds") or 120)),
+        )
+        submit_retries = 2
+        try:
+            submit_retries = max(1, min(4, int(tool_conf.get("submit_retries") or 2)))
+        except Exception:
+            submit_retries = 2
+
+        submit_resp = None
+        last_submit_error: Optional[Exception] = None
+        for submit_attempt in range(1, submit_retries + 1):
+            try:
+                submit_resp = await asyncio.to_thread(
+                    requests.post,
+                    submit_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=submit_timeouts,
+                    verify=False,
+                )
+                last_submit_error = None
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as submit_exc:
+                last_submit_error = submit_exc
+                logger.warning(
+                    "NukoAi submit network error | attempt=%s/%s url=%s error=%s",
+                    submit_attempt,
+                    submit_retries,
+                    submit_url,
+                    submit_exc,
+                )
+                if submit_attempt < submit_retries:
+                    await asyncio.sleep(min(8, 2 * submit_attempt))
+                    continue
+            except Exception as submit_exc:
+                logger.exception("NukoAi submit unexpected error | url=%s", submit_url)
+                return {
+                    "error": f"NukoAi submit failed: {submit_exc}",
+                    "submit_failed": True,
+                    "details": {"submit_url": submit_url, "model": model},
+                }
+
+        if submit_resp is None:
+            return {
+                "error": f"NukoAi submit timed out/unreachable after {submit_retries} attempts: {last_submit_error}",
+                "submit_failed": True,
+                "details": {
+                    "submit_url": submit_url,
+                    "model": model,
+                    "timeout": submit_timeouts,
+                },
+            }
+
+        submit_data: Dict[str, Any] = {}
+        if submit_resp.text:
+            try:
+                parsed_submit = submit_resp.json()
+                submit_data = parsed_submit if isinstance(parsed_submit, dict) else {}
+            except Exception:
+                submit_data = {}
+
+        if submit_resp.status_code not in [200, 201, 202] or submit_data.get("success") is False:
+            err_msg = _extract_error_message(
+                submit_data,
+                fallback=(submit_resp.text or "")[:500] or f"HTTP {submit_resp.status_code}",
+            )
+            return {
+                "error": f"NukoAi submit failed: {err_msg}",
+                "submit_failed": True,
+                "details": submit_data or (submit_resp.text or "")[:1000],
+            }
+
+        task_id = _extract_task_id(submit_data)
+        if not task_id:
+            direct_url = _extract_video_url(submit_data)
+            if direct_url:
+                return {"url": direct_url, "metadata": {**base_metadata, "raw": submit_data}}
+            return {
+                "error": "NukoAi submit succeeded but task id missing",
+                "submit_failed": True,
+                "details": submit_data,
+            }
+
+        task_id_callback = tool_conf.get("_provider_task_id_callback")
+        if callable(task_id_callback):
+            try:
+                callback_result = task_id_callback(str(task_id))
+                if asyncio.iscoroutine(callback_result):
+                    await callback_result
+            except Exception as callback_err:
+                logger.warning("NukoAi task_id_callback_failed | task_id=%s error=%s", task_id, callback_err)
+
+        provider_payload_callback = tool_conf.get("_provider_payload_callback")
+        if callable(provider_payload_callback):
+            try:
+                payload_cb_result = provider_payload_callback(
+                    {
+                        "provider": "nukoai",
+                        "task_id": str(task_id),
+                        "submit_raw": submit_data,
+                        "query_endpoint": query_endpoint_base,
+                    }
+                )
+                if asyncio.iscoroutine(payload_cb_result):
+                    await payload_cb_result
+            except Exception as payload_cb_err:
+                logger.warning("NukoAi provider_payload_callback_failed | task_id=%s error=%s", task_id, payload_cb_err)
+
+        poll_url = (
+            poll_template.replace("{taskId}", urllib.parse.quote(task_id))
+            .replace("{task_id}", urllib.parse.quote(task_id))
+            .replace("{id}", urllib.parse.quote(task_id))
+        )
+
+        logger.info(
+            "NukoAi poll-only generation started | task_id=%s model=%s duration=%s ratio=%s poll_interval=%ss",
+            task_id,
+            model,
+            duration_in,
+            normalized_ratio,
+            poll_interval_seconds,
+        )
+
+        max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+        for attempt in range(1, max_attempts + 1):
+            await asyncio.sleep(poll_interval_seconds)
+            try:
+                poll_resp = await asyncio.to_thread(
+                    requests.get,
+                    poll_url,
+                    headers=headers,
+                    timeout=30,
+                    verify=False,
+                )
+            except requests.exceptions.Timeout:
+                continue
+            except Exception:
+                if attempt == max_attempts:
+                    return {
+                        "error": "NukoAi polling exception",
+                        "submit_failed": False,
+                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
+                    }
+                continue
+
+            if poll_resp.status_code == 404:
+                continue
+            if poll_resp.status_code not in [200, 201]:
+                if attempt == max_attempts:
+                    return {
+                        "error": f"NukoAi polling failed {poll_resp.status_code}",
+                        "submit_failed": False,
+                        "details": (poll_resp.text or "")[:1000],
+                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
+                    }
+                continue
+
+            try:
+                poll_data = poll_resp.json() if poll_resp.text else {}
+            except Exception:
+                poll_data = {}
+
+            if isinstance(poll_data, dict) and poll_data.get("success") is False:
+                err_msg = _extract_error_message(poll_data, fallback="NukoAi task query failed")
+                # Auth / not-found are terminal; transient business errors keep polling.
+                err_code = ""
+                err_obj = poll_data.get("error") if isinstance(poll_data.get("error"), dict) else {}
+                err_code = str(err_obj.get("code") or "").strip().upper()
+                if err_code in {"UNAUTHORIZED", "NOT_FOUND", "INSUFFICIENT_CREDITS"} or poll_resp.status_code in {401, 402, 404}:
+                    return {
+                        "error": f"NukoAi generation failed: {err_msg}",
+                        "submit_failed": False,
+                        "details": poll_data,
+                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id, "raw": poll_data},
+                    }
+                continue
+
+            status_val = _extract_status(poll_data)
+            result_url = _extract_video_url(poll_data)
+            task_payload = _extract_task_payload(poll_data)
+
+            if status_val in {"completed", "success", "succeeded", "done", "finished"} or (
+                result_url and status_val in {"", "completed", "success", "succeeded", "done", "finished"}
+            ):
+                if result_url:
+                    return {
+                        "url": result_url,
+                        "metadata": {
+                            **base_metadata,
+                            "raw": poll_data,
+                            "task_id": task_id,
+                            "provider_task_id": task_id,
+                            "taskId": task_id,
+                            "credits_cost": (task_payload or {}).get("credits_cost") if isinstance(task_payload, dict) else None,
+                        },
+                    }
+                return {
+                    "error": "NukoAi generation completed without video_url",
+                    "submit_failed": False,
+                    "details": poll_data,
+                    "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
+                }
+
+            if status_val in {"failed", "error", "cancelled", "canceled", "rejected"}:
+                err_msg = _extract_error_message(poll_data, fallback="NukoAi generation failed")
+                return {
+                    "error": f"NukoAi generation failed: {err_msg}",
+                    "submit_failed": False,
+                    "details": poll_data,
+                    "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id, "raw": poll_data},
+                }
+
+            # pending / processing — keep polling
+
+        return {
+            "error": f"NukoAi polling timeout after {poll_timeout_seconds}s",
+            "submit_failed": False,
+            "metadata": {
+                **base_metadata,
+                "task_id": task_id,
+                "provider_task_id": task_id,
+                "taskId": task_id,
+            },
+        }
 
     async def _handle_aiclub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "aiclub")

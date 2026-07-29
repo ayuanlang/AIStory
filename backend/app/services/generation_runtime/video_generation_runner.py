@@ -1128,7 +1128,11 @@ async def _run_generate_video(
         if callable(provider_payload_callback):
             video_provider_options["_provider_payload_callback"] = provider_payload_callback
         if (force_pure_callback_mode or _is_pure_callback_mode_enabled()) and provider_callback_ticket and provider_callback_url:
-            video_provider_options["_pure_callback_mode"] = True
+            # NukoAi is poll-only: no upstream webhook. Never enable pure callback.
+            from app.services.media_service import media_service as _media_svc
+
+            if _media_svc._normalize_provider_name(resolved_video_provider, "Video") != "nukoai":
+                video_provider_options["_pure_callback_mode"] = True
         is_kie_kling3_video = bool(
             resolved_video_provider == "kie"
             and resolved_video_model in {"kling-3.0/video", "kling3", "kling-3.0", "kling-3-0"}
@@ -1634,8 +1638,6 @@ async def _run_generate_video(
         try:
             last_frame_url_val = (final_meta or {}).get("last_frame_url")
             if last_frame_url_val and resolved_shot_id:
-                from app.services.generation_runtime.asset_registration import _register_asset_helper
-                
                 dummy_req = type("DummyReq", (), {
                     "project_id": resolved_project_id,
                     "target_type": "shot_entity",

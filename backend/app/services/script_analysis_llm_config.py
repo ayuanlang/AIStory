@@ -91,6 +91,72 @@ def _inject_project_creativity_temperature(
     return llm_config
 
 
+def _inject_llm_call_log_trace(
+    llm_config: Optional[Dict[str, Any]],
+    *,
+    user_id: Optional[int] = None,
+    user_name: Optional[str] = None,
+    project_id: Optional[int] = None,
+    action_name: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Attach fields that llm_service._safe_log_json writes into llm_call_logs."""
+    if not isinstance(llm_config, dict):
+        return llm_config
+    cfg = llm_config.get("config") if isinstance(llm_config.get("config"), dict) else {}
+    if user_id:
+        cfg["__resolved_user_id"] = int(user_id)
+    if user_name:
+        cfg["__resolved_user_name"] = str(user_name)
+    if project_id:
+        try:
+            cfg["__resolved_project_id"] = int(project_id)
+        except Exception:
+            pass
+    if action_name:
+        cfg["__resolved_action"] = str(action_name).strip()
+    llm_config["config"] = cfg
+    return llm_config
+
+
+_ANALYZE_SCENE_ACTION_BY_STAGE = {
+    "script_optimization": "剧本优化",
+    "assets_extraction": "资产提取",
+    "scene_markdown": "场景编排",
+    "entity_design": "资产设计",
+}
+
+
+def _script_analysis_action_label(
+    *,
+    stage_key: Any = None,
+    context: Any = None,
+    function_name: Any = None,
+    fallback: str = "场景分析",
+) -> str:
+    stage = str(stage_key or "").strip().lower()
+    if stage in _ANALYZE_SCENE_ACTION_BY_STAGE:
+        return _ANALYZE_SCENE_ACTION_BY_STAGE[stage]
+    ctx = str(context or "").strip().lower()
+    if ctx in {"ai_generate_shots", "generate_shots"}:
+        return "生成分镜"
+    if ctx in {"ai_regenerate_shots", "regenerate_shots"}:
+        return "重新生成分镜"
+    if ctx in {"generate_episode_scripts"}:
+        return "生成分集剧本"
+    if ctx in {"generate_project_character_profile"}:
+        return "生成角色档案设定"
+    fn = str(function_name or "").strip().lower()
+    if "stage_1" in fn or "script_optimization" in fn:
+        return "剧本优化"
+    if "stage_2_1" in fn or "assets_extraction" in fn:
+        return "资产提取"
+    if "stage_2_2" in fn or "beats" in fn:
+        return "场景编排"
+    if "entity_design" in fn or "asset_design" in fn:
+        return "资产设计"
+    return fallback
+
+
 def _script_analysis_function_api_name(function_name: Any) -> str:
     raw = str(function_name or "").strip()
     if raw.startswith("script_analysis"):
@@ -212,12 +278,12 @@ def _resolve_story_generator_script_analysis_llm_config(
             project_global_info,
             context=context,
         )
-    if isinstance(llm_config, dict):
-        llm_config.setdefault("config", {})
-        if user_id: llm_config["config"]["__resolved_user_id"] = user_id
-        if user_name: llm_config["config"]["__resolved_user_name"] = user_name
-        if project_id: llm_config["config"]["__resolved_project_id"] = project_id
-        if action_name: llm_config["config"]["__resolved_action"] = action_name
-    return llm_config
+    return _inject_llm_call_log_trace(
+        llm_config,
+        user_id=user_id,
+        user_name=user_name,
+        project_id=project_id,
+        action_name=action_name,
+    )
 
 
