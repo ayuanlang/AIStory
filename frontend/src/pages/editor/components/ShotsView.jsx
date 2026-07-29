@@ -5502,6 +5502,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         // Inspect-only query must NOT flip into generate-running by itself.
         setQueryingVideoTaskByShot((prev) => ({ ...prev, [stableShotId]: true }));
+        setVideoStatuses((prev) => ({ ...prev, [stableShotId]: 'querying_task' }));
         let jobId = '';
         try {
             const resolveLocalShot = () => (
@@ -5518,10 +5519,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     return false;
                 }
 
+                const busyKey = `${stableShotId}:video`;
                 setShotGeneratingState(stableShotId, 'video', true);
-                setVideoStatuses((prev) => ({ ...prev, [stableShotId]: 'saving_video' }));
+                setVideoStatuses((prev) => ({ ...prev, [stableShotId]: 're_downloading' }));
+                setShotMediaOssPersistBusy((prev) => ({ ...prev, [busyKey]: true }));
                 showNotification(
-                    t('任务已成功，正在下载并上传 OSS...', 'Task succeeded; downloading and uploading to OSS...'),
+                    t('正在处理重下载：下载远程文件并写入 OSS...', 'Re-download in progress: downloading remote file and saving to OSS...'),
                     'info'
                 );
 
@@ -5602,6 +5605,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     releaseShotVideoUi({ shotId: stableShotId, jobId: jobId || undefined });
                     showNotification(`${t('下载/落盘失败', 'Download/persist failed')}: ${detail}`, 'error');
                     return false;
+                } finally {
+                    setShotMediaOssPersistBusy((prev) => {
+                        const next = { ...prev };
+                        delete next[busyKey];
+                        return next;
+                    });
+                    setVideoStatuses((prev) => {
+                        if (String(prev?.[stableShotId] || '') !== 're_downloading') return prev;
+                        const next = { ...prev };
+                        delete next[stableShotId];
+                        return next;
+                    });
                 }
             };
 
@@ -5661,6 +5676,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             });
         } finally {
             setQueryingVideoTaskByShot((prev) => {
+                const next = { ...prev };
+                delete next[stableShotId];
+                return next;
+            });
+            setVideoStatuses((prev) => {
+                const status = String(prev?.[stableShotId] || '');
+                if (status !== 'querying_task' && status !== 're_downloading') return prev;
+                // Keep re_download overlay until persist finally clears it.
+                if (status === 're_downloading') return prev;
                 const next = { ...prev };
                 delete next[stableShotId];
                 return next;
@@ -12332,15 +12356,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             ? 'bg-white/10 text-white/40 cursor-not-allowed'
                                                             : 'bg-cyan-500/20 text-cyan-200 hover:bg-cyan-500/30'
                                                     }`}
-                                                    title={t('查询供应商任务状态（不进入生成运行态）', 'Query provider task status (does not enter generating state)')}
-                                                    aria-label={t('查询任务', 'Query task')}
+                                                    title={t(
+                                                        '查询任务，如存在远程文件，且为过期，可重新下载（网络故障的补救手段）',
+                                                        'Query the task; if a remote file exists and has expired, re-download it (recovery for network failures).'
+                                                    )}
+                                                    aria-label={t('重下载', 'Re-download')}
                                                 >
                                                     {Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
                                                         ? <Loader2 className="w-3 h-3 animate-spin"/>
                                                         : <Search className="w-3 h-3"/>}
                                                     {Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
-                                                        ? t('查询中...', 'Querying...')
-                                                        : t('查询', 'Query')}
+                                                        ? t('重下载中...', 'Re-downloading...')
+                                                        : t('重下载', 'Re-download')}
                                                 </button>
                                                 <button
                                                     onClick={() => handleForceStopShotVideo(editingShot?.id)}
@@ -12357,10 +12384,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[420px] 2xl:h-[480px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center`}
                                             onClick={() => openAssetDetailModal('video')}
                                         >
-                                            {currentGeneratingState.video && (
+                                            {(currentGeneratingState.video
+                                                || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
+                                                || Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])) && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
                                                     <span className="text-[10px] text-white/70 animate-pulse">{t(
+                                                        videoStatuses[editingShot.id] === 're_downloading' ? '正在处理重下载...' :
+                                                        videoStatuses[editingShot.id] === 'querying_task' ? '正在查询任务...' :
                                                         videoStatuses[editingShot.id] === 'upscaling' ? '正在 Topaz 提质...' :
                                                         videoStatuses[editingShot.id] === 'cleaning_subtitle' ? '正在本地去除字幕...' :
                                                         videoStatuses[editingShot.id] === 'cleaning_bgm' ? '正在本地去除 BGM...' :
@@ -12369,6 +12400,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? '加载视频中...' :
                                                         (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? '获取视频中...' :
                                                         '正在生成视频...',
+                                                        videoStatuses[editingShot.id] === 're_downloading' ? 'Processing re-download...' :
+                                                        videoStatuses[editingShot.id] === 'querying_task' ? 'Querying task...' :
                                                         videoStatuses[editingShot.id] === 'upscaling' ? 'Topaz upscaling...' :
                                                         videoStatuses[editingShot.id] === 'cleaning_subtitle' ? 'Removing subtitles locally...' :
                                                         videoStatuses[editingShot.id] === 'cleaning_bgm' ? 'Removing BGM locally...' :
@@ -12380,7 +12413,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     )}</span>
                                                 </div>
                                             )}
-                                            {currentGeneratingState.video ? (
+                                            {(currentGeneratingState.video
+                                                || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
+                                                || Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])) ? (
                                                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/20 overflow-hidden pointer-events-none">
                                                     {resolveShotVideoPosterUrl(editingShot) ? (
                                                         <SafeImage
@@ -12457,7 +12492,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                              )}
                                              
                                              {/* Video Actions Overlay */}
-                                             {!currentGeneratingState.video && (
+                                             {!(currentGeneratingState.video
+                                                || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
+                                                || Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])) && (
                                                 <div className="absolute top-2 right-2 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-20">
                                                     <button
                                                         onClick={(e) => {
@@ -13967,10 +14004,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             <div className="space-y-3 min-w-0">
                                                                 <div className={`${previewShellClass} border-white/10`}>
                                                                     {renderPreviewModeToggle()}
-                                                                    {currentGeneratingState.video && (
+                                                                    {(currentGeneratingState.video
+                                                                        || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
+                                                                        || Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])) && (
                                                                         <div className="absolute inset-0 z-10 bg-black/60 flex items-center justify-center flex-col gap-2">
                                                                             <Loader2 className="w-6 h-6 animate-spin text-primary" />
                                                                             <span className="text-xs text-white/80">{t(
+                                                                                videoStatuses[editingShot.id] === 're_downloading' ? '正在处理重下载...' :
+                                                                                videoStatuses[editingShot.id] === 'querying_task' ? '正在查询任务...' :
                                                                                 videoStatuses[editingShot.id] === 'upscaling' ? '正在 Topaz 提质...' :
                                                                                 videoStatuses[editingShot.id] === 'cleaning_subtitle' ? '正在本地去除字幕...' :
                                                                                 videoStatuses[editingShot.id] === 'cleaning_bgm' ? '正在本地去除 BGM...' :
@@ -13979,6 +14020,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                                 (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? '加载视频中...' :
                                                                                 (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? '获取视频中...' :
                                                                                 '正在生成视频...',
+                                                                                videoStatuses[editingShot.id] === 're_downloading' ? 'Processing re-download...' :
+                                                                                videoStatuses[editingShot.id] === 'querying_task' ? 'Querying task...' :
                                                                                 videoStatuses[editingShot.id] === 'upscaling' ? 'Topaz upscaling...' :
                                                                                 videoStatuses[editingShot.id] === 'cleaning_subtitle' ? 'Removing subtitles locally...' :
                                                                                 videoStatuses[editingShot.id] === 'cleaning_bgm' ? 'Removing BGM locally...' :
@@ -13999,8 +14042,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                                 className={videoPreviewClass}
                                                                                 wrapperClassName="w-full h-full"
                                                                                 preload="metadata"
-                                                                                suspend={Boolean(currentGeneratingState.video)}
-                                                                                hideBusyOverlay={Boolean(currentGeneratingState.video)}
+                                                                                suspend={Boolean(
+                                                                                    currentGeneratingState.video
+                                                                                    || queryingVideoTaskByShot[String(editingShot?.id || '')]
+                                                                                    || shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`]
+                                                                                )}
+                                                                                hideBusyOverlay={Boolean(
+                                                                                    currentGeneratingState.video
+                                                                                    || queryingVideoTaskByShot[String(editingShot?.id || '')]
+                                                                                    || shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`]
+                                                                                )}
                                                                                 uiLang={uiLang}
                                                                             />
                                                                         ) : <Video className="w-8 h-8 opacity-30" />}
@@ -14126,13 +14177,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'primary',
                                                                     })}
                                                                     {renderDetailActionButton({
-                                                                        label: t('查询任务', 'Query Task'),
-                                                                        busyLabel: t('查询中...', 'Querying...'),
+                                                                        label: t('重下载', 'Re-download'),
+                                                                        busyLabel: t('重下载中...', 'Re-downloading...'),
                                                                         onClick: () => handleQueryVideoProviderTask(editingShot?.id),
                                                                         disabled: !editingShot?.id || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')]),
                                                                         busy: Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')]),
                                                                         variant: 'secondary',
-                                                                        title: t('查询供应商任务状态（不进入生成运行态）', 'Query provider task status (does not enter generating state)'),
+                                                                        title: t(
+                                                                            '查询任务，如存在远程文件，且为过期，可重新下载（网络故障的补救手段）',
+                                                                            'Query the task; if a remote file exists and has expired, re-download it (recovery for network failures).'
+                                                                        ),
                                                                     })}
                                                                     {renderShotEnvChangeBadge(false)}
                                                                     {renderPromptLangMenu('video')}
