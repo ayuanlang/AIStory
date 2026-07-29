@@ -615,11 +615,22 @@ def _extract_job_provider_task_id(job: Dict[str, Any]) -> str:
         if normalized:
             return normalized
 
+    billing = job.get("billing_context")
+    if isinstance(billing, dict):
+        for key in ("provider_task_id", "task_id", "taskId"):
+            normalized = str(billing.get(key) or "").strip()
+            if normalized:
+                return normalized
+
     result = job.get("result")
     if isinstance(result, dict):
+        for key in ("provider_task_id", "task_id", "taskId"):
+            normalized = str(result.get(key) or "").strip()
+            if normalized:
+                return normalized
         metadata = result.get("metadata")
         if isinstance(metadata, dict):
-            for key in ("task_id", "taskId", "job_id", "jobId"):
+            for key in ("provider_task_id", "task_id", "taskId", "job_id", "jobId"):
                 normalized = str(metadata.get(key) or "").strip()
                 if normalized:
                     return normalized

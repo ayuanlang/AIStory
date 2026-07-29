@@ -1194,6 +1194,7 @@ def _hydrate_video_job_record(job_id: str, job: Optional[Dict[str, Any]] = None)
                 "shot_id", "project_id", "episode_id", "scene_id", "shot_number", "shot_name",
                 "asset_type", "provider", "model", "prompt", "username",
                 "reservation_tx_id", "billing_pending", "billing_settled", "billing_context",
+                "provider_task_id", "task_id", "taskId", "system_api_id", "query_endpoint",
             ):
                 if task_payload.get(key) in (None, "", {}, []):
                     continue

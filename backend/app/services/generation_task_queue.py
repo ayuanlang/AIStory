@@ -329,6 +329,168 @@ def get_generation_job_state(*, kind: str, job_id: str) -> Optional[Dict[str, An
         db.close()
 
 
+def _payload_contains_shot_id(payload: Any, shot_id: str) -> bool:
+    safe_shot_id = str(shot_id or "").strip()
+    if not safe_shot_id or not isinstance(payload, dict):
+        return False
+
+    def _collect(src: Any, depth: int = 0) -> bool:
+        if depth > 3 or not isinstance(src, dict):
+            return False
+        for key in ("shot_id", "ownerShotId", "owner_shot_id"):
+            value = src.get(key)
+            if value in (None, ""):
+                continue
+            if str(value).strip() == safe_shot_id:
+                return True
+        for nested_key in ("request", "payload", "metadata", "context", "combined_payload", "final_provider_payload", "result"):
+            nested = src.get(nested_key)
+            if isinstance(nested, dict) and _collect(nested, depth + 1):
+                return True
+            if nested_key == "result" and isinstance(nested, dict):
+                meta = nested.get("metadata")
+                if isinstance(meta, dict) and _collect(meta, depth + 1):
+                    return True
+        return False
+
+    return _collect(payload)
+
+
+def _shot_id_sql_like_patterns(shot_id: str) -> List[str]:
+    safe = str(shot_id or "").strip()
+    if not safe:
+        return []
+    # Match JSON number and string encodings of shot_id.
+    return [
+        f'%"shot_id": {safe}%',
+        f'%"shot_id":{safe}%',
+        f'%"shot_id": "{safe}"%',
+        f'%"shot_id":"{safe}"%',
+        f'%"ownerShotId": "{safe}"%',
+        f'%"ownerShotId":"{safe}"%',
+        f'%"owner_shot_id": "{safe}"%',
+        f'%"owner_shot_id":"{safe}"%',
+    ]
+
+
+def find_generation_job_states_by_shot_id(
+    *,
+    kind: str,
+    shot_id: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """Find persisted generation job snapshots whose payload references shot_id."""
+    safe_kind = str(kind or "").strip().lower()
+    safe_shot_id = str(shot_id or "").strip()
+    if not safe_kind or not safe_shot_id:
+        return []
+    patterns = _shot_id_sql_like_patterns(safe_shot_id)
+    if not patterns:
+        return []
+
+    _ensure_job_state_table_ready()
+    like_clauses = " OR ".join(f"payload_json LIKE :p{i}" for i in range(len(patterns)))
+    params: Dict[str, Any] = {
+        "kind": safe_kind,
+        "limit": int(max(1, min(int(limit or 20), 100))),
+    }
+    for i, pattern in enumerate(patterns):
+        params[f"p{i}"] = pattern
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                f"""
+                SELECT job_id, user_id, status, updated_at, payload_json
+                FROM generation_job_state
+                WHERE kind = :kind AND ({like_clauses})
+                ORDER BY updated_at DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        ).mappings().all()
+        matches: List[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(str(row.get("payload_json") or "{}"))
+            except Exception:
+                payload = None
+            if not isinstance(payload, dict):
+                continue
+            if not _payload_contains_shot_id(payload, safe_shot_id):
+                continue
+            payload["job_id"] = payload.get("job_id") or str(row.get("job_id") or "")
+            if payload.get("user_id") in (None, "") and row.get("user_id") not in (None, ""):
+                payload["user_id"] = row.get("user_id")
+            if payload.get("status") in (None, "") and row.get("status") not in (None, ""):
+                payload["status"] = row.get("status")
+            if row.get("updated_at") not in (None, "") and payload.get("updated_at") in (None, ""):
+                payload["updated_at"] = row.get("updated_at")
+            matches.append(payload)
+        return matches
+    finally:
+        db.close()
+
+
+def find_generation_tasks_by_shot_id(
+    *,
+    kind: str,
+    shot_id: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """Find queue rows (including failed/completed) whose payload references shot_id."""
+    safe_kind = str(kind or "").strip().lower()
+    safe_shot_id = str(shot_id or "").strip()
+    if not safe_kind or not safe_shot_id:
+        return []
+    patterns = _shot_id_sql_like_patterns(safe_shot_id)
+    if not patterns:
+        return []
+
+    _ensure_queue_table_ready()
+    like_clauses = " OR ".join(f"payload_json LIKE :p{i}" for i in range(len(patterns)))
+    params: Dict[str, Any] = {
+        "kind": safe_kind,
+        "limit": int(max(1, min(int(limit or 20), 100))),
+    }
+    for i, pattern in enumerate(patterns):
+        params[f"p{i}"] = pattern
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                f"""
+                SELECT job_id, kind, user_id, status, attempt_count, worker_id,
+                       created_at, started_at, finished_at, last_heartbeat, error, payload_json
+                FROM generation_task_queue
+                WHERE kind = :kind AND ({like_clauses})
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        ).mappings().all()
+        matches: List[Dict[str, Any]] = []
+        for row in rows:
+            item = {k: row.get(k) for k in row.keys()}
+            try:
+                payload = json.loads(str(item.get("payload_json") or "{}"))
+            except Exception:
+                payload = None
+            if not isinstance(payload, dict):
+                continue
+            if not _payload_contains_shot_id(payload, safe_shot_id):
+                continue
+            item["payload"] = payload
+            matches.append(item)
+        return matches
+    finally:
+        db.close()
+
+
 def find_generation_job_states_by_callback_ticket(*, kind: str, callback_ticket: str, limit: int = 20) -> List[Dict[str, Any]]:
     stable_ticket = str(callback_ticket or "").strip()
     if not stable_ticket:

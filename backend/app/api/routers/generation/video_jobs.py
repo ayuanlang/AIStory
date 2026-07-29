@@ -590,26 +590,44 @@ def _collect_video_jobs_for_shot(shot_id: str) -> List[Dict[str, Any]]:
         return []
 
     from app.services.generation_runtime.job_store import VIDEO_JOB_FILE_DIR, _read_video_job_file
+    from app.services.generation_task_queue import (
+        find_generation_job_states_by_shot_id,
+        find_generation_tasks_by_shot_id,
+    )
 
     by_id: Dict[str, Dict[str, Any]] = {}
 
-    def _consider(raw_job: Optional[Dict[str, Any]], fallback_job_id: str = "") -> None:
+    def _consider(
+        raw_job: Optional[Dict[str, Any]],
+        fallback_job_id: str = "",
+        *,
+        source: str = "",
+        prefiltered: bool = False,
+    ) -> None:
         if not isinstance(raw_job, dict):
             return
         job = dict(raw_job)
         job_id = str(job.get("job_id") or fallback_job_id or "").strip()
         if not job_id:
             return
-        if _extract_video_job_shot_id(job) != safe_shot_id:
+        extracted_shot = _extract_video_job_shot_id(job)
+        if extracted_shot:
+            if extracted_shot != safe_shot_id:
+                return
+        elif not prefiltered:
             return
+        else:
+            job["shot_id"] = job.get("shot_id") or safe_shot_id
         job["job_id"] = job_id
+        if source and not job.get("_lookup_source"):
+            job["_lookup_source"] = source
         prev = by_id.get(job_id)
         if not prev or _video_job_recency_ts(job) >= _video_job_recency_ts(prev):
             by_id[job_id] = job
 
     with VIDEO_JOB_LOCK:
         for job_id, payload in list(VIDEO_JOB_STORE.items()):
-            _consider(payload, str(job_id))
+            _consider(payload, str(job_id), source="memory")
 
     try:
         if os.path.isdir(VIDEO_JOB_FILE_DIR):
@@ -619,13 +637,93 @@ def _collect_video_jobs_for_shot(shot_id: str) -> List[Dict[str, Any]]:
                 job_id = str(name)[:-5].strip()
                 if not job_id:
                     continue
-                _consider(_read_video_job_file(job_id), job_id)
+                _consider(_read_video_job_file(job_id), job_id, source="file")
     except Exception:
         logger.exception("[VideoJob] scan job files for shot failed | shot_id=%s", safe_shot_id)
+
+    try:
+        for state in find_generation_job_states_by_shot_id(kind="video", shot_id=safe_shot_id, limit=50):
+            _consider(state, str((state or {}).get("job_id") or ""), source="job_state", prefiltered=True)
+    except Exception:
+        logger.exception("[VideoJob] scan job_state for shot failed | shot_id=%s", safe_shot_id)
+
+    try:
+        for task in find_generation_tasks_by_shot_id(kind="video", shot_id=safe_shot_id, limit=50):
+            payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+            job = dict(payload) if isinstance(payload, dict) else {}
+            job_id = str(task.get("job_id") or job.get("job_id") or "").strip()
+            if not job_id:
+                continue
+            job["job_id"] = job_id
+            if job.get("user_id") in (None, "") and task.get("user_id") not in (None, ""):
+                job["user_id"] = task.get("user_id")
+            if task.get("status") not in (None, ""):
+                # Prefer queue terminal status when reconstructing from queue-only rows.
+                if job.get("status") in (None, "") or str(task.get("status") or "").lower() in {
+                    "failed", "error", "canceled", "cancelled", "succeeded", "completed",
+                }:
+                    job["status"] = task.get("status")
+            for ts_key in ("created_at", "started_at", "finished_at"):
+                if job.get(ts_key) in (None, "") and task.get(ts_key) not in (None, ""):
+                    job[ts_key] = task.get(ts_key)
+            if task.get("error") not in (None, "") and job.get("error") in (None, ""):
+                job["error"] = task.get("error")
+            _consider(job, job_id, source="task_queue", prefiltered=True)
+    except Exception:
+        logger.exception("[VideoJob] scan task_queue for shot failed | shot_id=%s", safe_shot_id)
 
     jobs = list(by_id.values())
     jobs.sort(key=_video_job_recency_ts, reverse=True)
     return jobs
+
+
+def _load_video_job_for_query(job_id: str) -> Dict[str, Any]:
+    """Load video job from memory/file/job_state/task queue for provider-task query."""
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        return {}
+
+    with VIDEO_JOB_LOCK:
+        job = dict(VIDEO_JOB_STORE.get(stable_job_id) or {})
+    if not job:
+        file_job = _read_video_job_file(stable_job_id)
+        if file_job:
+            job = dict(file_job)
+
+    if not job:
+        try:
+            from app.services.generation_task_queue import get_generation_task_status
+
+            task_row = get_generation_task_status(stable_job_id) or {}
+            payload = {}
+            raw_json = task_row.get("payload_json")
+            if isinstance(raw_json, str) and raw_json.strip():
+                try:
+                    parsed = json.loads(raw_json)
+                    if isinstance(parsed, dict):
+                        payload = parsed
+                except Exception:
+                    payload = {}
+            elif isinstance(task_row.get("payload"), dict):
+                payload = dict(task_row.get("payload") or {})
+            if payload or task_row:
+                job = dict(payload)
+                job["job_id"] = stable_job_id
+                if job.get("user_id") in (None, "") and task_row.get("user_id") not in (None, ""):
+                    job["user_id"] = task_row.get("user_id")
+                if task_row.get("status") not in (None, ""):
+                    job["status"] = task_row.get("status")
+                for ts_key in ("created_at", "started_at", "finished_at"):
+                    if job.get(ts_key) in (None, "") and task_row.get(ts_key) not in (None, ""):
+                        job[ts_key] = task_row.get(ts_key)
+                if task_row.get("error") not in (None, "") and job.get("error") in (None, ""):
+                    job["error"] = task_row.get("error")
+        except Exception:
+            logger.exception("[VideoJob] reconstruct from task queue failed | job_id=%s", stable_job_id)
+
+    if job:
+        job = _hydrate_video_job_record(stable_job_id, job)
+    return job if isinstance(job, dict) else {}
 
 
 @router.get("/generate/video/shots/{shot_id}/latest-job")
@@ -721,7 +819,10 @@ def get_latest_video_job_for_shot(
             "shot_id": safe_shot_id,
             "created_at": hydrated.get("created_at") or job.get("created_at"),
             "finished_at": hydrated.get("finished_at") or job.get("finished_at"),
-            "source": "shot_metadata" if job_id == shot_job_id else "job_store",
+            "source": (
+                "shot_metadata" if job_id == shot_job_id
+                else (hydrated.get("_lookup_source") or job.get("_lookup_source") or "job_store")
+            ),
         }
 
     if shot_job_id:
@@ -758,16 +859,9 @@ def query_video_job_provider_task(
     if not stable_job_id:
         raise HTTPException(status_code=400, detail="job_id is required")
 
-    with VIDEO_JOB_LOCK:
-        job = dict(VIDEO_JOB_STORE.get(stable_job_id) or {})
-    if not job:
-        file_job = _read_video_job_file(stable_job_id)
-        if file_job:
-            job = dict(file_job)
+    job = _load_video_job_for_query(stable_job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-
-    job = _hydrate_video_job_record(stable_job_id, job)
 
     owner_id = job.get("user_id")
     owner_username = str(job.get("username") or "").strip().lower()
