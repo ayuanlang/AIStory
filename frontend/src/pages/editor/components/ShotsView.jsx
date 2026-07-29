@@ -5512,33 +5512,70 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             );
 
             const runDownloadAndSync = async (queryResult) => {
-                const recoverJobId = String(queryResult?.job_id || jobId || '').trim();
-                if (recoverJobId && !String(recoverJobId).startsWith('audit-tx:') && !String(recoverJobId).startsWith('provider-task:')) {
-                    setPendingVideoJob(stableShotId, recoverJobId);
+                const sourceUrl = String(queryResult?.result_url || '').trim();
+                if (!sourceUrl) {
+                    showNotification(t('供应商结果中没有可下载的视频地址', 'No downloadable video URL in provider result'), 'warning');
+                    return false;
                 }
+
                 setShotGeneratingState(stableShotId, 'video', true);
                 setVideoStatuses((prev) => ({ ...prev, [stableShotId]: 'saving_video' }));
                 showNotification(
                     t('任务已成功，正在下载并上传 OSS...', 'Task succeeded; downloading and uploading to OSS...'),
                     'info'
                 );
-                const recoverResult = await queryVideoShotProviderTask(stableShotId, { apply_recovery: true });
-                jobId = String(recoverResult?.job_id || recoverJobId || '').trim();
-                setVideoTaskQueryModal((prev) => ({
-                    ...(prev || {}),
-                    shotId: stableShotId,
-                    jobId,
-                    result: {
-                        ...(queryResult || {}),
-                        ...(recoverResult || {}),
-                    },
-                }));
-                const synced = await syncShotVideoAfterOssPersist({
-                    shotId: stableShotId,
-                    jobId: jobId || undefined,
-                    initialUrl: String(recoverResult?.result_url || queryResult?.result_url || '').trim(),
-                });
-                if (!synced) {
+
+                try {
+                    // Use the proven shot persist-media path so video_url is bound immediately.
+                    const persistResult = await persistShotMedia(stableShotId, {
+                        slot: 'video',
+                        source_url: sourceUrl,
+                    });
+                    const persistedUrl = String(
+                        persistResult?.persisted_url
+                        || persistResult?.shot?.video_url
+                        || ''
+                    ).trim();
+                    const refreshedShot = persistResult?.shot && typeof persistResult.shot === 'object'
+                        ? persistResult.shot
+                        : null;
+                    const patch = {
+                        ...(persistedUrl ? { video_url: persistedUrl } : {}),
+                        ...(refreshedShot?.technical_notes != null
+                            ? { technical_notes: refreshedShot.technical_notes }
+                            : {}),
+                        ...(refreshedShot?.video_url ? { video_url: refreshedShot.video_url } : {}),
+                    };
+
+                    if (Object.keys(patch).length > 0) {
+                        setEditingShot((prev) => (
+                            prev && String(prev.id) === stableShotId ? { ...prev, ...patch } : prev
+                        ));
+                        setShots((prev) => prev.map((item) => (
+                            String(item?.id) === stableShotId ? { ...item, ...patch } : item
+                        )));
+                        setMediaPersistGraceRefreshSeq((seq) => seq + 1);
+                        try {
+                            await onUpdateShot(stableShotId, patch);
+                        } catch (updateErr) {
+                            console.warn('[VideoTaskQuery] shot patch after persist failed:', updateErr);
+                        }
+                    }
+
+                    setVideoTaskQueryModal((prev) => ({
+                        ...(prev || {}),
+                        shotId: stableShotId,
+                        jobId: String(queryResult?.job_id || jobId || '').trim(),
+                        result: {
+                            ...(queryResult || {}),
+                            result_url: persistedUrl || sourceUrl,
+                            recovery_applied: true,
+                            persisted_url: persistedUrl || null,
+                            persist_result: persistResult || null,
+                        },
+                    }));
+
+                    // Best-effort refresh; UI already patched above.
                     try {
                         const latestShot = await fetchShot(stableShotId);
                         if (latestShot?.id) {
@@ -5551,17 +5588,21 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             )));
                         }
                     } catch (syncErr) {
-                        console.warn('[VideoTaskQuery] post-recovery shot sync failed:', syncErr);
+                        console.warn('[VideoTaskQuery] post-persist shot refresh failed:', syncErr);
                     }
+
+                    Promise.resolve(refreshShots?.()).catch(() => {});
+                    refreshShotAssetsMeta?.();
                     releaseShotVideoUi({ shotId: stableShotId, jobId: jobId || undefined });
-                    showNotification(
-                        t('已触发下载/OSS，请稍后刷新查看视频', 'Download/OSS started; refresh later if video is not visible yet'),
-                        'warning'
-                    );
+                    showNotification(t('视频已落盘并写入 OSS', 'Video downloaded and stored to OSS'), 'success');
+                    return true;
+                } catch (persistErr) {
+                    const detail = persistErr?.response?.data?.detail || persistErr?.message || 'Unknown error';
+                    console.warn('[VideoTaskQuery] persistShotMedia failed:', persistErr);
+                    releaseShotVideoUi({ shotId: stableShotId, jobId: jobId || undefined });
+                    showNotification(`${t('下载/落盘失败', 'Download/persist failed')}: ${detail}`, 'error');
                     return false;
                 }
-                showNotification(t('视频已落盘并写入 OSS', 'Video downloaded and stored to OSS'), 'success');
-                return true;
             };
 
             // Resolve + query by shot: latest provider_task_id from billing audit / job snapshots.
@@ -5630,12 +5671,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         editingShot,
         normalizeShotPromptDefaults,
         onLog,
+        onUpdateShot,
+        persistShotMedia,
+        refreshShotAssetsMeta,
+        refreshShots,
         releaseShotVideoUi,
         rememberLastVideoJobId,
-        setPendingVideoJob,
         setShotGeneratingState,
         showNotification,
-        syncShotVideoAfterOssPersist,
         t,
     ]);
 
