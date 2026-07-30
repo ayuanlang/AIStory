@@ -14,7 +14,22 @@ import { BookOpen, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users,
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
-import { getEpisodeAnalysisRun, releaseEpisodeAnalysisRun, trackEpisodeAnalysisRun, updateEpisodeAnalysisRun } from '../../../lib/analysisRunRegistry';
+import {
+    getEpisodeAnalysisRun,
+    releaseEpisodeAnalysisRun,
+    trackEpisodeAnalysisRun,
+    updateEpisodeAnalysisRun,
+    tryClaimEpisodeAnalysis,
+    releaseEpisodeAnalysisClaim,
+    isEpisodeAnalysisClaimed,
+    publishEpisodeAnalysisProgress,
+    getEpisodeAnalysisProgress,
+    clearEpisodeAnalysisProgress,
+    subscribeEpisodeAnalysisProgress,
+    markEpisodeAnalysisDetached,
+    clearEpisodeAnalysisDetached,
+    isEpisodeAnalysisDetached,
+} from '../../../lib/analysisRunRegistry';
 import { unwrapInjectionSection, wrapInjectionSection } from '../../../lib/promptInjection';
 import { collectLlmJsonTextCandidates, sanitizeLlmTextForJsonImport } from '../../../lib/llmJsonExtract';
 
@@ -1285,12 +1300,14 @@ const isEpisodeAnalysisTaskLive = (episodeId, {
     analysisRunInFlight = false,
     analysisResumeInFlight = false,
     phase2GenerationInFlight = false,
+    analysisEntryLock = false,
 } = {}) => {
     const id = Number(episodeId || 0);
     if (!id) return false;
 
     if (isAnalyzing || isRetryingPhase2) return true;
-    if (analysisRunInFlight || analysisResumeInFlight || phase2GenerationInFlight) return true;
+    if (analysisRunInFlight || analysisResumeInFlight || phase2GenerationInFlight || analysisEntryLock) return true;
+    if (isEpisodeAnalysisClaimed(id)) return true;
 
     const marker = typeof loadAnalysisTaskMarker === 'function' ? loadAnalysisTaskMarker(id) : null;
     const markerTaskId = String(marker?.taskId || '').trim();
@@ -1299,6 +1316,7 @@ const isEpisodeAnalysisTaskLive = (episodeId, {
     const activeRun = getEpisodeAnalysisRun(id);
     const runTaskId = String(activeRun?.taskId || markerTaskId || '').trim();
     if (activeRun?.promise && runTaskId && isAsyncTaskPollInFlight(runTaskId)) return true;
+    if (activeRun?.promise) return true;
 
     return false;
 };
@@ -1941,6 +1959,51 @@ const runAnalysisPipelineIntegrityGate = async ({
 const ANALYSIS_FLOW_HISTORY_CAP = 500;
 const ANALYSIS_DETAIL_LOG_CAP = 500;
 
+/** `endedAt: null` must NOT count as finished — Number(null) === 0 is finite. */
+const hasAnalysisHistoryEndedAt = (item) => {
+    const endedAt = Number(item?.endedAt);
+    return Number.isFinite(endedAt) && endedAt > 0;
+};
+
+/** Append/update flow history without React (survives unmount progress publishing). */
+const appendAnalysisFlowHistoryEntry = (prevHistory, { phase, message, highlightHint = '' } = {}) => {
+    const stablePhase = String(phase || '').trim();
+    const stableMessage = String(message || '').trim();
+    const stableHint = String(highlightHint || '').trim();
+    if (!stablePhase || stablePhase === 'idle' || !stableMessage) {
+        return Array.isArray(prevHistory) ? prevHistory : [];
+    }
+    const prev = Array.isArray(prevHistory) ? prevHistory : [];
+    const lastItem = prev[prev.length - 1];
+    const isPerSceneHint = stableHint && /「[^」]+」/.test(stableHint);
+    const shouldAppendPerSceneUpdate = (
+        isPerSceneHint
+        && (stablePhase === 'scene_beats' || stablePhase === 'storyboard')
+    );
+    if (lastItem && lastItem.phase === stablePhase && lastItem.message === stableMessage) {
+        if (stableHint && stableHint !== String(lastItem.highlightHint || '').trim()) {
+            if (!shouldAppendPerSceneUpdate) {
+                return [...prev.slice(0, -1), { ...lastItem, highlightHint: stableHint }];
+            }
+        } else {
+            return prev;
+        }
+    }
+    const now = Date.now();
+    const next = prev.map((item) => (
+        hasAnalysisHistoryEndedAt(item) ? item : { ...item, endedAt: now }
+    ));
+    next.push({
+        id: `${now}-${prev.length}`,
+        phase: stablePhase,
+        message: stableMessage,
+        highlightHint: stableHint,
+        createdAt: now,
+        endedAt: null,
+    });
+    return next.length > ANALYSIS_FLOW_HISTORY_CAP ? next.slice(-ANALYSIS_FLOW_HISTORY_CAP) : next;
+};
+
 const getAnalysisSessionStorageKey = (episodeId) => {
     const id = Number(episodeId || 0);
     return id > 0 ? `aistory:analysis-session:${id}` : '';
@@ -2019,12 +2082,6 @@ const clearAnalysisSessionProgressSnapshot = (episodeId) => {
     } catch (_) {
         // Ignore localStorage failures.
     }
-};
-
-/** `endedAt: null` must NOT count as finished — Number(null) === 0 is finite. */
-const hasAnalysisHistoryEndedAt = (item) => {
-    const endedAt = Number(item?.endedAt);
-    return Number.isFinite(endedAt) && endedAt > 0;
 };
 
 /** Canonical pipeline order for progress UI + final report (5 stages). */
@@ -2407,7 +2464,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const parentOnLogRef = useRef(parentOnLog);
     parentOnLogRef.current = parentOnLog;
     const analysisDetailLogsRef = useRef([]);
-    const [analysisDetailLogs, setAnalysisDetailLogs] = useState([]);
+    const [analysisDetailLogs, setAnalysisDetailLogsState] = useState([]);
     const analysisProgressDismissedRef = useRef(false);
     const analysisProgressLogRef = useRef(null);
     const analysisProgressLogStickToBottomRef = useRef(true);
@@ -2419,6 +2476,45 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         detailLogs: [],
     });
     const captureAnalysisLogRef = useRef(() => false);
+    const scriptEditorMountedRef = useRef(true);
+    const latestActiveEpisodeIdRef = useRef(null);
+    const applyingRemoteProgressRef = useRef(false);
+    const analysisFlowStatusRef = useRef({ phase: 'idle', message: '' });
+    const analysisFlowHistoryRef = useRef([]);
+    const analysisUiReportRef = useRef(null);
+    const storyboardTaskProgressRef = useRef(EMPTY_STORYBOARD_TASK_PROGRESS);
+
+    const publishLiveAnalysisProgressSnapshot = useCallback((patch = {}) => {
+        if (applyingRemoteProgressRef.current) return;
+        const episodeId = Number(latestActiveEpisodeIdRef.current || 0);
+        if (!episodeId) return;
+        const uiReportBase = analysisUiReportRef.current && typeof analysisUiReportRef.current === 'object'
+            ? { ...analysisUiReportRef.current }
+            : null;
+        const uiReport = uiReportBase
+            ? {
+                ...uiReportBase,
+                storyboardTaskProgress: normalizeStoryboardTaskProgress(
+                    storyboardTaskProgressRef.current || uiReportBase.storyboardTaskProgress || EMPTY_STORYBOARD_TASK_PROGRESS
+                ),
+            }
+            : null;
+        const snapshot = {
+            flowStatus: analysisFlowStatusRef.current,
+            flowHistory: Array.isArray(analysisFlowHistoryRef.current) ? analysisFlowHistoryRef.current : [],
+            detailLogs: Array.isArray(analysisDetailLogsRef.current) ? analysisDetailLogsRef.current : [],
+            uiReport,
+            isAnalyzing: Boolean(latestIsAnalyzingRef.current),
+            ...patch,
+        };
+        latestAnalysisProgressUiRef.current = {
+            flowStatus: snapshot.flowStatus,
+            flowHistory: snapshot.flowHistory,
+            uiReport: snapshot.uiReport,
+            detailLogs: snapshot.detailLogs,
+        };
+        publishEpisodeAnalysisProgress(episodeId, snapshot);
+    }, []);
 
     const appendAnalysisDetailLog = useCallback((message, type = 'info') => {
         const text = String(message || '').trim();
@@ -2439,8 +2535,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 detailLogs: analysisDetailLogsRef.current,
             };
         }
-        setAnalysisDetailLogs([...analysisDetailLogsRef.current]);
-    }, []);
+        publishLiveAnalysisProgressSnapshot({ detailLogs: analysisDetailLogsRef.current });
+        if (scriptEditorMountedRef.current) {
+            setAnalysisDetailLogsState([...analysisDetailLogsRef.current]);
+        }
+    }, [publishLiveAnalysisProgressSnapshot]);
+
+    const setAnalysisDetailLogs = useCallback((updater) => {
+        const prev = analysisDetailLogsRef.current;
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        const resolved = Array.isArray(next) ? next : [];
+        analysisDetailLogsRef.current = resolved.slice(-ANALYSIS_DETAIL_LOG_CAP);
+        if (latestAnalysisProgressUiRef.current) {
+            latestAnalysisProgressUiRef.current = {
+                ...latestAnalysisProgressUiRef.current,
+                detailLogs: analysisDetailLogsRef.current,
+            };
+        }
+        publishLiveAnalysisProgressSnapshot({ detailLogs: analysisDetailLogsRef.current });
+        if (scriptEditorMountedRef.current) {
+            setAnalysisDetailLogsState([...analysisDetailLogsRef.current]);
+        }
+    }, [publishLiveAnalysisProgressSnapshot]);
 
     const onLog = useCallback((message, type = 'info') => {
         const businessMessage = toBusinessAnalysisLogMessage(message, t);
@@ -2554,8 +2670,56 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [reuseSubjectKeyword, setReuseSubjectKeyword] = useState('');
     const [isLoadingSubjectAssets, setIsLoadingSubjectAssets] = useState(false);
     const [isSavingReuseSubjects, setIsSavingReuseSubjects] = useState(false);
-    const [analysisFlowStatus, setAnalysisFlowStatus] = useState({ phase: 'idle', message: '' });
-    const [analysisFlowStatusHistory, setAnalysisFlowStatusHistory] = useState([]);
+    const [analysisFlowStatus, setAnalysisFlowStatusState] = useState({ phase: 'idle', message: '' });
+    const [analysisFlowStatusHistory, setAnalysisFlowStatusHistoryState] = useState([]);
+    const setAnalysisFlowStatusHistory = useCallback((updater) => {
+        const prev = analysisFlowHistoryRef.current;
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        const resolved = Array.isArray(next) ? next : [];
+        analysisFlowHistoryRef.current = resolved;
+        if (latestAnalysisProgressUiRef.current) {
+            latestAnalysisProgressUiRef.current = {
+                ...latestAnalysisProgressUiRef.current,
+                flowHistory: resolved,
+            };
+        }
+        publishLiveAnalysisProgressSnapshot({ flowHistory: resolved });
+        if (scriptEditorMountedRef.current) {
+            setAnalysisFlowStatusHistoryState(resolved);
+        }
+    }, [publishLiveAnalysisProgressSnapshot]);
+    const setAnalysisFlowStatus = useCallback((updater) => {
+        const prev = analysisFlowStatusRef.current;
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        const resolved = (next && typeof next === 'object')
+            ? next
+            : { phase: 'idle', message: '' };
+        analysisFlowStatusRef.current = resolved;
+        const phase = String(resolved?.phase || '').trim();
+        const message = String(resolved?.message || '').trim();
+        const highlightHint = String(resolved?.highlightHint || '').trim();
+        if (phase && phase !== 'idle' && message) {
+            analysisFlowHistoryRef.current = appendAnalysisFlowHistoryEntry(
+                analysisFlowHistoryRef.current,
+                { phase, message, highlightHint }
+            );
+        }
+        if (latestAnalysisProgressUiRef.current) {
+            latestAnalysisProgressUiRef.current = {
+                ...latestAnalysisProgressUiRef.current,
+                flowStatus: resolved,
+                flowHistory: analysisFlowHistoryRef.current,
+            };
+        }
+        publishLiveAnalysisProgressSnapshot({
+            flowStatus: resolved,
+            flowHistory: analysisFlowHistoryRef.current,
+        });
+        if (scriptEditorMountedRef.current) {
+            setAnalysisFlowStatusState(resolved);
+            setAnalysisFlowStatusHistoryState(analysisFlowHistoryRef.current);
+        }
+    }, [publishLiveAnalysisProgressSnapshot]);
     const sceneOrchestrationPanelReporterRef = useRef(null);
     const publishSceneOrchestrationPanelStatus = useCallback((payload) => {
         const reporter = sceneOrchestrationPanelReporterRef.current;
@@ -2563,7 +2727,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const status = reporter.report(payload);
         if (!status) return;
         setAnalysisFlowStatus(status);
-    }, []);
+    }, [setAnalysisFlowStatus]);
     const beginSceneOrchestrationPanelTracking = useCallback((totalScenes) => {
         sceneOrchestrationPanelReporterRef.current = createSceneOrchestrationPanelReporter({
             totalScenes: Math.max(1, Number(totalScenes) || 1),
@@ -2573,9 +2737,46 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const endSceneOrchestrationPanelTracking = useCallback(() => {
         sceneOrchestrationPanelReporterRef.current = null;
     }, []);
-    const [analysisUiReport, setAnalysisUiReport] = useState(null);
-    const [storyboardTaskProgress, setStoryboardTaskProgress] = useState(EMPTY_STORYBOARD_TASK_PROGRESS);
-    const storyboardTaskProgressRef = useRef(EMPTY_STORYBOARD_TASK_PROGRESS);
+    const [analysisUiReport, setAnalysisUiReportState] = useState(null);
+    const setAnalysisUiReport = useCallback((updater) => {
+        const prev = analysisUiReportRef.current;
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        analysisUiReportRef.current = next && typeof next === 'object' ? next : null;
+        if (latestAnalysisProgressUiRef.current) {
+            latestAnalysisProgressUiRef.current = {
+                ...latestAnalysisProgressUiRef.current,
+                uiReport: analysisUiReportRef.current,
+            };
+        }
+        publishLiveAnalysisProgressSnapshot({ uiReport: analysisUiReportRef.current });
+        if (scriptEditorMountedRef.current) {
+            setAnalysisUiReportState(analysisUiReportRef.current);
+        }
+    }, [publishLiveAnalysisProgressSnapshot]);
+    const [storyboardTaskProgress, setStoryboardTaskProgressState] = useState(EMPTY_STORYBOARD_TASK_PROGRESS);
+    const setStoryboardTaskProgress = useCallback((updater) => {
+        const prev = storyboardTaskProgressRef.current;
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        const resolved = normalizeStoryboardTaskProgress(next);
+        storyboardTaskProgressRef.current = resolved;
+        if (analysisUiReportRef.current && typeof analysisUiReportRef.current === 'object') {
+            analysisUiReportRef.current = {
+                ...analysisUiReportRef.current,
+                storyboardTaskProgress: resolved,
+            };
+        }
+        publishLiveAnalysisProgressSnapshot({
+            uiReport: analysisUiReportRef.current
+                ? { ...analysisUiReportRef.current, storyboardTaskProgress: resolved }
+                : { storyboardTaskProgress: resolved },
+        });
+        if (scriptEditorMountedRef.current) {
+            setStoryboardTaskProgressState(resolved);
+            if (analysisUiReportRef.current) {
+                setAnalysisUiReportState(analysisUiReportRef.current);
+            }
+        }
+    }, [publishLiveAnalysisProgressSnapshot]);
     const [analysisReviewIssues, setAnalysisReviewIssues] = useState([]);
     const analysisFallbackRetryRef = useRef({
         episodeId: null,
@@ -3560,56 +3761,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [t]);
 
     useEffect(() => {
-        const phase = String(analysisFlowStatus?.phase || '').trim();
-        const message = String(analysisFlowStatus?.message || '').trim();
-        const highlightHint = String(analysisFlowStatus?.highlightHint || '').trim();
-
-        if (!phase || phase === 'idle' || !message) return;
-
-        setAnalysisFlowStatusHistory((prev) => {
-            const lastItem = prev[prev.length - 1];
-            // For scene orchestration / storyboard phases with a per-scene highlightHint, always add a new
-            // entry so every scene's status update is visible (not overwritten by the next scene).
-            const isPerSceneHint = highlightHint && /「[^」]+」/.test(highlightHint);
-            const shouldAppendPerSceneUpdate = (
-                isPerSceneHint
-                && (phase === 'scene_beats' || phase === 'storyboard')
-            );
-            if (lastItem && lastItem.phase === phase && lastItem.message === message) {
-                if (highlightHint && highlightHint !== String(lastItem.highlightHint || '').trim()) {
-                    if (shouldAppendPerSceneUpdate) {
-                        // Fall through to add a new entry below
-                    } else {
-                        return [...prev.slice(0, -1), { ...lastItem, highlightHint }];
-                    }
-                } else {
-                    return prev;
-                }
-            }
-            const now = Date.now();
-            // Close every open entry — Number(null)===0 must not count as ended.
-            const next = prev.map((item) => (
-                hasAnalysisHistoryEndedAt(item) ? item : { ...item, endedAt: now }
-            ));
-            next.push({
-                id: `${now}-${prev.length}`,
-                phase,
-                message,
-                highlightHint,
-                createdAt: now,
-                endedAt: null,
-            });
-            return next.length > ANALYSIS_FLOW_HISTORY_CAP ? next.slice(-ANALYSIS_FLOW_HISTORY_CAP) : next;
-        });
-    }, [analysisFlowStatus?.phase, analysisFlowStatus?.message, analysisFlowStatus?.highlightHint]);
-
-    useEffect(() => {
         latestAnalysisProgressUiRef.current = {
             flowStatus: analysisFlowStatus,
             flowHistory: analysisFlowStatusHistory,
             uiReport: analysisUiReport,
             detailLogs: analysisDetailLogsRef.current,
         };
+        analysisFlowStatusRef.current = analysisFlowStatus;
+        analysisFlowHistoryRef.current = analysisFlowStatusHistory;
+        analysisUiReportRef.current = analysisUiReport;
     }, [analysisFlowStatus, analysisFlowStatusHistory, analysisUiReport, analysisDetailLogs]);
 
     useEffect(() => {
@@ -3690,6 +3850,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             analysisRunInFlightRef.current
             || analysisResumeInFlightRef.current
             || phase2GenerationInFlightRef.current
+            || analysisEntryLockRef.current
+            || isEpisodeAnalysisClaimed(activeEpisode?.id)
         );
         const progress = pickRicherStoryboardTaskProgress(
             storyboardTaskProgress,
@@ -10355,6 +10517,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const phase2GenerationInFlightRef = useRef(false);
     /** Synchronous entry lock so two analyze clicks cannot both pass the in-flight check during setup awaits. */
     const analysisEntryLockRef = useRef(false);
+    /** Module-level claim token for the current click/run (survives remount). */
+    const analysisClaimTokenRef = useRef('');
     /**
      * Episode id whose automatic Stage 3 already completed successfully in this browser session.
      * Blocks a second full auto asset-design fan-out after the first batch succeeds.
@@ -10386,10 +10550,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisResumeCoordinatorRef = useRef({ running: false, episodeId: null });
     const detachedAnalysisRunEpisodeRef = useRef(null);
     const mountResumeReadyRef = useRef(false);
-    const scriptEditorMountedRef = useRef(true);
     const forceRegenerateRef = useRef(false);
     const autoImportRunningRef = useRef(false);
-    const latestActiveEpisodeIdRef = useRef(null);
 
     useEffect(() => {
         captureAnalysisLogRef.current = () => {
@@ -10569,23 +10731,88 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const clearAnalysisProgressUiState = useCallback((episodeId, { persist = true } = {}) => {
         const id = Number(episodeId || activeEpisode?.id || 0);
         analysisTimerStartedAtRef.current = 0;
+        latestIsAnalyzingRef.current = false;
         setIsAnalyzing(false);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({ phase: 'idle', message: '' });
         setAnalysisFlowStatusHistory([]);
-        analysisDetailLogsRef.current = [];
         setAnalysisDetailLogs([]);
         setAnalysisUiReport(null);
         setAnalysisReviewIssues([]);
         resetStoryboardKickoffTracking();
+        if (id) {
+            clearEpisodeAnalysisProgress(id);
+            clearEpisodeAnalysisDetached(id);
+        }
         if (persist && id) {
             clearAnalysisSessionProgressSnapshot(id);
         }
-    }, [activeEpisode?.id, resetStoryboardKickoffTracking]);
+    }, [activeEpisode?.id, resetStoryboardKickoffTracking, setAnalysisDetailLogs, setAnalysisFlowStatus, setAnalysisFlowStatusHistory, setAnalysisUiReport]);
+
+    const applyLiveAnalysisProgressSnapshot = useCallback((snapshot) => {
+        if (!snapshot || typeof snapshot !== 'object') return false;
+        applyingRemoteProgressRef.current = true;
+        try {
+            const flowStatus = (snapshot.flowStatus && typeof snapshot.flowStatus === 'object')
+                ? snapshot.flowStatus
+                : { phase: 'idle', message: '' };
+            const flowHistory = Array.isArray(snapshot.flowHistory) ? snapshot.flowHistory : [];
+            const detailLogs = Array.isArray(snapshot.detailLogs) ? snapshot.detailLogs : [];
+            const uiReport = (snapshot.uiReport && typeof snapshot.uiReport === 'object') ? snapshot.uiReport : null;
+
+            analysisFlowStatusRef.current = flowStatus;
+            analysisFlowHistoryRef.current = flowHistory;
+            analysisDetailLogsRef.current = detailLogs.slice(-ANALYSIS_DETAIL_LOG_CAP);
+            analysisUiReportRef.current = uiReport;
+            latestAnalysisProgressUiRef.current = {
+                flowStatus,
+                flowHistory,
+                uiReport,
+                detailLogs: analysisDetailLogsRef.current,
+            };
+
+            setAnalysisFlowStatusState(flowStatus);
+            setAnalysisFlowStatusHistoryState(flowHistory);
+            setAnalysisDetailLogsState([...analysisDetailLogsRef.current]);
+            if (uiReport) {
+                setAnalysisUiReportState(uiReport);
+                setAnalysisReviewIssues(Array.isArray(uiReport.reviewIssues) ? uiReport.reviewIssues : []);
+                const restoredStoryboard = normalizeStoryboardTaskProgress(uiReport.storyboardTaskProgress);
+                if (Number(restoredStoryboard.started || 0) > 0 || Object.keys(restoredStoryboard.items || {}).length > 0) {
+                    storyboardTaskProgressRef.current = restoredStoryboard;
+                    setStoryboardTaskProgressState(restoredStoryboard);
+                }
+                if (String(uiReport?.status || '').trim().toLowerCase() === 'running') {
+                    beginAnalysisTimer(Number(uiReport?.startedAt || Date.now()));
+                }
+            }
+            if (Object.prototype.hasOwnProperty.call(snapshot, 'isAnalyzing')) {
+                latestIsAnalyzingRef.current = Boolean(snapshot.isAnalyzing);
+                setIsAnalyzing(Boolean(snapshot.isAnalyzing));
+            }
+            return true;
+        } finally {
+            applyingRemoteProgressRef.current = false;
+        }
+    }, [beginAnalysisTimer]);
 
     const restoreAnalysisProgressFromSession = useCallback((episodeId) => {
         const id = Number(episodeId || 0);
         if (!id) return false;
+        const live = getEpisodeAnalysisProgress(id);
+        if (live && Number(live.updatedAt || 0) > 0) {
+            analysisProgressDismissedRef.current = false;
+            applyLiveAnalysisProgressSnapshot(live);
+            if (live.isAnalyzing || isPersistedAnalysisProgressRunning({
+                flowStatus: live.flowStatus,
+                flowHistory: live.flowHistory,
+                uiReport: live.uiReport,
+            })) {
+                setIsAnalyzing(true);
+                latestIsAnalyzingRef.current = true;
+            }
+            return true;
+        }
         const snapshot = loadAnalysisSessionSnapshot(id);
         const progressUi = snapshot?.progressUi;
         if (!progressUi || progressUi.dismissed === true) {
@@ -10601,22 +10828,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const detailLogs = Array.isArray(progressUi.detailLogs) ? progressUi.detailLogs : [];
         const uiReport = (progressUi.uiReport && typeof progressUi.uiReport === 'object') ? progressUi.uiReport : null;
         if (!isRunning && !hasPersistableAnalysisProgress(flowStatus, flowHistory, uiReport)) return false;
-        setAnalysisFlowStatus(flowStatus);
-        setAnalysisFlowStatusHistory(flowHistory);
-        analysisDetailLogsRef.current = detailLogs.slice(-ANALYSIS_DETAIL_LOG_CAP);
-        setAnalysisDetailLogs([...analysisDetailLogsRef.current]);
-        if (uiReport) {
-            setAnalysisUiReport(uiReport);
-            setAnalysisReviewIssues(Array.isArray(uiReport.reviewIssues) ? uiReport.reviewIssues : []);
-            const restoredStoryboard = normalizeStoryboardTaskProgress(uiReport.storyboardTaskProgress);
-            if (Number(restoredStoryboard.started || 0) > 0 || Object.keys(restoredStoryboard.items || {}).length > 0) {
-                storyboardTaskProgressRef.current = restoredStoryboard;
-                setStoryboardTaskProgress(restoredStoryboard);
-            }
-            if (String(uiReport?.status || '').trim().toLowerCase() === 'running') {
-                beginAnalysisTimer(Number(uiReport?.startedAt || Date.now()));
-            }
-        }
+        applyLiveAnalysisProgressSnapshot({
+            flowStatus,
+            flowHistory,
+            detailLogs,
+            uiReport,
+            isAnalyzing: isRunning,
+        });
         if (isRunning) {
             setIsAnalyzing(true);
             try {
@@ -10652,7 +10870,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setIsAnalyzing(false);
         }
         return true;
-    }, [beginAnalysisTimer, hasPersistableAnalysisProgress, t]);
+    }, [applyLiveAnalysisProgressSnapshot, beginAnalysisTimer, hasPersistableAnalysisProgress, setAnalysisFlowStatus, setAnalysisUiReport, t]);
 
     const dismissAnalysisProgressPanel = useCallback(() => {
         analysisProgressDismissedRef.current = true;
@@ -10662,14 +10880,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({ phase: 'idle', message: '' });
         setAnalysisFlowStatusHistory([]);
-        analysisDetailLogsRef.current = [];
         setAnalysisDetailLogs([]);
         setAnalysisUiReport(null);
         setAnalysisReviewIssues([]);
         if (activeEpisode?.id) {
+            clearEpisodeAnalysisProgress(activeEpisode.id);
+            clearEpisodeAnalysisDetached(activeEpisode.id);
             persistAnalysisSessionSnapshot(activeEpisode.id);
         }
-    }, [activeEpisode?.id, persistAnalysisSessionSnapshot]);
+    }, [activeEpisode?.id, persistAnalysisSessionSnapshot, setAnalysisDetailLogs, setAnalysisFlowStatus, setAnalysisFlowStatusHistory, setAnalysisUiReport]);
 
     const terminalAnalysisToastKeyRef = useRef('');
     // After imports finish: use a self-dismissing toast instead of a blocking modal.
@@ -10955,6 +11174,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phase2GenerationInFlightRef.current = false;
                 analysisRunInFlightRef.current = false;
                 analysisEntryLockRef.current = false;
+                if (activeEpisode?.id) {
+                    releaseEpisodeAnalysisClaim(activeEpisode.id);
+                    analysisClaimTokenRef.current = '';
+                }
                 setAnalysisFlowStatus({
                     phase: 'warning',
                     message: t('已请求停止当前剧本分析流程。', 'Stop requested for the current script analysis flow.'),
@@ -10996,6 +11219,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phase2GenerationInFlightRef.current = false;
             analysisRunInFlightRef.current = false;
             analysisEntryLockRef.current = false;
+            if (activeEpisode?.id) {
+                releaseEpisodeAnalysisClaim(activeEpisode.id);
+                analysisClaimTokenRef.current = '';
+            }
         }
     }, [activeAnalysisTaskId, activeEpisode?.id, clearAnalysisTaskMarker, isAnalyzing, isRetryingPhase2, loadAnalysisTaskMarker, onLog, t]);
     const refreshAnalysisFromDB = useCallback(async ({ resultField = 'ai_scene_analysis_result' } = {}) => {
@@ -13466,17 +13693,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     useEffect(() => {
         latestIsAnalyzingRef.current = Boolean(isAnalyzing);
         latestActiveEpisodeIdRef.current = activeEpisode?.id || null;
+        const episodeId = Number(activeEpisode?.id || 0);
+        if (!episodeId || applyingRemoteProgressRef.current) return;
+        publishEpisodeAnalysisProgress(episodeId, { isAnalyzing: Boolean(isAnalyzing) });
     }, [isAnalyzing, activeEpisode?.id]);
 
     const resetBootstrapAnalysisUiIfIdle = useCallback(() => {
         const episodeId = activeEpisode?.id;
         if (!episodeId) return;
+        if (analysisEntryLockRef.current || isEpisodeAnalysisClaimed(episodeId)) return;
         const marker = loadAnalysisTaskMarker(episodeId);
         const stillLive = isEpisodeAnalysisTaskLive(episodeId, {
             loadAnalysisTaskMarker,
             analysisResumeInFlight: analysisResumeInFlightRef.current,
             analysisRunInFlight: analysisRunInFlightRef.current,
             phase2GenerationInFlight: phase2GenerationInFlightRef.current,
+            analysisEntryLock: analysisEntryLockRef.current,
         });
         if (marker?.taskId || stillLive) return;
 
@@ -13609,11 +13841,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const hasPendingWork = Boolean(pendingMarker?.taskId || activeRun?.promise);
         if (!hasPendingWork) {
             // Stale isAnalyzing with no live marker/run (often after storyboard settles on phase=storyboard).
+            // Never clear while a click claim / entry lock is held (prep before LLM task id exists).
             if (
                 (isAnalyzing || isRetryingPhase2)
                 && !analysisRunInFlightRef.current
                 && !analysisResumeInFlightRef.current
                 && !phase2GenerationInFlightRef.current
+                && !analysisEntryLockRef.current
+                && !isEpisodeAnalysisClaimed(episodeId)
             ) {
                 const ui = latestAnalysisProgressUiRef.current || {};
                 const phase = String(ui?.flowStatus?.phase || '').trim().toLowerCase();
@@ -13663,23 +13898,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             let refreshedRun = getEpisodeAnalysisRun(episodeId);
             if (refreshedRun?.promise) {
-                const runTaskId = String(refreshedRun.taskId || loadAnalysisTaskMarker(episodeId)?.taskId || '').trim();
-                const runLive = analysisRunInFlightRef.current
-                    || analysisResumeInFlightRef.current
-                    || (runTaskId && isAsyncTaskPollInFlight(runTaskId));
-                if (!runLive) {
-                    releaseEpisodeAnalysisRun(episodeId, refreshedRun.promise);
-                    refreshedRun = null;
-                }
-            }
-            if (refreshedRun?.promise) {
+                // Registry promise is the source of truth across remount. Never drop it just
+                // because this ScriptEditor instance's in-flight refs are cold.
                 if (analysisRunInFlightRef.current) {
                     bootstrapPendingAnalysisUi();
                     return;
                 }
-                if (detachedAnalysisRunEpisodeRef.current !== episodeId) {
-                    return;
-                }
+                clearEpisodeAnalysisDetached(episodeId);
                 detachedAnalysisRunEpisodeRef.current = null;
                 await reattachToExistingAnalysisRun(refreshedRun);
                 return;
@@ -13764,9 +13989,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!episodeId) return;
 
         scriptEditorMountedRef.current = true;
+        latestActiveEpisodeIdRef.current = episodeId;
         mountResumeReadyRef.current = false;
         restoreAnalysisProgressFromSession(episodeId);
         bootstrapPendingAnalysisUi();
+        // Remount during prep/clear must keep the CTA in running state if a module claim is held.
+        if (isEpisodeAnalysisClaimed(episodeId)) {
+            setIsAnalyzing(true);
+            latestIsAnalyzingRef.current = true;
+        }
+
+        const unsubscribeProgress = subscribeEpisodeAnalysisProgress(episodeId, (snapshot) => {
+            if (!scriptEditorMountedRef.current) return;
+            if (analysisProgressDismissedRef.current) return;
+            if (!snapshot || typeof snapshot !== 'object') return;
+            // Owner instance already has React state; avoid echo loops while writing.
+            if (analysisRunInFlightRef.current && !isEpisodeAnalysisDetached(episodeId)) return;
+            applyLiveAnalysisProgressSnapshot(snapshot);
+        });
+
         let cancelled = false;
         (async () => {
             ensureAnalysisFallbackState(episodeId);
@@ -13792,11 +14033,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             scriptEditorMountedRef.current = false;
             mountResumeReadyRef.current = false;
             cancelled = true;
+            unsubscribeProgress();
             const leavingEpisodeId = Number(latestActiveEpisodeIdRef.current || episodeId);
             if (!leavingEpisodeId) return;
 
-            if (getEpisodeAnalysisRun(leavingEpisodeId)?.promise) {
+            if (getEpisodeAnalysisRun(leavingEpisodeId)?.promise || isEpisodeAnalysisClaimed(leavingEpisodeId)) {
+                markEpisodeAnalysisDetached(leavingEpisodeId);
                 detachedAnalysisRunEpisodeRef.current = leavingEpisodeId;
+                // Flush one last live snapshot so remount hydrates beyond leave-time localStorage.
+                publishLiveAnalysisProgressSnapshot({
+                    isAnalyzing: Boolean(latestIsAnalyzingRef.current),
+                });
             }
             persistAnalysisSessionSnapshot(leavingEpisodeId);
             const stillRunning = isEpisodeAnalysisTaskLive(leavingEpisodeId, {
@@ -14915,25 +15162,42 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             alert("Script content is too short for analysis.");
             return;
         }
-        // Sync ref lock first — setState is async, so isAnalyzing alone cannot stop double-clicks.
+        const episodeId = Number(activeEpisode?.id || 0);
+        if (!episodeId) {
+            alert("No active episode selected.");
+            return;
+        }
+
+        // Sync locks first — setState is async; module claim survives remount during clear/refresh.
         if (
             isAnalyzing
             || analysisRunInFlightRef?.current
             || analysisResumeInFlightRef?.current
             || analysisEntryLockRef?.current
+            || isEpisodeAnalysisClaimed(episodeId)
         ) {
             onLog?.("Already analyzing, duplicate click prevented.");
+            setIsAnalyzing(true);
             return;
         }
 
-        // Enter running state immediately (before autosave / confirms / clear) so the button
-        // shows "分析中..." and stays disabled on the first click.
+        const claim = tryClaimEpisodeAnalysis(episodeId, 'ai_script_analysis_click');
+        if (!claim.ok) {
+            onLog?.("Already analyzing (module claim), duplicate click prevented.");
+            setIsAnalyzing(true);
+            return;
+        }
+
+        // Enter running state immediately (before autosave / confirms / clear).
         analysisEntryLockRef.current = true;
+        analysisClaimTokenRef.current = claim.token;
         analysisProgressDismissedRef.current = false;
         setIsAnalyzing(true);
         beginAnalysisRestartUi(Date.now());
 
         const releaseAnalysisClickClaim = () => {
+            releaseEpisodeAnalysisClaim(episodeId, analysisClaimTokenRef.current);
+            analysisClaimTokenRef.current = '';
             analysisEntryLockRef.current = false;
             setIsAnalyzing(false);
             setAnalysisFlowStatus({ phase: 'idle', message: '' });
@@ -14961,8 +15225,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         }, 2000);
                     } catch (e) {
                         console.error("Script split failed", e);
-                        analysisEntryLockRef.current = false;
-                        setIsAnalyzing(false);
+                        releaseAnalysisClickClaim();
                         setAnalysisFlowStatus({ phase: 'failed', message: t('剧本分集失败：', 'Split failed: ') + (e.message || e) });
                         alert(t("分集失败: ", "Split failed: ") + (e.message || e));
                     }
@@ -15074,18 +15337,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             forceRegenerateRef.current = true;
             analysisProgressDismissedRef.current = false;
             beginAnalysisRestartUi(Date.now());
+            // Hold local in-flight flag through handoff so remount/resume cannot treat prep as stale.
+            analysisRunInFlightRef.current = true;
 
             const stage1Input = ensureStage1ProjectContextInjected(actualContent);
 
             try {
                 const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
-                executeAdvancedAnalysis(stage1Input, res.content, 0, true);
+                await executeAdvancedAnalysis(stage1Input, res.content, 0, true);
             } catch (e) {
                 console.error("Failed to fetch system prompt", e);
-                executeAnalysis(stage1Input, null, true);
+                await executeAnalysis(stage1Input, null, true);
             }
         } catch (prepErr) {
             console.error('AI Script Analysis prep failed', prepErr);
+            analysisRunInFlightRef.current = false;
             releaseAnalysisClickClaim();
             alert(t(
                 `启动剧本分析失败：${prepErr?.message || prepErr}`,
@@ -15813,6 +16079,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const forceRegenerate = forceRegenerateRef.current;
         forceRegenerateRef.current = false;
         const episodeId = activeEpisode?.id;
+        const claimToken = String(analysisClaimTokenRef.current || '').trim();
+        let handedOffToTrackedRun = false;
 
         if (forceRegenerate && episodeId) {
             releaseEpisodeAnalysisRun(episodeId);
@@ -16288,10 +16556,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         const runPromise = runAnalysisPipeline();
 
-        trackEpisodeAnalysisRun(episodeId, runPromise, { startedAt, kind: 'standard' });
+        trackEpisodeAnalysisRun(episodeId, runPromise, {
+            startedAt,
+            kind: 'standard',
+            claimToken,
+        });
+        handedOffToTrackedRun = true;
+        await runPromise;
         return runPromise;
         } finally {
             analysisEntryLockRef.current = false;
+            if (!handedOffToTrackedRun && episodeId) {
+                releaseEpisodeAnalysisClaim(episodeId, claimToken || undefined);
+                if (analysisClaimTokenRef.current === claimToken) {
+                    analysisClaimTokenRef.current = '';
+                }
+                if (!getEpisodeAnalysisRun(episodeId)?.promise) {
+                    analysisRunInFlightRef.current = false;
+                }
+            }
         }
     };
 
@@ -16369,6 +16652,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const forceRegenerate = forceRegenerateRef.current;
         forceRegenerateRef.current = false;
         const episodeId = activeEpisode.id;
+        const claimToken = String(analysisClaimTokenRef.current || '').trim();
+        let handedOffToTrackedRun = false;
 
         if (forceRegenerate) {
             releaseEpisodeAnalysisRun(episodeId);
@@ -16378,6 +16663,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return reattachToExistingAnalysisRun(existingRun);
             }
         }
+        // Block parallel pipelines for this instance. Module claim already covers remount/double-click;
+        // forceRegenerate must still not stack a second Stage-1 call while local in-flight is true
+        // from the same click handoff (analysisRunInFlightRef set in handleAnalysisClick).
         if (!forceRegenerate && (analysisRunInFlightRef.current || analysisResumeInFlightRef.current || analysisEntryLockRef.current)) {
             if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
@@ -17356,10 +17644,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         const runPromise = runAnalysisPipeline();
 
-        trackEpisodeAnalysisRun(episodeId, runPromise, { startedAt, kind: 'advanced' });
+        trackEpisodeAnalysisRun(episodeId, runPromise, {
+            startedAt,
+            kind: 'advanced',
+            claimToken,
+        });
+        handedOffToTrackedRun = true;
+        try {
+            await runPromise;
+        } finally {
+            // Keep entry lock until the pipeline settles so remount/resume cannot start a twin.
+        }
         return runPromise;
         } finally {
             analysisEntryLockRef.current = false;
+            if (!handedOffToTrackedRun) {
+                releaseEpisodeAnalysisClaim(episodeId, claimToken || undefined);
+                if (analysisClaimTokenRef.current === claimToken) {
+                    analysisClaimTokenRef.current = '';
+                }
+                // handleAnalysisClick may have armed this before handoff; clear on abort paths.
+                if (!getEpisodeAnalysisRun(episodeId)?.promise) {
+                    analysisRunInFlightRef.current = false;
+                }
+            }
         }
     };
 

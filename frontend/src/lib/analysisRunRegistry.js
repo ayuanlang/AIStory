@@ -1,7 +1,29 @@
 const analysisRunsByEpisode = new Map();
+/** Soft-start / in-flight claims that survive ScriptEditor remount (episode refresh). */
+const analysisClaimsByEpisode = new Map();
+/** Live progress UI snapshots that survive ScriptEditor remount. */
+const analysisProgressByEpisode = new Map();
+const analysisProgressListenersByEpisode = new Map();
+/** Episodes whose ScriptEditor unmounted while a run promise is still live. */
+const detachedAnalysisEpisodes = new Set();
+
+function toEpisodeId(episodeId) {
+    return Number(episodeId || 0);
+}
+
+function emptyProgressSnapshot() {
+    return {
+        flowStatus: { phase: 'idle', message: '' },
+        flowHistory: [],
+        detailLogs: [],
+        uiReport: null,
+        isAnalyzing: false,
+        updatedAt: 0,
+    };
+}
 
 export function trackEpisodeAnalysisRun(episodeId, runPromise, meta = {}) {
-    const id = Number(episodeId || 0);
+    const id = toEpisodeId(episodeId);
     if (!id || !runPromise) return null;
 
     const entry = {
@@ -11,21 +33,41 @@ export function trackEpisodeAnalysisRun(episodeId, runPromise, meta = {}) {
         kind: String(meta.kind || 'analysis'),
         phase: meta.phase ?? 1,
         taskId: String(meta.taskId || '').trim(),
+        claimToken: String(meta.claimToken || analysisClaimsByEpisode.get(id)?.token || '').trim(),
     };
     analysisRunsByEpisode.set(id, entry);
+
+    // Ensure a claim stays alive for the whole tracked run (covers remount mid-flight).
+    if (entry.claimToken) {
+        analysisClaimsByEpisode.set(id, {
+            token: entry.claimToken,
+            claimedAt: Number(meta.startedAt || Date.now()),
+            source: String(meta.kind || 'analysis'),
+        });
+    } else {
+        const token = `run_${id}_${Date.now()}`;
+        entry.claimToken = token;
+        analysisClaimsByEpisode.set(id, {
+            token,
+            claimedAt: Number(meta.startedAt || Date.now()),
+            source: String(meta.kind || 'analysis'),
+        });
+    }
 
     runPromise.finally(() => {
         const current = analysisRunsByEpisode.get(id);
         if (current?.promise === runPromise) {
             analysisRunsByEpisode.delete(id);
         }
+        releaseEpisodeAnalysisClaim(id, entry.claimToken);
+        clearEpisodeAnalysisDetached(id);
     });
 
     return entry;
 }
 
 export function getEpisodeAnalysisRun(episodeId) {
-    const id = Number(episodeId || 0);
+    const id = toEpisodeId(episodeId);
     if (!id) return null;
     return analysisRunsByEpisode.get(id) || null;
 }
@@ -38,10 +80,175 @@ export function updateEpisodeAnalysisRun(episodeId, patch = {}) {
 }
 
 export function releaseEpisodeAnalysisRun(episodeId, runPromise = null) {
-    const id = Number(episodeId || 0);
+    const id = toEpisodeId(episodeId);
     if (!id) return;
     const current = analysisRunsByEpisode.get(id);
     if (!current) return;
     if (runPromise && current.promise !== runPromise) return;
     analysisRunsByEpisode.delete(id);
+    clearEpisodeAnalysisDetached(id);
+}
+
+/**
+ * Try to claim an episode analysis start. Fails if another start/run already holds the claim.
+ * Survives component remount (module-level).
+ */
+export function tryClaimEpisodeAnalysis(episodeId, source = 'analysis') {
+    const id = toEpisodeId(episodeId);
+    if (!id) return { ok: false, token: '', reason: 'no_episode' };
+    if (analysisClaimsByEpisode.has(id) || analysisRunsByEpisode.has(id)) {
+        return { ok: false, token: '', reason: 'busy' };
+    }
+    const token = `claim_${id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    analysisClaimsByEpisode.set(id, {
+        token,
+        claimedAt: Date.now(),
+        source: String(source || 'analysis'),
+    });
+    return { ok: true, token, reason: '' };
+}
+
+/**
+ * Take over / refresh claim for an intentional regenerate after user confirmation.
+ */
+export function forceClaimEpisodeAnalysis(episodeId, source = 'analysis') {
+    const id = toEpisodeId(episodeId);
+    if (!id) return { ok: false, token: '', reason: 'no_episode' };
+    const token = `claim_${id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    analysisClaimsByEpisode.set(id, {
+        token,
+        claimedAt: Date.now(),
+        source: String(source || 'analysis'),
+    });
+    return { ok: true, token, reason: '' };
+}
+
+export function releaseEpisodeAnalysisClaim(episodeId, token = null) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return false;
+    const current = analysisClaimsByEpisode.get(id);
+    if (!current) return false;
+    if (token && current.token !== token) return false;
+    analysisClaimsByEpisode.delete(id);
+    return true;
+}
+
+export function isEpisodeAnalysisClaimed(episodeId) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return false;
+    return analysisClaimsByEpisode.has(id) || analysisRunsByEpisode.has(id);
+}
+
+export function getEpisodeAnalysisClaim(episodeId) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return null;
+    return analysisClaimsByEpisode.get(id) || null;
+}
+
+export function markEpisodeAnalysisDetached(episodeId) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return;
+    detachedAnalysisEpisodes.add(id);
+}
+
+export function clearEpisodeAnalysisDetached(episodeId) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return;
+    detachedAnalysisEpisodes.delete(id);
+}
+
+export function isEpisodeAnalysisDetached(episodeId) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return false;
+    return detachedAnalysisEpisodes.has(id);
+}
+
+/**
+ * Publish live progress for an episode. Survives ScriptEditor unmount so remount can subscribe.
+ * Patch fields merge shallowly; arrays/objects in the patch replace that field.
+ */
+export function publishEpisodeAnalysisProgress(episodeId, patch = {}) {
+    const id = toEpisodeId(episodeId);
+    if (!id || !patch || typeof patch !== 'object') return null;
+
+    const prev = analysisProgressByEpisode.get(id) || emptyProgressSnapshot();
+    const next = {
+        ...prev,
+        ...patch,
+        updatedAt: Date.now(),
+    };
+    if (patch.flowStatus && typeof patch.flowStatus === 'object') {
+        next.flowStatus = { ...(prev.flowStatus || {}), ...patch.flowStatus };
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'uiReport')) {
+        next.uiReport = patch.uiReport && typeof patch.uiReport === 'object'
+            ? { ...(prev.uiReport || {}), ...patch.uiReport }
+            : patch.uiReport;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'flowHistory') && Array.isArray(patch.flowHistory)) {
+        next.flowHistory = patch.flowHistory;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'detailLogs') && Array.isArray(patch.detailLogs)) {
+        next.detailLogs = patch.detailLogs;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'isAnalyzing')) {
+        next.isAnalyzing = Boolean(patch.isAnalyzing);
+    }
+    analysisProgressByEpisode.set(id, next);
+
+    const listeners = analysisProgressListenersByEpisode.get(id);
+    if (listeners && listeners.size > 0) {
+        listeners.forEach((listener) => {
+            try {
+                listener(next);
+            } catch (_) {
+                // Ignore subscriber failures so publishers keep running.
+            }
+        });
+    }
+    return next;
+}
+
+export function getEpisodeAnalysisProgress(episodeId) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return null;
+    return analysisProgressByEpisode.get(id) || null;
+}
+
+export function clearEpisodeAnalysisProgress(episodeId) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return;
+    analysisProgressByEpisode.delete(id);
+}
+
+/**
+ * Subscribe to live progress for an episode. Returns unsubscribe.
+ * Immediately invokes listener with current snapshot if one exists.
+ */
+export function subscribeEpisodeAnalysisProgress(episodeId, listener) {
+    const id = toEpisodeId(episodeId);
+    if (!id || typeof listener !== 'function') return () => {};
+
+    let listeners = analysisProgressListenersByEpisode.get(id);
+    if (!listeners) {
+        listeners = new Set();
+        analysisProgressListenersByEpisode.set(id, listeners);
+    }
+    listeners.add(listener);
+
+    const current = analysisProgressByEpisode.get(id);
+    if (current) {
+        try {
+            listener(current);
+        } catch (_) {
+            // Ignore initial hydrate failures.
+        }
+    }
+
+    return () => {
+        const set = analysisProgressListenersByEpisode.get(id);
+        if (!set) return;
+        set.delete(listener);
+        if (set.size === 0) analysisProgressListenersByEpisode.delete(id);
+    };
 }
