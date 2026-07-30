@@ -234,6 +234,17 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
             payload_status or None,
             callback_task_id or None,
         )
+        try:
+            await asyncio.to_thread(
+                _arm_followup_poll_after_progress_callback,
+                stable_ticket,
+                normalized_payload if isinstance(normalized_payload, dict) else {},
+            )
+        except Exception:
+            logger.exception(
+                "[GenerationCallback] failed to arm followup poll after running | ticket=%s",
+                stable_ticket,
+            )
         return {"ok": True, "ticket": stable_ticket, "accepted": True}
 
     if _mark_generation_callback_inflight(stable_ticket):

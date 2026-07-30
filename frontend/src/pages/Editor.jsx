@@ -273,6 +273,8 @@ const Editor = ({
     // Global Logging Context
     const { addLog } = useLog();
     const episodesLoadPromiseRef = useRef(null);
+    // Prevent infinite auto-create retries when project is missing/deleted (404) but UI still retries.
+    const episodesBootstrapFailedRef = useRef(false);
     const episodesRef = useRef([]);
     const activeEpisodeIdRef = useRef(initialEpisodeId);
     const previousProjectIdRef = useRef(null);
@@ -492,24 +494,36 @@ const Editor = ({
 
     const loadEpisodesForEditor = useCallback(async (projectSnapshot = null) => {
         if (!id) return [];
+        if (episodesBootstrapFailedRef.current) return [];
         if (episodesLoadPromiseRef.current) {
             return episodesLoadPromiseRef.current;
         }
 
         setIsEpisodesLoading(true);
         const loadPromise = (async () => {
-            let eps = await fetchEpisodes(id).catch(() => []);
-            if (eps.length === 0 && projectSnapshot) {
+            let fetchError = null;
+            let eps = await fetchEpisodes(id).catch((err) => {
+                fetchError = err;
+                return [];
+            });
+            // Only auto-create when list fetch succeeded empty — never after project 404/access errors.
+            if (eps.length === 0 && projectSnapshot && !fetchError) {
                 const newEp = await createEpisode(id, { title: "Episode 1" });
                 eps = [newEp];
             }
+            if (fetchError) throw fetchError;
             return hydrateEpisodesState(eps);
         })();
 
         episodesLoadPromiseRef.current = loadPromise;
 
         try {
-            return await loadPromise;
+            const result = await loadPromise;
+            episodesBootstrapFailedRef.current = false;
+            return result;
+        } catch (err) {
+            episodesBootstrapFailedRef.current = true;
+            throw err;
         } finally {
             episodesLoadPromiseRef.current = null;
             setIsEpisodesLoading(false);
@@ -537,6 +551,7 @@ const Editor = ({
 
         if (!hasProjectChanged) return;
 
+        episodesBootstrapFailedRef.current = false;
         episodesRef.current = [];
         setEpisodes([]);
         setActiveEpisodeId(initialEpisodeId ?? null);
@@ -712,7 +727,10 @@ const Editor = ({
     useEffect(() => {
         if (!EPISODE_REQUIRED_TABS.has(activeTab)) return;
         if (episodes.length > 0 || isEpisodesLoading) return;
-        void loadEpisodesForEditor(project);
+        if (episodesBootstrapFailedRef.current) return;
+        void loadEpisodesForEditor(project).catch((episodeErr) => {
+            console.error('Failed to load episodes for tab', episodeErr);
+        });
     }, [activeTab, episodes.length, isEpisodesLoading, loadEpisodesForEditor, project]);
 
     useEffect(() => {

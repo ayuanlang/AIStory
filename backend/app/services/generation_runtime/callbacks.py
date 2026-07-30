@@ -2238,6 +2238,62 @@ from app.services.generation_runtime.video_job_billing import (  # noqa: E402
 )
 
 
+def _arm_followup_poll_after_progress_callback(ticket: str, payload: Dict[str, Any]) -> None:
+    """Bind provider task id from a running webhook and start early poll recovery.
+
+    Production often receives only ``running`` and never a usable ``succeeded`` webhook.
+    Waiting for the hard running-timeout leaves jobs stuck for ~20 minutes.
+    """
+    stable_ticket = str(ticket or "").strip()
+    if not stable_ticket:
+        return
+
+    callback_task_id = _extract_callback_task_id(payload if isinstance(payload, dict) else {})
+    kind = ""
+    if stable_ticket.startswith("video-job-"):
+        kind = "video"
+        matched = _find_video_jobs_by_provider_callback_ticket(stable_ticket)
+        set_job = _set_video_job
+    elif stable_ticket.startswith("image-job-"):
+        kind = "image"
+        matched = _find_image_jobs_by_provider_callback_ticket(stable_ticket)
+        set_job = _set_image_job
+    else:
+        return
+
+    if not matched:
+        logger.info(
+            "[GenerationCallback] progress callback has no matching %s job for followup | ticket=%s task_id=%s",
+            kind,
+            stable_ticket,
+            callback_task_id or None,
+        )
+        return
+
+    from app.services.generation_runtime.timeout_poll_recovery import maybe_start_callback_followup_poll
+
+    for job_id, job in matched:
+        updates: Dict[str, Any] = {}
+        existing_task_id = _extract_job_provider_task_id(job)
+        if callback_task_id and callback_task_id != existing_task_id:
+            # Prefer callback task id when job is missing it; never overwrite a different id.
+            if not existing_task_id:
+                updates["provider_task_id"] = callback_task_id
+        if updates:
+            set_job(job_id, **updates)
+            job = dict(job)
+            job.update(updates)
+        started = maybe_start_callback_followup_poll(kind, job_id, job)
+        logger.info(
+            "[GenerationCallback] followup poll arm | kind=%s job_id=%s ticket=%s task_id=%s started=%s",
+            kind,
+            job_id,
+            stable_ticket,
+            _extract_job_provider_task_id(job) or callback_task_id or None,
+            started,
+        )
+
+
 async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> None:
     from app.services.generation_task_queue import mark_generation_task_status_external
 

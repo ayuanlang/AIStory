@@ -11274,18 +11274,24 @@ class MediaGenerationService:
             .replace("{id}", urllib.parse.quote(task_id))
         )
 
+        max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
         logger.info(
-            "NukoAi poll-only generation started | task_id=%s model=%s duration=%s ratio=%s poll_interval=%ss",
+            "NukoAi poll-only generation started | task_id=%s model=%s duration=%s ratio=%s poll_interval=%ss poll_timeout=%ss max_attempts=%s poll_url=%s",
             task_id,
             model,
             duration_in,
             normalized_ratio,
             poll_interval_seconds,
+            poll_timeout_seconds,
+            max_attempts,
+            poll_url,
         )
 
-        max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+        last_logged_status = ""
+        poll_started_at = time.time()
         for attempt in range(1, max_attempts + 1):
             await asyncio.sleep(poll_interval_seconds)
+            elapsed_s = int(time.time() - poll_started_at)
             try:
                 poll_resp = await asyncio.to_thread(
                     requests.get,
@@ -11295,8 +11301,23 @@ class MediaGenerationService:
                     verify=False,
                 )
             except requests.exceptions.Timeout:
+                logger.warning(
+                    "NukoAi poll timeout | task_id=%s attempt=%s/%s elapsed=%ss",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                )
                 continue
-            except Exception:
+            except Exception as poll_exc:
+                logger.warning(
+                    "NukoAi poll exception | task_id=%s attempt=%s/%s elapsed=%ss error=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    poll_exc,
+                )
                 if attempt == max_attempts:
                     return {
                         "error": "NukoAi polling exception",
@@ -11306,8 +11327,24 @@ class MediaGenerationService:
                 continue
 
             if poll_resp.status_code == 404:
+                logger.warning(
+                    "NukoAi poll 404 | task_id=%s attempt=%s/%s elapsed=%ss",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                )
                 continue
             if poll_resp.status_code not in [200, 201]:
+                logger.warning(
+                    "NukoAi poll http=%s | task_id=%s attempt=%s/%s elapsed=%ss body=%s",
+                    poll_resp.status_code,
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    (poll_resp.text or "")[:300],
+                )
                 if attempt == max_attempts:
                     return {
                         "error": f"NukoAi polling failed {poll_resp.status_code}",
@@ -11321,6 +11358,14 @@ class MediaGenerationService:
                 poll_data = poll_resp.json() if poll_resp.text else {}
             except Exception:
                 poll_data = {}
+                logger.warning(
+                    "NukoAi poll invalid json | task_id=%s attempt=%s/%s elapsed=%ss body=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    (poll_resp.text or "")[:300],
+                )
 
             if isinstance(poll_data, dict) and poll_data.get("success") is False:
                 err_msg = _extract_error_message(poll_data, fallback="NukoAi task query failed")
@@ -11328,6 +11373,15 @@ class MediaGenerationService:
                 err_code = ""
                 err_obj = poll_data.get("error") if isinstance(poll_data.get("error"), dict) else {}
                 err_code = str(err_obj.get("code") or "").strip().upper()
+                logger.warning(
+                    "NukoAi poll business_error | task_id=%s attempt=%s/%s elapsed=%ss code=%s error=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    err_code or None,
+                    err_msg,
+                )
                 if err_code in {"UNAUTHORIZED", "NOT_FOUND", "INSUFFICIENT_CREDITS"} or poll_resp.status_code in {401, 402, 404}:
                     return {
                         "error": f"NukoAi generation failed: {err_msg}",
@@ -11340,11 +11394,32 @@ class MediaGenerationService:
             status_val = _extract_status(poll_data)
             result_url = _extract_video_url(poll_data)
             task_payload = _extract_task_payload(poll_data)
+            # Log every poll; amplify when status changes.
+            if status_val != last_logged_status or attempt == 1 or attempt % 5 == 0 or attempt == max_attempts:
+                logger.info(
+                    "NukoAi poll | task_id=%s attempt=%s/%s elapsed=%ss status=%s has_video_url=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    status_val or "unknown",
+                    bool(result_url),
+                )
+                last_logged_status = status_val
 
             if status_val in {"completed", "success", "succeeded", "done", "finished"} or (
                 result_url and status_val in {"", "completed", "success", "succeeded", "done", "finished"}
             ):
                 if result_url:
+                    logger.info(
+                        "NukoAi poll completed | task_id=%s attempt=%s/%s elapsed=%ss credits_cost=%s url=%s",
+                        task_id,
+                        attempt,
+                        max_attempts,
+                        elapsed_s,
+                        (task_payload or {}).get("credits_cost") if isinstance(task_payload, dict) else None,
+                        str(result_url).split("?", 1)[0],
+                    )
                     return {
                         "url": result_url,
                         "metadata": {
@@ -11356,6 +11431,14 @@ class MediaGenerationService:
                             "credits_cost": (task_payload or {}).get("credits_cost") if isinstance(task_payload, dict) else None,
                         },
                     }
+                logger.error(
+                    "NukoAi poll completed without video_url | task_id=%s attempt=%s/%s elapsed=%ss raw=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    str(poll_data)[:500],
+                )
                 return {
                     "error": "NukoAi generation completed without video_url",
                     "submit_failed": False,
@@ -11365,6 +11448,15 @@ class MediaGenerationService:
 
             if status_val in {"failed", "error", "cancelled", "canceled", "rejected"}:
                 err_msg = _extract_error_message(poll_data, fallback="NukoAi generation failed")
+                logger.error(
+                    "NukoAi poll failed | task_id=%s attempt=%s/%s elapsed=%ss status=%s error=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    status_val,
+                    err_msg,
+                )
                 return {
                     "error": f"NukoAi generation failed: {err_msg}",
                     "submit_failed": False,
@@ -11374,6 +11466,14 @@ class MediaGenerationService:
 
             # pending / processing — keep polling
 
+        logger.error(
+            "NukoAi poll timeout exhausted | task_id=%s attempts=%s elapsed=%ss timeout=%ss last_status=%s",
+            task_id,
+            max_attempts,
+            int(time.time() - poll_started_at),
+            poll_timeout_seconds,
+            last_logged_status or None,
+        )
         return {
             "error": f"NukoAi polling timeout after {poll_timeout_seconds}s",
             "submit_failed": False,

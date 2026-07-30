@@ -34,6 +34,7 @@ _TIMEOUT_POLL_LOCK = threading.Lock()
 
 _TIMEOUT_POLL_UPSTREAM = "callback_timeout_poll"
 _TIMEOUT_POLL_EXHAUSTED_UPSTREAM = "callback_timeout_poll_exhausted"
+_FOLLOWUP_POLL_UPSTREAM = "callback_followup_poll"
 
 
 def _timeout_poll_max_attempts() -> int:
@@ -42,6 +43,18 @@ def _timeout_poll_max_attempts() -> int:
 
 def _timeout_poll_interval_seconds() -> int:
     return _queue_cfg_int("timeout_poll_interval_seconds", 30, minimum=5, maximum=300)
+
+
+def _followup_poll_delay_seconds() -> int:
+    return _queue_cfg_int("callback_followup_poll_delay_seconds", 90, minimum=15, maximum=600)
+
+
+def _followup_poll_max_attempts() -> int:
+    return _queue_cfg_int("callback_followup_poll_max_attempts", 40, minimum=3, maximum=120)
+
+
+def _followup_poll_interval_seconds() -> int:
+    return _queue_cfg_int("callback_followup_poll_interval_seconds", 30, minimum=10, maximum=120)
 
 
 def _inflight_key(kind: str, job_id: str) -> str:
@@ -352,15 +365,46 @@ def _mark_timeout_failed(kind: str, job_id: str, job: Dict[str, Any], *, attempt
     )
 
 
-def _recovery_thread_main(kind: str, job_id: str) -> None:
+def _recovery_thread_main(
+    kind: str,
+    job_id: str,
+    *,
+    mode: str = "timeout",
+    initial_delay_seconds: int = 0,
+    max_attempts: Optional[int] = None,
+    interval_seconds: Optional[int] = None,
+) -> None:
     from app.services.generation_runtime.callbacks import _extract_job_provider_task_id
     from app.services.media_service import media_service
 
     key = _inflight_key(kind, job_id)
-    max_attempts = _timeout_poll_max_attempts()
-    interval_seconds = _timeout_poll_interval_seconds()
+    is_followup = str(mode or "").strip().lower() == "followup"
+    upstream_label = _FOLLOWUP_POLL_UPSTREAM if is_followup else _TIMEOUT_POLL_UPSTREAM
+    resolved_max_attempts = int(
+        max_attempts
+        if max_attempts is not None
+        else (_followup_poll_max_attempts() if is_followup else _timeout_poll_max_attempts())
+    )
+    resolved_interval = int(
+        interval_seconds
+        if interval_seconds is not None
+        else (_followup_poll_interval_seconds() if is_followup else _timeout_poll_interval_seconds())
+    )
     try:
-        for attempt in range(1, max_attempts + 1):
+        delay = max(0, int(initial_delay_seconds or 0))
+        if delay > 0:
+            logger.info(
+                "[TimeoutPoll] followup delay before first poll | kind=%s job_id=%s delay_seconds=%s",
+                kind,
+                job_id,
+                delay,
+            )
+            time.sleep(delay)
+            live = _hydrate_job(kind, job_id)
+            if not live or _job_has_success_result(live):
+                return
+
+        for attempt in range(1, resolved_max_attempts + 1):
             job = _hydrate_job(kind, job_id)
             if not job:
                 return
@@ -379,6 +423,15 @@ def _recovery_thread_main(kind: str, job_id: str) -> None:
                     kind,
                     job_id,
                 )
+                if is_followup:
+                    _set_job(
+                        kind,
+                        job_id,
+                        status="waiting_callback",
+                        upstream_submit_state="callback_pending",
+                        error=None,
+                    )
+                    return
                 _mark_timeout_failed(kind, job_id, job, attempts=attempt)
                 return
 
@@ -386,7 +439,7 @@ def _recovery_thread_main(kind: str, job_id: str) -> None:
                 kind,
                 job_id,
                 status="waiting_callback",
-                upstream_submit_state=_TIMEOUT_POLL_UPSTREAM,
+                upstream_submit_state=upstream_label,
                 timeout_poll_attempts=attempt,
                 timeout_poll_at=now_bj_iso(),
                 error=None,
@@ -400,17 +453,18 @@ def _recovery_thread_main(kind: str, job_id: str) -> None:
                     job_id,
                     provider or None,
                     attempt,
-                    max_attempts,
+                    resolved_max_attempts,
                 )
             else:
                 logger.info(
-                    "[TimeoutPoll] polling provider | kind=%s job_id=%s provider=%s task_id=%s attempt=%s/%s",
+                    "[TimeoutPoll] polling provider | kind=%s job_id=%s provider=%s task_id=%s attempt=%s/%s mode=%s",
                     kind,
                     job_id,
                     provider or None,
                     provider_task_id,
                     attempt,
-                    max_attempts,
+                    resolved_max_attempts,
+                    "followup" if is_followup else "timeout",
                 )
                 poll_result = media_service.fetch_provider_task_result(
                     task_id=provider_task_id,
@@ -424,14 +478,14 @@ def _recovery_thread_main(kind: str, job_id: str) -> None:
                     if _apply_poll_success(kind, job_id, job, poll_result):
                         return
                 status = str((poll_result or {}).get("status") or "").strip().lower()
-                if status in {"failed", "canceled"}:
+                if status in {"failed", "canceled", "cancelled", "expired"}:
                     logger.warning(
                         "[TimeoutPoll] provider reported terminal failure | kind=%s job_id=%s status=%s attempt=%s/%s",
                         kind,
                         job_id,
                         status,
                         attempt,
-                        max_attempts,
+                        resolved_max_attempts,
                     )
                     # Keep trying remaining attempts in case status/payload is stale.
                 elif poll_result and poll_result.get("error"):
@@ -440,7 +494,7 @@ def _recovery_thread_main(kind: str, job_id: str) -> None:
                         kind,
                         job_id,
                         attempt,
-                        max_attempts,
+                        resolved_max_attempts,
                         poll_result.get("error"),
                     )
 
@@ -449,19 +503,44 @@ def _recovery_thread_main(kind: str, job_id: str) -> None:
             if _job_has_success_result(live):
                 return
 
-            if attempt < max_attempts:
-                time.sleep(interval_seconds)
+            if attempt < resolved_max_attempts:
+                time.sleep(resolved_interval)
 
         job = _hydrate_job(kind, job_id)
         if _job_has_success_result(job):
             return
-        _mark_timeout_failed(kind, job_id, job, attempts=max_attempts)
+        if is_followup:
+            # Soft stop: keep waiting for late webhook / hard timeout recovery.
+            _set_job(
+                kind,
+                job_id,
+                status="waiting_callback",
+                upstream_submit_state="callback_pending",
+                error=None,
+            )
+            logger.warning(
+                "[TimeoutPoll] followup exhausted without result; leaving job waiting | kind=%s job_id=%s attempts=%s",
+                kind,
+                job_id,
+                resolved_max_attempts,
+            )
+            return
+        _mark_timeout_failed(kind, job_id, job, attempts=resolved_max_attempts)
     except Exception:
-        logger.exception("[TimeoutPoll] recovery thread failed | kind=%s job_id=%s", kind, job_id)
+        logger.exception("[TimeoutPoll] recovery thread failed | kind=%s job_id=%s mode=%s", kind, job_id, mode)
         try:
             job = _hydrate_job(kind, job_id)
             if job and not _job_has_success_result(job):
-                _mark_timeout_failed(kind, job_id, job, attempts=_timeout_poll_max_attempts())
+                if is_followup:
+                    _set_job(
+                        kind,
+                        job_id,
+                        status="waiting_callback",
+                        upstream_submit_state="callback_pending",
+                        error=None,
+                    )
+                else:
+                    _mark_timeout_failed(kind, job_id, job, attempts=_timeout_poll_max_attempts())
         except Exception:
             pass
     finally:
@@ -521,7 +600,12 @@ def maybe_start_timeout_poll_recovery(kind: str, job_id: str, job: Optional[Dict
 
     thread = threading.Thread(
         target=_recovery_thread_main,
-        args=(stable_kind, stable_job_id),
+        kwargs={
+            "kind": stable_kind,
+            "job_id": stable_job_id,
+            "mode": "timeout",
+            "initial_delay_seconds": 0,
+        },
         name=f"timeout-poll-{stable_kind}-{stable_job_id[:12]}",
         daemon=True,
     )
@@ -537,6 +621,77 @@ def maybe_start_timeout_poll_recovery(kind: str, job_id: str, job: Optional[Dict
     return True
 
 
+def maybe_start_callback_followup_poll(kind: str, job_id: str, job: Optional[Dict[str, Any]] = None) -> bool:
+    """Start early provider polling after an intermediate running webhook.
+
+    Ark/Seedance (and similar) often send running then lose/drop the succeeded webhook.
+    Do not wait for the full running-timeout before querying the provider.
+    """
+    from app.services.generation_runtime.callbacks import _extract_job_provider_task_id
+
+    stable_kind = str(kind or "").strip().lower()
+    stable_job_id = str(job_id or "").strip()
+    if stable_kind not in {"image", "video"} or not stable_job_id:
+        return False
+
+    payload = dict(job or {}) or _hydrate_job(stable_kind, stable_job_id)
+    if _job_has_success_result(payload):
+        return False
+
+    upstream = str(payload.get("upstream_submit_state") or "").strip().lower()
+    if _TIMEOUT_POLL_EXHAUSTED_UPSTREAM in upstream:
+        return False
+
+    provider_task_id = _extract_job_provider_task_id(payload)
+    if not provider_task_id:
+        return False
+
+    key = _inflight_key(stable_kind, stable_job_id)
+    with _TIMEOUT_POLL_LOCK:
+        if key in _TIMEOUT_POLL_INFLIGHT:
+            return True
+        _TIMEOUT_POLL_INFLIGHT.add(key)
+
+    delay = _followup_poll_delay_seconds()
+    max_attempts = _followup_poll_max_attempts()
+    interval = _followup_poll_interval_seconds()
+    _set_job(
+        stable_kind,
+        stable_job_id,
+        status="waiting_callback",
+        upstream_submit_state=_FOLLOWUP_POLL_UPSTREAM,
+        error=None,
+        finished_at=None,
+        timeout_poll_started_at=payload.get("timeout_poll_started_at") or now_bj_iso(),
+        callback_followup_armed_at=now_bj_iso(),
+    )
+
+    thread = threading.Thread(
+        target=_recovery_thread_main,
+        kwargs={
+            "kind": stable_kind,
+            "job_id": stable_job_id,
+            "mode": "followup",
+            "initial_delay_seconds": delay,
+            "max_attempts": max_attempts,
+            "interval_seconds": interval,
+        },
+        name=f"followup-poll-{stable_kind}-{stable_job_id[:12]}",
+        daemon=True,
+    )
+    thread.start()
+    logger.warning(
+        "[TimeoutPoll] started followup after running callback | kind=%s job_id=%s provider_task_id=%s delay=%ss attempts=%s interval=%ss",
+        stable_kind,
+        stable_job_id,
+        provider_task_id,
+        delay,
+        max_attempts,
+        interval,
+    )
+    return True
+
+
 def is_timeout_poll_in_progress(kind: str, job_id: str, job: Optional[Dict[str, Any]] = None) -> bool:
     key = _inflight_key(kind, job_id)
     with _TIMEOUT_POLL_LOCK:
@@ -544,4 +699,6 @@ def is_timeout_poll_in_progress(kind: str, job_id: str, job: Optional[Dict[str, 
             return True
     payload = job if isinstance(job, dict) else _hydrate_job(str(kind or "").strip().lower(), str(job_id or "").strip())
     upstream = str((payload or {}).get("upstream_submit_state") or "").strip().lower()
-    return _TIMEOUT_POLL_UPSTREAM in upstream and _TIMEOUT_POLL_EXHAUSTED_UPSTREAM not in upstream
+    if _TIMEOUT_POLL_EXHAUSTED_UPSTREAM in upstream:
+        return False
+    return _TIMEOUT_POLL_UPSTREAM in upstream or _FOLLOWUP_POLL_UPSTREAM in upstream
