@@ -62,6 +62,7 @@ from app.services.generation_runtime.log_sanitize import _sanitize_generation_ru
 from app.services.generation_runtime.media_persist import (
     _enrich_media_metadata_from_generation_context,
     _hydrate_video_job_record,
+    _is_provider_direct_oss_url,
     _oss_upload_succeeded_for_url,
     _persist_remote_video_result,
     _resolve_video_bind_url,
@@ -1392,10 +1393,13 @@ async def _run_generate_video(
         )
 
         # Register asset + bind shot for direct-success providers (callback mode handles this in finalize path).
+        # Publish provisional provider URL immediately so frontend job-poll can finish before OSS completes
+        # (same pattern as image generation background localization).
         if result.get("url"):
             temp_url = str(result.get("url") or "").strip()
             if temp_url:
                 stable_job_id = str(job_id or "").strip()
+                provisional_meta = dict(result.get("metadata") or {})
                 if stable_job_id:
                     try:
                         from app.services.generation_task_queue import mark_generation_task_status_external
@@ -1404,54 +1408,196 @@ async def _run_generate_video(
                             stable_job_id,
                             status="storing_asset",
                             upstream_submit_state="storing_asset",
+                            result={"url": temp_url, "metadata": provisional_meta},
                             error=None,
                         )
+                        # Keep queue row active-looking only until this runner returns;
+                        # provisional result.url already unblocks the editor poll.
                         mark_generation_task_status_external(stable_job_id, status="running", error=None)
+                        logger.info(
+                            "[GenerateVideo] provisional result published | job_id=%s url=%s",
+                            stable_job_id,
+                            temp_url.split("?", 1)[0],
+                        )
                     except Exception:
                         logger.exception(
                             "[GenerateVideo] failed to mark storing_asset | job_id=%s",
                             stable_job_id,
                         )
-                filename_base = _build_generation_filename_base(req, db)
-                if temp_url.lower().startswith(("http://", "https://")):
-                    norm_url, norm_meta, oss_uploaded = await asyncio.to_thread(
-                        _persist_remote_video_result,
-                        current_user,
-                        temp_url,
-                        result.get("metadata"),
-                        filename_base=filename_base,
+
+                skip_remote_localization = _is_provider_direct_oss_url(temp_url, provisional_meta)
+                needs_remote_localize = (
+                    temp_url.lower().startswith(("http://", "https://"))
+                    and not skip_remote_localization
+                )
+
+                if needs_remote_localize:
+                    filename_base = _build_generation_filename_base(req, db)
+                    user_id_for_bg = int(getattr(current_user, "id", 0) or 0)
+
+                    async def _bg_video_upload_and_update(
+                        *,
+                        raw_url: str,
+                        meta: Optional[dict],
+                        fname_base: Optional[str],
+                        req_obj: Any,
+                        uid: int,
+                        jid: str,
+                    ) -> None:
+                        bg_db = SessionLocal()
+                        try:
+                            bg_user = bg_db.query(User).filter(User.id == uid).first()
+                            if not bg_user:
+                                logger.error(
+                                    "[GenerateVideo] bg persist skipped; user missing | job_id=%s user_id=%s",
+                                    jid or None,
+                                    uid,
+                                )
+                                if jid:
+                                    _set_video_job(
+                                        jid,
+                                        status="succeeded",
+                                        finished_at=now_bj_iso(),
+                                        upstream_submit_state="completed",
+                                        error=None,
+                                    )
+                                return
+
+                            logger.info(
+                                "[GenerateVideo] bg OSS persist start | job_id=%s user_id=%s url=%s",
+                                jid or None,
+                                uid,
+                                str(raw_url).split("?", 1)[0],
+                            )
+                            norm_url, norm_meta, oss_uploaded = await asyncio.to_thread(
+                                _persist_remote_video_result,
+                                bg_user,
+                                raw_url,
+                                meta,
+                                filename_base=fname_base,
+                            )
+                            final_url = str(norm_url or raw_url).strip()
+                            final_meta = dict(norm_meta if norm_meta is not None else (meta or {}))
+                            if jid:
+                                final_meta["idempotency_key"] = jid
+
+                            bind_url, ephemeral_binding, final_meta = _resolve_video_bind_url(
+                                raw_url=raw_url,
+                                normalized_url=final_url,
+                                normalized_meta=final_meta,
+                            )
+                            if bind_url:
+                                await asyncio.to_thread(
+                                    _register_asset_helper,
+                                    bg_db,
+                                    bg_user.id,
+                                    bind_url,
+                                    req_obj,
+                                    final_meta,
+                                )
+                                await asyncio.to_thread(
+                                    _bind_generated_media_to_shot,
+                                    bg_db,
+                                    bg_user,
+                                    req_obj,
+                                    bind_url,
+                                    bool(oss_uploaded and not ephemeral_binding),
+                                    final_meta,
+                                )
+
+                            if jid:
+                                with VIDEO_JOB_LOCK:
+                                    job_snapshot = dict(VIDEO_JOB_STORE.get(jid) or {})
+                                updated_res = dict(job_snapshot.get("result") or {"url": raw_url, "metadata": meta or {}})
+                                if bind_url:
+                                    updated_res["url"] = bind_url
+                                    updated_res["metadata"] = final_meta
+                                _set_video_job(
+                                    jid,
+                                    result=updated_res,
+                                    status="succeeded",
+                                    finished_at=now_bj_iso(),
+                                    upstream_submit_state="completed",
+                                    error=None,
+                                )
+                                logger.info(
+                                    "[GenerateVideo] bg OSS persist done | job_id=%s oss_uploaded=%s bind_url=%s",
+                                    jid,
+                                    bool(oss_uploaded),
+                                    str(bind_url or final_url or raw_url).split("?", 1)[0],
+                                )
+                        except Exception:
+                            logger.exception(
+                                "[GenerateVideo] bg OSS persist failed | job_id=%s url=%s",
+                                jid or None,
+                                str(raw_url).split("?", 1)[0],
+                            )
+                            # Keep provisional provider URL; do not flip a visible success into failed.
+                            if jid:
+                                try:
+                                    _set_video_job(
+                                        jid,
+                                        status="succeeded",
+                                        finished_at=now_bj_iso(),
+                                        upstream_submit_state="completed",
+                                        error=None,
+                                    )
+                                except Exception:
+                                    pass
+                        finally:
+                            bg_db.close()
+
+                    asyncio.create_task(
+                        _bg_video_upload_and_update(
+                            raw_url=temp_url,
+                            meta=provisional_meta,
+                            fname_base=filename_base,
+                            req_obj=req,
+                            uid=user_id_for_bg,
+                            jid=stable_job_id,
+                        )
                     )
                 else:
-                    norm_url = temp_url
-                    norm_meta = dict(result.get("metadata") or {})
-                    oss_uploaded = _oss_upload_succeeded_for_url(norm_url, norm_meta)
+                    filename_base = _build_generation_filename_base(req, db)
+                    if temp_url.lower().startswith(("http://", "https://")):
+                        norm_url, norm_meta, oss_uploaded = await asyncio.to_thread(
+                            _persist_remote_video_result,
+                            current_user,
+                            temp_url,
+                            result.get("metadata"),
+                            filename_base=filename_base,
+                        )
+                    else:
+                        norm_url = temp_url
+                        norm_meta = dict(result.get("metadata") or {})
+                        oss_uploaded = _oss_upload_succeeded_for_url(norm_url, norm_meta)
 
-                final_url = str(norm_url or temp_url).strip()
-                final_meta = dict(norm_meta if norm_meta is not None else (result.get("metadata") or {}))
+                    final_url = str(norm_url or temp_url).strip()
+                    final_meta = dict(norm_meta if norm_meta is not None else (result.get("metadata") or {}))
 
-                if final_url and final_url != temp_url:
-                    result["url"] = final_url
-                    result["metadata"] = final_meta
-
-                bind_url, ephemeral_binding, final_meta = _resolve_video_bind_url(
-                    raw_url=temp_url,
-                    normalized_url=final_url,
-                    normalized_meta=final_meta,
-                )
-                if bind_url:
-                    if bind_url != temp_url or ephemeral_binding:
-                        result["url"] = bind_url
+                    if final_url and final_url != temp_url:
+                        result["url"] = final_url
                         result["metadata"] = final_meta
-                    await asyncio.to_thread(_register_asset_helper, db, current_user.id, bind_url, req, final_meta)
-                    await asyncio.to_thread(
-                        _bind_generated_media_to_shot,
-                        db,
-                        current_user,
-                        req,
-                        bind_url,
-                        bool(oss_uploaded and not ephemeral_binding),
-                        final_meta,
+
+                    bind_url, ephemeral_binding, final_meta = _resolve_video_bind_url(
+                        raw_url=temp_url,
+                        normalized_url=final_url,
+                        normalized_meta=final_meta,
                     )
+                    if bind_url:
+                        if bind_url != temp_url or ephemeral_binding:
+                            result["url"] = bind_url
+                            result["metadata"] = final_meta
+                        await asyncio.to_thread(_register_asset_helper, db, current_user.id, bind_url, req, final_meta)
+                        await asyncio.to_thread(
+                            _bind_generated_media_to_shot,
+                            db,
+                            current_user,
+                            req,
+                            bind_url,
+                            bool(oss_uploaded and not ephemeral_binding),
+                            final_meta,
+                        )
 
         if reservation_tx_id is not None:
             final_meta = result.get("metadata") if isinstance(result, dict) else {}
@@ -2055,16 +2201,22 @@ async def _run_generate_video_job(
             _set_video_job(job_id, **update_fields)
             mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
             return {"defer_completion": True}
-        _set_video_job(
-            job_id,
-            status="succeeded",
-            finished_at=now_bj_iso(),
-            result=result,
-            error=None,
-            upstream_submit_state="completed",
-            callback_submit_retries=0,
-            callback_retry_at=None,
-        )
+        with VIDEO_JOB_LOCK:
+            _current_video_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+        _status_to_set = "storing_asset" if _current_video_job.get("status") == "storing_asset" else "succeeded"
+        _finished_at_val = None if _status_to_set == "storing_asset" else now_bj_iso()
+        _success_fields: Dict[str, Any] = {
+            "status": _status_to_set,
+            "finished_at": _finished_at_val,
+            "result": result,
+            "error": None,
+            "callback_submit_retries": 0,
+            "callback_retry_at": None,
+        }
+        if _status_to_set == "succeeded":
+            _success_fields["upstream_submit_state"] = "completed"
+        _set_video_job(job_id, **_success_fields)
+        # Queue completes once provider URL is available; OSS may still finish in background.
         mark_generation_task_status_external(job_id, status="completed", error=None)
         return {"defer_completion": False}
     except asyncio.TimeoutError:
@@ -2072,13 +2224,17 @@ async def _run_generate_video_job(
             current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
         current_status = _normalize_generation_status(current_job.get("status"))
         current_result_url = _extract_job_result_url(current_job.get("result"))
-        if current_status == "succeeded" and current_result_url:
+        if current_status in {"succeeded", "storing_asset"} and current_result_url:
             logger.info(
-                "[VideoJob] timeout ignored after callback finalization | job_id=%s provider_task_id=%s result_url=%s",
+                "[VideoJob] timeout ignored after result finalization | job_id=%s status=%s provider_task_id=%s result_url=%s",
                 job_id,
+                current_status,
                 _extract_job_provider_task_id(current_job) or None,
                 current_result_url,
             )
+            if current_status == "storing_asset":
+                # Provider URL already published; do not fail the job while OSS bg may still run.
+                mark_generation_task_status_external(job_id, status="completed", error=None)
             return
         # Forced provider poll supplement (incl. pure callback mode) before permanent fail.
         try:
@@ -2111,10 +2267,11 @@ async def _run_generate_video_job(
             current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
         current_status = _normalize_generation_status(current_job.get("status"))
         current_result_url = _extract_job_result_url(current_job.get("result"))
-        if current_status == "succeeded" and current_result_url:
+        if current_status in {"succeeded", "storing_asset"} and current_result_url:
             logger.info(
-                "[VideoJob] cancellation ignored after callback finalization | job_id=%s provider_task_id=%s result_url=%s",
+                "[VideoJob] cancellation ignored after result finalization | job_id=%s status=%s provider_task_id=%s result_url=%s",
                 job_id,
+                current_status,
                 _extract_job_provider_task_id(current_job) or None,
                 current_result_url,
             )
@@ -2135,10 +2292,11 @@ async def _run_generate_video_job(
             current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
         current_status = _normalize_generation_status(current_job.get("status"))
         current_result_url = _extract_job_result_url(current_job.get("result"))
-        if current_status == "succeeded" and current_result_url:
+        if current_status in {"succeeded", "storing_asset"} and current_result_url:
             logger.info(
-                "[VideoJob] http error ignored after callback finalization | job_id=%s detail=%s provider_task_id=%s",
+                "[VideoJob] http error ignored after result finalization | job_id=%s status=%s detail=%s provider_task_id=%s",
                 job_id,
+                current_status,
                 str(e.detail),
                 _extract_job_provider_task_id(current_job) or None,
             )
@@ -2182,10 +2340,11 @@ async def _run_generate_video_job(
             current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
         current_status = _normalize_generation_status(current_job.get("status"))
         current_result_url = _extract_job_result_url(current_job.get("result"))
-        if current_status == "succeeded" and current_result_url:
+        if current_status in {"succeeded", "storing_asset"} and current_result_url:
             logger.info(
-                "[VideoJob] exception ignored after callback finalization | job_id=%s error=%s provider_task_id=%s",
+                "[VideoJob] exception ignored after result finalization | job_id=%s status=%s error=%s provider_task_id=%s",
                 job_id,
+                current_status,
                 str(e),
                 _extract_job_provider_task_id(current_job) or None,
             )
