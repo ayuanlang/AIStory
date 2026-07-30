@@ -33,10 +33,6 @@ DEFAULT_QUEUE_CONFIG: Dict[str, Any] = {
     # as a callback-loss supplement before permanently failing.
     "timeout_poll_max_attempts": 3,
     "timeout_poll_interval_seconds": 30,
-    # After intermediate running webhook: early provider poll in case terminal webhook is lost.
-    "callback_followup_poll_delay_seconds": 90,
-    "callback_followup_poll_max_attempts": 40,
-    "callback_followup_poll_interval_seconds": 30,
 }
 
 _LEGACY_QUEUE_CONFIG_FILE = os.path.join(_BACKEND_DIR, "queue_config.json")
