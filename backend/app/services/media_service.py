@@ -5638,6 +5638,28 @@ class MediaGenerationService:
                 aspect_ratio=aspect_ratio,
                 negative_prompt=negative_prompt,
             )
+        # Ark API-Key Seedance path must not fall through to doubao/ark-seedance.
+        if normalized == "ark":
+            return await self._handle_ark_generation(
+                "video",
+                prompt,
+                active_config,
+                reference_image_url,
+                last_frame_url=last_frame_url,
+                duration=duration,
+                aspect_ratio=aspect_ratio,
+                negative_prompt=negative_prompt,
+            )
+        if normalized in {"ark-seedance", "ark_seedance"}:
+            return await self._handle_ark_seedance_generation(
+                "video",
+                prompt,
+                active_config,
+                reference_image_url,
+                last_frame_url=last_frame_url,
+                duration=duration,
+                aspect_ratio=aspect_ratio,
+            )
         runtime_activation = self._get_runtime_activation(active_config)
         if runtime_activation == "video_openai_compatible":
             return await self._handle_apiyi_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
@@ -7627,26 +7649,17 @@ class MediaGenerationService:
             if last_frame_url and "1-0-pro-fast" in (model or ""):
                 model = "doubao-seedance-1-5-pro-251215"
             
-            # If the user is specifically using Seedance 2.0 through the generic Doubao provider flow,
-            # route it to the advanced ark_seedance handler to fully support audio/video/multi-image refs.
+            # Seedance 2.0 via Doubao provider: use the Ark API-Key adapter (provider=ark),
+            # NOT the legacy ark-seedance AK/SK private-asset path.
             if "seedance-2" in str(model or "").lower():
-                target_config = dict(config)
-                
-                # Try to fetch the proper AK:SK:EP_TOKEN configured in ark-seedance provider settings
-                from app.db.session import SessionLocal
-                with SessionLocal() as session:
-                    ark_bundle = self._collect_provider_key_pool_bundle(session, "Video", "ark-seedance")
-                    pooled_keys = self._normalize_api_keys(ark_bundle.get("provider_api_keys"))
-                    if pooled_keys:
-                        target_config["api_key"] = self._pick_runtime_api_key(ark_bundle)
-                        
-                        # Merge the config properties to make sure we don't lose callback / project configurations
-                        ark_inner_config = ark_bundle.get("provider_api_keys", [{}])[0].get("config", {}) if isinstance(ark_bundle.get("provider_api_keys"), list) and ark_bundle["provider_api_keys"] and isinstance(ark_bundle["provider_api_keys"][0], dict) else {}
-                        if isinstance(ark_inner_config, dict):
-                            target_config["config"] = {**tool_conf, **ark_inner_config}
-                            
-                return await self._handle_ark_seedance_generation(
-                    gen_type, prompt, target_config, reference_image_url=ref_image, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio
+                return await self._handle_ark_generation(
+                    gen_type,
+                    prompt,
+                    config,
+                    reference_image_url=ref_image,
+                    last_frame_url=last_frame_url,
+                    duration=duration,
+                    aspect_ratio=aspect_ratio,
                 )
 
             content_payload = [{"type": "text", "text": prompt}]

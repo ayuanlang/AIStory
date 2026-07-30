@@ -265,15 +265,15 @@ def _resolve_system_api_credentials(
                 base_url = str(getattr(candidate, "base_url", "") or "").strip().lower()
                 if not provider_text and not base_url:
                     continue
+                # ark and ark-seedance are distinct; never cross-match via startswith/"ark" in ...
+                ark_aliases = {"ark", "ark-seedance", "ark_seedance"}
+                if provider_l in ark_aliases or provider_text in ark_aliases:
+                    continue
                 if (
                     provider_text.startswith(provider_l + "/")
                     or provider_l.startswith(provider_text + "/")
                     or provider_l.startswith(provider_text)
                     or ("kie" in provider_l and (provider_text.startswith("kie") or "kie.ai" in base_url))
-                    or (
-                        ("ark" in provider_l or "seedance" in provider_l)
-                        and ("ark" in provider_text or "seedance" in provider_text or "volces.com" in base_url)
-                    )
                 ):
                     if _first_api_key_from_value(getattr(candidate, "api_key", None)):
                         row = candidate

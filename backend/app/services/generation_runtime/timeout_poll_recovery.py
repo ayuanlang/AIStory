@@ -123,19 +123,21 @@ def _resolve_poll_credentials(job: Dict[str, Any]) -> Tuple[str, str, str, str]:
                 .all()
             ):
                 candidate_provider = str(getattr(candidate, "provider", "") or "").strip().lower()
-                if candidate_provider == provider_l or (
-                    provider_l
-                    and (
-                        candidate_provider.startswith(provider_l)
-                        or provider_l.startswith(candidate_provider)
-                        or ("kie" in provider_l and "kie" in candidate_provider)
-                        or (
-                            ("ark" in provider_l or "seedance" in provider_l)
-                            and ("ark" in candidate_provider or "seedance" in candidate_provider)
-                        )
-                        or ("grsai" in provider_l and "grsai" in candidate_provider)
-                        or ("runninghub" in provider_l and "runninghub" in candidate_provider)
-                    )
+                if candidate_provider == provider_l:
+                    if _first_api_key(getattr(candidate, "api_key", None)):
+                        row = candidate
+                        break
+                    continue
+                # ark and ark-seedance are distinct providers; never cross-match via startswith/"ark" in ...
+                ark_aliases = {"ark", "ark-seedance", "ark_seedance"}
+                if provider_l in ark_aliases or candidate_provider in ark_aliases:
+                    continue
+                if provider_l and (
+                    candidate_provider.startswith(provider_l)
+                    or provider_l.startswith(candidate_provider)
+                    or ("kie" in provider_l and "kie" in candidate_provider)
+                    or ("grsai" in provider_l and "grsai" in candidate_provider)
+                    or ("runninghub" in provider_l and "runninghub" in candidate_provider)
                 ):
                     if _first_api_key(getattr(candidate, "api_key", None)):
                         row = candidate
