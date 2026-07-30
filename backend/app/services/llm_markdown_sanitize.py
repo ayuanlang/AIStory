@@ -69,6 +69,21 @@ def sanitize_llm_markdown_output(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _subject_index_row_markers_present(text: str) -> bool:
+    """True when text looks like it contains at least one Subject Index entity row."""
+    sample = str(text or "")
+    if not sample.strip():
+        return False
+    return bool(
+        re.search(r"(?im)^\s*\|?\s*S\d{3,}\s*\|", sample)
+        or re.search(r"(?i)subject_no\s*=\s*[A-Za-z]?\d+\b", sample)
+        or re.search(
+            r"(?im)^\s*\|?\s*S\d{3,}\s*\|\s*(?:character|prop|environment|cover_poster|角色|道具|环境|封面)",
+            sample,
+        )
+    )
+
+
 def sanitize_subject_index_text(text: Any) -> str:
     """Keep only Subject Index content and strip common LLM reasoning leakage.
 
@@ -79,11 +94,34 @@ def sanitize_subject_index_text(text: Any) -> str:
     if not cleaned:
         return ""
 
+    # Chinese models often emit fullwidth pipes / spaces; normalize early for row detection.
+    cleaned = (
+        cleaned.replace("\uFF5C", "|")  # fullwidth vertical line
+        .replace("\u2502", "|")  # box drawings light vertical
+        .replace("\u00A0", " ")
+    )
+
     delimiter = "----------------*****--------------"
+    raw_cleaned = cleaned
     delimiter_idx = cleaned.find(delimiter)
     if delimiter_idx >= 0:
-        cleaned = cleaned[delimiter_idx + len(delimiter):].strip()
-        if not cleaned:
+        after = cleaned[delimiter_idx + len(delimiter):].strip()
+        before = cleaned[:delimiter_idx].strip()
+        # Prefer content after the required delimiter when it has rows/headers.
+        # If the model put the table before the delimiter (or truncated after it),
+        # keep whichever side still looks like a Subject Index.
+        if after and (
+            _subject_index_row_markers_present(after)
+            or re.search(r"(?i)subject\s*index|subject_no|subject_type", after)
+        ):
+            cleaned = after
+        elif before and _subject_index_row_markers_present(before):
+            cleaned = before
+        elif after:
+            cleaned = after
+        elif before:
+            cleaned = before
+        else:
             return ""
 
     lines = [str(line or "") for line in cleaned.splitlines()]
@@ -91,7 +129,8 @@ def sanitize_subject_index_text(text: Any) -> str:
         return ""
 
     subject_header_re = re.compile(
-        r"(?i)^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(?:subject\s*index|subjects\s*index|资产清单|实体清单|设计资产索引)\b"
+        r"(?i)^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(?:subject\s*index|subjects\s*index|"
+        r"资产清单|实体清单|设计资产索引|资产索引|主体索引|实体索引)\b"
     )
     subject_hint_re = re.compile(r"(?i)subject_no|subject_type|script_entity_coverage")
     row_start_re = re.compile(r"(?i)^\s*\|?\s*S\d+\s*\|")
@@ -111,7 +150,9 @@ def sanitize_subject_index_text(text: Any) -> str:
                 break
 
     if start_idx < 0:
-        return ""
+        # Docstring contract: fall back to cleaned original when no clear section marker.
+        # Prefer the delimiter-adjusted cleaned text; else the pre-delimiter cleaned body.
+        return cleaned.strip() or raw_cleaned.strip()
 
     end_idx = len(lines)
     for idx in range(start_idx + 1, len(lines)):
@@ -150,4 +191,4 @@ def sanitize_subject_index_text(text: Any) -> str:
         # Normalize glued rows like: ...S001...S002... into one row per line.
         result = re.sub(r"(?<!^)\s*(?=S\d{3,})", "\n", result)
         result = re.sub(r"\n{3,}", "\n\n", result).strip()
-    return result or ""
+    return result or cleaned.strip() or raw_cleaned.strip()

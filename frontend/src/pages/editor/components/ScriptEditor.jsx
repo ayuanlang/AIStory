@@ -5139,16 +5139,43 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const projectInfo = (project?.global_info && typeof project.global_info === 'object')
             ? project.global_info
             : {};
+        const projectInfoSources = [
+            projectInfo,
+            (projectInfo?.basic_information && typeof projectInfo.basic_information === 'object')
+                ? projectInfo.basic_information
+                : {},
+            (projectInfo?.basic_info && typeof projectInfo.basic_info === 'object')
+                ? projectInfo.basic_info
+                : {},
+            (projectInfo?.e_global_info && typeof projectInfo.e_global_info === 'object')
+                ? projectInfo.e_global_info
+                : {},
+            (projectInfo?.story_generator_global_input && typeof projectInfo.story_generator_global_input === 'object')
+                ? projectInfo.story_generator_global_input
+                : {},
+        ];
+        const normalizeInfoKey = (key) => String(key || '').toLowerCase().replace(/[\s\-]/g, '_').trim();
         const getInfoValue = (keys = []) => {
-            for (const key of keys) {
-                const value = String(projectInfo?.[key] || '').trim();
-                if (value) return value;
+            const normalizedAlias = new Set((keys || []).map(normalizeInfoKey));
+            for (const src of projectInfoSources) {
+                if (!src || typeof src !== 'object') continue;
+                for (const [key, raw] of Object.entries(src)) {
+                    if (!normalizedAlias.has(normalizeInfoKey(key))) continue;
+                    if (raw && typeof raw === 'object') continue;
+                    const value = String(raw || '').trim();
+                    if (value) return value;
+                }
             }
             return '';
         };
-        const borrowedFilms = Array.isArray(projectInfo?.borrowed_films)
-            ? projectInfo.borrowed_films.map(v => String(v || '').trim()).filter(Boolean)
-            : [];
+        const borrowedFilms = (() => {
+            for (const src of projectInfoSources) {
+                if (Array.isArray(src?.borrowed_films) && src.borrowed_films.length > 0) {
+                    return src.borrowed_films.map(v => String(v || '').trim()).filter(Boolean);
+                }
+            }
+            return [];
+        })();
 
         const basicInfoLines = [];
         const title = getInfoValue(['script_title', 'title']);
@@ -5191,30 +5218,53 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const info = (project?.global_info && typeof project.global_info === 'object') ? project.global_info : {};
         if (!info || Object.keys(info).length === 0) return '';
 
-        const visual = (info?.tech_params && typeof info.tech_params === 'object' && info.tech_params.visual_standard && typeof info.tech_params.visual_standard === 'object')
-            ? info.tech_params.visual_standard
+        const basicInfoNested = (info?.basic_information && typeof info.basic_information === 'object')
+            ? info.basic_information
+            : ((info?.basic_info && typeof info.basic_info === 'object') ? info.basic_info : {});
+        const eGlobalInfo = (info?.e_global_info && typeof info.e_global_info === 'object') ? info.e_global_info : {};
+        const storyInput = (info?.story_generator_global_input && typeof info.story_generator_global_input === 'object')
+            ? info.story_generator_global_input
             : {};
+        const contextSources = [info, basicInfoNested, eGlobalInfo, storyInput];
+
+        const visualFromSources = (() => {
+            for (const src of contextSources) {
+                const tech = src?.tech_params;
+                if (tech && typeof tech === 'object' && tech.visual_standard && typeof tech.visual_standard === 'object') {
+                    return tech.visual_standard;
+                }
+            }
+            return {};
+        })();
+        const visual = visualFromSources;
         const normalizeInfoKey = (key) => String(key || '').toLowerCase().replace(/[\s\-]/g, '_').trim();
         const getInfoValue = (aliases = []) => {
             const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-            for (const [key, value] of Object.entries(info || {})) {
-                if (!normalizedAlias.has(normalizeInfoKey(key))) continue;
-                const text = String(value || '').trim();
-                if (text) return text;
+            for (const src of contextSources) {
+                if (!src || typeof src !== 'object') continue;
+                for (const [key, value] of Object.entries(src)) {
+                    if (!normalizedAlias.has(normalizeInfoKey(key))) continue;
+                    if (value && typeof value === 'object') continue;
+                    const text = String(value || '').trim();
+                    if (text) return text;
+                }
             }
             return '';
         };
         const getInfoArray = (aliases = []) => {
             const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-            for (const [key, value] of Object.entries(info || {})) {
-                if (!normalizedAlias.has(normalizeInfoKey(key))) continue;
-                if (Array.isArray(value)) {
-                    const items = value.map((item) => String(item || '').trim()).filter(Boolean);
-                    if (items.length > 0) return items;
-                }
-                if (typeof value === 'string') {
-                    const items = value.split(/[\n,，;；]/).map((item) => item.trim()).filter(Boolean);
-                    if (items.length > 0) return items;
+            for (const src of contextSources) {
+                if (!src || typeof src !== 'object') continue;
+                for (const [key, value] of Object.entries(src)) {
+                    if (!normalizedAlias.has(normalizeInfoKey(key))) continue;
+                    if (Array.isArray(value)) {
+                        const items = value.map((item) => String(item || '').trim()).filter(Boolean);
+                        if (items.length > 0) return items;
+                    }
+                    if (typeof value === 'string') {
+                        const items = value.split(/[\n,，;；]/).map((item) => item.trim()).filter(Boolean);
+                        if (items.length > 0) return items;
+                    }
                 }
             }
             return [];
@@ -5226,12 +5276,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const text = String(value || '').trim();
                 if (text) return text;
             }
-            for (const [key, value] of Object.entries(info || {})) {
-                if (!normalizedAlias.has(normalizeInfoKey(key))) continue;
-                const text = String(value || '').trim();
-                if (text) return text;
-            }
-            return '';
+            return getInfoValue(aliases);
         };
 
         const borrowedFilms = getInfoArray(['borrowed_films', 'borrowedFilms', 'reference_films', 'referenceFilms']);
@@ -14929,12 +14974,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ? project.global_info
                 : {};
             const normalizeInfoKey = (key) => String(key || '').toLowerCase().replace(/[\s\-]/g, '_').trim();
+            const projectInfoSources = [
+                projectInfo,
+                (projectInfo?.basic_information && typeof projectInfo.basic_information === 'object')
+                    ? projectInfo.basic_information
+                    : {},
+                (projectInfo?.basic_info && typeof projectInfo.basic_info === 'object')
+                    ? projectInfo.basic_info
+                    : {},
+                (projectInfo?.e_global_info && typeof projectInfo.e_global_info === 'object')
+                    ? projectInfo.e_global_info
+                    : {},
+                (projectInfo?.story_generator_global_input && typeof projectInfo.story_generator_global_input === 'object')
+                    ? projectInfo.story_generator_global_input
+                    : {},
+            ];
             const getInfoValue = (aliases = []) => {
                 const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-                for (const [k, v] of Object.entries(projectInfo)) {
-                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                    const text = String(v || '').trim();
-                    if (text) return text;
+                for (const src of projectInfoSources) {
+                    if (!src || typeof src !== 'object') continue;
+                    for (const [k, v] of Object.entries(src)) {
+                        if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
+                        if (v && typeof v === 'object') continue;
+                        const text = String(v || '').trim();
+                        if (text) return text;
+                    }
                 }
                 return '';
             };
@@ -18402,16 +18466,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
-        let metadata = null;
-        if (project) {
-            metadata = {
-                title: project.title,
-                synopsis: project.summary,
-                genre: project.genre_tags?.join(', '),
-                language: project.language,
-                theme: (project.styles && project.styles.length > 0) ? project.styles[0] : null,
-            };
-        }
+        // Prefer full project.global_info (language/type/style/...). Do NOT pass a sparse
+        // { title, language: project.language } stub — Project has no top-level language field,
+        // and a non-empty stub used to block backend DB auto-fill of real project info.
+        const metadata = (project?.global_info && typeof project.global_info === 'object')
+            ? project.global_info
+            : null;
+        const stage1Input = ensureStage1ProjectContextInjected(content);
 
         let customSystemPrompt = '';
         try {
@@ -18435,7 +18496,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const result = await awaitAnalyzeSceneWithRecovery(
                 () => runScriptAnalysisFlowAnalyzeNode(
                     'script_optimization',
-                    content,
+                    stage1Input,
                     customSystemPrompt,
                     metadata,
                     activeEpisode?.id || null,

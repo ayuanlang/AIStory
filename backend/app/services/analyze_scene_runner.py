@@ -95,7 +95,9 @@ from app.services.script_analysis_llm_config import (
 from app.services.shot_generation_prompts import _build_project_prompt_context
 from app.services.soft_delete import _active_entity_clause
 from app.services.subject_index_resolve import (
+    _coerce_subject_index_candidate,
     _subject_index_has_usable_content,
+    _subject_index_rows_present,
     resolve_usable_episode_subject_index,
 )
 from app.services.user_model_preferences import _inject_user_advanced_llm_preferences
@@ -129,14 +131,42 @@ async def execute_analyze_scene(
         if bool(getattr(request_episode, "is_deleted", False)):
             raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
 
-    if not request.project_metadata and request_episode:
+    if request_episode:
         try:
             _auto_pr = db.query(Project).filter(Project.id == request_episode.project_id).first()
-            if _auto_pr and isinstance(_auto_pr.global_info, dict):
-                request.project_metadata = _auto_pr.global_info
-                logger.info("[analyze_scene] Automatically populated project_metadata from DB")
+            db_global_info = (
+                _auto_pr.global_info
+                if _auto_pr and isinstance(getattr(_auto_pr, "global_info", None), dict)
+                else None
+            )
+            if isinstance(db_global_info, dict) and db_global_info:
+                incoming_meta = request.project_metadata if isinstance(request.project_metadata, dict) else None
+                if not incoming_meta:
+                    request.project_metadata = dict(db_global_info)
+                    logger.info("[analyze_scene] Automatically populated project_metadata from DB")
+                else:
+                    # Sparse/legacy payloads (e.g. {title, language: undefined→missing}) must not
+                    # block DB project info. Use DB as base; overlay only meaningful request fields.
+                    def _meaningful_meta_value(value: Any) -> bool:
+                        if value is None:
+                            return False
+                        if isinstance(value, str):
+                            return bool(value.strip())
+                        if isinstance(value, (list, dict)):
+                            return bool(value)
+                        return True
+
+                    merged_meta = dict(db_global_info)
+                    for key, value in incoming_meta.items():
+                        if _meaningful_meta_value(value):
+                            merged_meta[key] = value
+                    request.project_metadata = merged_meta
+                    logger.info(
+                        "[analyze_scene] Merged request project_metadata with DB global_info (keys=%s)",
+                        list(merged_meta.keys())[:40],
+                    )
         except Exception as e:
-            logger.warning(f"[analyze_scene] Failed to auto-fetch project_metadata: {e}")
+            logger.warning(f"[analyze_scene] Failed to auto-fetch/merge project_metadata: {e}")
 
     if request.project_metadata:
         try:
@@ -1299,38 +1329,43 @@ async def execute_analyze_scene(
             and is_subject_index_extraction_stage
         )
         if should_check_subject_index_guard:
+            # Align with episode resolve path: sanitize first, then coerce/raw fallback
+            # so delimiter/header quirks do not false-reject usable S00x rows.
             source_subject_index_text = sanitize_subject_index_text(result_content)
+            if not _subject_index_has_usable_content(source_subject_index_text):
+                source_subject_index_text = _coerce_subject_index_candidate(result_content)
+
+            probe_text = source_subject_index_text or str(result_content or "")
             has_subject_section = bool(
-                re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", source_subject_index_text)
-                or re.search(r"(?i)(?:subject_no|subject_type)", source_subject_index_text)
+                re.search(
+                    r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities|"
+                    r"character|prop|environment|cover_poster)",
+                    probe_text,
+                )
+                or re.search(r"(?i)(?:subject_no|subject_type)", probe_text)
             )
             has_subject_header = bool(
                 re.search(
                     r"(?im)^\s*\|\s*subject_no\s*\|\s*subject_type\s*\|",
-                    source_subject_index_text,
+                    probe_text,
                 )
                 or re.search(
                     r"(?im)^\s*subject_no\s*\|\s*subject_type\s*\|",
-                    source_subject_index_text,
+                    probe_text,
                 )
                 or re.search(
                     r"(?im)^\s*subject_no(?:\s+|\t+|\s*\|\s*)subject_type\b",
-                    source_subject_index_text,
+                    probe_text,
                 )
-                or re.search(r"(?i)subject_no\s*=\s*", source_subject_index_text)
+                or re.search(r"(?i)subject_no\s*=\s*", probe_text)
             )
-            has_subject_rows = bool(
-                re.search(r"(?im)^\s*\|\s*S\d{3,}\s*\|", source_subject_index_text)
-                or re.search(r"(?im)^\s*S\d{3,}\s*\|", source_subject_index_text)
-                or re.search(
-                    r"(?im)^\s*S\d{3,}(?:\s+|\t+|\s*\|\s*)[a-z_]+(?:\s+|\t+|\s*\|\s*)",
-                    source_subject_index_text,
-                )
-                or re.search(r"(?im)^\s*subject_no\s*=\s*[A-Za-z]?\d+\b", source_subject_index_text)
+            has_subject_rows = _subject_index_rows_present(probe_text) or _subject_index_has_usable_content(
+                source_subject_index_text
             )
 
-            if not has_subject_section or not has_subject_rows:
-                if has_subject_header and not has_subject_rows:
+            # Entity rows alone are sufficient; section title/header is not required.
+            if not has_subject_rows:
+                if has_subject_header or has_subject_section:
                     blocking_codes.append("ANALYSIS_SUBJECT_INDEX_HEADER_ONLY")
                     blocking_subject_warnings.append(
                         "资产提取仅解析到 Subject Index 表头，缺少实体条目（如 S001... 行或 subject_no=... 条目），请重试。"
@@ -1355,12 +1390,17 @@ async def execute_analyze_scene(
                 integrity_meta.get("warnings") or [],
                 blocking_subject_warnings,
             )
+            output_preview = str(result_content or "").strip().replace("\n", "\\n")
+            if len(output_preview) > 800:
+                output_preview = output_preview[:800] + "…"
             logger.error(
-                "[analyze_scene] subject_index_missing_blocking episode_id=%s codes=%s warnings=%s output_chars=%s",
+                "[analyze_scene] subject_index_missing_blocking episode_id=%s codes=%s warnings=%s "
+                "output_chars=%s output_preview=%s",
                 getattr(request, "episode_id", None),
                 blocking_codes,
                 blocking_subject_warnings,
                 len(result_content or ""),
+                output_preview,
             )
             raise HTTPException(status_code=400, detail=detail)
 

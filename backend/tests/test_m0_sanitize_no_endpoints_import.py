@@ -28,6 +28,37 @@ def test_sanitize_module_standalone():
     assert "S001" in idx
 
 
+def test_sanitize_subject_index_keeps_rows_without_title():
+    _drop_modules(("app.services.llm_markdown_sanitize", "app.api.endpoints"))
+    from app.services.llm_markdown_sanitize import sanitize_subject_index_text
+    from app.services.subject_index_resolve import _subject_index_has_usable_content
+
+    # Fullwidth pipes + no ### Subject Index title should still be recoverable.
+    raw = (
+        "----------------*****--------------\n"
+        "｜ S001 ｜ character ｜ 林月 ｜ Lin Yue ｜ None ｜ None ｜ age_tier:青年 ｜ 林月 ｜"
+    )
+    idx = sanitize_subject_index_text(raw)
+    assert "S001" in idx
+    assert _subject_index_has_usable_content(idx)
+
+
+def test_sanitize_subject_index_table_before_delimiter():
+    _drop_modules(("app.services.llm_markdown_sanitize", "app.api.endpoints"))
+    from app.services.llm_markdown_sanitize import sanitize_subject_index_text
+    from app.services.subject_index_resolve import _subject_index_has_usable_content
+
+    raw = (
+        "### Subject Index\n"
+        "| subject_no | subject_type | subject_name_zh |\n"
+        "| S001 | character | 林月 |\n"
+        "----------------*****--------------\n"
+    )
+    idx = sanitize_subject_index_text(raw)
+    assert _subject_index_has_usable_content(idx)
+    assert "S001" in idx
+
+
 def test_analyze_scene_stages_import_does_not_load_endpoints():
     _drop_modules(
         (
