@@ -635,6 +635,27 @@ def _extract_job_provider_task_id(job: Dict[str, Any]) -> str:
                 if normalized:
                     return normalized
 
+    # Poll-only adapters (e.g. NukoAi) may only store ids under provider payload snapshots.
+    for nested_key in ("final_provider_payload", "combined_payload", "provider_payload", "submit_raw"):
+        nested = job.get(nested_key)
+        if not isinstance(nested, dict):
+            continue
+        for key in ("provider_task_id", "task_id", "taskId", "id"):
+            normalized = str(nested.get(key) or "").strip()
+            if normalized:
+                return normalized
+        data = nested.get("data") if isinstance(nested.get("data"), dict) else {}
+        for key in ("provider_task_id", "task_id", "taskId", "id"):
+            normalized = str(data.get(key) or "").strip()
+            if normalized:
+                return normalized
+        submit_raw = nested.get("submit_raw") if isinstance(nested.get("submit_raw"), dict) else {}
+        submit_data = submit_raw.get("data") if isinstance(submit_raw.get("data"), dict) else {}
+        for key in ("provider_task_id", "task_id", "taskId", "id"):
+            normalized = str(submit_data.get(key) or submit_raw.get(key) or "").strip()
+            if normalized:
+                return normalized
+
     return ""
 
 
@@ -661,7 +682,7 @@ def _normalize_generation_status(value: Any) -> str:
     status = str(value or "").strip().lower()
     if status in {"success", "succeeded", "completed", "done"}:
         return "succeeded"
-    if status in {"failed", "error"}:
+    if status in {"failed", "error", "expired"}:
         return "failed"
     if status in {"canceled", "cancelled"}:
         return "canceled"
@@ -821,15 +842,21 @@ def _build_result_from_provider_callback(
                 except Exception:
                     pass
                 break
-            # Ark Seedance callback fields on webhook root.
+            # Ark Seedance callback / query fields (ContentGenerationTask shape).
+            content_obj = payload.get("content") if isinstance(payload.get("content"), dict) else {}
             if payload.get("duration") not in (None, ""):
                 metadata["duration"] = payload.get("duration")
             if payload.get("ratio") not in (None, ""):
                 metadata["aspect_ratio"] = payload.get("ratio")
             if payload.get("resolution") not in (None, ""):
                 metadata["resolution"] = payload.get("resolution")
-            if payload.get("framespersecond") not in (None, ""):
-                metadata["fps"] = payload.get("framespersecond")
+            if payload.get("framespersecond") not in (None, "") or payload.get("frames_per_second") not in (None, ""):
+                metadata["fps"] = payload.get("framespersecond") or payload.get("frames_per_second")
+            if payload.get("generate_audio") not in (None, ""):
+                metadata["generate_audio"] = payload.get("generate_audio")
+            last_frame = content_obj.get("last_frame_url") or payload.get("last_frame_url")
+            if last_frame not in (None, ""):
+                metadata["last_frame_url"] = last_frame
             if metadata.get("taskCostTime") is None:
                 try:
                     created_at = float(payload.get("created_at") or 0)
@@ -850,6 +877,9 @@ def _build_result_from_provider_callback(
                 "duration": payload.get("duration"),
                 "ratio": payload.get("ratio"),
                 "resolution": payload.get("resolution"),
+                "framespersecond": metadata.get("fps"),
+                "generate_audio": payload.get("generate_audio"),
+                "content": content_obj or None,
             }
     except Exception:
         pass

@@ -1148,6 +1148,12 @@ const Settings = () => {
                     setVidToolModel("doubao-seedance-1-5-pro-251215");
                     setVidToolWebHook("");
                     setVidToolDraft(false);
+                 } else if (toolName === "ark") {
+                    setVidToolKey("");
+                    setVidToolEndpoint("https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks");
+                    setVidToolModel("doubao-seedance-2-0-260128");
+                    setVidToolWebHook("");
+                    setVidToolDraft(false);
                                             } else if (toolName === "Zlhub Video" || toolName === "Lzhbu Video") {
                           setVidToolKey("");
                           setVidToolEndpoint("https://zlhub.xiaowaiyou.cn/zhonglian/api/v1/proxy/chat/completions");
@@ -1288,6 +1294,8 @@ const Settings = () => {
             if (frontendProviderName.includes("Grsai")) backendProvider = "grsai";
             else if (frontendProviderName === "Stable Diffusion") backendProvider = "stability";
             else if (frontendProviderName === "Doubao Video") backendProvider = "doubao";
+            else if (frontendProviderName === "ark") backendProvider = "ark";
+            else if (frontendProviderName === "ark-seedance" || frontendProviderName.includes("Ark-Seedance")) backendProvider = "ark-seedance";
             else if (frontendProviderName === "Zlhub Video" || frontendProviderName === "Lzhbu Video") backendProvider = "zlhub";
             else if (frontendProviderName === "Wanxiang") backendProvider = "wanxiang";
             else if (frontendProviderName === "HappyHorse") backendProvider = "happyhorse";

@@ -14870,120 +14870,163 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             alert("Script content is too short for analysis.");
             return;
         }
-        if (isAnalyzing || analysisRunInFlightRef?.current || analysisResumeInFlightRef?.current) {
+        // Sync ref lock first — setState is async, so isAnalyzing alone cannot stop double-clicks.
+        if (
+            isAnalyzing
+            || analysisRunInFlightRef?.current
+            || analysisResumeInFlightRef?.current
+            || analysisEntryLockRef?.current
+        ) {
             onLog?.("Already analyzing, duplicate click prevented.");
             return;
         }
 
-        await autoSaveScriptBeforeAnalysis();
-
-        if (actualContent && actualContent.trim().length > 6000) {
-            const ok = await confirmUiMessage(t(
-                '检测到剧本内容超过6000字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
-                'Script length exceeds 6000 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
-            ));
-            if (ok) {
-                if (onLog) onLog("开始调用剧本分隔提示词自动分集...");
-                setAnalysisFlowStatus({ phase: 'script_opt', message: t('正在为您深度阅读并切分剧本分集，请耐心等待...', 'Deep reading and splitting script episodes, this may take a while...') });
-                try {
-                    const { splitEpisodeScript } = await import('../../../services/api');
-                    await splitEpisodeScript(projectId, activeEpisode.id, { script_content: actualContent });
-                    if (onLog) onLog("分集保存成功，即将刷新！");
-                    setAnalysisFlowStatus({ phase: 'completed', message: t('剧本分集成功！即将自动刷新以加载新集数...', 'Script split successfully! Reloading to show new episodes...') });
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 2000);
-                } catch (e) {
-                    console.error("Script split failed", e);
-                    setAnalysisFlowStatus({ phase: 'failed', message: t('剧本分集失败：', 'Split failed: ') + (e.message || e) });
-                    alert(t("分集失败: ", "Split failed: ") + (e.message || e));
-                }
-                return;
-            }
-        }
-
-        const projectInfo = (project?.global_info && typeof project.global_info === 'object')
-            ? project.global_info
-            : {};
-        const normalizeInfoKey = (key) => String(key || '').toLowerCase().replace(/[\s\-]/g, '_').trim();
-        const getInfoValue = (aliases = []) => {
-            const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-            for (const [k, v] of Object.entries(projectInfo)) {
-                if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                const text = String(v || '').trim();
-                if (text) return text;
-            }
-            return '';
-        };
-
-        if (activeEpisode?.id) {
-            const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
-            const hasExistingStageOutputs = [
-                activeEpisode?.ai_scene_analysis_result,
-                activeEpisode?.ai_scene_analysis_adaptation,
-                activeEpisode?.ai_scene_analysis_subject_index,
-                activeEpisode?.ai_scene_analysis_scene_markdown,
-                activeEpisode?.ai_entity_design_result,
-                activeEpisode?.ai_stage_outputs,
-                subjectIndexText,
-                adaptationText,
-                llmRawResultContent,
-                llmAssetRawResultContent,
-            ].some((value) => String(value || '').trim());
-            const hasExistingScenes = existingScenes && existingScenes.length > 0;
-            
-            if (hasExistingScenes || hasExistingStageOutputs) {
-                const ok = await confirmUiMessage(t(
-                    '检测到已存在剧本分析各阶段结果或场景数据。重新分析将清空并覆盖原结果，是否继续重新生成？（选择“取消”则保留并使用原来的结果）',
-                    'Existing stage analysis outputs or scenes detected. Regenerating will clear and overwrite previous results. Continue? (Choose Cancel to keep existing results)'
-                ));
-                if (!ok) {
-                    return;
-                }
-            }
-        }
-
-        const projectLanguage = getInfoValue(['language', 'project_language', 'lang']);
-        if (!projectLanguage) {
-            const ok = await confirmUiMessage(t(
-                '检测到项目语言为空。建议先在“项目信息”里填写语言，以保证分析输出语言稳定。是否继续分析？',
-                'Project language is empty. Set language in Project Info first for stable analysis output. Continue anyway?'
-            ));
-            if (!ok) {
-                return;
-            }
-            if (onLog) onLog('Project language is empty. Analysis continues with warning.', 'warning');
-        }
-
-        // Confirmations done: wipe workspace artifacts + diagnostic panel before starting a fresh run.
-        try {
-            if (onLog) onLog('Clearing workspace analysis artifacts and diagnostic panel before AI Script Analysis...', 'process');
-            await clearAnalysisOutputsForRestart({
-                preserveProgressUi: false,
-                deferWorkspaceUiReset: false,
-            });
-        } catch (clearErr) {
-            console.error('Failed to clear analysis outputs before rerun', clearErr);
-            alert(t(
-                `清空工作区分析结果失败：${clearErr?.message || clearErr}`,
-                `Failed to clear workspace analysis outputs: ${clearErr?.message || clearErr}`
-            ));
-            return;
-        }
-
-        forceRegenerateRef.current = true;
+        // Enter running state immediately (before autosave / confirms / clear) so the button
+        // shows "分析中..." and stays disabled on the first click.
+        analysisEntryLockRef.current = true;
         analysisProgressDismissedRef.current = false;
         setIsAnalyzing(true);
         beginAnalysisRestartUi(Date.now());
 
-        const stage1Input = ensureStage1ProjectContextInjected(actualContent);
+        const releaseAnalysisClickClaim = () => {
+            analysisEntryLockRef.current = false;
+            setIsAnalyzing(false);
+            setAnalysisFlowStatus({ phase: 'idle', message: '' });
+            setAnalysisUiReport(null);
+        };
 
         try {
-            const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
-            executeAdvancedAnalysis(stage1Input, res.content, 0, true);
-        } catch (e) {
-            console.error("Failed to fetch system prompt", e);
-            executeAnalysis(stage1Input, null, true);
+            await autoSaveScriptBeforeAnalysis();
+
+            if (actualContent && actualContent.trim().length > 6000) {
+                const ok = await confirmUiMessage(t(
+                    '检测到剧本内容超过6000字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
+                    'Script length exceeds 6000 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
+                ));
+                if (ok) {
+                    if (onLog) onLog("开始调用剧本分隔提示词自动分集...");
+                    setAnalysisFlowStatus({ phase: 'script_opt', message: t('正在为您深度阅读并切分剧本分集，请耐心等待...', 'Deep reading and splitting script episodes, this may take a while...') });
+                    try {
+                        const { splitEpisodeScript } = await import('../../../services/api');
+                        await splitEpisodeScript(projectId, activeEpisode.id, { script_content: actualContent });
+                        if (onLog) onLog("分集保存成功，即将刷新！");
+                        setAnalysisFlowStatus({ phase: 'completed', message: t('剧本分集成功！即将自动刷新以加载新集数...', 'Script split successfully! Reloading to show new episodes...') });
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 2000);
+                    } catch (e) {
+                        console.error("Script split failed", e);
+                        analysisEntryLockRef.current = false;
+                        setIsAnalyzing(false);
+                        setAnalysisFlowStatus({ phase: 'failed', message: t('剧本分集失败：', 'Split failed: ') + (e.message || e) });
+                        alert(t("分集失败: ", "Split failed: ") + (e.message || e));
+                    }
+                    return;
+                }
+            }
+
+            const projectInfo = (project?.global_info && typeof project.global_info === 'object')
+                ? project.global_info
+                : {};
+            const normalizeInfoKey = (key) => String(key || '').toLowerCase().replace(/[\s\-]/g, '_').trim();
+            const getInfoValue = (aliases = []) => {
+                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
+                for (const [k, v] of Object.entries(projectInfo)) {
+                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
+                    const text = String(v || '').trim();
+                    if (text) return text;
+                }
+                return '';
+            };
+
+            if (activeEpisode?.id) {
+                const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+                const hasExistingStageOutputs = [
+                    activeEpisode?.ai_scene_analysis_result,
+                    activeEpisode?.ai_scene_analysis_adaptation,
+                    activeEpisode?.ai_scene_analysis_subject_index,
+                    activeEpisode?.ai_scene_analysis_scene_markdown,
+                    activeEpisode?.ai_entity_design_result,
+                    activeEpisode?.ai_stage_outputs,
+                    subjectIndexText,
+                    adaptationText,
+                    llmRawResultContent,
+                    llmAssetRawResultContent,
+                ].some((value) => String(value || '').trim());
+                const hasExistingScenes = existingScenes && existingScenes.length > 0;
+                
+                if (hasExistingScenes || hasExistingStageOutputs) {
+                    const ok = await confirmUiMessage(t(
+                        '检测到已存在剧本分析各阶段结果或场景数据。重新分析将清空并覆盖原结果，是否继续重新生成？（选择“取消”则保留并使用原来的结果）',
+                        'Existing stage analysis outputs or scenes detected. Regenerating will clear and overwrite previous results. Continue? (Choose Cancel to keep existing results)'
+                    ));
+                    if (!ok) {
+                        releaseAnalysisClickClaim();
+                        return;
+                    }
+                }
+            }
+
+            const projectLanguage = getInfoValue(['language', 'project_language', 'lang']);
+            if (!projectLanguage) {
+                const ok = await confirmUiMessage(t(
+                    '检测到项目语言为空。建议先在“项目信息”里填写语言，以保证分析输出语言稳定。是否继续分析？',
+                    'Project language is empty. Set language in Project Info first for stable analysis output. Continue anyway?'
+                ));
+                if (!ok) {
+                    releaseAnalysisClickClaim();
+                    return;
+                }
+                if (onLog) onLog('Project language is empty. Analysis continues with warning.', 'warning');
+            }
+
+            // Confirmations done: wipe workspace artifacts before starting a fresh run.
+            // Keep preparing UI (preserveProgressUi) so the button/progress stay in running state;
+            // still reset orchestration/storyboard tracking for a clean restart.
+            try {
+                if (onLog) onLog('Clearing workspace analysis artifacts and diagnostic panel before AI Script Analysis...', 'process');
+                orchestrationLiveImportedScenesRef.current = new Set();
+                orchestrationCanonicalSceneIdsRef.current = new Set();
+                orchestrationPersistedSceneMarkdownRef.current = {};
+                endSceneOrchestrationPanelTracking();
+                resetStoryboardKickoffTracking();
+                if (activeEpisode?.id) {
+                    clearAnalysisSessionProgressSnapshot(activeEpisode.id);
+                }
+                await clearAnalysisOutputsForRestart({
+                    preserveProgressUi: true,
+                    deferWorkspaceUiReset: false,
+                });
+            } catch (clearErr) {
+                console.error('Failed to clear analysis outputs before rerun', clearErr);
+                releaseAnalysisClickClaim();
+                alert(t(
+                    `清空工作区分析结果失败：${clearErr?.message || clearErr}`,
+                    `Failed to clear workspace analysis outputs: ${clearErr?.message || clearErr}`
+                ));
+                return;
+            }
+
+            forceRegenerateRef.current = true;
+            analysisProgressDismissedRef.current = false;
+            beginAnalysisRestartUi(Date.now());
+
+            const stage1Input = ensureStage1ProjectContextInjected(actualContent);
+
+            try {
+                const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
+                executeAdvancedAnalysis(stage1Input, res.content, 0, true);
+            } catch (e) {
+                console.error("Failed to fetch system prompt", e);
+                executeAnalysis(stage1Input, null, true);
+            }
+        } catch (prepErr) {
+            console.error('AI Script Analysis prep failed', prepErr);
+            releaseAnalysisClickClaim();
+            alert(t(
+                `启动剧本分析失败：${prepErr?.message || prepErr}`,
+                `Failed to start script analysis: ${prepErr?.message || prepErr}`
+            ));
         }
     };
 

@@ -1195,12 +1195,23 @@ def _hydrate_video_job_record(job_id: str, job: Optional[Dict[str, Any]] = None)
                 "asset_type", "provider", "model", "prompt", "username",
                 "reservation_tx_id", "billing_pending", "billing_settled", "billing_context",
                 "provider_task_id", "task_id", "taskId", "system_api_id", "query_endpoint",
+                "final_provider_payload", "combined_payload",
             ):
                 if task_payload.get(key) in (None, "", {}, []):
                     continue
                 if merged.get(key) in (None, "", {}, []):
                     merged[key] = task_payload.get(key)
                     recovered_fields[key] = task_payload.get(key)
+            # Promote nested NukoAi/poll task ids onto top-level for re-download lookup.
+            if merged.get("provider_task_id") in (None, ""):
+                from app.services.generation_runtime.callbacks import _extract_job_provider_task_id
+
+                nested_task_id = _extract_job_provider_task_id(task_payload) or _extract_job_provider_task_id(merged)
+                if nested_task_id:
+                    merged["provider_task_id"] = nested_task_id
+                    merged["task_id"] = nested_task_id
+                    merged["taskId"] = nested_task_id
+                    recovered_fields["provider_task_id"] = nested_task_id
             if recovered_fields:
                 logger.info(
                     "[VideoJob] hydrated missing fields from task payload | job_id=%s fields=%s",

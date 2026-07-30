@@ -760,6 +760,26 @@ def _extract_provider_task_id_from_mapping(payload: Optional[Dict[str, Any]]) ->
         value = str(meta.get(key) or "").strip()
         if value:
             return value
+    # NukoAi / poll adapters may only persist task id under provider payload snapshots.
+    for nested_key in ("final_provider_payload", "combined_payload", "provider_payload", "submit_raw"):
+        nested = payload.get(nested_key)
+        if not isinstance(nested, dict):
+            continue
+        for key in ("provider_task_id", "task_id", "taskId", "id"):
+            value = str(nested.get(key) or "").strip()
+            if value:
+                return value
+        data = nested.get("data") if isinstance(nested.get("data"), dict) else {}
+        for key in ("provider_task_id", "task_id", "taskId", "id"):
+            value = str(data.get(key) or "").strip()
+            if value:
+                return value
+        submit_raw = nested.get("submit_raw") if isinstance(nested.get("submit_raw"), dict) else {}
+        submit_data = submit_raw.get("data") if isinstance(submit_raw.get("data"), dict) else {}
+        for key in ("provider_task_id", "task_id", "taskId", "id"):
+            value = str(submit_data.get(key) or submit_raw.get(key) or "").strip()
+            if value:
+                return value
     return ""
 
 

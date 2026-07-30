@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, TrendingUp , Activity} from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, TrendingUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -334,6 +334,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     });
     const [promoFrameworkViewMode, setPromoFrameworkViewMode] = useState('preview');
     const [storyFrameworkViewMode, setStoryFrameworkViewMode] = useState('preview');
+    const [storyGenFocusStep, setStoryGenFocusStep] = useState('wild_ideas');
+    const storyGenStepRefs = useRef({});
     const [targetEpisodeNumberForGen, setTargetEpisodeNumberForGen] = useState('');
     const [hasSetDefaultEp, setHasSetDefaultEp] = useState(false);
     
@@ -1865,6 +1867,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             ...prev,
             wild_creative_notes: nextNotes,
         }));
+        setStoryGenFocusStep('wild_ideas');
         void persistStoryGeneratorInputPatch({ wild_creative_notes: nextNotes }).catch((err) => {
             console.warn('[Market Research] append to wild ideas save failed:', err);
         });
@@ -1908,6 +1911,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             const searchNote = Number(snippetCount) > 0
                 ? t(`（已参考 ${snippetCount} 条高潮/名场面/画面/对白/动作检索素材）`, ` (informed by ${snippetCount} climax/iconic-scene reference snippets)`)
                 : '';
+            setStoryGenFocusStep('structure_prefill');
             alert(t('已提取关键要素、检索高潮与名场面参考素材并预填 I1–I9 字段，请重点核对 I7a 高潮名场面。', 'Key elements extracted, climax/iconic references searched, and I1–I9 prefilled. Review I7a climax scenes carefully.') + searchNote);
         } catch (e) {
             console.error(e);
@@ -1979,6 +1983,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 }
                 setInfo(merged);
             }
+            setStoryGenFocusStep('global_framework');
             alert('Global story framework generated and saved to Overview.');
         } catch (e) {
             console.error(e);
@@ -2133,6 +2138,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         setIsGeneratingEpisodeScripts(true);
         setEpisodeScriptsProgress(null);
         setShowEpisodeScriptsProgressModal(true);
+        if (generatorKind === 'story') setStoryGenFocusStep('episode_scripts');
 
         if (episodeScriptsStatusTimerRef.current) {
             clearInterval(episodeScriptsStatusTimerRef.current);
@@ -2522,6 +2528,35 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         if (!isGeneratorMode || episodeResultRows.length === 0) return [];
         return episodeResultRows.filter(item => item?.status === 'failed' && item?.episode_id);
     }, [episodeResultRows, isGeneratorMode]);
+
+    const STORY_GEN_STEP_LABELS = {
+        wild_ideas: { zh: '输入天马行空想法', en: 'Wild Ideas' },
+        structure_prefill: { zh: '结构化预填', en: 'Structure & Prefill' },
+        global_framework: { zh: '全局框架生成', en: 'Global Framework' },
+        episode_scripts: { zh: '分集生成', en: 'Episode Generation' },
+    };
+    const getStoryGenStepLabel = (key) => {
+        const row = STORY_GEN_STEP_LABELS[key];
+        return row ? t(row.zh, row.en) : key;
+    };
+    const wildIdeasReady = Boolean(String(globalStoryInput?.wild_creative_notes || '').trim());
+    const structurePrefillReady = Boolean(String(globalStoryInput?.logline || '').trim());
+    const globalFrameworkReady = Boolean(String(info?.story_dna_global_md || '').trim());
+    const episodeScriptsGeneratedCount = Number(episodeScriptsProgress?.generated || 0);
+    const episodeScriptsReady = !episodeScriptsRunning
+        && (episodeScriptsGeneratedCount > 0
+            || failedEpisodeRows.length > 0
+            || Number(episodeScriptsProgress?.processed || 0) > 0);
+    const structurePrefillActive = isStructuringCreativeInput;
+    const globalFrameworkActive = isGeneratingGlobalStory;
+    const episodeScriptsActive = episodeScriptsRunning;
+    const scrollToStoryGenStep = (stepKey) => {
+        setStoryGenFocusStep(stepKey);
+        const el = storyGenStepRefs.current?.[stepKey];
+        if (el && typeof el.scrollIntoView === 'function') {
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    };
 
     const shouldComputeCostPanel = mode === 'overview' && expandedSections.cost;
 
@@ -3475,106 +3510,213 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 </div>
                 )}
 
-                {/* Story Generator (Global) */}
+                {/* Story Generator (Global) — 4-step flow */}
                 {mode === 'generator' && projectTab === 'story_generator' && (
                 <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-4 xl:col-span-2">
                     <div className="flex items-center justify-between gap-3">
                         <h3 className="text-lg font-semibold text-primary">{t('故事生成器（全局 / 项目）', 'Story Generator (Global / Project)')}</h3>
-                        <div className="flex items-center gap-2">
-                            <button
-                                onClick={handleGenerateGlobalStory}
-                                disabled={isGeneratingGlobalStory}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingGlobalStory ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                title={t('生成国际化爆款故事框架并保存到项目总览', 'Generate an international-blockbuster story framework and store it in project Overview')}
-                            >
-                                {isGeneratingGlobalStory ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Sparkles className="w-4 h-4" /> {t('生成全局框架', 'Generate Global Framework')}</>}
-                            </button>
-
-                            <button
-                                onClick={handleGenerateEpisodeScripts}
-                                disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                title={t('从全局框架 + 项目角色设定生成分集剧本，自动创建缺失分集并写入对应分集', 'Generate episode scripts from Global Framework + Project Character Canon, create missing episodes, and save each script into its episode')}
-                            >
-                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-4 h-4" /> {t('全量生成分集', 'Generate All')}</>}
-                            </button>
-                            <div className="flex items-center bg-white/5 rounded-lg overflow-hidden border border-white/10">
-                                <input
-                                    type="number"
-                                    min="1"
-                                    placeholder={t('单集', 'Ep#')}
-                                    className="w-16 px-2 py-2 bg-transparent text-sm text-center outline-none text-white placeholder-white/30"
-                                    value={targetEpisodeNumberForGen}
-                                    onChange={e => setTargetEpisodeNumberForGen(e.target.value)}
-                                    disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
-                                />
-                                <button
-                                    onClick={() => handleGenerateEpisodeScripts({ specificEpisode: targetEpisodeNumberForGen })}
-                                    disabled={!targetEpisodeNumberForGen || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
-                                    className={`px-3 py-2 text-sm font-bold flex items-center bg-white/10 hover:bg-white/20 transition-colors ${(!targetEpisodeNumberForGen || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'opacity-50 cursor-not-allowed' : 'text-blue-300'}`}
-                                    title={t('仅生成填写的单个集数', 'Generate only the specified episode number')}
-                                >
-                                    {t('单集生成', 'Gen Single')}
-                                </button>
-                            </div>
-                            <button
-                                onClick={handleStopEpisodeScripts}
-                                disabled={isStoppingEpisodeScripts}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isStoppingEpisodeScripts ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
-                                title={t('强制停止当前批量分集剧本任务', 'Force stop current batch episode scripts task')}
-                            >
-                                {isStoppingEpisodeScripts
-                                    ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('停止中...', 'Stopping...')}</>
-                                    : <><X className="w-4 h-4" /> {t('强制停止', 'Force Stop')}</>}
-                            </button>
-                        </div>
                     </div>
 
-                    {episodeScriptsProgress && (
-                        <div className="border border-white/10 rounded-lg p-3 bg-black/20 space-y-2">
-                            <div className="text-xs text-muted-foreground uppercase tracking-wide">{t('分集剧本进度快照', 'Episode Scripts Progress Snapshot')}</div>
-                            <div className="h-2 rounded bg-white/10 overflow-hidden">
-                                <div
-                                    className="h-2 bg-primary"
-                                    style={{ width: `${progressPercent}%` }}
-                                />
+                    {/* Workflow Diagnostics stepper (mirrors ScriptEditor progress panel) */}
+                    <div className="rounded-2xl border border-white/10 bg-black/25 p-4 backdrop-blur-sm">
+                        <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+                            <div className="flex items-center gap-2 font-bold text-sm shrink-0">
+                                <div className="w-1 h-5 bg-purple-500 rounded-full"></div>
+                                {t('剧本生成流程', 'Story Generation Flow')}
                             </div>
-                            <div className="text-sm text-white flex flex-wrap gap-x-4 gap-y-1">
-                                <span>{t('状态', 'Status')}: <b>{episodeScriptsProgress.running ? t('运行中', 'Running') : t('空闲', 'Idle')}</b></span>
-                                {episodeScriptsProgress.stop_requested ? <span>{t('停止请求', 'Stop Requested')}: <b>{t('是', 'Yes')}</b></span> : null}
-                                <span>{t('已处理', 'Processed')}: <b>{processedCount}</b> / <b>{episodesInRun}</b></span>
-                                <span>{t('已生成', 'Generated')}: <b>{episodeScriptsProgress.generated || 0}</b></span>
-                                <span>{t('失败', 'Failed')}: <b>{episodeScriptsProgress.failed || 0}</b></span>
-                                <span>{t('跳过', 'Skipped')}: <b>{episodeScriptsProgress.skipped || 0}</b></span>
-                            </div>
-                            <div className="flex items-center gap-2 pt-1">
-                                <button
-                                    onClick={() => setShowEpisodeScriptsProgressModal(true)}
-                                    className="px-3 py-1.5 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20"
-                                >
-                                    {t('查看详情', 'View Details')}
-                                </button>
-                                <button
-                                    onClick={pollEpisodeScriptsStatus}
-                                    className="px-3 py-1.5 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-1.5"
-                                >
-                                    <RefreshCw className="w-3.5 h-3.5" /> {t('刷新', 'Refresh')}
-                                </button>
-                                <button
-                                    onClick={handleStopEpisodeScripts}
-                                    disabled={isStoppingEpisodeScripts}
-                                    className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 ${isStoppingEpisodeScripts ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
-                                >
-                                    {isStoppingEpisodeScripts
-                                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('停止中...', 'Stopping...')}</>
-                                        : <><X className="w-3.5 h-3.5" /> {t('强制停止', 'Force Stop')}</>}
-                                </button>
-                            </div>
+                            {(() => {
+                                const stepBtnClass = 'text-[10px] px-1.5 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 disabled:opacity-40 disabled:cursor-not-allowed hover:text-white transition-colors';
+                                const primaryChipClass = 'text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1';
+                                const renderProcessingLabel = () => (
+                                    <span className="text-[10px] text-purple-300 flex items-center gap-1">
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                        {t('处理中', 'Processing')}
+                                    </span>
+                                );
+                                const circleClass = (ready, active) => (
+                                    ready
+                                        ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
+                                        : (active
+                                            ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                                            : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')
+                                );
+                                const steps = [
+                                    {
+                                        key: 'wild_ideas',
+                                        n: 1,
+                                        ready: wildIdeasReady,
+                                        active: storyGenFocusStep === 'wild_ideas' && !wildIdeasReady,
+                                    },
+                                    {
+                                        key: 'structure_prefill',
+                                        n: 2,
+                                        ready: structurePrefillReady,
+                                        active: structurePrefillActive,
+                                    },
+                                    {
+                                        key: 'global_framework',
+                                        n: 3,
+                                        ready: globalFrameworkReady,
+                                        active: globalFrameworkActive,
+                                    },
+                                    {
+                                        key: 'episode_scripts',
+                                        n: 4,
+                                        ready: episodeScriptsReady && episodeScriptsGeneratedCount > 0 && !episodeScriptsActive,
+                                        active: episodeScriptsActive,
+                                    },
+                                ];
+                                return (
+                                    <div className="flex-1 w-full flex items-start justify-between relative max-w-4xl px-2 mt-2 md:mt-0 gap-1">
+                                        <div className="absolute top-4 left-8 right-8 h-0.5 bg-white/10 -z-10"></div>
+                                        {steps.map((step) => (
+                                            <div key={step.key} className="flex flex-col items-center gap-2 relative flex-1 min-w-0">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => scrollToStoryGenStep(step.key)}
+                                                    className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${circleClass(step.ready, step.active || (storyGenFocusStep === step.key && !step.ready))}`}
+                                                    title={getStoryGenStepLabel(step.key)}
+                                                >
+                                                    {step.ready
+                                                        ? <Check className="w-4 h-4" />
+                                                        : (step.active ? <Loader2 className="w-4 h-4 animate-spin" /> : step.n)}
+                                                </button>
+                                                <div className="flex flex-col items-center gap-1 text-center px-0.5">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => scrollToStoryGenStep(step.key)}
+                                                        className={`text-xs font-semibold leading-tight ${storyGenFocusStep === step.key ? 'text-white' : 'text-white/80 hover:text-white'}`}
+                                                    >
+                                                        {getStoryGenStepLabel(step.key)}
+                                                    </button>
+                                                    {step.key === 'wild_ideas' && (
+                                                        wildIdeasReady ? (
+                                                            <div className="flex items-center gap-1 flex-wrap justify-center">
+                                                                <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
+                                                                <button type="button" onClick={() => scrollToStoryGenStep('wild_ideas')} className={stepBtnClass}>
+                                                                    {t('编辑', 'Edit')}
+                                                                </button>
+                                                            </div>
+                                                        ) : (
+                                                            <button type="button" onClick={() => scrollToStoryGenStep('wild_ideas')} className={primaryChipClass}>
+                                                                {t('去输入', 'Go Input')}
+                                                            </button>
+                                                        )
+                                                    )}
+                                                    {step.key === 'structure_prefill' && (
+                                                        structurePrefillActive ? renderProcessingLabel() : (
+                                                            structurePrefillReady ? (
+                                                                <div className="flex items-center gap-1 flex-wrap justify-center">
+                                                                    <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
+                                                                    <button type="button" onClick={() => scrollToStoryGenStep('structure_prefill')} className={stepBtnClass}>
+                                                                        {t('编辑', 'Edit')}
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={handleStructureCreativeInput}
+                                                                        disabled={isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady}
+                                                                        className={stepBtnClass}
+                                                                    >
+                                                                        {t('重跑', 'Rerun')}
+                                                                    </button>
+                                                                </div>
+                                                            ) : wildIdeasReady ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={handleStructureCreativeInput}
+                                                                    disabled={isStructuringCreativeInput || isGeneratingGlobalStory}
+                                                                    className={primaryChipClass}
+                                                                >
+                                                                    <Wand2 className="w-3 h-3" />
+                                                                    {t('结构化预填', 'Structure')}
+                                                                </button>
+                                                            ) : (
+                                                                <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
+                                                            )
+                                                        )
+                                                    )}
+                                                    {step.key === 'global_framework' && (
+                                                        globalFrameworkActive ? renderProcessingLabel() : (
+                                                            globalFrameworkReady ? (
+                                                                <div className="flex items-center gap-1 flex-wrap justify-center">
+                                                                    <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
+                                                                    <button type="button" onClick={() => scrollToStoryGenStep('global_framework')} className={stepBtnClass}>
+                                                                        {t('编辑', 'Edit')}
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={handleGenerateGlobalStory}
+                                                                        disabled={isGeneratingGlobalStory}
+                                                                        className={stepBtnClass}
+                                                                    >
+                                                                        {t('重跑', 'Rerun')}
+                                                                    </button>
+                                                                </div>
+                                                            ) : structurePrefillReady ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={handleGenerateGlobalStory}
+                                                                    disabled={isGeneratingGlobalStory}
+                                                                    className={primaryChipClass}
+                                                                >
+                                                                    <Sparkles className="w-3 h-3" />
+                                                                    {t('生成框架', 'Generate')}
+                                                                </button>
+                                                            ) : (
+                                                                <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
+                                                            )
+                                                        )
+                                                    )}
+                                                    {step.key === 'episode_scripts' && (
+                                                        episodeScriptsActive ? (
+                                                            <div className="flex flex-col items-center gap-1">
+                                                                {renderProcessingLabel()}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={handleStopEpisodeScripts}
+                                                                    disabled={isStoppingEpisodeScripts}
+                                                                    className="text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 disabled:opacity-50"
+                                                                >
+                                                                    {isStoppingEpisodeScripts ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
+                                                                </button>
+                                                            </div>
+                                                        ) : (
+                                                            globalFrameworkReady ? (
+                                                                <div className="flex flex-col items-center gap-1">
+                                                                    {episodeScriptsGeneratedCount > 0 ? (
+                                                                        <span className="text-[10px] text-emerald-400/80">
+                                                                            {t(`已生成 ${episodeScriptsGeneratedCount}`, `Generated ${episodeScriptsGeneratedCount}`)}
+                                                                        </span>
+                                                                    ) : null}
+                                                                    <div className="flex items-center gap-1 flex-wrap justify-center">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={handleGenerateEpisodeScripts}
+                                                                            disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                                                            className={primaryChipClass}
+                                                                            title={t('从全局框架 + 项目角色设定生成分集剧本', 'Generate episode scripts from Global Framework + Character Canon')}
+                                                                        >
+                                                                            <Wand2 className="w-3 h-3" />
+                                                                            {t('全量生成', 'Gen All')}
+                                                                        </button>
+                                                                        <button type="button" onClick={() => scrollToStoryGenStep('episode_scripts')} className={stepBtnClass}>
+                                                                            {t('单集/详情', 'Single / Details')}
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            ) : (
+                                                                <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
+                                                            )
+                                                        )
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                );
+                            })()}
                         </div>
-                    )}
-
-
-                    
+                    </div>
 
                         <div className="sm:col-span-2 rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
                             <div className="flex items-start justify-between gap-3">
@@ -3659,44 +3801,65 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             </div>
                         </div>
 
-                        <div className="sm:col-span-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+                        {/* Step 1: Wild Ideas */}
+                        <div
+                            ref={(el) => { storyGenStepRefs.current.wild_ideas = el; }}
+                            className={`sm:col-span-2 rounded-xl border p-4 space-y-3 transition-colors ${storyGenFocusStep === 'wild_ideas' ? 'border-purple-500/40 bg-purple-500/5' : 'border-white/10 bg-white/[0.02]'}`}
+                        >
                             <div className="flex items-start justify-between gap-3">
                                 <div>
-                                    <label className="text-xs text-muted-foreground uppercase font-bold block">
-                                        {t('天马行空的想法', 'Wild Ideas & Creative Prompt')}
-                                    </label>
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${wildIdeasReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>1</span>
+                                        <label className="text-xs text-muted-foreground uppercase font-bold block">
+                                            {t('天马行空的想法', 'Wild Ideas & Creative Prompt')}
+                                        </label>
+                                    </div>
                                     <div className="text-[11px] text-muted-foreground/80 mt-1">
-                                        {t('先把脑海中的画面、台词、怪念头倒在这里；点「结构化预填」会先提取关键要素，再搜索经典名场面/热门桥段/热门话题，最后预填 I1–I9。', 'Pour raw scenes, lines, and quirky ideas here; Structure extracts key elements, searches classic scenes/tropes/hot topics, then prefills I1–I9.')}
+                                        {t('先把脑海中的画面、台词、怪念头倒在这里；完成后进入步骤 2 结构化预填。', 'Pour raw scenes, lines, and quirky ideas here; then go to Step 2 Structure & Prefill.')}
                                     </div>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={handleStructureCreativeInput}
-                                    disabled={isStructuringCreativeInput || isGeneratingGlobalStory}
-                                    className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
-                                    title={t('提取关键要素 → 搜索高潮/名场面参考（画面·对白·动作）→ 预填 I1–I9', 'Extract key elements → search climax/iconic references (visual/dialogue/action) → prefill I1–I9')}
-                                >
-                                    {isStructuringCreativeInput
-                                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('检索分析中...', 'Researching...')}</>
-                                        : <><Wand2 className="w-3.5 h-3.5" /> {t('结构化预填', 'Structure & Prefill')}</>}
-                                </button>
                             </div>
                             <textarea
                                 className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-32 resize-none placeholder:text-white/25"
                                 value={globalStoryInput.wild_creative_notes}
-                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, wild_creative_notes: e.target.value }))}
+                                onChange={(e) => {
+                                    setStoryGenFocusStep('wild_ideas');
+                                    setGlobalStoryInput(prev => ({ ...prev, wild_creative_notes: e.target.value }));
+                                }}
+                                onFocus={() => setStoryGenFocusStep('wild_ideas')}
                                 placeholder={t(
                                     '尽情输入脑洞与名场面设想，例如：绝症杀手替女儿复仇；双重人格杀人前必听贝多芬；开头直升机反杀；高潮雨中工厂兄弟反目、经典台词「我们都回不去了」…',
                                     'Wild ideas + iconic scenes: dying assassin avenges daughter; dual-personality killer listens to Beethoven; helicopter opening; rainy factory climax with line "We can never go back"…'
                                 )}
                             />
                         </div>
-                        <div className="sm:col-span-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-4">
-                            <div>
-                                <div className="text-sm font-semibold text-white">{t('脑洞标准输入（I1–I9）', 'Creative Input (I1–I9)')}</div>
-                                <div className="text-xs text-muted-foreground mt-1">
-                                    {t('先填 I1–I3 定调，再填世界、人物与剧情；未归类碎片放 I9。每栏下方有简要示例（灰色），可作 placeholder 参考。', 'Fill I1–I3 first, then world/characters/plot; fragments in I9. Each field has a brief example below.')}
+
+                        {/* Step 2: Structure & Prefill (I1–I9) */}
+                        <div
+                            ref={(el) => { storyGenStepRefs.current.structure_prefill = el; }}
+                            className={`sm:col-span-2 rounded-xl border p-4 space-y-4 transition-colors ${storyGenFocusStep === 'structure_prefill' ? 'border-purple-500/40 bg-purple-500/5' : 'border-white/10 bg-white/[0.02]'}`}
+                        >
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${structurePrefillReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>2</span>
+                                        <div className="text-sm font-semibold text-white">{t('脑洞标准输入（I1–I9）', 'Creative Input (I1–I9)')}</div>
+                                    </div>
+                                    <div className="text-xs text-muted-foreground mt-1">
+                                        {t('点「结构化预填」从天马行空自动提取并检索名场面参考，再核对 I1–I9；也可手工填写。', 'Use Structure & Prefill to extract from wild ideas and search iconic references, then review I1–I9; or fill manually.')}
+                                    </div>
                                 </div>
+                                <button
+                                    type="button"
+                                    onClick={handleStructureCreativeInput}
+                                    disabled={isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady}
+                                    className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
+                                    title={t('提取关键要素 → 搜索高潮/名场面参考（画面·对白·动作）→ 预填 I1–I9', 'Extract key elements → search climax/iconic references (visual/dialogue/action) → prefill I1–I9')}
+                                >
+                                    {isStructuringCreativeInput
+                                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('检索分析中...', 'Researching...')}</>
+                                        : <><Wand2 className="w-3.5 h-3.5" /> {t('结构化预填', 'Structure & Prefill')}</>}
+                                </button>
                             </div>
                             {[
                                 {
@@ -3762,6 +3925,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         rows={field.rows}
                                         placeholder={field.example}
                                         value={globalStoryInput[field.id] || ''}
+                                        onFocus={() => setStoryGenFocusStep('structure_prefill')}
                                         onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
                                     />
                                 </div>
@@ -3808,6 +3972,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                             rows={field.rows}
                                             placeholder={field.example}
                                             value={globalStoryInput[field.id] || ''}
+                                            onFocus={() => setStoryGenFocusStep('structure_prefill')}
                                             onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
                                         />
                                     </div>
@@ -3845,6 +4010,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                             rows={field.rows}
                                             placeholder={field.example}
                                             value={globalStoryInput[field.id] || ''}
+                                            onFocus={() => setStoryGenFocusStep('structure_prefill')}
                                             onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
                                         />
                                     </div>
@@ -3882,6 +4048,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                             rows={field.rows}
                                             placeholder={field.example}
                                             value={globalStoryInput[field.id] || ''}
+                                            onFocus={() => setStoryGenFocusStep('structure_prefill')}
                                             onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
                                         />
                                     </div>
@@ -3898,92 +4065,176 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 <textarea
                                     className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-24 resize-none placeholder:text-white/25"
                                     value={globalStoryInput.extra_notes}
+                                    onFocus={() => setStoryGenFocusStep('structure_prefill')}
                                     onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, extra_notes: e.target.value }))}
                                     placeholder={t('例：开头倒叙工牌特写；集末保安上门断点…', 'e.g. Cold-open badge close-up; cliffhanger security at door…')}
                                 />
                             </div>
                         </div>
 
-                        <div>
-                            <div className="flex items-center justify-between gap-3 mb-1">
-                            <label className="text-xs text-muted-foreground uppercase font-bold block">{t('已生成全局框架（Markdown）', 'Generated Global Framework (Markdown)')}</label>
-                            <div className="flex items-center gap-1 bg-black/20 border border-white/10 rounded-md p-1">
-                                <button
-                                    type="button"
-                                    onClick={() => setStoryFrameworkViewMode('preview')}
-                                    className={`px-2 py-1 rounded text-xs font-bold ${storyFrameworkViewMode === 'preview' ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
-                                >
-                                    {t('预览', 'Preview')}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setStoryFrameworkViewMode('edit')}
-                                    className={`px-2 py-1 rounded text-xs font-bold ${storyFrameworkViewMode === 'edit' ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
-                                >
-                                    {t('编辑', 'Edit')}
-                                </button>
+                        {/* Step 3: Global Framework */}
+                        <div
+                            ref={(el) => { storyGenStepRefs.current.global_framework = el; }}
+                            className={`rounded-xl border p-4 space-y-3 transition-colors ${storyGenFocusStep === 'global_framework' ? 'border-purple-500/40 bg-purple-500/5' : 'border-white/10 bg-white/[0.02]'}`}
+                        >
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2">
+                                    <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${globalFrameworkReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>3</span>
+                                    <label className="text-xs text-muted-foreground uppercase font-bold block">{t('已生成全局框架（Markdown）', 'Generated Global Framework (Markdown)')}</label>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleGenerateGlobalStory}
+                                        disabled={isGeneratingGlobalStory || !structurePrefillReady}
+                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isGeneratingGlobalStory || !structurePrefillReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
+                                        title={t('生成国际化爆款故事框架并保存到项目总览', 'Generate an international-blockbuster story framework and store it in project Overview')}
+                                    >
+                                        {isGeneratingGlobalStory
+                                            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('生成中...', 'Generating...')}</>
+                                            : <><Sparkles className="w-3.5 h-3.5" /> {globalFrameworkReady ? t('重新生成', 'Regenerate') : t('生成全局框架', 'Generate Framework')}</>}
+                                    </button>
+                                    <div className="flex items-center gap-1 bg-black/20 border border-white/10 rounded-md p-1">
+                                        <button
+                                            type="button"
+                                            onClick={() => setStoryFrameworkViewMode('preview')}
+                                            className={`px-2 py-1 rounded text-xs font-bold ${storyFrameworkViewMode === 'preview' ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
+                                        >
+                                            {t('预览', 'Preview')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setStoryFrameworkViewMode('edit')}
+                                            className={`px-2 py-1 rounded text-xs font-bold ${storyFrameworkViewMode === 'edit' ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
+                                        >
+                                            {t('编辑', 'Edit')}
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
+
+                            {storyFrameworkViewMode === 'edit' ? (
+                                <textarea
+                                    ref={(el) => {
+                                        if (el) {
+                                            if (el.dataset.content === el.value) return;
+                                            const scrollParent = el.closest('.overflow-y-auto');
+                                            const scrollTopContainer = scrollParent ? scrollParent.scrollTop : 0;
+                                            const scrollTopWindow = window.scrollY;
+                                            el.style.height = 'auto';
+                                            el.style.height = el.scrollHeight + 'px';
+                                            el.dataset.content = el.value;
+                                            if (scrollParent) scrollParent.scrollTop = scrollTopContainer;
+                                            window.scrollTo(0, scrollTopWindow);
+                                        }
+                                    }}
+                                    className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full min-h-[12rem] resize-none overflow-hidden"
+                                    value={info.story_dna_global_md || ''}
+                                    onFocus={() => setStoryGenFocusStep('global_framework')}
+                                    onChange={(e) => updateField('story_dna_global_md', e.target.value)}
+                                    placeholder={t('（生成后，全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, the global framework will appear here. You can edit it and Save Changes.)')}
+                                />
+                            ) : (
+                                <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 min-h-[12rem] overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1">
+                                    {(info.story_dna_global_md || '').trim()
+                                        ? <ReactMarkdown>{info.story_dna_global_md}</ReactMarkdown>
+                                        : <div className="text-sm text-muted-foreground">{t('（生成后，全局框架会显示在这里。）', '(After generation, the global framework will appear here.)')}</div>
+                                    }
+                                </div>
+                            )}
                         </div>
 
-                        {storyFrameworkViewMode === 'edit' ? (
-                            <textarea
-                                ref={(el) => {
-                                    if (el) {
-                                        if (el.dataset.content === el.value) return;
-                                        const scrollParent = el.closest('.overflow-y-auto');
-                                        const scrollTopContainer = scrollParent ? scrollParent.scrollTop : 0;
-                                        const scrollTopWindow = window.scrollY;
-                                        el.style.height = 'auto';
-                                        el.style.height = el.scrollHeight + 'px';
-                                        el.dataset.content = el.value;
-                                        if (scrollParent) scrollParent.scrollTop = scrollTopContainer;
-                                        window.scrollTo(0, scrollTopWindow);
-                                    }
-                                }}
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full min-h-[12rem] resize-none overflow-hidden"
-                                value={info.story_dna_global_md || ''}
-                                onChange={(e) => updateField('story_dna_global_md', e.target.value)}
-                                placeholder={t('（生成后，全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, the global framework will appear here. You can edit it and Save Changes.)')}
-                            />
-                        ) : (
-                            <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 min-h-[12rem] overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1">
-                                {(info.story_dna_global_md || '').trim()
-                                    ? <ReactMarkdown>{info.story_dna_global_md}</ReactMarkdown>
-                                    : <div className="text-sm text-muted-foreground">{t('（生成后，全局框架会显示在这里。）', '(After generation, the global framework will appear here.)')}</div>
-                                }
+                        {/* Step 4: Episode Generation */}
+                        <div
+                            ref={(el) => { storyGenStepRefs.current.episode_scripts = el; }}
+                            className={`rounded-xl border p-4 space-y-3 transition-colors ${storyGenFocusStep === 'episode_scripts' ? 'border-purple-500/40 bg-purple-500/5' : 'border-white/10 bg-white/[0.02]'}`}
+                        >
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <div className="flex items-center gap-2">
+                                    <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${(episodeScriptsReady && episodeScriptsGeneratedCount > 0) ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>4</span>
+                                    <div>
+                                        <div className="text-sm font-semibold text-white">{t('分集剧本生成', 'Episode Script Generation')}</div>
+                                        <div className="text-[11px] text-muted-foreground mt-0.5">
+                                            {t('基于全局框架与角色设定批量/单集生成分集剧本。', 'Batch or single-episode scripts from Global Framework + Character Canon.')}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                        onClick={handleGenerateEpisodeScripts}
+                                        disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady}
+                                        className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
+                                        title={t('从全局框架 + 项目角色设定生成分集剧本，自动创建缺失分集并写入对应分集', 'Generate episode scripts from Global Framework + Project Character Canon, create missing episodes, and save each script into its episode')}
+                                    >
+                                        {episodeScriptsRunning ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-3.5 h-3.5" /> {t('全量生成分集', 'Generate All')}</>}
+                                    </button>
+                                    <div className="flex items-center bg-white/5 rounded-lg overflow-hidden border border-white/10">
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            placeholder={t('单集', 'Ep#')}
+                                            className="w-16 px-2 py-2 bg-transparent text-sm text-center outline-none text-white placeholder-white/30"
+                                            value={targetEpisodeNumberForGen}
+                                            onChange={e => setTargetEpisodeNumberForGen(e.target.value)}
+                                            disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                        />
+                                        <button
+                                            onClick={() => handleGenerateEpisodeScripts({ specificEpisode: targetEpisodeNumberForGen })}
+                                            disabled={!targetEpisodeNumberForGen || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady}
+                                            className={`px-3 py-2 text-xs font-bold flex items-center bg-white/10 hover:bg-white/20 transition-colors ${(!targetEpisodeNumberForGen || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady) ? 'opacity-50 cursor-not-allowed' : 'text-blue-300'}`}
+                                            title={t('仅生成填写的单个集数', 'Generate only the specified episode number')}
+                                        >
+                                            {t('单集生成', 'Gen Single')}
+                                        </button>
+                                    </div>
+                                    <button
+                                        onClick={handleStopEpisodeScripts}
+                                        disabled={isStoppingEpisodeScripts}
+                                        className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${isStoppingEpisodeScripts ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                                        title={t('强制停止当前批量分集剧本任务', 'Force stop current batch episode scripts task')}
+                                    >
+                                        {isStoppingEpisodeScripts
+                                            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('停止中...', 'Stopping...')}</>
+                                            : <><X className="w-3.5 h-3.5" /> {t('强制停止', 'Force Stop')}</>}
+                                    </button>
+                                </div>
                             </div>
-                        )}
-                    </div>
-                    <div className="mt-4 border border-white/10 rounded-xl bg-black/20 p-4 space-y-3">
-                        <div className="flex items-center justify-between">
-                            <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                                <Activity className="w-4 h-4 text-primary" /> {t('剧本页面诊断与状态面板', 'Generation Status & Diagnosis')}
-                            </h4>
+
+                            {episodeScriptsProgress && (
+                                <div className="border border-white/10 rounded-lg p-3 bg-black/20 space-y-2">
+                                    <div className="text-xs text-muted-foreground uppercase tracking-wide">{t('分集剧本进度快照', 'Episode Scripts Progress Snapshot')}</div>
+                                    <div className="h-2 rounded bg-white/10 overflow-hidden">
+                                        <div
+                                            className="h-2 bg-primary"
+                                            style={{ width: `${progressPercent}%` }}
+                                        />
+                                    </div>
+                                    <div className="text-sm text-white flex flex-wrap gap-x-4 gap-y-1">
+                                        <span>{t('状态', 'Status')}: <b>{episodeScriptsProgress.running ? t('运行中', 'Running') : t('空闲', 'Idle')}</b></span>
+                                        {episodeScriptsProgress.stop_requested ? <span>{t('停止请求', 'Stop Requested')}: <b>{t('是', 'Yes')}</b></span> : null}
+                                        <span>{t('已处理', 'Processed')}: <b>{processedCount}</b> / <b>{episodesInRun}</b></span>
+                                        <span>{t('已生成', 'Generated')}: <b>{episodeScriptsProgress.generated || 0}</b></span>
+                                        <span>{t('失败', 'Failed')}: <b>{episodeScriptsProgress.failed || 0}</b></span>
+                                        <span>{t('跳过', 'Skipped')}: <b>{episodeScriptsProgress.skipped || 0}</b></span>
+                                    </div>
+                                    <div className="flex items-center gap-2 pt-1">
+                                        <button
+                                            onClick={() => setShowEpisodeScriptsProgressModal(true)}
+                                            className="px-3 py-1.5 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20"
+                                        >
+                                            {t('查看详情', 'View Details')}
+                                        </button>
+                                        <button
+                                            onClick={pollEpisodeScriptsStatus}
+                                            className="px-3 py-1.5 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-1.5"
+                                        >
+                                            <RefreshCw className="w-3.5 h-3.5" /> {t('刷新', 'Refresh')}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                            {t('基于当前输入与生成的诊断追踪。', 'Current status and output diagnostic tracking.')}
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
-                                <div className="text-xs text-muted-foreground">{t('全局框架状态', 'Framework Status')}</div>
-                                <div className="font-bold text-white">{info.story_dna_global_md ? t('已建立', 'Established') : t('待补充', 'Missing')}</div>
-                            </div>
-                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
-                                <div className="text-xs text-muted-foreground">{t('创意标准输入(I1-I9)', 'Creative I1-I9')}</div>
-                                <div className="font-bold text-white">{globalStoryInput.logline ? t('已填核心', 'Core Filled') : t('待细化', 'Needs Detail')}</div>
-                            </div>
-                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
-                                <div className="text-xs text-muted-foreground">{t('主线分集生成', 'Episodes Gen')}</div>
-                                <div className="font-bold text-white">{episodeScriptsProgress?.running ? t('运行中', 'Running') : t('闲置状态', 'Idle')}</div>
-                            </div>
-                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
-                                <div className="text-xs text-muted-foreground">{t('生成分集数量', 'Episodes Target')}</div>
-                                <div className="font-bold text-white">{globalStoryInput.episodes_count || 0} 集</div>
-                            </div>
-                        </div>
-                    </div>
-                
-                
+
                 </div>
                 )}
 

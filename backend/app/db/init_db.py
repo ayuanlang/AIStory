@@ -1389,11 +1389,15 @@ def check_and_migrate_tables(*, critical_only: bool = False):
         except Exception as e:
             logger.error(f"Failed to ensure smtp_system_configs table: {e}")
 
-        # Ensure dedicated wechat_pay_configs table exists
+        # Ensure dedicated wechat_pay_configs table exists (+ missing columns on upgrades)
         try:
             if not inspector.has_table("wechat_pay_configs"):
                 WechatPayConfig.__table__.create(bind=engine, checkfirst=True)
                 logger.info("Created wechat_pay_configs table")
+            else:
+                _ensure_missing_table_columns(
+                    "wechat_pay_configs", WechatPayConfig, is_postgres=is_postgres
+                )
         except Exception as e:
             logger.error(f"Failed to ensure wechat_pay_configs table: {e}")
 

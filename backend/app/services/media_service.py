@@ -1797,6 +1797,333 @@ class MediaGenerationService:
                 logger.warning("Ark Seedance missing-asset retry failed | error=%s", str(rebuild_err)[:300])
 
         return first_result
+
+    async def _handle_ark_generation(
+        self,
+        category: str,
+        prompt: str,
+        config: dict,
+        reference_image_url: str = None,
+        last_frame_url: str = None,
+        duration=None,
+        aspect_ratio=None,
+        negative_prompt: Optional[str] = None,
+    ) -> dict:
+        """Volcengine Ark video API (Seedance 2.0) — API Key Bearer auth only.
+
+        Docs: POST https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks
+        Auth: long-lived Ark API Key (not AK/SK). Private-asset AK:SK:EP flow stays on ark-seedance.
+        """
+        if str(category or "").strip().lower() not in {"video", ""}:
+            return {"error": "ark provider currently supports video only", "submit_failed": True}
+
+        raw_api_key = str(config.get("api_key") or "").strip()
+        if not raw_api_key:
+            return {"error": "ark provider requires Ark API Key", "submit_failed": True}
+
+        # Accidental AK:SK:EP_TOKEN pastes: Ark HTTP task APIs expect the EP/API token only.
+        api_key = raw_api_key
+        if raw_api_key.count(":") >= 2:
+            ep_token = raw_api_key.split(":", 2)[2].strip()
+            if ":" in ep_token:
+                ep_token = ep_token.split(":", 1)[0].strip()
+            if ep_token:
+                api_key = ep_token
+                logger.info("[ark] api_key looked like AK:SK:EP; using EP/API token segment for Bearer auth")
+
+        tool_conf = config.get("config", {}) or {}
+        prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+
+        image_refs = self._collect_video_reference_image_urls(
+            reference_image_url,
+            tool_conf,
+            extra_sources=config,
+        )
+        resolved_images: List[str] = []
+        for item in image_refs:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            resolved = await self._resolve_ref_for_api_async(
+                text,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+            )
+            if resolved:
+                resolved_images.append(str(resolved).strip())
+        resolved_images = [item for item in dict.fromkeys(resolved_images) if item]
+
+        resolved_last_frame = None
+        if str(last_frame_url or "").strip():
+            resolved_last_frame = await self._resolve_ref_for_api_async(
+                last_frame_url,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+            )
+            resolved_last_frame = str(resolved_last_frame or "").strip() or None
+
+        reference_video_urls = self._resolve_public_media_urls(
+            self._collect_video_reference_video_urls(tool_conf, extra_sources=config)
+        )
+        reference_audio_raw = (
+            tool_conf.get("reference_audio_urls")
+            or tool_conf.get("ref_audio_urls")
+            or config.get("reference_audio_urls")
+            or []
+        )
+        reference_audio_urls = self._resolve_public_media_urls(reference_audio_raw)
+
+        raw_ref_mode = str(
+            tool_conf.get("ref_mode")
+            or tool_conf.get("video_ref_mode")
+            or tool_conf.get("video_mode")
+            or tool_conf.get("video_mode_unified")
+            or ""
+        ).strip().lower()
+        if raw_ref_mode in {"refs_video", "entity_refs", "reference", "reference_images", "reference_image"}:
+            ref_mode = "entity_refs"
+        elif raw_ref_mode in {"start_end", "start-end", "start+end", "first_last", "first_last_frame", "first_and_last"}:
+            ref_mode = "start_end"
+        elif raw_ref_mode in {"end", "last", "last_frame"}:
+            ref_mode = "end"
+        elif raw_ref_mode in {"start", "first", "first_frame", "auto"}:
+            ref_mode = "start"
+        elif raw_ref_mode in {"t2v", "text", "text_to_video", "txt2vid"}:
+            ref_mode = "t2v"
+        else:
+            ref_mode = ""
+
+        if not ref_mode:
+            if resolved_last_frame and resolved_images:
+                ref_mode = "start_end"
+            elif reference_video_urls or reference_audio_urls or len(resolved_images) > 1:
+                ref_mode = "entity_refs"
+            elif resolved_images:
+                ref_mode = "start"
+            else:
+                ref_mode = "t2v"
+
+        use_reference_media = ref_mode == "entity_refs"
+        use_frame_roles = ref_mode in {"start", "start_end", "end"}
+
+        if reference_audio_urls and not resolved_images and not reference_video_urls:
+            return {
+                "error": "Seedance 2.0 cannot accept audio-only input; include at least one reference image or video",
+                "submit_failed": True,
+            }
+        if ref_mode == "t2v" and not str(prompt_text or "").strip():
+            return {"error": "Seedance 2.0 text-to-video requires a text prompt", "submit_failed": True}
+
+        # first/last-frame vs multimodal reference_* are mutually exclusive.
+        if use_frame_roles:
+            if resolved_images:
+                resolved_images = resolved_images[:1]
+            reference_video_urls = []
+            reference_audio_urls = []
+            if ref_mode == "start":
+                resolved_last_frame = None
+            elif ref_mode == "end" and not resolved_last_frame and resolved_images:
+                resolved_last_frame = resolved_images[0]
+                resolved_images = []
+        elif use_reference_media:
+            resolved_last_frame = None
+        else:
+            resolved_images = []
+            resolved_last_frame = None
+            reference_video_urls = []
+            reference_audio_urls = []
+
+        content_payload: List[Dict[str, Any]] = []
+        if str(prompt_text or "").strip():
+            content_payload.append({"type": "text", "text": prompt_text})
+
+        if use_reference_media:
+            for item in resolved_images:
+                content_payload.append({
+                    "type": "image_url",
+                    "image_url": {"url": item},
+                    "role": "reference_image",
+                })
+            for item in reference_video_urls:
+                content_payload.append({
+                    "type": "video_url",
+                    "video_url": {"url": item},
+                    "role": "reference_video",
+                })
+            for item in reference_audio_urls:
+                content_payload.append({
+                    "type": "audio_url",
+                    "audio_url": {"url": item},
+                    "role": "reference_audio",
+                })
+        else:
+            if resolved_images:
+                content_payload.append({
+                    "type": "image_url",
+                    "image_url": {"url": resolved_images[0]},
+                    "role": "first_frame",
+                })
+            if resolved_last_frame:
+                content_payload.append({
+                    "type": "image_url",
+                    "image_url": {"url": resolved_last_frame},
+                    "role": "last_frame",
+                })
+
+        if use_frame_roles and ref_mode == "start_end":
+            roles = {str(item.get("role") or "") for item in content_payload if isinstance(item, dict)}
+            if "first_frame" not in roles or "last_frame" not in roles:
+                return {
+                    "error": "Seedance 2.0 first/last-frame mode requires both first_frame and last_frame images",
+                    "submit_failed": True,
+                }
+        if ref_mode != "t2v" and len(content_payload) <= (1 if str(prompt_text or "").strip() else 0):
+            return {
+                "error": "Seedance 2.0 requires at least one valid image or video reference for this mode",
+                "submit_failed": True,
+            }
+
+        task_endpoint_raw = (
+            config.get("base_url")
+            or tool_conf.get("base_url")
+            or config.get("endpoint")
+            or tool_conf.get("endpoint")
+            or "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+        )
+        task_endpoint = self._normalize_doubao_video_tasks_endpoint(task_endpoint_raw)
+
+        model_id = str(
+            config.get("model")
+            or tool_conf.get("model")
+            or config.get("base_model")
+            or tool_conf.get("base_model")
+            or "doubao-seedance-2-0-260128"
+        ).strip() or "doubao-seedance-2-0-260128"
+
+        raw_callback_url = str(
+            tool_conf.get("_provider_callback_url")
+            or tool_conf.get("callback_url")
+            or tool_conf.get("callbackUrl")
+            or tool_conf.get("callBackUrl")
+            or tool_conf.get("webHook")
+            or ""
+        ).strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or "ark-video"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url:
+            callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(
+            str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"}
+        )
+        if pure_callback_mode and not self._is_public_deployment_hint():
+            logger.info("[ark] pure_callback_mode ignored on non-public deploy; falling back to provider poll")
+            pure_callback_mode = False
+        if callback_url and callback_url != raw_callback_url:
+            logger.info(
+                "Ark callback auto-assigned | ticket=%s callback_url=%s raw_callback=%s",
+                callback_ticket,
+                callback_url,
+                raw_callback_url or None,
+            )
+
+        task_payload: Dict[str, Any] = {
+            "model": model_id,
+            "content": content_payload,
+            "return_last_frame": self._normalize_bool_value(tool_conf.get("return_last_frame"), default=True),
+            "generate_audio": self._normalize_bool_value(tool_conf.get("generate_audio"), default=True),
+            "watermark": self._normalize_bool_value(tool_conf.get("watermark"), default=False),
+        }
+        requested_res = str(tool_conf.get("resolution") or tool_conf.get("video_resolution") or "").strip()
+        if requested_res:
+            task_payload["resolution"] = (
+                requested_res
+                if requested_res.lower().endswith("p") or requested_res.lower() == "4k"
+                else f"{requested_res}p"
+            )
+        else:
+            task_payload["resolution"] = "720p"
+        if callback_url and callback_url != "-1":
+            task_payload["callback_url"] = callback_url
+        if duration is not None:
+            try:
+                task_payload["duration"] = int(duration)
+            except Exception:
+                pass
+        final_ratio = (
+            self._normalize_aspect_ratio_value(aspect_ratio)
+            or str(tool_conf.get("ratio") or "").strip()
+            or "adaptive"
+        )
+        task_payload["ratio"] = final_ratio
+
+        safety_identifier = str(tool_conf.get("safety_identifier") or tool_conf.get("safetyIdentifier") or "").strip()
+        if safety_identifier:
+            task_payload["safety_identifier"] = safety_identifier[:64]
+        try:
+            priority_raw = tool_conf.get("priority")
+            if priority_raw is not None and str(priority_raw).strip() != "":
+                priority_val = int(priority_raw)
+                if 0 <= priority_val <= 9:
+                    task_payload["priority"] = priority_val
+        except Exception:
+            pass
+        try:
+            expires_raw = tool_conf.get("execution_expires_after") or tool_conf.get("executionExpiresAfter")
+            if expires_raw is not None and str(expires_raw).strip() != "":
+                expires_val = int(expires_raw)
+                if 3600 <= expires_val <= 259200:
+                    task_payload["execution_expires_after"] = expires_val
+        except Exception:
+            pass
+        tools_cfg = tool_conf.get("tools")
+        if isinstance(tools_cfg, list) and tools_cfg:
+            task_payload["tools"] = tools_cfg
+        elif self._normalize_bool_value(tool_conf.get("web_search") or tool_conf.get("webSearch")):
+            task_payload["tools"] = [{"type": "web_search"}]
+
+        try:
+            poll_timeout_seconds = int(tool_conf.get("poll_timeout_seconds") or tool_conf.get("timeout") or 1200)
+            poll_timeout_seconds = min(1800, max(300, poll_timeout_seconds))
+        except Exception:
+            poll_timeout_seconds = 1200
+
+        logger.info(
+            "[ark] submit | model=%s mode=%s endpoint=%s callback_enabled=%s pure_callback=%s images=%s videos=%s audios=%s",
+            model_id,
+            ref_mode,
+            task_endpoint,
+            callback_enabled,
+            pure_callback_mode and callback_enabled,
+            len(resolved_images),
+            len(reference_video_urls),
+            len(reference_audio_urls),
+        )
+
+        provider_payload_callback = tool_conf.get("_provider_payload_callback")
+        if not callable(provider_payload_callback):
+            provider_payload_callback = None
+
+        return await self._submit_and_poll_video(
+            url=task_endpoint,
+            payload=task_payload,
+            api_key=api_key,
+            log_tag="ark",
+            extra_metadata={
+                "provider": "ark",
+                "model": model_id,
+                "seedance2_ref_mode": ref_mode,
+                "is_seedance_2": True,
+            },
+            poll_timeout_seconds=poll_timeout_seconds,
+            pure_callback_mode=pure_callback_mode,
+            callback_enabled=callback_enabled,
+            callback_ticket=callback_ticket,
+            callback_url=callback_url,
+            provider_payload_callback=provider_payload_callback,
+        )
+
     def _classify_media_retry(self, result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         payload = result if isinstance(result, dict) else {}
         has_output = bool(payload.get("url")) or bool(payload.get("video_url"))
@@ -4793,13 +5120,20 @@ class MediaGenerationService:
             "nokuai": "nukoai",
             "noku ai": "nukoai",
             "noku": "nukoai",
+            "ark-seedance": "ark-seedance",
+            "ark_seedance": "ark-seedance",
+            "ark seedance": "ark-seedance",
+            "volcengine-ark-seedance": "ark-seedance",
+            "ark": "ark",
+            "volcengine ark": "ark",
+            "volcengine-ark": "ark",
+            "ark video": "ark",
         }
+        # Legacy Image rows used provider=ark as Doubao/Seedream alias.
+        if category == "Image" and raw in {"ark", "volcengine ark", "volcengine-ark"}:
+            return "doubao"
         if raw in mapping:
             return mapping[raw]
-        if category == "Image" and raw == "ark":
-            return "doubao"
-        if category == "Video" and raw == "ark":
-            return "doubao"
         return raw
 
     def _is_supported_provider(self, category: str, provider: Optional[str]) -> bool:
@@ -5693,7 +6027,18 @@ class MediaGenerationService:
                 if runtime_result is not None:
                     return runtime_result
 
-                if effective_provider in ["doubao", "ark"]:
+                if effective_provider == "ark":
+                    return await self._handle_ark_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        last_frame_url=effective_last_frame_url,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                    )
+                if effective_provider == "doubao":
                     return await self._handle_doubao_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if effective_provider == "grsai":
                     return await self._handle_grsai_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
@@ -13415,9 +13760,21 @@ class MediaGenerationService:
                             )
                         if last_frame_url_res:
                             metadata["last_frame_url"] = last_frame_url_res
+                        # ContentGenerationTask scalar fields used by billing / continuity.
+                        for src_key, dest_key in (
+                            ("duration", "duration"),
+                            ("ratio", "aspect_ratio"),
+                            ("resolution", "resolution"),
+                            ("generate_audio", "generate_audio"),
+                        ):
+                            if p_data.get(src_key) not in (None, ""):
+                                metadata[dest_key] = p_data.get(src_key)
+                        fps_val = p_data.get("framespersecond") or p_data.get("frames_per_second")
+                        if fps_val not in (None, ""):
+                            metadata["fps"] = fps_val
                         return {"url": video_url, "metadata": metadata}
-                    elif status_l in ["failed", "error", "canceled", "cancelled"]:
-                        return {"error": "Generation Failed", "details": p_data.get("error")}
+                    elif status_l in ["failed", "error", "canceled", "cancelled", "expired"]:
+                        return {"error": "Generation Failed", "details": p_data.get("error") or status}
             return {"error": f"Timeout after {poll_timeout_seconds}s"}
         except requests.exceptions.Timeout as e:
             if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e):

@@ -1602,6 +1602,100 @@
       "tags": null
     },
     {
+      "name": "ark Seedance 2.0 (火山方舟 API Key)",
+      "category": "Video",
+      "provider": "ark",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+      "model": "doubao-seedance-2-0-260128",
+      "base_model": "seedance-2",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "capability_flags": {
+          "supports_first_frame": true,
+          "supports_last_frame": true,
+          "supports_reference_image": true,
+          "supports_reference_video": true,
+          "supports_reference_audio": true,
+          "supports_generate_audio": true,
+          "supports_web_search": true
+        }
+      },
+      "supplier_info": {
+        "ark": {
+          "api_key_format": "ARK_API_KEY",
+          "auth": "Bearer API Key",
+          "submit_endpoint": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+          "query_endpoint": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/{id}",
+          "callback_supported": true,
+          "callback_compensation": true,
+          "reference_roles": [
+            "first_frame",
+            "last_frame",
+            "reference_image",
+            "reference_video",
+            "reference_audio"
+          ],
+          "mutual_exclusion": "first_last_frame XOR multimodal_reference",
+          "duration_range": [4, 15],
+          "duration_auto": -1,
+          "resolutions": ["480p", "720p", "1080p", "4k"],
+          "note": "Per official docs this API uses Ark API Key only; AK/SK private-asset flow remains on provider ark-seedance"
+        }
+      },
+      "config": {
+        "endpoint": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+        "query_endpoint": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+        "webHook": "",
+        "generate_audio": true,
+        "watermark": false,
+        "return_last_frame": true,
+        "poll_timeout_seconds": 1200,
+        "provider_api_key_strategy": "random",
+        "api_pricing": {
+          "unit_type": "per_million_tokens",
+          "cost": 4600,
+          "cost_input": 2800,
+          "cost_output": 4600,
+          "extra_conditions": {
+            "seedance_with_video_input_cny_per_mtok": 28.0,
+            "seedance_without_video_input_cny_per_mtok": 46.0
+          }
+        },
+        "ref_cost_cny_per_million_tokens": 46.0,
+        "ref_cost_cny_per_million_tokens_with_video_input": 28.0,
+        "video_token_defaults": {
+          "width": 1280,
+          "height": 720,
+          "fps": 24,
+          "draft_token_coefficient": 1.0
+        },
+        "video_token_resolution_rates": {
+          "480p": {"with_video_input": 28.0, "without_video_input": 46.0},
+          "720p": {"with_video_input": 28.0, "without_video_input": 46.0},
+          "1080p": {"with_video_input": 28.0, "without_video_input": 46.0},
+          "4k": {"with_video_input": 28.0, "without_video_input": 46.0}
+        }
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "token_billing",
+        "async",
+        "callback",
+        "seedance-2",
+        "ark-api-key"
+      ]
+    },
+    {
       "name": "zlhub doubao-seedance-2-0",
       "category": "Video",
       "provider": "zlhub",

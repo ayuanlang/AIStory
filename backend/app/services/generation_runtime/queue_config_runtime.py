@@ -40,8 +40,11 @@ def _queue_cfg_int(key: str, default: int, minimum: int = 0, maximum: int = 10**
 def _is_pure_callback_mode_enabled() -> bool:
     auto_mode = _queue_cfg_bool("pure_callback_mode_auto", True)
     if auto_mode:
+        # Keep in sync with MediaService._is_public_deployment_hint so Ark / Doubao /
+        # KIE / etc. all enter pure-callback on the same production signals.
         is_public_deploy = bool(
-            str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
+            str(os.getenv("AISTORY_PUBLIC_BASE_URL") or os.getenv("PUBLIC_BASE_URL") or "").strip()
+            or str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
             or str(os.getenv("RENDER") or "").strip()
             or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
             or str(os.getenv("RAILWAY_PUBLIC_DOMAIN") or "").strip()

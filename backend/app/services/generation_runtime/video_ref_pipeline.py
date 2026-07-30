@@ -574,10 +574,15 @@ def _video_api_supports_last_frame_mode(provider: Any, model: Any) -> bool:
     provider_text = str(provider or "").strip().lower()
     model_text = str(model or "").strip().lower()
 
-    # Seedance 2 multi-ref path consumes all images as reference_image + @ImageN.
-    # A separate last_frame slot is dropped by the ark-seedance adapter.
+    # Existing ark-seedance adapter uses multimodal reference_* by default and drops
+    # a separate last_frame slot unless modality.capability_flags overrides.
     if provider_text in {"ark-seedance", "ark_seedance"}:
         return False
+    # New Ark API-Key provider supports first/last-frame (mutually exclusive with refs).
+    if provider_text == "ark":
+        return True
+    # Other Seedance-2 suppliers default to multimodal refs unless modality
+    # capability_flags.supports_last_frame is explicitly true.
     if "seedance-2" in model_text or "seedance_2" in model_text or "seedance2" in model_text:
         return False
 

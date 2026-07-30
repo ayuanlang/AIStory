@@ -25,6 +25,8 @@ It separates two different callback layers:
 | RunningHub | Yes | Yes | Current standard-model integration now forwards upstream `webhookUrl` for image and video when explicitly configured or when AIStory auto-assigns a public callback URL. Submit-then-query polling remains in place as the fallback completion path. |
 | APIYI | No | No upstream callback in current adapter | Current image adapter uses synchronous `/v1/images/generations`. Current video adapter uses submit-and-poll style `/v1/videos` handling. |
 | Doubao | No | Yes | Current image path uses synchronous `/images/generations` style submission. Current video path forwards `callback_url` when present. |
+| Ark | N/A | Yes | New Seedance 2.0 provider via Ark **API Key** (`Bearer`) + `POST /api/v3/contents/generations/tasks`. Same production callback path as other video APIs. Does **not** use AK/SK. |
+| Ark-Seedance | N/A | Yes | Existing native private-asset path (`AK:SK:EP_TOKEN`). Unchanged; separate from provider `ark`. |
 | NukoAi | N/A | No (poll-only) | Submit `POST /videos` then poll `GET /videos/{id}`. Adapter ignores pure-callback mode; no upstream webhook. |
 
 ## AIStory Internal Callback Layer
@@ -78,6 +80,19 @@ This means the frontend may still observe callback-based completion from AIStory
 
 - Current image adapter uses `/images/generations` request path and does not attach callback.
 - Current video adapter forwards `callback_url` when present.
+
+### Ark (Seedance 2.0, API Key)
+
+- Video provider key: `ark` (distinct from existing `ark-seedance`).
+- Auth per official docs: long-lived **Ark API Key** only (`Authorization: Bearer <API_Key>`). No AK/SK required.
+- Upstream: `POST/GET https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks`.
+- Production callback path identical to other video APIs (`callback_url` → `/api/v1/generate/callback/video-job-{job_id}`; pure-callback when public deploy; compensation + timeout poll fallback).
+- Callback/query body: Ark `ContentGenerationTask` (`content.video_url`, `usage.completion_tokens`, `duration` / `ratio` / `resolution` / `framespersecond`).
+
+### Ark-Seedance (existing, unchanged)
+
+- Separate provider `ark-seedance` for private-asset registration (`AK:SK:EP_TOKEN`).
+- Not used by the new `ark` Seedance-2 API-Key integration.
 
 ### NukoAi
 

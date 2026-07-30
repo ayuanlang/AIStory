@@ -142,6 +142,7 @@ async def _run_generate_video(
     provider_callback_url: Optional[str] = None,
     force_pure_callback_mode: bool = False,
     provider_payload_callback: Any = None,
+    provider_task_id_callback: Any = None,
 ):
     reservation_tx = None
     reservation_tx_id: Optional[int] = None
@@ -1127,6 +1128,8 @@ async def _run_generate_video(
             video_provider_options["_provider_callback_url"] = str(provider_callback_url).strip()
         if callable(provider_payload_callback):
             video_provider_options["_provider_payload_callback"] = provider_payload_callback
+        if callable(provider_task_id_callback):
+            video_provider_options["_provider_task_id_callback"] = provider_task_id_callback
         if (force_pure_callback_mode or _is_pure_callback_mode_enabled()) and provider_callback_ticket and provider_callback_url:
             # NukoAi is poll-only: no upstream webhook. Never enable pure callback.
             from app.services.media_service import media_service as _media_svc
@@ -1746,6 +1749,55 @@ async def _run_generate_video_job(
     req_provider = str(req_payload.get("provider") or "").strip() or None
     req_model = str(req_payload.get("model") or "").strip() or None
 
+    def _on_provider_task_id(task_id: str) -> None:
+        normalized_task_id = str(task_id or "").strip()
+        if not normalized_task_id:
+            return
+        _set_video_job(job_id, provider_task_id=normalized_task_id, task_id=normalized_task_id, taskId=normalized_task_id)
+        try:
+            patch_generation_task_payload(
+                job_id,
+                {
+                    "provider_task_id": normalized_task_id,
+                    "task_id": normalized_task_id,
+                    "taskId": normalized_task_id,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "[VideoJob] patch provider taskId into queue payload failed | job_id=%s provider_task_id=%s",
+                job_id,
+                normalized_task_id,
+            )
+        try:
+            from app.services.generation_runtime.job_store import VIDEO_JOB_LOCK, VIDEO_JOB_STORE
+
+            with VIDEO_JOB_LOCK:
+                current = dict(VIDEO_JOB_STORE.get(job_id) or {})
+            reservation_tx_id_for_task = int(current.get("reservation_tx_id") or 0) or None
+            if reservation_tx_id_for_task:
+                attach_db = SessionLocal()
+                try:
+                    billing_service.attach_provider_task_id_to_reservation(
+                        attach_db,
+                        reservation_tx_id_for_task,
+                        normalized_task_id,
+                    )
+                finally:
+                    attach_db.close()
+        except Exception:
+            logger.exception(
+                "[VideoJob] persist provider taskId to reservation failed | job_id=%s provider_task_id=%s",
+                job_id,
+                normalized_task_id,
+            )
+        logger.info(
+            "[VideoJob] provider task linked | job_id=%s provider=%s provider_task_id=%s",
+            job_id,
+            req_provider or "unknown",
+            normalized_task_id,
+        )
+
     def _on_provider_payload(payload_snapshot: Any) -> None:
         if not isinstance(payload_snapshot, dict):
             return
@@ -1754,19 +1806,42 @@ async def _run_generate_video_job(
             payload_snapshot = _copy.deepcopy(payload_snapshot)
         except Exception:
             payload_snapshot = dict(payload_snapshot)
-        patch_generation_task_payload(
-            job_id,
-            {
-                "combined_payload": payload_snapshot,
-                "final_provider_payload": payload_snapshot,
-                "final_provider_payload_at": now_bj_iso(),
-            },
-        )
+        patch_fields = {
+            "combined_payload": payload_snapshot,
+            "final_provider_payload": payload_snapshot,
+            "final_provider_payload_at": now_bj_iso(),
+        }
+        nested_task_id = str(
+            payload_snapshot.get("task_id")
+            or payload_snapshot.get("taskId")
+            or payload_snapshot.get("provider_task_id")
+            or payload_snapshot.get("id")
+            or ""
+        ).strip()
+        if not nested_task_id:
+            submit_raw = payload_snapshot.get("submit_raw") if isinstance(payload_snapshot.get("submit_raw"), dict) else {}
+            submit_data = submit_raw.get("data") if isinstance(submit_raw.get("data"), dict) else {}
+            nested_task_id = str(
+                submit_data.get("id")
+                or submit_data.get("task_id")
+                or submit_raw.get("id")
+                or ""
+            ).strip()
+        if nested_task_id:
+            patch_fields["provider_task_id"] = nested_task_id
+            patch_fields["task_id"] = nested_task_id
+            patch_fields["taskId"] = nested_task_id
+            _on_provider_task_id(nested_task_id)
+        query_endpoint = str(payload_snapshot.get("query_endpoint") or payload_snapshot.get("queryEndpoint") or "").strip()
+        if query_endpoint:
+            patch_fields["query_endpoint"] = query_endpoint
+        patch_generation_task_payload(job_id, patch_fields)
         logger.info(
-            "[VideoJob] final provider payload recorded | job_id=%s provider=%s model=%s",
+            "[VideoJob] final provider payload recorded | job_id=%s provider=%s model=%s provider_task_id=%s",
             job_id,
             req_provider or "unknown",
             req_model or "unknown",
+            nested_task_id or None,
         )
     try:
         user = db.query(User).filter(User.id == user_id).first()
@@ -1810,6 +1885,7 @@ async def _run_generate_video_job(
                 provider_callback_url=provider_callback_url,
                 force_pure_callback_mode=_is_pure_callback_mode_enabled(),
                 provider_payload_callback=_on_provider_payload,
+                provider_task_id_callback=_on_provider_task_id,
             ),
             timeout=VIDEO_JOB_MAX_RUNNING_SECONDS,
         )
