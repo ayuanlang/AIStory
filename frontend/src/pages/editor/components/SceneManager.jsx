@@ -1196,24 +1196,26 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             setSceneShotDurationMap({});
             return;
         }
+        const episodeId = Number(activeEpisode.id);
         try {
-            const rows = await fetchEpisodeShots(activeEpisode.id, { compact: true });
+            const rows = await fetchEpisodeShots(episodeId, { compact: true, limit: 500 });
+            // Ignore stale responses after episode switch.
+            if (Number(activeEpisode?.id) !== episodeId) return;
             const nextCounts = {};
             const nextDurations = {};
             (Array.isArray(rows) ? rows : []).forEach((shot) => {
                 const sceneId = Number(shot?.scene_id || 0);
-                if (sceneId <= 0) return;
+                if (!Number.isFinite(sceneId) || sceneId <= 0) return;
                 nextCounts[sceneId] = (nextCounts[sceneId] || 0) + 1;
-                
-                const dur = parseFloat(shot?.duration) || 0;
-                nextDurations[sceneId] = (nextDurations[sceneId] || 0) + dur;
+                const durRaw = String(shot?.duration ?? '').trim();
+                const dur = Number.parseFloat(durRaw);
+                nextDurations[sceneId] = (nextDurations[sceneId] || 0) + (Number.isFinite(dur) ? dur : 0);
             });
             setSceneShotCountMap(nextCounts);
             setSceneShotDurationMap(nextDurations);
         } catch (e) {
             console.warn('Failed to refresh scene shot counts', e);
-            setSceneShotCountMap({});
-            setSceneShotDurationMap({});
+            // Keep previous totals on transient failures instead of flashing zeros.
         }
     }, [activeEpisode?.id]);
 
@@ -1324,9 +1326,8 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             if (items.length === 0) return false;
 
             const currentEpisodeId = Number(activeEpisode.id || 0);
-            const matched = items.find((item) => extractEpisodeIdFromJobPoolItem(item) === currentEpisodeId)
-                || items.find((item) => String(item?.status || '').toLowerCase() === 'running')
-                || items[0];
+            // Only recover jobs that belong to the current episode (never fall back to other episodes).
+            const matched = items.find((item) => extractEpisodeIdFromJobPoolItem(item) === currentEpisodeId);
             if (!matched) return false;
 
             const running = String(matched?.status || '').toLowerCase() === 'running';
@@ -1481,7 +1482,12 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         }
         const restored = loadBatchAiShotsRuntime(activeEpisode.id);
         if (restored) {
-            setBatchAiShotsProgress(restored);
+            // Keep progress totals for UX, but never trust persisted running across remount.
+            // Server poll / job-pool recover will re-arm running when a real batch is active.
+            setBatchAiShotsProgress({
+                ...restored,
+                running: false,
+            });
         } else {
             setBatchAiShotsProgress(createBatchAiShotsProgressState());
         }
@@ -1915,6 +1921,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             if (typeof refreshShots === 'function') {
                 await refreshShots();
             }
+            await refreshSceneShotCounts();
         } catch (e) {
             const message = e?.response?.data?.detail || e?.message || 'Shot supplement failed';
             console.error('[SceneManager] shot supplement failed', e);
@@ -1999,6 +2006,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             if (typeof refreshShots === 'function') {
                 await refreshShots();
             }
+            await refreshSceneShotCounts();
         } catch (e) {
             onLog?.(t('应用镜头失败: ', 'Failed to apply shots: ') + (e?.response?.data?.detail || e?.message), 'error');
         } finally {
@@ -2247,15 +2255,18 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
     useEffect(() => {
         if (!activeEpisode?.id) {
             setSceneShotCountMap({});
+            setSceneShotDurationMap({});
             return;
         }
-        if (batchAiShotsProgress.running) return;
+        // Always refresh counts/durations. Do not gate on batchAiShotsProgress.running —
+        // a stale localStorage "running" flag previously blocked this forever and showed 0.
         refreshSceneShotCounts();
     }, [
         activeEpisode?.id,
         sceneIdSignature,
         aiShotsFlowStatus.phase,
         batchAiShotsProgress.running,
+        batchAiShotsProgress.completed,
         batchAiShotsProgress.total,
         refreshSceneShotCounts,
     ]);
@@ -3071,6 +3082,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         onLog?.(`SceneManager: Auto-importing shots for Scene ${sceneId}...`, 'info');
 
         await applySceneAIResult(sceneId, { content: generatedRows });
+        await refreshSceneShotCounts();
 
         onLog?.(`SceneManager: Auto-import finished for Scene ${sceneId}.`, 'success');
         if (typeof onSwitchToShots === 'function' && consumeAiShotsAutoSwitchTicket(activeEpisode?.id)) {
@@ -3081,7 +3093,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             sceneId,
             message: t('AI Shots 已导入，已切换到 Shots 页面。', 'AI Shots imported. Switched to Shots page.'),
         });
-    }, [activeEpisode?.id, consumeAiShotsAutoSwitchTicket, onLog, onSwitchToShots, scenes, t]);
+    }, [activeEpisode?.id, consumeAiShotsAutoSwitchTicket, onLog, onSwitchToShots, refreshSceneShotCounts, scenes, t]);
 
     const isAiShotsFlowActive = ['preparing', 'generating', 'importing'].includes(String(aiShotsFlowStatus?.phase || '').toLowerCase());
     const isSceneAiShotsGenerating = useCallback((sceneId) => {
@@ -3627,9 +3639,11 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                 };
             }
 
+            const wasRunning = Boolean(prevProgress.running);
+            const nextRunning = Boolean(status.running);
             setBatchAiShotsProgress(prev => ({
                 ...prev,
-                running: Boolean(status.running),
+                running: nextRunning,
                 total: Number(status.total || 0),
                 completed: Number(status.completed || 0),
                 success: Number(status.success || 0),
@@ -3644,12 +3658,17 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                 clearInterval(batchAiShotsStatusTimerRef.current);
                 batchAiShotsStatusTimerRef.current = null;
             }
+            if (wasRunning && !nextRunning) {
+                void refreshSceneShotCounts();
+            } else if (nextRunning && Number(status.completed || 0) !== Number(prevProgress.completed || 0)) {
+                void refreshSceneShotCounts();
+            }
 
             return status;
         } catch (e) {
             return null;
         }
-    }, [activeEpisode?.id, onSwitchToShots, t]);
+    }, [activeEpisode?.id, onSwitchToShots, refreshSceneShotCounts, t]);
 
     useEffect(() => {
         if (!activeEpisode?.id) {
