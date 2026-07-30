@@ -149,8 +149,14 @@ export default function QueueAdmin() {
     const upstream = String(task?.callback_diag?.upstream_submit_state || '').trim().toLowerCase();
     const hasTicket = Boolean(task?.callback_diag?.provider_callback_ticket);
     const retrying = Number(task?.callback_diag?.callback_submit_retries || 0) > 0 || Boolean(task?.callback_diag?.callback_retry_at);
-    // Prefer runtime job status when queue row is stale (e.g. succeeded + callback_pending).
-    const status = ['succeeded', 'completed', 'done', 'success', 'failed', 'error', 'canceled', 'cancelled'].includes(jobStatus)
+    // Prefer runtime job status when queue row is stale (e.g. succeeded + callback_pending),
+    // or when poll/OSS progress advanced past queue "submit".
+    const preferJobStatus = [
+      'succeeded', 'completed', 'done', 'success',
+      'failed', 'error', 'canceled', 'cancelled',
+      'storing_asset', 'waiting_callback', 'callback_processing', 'running',
+    ].includes(jobStatus);
+    const status = preferJobStatus
       ? (jobStatus === 'succeeded' || jobStatus === 'success' || jobStatus === 'done' ? 'completed' : jobStatus)
       : queueStatus;
     const isTerminalSuccess = ['completed', 'succeeded', 'success', 'done'].includes(status);
@@ -207,6 +213,28 @@ export default function QueueAdmin() {
         text: '提交上游中',
         filterKey: 'submit',
         tone: 'text-violet-300 border-violet-500/40 bg-violet-500/10',
+        icon: 'running',
+      };
+    }
+
+    if (status === 'storing_asset' || upstream.includes('storing_asset')) {
+      return {
+        text: '入库中',
+        filterKey: 'storing_asset',
+        tone: 'text-amber-300 border-amber-500/40 bg-amber-500/10',
+        icon: 'running',
+      };
+    }
+
+    if (
+      (status === 'running' || status === 'processing' || status === 'pending')
+      && (upstream.includes('polling') || upstream.includes('submitted'))
+      && !hasTicket
+    ) {
+      return {
+        text: '上游生成中',
+        filterKey: 'submitted_upstream',
+        tone: 'text-sky-300 border-sky-500/40 bg-sky-500/10',
         icon: 'running',
       };
     }
@@ -501,8 +529,9 @@ export default function QueueAdmin() {
           <span>状态标注:</span>
           <span className="text-amber-300">排队中 = queued</span>
           <span className="text-violet-300">提交上游中 = submit</span>
+          <span className="text-sky-300">上游生成中 = running + polling</span>
+          <span className="text-amber-300">入库中 = storing_asset</span>
           <span className="text-blue-300">处理中 = running/processing/pending</span>
-          <span className="text-sky-300">已提交上游 = 上游已接收任务</span>
           <span className="text-cyan-300">等待回调入库 = 等待 provider callback 落库</span>
           <span className="text-teal-300">回调处理中 = 回调线程处理文件并更新记录</span>
           <span className="text-orange-300">回调补偿重试中 = 回调缺失触发补偿</span>
@@ -517,8 +546,9 @@ export default function QueueAdmin() {
               <option value="all">全部状态</option>
               <option value="queued">排队中</option>
               <option value="submit">提交上游中</option>
+              <option value="submitted_upstream">上游生成中</option>
+              <option value="storing_asset">入库中</option>
               <option value="running">处理中</option>
-              <option value="submitted_upstream">已提交上游</option>
               <option value="callback_waiting">等待回调入库</option>
               <option value="callback_processing">回调处理中</option>
               <option value="callback_retrying">回调补偿重试中</option>

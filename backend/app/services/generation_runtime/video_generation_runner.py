@@ -143,6 +143,7 @@ async def _run_generate_video(
     force_pure_callback_mode: bool = False,
     provider_payload_callback: Any = None,
     provider_task_id_callback: Any = None,
+    job_id: Optional[str] = None,
 ):
     reservation_tx = None
     reservation_tx_id: Optional[int] = None
@@ -1394,6 +1395,23 @@ async def _run_generate_video(
         if result.get("url"):
             temp_url = str(result.get("url") or "").strip()
             if temp_url:
+                stable_job_id = str(job_id or "").strip()
+                if stable_job_id:
+                    try:
+                        from app.services.generation_task_queue import mark_generation_task_status_external
+
+                        _set_video_job(
+                            stable_job_id,
+                            status="storing_asset",
+                            upstream_submit_state="storing_asset",
+                            error=None,
+                        )
+                        mark_generation_task_status_external(stable_job_id, status="running", error=None)
+                    except Exception:
+                        logger.exception(
+                            "[GenerateVideo] failed to mark storing_asset | job_id=%s",
+                            stable_job_id,
+                        )
                 filename_base = _build_generation_filename_base(req, db)
                 if temp_url.lower().startswith(("http://", "https://")):
                     norm_url, norm_meta, oss_uploaded = await asyncio.to_thread(
@@ -1753,7 +1771,16 @@ async def _run_generate_video_job(
         normalized_task_id = str(task_id or "").strip()
         if not normalized_task_id:
             return
-        _set_video_job(job_id, provider_task_id=normalized_task_id, task_id=normalized_task_id, taskId=normalized_task_id)
+        _set_video_job(
+            job_id,
+            provider_task_id=normalized_task_id,
+            task_id=normalized_task_id,
+            taskId=normalized_task_id,
+            # Leave "submit" for pure-callback waiters; poll-only providers spend minutes here.
+            status="running",
+            upstream_submit_state="polling",
+            error=None,
+        )
         try:
             patch_generation_task_payload(
                 job_id,
@@ -1768,6 +1795,13 @@ async def _run_generate_video_job(
                 "[VideoJob] patch provider taskId into queue payload failed | job_id=%s provider_task_id=%s",
                 job_id,
                 normalized_task_id,
+            )
+        try:
+            mark_generation_task_status_external(job_id, status="running", error=None)
+        except Exception:
+            logger.exception(
+                "[VideoJob] mark queue running after provider task link failed | job_id=%s",
+                job_id,
             )
         try:
             from app.services.generation_runtime.job_store import VIDEO_JOB_LOCK, VIDEO_JOB_STORE
@@ -1886,6 +1920,7 @@ async def _run_generate_video_job(
                 force_pure_callback_mode=_is_pure_callback_mode_enabled(),
                 provider_payload_callback=_on_provider_payload,
                 provider_task_id_callback=_on_provider_task_id,
+                job_id=job_id,
             ),
             timeout=VIDEO_JOB_MAX_RUNNING_SECONDS,
         )
