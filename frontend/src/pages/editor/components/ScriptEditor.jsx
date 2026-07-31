@@ -18565,6 +18565,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
+        // Scene-beats-only rerun still needs ENV design for storyboard kickoff.
+        // If Subject Index has ENV rows but environment asset design is missing, co-start it.
+        const stage3Config = await ensureStage3AutoStartCache();
+        const envAutoStartOn = stage3Config?.asset_design_environment !== false;
+        const subjectHasEnvRows = /(?:^|\n)\s*\|[^|\n]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(stage2_1SubjectIndexText)
+            || /(?:^|\n)\s*S\d+[^\n|]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(stage2_1SubjectIndexText);
+        const envDesignMissing = !hasPersistedEnvironmentAssetDesign();
+        const shouldRunEnvAssetDesign = envAutoStartOn && subjectHasEnvRows && envDesignMissing;
+
         const startedAt = Date.now();
         let importReport = null;
         let runtimeMeta = null;
@@ -18590,17 +18599,64 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         beginSceneOrchestrationPanelTracking(orchestrationSceneCount);
         setAnalysisFlowStatus({
             phase: 'scene_beats',
-            message: rerunMode === 'single'
-                ? t(`正在重排单个场景：${targetSceneId}...`, `Rerunning scene beats for ${targetSceneId}...`)
-                : t(`正在同步发起全部 ${orchestrationSceneCount} 场场景编排...`, `Sync-launching all ${orchestrationSceneCount} scene beats...`),
+            message: shouldRunEnvAssetDesign
+                ? (
+                    rerunMode === 'single'
+                        ? t(
+                            `正在重排场景 ${targetSceneId}，并同步启动缺失的环境资产设计...`,
+                            `Rerunning scene ${targetSceneId} and co-starting missing environment asset design...`
+                        )
+                        : t(
+                            `正在重排全部 ${orchestrationSceneCount} 场场景编排，并同步启动缺失的环境资产设计...`,
+                            `Rerunning all ${orchestrationSceneCount} scene beats and co-starting missing environment asset design...`
+                        )
+                )
+                : (
+                    rerunMode === 'single'
+                        ? t(`正在重排单个场景：${targetSceneId}...`, `Rerunning scene beats for ${targetSceneId}...`)
+                        : t(`正在同步发起全部 ${orchestrationSceneCount} 场场景编排...`, `Sync-launching all ${orchestrationSceneCount} scene beats...`)
+                ),
         });
         sceneBeatsOnlyRerunInFlightRef.current = true;
         logSelectedScriptAnalysisApi(rerunLabel);
 
+        let envAssetDesignPromise = null;
         try {
             orchestrationLiveImportedScenesRef.current = new Set();
             orchestrationPersistedSceneMarkdownRef.current = {};
             resetStoryboardKickoffTracking();
+
+            if (shouldRunEnvAssetDesign) {
+                armEnvironmentAssetDesignGate('scene-beats-rerun-env-missing');
+                onLog?.(
+                    t(
+                        '场景编排重跑检测到环境资产尚未完成，已并发启动环境资产设计。',
+                        'Scene-beats rerun detected missing environment assets; co-starting environment asset design.'
+                    ),
+                    'info'
+                );
+                envAssetDesignPromise = runPostImportSceneSubjectPipeline(
+                    null,
+                    stage2_1SubjectIndexText,
+                    {
+                        explicitSubjectIndexText: stage2_1SubjectIndexText,
+                        parallelWithScenes: true,
+                        targetEntityTypes: ['environments'],
+                        forceAssetDesign: true,
+                        skipExistingAssets: true,
+                    }
+                );
+            } else if (envAutoStartOn && subjectHasEnvRows && !envDesignMissing) {
+                // Open gate so early scene imports can kick storyboard while analysis is still in flight.
+                markEnvironmentAssetDesignReady('scene-beats-rerun-env-already-persisted');
+            } else {
+                markEnvironmentAssetDesignReady(
+                    !envAutoStartOn
+                        ? 'scene-beats-rerun-env-auto-start-off'
+                        : 'scene-beats-rerun-no-env-rows'
+                );
+            }
+
             const rerunSceneIds = collectOrchestrationResetSceneIds(
                 unitsForRerun,
                 episodePrefix
@@ -18867,8 +18923,39 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             setAnalysisFlowStatus({
                 phase: 'scene_beats',
-                message: t('✅ 场景编排导入完成，正在更新任务状态...', 'Scene beats import completed, updating task status...'),
+                message: envAssetDesignPromise
+                    ? t(
+                        '✅ 场景编排导入完成，等待环境资产设计结束后再启动分镜...',
+                        'Scene beats import completed; waiting for environment asset design before storyboard...'
+                    )
+                    : t('✅ 场景编排导入完成，正在更新任务状态...', 'Scene beats import completed, updating task status...'),
             });
+
+            if (envAssetDesignPromise) {
+                try {
+                    const envReport = await envAssetDesignPromise;
+                    if (envReport && typeof envReport === 'object') {
+                        const mergedScenePostReport = syncScenePostImportCheckedCount(importReport, envReport);
+                        importReport = {
+                            ...(importReport && typeof importReport === 'object' ? importReport : {}),
+                            sceneSubjectPostImportReport: mergedScenePostReport,
+                            dbRunInsertedCounts: envReport?.dbRunInsertedCounts,
+                            dbPersistedCounts: envReport?.dbPersistedCounts,
+                            importedSubjectCounts: envReport?.importedSubjectCounts,
+                        };
+                    }
+                } catch (envErr) {
+                    const envMsg = envErr?.message || String(envErr || 'environment asset design failed');
+                    onLog?.(
+                        t(
+                            `场景编排重跑时环境资产设计失败：${envMsg}`,
+                            `Environment asset design failed during scene-beats rerun: ${envMsg}`
+                        ),
+                        'error'
+                    );
+                    throw envErr instanceof Error ? envErr : new Error(envMsg);
+                }
+            }
 
             const rerunStoryboard = await awaitPendingStoryboardTasks({
                 importReport,
@@ -18897,6 +18984,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     rerunMode === 'single'
                         ? t(`场景 ${targetSceneId} 编排已重排完成。`, `Scene ${targetSceneId} beats rerun completed.`)
                         : t(`全部 ${orchestrationSceneCount} 场场景编排已重排完成。`, `All ${orchestrationSceneCount} scene beats reruns completed.`)
+                ) + (
+                    shouldRunEnvAssetDesign
+                        ? t(' 环境资产设计已同步完成。', ' Environment asset design also completed.')
+                        : ''
                 ) + rerunStoryboardSuffix,
             });
         } catch (error) {
@@ -18918,6 +19009,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             alert(t(`场景重排失败：${friendlyError}`, `Scene beats rerun failed: ${friendlyError}`));
         } finally {
+            // If scene branch failed before awaiting ENV, keep ENV running but avoid unhandled rejection.
+            if (envAssetDesignPromise) {
+                void envAssetDesignPromise.catch((err) => {
+                    onLog?.(
+                        t(
+                            `场景编排重跑附带的环境资产设计后续失败：${err?.message || err}`,
+                            `Background environment asset design from scene-beats rerun failed: ${err?.message || err}`
+                        ),
+                        'warning'
+                    );
+                });
+            }
             sceneBeatsOnlyRerunInFlightRef.current = false;
             endSceneOrchestrationPanelTracking();
             clearAnalysisTaskMarker(activeEpisode?.id);
@@ -18930,6 +19033,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.ai_scene_analysis_result,
         activeEpisode?.ai_scene_analysis_subject_index,
         activeEpisode?.id,
+        armEnvironmentAssetDesignGate,
         buildStage2_2UserInputFromStage1,
         buildCompletedAnalysisUiReport,
         beginSceneOrchestrationPanelTracking,
@@ -18939,16 +19043,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         endSceneOrchestrationPanelTracking,
         ensureOrchestrationScenesInWorkspace,
         ensurePersistedSubjectIndexForDownstream,
+        ensureStage3AutoStartCache,
         awaitPendingStoryboardTasks,
         extractPureSubjectIndexText,
         extractSceneDisplayLabel,
         extractStage1AdaptedScriptBody,
         getStageOutputContent,
+        hasPersistedEnvironmentAssetDesign,
         hasUsableSubjectIndexRows,
         importScenesFromPerScenePatchMap,
         isAnalyzing,
         localizeAnalysisFailureMessage,
         doImportText,
+        markEnvironmentAssetDesignReady,
         onLog,
         parseMarkdownTable,
         patchSceneTableRowIdentity,
@@ -18961,6 +19068,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         resetSceneOrchestrationProgress,
         resetStoryboardKickoffTracking,
         runAutoImportAndSwitchToScenes,
+        runPostImportSceneSubjectPipeline,
         runStage2_2WithValidationRetry,
         saveAnalysisTaskMarker,
         setAnalysisFlowStatus,
