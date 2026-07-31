@@ -46,6 +46,7 @@ from app.services.generation_runtime.callbacks import (
     _is_ambiguous_image_submit_detail,
     _merge_provider_task_ids_into_settle,
     _normalize_generation_status,
+    _set_generation_callback_payload,
 )
 from app.services.generation_runtime.generation_errors import _format_generation_failure_detail
 from app.services.generation_runtime.generation_filename import _build_generation_filename_base
@@ -134,6 +135,70 @@ def _to_positive_int_or_none(value: Any) -> Optional[int]:
     return _fn(value)
 
 
+def _publish_provisional_video_success(
+    job_id: Optional[str],
+    *,
+    url: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    callback_ticket: Optional[str] = None,
+    mark_queue_completed: bool = True,
+) -> bool:
+    """Publish provider URL immediately so editor/job polls finish before OSS localization."""
+    stable_job_id = str(job_id or "").strip()
+    stable_url = str(url or "").strip()
+    if not stable_job_id or not stable_url:
+        return False
+
+    result_payload = {
+        "url": stable_url,
+        "metadata": dict(metadata) if isinstance(metadata, dict) else {},
+    }
+    result_payload["metadata"].setdefault("oss_persist_pending", True)
+
+    try:
+        from app.services.generation_task_queue import mark_generation_task_status_external
+
+        _set_video_job(
+            stable_job_id,
+            status="succeeded",
+            upstream_submit_state="storing_asset",
+            result=result_payload,
+            error=None,
+            finished_at=now_bj_iso(),
+        )
+        if mark_queue_completed:
+            mark_generation_task_status_external(stable_job_id, status="completed", error=None)
+
+        stable_ticket = str(callback_ticket or "").strip()
+        if stable_ticket:
+            _set_generation_callback_payload(
+                stable_ticket,
+                {
+                    "event": "generation.completed",
+                    "kind": "video",
+                    "job_id": stable_job_id,
+                    "status": "succeeded",
+                    "success": True,
+                    "error": None,
+                    "result": result_payload,
+                },
+            )
+
+        logger.info(
+            "[GenerateVideo] provisional result published | job_id=%s url=%s callback_ticket=%s",
+            stable_job_id,
+            stable_url.split("?", 1)[0],
+            stable_ticket or None,
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "[GenerateVideo] failed to publish provisional result | job_id=%s",
+            stable_job_id,
+        )
+        return False
+
+
 
 async def _run_generate_video(
     req: VideoGenerationRequest,
@@ -144,6 +209,7 @@ async def _run_generate_video(
     force_pure_callback_mode: bool = False,
     provider_payload_callback: Any = None,
     provider_task_id_callback: Any = None,
+    provider_result_callback: Any = None,
     job_id: Optional[str] = None,
 ):
     reservation_tx = None
@@ -1132,6 +1198,8 @@ async def _run_generate_video(
             video_provider_options["_provider_payload_callback"] = provider_payload_callback
         if callable(provider_task_id_callback):
             video_provider_options["_provider_task_id_callback"] = provider_task_id_callback
+        if callable(provider_result_callback):
+            video_provider_options["_provider_result_callback"] = provider_result_callback
         if (force_pure_callback_mode or _is_pure_callback_mode_enabled()) and provider_callback_ticket and provider_callback_url:
             # NukoAi is poll-only: no upstream webhook. Never enable pure callback.
             from app.services.media_service import media_service as _media_svc
@@ -1400,30 +1468,51 @@ async def _run_generate_video(
             if temp_url:
                 stable_job_id = str(job_id or "").strip()
                 provisional_meta = dict(result.get("metadata") or {})
-                if stable_job_id:
-                    try:
-                        from app.services.generation_task_queue import mark_generation_task_status_external
+                provisional_meta.setdefault("oss_persist_pending", True)
+                _publish_provisional_video_success(
+                    stable_job_id,
+                    url=temp_url,
+                    metadata=provisional_meta,
+                    callback_ticket=provider_callback_ticket,
+                    mark_queue_completed=True,
+                )
 
-                        _set_video_job(
-                            stable_job_id,
-                            status="storing_asset",
-                            upstream_submit_state="storing_asset",
-                            result={"url": temp_url, "metadata": provisional_meta},
-                            error=None,
+                # Bind provider URL to the shot immediately so refresh shows video while OSS runs.
+                try:
+                    early_bind_url, early_ephemeral, early_meta = _resolve_video_bind_url(
+                        raw_url=temp_url,
+                        normalized_url=temp_url,
+                        normalized_meta=dict(provisional_meta),
+                    )
+                    if early_bind_url:
+                        await asyncio.to_thread(
+                            _register_asset_helper,
+                            db,
+                            current_user.id,
+                            early_bind_url,
+                            req,
+                            early_meta,
                         )
-                        # Keep queue row active-looking only until this runner returns;
-                        # provisional result.url already unblocks the editor poll.
-                        mark_generation_task_status_external(stable_job_id, status="running", error=None)
+                        await asyncio.to_thread(
+                            _bind_generated_media_to_shot,
+                            db,
+                            current_user,
+                            req,
+                            early_bind_url,
+                            False,
+                            early_meta,
+                        )
                         logger.info(
-                            "[GenerateVideo] provisional result published | job_id=%s url=%s",
-                            stable_job_id,
-                            temp_url.split("?", 1)[0],
+                            "[GenerateVideo] early shot bind with provider url | job_id=%s url=%s ephemeral=%s",
+                            stable_job_id or None,
+                            early_bind_url.split("?", 1)[0],
+                            bool(early_ephemeral),
                         )
-                    except Exception:
-                        logger.exception(
-                            "[GenerateVideo] failed to mark storing_asset | job_id=%s",
-                            stable_job_id,
-                        )
+                except Exception:
+                    logger.exception(
+                        "[GenerateVideo] early shot bind failed | job_id=%s",
+                        stable_job_id or None,
+                    )
 
                 skip_remote_localization = _is_provider_direct_oss_url(temp_url, provisional_meta)
                 needs_remote_localize = (
@@ -1480,6 +1569,7 @@ async def _run_generate_video(
                             final_meta = dict(norm_meta if norm_meta is not None else (meta or {}))
                             if jid:
                                 final_meta["idempotency_key"] = jid
+                            final_meta.pop("oss_persist_pending", None)
 
                             bind_url, ephemeral_binding, final_meta = _resolve_video_bind_url(
                                 raw_url=raw_url,
@@ -1511,7 +1601,9 @@ async def _run_generate_video(
                                 updated_res = dict(job_snapshot.get("result") or {"url": raw_url, "metadata": meta or {}})
                                 if bind_url:
                                     updated_res["url"] = bind_url
-                                    updated_res["metadata"] = final_meta
+                                    updated_meta = dict(final_meta)
+                                    updated_meta.pop("oss_persist_pending", None)
+                                    updated_res["metadata"] = updated_meta
                                 _set_video_job(
                                     jid,
                                     result=updated_res,
@@ -2023,6 +2115,22 @@ async def _run_generate_video_job(
             req_model or "unknown",
             nested_task_id or None,
         )
+
+    def _on_provider_result(result_snapshot: Any) -> None:
+        if not isinstance(result_snapshot, dict):
+            return
+        result_url = str(result_snapshot.get("url") or "").strip()
+        if not result_url:
+            return
+        result_meta = result_snapshot.get("metadata") if isinstance(result_snapshot.get("metadata"), dict) else {}
+        _publish_provisional_video_success(
+            job_id,
+            url=result_url,
+            metadata=result_meta,
+            callback_ticket=provider_callback_ticket,
+            mark_queue_completed=True,
+        )
+
     try:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -2066,6 +2174,7 @@ async def _run_generate_video_job(
                 force_pure_callback_mode=_is_pure_callback_mode_enabled(),
                 provider_payload_callback=_on_provider_payload,
                 provider_task_id_callback=_on_provider_task_id,
+                provider_result_callback=_on_provider_result,
                 job_id=job_id,
             ),
             timeout=VIDEO_JOB_MAX_RUNNING_SECONDS,

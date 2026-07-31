@@ -449,7 +449,7 @@ def get_generate_video_job_status(
         job = dict(VIDEO_JOB_STORE.get(job_id) or {})
 
     status = str(job.get("status") or "").strip().lower()
-    if not job or status in {"queued", "running"}:
+    if not job or status in {"queued", "running", "submit", "storing_asset"}:
         file_job = _read_video_job_file(job_id)
         if file_job:
             file_status = str(file_job.get("status") or "").strip().lower()

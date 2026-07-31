@@ -1209,9 +1209,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const phase = String(value || '').trim().toLowerCase();
         if (!phase) return '';
         if (['success', 'succeeded', 'completed', 'done'].includes(phase)) return 'succeeded';
+        // OSS localization may continue after provider URL is already available.
+        if (phase === 'storing_asset') return 'succeeded';
         if (['failed', 'error'].includes(phase)) return 'failed';
         if (['canceled', 'cancelled'].includes(phase)) return 'canceled';
-        if (['queued', 'pending', 'running', 'processing', 'generating', 'submitted', 'in_progress', 'in-progress'].includes(phase)) return 'running';
+        if (['queued', 'pending', 'running', 'processing', 'generating', 'submitted', 'in_progress', 'in-progress', 'submit'].includes(phase)) return 'running';
         return phase;
     }, []);
 
@@ -2897,15 +2899,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             : (generatingStateByShotRef.current?.[stableShotId] || { start: false, end: false, video: false, videoAt: 0 });
         if (!shotState?.video) return false;
 
-        const pendingVideoJobId = getPendingVideoJobId(stableShotId);
-        if (pendingVideoJobId) return true;
-
         const statusText = String(videoStatuses?.[stableShotId] || '').trim();
-        if (statusText) {
-            const normalizedStatus = normalizeGenerationPhase(statusText);
-            if (!isTerminalGenerationPhase(normalizedStatus)) {
-                return true;
-            }
+        const normalizedStatus = normalizeGenerationPhase(statusText);
+        // Provider URL / OSS-pending success must not keep the spinner forever.
+        if (statusText && isTerminalGenerationPhase(normalizedStatus)) {
+            return false;
+        }
+
+        const pendingVideoJobId = getPendingVideoJobId(stableShotId);
+        if (pendingVideoJobId && !(statusText && isTerminalGenerationPhase(normalizedStatus))) {
+            return true;
+        }
+
+        if (statusText && !isTerminalGenerationPhase(normalizedStatus)) {
+            return true;
         }
 
         const startedAtMs = Number(shotState?.videoAt || 0);
@@ -9126,7 +9133,37 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             ignoredAsyncJobCallbackCount += 1;
                             return;
                         }
-                        setVideoStatuses(prev => ({ ...prev, [targetShotId]: String(data?.status || status).toLowerCase() }));
+                        const nextStatus = String(data?.status || status || '').toLowerCase();
+                        setVideoStatuses(prev => ({ ...prev, [targetShotId]: nextStatus }));
+                        const earlyUrl = String(
+                            data?.result?.url
+                            || data?.result?.video_url
+                            || data?.url
+                            || data?.video_url
+                            || ''
+                        ).trim();
+                        // Unblock UI as soon as provider URL is published (OSS may still be uploading).
+                        if (earlyUrl || ['succeeded', 'completed', 'done', 'success', 'storing_asset'].includes(nextStatus)) {
+                            if (earlyUrl) {
+                                ignoreAsyncJobCallbacks = true;
+                                releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
+                                const stableTargetShotId = String(targetShotId || '').trim();
+                                setShots((prev) => prev.map((shot) => (
+                                    String(shot?.id || '') === stableTargetShotId
+                                        ? { ...shot, video_url: earlyUrl }
+                                        : shot
+                                )));
+                                setEditingShot((prev) => {
+                                    if (!prev || String(prev.id) !== stableTargetShotId) return prev;
+                                    return { ...prev, video_url: earlyUrl };
+                                });
+                                setVideoStatuses((prev) => {
+                                    const next = { ...prev };
+                                    delete next[targetShotId];
+                                    return next;
+                                });
+                            }
+                        }
                     },
                 }, keyframeRequestUrls);
                 onLog?.(t('视频请求已发起', 'Video request dispatched'), 'info');

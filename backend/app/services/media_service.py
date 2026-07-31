@@ -11411,25 +11411,47 @@ class MediaGenerationService:
                 result_url and status_val in {"", "completed", "success", "succeeded", "done", "finished"}
             ):
                 if result_url:
+                    result_metadata = {
+                        **base_metadata,
+                        "raw": poll_data,
+                        "task_id": task_id,
+                        "provider_task_id": task_id,
+                        "taskId": task_id,
+                        "credits_cost": (task_payload or {}).get("credits_cost") if isinstance(task_payload, dict) else None,
+                        "oss_persist_pending": True,
+                    }
                     logger.info(
                         "NukoAi poll completed | task_id=%s attempt=%s/%s elapsed=%ss credits_cost=%s url=%s",
                         task_id,
                         attempt,
                         max_attempts,
                         elapsed_s,
-                        (task_payload or {}).get("credits_cost") if isinstance(task_payload, dict) else None,
+                        result_metadata.get("credits_cost"),
                         str(result_url).split("?", 1)[0],
                     )
+                    # Unblock frontend/job poll before OSS localization starts.
+                    result_callback = tool_conf.get("_provider_result_callback")
+                    if callable(result_callback):
+                        try:
+                            cb_result = result_callback(
+                                {
+                                    "url": result_url,
+                                    "metadata": result_metadata,
+                                    "provider": "nukoai",
+                                    "task_id": str(task_id),
+                                }
+                            )
+                            if asyncio.iscoroutine(cb_result):
+                                await cb_result
+                        except Exception as result_cb_err:
+                            logger.warning(
+                                "NukoAi provider_result_callback_failed | task_id=%s error=%s",
+                                task_id,
+                                result_cb_err,
+                            )
                     return {
                         "url": result_url,
-                        "metadata": {
-                            **base_metadata,
-                            "raw": poll_data,
-                            "task_id": task_id,
-                            "provider_task_id": task_id,
-                            "taskId": task_id,
-                            "credits_cost": (task_payload or {}).get("credits_cost") if isinstance(task_payload, dict) else None,
-                        },
+                        "metadata": result_metadata,
                     }
                 logger.error(
                     "NukoAi poll completed without video_url | task_id=%s attempt=%s/%s elapsed=%ss raw=%s",

@@ -2298,7 +2298,8 @@ const pollVideoJobUntilDone = async (
             if (result?.url) {
                 return result;
             }
-            if (status === 'succeeded' || status === 'completed') {
+            // storing_asset: provider URL may already be on the job while OSS finishes in background.
+            if (status === 'succeeded' || status === 'completed' || status === 'storing_asset') {
                 return result || data.result || {};
             }
             if (status === 'failed' || status === 'error' || status === 'canceled' || status === 'cancelled') {
