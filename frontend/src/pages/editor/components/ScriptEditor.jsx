@@ -1275,22 +1275,103 @@ const TERMINAL_ASYNC_TASK_STATUSES = new Set([
     'completed', 'success', 'succeeded', 'done', 'finished',
     'failed', 'error', 'timeout', 'canceled', 'cancelled', 'stopped',
 ]);
+const SUCCESS_ASYNC_TASK_STATUSES = new Set(['completed', 'success', 'succeeded', 'done', 'finished']);
+const FAILED_ASYNC_TASK_STATUSES = new Set(['failed', 'error', 'timeout']);
+const CANCELED_ASYNC_TASK_STATUSES = new Set(['canceled', 'cancelled', 'stopped']);
 
 const peekAsyncTaskTerminalStatus = async (taskId) => {
+    const info = await peekAsyncTaskTerminalInfo(taskId);
+    return info?.status || null;
+};
+
+/** Peek terminal async-task status plus optional error text from GET /tasks/{id}. */
+const peekAsyncTaskTerminalInfo = async (taskId) => {
     const id = String(taskId || '').trim();
     if (!id) return null;
     try {
         const res = await api.get(`/tasks/${id}`, { params: { _ts: Date.now() }, timeout: 15000 });
         const status = String(res?.data?.status || '').trim().toLowerCase();
-        return TERMINAL_ASYNC_TASK_STATUSES.has(status) ? status : null;
+        if (!TERMINAL_ASYNC_TASK_STATUSES.has(status)) return null;
+        return {
+            status,
+            error: String(res?.data?.error || '').trim(),
+        };
     } catch (error) {
         const status = Number(error?.response?.status || 0);
         const detail = String(error?.response?.data?.detail || error?.message || '').trim().toLowerCase();
         if (status === 404 || detail.includes('task not found') || detail.includes('not found')) {
-            return 'not_found';
+            return { status: 'not_found', error: '' };
         }
         return null;
     }
+};
+
+/** Map backend terminal task status → analysis panel phase / report status / copy. */
+const resolveAsyncTaskTerminalUi = (terminalInfo, t) => {
+    const status = String(terminalInfo?.status || '').trim().toLowerCase();
+    const errorText = String(terminalInfo?.error || '').trim();
+    if (SUCCESS_ASYNC_TASK_STATUSES.has(status)) {
+        return {
+            phase: 'completed',
+            status: 'completed',
+            message: t('分析已成功完成。', 'Analysis completed successfully.'),
+            error: '',
+            warning: '',
+        };
+    }
+    if (CANCELED_ASYNC_TASK_STATUSES.has(status)) {
+        return {
+            phase: 'warning',
+            status: 'warning',
+            message: t('分析任务已停止。', 'Analysis task was stopped.'),
+            error: '',
+            warning: t('分析任务已停止。', 'Analysis task was stopped.'),
+        };
+    }
+    if (FAILED_ASYNC_TASK_STATUSES.has(status)) {
+        const message = errorText
+            ? t(`分析失败：${errorText}`, `Analysis failed: ${errorText}`)
+            : t('分析失败。', 'Analysis failed.');
+        return {
+            phase: 'failed',
+            status: 'failed',
+            message,
+            error: errorText || message,
+            warning: '',
+        };
+    }
+    if (status === 'not_found') {
+        return {
+            phase: 'warning',
+            status: 'warning',
+            message: t(
+                '后台分析任务已结束，但无法确认结果（任务记录已失效）。',
+                'Background analysis task ended, but the outcome could not be confirmed (task record missing).'
+            ),
+            error: '',
+            warning: t(
+                '后台分析任务已结束，但无法确认结果（任务记录已失效）。',
+                'Background analysis task ended, but the outcome could not be confirmed (task record missing).'
+            ),
+        };
+    }
+    return {
+        phase: 'warning',
+        status: 'warning',
+        message: t('后台分析任务已结束。', 'Background analysis task has finished.'),
+        error: '',
+        warning: t('后台分析任务已结束。', 'Background analysis task has finished.'),
+    };
+};
+
+/** Settled storyboard progress → panel phase/status (partial failures surface as warning). */
+const resolveSettledStoryboardUiOutcome = (progressValue) => {
+    const progress = normalizeStoryboardTaskProgress(progressValue);
+    const failed = Number(progress.failed || 0);
+    if (failed > 0) {
+        return { phase: 'warning', status: 'warning' };
+    }
+    return { phase: 'completed', status: 'completed' };
 };
 
 const isEpisodeAnalysisTaskLive = (episodeId, {
@@ -3898,12 +3979,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (pipelineStillLive) return;
         if (phase !== 'storyboard') return;
         if (!isStoryboardTaskProgressSettled(progress)) return;
+        const storyboardOutcome = resolveSettledStoryboardUiOutcome(progress);
         latestIsAnalyzingRef.current = false;
         setIsAnalyzing(false);
         setIsRetryingPhase2(false);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus((prev) => ({
-            phase: 'completed',
+            phase: storyboardOutcome.phase,
             message: String(prev?.message || '').trim()
                 || t('分镜生成已结束', 'Storyboard generation finished'),
             highlightHint: prev?.highlightHint || '',
@@ -3911,7 +3993,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisUiReport((prev) => {
             if (!prev || typeof prev !== 'object') {
                 return {
-                    status: 'completed',
+                    status: storyboardOutcome.status,
                     storyboardTaskProgress: progress,
                     storyboardAutoStarted: true,
                 };
@@ -3920,7 +4002,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const startedAt = Number(prev.startedAt || analysisTimerStartedAtRef.current || 0);
             return {
                 ...prev,
-                status: 'completed',
+                status: storyboardOutcome.status,
                 storyboardTaskProgress: progress,
                 durationMs: startedAt > 0
                     ? Math.max(0, Date.now() - startedAt)
@@ -3978,7 +4060,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 };
             }
 
-            if (reportStatus === 'failed') {
+            if (reportStatus === 'failed' || reportStatus === 'error') {
                 if (prevPhase === 'failed') return prev;
                 return {
                     phase: 'failed',
@@ -7298,15 +7380,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             const analysisTerminal = prevPhase === 'completed' || prevPhase === 'warning' || prevPhase === 'failed';
             if (analysisTerminal) {
+                const demoteToWarning = failed > 0 && prevPhase === 'completed';
                 return {
                     ...prev,
+                    phase: demoteToWarning ? 'warning' : prevPhase,
                     message: nextMessage || prev?.message || '',
                     highlightHint: highlightHint || prev?.highlightHint || '',
                 };
             }
             if (shouldFinalizeAnalysis) {
+                const storyboardOutcome = resolveSettledStoryboardUiOutcome(progress);
                 return {
-                    phase: 'completed',
+                    phase: storyboardOutcome.phase,
                     message: nextMessage,
                     highlightHint,
                 };
@@ -7339,17 +7424,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 return base;
             }
-            if (!shouldFinalizeAnalysis) return base;
+            if (!shouldFinalizeAnalysis) {
+                // If analysis already terminal as completed but shots had failures, surface warning.
+                if (allSettled && failed > 0) {
+                    const prevStatus = String(prev?.status || '').trim().toLowerCase();
+                    if (prevStatus === 'completed') {
+                        return { ...base, status: 'warning' };
+                    }
+                }
+                return base;
+            }
             const startedAt = Number(prev?.startedAt || analysisTimerStartedAtRef.current || 0);
             const durationMs = startedAt > 0
                 ? Math.max(0, Date.now() - startedAt)
                 : Number(prev?.durationMs || 0) || 0;
+            const prevStatus = String(prev?.status || '').trim().toLowerCase();
+            const storyboardOutcome = resolveSettledStoryboardUiOutcome(progress);
             return {
                 ...base,
-                status: String(prev?.status || '').trim().toLowerCase() === 'failed' ? prev.status : 'completed',
+                status: prevStatus === 'failed' ? prev.status : storyboardOutcome.status,
                 startedAt: startedAt || prev?.startedAt || undefined,
                 durationMs,
-                error: String(prev?.status || '').trim().toLowerCase() === 'failed' ? (prev?.error || '') : '',
+                error: prevStatus === 'failed' ? (prev?.error || '') : '',
             };
         });
         if (shouldFinalizeAnalysis) {
@@ -10852,9 +10948,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             String(flowStatus?.phase || '').trim().toLowerCase() === 'storyboard'
             && isStoryboardTaskProgressSettled(uiReport?.storyboardTaskProgress)
         ) {
-            // Settled storyboard snapshot left phase=storyboard; show completed so the panel stops spinning.
+            // Settled storyboard snapshot left phase=storyboard; stop spinning and show success/warning.
+            const storyboardOutcome = resolveSettledStoryboardUiOutcome(uiReport?.storyboardTaskProgress);
             setAnalysisFlowStatus({
-                phase: 'completed',
+                phase: storyboardOutcome.phase,
                 message: String(flowStatus?.message || '').trim()
                     || t('分镜生成已结束', 'Storyboard generation finished'),
                 highlightHint: flowStatus?.highlightHint || '',
@@ -10864,7 +10961,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...uiReport,
                     status: String(uiReport.status || '').trim().toLowerCase() === 'failed'
                         ? uiReport.status
-                        : 'completed',
+                        : storyboardOutcome.status,
                 });
             }
             setIsAnalyzing(false);
@@ -13767,17 +13864,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             await refreshAnalysisFromDB({ resultField: 'ai_entity_design_result' });
             const marker = loadAnalysisTaskMarker(activeEpisode.id);
             if (!marker?.taskId) {
-                setAnalysisFlowStatus((prev) => (prev?.phase === 'completed' ? prev : {
-                    phase: 'completed',
-                    message: t('分析任务已完成。', 'Analysis task completed.'),
-                }));
-                setAnalysisUiReport((prev) => ({
-                    ...(prev || {}),
-                    status: 'completed',
-                    startedAt,
-                    durationMs: Date.now() - startedAt,
-                    error: '',
-                }));
+                setAnalysisFlowStatus((prev) => {
+                    const phase = String(prev?.phase || '').trim().toLowerCase();
+                    if (['completed', 'warning', 'failed'].includes(phase)) return prev;
+                    return {
+                        phase: 'completed',
+                        message: t('分析已成功完成。', 'Analysis completed successfully.'),
+                    };
+                });
+                setAnalysisUiReport((prev) => {
+                    const prevStatus = String(prev?.status || '').trim().toLowerCase();
+                    if (['failed', 'error', 'warning'].includes(prevStatus)) {
+                        return {
+                            ...(prev || {}),
+                            startedAt,
+                            durationMs: Date.now() - startedAt,
+                        };
+                    }
+                    return {
+                        ...(prev || {}),
+                        status: 'completed',
+                        startedAt,
+                        durationMs: Date.now() - startedAt,
+                        error: '',
+                    };
+                });
             }
         } catch (e) {
             const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
@@ -13864,8 +13975,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     setIsRetryingPhase2(false);
                     setActiveAnalysisTaskId('');
                     if (phase === 'storyboard' && storyboardSettled) {
+                        const storyboardOutcome = resolveSettledStoryboardUiOutcome(
+                            ui?.uiReport?.storyboardTaskProgress
+                        );
                         setAnalysisFlowStatus({
-                            phase: 'completed',
+                            phase: storyboardOutcome.phase,
                             message: String(ui?.flowStatus?.message || '').trim()
                                 || t('分镜生成已结束', 'Storyboard generation finished'),
                             highlightHint: ui?.flowStatus?.highlightHint || '',
@@ -13876,7 +13990,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const startedAt = Number(prev.startedAt || analysisTimerStartedAtRef.current || 0);
                             return {
                                 ...prev,
-                                status: 'completed',
+                                status: storyboardOutcome.status,
                                 durationMs: startedAt > 0
                                     ? Math.max(0, Date.now() - startedAt)
                                     : Number(prev.durationMs || 0) || 0,
@@ -13920,39 +14034,79 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return;
             }
 
-            const terminalStatus = await peekAsyncTaskTerminalStatus(marker.taskId);
-            if (terminalStatus) {
+            const terminalInfo = await peekAsyncTaskTerminalInfo(marker.taskId);
+            if (terminalInfo?.status) {
+                const terminalStatus = String(terminalInfo.status || '').trim().toLowerCase();
+                const localizedError = terminalInfo.error
+                    ? localizeAnalysisFailureMessage(terminalInfo.error)
+                    : '';
+                const terminalUi = resolveAsyncTaskTerminalUi(
+                    { ...terminalInfo, error: localizedError || terminalInfo.error },
+                    t
+                );
                 clearAnalysisTaskMarker(episodeId);
                 releaseEpisodeAnalysisRun(episodeId);
                 detachedAnalysisRunEpisodeRef.current = null;
                 setIsAnalyzing(false);
                 setIsRetryingPhase2(false);
                 setActiveAnalysisTaskId('');
-                // Soft-stop monitoring only — keep restored progress logs; no failure/retry prompt.
+                // Soft-stop monitoring — keep restored progress logs, but surface success vs failure.
                 setAnalysisFlowStatus((prev) => {
                     const phase = String(prev?.phase || '').trim().toLowerCase();
-                    if (!phase || phase === 'idle' || ['completed', 'warning', 'failed'].includes(phase)) return prev;
+                    // Prefer a more severe outcome if UI already has a terminal phase.
+                    const severity = { completed: 1, warning: 2, failed: 3 };
+                    if (
+                        ['completed', 'warning', 'failed'].includes(phase)
+                        && (severity[terminalUi.phase] || 0) <= (severity[phase] || 0)
+                    ) {
+                        return {
+                            ...prev,
+                            message: String(prev?.message || '').trim() || terminalUi.message,
+                        };
+                    }
                     return {
-                        phase: 'completed',
-                        message: t('后台分析任务已结束。', 'Background analysis task has finished.'),
+                        phase: terminalUi.phase,
+                        message: terminalUi.message,
                     };
                 });
                 setAnalysisUiReport((prev) => {
-                    if (!prev || String(prev.status || '').trim().toLowerCase() !== 'running') return prev;
-                    const startedAt = Number(prev.startedAt || Date.now());
+                    const prevStatus = String(prev?.status || '').trim().toLowerCase();
+                    const startedAt = Number(prev?.startedAt || Date.now());
+                    const durationMs = Math.max(
+                        0,
+                        Date.now() - (Number.isFinite(startedAt) && startedAt > 0 ? startedAt : Date.now())
+                    );
+                    if (!prev) {
+                        return {
+                            status: terminalUi.status,
+                            error: terminalUi.error,
+                            warning: terminalUi.warning,
+                            durationMs,
+                        };
+                    }
+                    // Keep an already-failed report; upgrade running/completed when terminal is worse.
+                    if (prevStatus === 'failed' && terminalUi.status !== 'failed') {
+                        return { ...prev, durationMs: Number(prev.durationMs || 0) || durationMs };
+                    }
+                    if (prevStatus === 'warning' && terminalUi.status === 'completed') {
+                        return { ...prev, durationMs: Number(prev.durationMs || 0) || durationMs };
+                    }
                     return {
                         ...prev,
-                        status: 'completed',
-                        error: '',
-                        warning: '',
-                        durationMs: Math.max(0, Date.now() - (Number.isFinite(startedAt) && startedAt > 0 ? startedAt : Date.now())),
+                        status: terminalUi.status,
+                        error: terminalUi.error,
+                        warning: terminalUi.warning,
+                        durationMs: Number(prev.durationMs || 0) || durationMs,
                     };
                 });
                 if (onLog) {
                     const reason = terminalStatus === 'not_found'
                         ? 'backend task no longer exists (server may have restarted)'
                         : `backend task already ${terminalStatus}`;
-                    onLog?.(`[Analysis Resume] Cleared stale marker; ${reason}.`, 'info');
+                    const logLevel = terminalUi.phase === 'failed'
+                        ? 'error'
+                        : (terminalUi.phase === 'warning' ? 'warning' : 'info');
+                    onLog?.(`[Analysis Resume] Cleared stale marker; ${reason}. Outcome=${terminalUi.phase}.`, logLevel);
                 }
                 return;
             }
@@ -13977,6 +14131,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         isAnalyzing,
         isRetryingPhase2,
         loadAnalysisTaskMarker,
+        localizeAnalysisFailureMessage,
         onLog,
         reattachToExistingAnalysisRun,
         resetBootstrapAnalysisUiIfIdle,
