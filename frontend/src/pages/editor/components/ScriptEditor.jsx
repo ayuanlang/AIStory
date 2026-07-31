@@ -10644,6 +10644,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const activeAnalysisTaskIdsRef = useRef(new Set());
     const analysisRunInFlightRef = useRef(false);
     const analysisResumeCoordinatorRef = useRef({ running: false, episodeId: null });
+    /** Late-bound continue helper (Stage 1 done / incomplete artifacts) — avoids TDZ with resume callbacks. */
+    const resumeIncompleteAnalysisPipelineRef = useRef(null);
     const detachedAnalysisRunEpisodeRef = useRef(null);
     const mountResumeReadyRef = useRef(false);
     const forceRegenerateRef = useRef(false);
@@ -11038,6 +11040,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return `aistory:scene-analysis-task:${episodeId}`;
     }, []);
 
+    const normalizeAnalysisTaskMarkerPhase = useCallback((phase) => {
+        const raw = phase;
+        if (raw === 'scene_beats' || raw === 'script_opt' || raw === 'assets_gen') return raw;
+        const asText = String(raw ?? '').trim().toLowerCase();
+        if (asText === 'scene_beats' || asText === 'script_opt' || asText === 'assets_gen') return asText;
+        const asNum = Number(raw);
+        if (Number.isFinite(asNum) && asNum > 0) return asNum;
+        return 1;
+    }, []);
+
     const loadAnalysisTaskMarker = useCallback((episodeId) => {
         try {
             const key = getAnalysisTaskStorageKey(episodeId);
@@ -11050,7 +11062,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ? Array.from(new Set(parsed.taskIds.map((item) => String(item || '').trim()).filter(Boolean)))
                 : [];
             const startedAt = Number(parsed?.startedAt || 0);
-            const phase = Number(parsed?.phase || 1);
+            const phase = normalizeAnalysisTaskMarkerPhase(parsed?.phase);
             if (!taskId) return null;
             if (!Number.isFinite(startedAt) || startedAt <= 0) return { taskId, taskIds: taskIds.length ? taskIds : [taskId], startedAt: Date.now(), phase };
             // Align marker TTL with task polling timeout to avoid endless resume loops after reload.
@@ -11062,7 +11074,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } catch (_) {
             return null;
         }
-    }, [ANALYSIS_TASK_MARKER_TTL_MS, getAnalysisTaskStorageKey]);
+    }, [ANALYSIS_TASK_MARKER_TTL_MS, getAnalysisTaskStorageKey, normalizeAnalysisTaskMarkerPhase]);
 
     const saveAnalysisTaskMarker = useCallback((episodeId, marker) => {
         try {
@@ -11089,14 +11101,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 taskId,
                 taskIds,
                 startedAt: Number(marker?.startedAt || Date.now()),
-                phase: Number(marker?.phase || 1),
+                // Preserve string phases like scene_beats (Number('scene_beats') === NaN → null in JSON).
+                phase: normalizeAnalysisTaskMarkerPhase(marker?.phase),
             };
             window.localStorage.setItem(key, JSON.stringify(payload));
             registerActiveAnalysisTask(taskId);
         } catch (_) {
             // Ignore localStorage failures.
         }
-    }, [getAnalysisTaskStorageKey, registerActiveAnalysisTask]);
+    }, [getAnalysisTaskStorageKey, normalizeAnalysisTaskMarkerPhase, registerActiveAnalysisTask]);
 
     const clearAnalysisTaskMarker = useCallback((episodeId) => {
         try {
@@ -14037,6 +14050,122 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const terminalInfo = await peekAsyncTaskTerminalInfo(marker.taskId);
             if (terminalInfo?.status) {
                 const terminalStatus = String(terminalInfo.status || '').trim().toLowerCase();
+                const markerPhase = normalizeAnalysisTaskMarkerPhase(marker?.phase);
+                const markerPhaseKey = String(markerPhase ?? '1').trim().toLowerCase();
+                const isSuccessTerminal = SUCCESS_ASYNC_TASK_STATUSES.has(terminalStatus);
+
+                // Re-check after await: Stage 1/2.x node completion is normal mid-pipeline.
+                // Never treat a single completed node task as whole-pipeline success while a run is live.
+                const liveRun = getEpisodeAnalysisRun(episodeId);
+                const pipelineStillLive = Boolean(
+                    liveRun?.promise
+                    || analysisRunInFlightRef.current
+                    || analysisEntryLockRef.current
+                    || isEpisodeAnalysisClaimed(episodeId)
+                );
+                if (pipelineStillLive) {
+                    if (isSuccessTerminal && (markerPhaseKey === '1' || markerPhase === 1)) {
+                        // Drop the completed Stage 1 task id so resume cannot false-complete later;
+                        // Stage 2.1+ will write a fresh marker via onTaskCreated.
+                        clearAnalysisTaskMarker(episodeId);
+                        onLog?.(
+                            `[Analysis Resume] Stage 1 backend task already ${terminalStatus}; cleared node marker while multi-stage pipeline continues.`,
+                            'info'
+                        );
+                    } else {
+                        bootstrapPendingAnalysisUi();
+                    }
+                    if (liveRun?.promise && !analysisRunInFlightRef.current) {
+                        clearEpisodeAnalysisDetached(episodeId);
+                        detachedAnalysisRunEpisodeRef.current = null;
+                        await reattachToExistingAnalysisRun(liveRun);
+                    }
+                    return;
+                }
+
+                // Pipeline is not live. Success of an intermediate node ≠ episode analysis complete.
+                if (isSuccessTerminal) {
+                    const hasSubjectIndex = Boolean(String(activeEpisode?.ai_scene_analysis_subject_index || '').trim());
+                    const hasSceneMarkdown = Boolean(String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim());
+                    const hasAdaptation = Boolean(String(
+                        activeEpisode?.ai_scene_analysis_adaptation
+                        || activeEpisode?.ai_scene_analysis_result
+                        || ''
+                    ).trim());
+                    const hasEntityDesign = hasPersistedEntityDesignPayload(activeEpisode?.ai_entity_design_result);
+                    const scenes = await fetchScenes(episodeId).catch(() => []);
+                    const sceneCount = Array.isArray(scenes) ? scenes.length : 0;
+                    const episodeArtifactsComplete = Boolean(
+                        hasSubjectIndex && hasSceneMarkdown && hasEntityDesign && sceneCount > 0
+                    );
+
+                    if (!episodeArtifactsComplete) {
+                        clearAnalysisTaskMarker(episodeId);
+                        detachedAnalysisRunEpisodeRef.current = null;
+                        onLog?.(
+                            `[Analysis Resume] Cleared stale marker; backend task already ${terminalStatus}, but episode artifacts are incomplete `
+                            + `(phase=${markerPhaseKey}, subjectIndex=${hasSubjectIndex ? 1 : 0}, sceneMarkdown=${hasSceneMarkdown ? 1 : 0}, `
+                            + `entityDesign=${hasEntityDesign ? 1 : 0}, dbScenes=${sceneCount}). Not marking pipeline completed.`,
+                            'warning'
+                        );
+                        const continueFn = resumeIncompleteAnalysisPipelineRef.current;
+                        if (typeof continueFn === 'function' && (hasSubjectIndex || hasAdaptation)) {
+                            setAnalysisFlowStatus({
+                                phase: hasSubjectIndex ? 'scene_beats' : 'extract_assets',
+                                message: t(
+                                    '检测到上一阶段已完成但后续未跑完，正在自动继续分析…',
+                                    'Previous stage finished but later stages did not; auto-continuing analysis...'
+                                ),
+                            });
+                            try {
+                                await continueFn({
+                                    reason: `stale-terminal-${terminalStatus}`,
+                                    markerPhase: markerPhaseKey,
+                                    hasSubjectIndex,
+                                    hasAdaptation,
+                                });
+                            } catch (continueErr) {
+                                setIsAnalyzing(false);
+                                setIsRetryingPhase2(false);
+                                setActiveAnalysisTaskId('');
+                                analysisRunInFlightRef.current = false;
+                                setAnalysisFlowStatus({
+                                    phase: 'warning',
+                                    message: t(
+                                        `自动继续分析失败：${continueErr?.message || continueErr}。请手动点击继续分析。`,
+                                        `Auto-continue failed: ${continueErr?.message || continueErr}. Please resume analysis manually.`
+                                    ),
+                                });
+                                onLog?.(
+                                    `[Analysis Resume] Auto-continue after incomplete terminal task failed: ${continueErr?.message || continueErr}`,
+                                    'error'
+                                );
+                            }
+                            return;
+                        }
+                        setIsAnalyzing(false);
+                        setIsRetryingPhase2(false);
+                        setActiveAnalysisTaskId('');
+                        setAnalysisFlowStatus({
+                            phase: 'warning',
+                            message: t(
+                                '上一阶段后台任务已结束，但分析流水线尚未完成。请点击继续分析以接着跑后续阶段。',
+                                'A prior backend task ended, but the analysis pipeline is incomplete. Click resume analysis to continue.'
+                            ),
+                        });
+                        setAnalysisUiReport((prev) => ({
+                            ...(prev || {}),
+                            status: 'warning',
+                            warning: t(
+                                '分析未完整完成（仅部分阶段结束）。',
+                                'Analysis is incomplete (only some stages finished).'
+                            ),
+                            error: '',
+                        }));
+                        return;
+                    }
+                }
+
                 const localizedError = terminalInfo.error
                     ? localizeAnalysisFailureMessage(terminalInfo.error)
                     : '';
@@ -14124,14 +14253,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [
         activeEpisode,
         activeEpisode?.id,
+        activeEpisode?.ai_entity_design_result,
+        activeEpisode?.ai_scene_analysis_adaptation,
+        activeEpisode?.ai_scene_analysis_result,
+        activeEpisode?.ai_scene_analysis_scene_markdown,
+        activeEpisode?.ai_scene_analysis_subject_index,
         bootstrapPendingAnalysisUi,
         clearAnalysisTaskMarker,
         clearStaleAnalysisMarkerIfEpisodeComplete,
         clearStalePhase2AssetMarkerIfDesignExists,
+        fetchScenes,
         isAnalyzing,
         isRetryingPhase2,
         loadAnalysisTaskMarker,
         localizeAnalysisFailureMessage,
+        normalizeAnalysisTaskMarkerPhase,
         onLog,
         reattachToExistingAnalysisRun,
         resetBootstrapAnalysisUiIfIdle,
@@ -17021,6 +17157,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setAnalysisRuntimeMeta(null);
             }
 
+            // Stage 1 node task is terminal once the LLM returns. Drop its marker immediately so
+            // remount/resume cannot treat Stage 1 completion as whole-pipeline completion during
+            // the gap before Stage 2.1 writes a new task id.
+            clearAnalysisTaskMarker(episodeId);
+            setActiveAnalysisTaskId('');
+
             const integrityWarnings = collectAnalysisWarnings(result);
             const displayWarnings = collectAnalysisWarnings(result, { includeLogOnly: false });
             if (integrityWarnings.length > 0) {
@@ -17732,7 +17874,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             analysisError = e;
             analysisCanceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
             if (!scriptEditorMountedRef.current) {
-                return;
+                // Remount must observe rejection via the tracked registry promise; do not swallow.
+                throw e;
             }
 
             const friendlyAnalysisError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
@@ -17787,8 +17930,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 clearAnalysisTaskMarker(episodeId);
             }
             analysisRunInFlightRef.current = false;
-            if (!scriptEditorMountedRef.current) return;
-            if (!retainMarker) {
+            if (!scriptEditorMountedRef.current) {
+                // still allow registry.finally cleanup; skip UI-only resume kick
+            } else if (!retainMarker) {
                 setIsAnalyzing(false);
                 setActiveAnalysisTaskId('');
                 analysisStopRequestedRef.current = false;
@@ -17906,8 +18050,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         onLog?.('Restored Stage 1 adapted script back into the episode script editor.', 'success');
     }, [activeEpisode?.id, getStageOutputContent, onLog, onUpdateScript, resolveStage1AdaptedScriptText]);
 
-    const handleRestartStage2 = async () => {
-        if (!activeEpisode?.id || isAnalyzing) return;
+    const handleRestartStage2 = async ({ allowWhileAnalyzing = false } = {}) => {
+        if (!activeEpisode?.id) return;
+        if (isAnalyzing && !allowWhileAnalyzing) return;
         logSelectedScriptAnalysisApi('Stage 2 restart');
 
         const stage1SourceText = buildStage1RestartSourceText();
@@ -18268,6 +18413,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             analysisStopRequestedRef.current = false;
             analysisRunInFlightRef.current = false;
         }
+    };
+
+    // Bound after Stage-2 resume helpers exist so tryResumePendingAnalysis can auto-continue
+    // when a completed Stage-1 node task is mistaken for a finished pipeline.
+    resumeIncompleteAnalysisPipelineRef.current = async ({ hasSubjectIndex = false } = {}) => {
+        analysisRunInFlightRef.current = false;
+        analysisResumeInFlightRef.current = false;
+        if (hasSubjectIndex) {
+            const resumeState = await prepareSceneAnalysisResumeState();
+            if (resumeState?.decision === 'completed' || resumeState?.decision === 'phase2') {
+                const resumed = await tryResumeAnalysisFromExistingArtifacts(resumeState, 0);
+                if (resumed) return;
+            }
+        }
+        await handleRestartStage2({ allowWhileAnalyzing: true });
     };
 
     const resolveSceneBeatsRerunCandidates = useCallback(() => {
