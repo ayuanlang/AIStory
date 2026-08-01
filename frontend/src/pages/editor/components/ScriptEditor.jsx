@@ -2357,6 +2357,50 @@ const isStoryboardProgressUnresolved = (progressValue) => {
     return !isStoryboardTaskProgressSettled(progress);
 };
 
+/**
+ * Shared source of truth for progress banner / diagnostics / CTA live state.
+ * When the run flag is off and no storyboard work is open, intermediate phase/"running"
+ * leftovers must present as a terminal panel — never as "剧本分析进行中".
+ */
+const resolveAnalysisProgressDisplayState = ({
+    isAnalyzing = false,
+    isRetryingPhase2 = false,
+    phase = 'idle',
+    reportStatus = '',
+    storyboardProgress = null,
+    hasOpenStoryboardWork = false,
+} = {}) => {
+    const normalizedPhase = String(phase || '').trim().toLowerCase() || 'idle';
+    const normalizedReport = String(reportStatus || '').trim().toLowerCase();
+    const storyboardUnresolved = Boolean(hasOpenStoryboardWork)
+        || isStoryboardProgressUnresolved(storyboardProgress);
+    const isLive = Boolean(isAnalyzing || isRetryingPhase2 || storyboardUnresolved);
+
+    if (isLive) {
+        return { isLive: true, displayPhase: 'running' };
+    }
+
+    if (normalizedPhase === 'failed' || normalizedReport === 'failed' || normalizedReport === 'error') {
+        return { isLive: false, displayPhase: 'failed' };
+    }
+    if (normalizedPhase === 'warning' || normalizedReport === 'warning') {
+        return { isLive: false, displayPhase: 'warning' };
+    }
+    if (normalizedPhase === 'completed' || normalizedReport === 'completed') {
+        return { isLive: false, displayPhase: 'completed' };
+    }
+    if (normalizedPhase === 'idle' && !normalizedReport) {
+        return { isLive: false, displayPhase: 'idle' };
+    }
+
+    // Stale intermediate phase or status=running after the shared live flag cleared.
+    if (isStoryboardTaskProgressSettled(storyboardProgress)) {
+        const outcome = resolveSettledStoryboardUiOutcome(storyboardProgress);
+        return { isLive: false, displayPhase: outcome.phase };
+    }
+    return { isLive: false, displayPhase: 'completed' };
+};
+
 const isPersistedAnalysisProgressRunning = (progressUi) => {
     if (!progressUi || progressUi.dismissed === true) return false;
     const flowStatus = (progressUi.flowStatus && typeof progressUi.flowStatus === 'object')
@@ -2366,13 +2410,29 @@ const isPersistedAnalysisProgressRunning = (progressUi) => {
     const flowHistory = Array.isArray(progressUi.flowHistory) ? progressUi.flowHistory : [];
     const phase = String(flowStatus?.phase || 'idle').trim().toLowerCase();
     const reportStatus = String(uiReport?.status || '').trim().toLowerCase();
-    if (reportStatus === 'running') return true;
-    // Storyboard panel can linger on phase=storyboard after all shots settle; that is not a live run.
-    if (phase === 'storyboard' && isStoryboardTaskProgressSettled(uiReport?.storyboardTaskProgress)) {
-        return false;
+    const storyboardProgress = uiReport?.storyboardTaskProgress;
+    // Terminal report always wins over a leftover intermediate phase.
+    if (['completed', 'warning', 'failed', 'error'].includes(reportStatus)) return false;
+    if (reportStatus === 'running' && isStoryboardProgressUnresolved(storyboardProgress)) return true;
+    // Storyboard with no started tasks (or all settled) is not a live run.
+    if (phase === 'storyboard') {
+        const started = Number(normalizeStoryboardTaskProgress(storyboardProgress).started || 0);
+        if (started <= 0) return false;
+        if (isStoryboardTaskProgressSettled(storyboardProgress)) return false;
+        return true;
+    }
+    if (reportStatus === 'running') {
+        // Only treat as live when phase is still a pipeline stage (not idle/terminal).
+        if (!phase || ['idle', 'completed', 'failed', 'warning'].includes(phase)) return false;
+        return true;
     }
     if (phase && !['idle', 'completed', 'failed', 'warning'].includes(phase)) return true;
-    if (flowHistory.some((item) => !hasAnalysisHistoryEndedAt(item))) return true;
+    if (flowHistory.some((item) => !hasAnalysisHistoryEndedAt(item))) {
+        // Open history rows alone do not mean live if UI already left the run.
+        if (['completed', 'warning', 'failed'].includes(phase)) return false;
+        if (['completed', 'warning', 'failed', 'error'].includes(reportStatus)) return false;
+        return true;
+    }
     return false;
 };
 
@@ -3803,8 +3863,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisHeartbeatTick(0);
     }, []);
 
+    /** Shared live/terminal flag for CTA, diagnostics step activity, and progress banner. */
+    const analysisProgressDisplay = useMemo(() => {
+        const progress = pickRicherStoryboardTaskProgress(
+            storyboardTaskProgress,
+            storyboardTaskProgressRef.current,
+            analysisUiReport?.storyboardTaskProgress,
+        );
+        return resolveAnalysisProgressDisplayState({
+            isAnalyzing,
+            isRetryingPhase2,
+            phase: analysisFlowStatus?.phase,
+            reportStatus: analysisUiReport?.status,
+            storyboardProgress: progress,
+            // Kickoff promise/queue refs are declared later; progress counters cover the settled case.
+            hasOpenStoryboardWork: isStoryboardProgressUnresolved(progress),
+        });
+    }, [
+        analysisFlowStatus?.phase,
+        analysisUiReport?.status,
+        analysisUiReport?.storyboardTaskProgress,
+        isAnalyzing,
+        isRetryingPhase2,
+        storyboardTaskProgress,
+    ]);
+
     useEffect(() => {
-        if (!isAnalyzing && !isRetryingPhase2) {
+        if (!analysisProgressDisplay.isLive) {
             setAnalysisHeartbeatTick(0);
             return;
         }
@@ -3814,7 +3899,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }, 1000);
 
         return () => clearInterval(timer);
-    }, [isAnalyzing, isRetryingPhase2]);
+    }, [analysisProgressDisplay.isLive]);
 
     const analysisProgressStartedAt = useMemo(() => {
         const candidates = [
@@ -3823,24 +3908,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ].map((value) => Number(value || 0));
         const startedAt = candidates.find((value) => Number.isFinite(value) && value > 0) || 0;
         return startedAt;
-    }, [analysisUiReport?.startedAt, analysisHeartbeatTick, isAnalyzing, isRetryingPhase2]);
+    }, [analysisUiReport?.startedAt, analysisHeartbeatTick, analysisProgressDisplay.isLive]);
 
     const analysisHeartbeatElapsedMs = useMemo(() => {
         const startedAt = Number(analysisProgressStartedAt || 0);
+        const reported = Number(analysisUiReport?.durationMs || 0);
         if (!Number.isFinite(startedAt) || startedAt <= 0) {
-            return Number(analysisUiReport?.durationMs || 0) || 0;
+            return Number.isFinite(reported) && reported > 0 ? reported : 0;
         }
-        if (isAnalyzing || isRetryingPhase2) {
+        if (analysisProgressDisplay.isLive) {
             return Math.max(0, Date.now() - startedAt);
         }
-        const reported = Number(analysisUiReport?.durationMs || 0);
         if (Number.isFinite(reported) && reported > 0) return reported;
+        // Not live and no frozen duration yet — use wall clock once (heal effect will persist durationMs).
         return Math.max(0, Date.now() - startedAt);
     }, [
+        analysisProgressDisplay.isLive,
         analysisProgressStartedAt,
         analysisUiReport?.durationMs,
-        isAnalyzing,
-        isRetryingPhase2,
         analysisHeartbeatTick,
     ]);
 
@@ -4132,6 +4217,118 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisFlowStatus?.phase,
         analysisUiReport?.status,
         analysisUiReport?.storyboardTaskProgress,
+        storyboardTaskProgress,
+        t,
+    ]);
+
+    // Shared-flag heal: CTA/diagnostics already idle, but phase/status still look mid-run.
+    // Persist the same terminal displayPhase the banner uses so all surfaces stay aligned.
+    useEffect(() => {
+        if (isAnalyzing || isRetryingPhase2) return;
+        if (analysisProgressDisplay.isLive) return;
+
+        const phase = String(analysisFlowStatus?.phase || '').trim().toLowerCase();
+        const reportStatus = String(analysisUiReport?.status || '').trim().toLowerCase();
+        const alreadyTerminalPhase = ['completed', 'warning', 'failed', 'idle'].includes(phase);
+        // Terminal phase with leftover status=running still needs a write-back below.
+        if (alreadyTerminalPhase && reportStatus !== 'running') {
+            // Freeze durationMs so the elapsed clock stops after the shared live flag clears.
+            if (
+                phase !== 'idle'
+                && !(Number(analysisUiReport?.durationMs || 0) > 0)
+                && Number(analysisUiReport?.startedAt || analysisProgressStartedAt || 0) > 0
+            ) {
+                const startedAt = Number(analysisUiReport?.startedAt || analysisProgressStartedAt || 0);
+                setAnalysisUiReport((prev) => {
+                    if (!prev || typeof prev !== 'object') return prev;
+                    if (Number(prev.durationMs || 0) > 0) return prev;
+                    return {
+                        ...prev,
+                        durationMs: Math.max(0, Date.now() - startedAt),
+                    };
+                });
+            }
+            return;
+        }
+
+        const progress = pickRicherStoryboardTaskProgress(
+            storyboardTaskProgress,
+            storyboardTaskProgressRef.current,
+            analysisUiReport?.storyboardTaskProgress,
+        );
+        const openStoryboard = isStoryboardProgressUnresolved(progress)
+            || (storyboardKickoffPromisesRef.current?.size || 0) > 0
+            || (Array.isArray(pendingStoryboardKickoffsRef.current) && pendingStoryboardKickoffsRef.current.length > 0);
+        if (openStoryboard) return;
+
+        const pipelineStillLive = Boolean(
+            analysisRunInFlightRef.current
+            || analysisResumeInFlightRef.current
+            || phase2GenerationInFlightRef.current
+            || analysisEntryLockRef.current
+            || isEpisodeAnalysisClaimed(activeEpisode?.id)
+        );
+        if (pipelineStillLive) return;
+
+        const displayPhase = analysisProgressDisplay.displayPhase;
+        if (!['completed', 'warning', 'failed'].includes(displayPhase)) return;
+
+        const startedAt = Number(analysisUiReport?.startedAt || analysisProgressStartedAt || 0);
+        const durationMs = Number(analysisUiReport?.durationMs || 0) > 0
+            ? Number(analysisUiReport.durationMs)
+            : (startedAt > 0 ? Math.max(0, Date.now() - startedAt) : 0);
+
+        setAnalysisFlowStatus((prev) => {
+            const prevPhase = String(prev?.phase || '').trim().toLowerCase();
+            if (prevPhase === displayPhase) {
+                return prev;
+            }
+            return {
+                phase: displayPhase,
+                message: String(prev?.message || '').trim()
+                    || (displayPhase === 'failed'
+                        ? t('分析失败。', 'Analysis failed.')
+                        : displayPhase === 'warning'
+                            ? t('分析已结束，但有告警需要处理。', 'Analysis finished with warnings that need review.')
+                            : t('🎉 剧本分析与场景构建已完成。', 'Analysis and import completed.')),
+                highlightHint: prev?.highlightHint || '',
+            };
+        });
+        setAnalysisUiReport((prev) => {
+            const base = prev && typeof prev === 'object' ? { ...prev } : {};
+            const prevStatus = String(base.status || '').trim().toLowerCase();
+            if (prevStatus === 'failed' || prevStatus === 'error') {
+                return {
+                    ...base,
+                    durationMs: durationMs || Number(base.durationMs || 0) || 0,
+                };
+            }
+            return {
+                ...base,
+                status: displayPhase,
+                startedAt: startedAt || base.startedAt || undefined,
+                durationMs: durationMs || Number(base.durationMs || 0) || 0,
+                storyboardTaskProgress: progress,
+                error: displayPhase === 'failed' ? (base.error || '') : '',
+            };
+        });
+        setActiveAnalysisTaskId('');
+        latestIsAnalyzingRef.current = false;
+        if (activeEpisode?.id) {
+            publishEpisodeAnalysisProgress(activeEpisode.id, { isAnalyzing: false });
+        }
+    }, [
+        activeEpisode?.id,
+        analysisFlowStatus?.phase,
+        analysisProgressDisplay.displayPhase,
+        analysisProgressDisplay.isLive,
+        analysisProgressStartedAt,
+        analysisUiReport?.durationMs,
+        analysisUiReport?.startedAt,
+        analysisUiReport?.status,
+        analysisUiReport?.storyboardTaskProgress,
+        isAnalyzing,
+        isRetryingPhase2,
         storyboardTaskProgress,
         t,
     ]);
@@ -10930,13 +11127,49 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (live && Number(live.updatedAt || 0) > 0) {
             analysisProgressDismissedRef.current = false;
             applyLiveAnalysisProgressSnapshot(live);
-            if (live.isAnalyzing || isPersistedAnalysisProgressRunning({
+            const liveRunning = Boolean(live.isAnalyzing) || isPersistedAnalysisProgressRunning({
                 flowStatus: live.flowStatus,
                 flowHistory: live.flowHistory,
                 uiReport: live.uiReport,
-            })) {
+            });
+            if (liveRunning) {
                 setIsAnalyzing(true);
                 latestIsAnalyzingRef.current = true;
+            } else {
+                const display = resolveAnalysisProgressDisplayState({
+                    isAnalyzing: false,
+                    isRetryingPhase2: false,
+                    phase: live.flowStatus?.phase,
+                    reportStatus: live.uiReport?.status,
+                    storyboardProgress: live.uiReport?.storyboardTaskProgress,
+                });
+                if (['completed', 'warning', 'failed'].includes(display.displayPhase)
+                    && (
+                        !['completed', 'warning', 'failed', 'idle'].includes(String(live.flowStatus?.phase || '').trim().toLowerCase())
+                        || String(live.uiReport?.status || '').trim().toLowerCase() === 'running'
+                    )
+                ) {
+                    const startedAt = Number(live.uiReport?.startedAt || 0);
+                    setAnalysisFlowStatus({
+                        phase: display.displayPhase,
+                        message: String(live.flowStatus?.message || '').trim()
+                            || t('分镜生成已结束', 'Storyboard generation finished'),
+                        highlightHint: live.flowStatus?.highlightHint || '',
+                    });
+                    if (live.uiReport) {
+                        setAnalysisUiReport({
+                            ...live.uiReport,
+                            status: String(live.uiReport.status || '').trim().toLowerCase() === 'failed'
+                                ? live.uiReport.status
+                                : display.displayPhase,
+                            durationMs: Number(live.uiReport.durationMs || 0) > 0
+                                ? Number(live.uiReport.durationMs)
+                                : (startedAt > 0 ? Math.max(0, Date.now() - startedAt) : 0),
+                        });
+                    }
+                }
+                setIsAnalyzing(false);
+                latestIsAnalyzingRef.current = false;
             }
             return true;
         }
@@ -10975,25 +11208,39 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } catch (_) {
                 // Ignore marker parse failures during restore.
             }
-        } else if (
-            String(flowStatus?.phase || '').trim().toLowerCase() === 'storyboard'
-            && isStoryboardTaskProgressSettled(uiReport?.storyboardTaskProgress)
-        ) {
-            // Settled storyboard snapshot left phase=storyboard; stop spinning and show success/warning.
-            const storyboardOutcome = resolveSettledStoryboardUiOutcome(uiReport?.storyboardTaskProgress);
-            setAnalysisFlowStatus({
-                phase: storyboardOutcome.phase,
-                message: String(flowStatus?.message || '').trim()
-                    || t('分镜生成已结束', 'Storyboard generation finished'),
-                highlightHint: flowStatus?.highlightHint || '',
+        } else {
+            // Stale intermediate phase / status=running after the run flag cleared — align to shared display.
+            const display = resolveAnalysisProgressDisplayState({
+                isAnalyzing: false,
+                isRetryingPhase2: false,
+                phase: flowStatus?.phase,
+                reportStatus: uiReport?.status,
+                storyboardProgress: uiReport?.storyboardTaskProgress,
             });
-            if (uiReport) {
-                setAnalysisUiReport({
-                    ...uiReport,
-                    status: String(uiReport.status || '').trim().toLowerCase() === 'failed'
-                        ? uiReport.status
-                        : storyboardOutcome.status,
+            if (['completed', 'warning', 'failed'].includes(display.displayPhase)
+                && (
+                    !['completed', 'warning', 'failed', 'idle'].includes(String(flowStatus?.phase || '').trim().toLowerCase())
+                    || String(uiReport?.status || '').trim().toLowerCase() === 'running'
+                )
+            ) {
+                const startedAt = Number(uiReport?.startedAt || 0);
+                setAnalysisFlowStatus({
+                    phase: display.displayPhase,
+                    message: String(flowStatus?.message || '').trim()
+                        || t('分镜生成已结束', 'Storyboard generation finished'),
+                    highlightHint: flowStatus?.highlightHint || '',
                 });
+                if (uiReport) {
+                    setAnalysisUiReport({
+                        ...uiReport,
+                        status: String(uiReport.status || '').trim().toLowerCase() === 'failed'
+                            ? uiReport.status
+                            : display.displayPhase,
+                        durationMs: Number(uiReport.durationMs || 0) > 0
+                            ? Number(uiReport.durationMs)
+                            : (startedAt > 0 ? Math.max(0, Date.now() - startedAt) : 0),
+                    });
+                }
             }
             setIsAnalyzing(false);
         }
@@ -22315,11 +22562,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             />
                             <button 
                                 onClick={handleAnalysisClick} 
-                                disabled={isAnalyzing}
-                                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-colors ${isAnalyzing ? 'bg-purple-900/50 text-purple-200 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-500'}`}
+                                disabled={analysisProgressDisplay.isLive}
+                                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-colors ${analysisProgressDisplay.isLive ? 'bg-purple-900/50 text-purple-200 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-500'}`}
                                 title={t('分析原始剧本并生成结构', 'Analyze raw script to generate structure')}
                             >
-                                {isAnalyzing ? (
+                                {analysisProgressDisplay.isLive ? (
                                     <>
                                         <Loader2 className="w-4 h-4 animate-spin" /> {t('分析中...', 'Analyzing...')}
                                     </>
@@ -22402,8 +22649,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             || trackedStoryboardStartedCount > 0
                             || workspaceStoryboardPresent;
                         const livePhase = analysisFlowStatus?.phase || 'idle';
-                        const trustArtifact = (stepKey) => canTrustStageArtifactDuringLiveRun(livePhase, stepKey, { isLive: isAnalyzing });
-                        const stepActive = (stepKey) => isAnalysisLiveStepActive(livePhase, stepKey, { isLive: isAnalyzing });
+                        const analysisLive = analysisProgressDisplay.isLive;
+                        const trustArtifact = (stepKey) => canTrustStageArtifactDuringLiveRun(livePhase, stepKey, { isLive: analysisLive });
+                        const stepActive = (stepKey) => isAnalysisLiveStepActive(livePhase, stepKey, { isLive: analysisLive });
                         const hasScriptOptArtifact = Boolean(
                             getStageOutputContent('stage1', 'adapted_script')
                             || String(adaptationText || '').trim()
@@ -22431,7 +22679,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const sceneMarkdownActive = stepActive('scene_beats');
                         const assetDesignActive = stepActive('assets_gen');
                         const showAssetFailure = workflowCompletenessStats.hasFailedSubtask && (
-                            !isAnalyzing || assetDesignReady
+                            !analysisLive || assetDesignReady
                         );
                         const storyboardCanStart = Boolean(sceneMarkdownReady || hasSceneMarkdownArtifact);
                         const storyboardInFlight = storyboardRunningCount > 0
@@ -22744,7 +22992,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 {workflowCompletenessStats.hasAnyData
                     && (
-                        !isAnalyzing
+                        !analysisProgressDisplay.isLive
                         || (
                             !!getStageOutputContent('stage3', 'asset_design_json')
                             && canTrustStageArtifactDuringLiveRun(analysisFlowStatus?.phase, 'assets_gen', { isLive: true })
@@ -22822,7 +23070,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 {workflowCompletenessStats.failedCategories.length > 0
                     && (
-                        !isAnalyzing
+                        !analysisProgressDisplay.isLive
                         || (
                             !!getStageOutputContent('stage3', 'asset_design_json')
                             && canTrustStageArtifactDuringLiveRun(analysisFlowStatus?.phase, 'assets_gen', { isLive: true })
@@ -22860,10 +23108,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             
 
             {(analysisFlowStatus.phase !== 'idle' || analysisUiReport || analysisFlowStatusHistory.length > 0) && (() => {
-                const progressPhase = String(analysisFlowStatus?.phase || '').trim().toLowerCase();
+                // Prefer the shared display phase so banner matches CTA / diagnostics live flag.
+                const progressPhase = analysisProgressDisplay.isLive
+                    ? 'running'
+                    : (analysisProgressDisplay.displayPhase || String(analysisFlowStatus?.phase || '').trim().toLowerCase());
+                const analysisLive = analysisProgressDisplay.isLive;
                 const hasLiveBackgroundTask = Boolean(
-                    isAnalyzing
-                    || isRetryingPhase2
+                    analysisLive
                     || String(activeAnalysisTaskId || '').trim()
                     || loadAnalysisTaskMarker(activeEpisode?.id)?.taskId
                 );
@@ -22900,16 +23151,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     {startedClock
                                         ? `${t('启动', 'Started')} ${startedClock} · ${t('耗时', 'Elapsed')} ${formatDurationMs(analysisHeartbeatElapsedMs)}`
                                         : `${t('耗时', 'Elapsed')} ${formatDurationMs(analysisHeartbeatElapsedMs)}`}
-                                    {(isAnalyzing || isRetryingPhase2)
-                                        && progressPhase !== 'completed'
-                                        && progressPhase !== 'failed'
-                                        && progressPhase !== 'warning' ? (
+                                    {analysisLive ? (
                                         <span className="ml-2 opacity-70">{t('复杂剧本通常需要较长时间', 'Complex scripts usually take longer')}</span>
                                     ) : null}
                                 </div>
                                 {currentMessage ? (
                                     <div className="mt-0.5 truncate text-xs opacity-80">{currentMessage}</div>
-                                ) : (!isAnalyzing && !isRetryingPhase2 ? (
+                                ) : (!analysisLive ? (
                                     <div className="mt-0.5 truncate text-xs opacity-80">
                                         {t('可关闭此提示，继续编辑剧本。上滑可查看历史进度。', 'You can dismiss this and keep editing. Scroll up for earlier progress.')}
                                     </div>
@@ -22926,7 +23174,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     {t('重试', 'Retry')}
                                 </button>
                             )}
-                            {(!isAnalyzing && !isRetryingPhase2) || ['completed', 'warning', 'failed'].includes(progressPhase) ? (
+                            {!analysisLive || ['completed', 'warning', 'failed'].includes(progressPhase) ? (
                                 <button
                                     type="button"
                                     onClick={dismissAnalysisProgressPanel}
@@ -22937,7 +23185,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ) : null}
                         </div>
                     </div>
-                    {String(analysisFlowStatus?.highlightHint || '').trim() && (isAnalyzing || isRetryingPhase2) && (
+                    {String(analysisFlowStatus?.highlightHint || '').trim() && analysisLive && (
                         <div className="mt-2 text-xs font-medium text-emerald-100/90">
                             {String(analysisFlowStatus.highlightHint).trim()}
                         </div>
