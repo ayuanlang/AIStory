@@ -15,6 +15,22 @@ def _env_or_default(key: str, default: str) -> str:
     return stripped if stripped else default
 
 
+def mask_database_url(db_url: str | None) -> str:
+    """Redact password from a SQLAlchemy/DB URL for safe logging."""
+    raw = str(db_url or "").strip()
+    if not raw:
+        return ""
+    try:
+        if "://" in raw and "@" in raw:
+            scheme, rest = raw.split("://", 1)
+            creds, hostpart = rest.split("@", 1)
+            user = creds.split(":", 1)[0]
+            return f"{scheme}://{user}:***@{hostpart}"
+    except Exception:
+        return "***"
+    return raw
+
+
 def _path_env_or_default(key: str, default_relative: str) -> str:
     value = os.getenv(key)
     raw = value.strip() if value and value.strip() else default_relative

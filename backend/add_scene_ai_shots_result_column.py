@@ -7,7 +7,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
 from sqlalchemy import create_engine, text, inspect
-from app.core.config import settings
+from app.core.config import mask_database_url, settings
 
 def add_columns():
     # Allow overriding database via command line argument
@@ -15,7 +15,7 @@ def add_columns():
     if len(sys.argv) > 1:
         db_url = sys.argv[1]
 
-    print(f"Connecting to database: {db_url}")
+    print(f"Connecting to database: {mask_database_url(db_url)}")
     
     # Create engine for the target database
     engine = create_engine(db_url)

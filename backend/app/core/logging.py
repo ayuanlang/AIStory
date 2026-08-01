@@ -5,9 +5,11 @@ import time
 import re
 import json
 import sys
+import threading
+from collections import Counter
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
-from typing import Optional
+from typing import Dict, Optional
 from fastapi import Request
 from starlette.types import ASGIApp, Scope, Receive, Send
 from jose import jwt, JWTError
@@ -19,6 +21,30 @@ _BILLING_ESTIMATE_LOG_MIN_INTERVAL_SECONDS = max(
     float(os.getenv("BILLING_ESTIMATE_LOG_MIN_INTERVAL_SECONDS", "30") or 30),
 )
 _billing_estimate_log_state = {"last_at": 0.0, "suppressed": 0}
+
+# Lightweight path traffic summary (explains gunicorn max-requests burn without API Result spam).
+_REQUEST_TRAFFIC_LOG_ENABLED = os.getenv("REQUEST_TRAFFIC_LOG_ENABLED", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+_REQUEST_TRAFFIC_LOG_INTERVAL_SECONDS = max(
+    15.0,
+    float(os.getenv("REQUEST_TRAFFIC_LOG_INTERVAL_SECONDS", "60") or 60),
+)
+_REQUEST_TRAFFIC_LOG_TOP = max(5, min(40, int(os.getenv("REQUEST_TRAFFIC_LOG_TOP", "15") or 15)))
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_HEX_TOKEN_RE = re.compile(r"/[0-9a-fA-F]{16,}(?=/|$)")
+_NUMERIC_ID_RE = re.compile(r"/\d+(?=/|$)")
+_traffic_lock = threading.Lock()
+_traffic_window_paths: Counter = Counter()
+_traffic_window_categories: Counter = Counter()
+_traffic_lifetime_total = 0
+_traffic_window_started_at = time.time()
+_traffic_last_flush_at = time.time()
 
 # Configure standard loggers to be less noisy
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -314,6 +340,96 @@ def get_user_from_token(auth_header: str):
     except JWTError:
         return {"user_id": None, "username": "Guest"}
 
+
+def _normalize_traffic_path(path: str) -> str:
+    raw = str(path or "/").strip() or "/"
+    if raw.startswith("/uploads/") or raw == "/uploads":
+        return "/uploads/*"
+    normalized = _UUID_RE.sub(":uuid", raw)
+    normalized = _HEX_TOKEN_RE.sub("/:hex", normalized)
+    normalized = _NUMERIC_ID_RE.sub("/:id", normalized)
+    return normalized or "/"
+
+
+def _traffic_category(method: str, path: str) -> str:
+    if path in {"/healthz", "/version", "/"} or path.startswith("/docs") or path.startswith("/redoc"):
+        return "health"
+    if path.startswith("/uploads/") or path == "/uploads":
+        return "uploads"
+    if _is_polling_log_suppressed(method, path):
+        return "polling"
+    if path.startswith("/api/"):
+        return "api"
+    return "other"
+
+
+def log_request_traffic_startup() -> None:
+    if _REQUEST_TRAFFIC_LOG_ENABLED:
+        logger.info(
+            "Request traffic summary enabled | interval=%ss top=%s (look for request.traffic)",
+            int(_REQUEST_TRAFFIC_LOG_INTERVAL_SECONDS),
+            int(_REQUEST_TRAFFIC_LOG_TOP),
+        )
+
+
+def flush_request_traffic_stats(*, reason: str = "interval", force: bool = False) -> Optional[Dict]:
+    """Emit one aggregated traffic line and reset the window counters."""
+    if not _REQUEST_TRAFFIC_LOG_ENABLED and not force:
+        return None
+
+    global _traffic_window_started_at, _traffic_last_flush_at, _traffic_lifetime_total
+    now = time.time()
+    with _traffic_lock:
+        window_total = int(sum(_traffic_window_paths.values()))
+        if window_total <= 0 and not force:
+            _traffic_last_flush_at = now
+            return None
+        elapsed = max(0.001, now - float(_traffic_window_started_at or now))
+        top = [
+            {"key": key, "n": int(count)}
+            for key, count in _traffic_window_paths.most_common(_REQUEST_TRAFFIC_LOG_TOP)
+        ]
+        categories = {k: int(v) for k, v in sorted(_traffic_window_categories.items())}
+        lifetime = int(_traffic_lifetime_total)
+        payload = {
+            "reason": reason,
+            "window_s": round(elapsed, 1),
+            "window_total": window_total,
+            "lifetime_total": lifetime,
+            "rps": round(window_total / elapsed, 2),
+            "categories": categories,
+            "top": top,
+        }
+        _traffic_window_paths.clear()
+        _traffic_window_categories.clear()
+        _traffic_window_started_at = now
+        _traffic_last_flush_at = now
+
+    logger.info("request.traffic | %s", json.dumps(payload, ensure_ascii=False))
+    return payload
+
+
+def record_request_traffic(method: str, path: str) -> None:
+    """Count one HTTP hit for max-requests diagnostics; periodically flush a summary."""
+    if not _REQUEST_TRAFFIC_LOG_ENABLED:
+        return
+    method_u = str(method or "GET").upper()
+    path_s = str(path or "/")
+    key = f"{method_u} {_normalize_traffic_path(path_s)}"
+    category = _traffic_category(method_u, path_s)
+    should_flush = False
+    now = time.time()
+    global _traffic_lifetime_total
+    with _traffic_lock:
+        _traffic_window_paths[key] += 1
+        _traffic_window_categories[category] += 1
+        _traffic_lifetime_total += 1
+        if (now - float(_traffic_last_flush_at or now)) >= _REQUEST_TRAFFIC_LOG_INTERVAL_SECONDS:
+            should_flush = True
+    if should_flush:
+        flush_request_traffic_stats(reason="interval")
+
+
 class LoggingMiddleware:
     def __init__(self, app: ASGIApp):
         self.app = app
@@ -324,6 +440,13 @@ class LoggingMiddleware:
             return
 
         path = str(scope.get("path") or "")
+        method = str(scope.get("method") or "GET").upper()
+        # Count before early-return paths so /uploads and health checks are visible
+        # in max-requests diagnostics (they are suppressed from API Result logs).
+        try:
+            record_request_traffic(method, path)
+        except Exception:
+            pass
         if path.startswith("/uploads/"):
             await self.app(scope, receive, send)
             return

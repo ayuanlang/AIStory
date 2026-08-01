@@ -2,7 +2,7 @@ import argparse
 
 from sqlalchemy import create_engine, inspect, text
 
-from app.core.config import settings
+from app.core.config import mask_database_url, settings
 
 
 REQUIRED_COLUMNS = [
@@ -18,7 +18,7 @@ def migrate(db_url: str | None = None) -> None:
     if not db_url:
         raise ValueError("DATABASE_URL is empty")
 
-    print(f"[migrate-api-settings] connecting: {db_url}")
+    print(f"[migrate-api-settings] connecting: {mask_database_url(db_url)}")
     engine = create_engine(db_url)
     inspector = inspect(engine)
     if not inspector.has_table("api_settings"):

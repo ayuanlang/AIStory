@@ -24,7 +24,13 @@ import app.api.invoices as invoices_api
 from app.db.session import engine, SessionLocal, connect_raw_postgres
 from app.models.all_models import Base, User
 from sqlalchemy import inspect, text
-from app.core.logging import LoggingMiddleware, logger, configure_uvicorn_logging_noise_reduction
+from app.core.logging import (
+    LoggingMiddleware,
+    logger,
+    configure_uvicorn_logging_noise_reduction,
+    flush_request_traffic_stats,
+    log_request_traffic_startup,
+)
 from app.db.init_db import check_and_migrate_tables, create_default_superuser, init_initial_data
 from app.api.deps import warm_user_auth_cache_from_db
 from app.services.system_api_runtime_cache import warm_system_api_cache
@@ -896,6 +902,7 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("Runtime diag tracemalloc enable failed: %s", exc)
     _log_runtime_startup_profile()
+    log_request_traffic_startup()
     runtime_diag_stop_event: asyncio.Event | None = None
     runtime_diag_task: asyncio.Task | None = None
     if _RUNTIME_DIAG_LOG_ENABLED:
@@ -959,6 +966,10 @@ async def lifespan(app: FastAPI):
 
         await _stop_background(maintenance_task, maintenance_stop_event, timeout=3)
         await _stop_background(runtime_diag_task, runtime_diag_stop_event, timeout=2)
+        try:
+            flush_request_traffic_stats(reason="shutdown", force=True)
+        except Exception:
+            pass
 
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)

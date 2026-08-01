@@ -11,7 +11,7 @@ sys.path.insert(0, str(current_dir))
 
 from sqlalchemy import create_engine, inspect, text
 
-from app.core.config import settings
+from app.core.config import mask_database_url, settings
 from app.models import all_models as models
 
 
@@ -68,7 +68,7 @@ def _count_meta_coverage(conn, is_postgres: bool) -> dict:
 
 def ensure_assets_columns(db_url: str | None = None) -> int:
     db_url = db_url or settings.DATABASE_URL
-    print(f"[assets-meta] connecting to {db_url}")
+    print(f"[assets-meta] connecting to {mask_database_url(db_url)}")
     engine = create_engine(db_url)
     is_postgres = engine.dialect.name == "postgresql"
     inspector = inspect(engine)

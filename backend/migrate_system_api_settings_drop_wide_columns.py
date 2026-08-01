@@ -2,7 +2,7 @@ import argparse
 
 from sqlalchemy import create_engine, inspect, text
 
-from app.core.config import settings
+from app.core.config import mask_database_url, settings
 
 
 DROP_COLUMNS = [
@@ -48,7 +48,7 @@ def migrate(db_url: str | None = None) -> None:
     if not db_url:
         raise ValueError("DATABASE_URL is empty")
 
-    print(f"[drop-wide-columns] connecting: {db_url}")
+    print(f"[drop-wide-columns] connecting: {mask_database_url(db_url)}")
     engine = create_engine(db_url)
     inspector = inspect(engine)
 
