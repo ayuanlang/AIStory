@@ -1123,15 +1123,37 @@ const extractEnvBlockFromSceneText = (sceneText) => {
     }).filter(Boolean).join('\n\n').trim();
 };
 
-/** Per-scene Stage 2.1 body: ENV_BLOCK + Beats (fallback to full scene). */
+/**
+ * Stage 2.1: extract 【场景切换与首节拍转场】 (含服化道核销摘要) for CHAR/PROP/ENV cues.
+ * Stops before 对白拆句 / Beat markers so dialogue-split planning is not injected.
+ */
+const extractSceneTransitionBlockFromSceneText = (sceneText) => {
+    const text = String(sceneText || '');
+    const startMatch = /【场景切换与首节拍转场】/.exec(text);
+    if (!startMatch) {
+        // Fallback: keep a bare 服化道核销摘要 line/paragraph if present without the parent header.
+        const summaryMatch = /服化道核销摘要[：:][\s\S]*?(?=\n\s*【|\n\s*\[BEAT_START|\n\s*-\s*Beat\s+\d+\b|$)/i.exec(text);
+        return summaryMatch ? String(summaryMatch[0] || '').trim() : '';
+    }
+    const from = startMatch.index;
+    const rest = text.slice(from);
+    const endRe = /(?:\n\s*【对白拆句|\n\s*\[BEAT_START|\n\s*-\s*Beat\s+\d+\b|\n\s*\[SCENE_END)/i;
+    const endMatch = endRe.exec(rest);
+    const block = (endMatch ? rest.slice(0, endMatch.index) : rest).trim();
+    return block;
+};
+
+/** Per-scene Stage 2.1 body: ENV_BLOCK + 场景切换/服化道核销摘要 + Beats (fallback to full scene). */
 const extractSceneEnvAndBeatsBody = (sceneText, sceneId = '') => {
     const source = stripBlockLevelMarkersFromSceneText(sceneText).trim();
     if (!source) return { bodyText: '', source: 'scene_fallback' };
     const envBlock = extractEnvBlockFromSceneText(source).trim();
+    const transitionBlock = extractSceneTransitionBlockFromSceneText(source).trim();
     const beatsOnly = extractBeatBlocksFromSceneText(source).trim();
     const beatsChars = stripBeatBoundaryMarkers(beatsOnly).length;
     const chunks = [];
     if (envBlock) chunks.push(envBlock);
+    if (transitionBlock) chunks.push(transitionBlock);
     if (beatsOnly && beatsChars >= MIN_SCENE_BEATS_CHARS) chunks.push(beatsOnly);
     if (chunks.length) {
         return { bodyText: chunks.join('\n\n').trim(), source: 'extracted' };
@@ -1140,7 +1162,7 @@ const extractSceneEnvAndBeatsBody = (sceneText, sceneId = '') => {
 };
 
 /**
- * Rebuild Stage 2.1 script: optional【角色设定】+ per-scene ENV_BLOCK + Beats
+ * Rebuild Stage 2.1 script: optional【角色设定】+ per-scene ENV_BLOCK + 场景切换/服化道 + Beats
  * (replaces full Stage 1 adapted script).
  */
 const buildAssetsExtractionScriptFromAdapted = (adaptedScript) => {
@@ -3400,11 +3422,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const buildStage2UserInputFromStage1 = useCallback((stage1Text, reuseSubjectAssets = []) => {
         const adaptedScriptText = extractStage1AdaptedScriptBody(stage1Text);
-        // Stage 2.1: optional【角色设定】+ per-scene ENV_BLOCK + Beats (not full Stage 1 adapted script).
+        // Stage 2.1: optional【角色设定】+ ENV_BLOCK + 场景切换/服化道核销摘要 + Beats.
         const slimScriptText = buildAssetsExtractionScriptFromAdapted(adaptedScriptText) || adaptedScriptText;
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2InputParts = [
-            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为（可选）角色设定块（`[ENTITY_PROFILE_START]`…`[ENTITY_PROFILE_END]`）+ 逐场提取的环境块（`[ENV_BLOCK_START]`…`[ENV_BLOCK_END]`，含【主环境】+【未落环境实体清单】+【衍生环境】）与 Beat 块（`[BEAT_START]`…`[BEAT_END]`），据此提取实体并建立 Subject Index；角色设定块中已摘录的外形/性情/特定动作须写入对应 `entity_attributes`；【未落环境实体清单】供 PROP/建置核销线索，禁止据此另建 ENV 行；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
+            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为（可选）角色设定块（`[ENTITY_PROFILE_START]`…`[ENTITY_PROFILE_END]`）+ 逐场提取的环境块（`[ENV_BLOCK_START]`…`[ENV_BLOCK_END]`，含【主环境】+【未落环境实体清单】+【衍生环境】）+【场景切换与首节拍转场】（须识别其中**服化道核销摘要**：环境细节｜服饰/换装｜道具细节）与 Beat 块（`[BEAT_START]`…`[BEAT_END]`），据此提取实体并建立 Subject Index；**服饰/换装项命中换装或第二套可区分装束时，须强制拆多条 CHAR 供下游角色设计**；角色设定块中已摘录的外形/性情/特定动作须写入对应 `entity_attributes`；【未落环境实体清单】供 PROP/建置核销线索，禁止据此另建 ENV 行；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -3438,7 +3460,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Keep SCENES_BLOCK as the last section so nothing appears after [SCENES_BLOCK_END].
         stage2InputParts.push(wrapInjectionSection(
             '优化后剧本',
-            `[优化后剧本 - Stage 2.1权威输入（角色设定+逐场环境块+Beat）]\n${slimScriptText || ''}`
+            `[优化后剧本 - Stage 2.1权威输入（角色设定+逐场环境块+场景切换/服化道核销摘要+Beat）]\n${slimScriptText || ''}`
         ));
 
         return {

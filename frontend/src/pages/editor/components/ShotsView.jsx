@@ -5412,8 +5412,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const applyPersistedShot = async (shotRecord) => {
             if (!shotRecord || !isShotVideoOssPersistComplete(shotRecord)) return false;
             const normalized = normalizeShotPromptDefaults(shotRecord);
+            const durableUrl = String(normalized.video_url || '').trim();
+            if (!durableUrl || !isDurablePersistedMediaUrl(
+                durableUrl,
+                parseShotTechnicalNotes(normalized.technical_notes)?.video_metadata
+            )) {
+                return false;
+            }
             const patch = {
-                video_url: normalized.video_url,
+                video_url: durableUrl,
                 technical_notes: normalized.technical_notes,
             };
 
@@ -6090,10 +6097,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 const serverBoundVideoUrl = resultUrl;
                                 if (serverBoundVideoUrl) {
                                     const newData = { video_url: serverBoundVideoUrl };
-                                    try {
-                                        await onUpdateShot(stableShotId, newData);
-                                    } catch (persistErr) {
-                                        console.warn('Resume video job save failed:', persistErr);
+                                    // Only PUT durable OSS URLs. Temp/provider/local paths are rejected by
+                                    // the API until persist-media finishes — keep those local-only.
+                                    if (isDurablePersistedMediaUrl(serverBoundVideoUrl)) {
+                                        try {
+                                            await onUpdateShot(stableShotId, newData);
+                                        } catch (persistErr) {
+                                            console.warn('Resume video job save failed:', persistErr);
+                                        }
                                     }
                                     setShots((prev) => prev.map((shot) => (
                                         String(shot?.id || '') === stableShotId ? { ...shot, ...newData } : shot
@@ -6101,7 +6112,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
                                 }
-                                if (serverBoundVideoUrl && shotVideoNeedsOssPersist({ id: stableShotId, video_url: serverBoundVideoUrl })) {
+                                if (serverBoundVideoUrl && !isDurablePersistedMediaUrl(serverBoundVideoUrl)) {
                                     const synced = await syncShotVideoAfterOssPersist({
                                         shotId: stableShotId,
                                         jobId,
@@ -6127,17 +6138,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 const serverBoundVideoUrl = resultUrl;
                                 if (serverBoundVideoUrl) {
                                     const newData = { video_url: serverBoundVideoUrl };
-                                    try {
-                                        await onUpdateShot(stableShotId, newData);
-                                    } catch (persistErr) {
-                                        console.warn('Resume video job save failed:', persistErr);
+                                    if (isDurablePersistedMediaUrl(serverBoundVideoUrl)) {
+                                        try {
+                                            await onUpdateShot(stableShotId, newData);
+                                        } catch (persistErr) {
+                                            console.warn('Resume video job save failed:', persistErr);
+                                        }
                                     }
                                     setShots((prev) => prev.map((shot) => (
                                         String(shot?.id || '') === stableShotId ? { ...shot, ...newData } : shot
                                     )));
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
-                                    if (shotVideoNeedsOssPersist({ id: stableShotId, video_url: serverBoundVideoUrl })) {
+                                    if (!isDurablePersistedMediaUrl(serverBoundVideoUrl)) {
                                         const synced = await syncShotVideoAfterOssPersist({
                                             shotId: stableShotId,
                                             jobId,
@@ -9239,19 +9252,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 onLog?.('Video Generated', 'success');
                 showNotification('Video Generated', 'success');
 
-                // 2. Update Server & Master List (Async persistence)
-                try {
-                    await onUpdateShot(targetShotId, newData);
-                } catch (updateErr) {
-                    console.error("Failed to save shot update to backend:", updateErr);
+                // 2. Persist durable URLs only; temp URLs stay local until OSS sync finishes.
+                if (isDurablePersistedMediaUrl(resolvedVideoUrl)) {
+                    try {
+                        await onUpdateShot(targetShotId, newData);
+                    } catch (updateErr) {
+                        console.error("Failed to save shot update to backend:", updateErr);
+                    }
                 }
 
                 refreshShotAssetsMeta();
                 Promise.resolve(refreshShots()).catch(() => {});
                 setVideoStatuses(prev => { const n = {...prev}; delete n[targetShotId]; return n; });
 
-                const needsOssSync = shotVideoNeedsOssPersist({ ...shotSnapshot, ...newData });
-                if (needsOssSync) {
+                if (!isDurablePersistedMediaUrl(resolvedVideoUrl)) {
                     void syncShotVideoAfterOssPersist({
                         shotId: targetShotId,
                         jobId: createdVideoJobId,
@@ -9723,10 +9737,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     return { ...prev, ...newData };
                 });
 
-                try {
-                    await onUpdateShot(targetShotId, newData);
-                } catch (updateErr) {
-                    console.error('Failed to save upscaled video to backend:', updateErr);
+                if (isDurablePersistedMediaUrl(res.url)) {
+                    try {
+                        await onUpdateShot(targetShotId, newData);
+                    } catch (updateErr) {
+                        console.error('Failed to save upscaled video to backend:', updateErr);
+                    }
                 }
 
                 onLog?.(t('视频清晰度提升完成并已回填。', 'Video upscale completed and backfilled.'), 'success');
@@ -9734,7 +9750,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 refreshShotAssetsMeta();
                 Promise.resolve(refreshShots()).catch(() => {});
 
-                if (shotVideoNeedsOssPersist({ ...shotSnapshot, ...newData })) {
+                if (!isDurablePersistedMediaUrl(res.url)) {
                     void syncShotVideoAfterOssPersist({
                         shotId: targetShotId,
                         jobId: createdVideoJobId,
