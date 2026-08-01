@@ -1,5 +1,13 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning.md
 # Prompt Updated At: 2026-06-14 02:21:19 +08:00
+#
+# ⛔ DEPRECATED — DO NOT USE IN PRODUCTION
+# 生产路径已拆分为：
+#   Stage 1 → scene_planning_1_script_optimization.md
+#   Stage 2.1 → scene_planning_2_1_assets_extraction.md
+#   Stage 2.2 → scene_planning_2_2_beats_generation.md
+# 本文件契约已过时（受力独立拍 / PROP 跨场升格 / 对白翻译 / Beats 创作化等），
+# 与拆分文件直接冲突。保留仅供考古；任何加载方应改指向上述拆分文件。
 
 # Skill 1: 总体规划、剧本改编与资产分析提取 (Scene Planning - Stage 1 & 2 Combined)
 

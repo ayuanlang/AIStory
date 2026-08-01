@@ -8126,6 +8126,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         for (const marker of orchestrationLiveImportedScenesRef.current || []) {
             enqueue(marker);
         }
+        // Resume / mid-pipeline continue may have empty live-import refs; fall back to
+        // canonical markers (seeded from workspace) so residual storyboard still starts.
+        if (pending.length <= 0) {
+            for (const marker of orchestrationCanonicalSceneIdsRef.current || []) {
+                enqueue(marker);
+            }
+        }
 
         let started = 0;
         for (const item of pending) {
@@ -15597,11 +15604,69 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 
                 if (hasExistingScenes || hasExistingStageOutputs) {
                     const ok = await confirmUiMessage(t(
-                        '检测到已存在剧本分析各阶段结果或场景数据。重新分析将清空并覆盖原结果，是否继续重新生成？（选择“取消”则保留并使用原来的结果）',
-                        'Existing stage analysis outputs or scenes detected. Regenerating will clear and overwrite previous results. Continue? (Choose Cancel to keep existing results)'
+                        '检测到已存在剧本分析各阶段结果或场景数据。重新分析将清空并覆盖原结果，是否继续重新生成？（选择“取消”则保留原结果并自动续跑未完成阶段）',
+                        'Existing stage analysis outputs or scenes detected. Regenerating will clear and overwrite previous results. Continue? (Choose Cancel to keep existing results and auto-continue unfinished stages)'
                     ));
                     if (!ok) {
-                        releaseAnalysisClickClaim();
+                        // Keep artifacts: resume from the first incomplete stage through storyboard.
+                        if (onLog) {
+                            onLog(
+                                t(
+                                    '已选择保留原结果，正在检查并续跑未完成的分析阶段…',
+                                    'Keeping existing results; checking and continuing unfinished analysis stages...'
+                                ),
+                                'process'
+                            );
+                        }
+                        beginAnalysisRestartUi(Date.now());
+                        const claimToken = String(analysisClaimTokenRef.current || '').trim();
+                        const resumePromise = (async () => {
+                            const resumeState = await prepareSceneAnalysisResumeState();
+                            if (resumeState?.decision === 'phase2' || resumeState?.decision === 'completed') {
+                                const resumed = await tryResumeAnalysisFromExistingArtifacts(resumeState, 0);
+                                if (resumed) return;
+                            }
+                            const hasAdaptation = Boolean(String(
+                                activeEpisode?.ai_scene_analysis_adaptation
+                                || activeEpisode?.ai_scene_analysis_result
+                                || ''
+                            ).trim());
+                            if (hasAdaptation) {
+                                await handleRestartStage2({ allowWhileAnalyzing: true });
+                                return;
+                            }
+                            setAnalysisFlowStatus({
+                                phase: 'warning',
+                                message: t(
+                                    '未发现可续跑的中间产物（缺少资产清单或第一阶段成稿）。请选择重新生成，或先完成更早阶段。',
+                                    'No resumable mid-pipeline artifacts found (missing asset index or Stage 1 output). Choose regenerate, or finish earlier stages first.'
+                                ),
+                            });
+                            setAnalysisUiReport((prev) => ({
+                                ...(prev && typeof prev === 'object' ? prev : {}),
+                                status: 'warning',
+                                error: '',
+                                warning: t(
+                                    '保留原结果时无可续跑阶段。',
+                                    'Nothing left to continue when keeping existing results.'
+                                ),
+                            }));
+                            setIsAnalyzing(false);
+                            analysisRunInFlightRef.current = false;
+                        })();
+                        trackEpisodeAnalysisRun(episodeId, resumePromise, {
+                            startedAt: Date.now(),
+                            kind: 'resume_keep_existing',
+                            claimToken,
+                        });
+                        analysisEntryLockRef.current = false;
+                        try {
+                            await resumePromise;
+                        } finally {
+                            if (analysisClaimTokenRef.current === claimToken) {
+                                analysisClaimTokenRef.current = '';
+                            }
+                        }
                         return;
                     }
                 }
@@ -15620,19 +15685,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (onLog) onLog('Project language is empty. Analysis continues with warning.', 'warning');
             }
 
-            // Confirmations done: wipe workspace artifacts before starting a fresh run.
-            // Keep preparing UI (preserveProgressUi) so the button/progress stay in running state;
-            // still reset orchestration/storyboard tracking for a clean restart.
+            // Confirmations done: wipe temp-area + workspace artifacts before a fresh full run.
+            // Keep preparing UI (preserveProgressUi) so the button/progress stay in running state.
             try {
                 if (onLog) onLog('Clearing workspace analysis artifacts and diagnostic panel before AI Script Analysis...', 'process');
-                orchestrationLiveImportedScenesRef.current = new Set();
-                orchestrationCanonicalSceneIdsRef.current = new Set();
-                orchestrationPersistedSceneMarkdownRef.current = {};
-                endSceneOrchestrationPanelTracking();
-                resetStoryboardKickoffTracking();
-                if (activeEpisode?.id) {
-                    clearAnalysisSessionProgressSnapshot(activeEpisode.id);
-                }
                 await clearAnalysisOutputsForRestart({
                     preserveProgressUi: true,
                     deferWorkspaceUiReset: false,
@@ -15782,42 +15838,56 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             clearAnalysisTaskMarker(activeEpisode.id);
             resetAnalysisFallbackRetryCounts(activeEpisode.id);
             lastAutoSubjectsImportRef.current = { signature: '', result: null };
+            analysisStopRequestedRef.current = false;
+            phase2AutoCompletedEpisodeRef.current = null;
+            phase2GenerationInFlightRef.current = false;
+            sceneBeatsOnlyRerunInFlightRef.current = false;
+
+            // Always wipe temp-area / runtime residue so a re-click cannot inherit stale
+            // orchestration, storyboard gates, or diagnostic leftovers from a prior run.
+            orchestrationLiveImportedScenesRef.current = new Set();
+            orchestrationCanonicalSceneIdsRef.current = new Set();
+            orchestrationPersistedSceneMarkdownRef.current = {};
+            endSceneOrchestrationPanelTracking();
+            resetStoryboardKickoffTracking();
+            clearAnalysisSessionProgressSnapshot(activeEpisode.id);
+            clearEpisodeAnalysisProgress(activeEpisode.id);
+            clearEpisodeAnalysisDetached(activeEpisode.id);
+
+            analysisDetailLogsRef.current = [];
+            setAnalysisDetailLogs([]);
+            setAnalysisFlowStatusHistory([]);
+            setAnalysisReviewIssues([]);
+            setSubjectConsistencyReport(null);
+            setSubjectConsistencyResultText('');
+            setDiagnosticImportingKind('');
+            setIsRerunningStoryboard(false);
+            setStoryboardRerunModal({
+                open: false,
+                mode: 'all',
+                sceneId: '',
+                dbSceneId: null,
+                candidates: [],
+                loading: false,
+            });
+            setStageArtifactEditModal({
+                open: false,
+                kind: '',
+                titleZh: '',
+                titleEn: '',
+                hintZh: '',
+                hintEn: '',
+                content: '',
+                editing: false,
+                saving: false,
+            });
+            setDiagnosticsEpisodeSceneCount(0);
+            setDiagnosticsEpisodeShotStats({ shotCount: 0, sceneCountWithShots: 0 });
+
             if (!preserveProgressUi) {
-                orchestrationLiveImportedScenesRef.current = new Set();
-                orchestrationCanonicalSceneIdsRef.current = new Set();
-                orchestrationPersistedSceneMarkdownRef.current = {};
-                endSceneOrchestrationPanelTracking();
-                resetStoryboardKickoffTracking();
-                clearAnalysisSessionProgressSnapshot(activeEpisode.id);
                 analysisTimerStartedAtRef.current = 0;
-                analysisDetailLogsRef.current = [];
-                setAnalysisDetailLogs([]);
-                setAnalysisFlowStatusHistory([]);
-                setAnalysisReviewIssues([]);
                 setAnalysisUiReport(null);
                 setAnalysisFlowStatus({ phase: 'idle', message: '' });
-                setSubjectConsistencyReport(null);
-                setDiagnosticImportingKind('');
-                setIsRerunningStoryboard(false);
-                setStoryboardRerunModal({
-                    open: false,
-                    mode: 'all',
-                    sceneId: '',
-                    dbSceneId: null,
-                    candidates: [],
-                    loading: false,
-                });
-                setStageArtifactEditModal({
-                    open: false,
-                    kind: '',
-                    titleZh: '',
-                    titleEn: '',
-                    hintZh: '',
-                    hintEn: '',
-                    content: '',
-                    editing: false,
-                    saving: false,
-                });
                 if (latestAnalysisProgressUiRef.current) {
                     latestAnalysisProgressUiRef.current = {
                         ...latestAnalysisProgressUiRef.current,
@@ -15828,6 +15898,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         dismissed: false,
                     };
                 }
+            } else if (latestAnalysisProgressUiRef.current) {
+                // Keep the preparing/running shell; drop stale logs/history/report payload.
+                latestAnalysisProgressUiRef.current = {
+                    ...latestAnalysisProgressUiRef.current,
+                    flowHistory: [],
+                    detailLogs: [],
+                    dismissed: false,
+                };
             }
 
             if (projectId && activeEpisode?.id) {
@@ -16088,29 +16166,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             .filter(Boolean)
             .join('；');
 
-        if (resumeState.decision === 'completed') {
-            setAnalysisFlowStatus({
-                phase: 'completed',
-                message: '🎉 已检测到完整分析结果，无需重复导入或调用 AI！',
-            });
-            setAnalysisUiReport(buildCompletedAnalysisUiReport({
-                status: 'completed',
-                startedAt: Date.now(),
-                durationMs: 0,
-                phaseTimings: null,
-                importReport: null,
-                runtimeMeta: null,
-                warning: combinedWarning,
-                error: '',
-            }));
-            if (onLog) onLog('AI Analysis startup reused existing scene analysis results, asset index, and subjects JSON. No LLM call was needed.', 'success');
-            return true;
-        }
-
         if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) return true;
         analysisRunInFlightRef.current = true;
         setIsAnalyzing(true);
         const startedAt = Date.now();
+        const needsSceneOrchestration = Boolean(resumeState?.needsSceneOrchestration);
+        const needsAssetDesign = Boolean(resumeState?.needsAssetDesign);
+        const artifactsAlreadyComplete = resumeState.decision === 'completed';
+
         setAnalysisUiReport({
             status: 'running',
             startedAt,
@@ -16122,16 +16185,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             error: '',
         });
 
-        setAnalysisFlowStatus({
-            phase: resumeState?.needsSceneOrchestration ? 'scene_beats' : 'completed',
-            message: resumeState?.needsSceneOrchestration
-                ? t('🚀 资产清单已就绪，正在并发执行场景编排与资产生成...', 'Asset index ready; running scene orchestration and asset design in parallel...')
-                : '🚀 检测到资产清单已完整，直接进入资产设计...',
-        });
+        if (artifactsAlreadyComplete) {
+            setAnalysisFlowStatus({
+                phase: 'storyboard',
+                message: t(
+                    '🎉 已检测到完整分析结果；正在检查并补齐未完成的分镜生成…',
+                    'Complete analysis artifacts found; checking and finishing remaining storyboard generation...'
+                ),
+            });
+        } else {
+            setAnalysisFlowStatus({
+                phase: needsSceneOrchestration ? 'scene_beats' : (needsAssetDesign ? 'assets_gen' : 'storyboard'),
+                message: needsSceneOrchestration && needsAssetDesign
+                    ? t('🚀 资产清单已就绪，正在并发执行场景编排与资产生成...', 'Asset index ready; running scene orchestration and asset design in parallel...')
+                    : needsSceneOrchestration
+                        ? t('🚀 资产清单已就绪，正在续跑场景编排…', 'Asset index ready; continuing scene orchestration...')
+                        : needsAssetDesign
+                            ? t('🚀 检测到资产清单已完整，直接进入资产设计...', 'Asset index ready; continuing asset design...')
+                            : t('🚀 正在续跑剩余分析阶段…', 'Continuing remaining analysis stages...'),
+            });
+        }
 
         try {
-            const needsSceneOrchestration = Boolean(resumeState?.needsSceneOrchestration);
-            const needsAssetDesign = resumeState?.needsAssetDesign !== false;
             const stage1SourceText = String(
                 activeEpisode?.ai_scene_analysis_adaptation
                 || activeEpisode?.ai_scene_analysis_result
@@ -16271,33 +16346,39 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let importReport = { importedSceneRows: [] };
             let postImportSceneSubjectReport = null;
 
-            if (needsSceneOrchestration && needsAssetDesign) {
-                armEnvironmentAssetDesignGate('resume-scene-and-assets');
-                const [sceneOutcome, assetOutcome] = await Promise.allSettled([
-                    runSceneOrchestrationResumeBranch(),
-                    runAssetDesignResumeBranch(),
-                ]);
-                if (sceneOutcome.status !== 'fulfilled') {
-                    throw sceneOutcome.reason;
+            if (!artifactsAlreadyComplete) {
+                if (needsSceneOrchestration && needsAssetDesign) {
+                    armEnvironmentAssetDesignGate('resume-scene-and-assets');
+                    const [sceneOutcome, assetOutcome] = await Promise.allSettled([
+                        runSceneOrchestrationResumeBranch(),
+                        runAssetDesignResumeBranch(),
+                    ]);
+                    if (sceneOutcome.status !== 'fulfilled') {
+                        throw sceneOutcome.reason;
+                    }
+                    if (assetOutcome.status !== 'fulfilled') {
+                        const assetErr = assetOutcome.reason;
+                        onLog?.(`Stage 3 asset design resume failed: ${assetErr?.message || assetErr}`, 'error');
+                        throw assetErr instanceof Error ? assetErr : new Error(String(assetErr || 'Stage 3 asset design resume failed'));
+                    }
+                    importReport = sceneOutcome.value || importReport;
+                    postImportSceneSubjectReport = assetOutcome.value || null;
+                } else if (needsSceneOrchestration) {
+                    // Assets already complete — open ENV gate so per-scene storyboard can start after import.
+                    if (hasPersistedEnvironmentAssetDesign()) {
+                        markEnvironmentAssetDesignReady('resume-env-already-persisted');
+                    } else {
+                        markEnvironmentAssetDesignReady('resume-scene-only-no-env-rows-or-payload');
+                    }
+                    importReport = await runSceneOrchestrationResumeBranch();
+                } else if (needsAssetDesign) {
+                    armEnvironmentAssetDesignGate('resume-assets-only');
+                    postImportSceneSubjectReport = await runAssetDesignResumeBranch();
                 }
-                if (assetOutcome.status !== 'fulfilled') {
-                    const assetErr = assetOutcome.reason;
-                    onLog?.(`Stage 3 asset design resume failed: ${assetErr?.message || assetErr}`, 'error');
-                    throw assetErr instanceof Error ? assetErr : new Error(String(assetErr || 'Stage 3 asset design resume failed'));
-                }
-                importReport = sceneOutcome.value || importReport;
-                postImportSceneSubjectReport = assetOutcome.value || null;
-            } else if (needsSceneOrchestration) {
-                // Assets already complete — open ENV gate so per-scene storyboard can start after import.
-                if (hasPersistedEnvironmentAssetDesign()) {
-                    markEnvironmentAssetDesignReady('resume-env-already-persisted');
-                } else {
-                    markEnvironmentAssetDesignReady('resume-scene-only-no-env-rows-or-payload');
-                }
-                importReport = await runSceneOrchestrationResumeBranch();
+            } else if (hasPersistedEnvironmentAssetDesign()) {
+                markEnvironmentAssetDesignReady('resume-completed-env-already-persisted');
             } else {
-                armEnvironmentAssetDesignGate('resume-assets-only');
-                postImportSceneSubjectReport = await runAssetDesignResumeBranch();
+                markEnvironmentAssetDesignReady('resume-completed-no-env-rows-or-payload');
             }
 
             if (importReport && typeof importReport === 'object' && postImportSceneSubjectReport) {
@@ -16319,11 +16400,50 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 };
             }
 
+            // Seed workspace scene markers when resume did not freshly import scenes,
+            // so residual storyboard kickoff can still target DB scenes.
+            const liveImportedCount = orchestrationLiveImportedScenesRef.current instanceof Set
+                ? orchestrationLiveImportedScenesRef.current.size
+                : 0;
+            if (liveImportedCount <= 0 && activeEpisode?.id) {
+                try {
+                    const dbScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+                    const markers = (Array.isArray(dbScenes) ? dbScenes : [])
+                        .map((scene) => String(
+                            scene?.scene_no || scene?.scene_id || scene?.scene_code || ''
+                        ).trim())
+                        .filter(Boolean);
+                    if (markers.length > 0) {
+                        orchestrationCanonicalSceneIdsRef.current = new Set(markers);
+                        orchestrationLiveImportedScenesRef.current = new Set(markers);
+                    }
+                } catch (seedErr) {
+                    onLog?.(
+                        t(
+                            `续跑分镜前同步工作区场景失败（继续）：${seedErr?.message || seedErr}`,
+                            `Failed to sync workspace scenes before residual storyboard (continue): ${seedErr?.message || seedErr}`
+                        ),
+                        'warning'
+                    );
+                }
+            }
+
+            const resumeStoryboard = await awaitPendingStoryboardTasks({
+                importReport,
+                ensureResidual: true,
+            });
+            const resumeStoryboardStarted = Boolean(resumeStoryboard?.started);
+            const storyboardSuffix = buildStoryboardCompletionSuffix(resumeStoryboard);
+
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: needsSceneOrchestration
-                    ? t('🎉 场景编排与资产生成已完成。', 'Scene orchestration and asset design completed.')
-                    : '🎉 专属实体资产定制完毕，可随时投产使用！',
+                message: (
+                    artifactsAlreadyComplete
+                        ? t('🎉 已复用完整分析结果。', 'Reused complete analysis artifacts.')
+                        : needsSceneOrchestration
+                            ? t('🎉 场景编排与资产生成已完成。', 'Scene orchestration and asset design completed.')
+                            : t('🎉 专属实体资产定制完毕，可随时投产使用！', 'Exclusive entity assets are ready for production!')
+                ) + storyboardSuffix,
             });
 
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
@@ -16333,9 +16453,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phaseTimings: null,
                 importReport,
                 runtimeMeta: null,
+                storyboardAutoStarted: resumeStoryboardStarted,
+                storyboardTaskProgress: resumeStoryboard?.progress || EMPTY_STORYBOARD_TASK_PROGRESS,
                 warning: combinedWarning,
                 error: '',
             }));
+            if (onLog) {
+                onLog(
+                    artifactsAlreadyComplete
+                        ? `AI Analysis reused existing artifacts; storyboard residual started=${resumeStoryboardStarted ? 1 : 0}.`
+                        : `AI Analysis resume finished remaining stages; storyboard residual started=${resumeStoryboardStarted ? 1 : 0}.`,
+                    'success'
+                );
+            }
         } catch (err) {
             console.error(err);
             setAnalysisFlowStatus({ phase: 'failed', message: '❌ 资产生成失败: ' + err.message });
@@ -16363,8 +16493,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.id,
         armEnvironmentAssetDesignGate,
         assertWorkspaceSceneImportComplete,
+        awaitPendingStoryboardTasks,
         buildStage2_2UserInputFromStage1,
         buildCompletedAnalysisUiReport,
+        buildStoryboardCompletionSuffix,
         canSkipBatchSceneImport,
         fetchScenes,
         hasPersistedEnvironmentAssetDesign,
@@ -18100,6 +18232,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setIsAnalyzing(true);
         analysisRunInFlightRef.current = true;
         phase2AutoCompletedEpisodeRef.current = null;
+        phase2GenerationInFlightRef.current = false;
+        sceneBeatsOnlyRerunInFlightRef.current = false;
         analysisStopRequestedRef.current = false;
         setAnalysisFlowStatus({
             phase: 'script_opt',
@@ -18108,6 +18242,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         try {
             resetAutoSubjectsImportCache();
+            // Clear temp-area orchestration/storyboard residue while keeping Stage 1 outputs.
+            orchestrationLiveImportedScenesRef.current = new Set();
+            orchestrationCanonicalSceneIdsRef.current = new Set();
+            orchestrationPersistedSceneMarkdownRef.current = {};
+            endSceneOrchestrationPanelTracking();
+            resetStoryboardKickoffTracking();
             setAdaptationText(adaptedScriptText);
             if (onLog && slimScriptText && slimScriptText !== adaptedScriptText) {
                 onLog(

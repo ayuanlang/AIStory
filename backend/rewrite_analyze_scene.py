@@ -187,14 +187,15 @@ new_block = r"""\
         # 3. Create target_messages_2
         try:
             from app.core.prompts.skills_loader import get_skill_prompt_text
-            entity_design_skill = get_skill_prompt_text("scene_analysis_feature_stack/entity_design.md")
+            # Production path: common + typed prompts (not deprecated entity_design.md monolith)
+            entity_design_skill = get_skill_prompt_text("scene_analysis_feature_stack/entity_design_common.md")
         except Exception as e:
-            logger.warning(f"Failed to load entity_design prompt, using default: {e}")
-            entity_design_skill = "Provide detailed Entity Designs based on the subject index."
+            logger.warning(f"Failed to load entity_design_common prompt, using default: {e}")
+            entity_design_skill = "Provide detailed Entity Designs based on the subject index. Follow entity_design_common.md + typed character/prop/environment_and_poster prompts."
 
         target_messages_2 = list(messages)
         target_messages_2.append({"role": "assistant", "content": result_content_1})
-        target_messages_2.append({"role": "user", "content": f"Based on the following subject index, please provide the detailed Entity Designs using the required format:\n\n{parsed_subject_index}\n\nStrictly follow these guidelines:\n{entity_design_skill}"})
+        target_messages_2.append({"role": "user", "content": f"Based on the following subject index, please provide the detailed Entity Designs using the required format:\n\n{parsed_subject_index}\n\nStrictly follow these guidelines (common baseline; production uses common + typed prompts):\n{entity_design_skill}"})
         
         # 4. Call again
         loop2_res = await _run_loop(target_messages_2)

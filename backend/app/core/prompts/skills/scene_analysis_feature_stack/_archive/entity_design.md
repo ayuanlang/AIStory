@@ -1,4 +1,8 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design.md
+#
+# ⛔ DEPRECATED — DO NOT USE IN PRODUCTION
+# 生产路径：entity_design_common.md + entity_design_character.md / entity_design_prop.md / entity_design_environment_and_poster.md
+# 本 monolith 要求填写 generation_prompt_en、题材标签可触发真人条款等，与现行 common §1.6 冲突。
 # Prompt Updated At: 2026-06-14 02:21:19 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成

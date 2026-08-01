@@ -4,8 +4,15 @@ This package adds a routed scene-analysis base prompt plus runtime feature skill
 
 Current staged flow:
 - Stage 1: script adaptation (`scene_planning_1_script_optimization.md`)
-- Stage 2: asset analysis extraction (`scene_planning_2_beats_and_assets.md`)
+- Stage 2.1: asset extraction / Subject Index (`scene_planning_2_1_assets_extraction.md`)
+- Stage 2.2: scene orchestration / beats markdown (`scene_planning_2_2_beats_generation.md`)
 - Stage 3: asset design (`entity_design_common.md` + typed prompts: `entity_design_character.md`, `entity_design_prop.md`, `entity_design_environment_and_poster.md`)
+
+Deprecated (archived under `_archive/`; do not inject in production):
+- `_archive/scene_planning.md` — obsolete Stage 1+2 monolith
+- `_archive/entity_design.md` — obsolete Stage 3 monolith
+- `_archive/entity_design_environment.md` — obsolete env-only prompt
+Production uses split Stage 1/2.1/2.2 + `entity_design_common` + typed prompts.
 
 Goals:
 - Keep `classic` on the original `scene_analysis.txt` path.

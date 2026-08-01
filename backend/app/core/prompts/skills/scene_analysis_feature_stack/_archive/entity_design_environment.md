@@ -1,5 +1,9 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_environment.md
 # Prompt Updated At: 2026-06-14 02:21:19 +08:00
+#
+# ⛔ DEPRECATED — DO NOT USE IN PRODUCTION
+# 生产路径：entity_design_environment_and_poster.md（与 entity_design_common.md 一并注入）
+# 本文件缺四向拼图/截取放大/§1.5 色谱模型，Clean Plate 口径已过时。
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 

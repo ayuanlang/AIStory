@@ -1,10 +1,10 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-07-20 17:00:00 +08:00
+# Prompt Updated At: 2026-08-01 12:00:00 +08:00
 
 # Skill 1-2-2: 节拍工程映射（Beats-only）
 
-# Role: 严谨保守，一丝不苟的资产标准表达与节拍工程映射专员
+# Role: 资产标准表达与节拍工程映射专员
 
 ## 核心任务
 
@@ -69,26 +69,17 @@ Subject Index 表头：`| subject_no | subject_type | subject_name_zh | subject_
 
 ### Index 命名铁则
 
-> **🏆 实体命名绝对锁（最高硬约束 · 白名单闭包）**：Subject Index 是输出侧实体名的**唯一合法来源**。凡写入输出的 `CHAR:`/`ENV:`/`PROP:` 方括号内名称，以及表格 `Environment Name` / `Linked Characters` / `Key Props` / `{登场实体}` 中的实体名，**必须与 Subject Index 对应行 `subject_name_zh`（或列明确要求的 `subject_name_en`）完全一致——逐字符、含空格/标点/大小写/前后缀**。**禁止任何形式的修改**（润色、规范化、翻译、补词、缩写、删词、同义替换、繁简转换、标点/空格/大小写修正、括号补充、去前后缀、合并/拆分称呼、自创角度/状态后缀、拼接半截 Index 名）。**凡方括号名在 Index 中找不到逐字符相等的行 = 非法输出，整场废弃重写。**
+> **🏆 实体命名绝对锁（最高硬约束 · 白名单闭包）**：Subject Index 是输出侧实体名的**唯一合法来源**。凡 `CHAR:`/`ENV:`/`PROP:` 方括号名及表格 `Environment Name` / `Linked Characters` / `Key Props` / `{登场实体}` 中的实体名，须与 Index 对应行 `subject_name_zh`（或列要求的 `subject_name_en`）**逐字符完全一致**。**任意字符级差异=非法**（含润色/翻译/缩写/同义/繁简/空格标点大小写/去前后缀/自创后缀/半截拼接）。找不到相等行 → 整场废弃重写，禁止近似放行。
 
-**落笔前强制流程（每个 `TYPE:[…]` 必做，不可跳过）**：
-1. 在 Subject Index 中定位**唯一**匹配行（靠 `script_entity_coverage` / 本 Beat 明文 / 同族证据，**不是**靠「看起来像」）；
-2. **原样复制**该行 `subject_name_zh` 单元格全文（禁止凭记忆重打、禁止从 Stage 1 抄称呼再「修正」成 Index 风格）；
-3. 仅允许外加类型前缀与 `CHAR` 的 `@`：`CHAR:[@{原样}]` / `ENV:[{原样}]` / `PROP:[{原样}]`；
-4. 找不到 Index 行 → **禁止**套任何 `TYPE:[…]`，保留 Stage 1 自然语言称呼原串。
+**落笔四步（每个 `TYPE:[…]`）**：①靠 coverage/本 Beat 明文/同族证据定位唯一 Index 行（禁「看起来像」）→ ②**原样复制** `subject_name_zh` 单元格（禁凭记忆重打、禁从 Stage 1「修正」）→ ③仅外加前缀与 CHAR 的 `@`：`CHAR:[@{原样}]` / `ENV:[{原样}]` / `PROP:[{原样}]` → ④无 Index 行 → **禁止**套任何前缀，保留 Stage 1 自然语言。
 
-1. **白名单闭包（硬门禁）**：凡 `CHAR:`/`ENV:`/`PROP:`（含 `{Beats}` 全文、`{登场实体}`、表格环境/角色/道具列）方括号名须**逐字符等于** Index `subject_name_zh`（或列明确要求的 `subject_name_en`），且可追溯 `subject_no`。**唯一合法前缀**即此三者。**禁止**对 Index 无行实体套前缀（含自创 `EXTRA:`/`LOCATION:`/`VEFX:` 等）。**禁止**把 Stage 1 原称呼、别名、简称、敬称、职位称呼直接塞进方括号——方括号内**只许** Index 单元格原文。
-2. **类型前缀**：`character` → `CHAR:[@{subject_name_zh}]`；`environment` → `ENV:[{subject_name_zh}]`；`prop` → `PROP:[{subject_name_zh}]`；`cover_poster` 不进 Scene/Beat。前缀可加，**括号内名不得改一个字符**。
-3. **别名核销**：叙述层别名经 `script_entity_coverage` 核销后**整串替换为** Index `subject_name_zh`（只换称呼字符串，目标串必须与 Index 逐字符一致）；**台词不适用**。禁止换成「更规范/更全称/更短」的近似名；禁止核销到「同族另一行」的名（除非本 Beat 明文证据匹配该衍生行）。
-4. **双源交集**：Beat 与 Index 均有语义 → 必须 Index 化；名称冲突以 Index 为准（输出侧只许 Index 原名）。Stage 1 写「林岳」、Index 为「林岳_正装版」且本 Beat 明文匹配该行 → 输出必须是 `CHAR:[@林岳_正装版]`，**禁止**输出 `CHAR:[@林岳]`（除非 Index 另有基础版行且证据指向基础版）。
-5. **只读与缺口**：`base_entity`/`dependency_reference`/`entity_attributes` 仅供同族匹配；禁据此新建行或补入 Beat 未写态，亦禁据此改写已选定行的 `subject_name_zh`。Beat 有而 Index 无 → 保留自然语言、不加前缀；Index 有而 Beat 未写 → 禁补入正文。**禁止**用 `base_entity` 名冒充输出名、禁止用 `dependency_reference` 英文名填中文方括号。
-6. **ENV 整场闭包**：`ENV:[{name}]` 须为 Index `environment` 行且 **本场 Beat 已写**该整场名；`{name}` 与 Index **逐字符一致**（含 `0度…` / `90度…` / `…_状态` 等已登记全串）。未升格环境内实体只保留自然语言；已升格写 `PROP:[…]`，禁再套 `ENV:`。**禁止**自创未在 Index 登记的角度/状态 ENV 名后套 `ENV:[]`。
-7. **非法模式（出现任一即整场废弃）**：
-   - `CHAR:`/`ENV:`/`PROP:` 方括号名 ≠ 任一 Index `subject_name_zh`（差一字、多空格、少后缀、繁简不同均算）；
-   - 用 Stage 1 昵称/职位/「他/该男子」等非 Index 串套前缀；
-   - 自创 `CHAR:[@林岳战损]` / `ENV:[会议室90度]` 等 Index 无行格式；
-   - 表格列或 `{登场实体}` 写入 Index 无行名；
-   - 把固定陈设/未升格实体写成 `ENV:[会议桌]` 等 Index 无整场行之名。
+1. **白名单**：唯一合法前缀=`CHAR`/`ENV`/`PROP`（可追溯 `subject_no`）；禁对 Index 无行套前缀（含 `EXTRA:`/`LOCATION:` 等）；方括号内**只许** Index 单元格原文，禁 Stage 1 别名/简称/敬称/职位。
+2. **类型前缀**：`character`→`CHAR:[@…]`；`environment`→`ENV:[…]`；`prop`→`PROP:[…]`；`cover_poster` 不进 Scene/Beat。
+3. **别名核销**：叙述层别名经 coverage 整串替换为 Index 名（只换称呼；**台词不适用**）；禁换成近似名；禁核销到同族另一行（除非本 Beat 明文匹配该衍生）。
+4. **双源交集**：Beat∩Index 有语义 → 必须 Index 化；冲突以 Index 为准。例：Stage 1「林岳」+ Index「林岳_正装版」且明文匹配 → `CHAR:[@林岳_正装版]`，禁输出基础版名。
+5. **只读与缺口**：`base_entity`/`dependency_reference`/`entity_attributes` 仅供同族匹配；禁新建行/补未写态/改 `subject_name_zh`；Beat 有 Index 无→自然语言无前缀；Index 有 Beat 未写→禁补入；禁用 `base_entity` 冒充输出名。
+6. **ENV 整场闭包**：`ENV:[{name}]` 须为 Index environment 行且本场 Beat 已写该整场名（含已登记 `0度…`/`…_状态` 全串）；未升格陈设只留自然语言；已升格用 `PROP:`；禁自创未登记角度/状态名。
+7. **非法即废**：方括号名≠Index；非 Index 串套前缀；自创无行格式；表格/`{登场实体}` 写入无行名；`ENV:[会议桌]` 等无整场行。
 
 ### 基础/衍生资产映射
 
@@ -143,7 +134,7 @@ Index 化落位于：`{Beats}` 叙述层（Observer View/建置/环境切换等�
 | `Scene Name` | 输入有 `【场景名称】{短名}｜{日·夜}·{内/外}｜{季节}｜{气候}｜{正常叙事/闪回/倒叙}` → 写入 `{短名}｜{日·夜}·{内/外}｜{季节}｜{气候}｜{正常叙事/闪回/倒叙}`（**逐字原样**，含日·内/外；**不含** `【场景名称】` 前缀）；无该行 → `None`；禁自创/润色/拆短名 |
 | `{Beats}` | **强制主责**：输入全部 Beat 块**逐字完全继承**落入（含建置/入戏/切换说明全文；**仅**叙述层实体名 Index 化，其余字句标点零改动；保留外层/内层分隔符；台词原样） |
 | `{登场实体}` | 从本场 `{Beats}` **已合法 Index 化**实体汇总（方括号名须已在 Index）；无则 `None`；**禁止**汇总进 Index 无行之名 |
-| `{剧情阶段}` | **必须识别**本场的情节阶段属性。若上游输入（如 `【场景名称】` 的后缀，或建置描述中）明确标识了如“闪回”、“倒叙”、“梦境”、“想象”等，或通过文本能明确判断其非正常叙事时间线，必须将其提炼并标注。默认为 `正常`。输出至 `Core Scene Info` 列。 |
+| `{剧情阶段}` | **必须识别**本场的情节阶段属性。若上游输入（如 `【场景名称】` 的后缀，或建置描述中）明确标识了如“闪回”、“倒叙”、“梦境”、“想象”等，或通过文本能明确判断其非正常叙事时间线，必须将其提炼并标注。默认为 `正常叙事`（与 Stage 2.1 `plot_stage:` / 场景头后缀同闭集：`正常叙事`｜`闪回`｜`倒叙`｜`梦境`｜`想象` 等）。输出至 `Core Scene Info` 列。 |
 | `Entry State` / `Exit State` | Beat 首/末已写状态可摘录；未写→`None` |
 | `Adapted Script Text` | 可摘本场 Beat 头尾短片段；禁改写续写 |
 | `Environment Name` / `Linked Characters` / `Key Props` | 仅从本场 Beat 可核销实体汇总，且**每个名字必须逐字符等于 Index**；无则 `None`；Index 核销失败的实体**不得**写入这三列 |
@@ -153,7 +144,7 @@ Index 化落位于：`{Beats}` 叙述层（Observer View/建置/环境切换等�
 
 （仅示格式；`…` 须替换为输入 Beat 真实全文，禁照抄占位、禁借示例扩写）
 
-| EP01 | EP01_SC01 | 1 | {短名}｜{日·夜}·{内/外}｜{季节}｜{气候}｜{正常叙事/闪回/倒叙} | {Xs或None} | - **{剧情阶段}**: {闪回/正常/倒叙/梦境等}<br>- **{Beats}**:<br>[BEAT_START:1]<br>- Beat 1（{标签}）<br>────【建置】────<br>…（Stage 1 建置原文，仅实体名 Index 化）…<br>────【入戏】────<br>…（Stage 1 入戏/台词原文）…<br>────【Beat切换说明】────<br>[Beat切换说明]：…<br>[BEAT_END:1]<br>[BEAT_START:2]<br>- Beat 2: …<br>[BEAT_END:2]<br>- **{登场 实体}**: CHAR:[@…], ENV:[…], PROP:[…] | {Beat头尾片段或None} | {可拍ENV Index名 或None} | None | None | None | {入场态或None} | {出场态或None} | CHAR:[@…]或None | PROP:[…]或None |
+| EP01 | EP01_SC01 | 1 | {短名}｜{日·夜}·{内/外}｜{季节}｜{气候}｜{正常叙事/闪回/倒叙} | {Xs或None} | - **{剧情阶段}**: {正常叙事/闪回/倒叙/梦境等}<br>- **{Beats}**:<br>[BEAT_START:1]<br>- Beat 1（{标签}）<br>────【建置】────<br>…（Stage 1 建置原文，仅实体名 Index 化）…<br>────【入戏】────<br>…（Stage 1 入戏/台词原文）…<br>────【Beat切换说明】────<br>[Beat切换说明]：…<br>[BEAT_END:1]<br>[BEAT_START:2]<br>- Beat 2: …<br>[BEAT_END:2]<br>- **{登场 实体}**: CHAR:[@…], ENV:[…], PROP:[…] | {Beat头尾片段或None} | {可拍ENV Index名 或None} | None | None | None | {入场态或None} | {出场态或None} | CHAR:[@…]或None | PROP:[…]或None |
 
 ### 输出前自检
 

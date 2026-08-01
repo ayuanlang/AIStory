@@ -230,9 +230,9 @@ async def execute_analyze_scene(
                 "template_hash_sha256": hashlib.sha256(str(system_instruction or "").encode("utf-8")).hexdigest(),
             }
         else:
-            prompt_filename = request.prompt_file or "skills/scene_analysis_feature_stack/scene_planning.md"
+            prompt_filename = request.prompt_file or "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md"
             if feature_bundle.get("enabled") and not request.prompt_file:
-                prompt_filename = str(feature_bundle.get("base_prompt_file") or "skills/scene_analysis_feature_stack/scene_planning.md")
+                prompt_filename = str(feature_bundle.get("base_prompt_file") or "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md")
             try:
                 system_instruction = _resolve_prompt_text(prompt_filename)
             except FileNotFoundError:
@@ -250,7 +250,7 @@ async def execute_analyze_scene(
                 "Rendered routed scene analysis prompt with explicit slots: requested_mode=%s effective_mode=%s base_prompt=%s slots=%s skills=%s features=%s combos=%s",
                 requested_scene_analysis_mode,
                 feature_bundle.get("mode"),
-                feature_bundle.get("base_prompt_file") or request.prompt_file or "skills/scene_analysis_feature_stack/scene_planning.md",
+                feature_bundle.get("base_prompt_file") or request.prompt_file or "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md",
                 sorted((feature_bundle.get("slot_blocks") or {}).keys()),
                 [item.get("skill_id") for item in (feature_bundle.get("selected_skills") or [])],
                 feature_bundle.get("normalized_features") or {},

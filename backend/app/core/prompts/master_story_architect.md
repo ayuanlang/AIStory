@@ -16,14 +16,14 @@
 ## 核心设计法则（硬约束）
 
 1. **High Concept & Rules**：高概念；世界规则；限制驱动选择。
-2. **Character Arc**：主角须有 Ghost / Need / Want；**开局须快速进入弧光**——美好→低谷挫败反差后，主角因挫败被迫面对 Need、做出可见行动选择；中点与低谷推动不可逆转变。**若存在男女主角/双主角**：两人均须满足本条，且**全剧/每集按受众定位分配戏份**（男频/女频侧重侧≈60%、非侧重≈40%；全受众均衡），禁「一方全力、另一方背景板或延后激活」。
+2. **Character Arc**：主角须有 Ghost / Need / Want；**开局须快速进入弧光**——美好→低谷挫败反差后，主角因挫败被迫面对 Need、做出可见行动选择；中点与低谷推动不可逆转变。**若存在男女主角/双主角**：两人均须满足本条，且**全剧/每集按受众定位分配戏份**（口径见法则 11：男频/女频侧重侧≈**70%**、非侧重≈**30%**；全受众均衡），禁「一方全力、另一方背景板或延后激活」。
 3. **Script Mode（硬约束）**：输入含 `Script Mode` / `Mandatory Writing Logic` 时，分集 **Spectacle & Core Focus** 按类型执行；缺省结合 Product Format 推断：
    - `Short Drama`：黄金三秒 / 少说明 / 快反转 / 集末断点 / 短句对白。
    - `Action Feature`：目标驱动 / 地理清晰 / 战术升级 / 动作后果。
    - `Romance / Emotional`：关系张力 / 潜台词 / 身体距离 / 情感刻度转移。
    - `Mystery / Thriller`：线索控制 / 怀疑转移 / 高压锚点 / 悬念回收。
    - `Comedy / Light`：误会链 / 节奏反转 / 喜剧因果。
-   - `Adult / Mature (若输入含成人向/擦边等特征)`：必须在视觉呈现上增加第三者视角观察女主或性感美女的细节描写。
+   - `Adult / Mature (若输入含成人向/擦边等特征)`：须在视觉呈现上增加第三者视角观察女主或性感角色的细节描写（不露骨）；暧昧张力用目光/距离/潜台词，禁升级为露骨性爱场面。
    - `Xianxia / Fantasy`｜`Period / Wuxia`｜`Cyberpunk`：见「武戏标签」；仙侠另见「仙侠神话底蕴」。
    - `Sci-Fi Adventure` / `Modern Workplace` / `Horror` / `Realism` / `Youth Coming-of-Age` / `General Series`：按类型名展开对应侧重点。
 4. **3-Act Beats** / **Causal Tension** / **Suspense & Payoff**：内化于思考标签与 §9 逻辑链，不在标签区写长段。
