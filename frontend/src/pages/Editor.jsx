@@ -278,6 +278,9 @@ const Editor = ({
     const episodesRef = useRef([]);
     const activeEpisodeIdRef = useRef(initialEpisodeId);
     const previousProjectIdRef = useRef(null);
+    // Prevent lazy full-episode fetch storms when `episodes` identity churns every render.
+    const episodeFullLoadInflightRef = useRef('');
+    const episodeFullLoadFailedRef = useRef('');
 
     const persistProjectReturnSnapshot = useCallback(() => {
         try {
@@ -814,7 +817,11 @@ const Editor = ({
     const handleUpdateEpisodeInfo = async (epId, data) => {
         try {
             const updatedEp = await updateEpisode(epId, data);
-            setEpisodes(prev => sortEpisodesForEditor(prev.map(e => e.id === epId ? updatedEp : e)));
+            setEpisodes(prev => sortEpisodesForEditor(prev.map((e) => {
+                if (e.id !== epId) return e;
+                // Preserve client-only full-load marker so lazy-load effect does not refetch forever.
+                return { ...e, ...updatedEp, _fullLoaded: Boolean(e._fullLoaded) };
+            })));
             return updatedEp;
         } catch (e) {
             console.error("Episode Info Update Failed:", e);
@@ -3548,25 +3555,43 @@ const Editor = ({
     };
 
     // Lazy load full episode payload only when a tab that needs script/analysis fields is active.
+    // Depend on a stable loaded/pending flag — never on the whole `episodes` array (identity churn
+    // was cancelling in-flight fetches and re-requesting GET /episodes/:id dozens of times/sec).
+    const activeEpisodeFullLoadState = (() => {
+        if (!activeEpisodeId) return 'idle';
+        const ep = episodes.find((e) => String(e.id) === String(activeEpisodeId));
+        if (!ep) return 'missing';
+        return ep._fullLoaded ? 'loaded' : 'pending';
+    })();
     useEffect(() => {
         if (!activeEpisodeId) return;
         if (!EPISODE_FULL_LOAD_TABS.has(activeTab)) return;
-        const ep = episodes.find(e => String(e.id) === String(activeEpisodeId));
-        if (!ep) return;
-        if (ep._fullLoaded) return;
+        if (activeEpisodeFullLoadState !== 'pending') return;
+        const key = String(activeEpisodeId);
+        if (episodeFullLoadInflightRef.current === key) return;
+        if (episodeFullLoadFailedRef.current === key) return;
+        episodeFullLoadInflightRef.current = key;
         let cancelled = false;
         fetchEpisode(activeEpisodeId).then((fullEp) => {
+            if (episodeFullLoadInflightRef.current === key) {
+                episodeFullLoadInflightRef.current = '';
+            }
             if (cancelled) return;
+            episodeFullLoadFailedRef.current = '';
             setEpisodes((prev) => sortEpisodesForEditor(
-                prev.map((e) => String(e.id) === String(activeEpisodeId) ? { ...fullEp, _fullLoaded: true } : e)
+                prev.map((e) => String(e.id) === key ? { ...e, ...fullEp, _fullLoaded: true } : e)
             ));
         }).catch((err) => {
+            if (episodeFullLoadInflightRef.current === key) {
+                episodeFullLoadInflightRef.current = '';
+            }
+            episodeFullLoadFailedRef.current = key;
             console.error('Failed to fetch full episode', err);
         });
         return () => {
             cancelled = true;
         };
-    }, [activeEpisodeId, activeTab, episodes, sortEpisodesForEditor]);
+    }, [activeEpisodeId, activeTab, activeEpisodeFullLoadState, sortEpisodesForEditor]);
 
     const activeEpisode = episodes.find(e => String(e.id) === String(activeEpisodeId)) || null;
     const activeEpisodeIndex = activeEpisode ? episodes.findIndex((episode) => String(episode.id) === String(activeEpisode.id)) : -1;

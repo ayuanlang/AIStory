@@ -2800,6 +2800,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const prev = storyboardTaskProgressRef.current;
         const next = typeof updater === 'function' ? updater(prev) : updater;
         const resolved = normalizeStoryboardTaskProgress(next);
+        const prevNorm = normalizeStoryboardTaskProgress(prev);
+        const countersUnchanged = (
+            Number(prevNorm.started || 0) === Number(resolved.started || 0)
+            && Number(prevNorm.completed || 0) === Number(resolved.completed || 0)
+            && Number(prevNorm.failed || 0) === Number(resolved.failed || 0)
+            && Number(prevNorm.running || 0) === Number(resolved.running || 0)
+            && Number(prevNorm.waiting || 0) === Number(resolved.waiting || 0)
+        );
+        const prevItemKeys = Object.keys(prevNorm.items || {}).sort().join(',');
+        const nextItemKeys = Object.keys(resolved.items || {}).sort().join(',');
+        const prevItemStatuses = Object.keys(prevNorm.items || {}).sort()
+            .map((k) => `${k}:${String(prevNorm.items?.[k]?.status || '')}`)
+            .join('|');
+        const nextItemStatuses = Object.keys(resolved.items || {}).sort()
+            .map((k) => `${k}:${String(resolved.items?.[k]?.status || '')}`)
+            .join('|');
+        if (
+            countersUnchanged
+            && prevItemKeys === nextItemKeys
+            && prevItemStatuses === nextItemStatuses
+        ) {
+            // Keep ref fresh but skip React state churn that was storming dependent effects.
+            storyboardTaskProgressRef.current = resolved;
+            return;
+        }
         storyboardTaskProgressRef.current = resolved;
         if (analysisUiReportRef.current && typeof analysisUiReportRef.current === 'object') {
             analysisUiReportRef.current = {
@@ -9656,6 +9681,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         isRetryingPhase2,
     ]);
 
+    // Primitive signature only — object-identity storyboardTaskProgress was refetching
+    // GET /episodes/:id/shots on every progress publish (~30/sec during analysis UI churn).
+    const diagnosticsShotStatsRefreshKey = [
+        activeEpisode?.id || '',
+        Number(analysisUiReport?.storyboardTaskProgress?.started || storyboardTaskProgress?.started || 0),
+        Number(analysisUiReport?.storyboardTaskProgress?.completed || storyboardTaskProgress?.completed || 0),
+        Number(analysisUiReport?.storyboardTaskProgress?.failed || storyboardTaskProgress?.failed || 0),
+        Number(analysisUiReport?.storyboardTaskProgress?.running || storyboardTaskProgress?.running || 0),
+        Boolean(analysisUiReport?.storyboardAutoStarted) ? 1 : 0,
+        isAnalyzing ? 1 : 0,
+        isRetryingPhase2 ? 1 : 0,
+    ].join('|');
     useEffect(() => {
         let mounted = true;
         const loadEpisodeShotStats = async () => {
@@ -9682,13 +9719,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         loadEpisodeShotStats();
         return () => { mounted = false; };
-    }, [
-        activeEpisode?.id,
-        analysisUiReport?.storyboardTaskProgress,
-        analysisUiReport?.storyboardAutoStarted,
-        isAnalyzing,
-        isRetryingPhase2,
-    ]);
+    }, [diagnosticsShotStatsRefreshKey, activeEpisode?.id]);
 
     const reuseSubjectTypeOptions = useMemo(() => {
         const types = new Set();
@@ -14643,23 +14674,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
     }, [tryResumePendingAnalysis]);
 
+    const activeEpisodeAnalysisResult = activeEpisode?.ai_scene_analysis_result || '';
+    const activeEpisodeSubjectCheckResult = String(activeEpisode?.episode_info?.subject_check_result || '');
+    const prevActiveEpisodeAnalysisResultRef = useRef(undefined);
+    const prevAnalysisSyncEpisodeIdRef = useRef(null);
     useEffect(() => {
-        // On episode change/remount, prefer parent-provided field; fallback to DB refresh.
-        const initial = activeEpisode?.ai_scene_analysis_result || '';
+        // On episode change / analysis field update from parent. Do NOT depend on
+        // normalizeLlmMarkdownTable — it was recreated every render and stormed GET /episodes/:id.
+        const episodeId = activeEpisode?.id ?? null;
+        if (prevAnalysisSyncEpisodeIdRef.current !== episodeId) {
+            prevAnalysisSyncEpisodeIdRef.current = episodeId;
+            prevActiveEpisodeAnalysisResultRef.current = undefined;
+        }
+        const initial = activeEpisodeAnalysisResult;
         const normalizedInitial = normalizeLlmMarkdownTable(initial);
         setLlmRawResultContent((prev) => (prev === initial ? prev : initial));
         setLlmResultContent((prev) => (prev === normalizedInitial ? prev : normalizedInitial));
-        const nextConsistencyText = String(activeEpisode?.episode_info?.subject_check_result || '');
-        setSubjectConsistencyResultText((prev) => (prev === nextConsistencyText ? prev : nextConsistencyText));
+        setSubjectConsistencyResultText((prev) => (
+            prev === activeEpisodeSubjectCheckResult ? prev : activeEpisodeSubjectCheckResult
+        ));
         setAnalysisRuntimeMeta((prev) => (prev === null ? prev : null));
         lastLoadedAnalysisRef.current = initial;
         lastEpisodeSegmentsScriptKeyRef.current = '';
         lastEpisodeSyncScriptKeyRef.current = '';
         lastEpisodeReuseSubjectIdsKeyRef.current = '';
-        if (!initial) {
+        const prevInitial = prevActiveEpisodeAnalysisResultRef.current;
+        prevActiveEpisodeAnalysisResultRef.current = initial;
+        // Refresh from DB only on first empty mount/episode switch or when analysis was cleared.
+        if (!initial && (prevInitial === undefined || Boolean(prevInitial))) {
             refreshAnalysisFromDBRef.current();
         }
-    }, [activeEpisode?.id, normalizeLlmMarkdownTable]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- normalize helper intentionally omitted
+    }, [activeEpisode?.id, activeEpisodeAnalysisResult, activeEpisodeSubjectCheckResult]);
 
     const handleLlmCellChange = (rowIdx, colIdx, value) => {
         const parsed = parseMarkdownTable(llmMarkdownTableText || llmResultContent);
