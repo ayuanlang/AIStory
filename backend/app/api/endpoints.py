@@ -115,7 +115,6 @@ from app.services.script_analysis_flow import (
     SceneBeatsTooShortError,
     SceneMissingBeat1Error,
     scene_text_has_beat_1,
-    build_assets_extraction_script_from_adapted,
 )
 from app.services.script_analysis_flow.subject_index_name_align import (
     align_scene_markdown_names_with_subject_index,

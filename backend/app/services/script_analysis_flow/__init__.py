@@ -89,6 +89,14 @@ LEGACY_ENV_BLOCK_END_PATTERN = re.compile(
     r"【对白拆句)",
     re.IGNORECASE,
 )
+SCENE_TRANSITION_HEADER_PATTERN = re.compile(r"【场景切换与首节拍转场】")
+SCENE_TRANSITION_BLOCK_END_PATTERN = re.compile(
+    r"(?=\[BEAT_START|"
+    r"\[SCENE_END|"
+    r"【对白拆句|"
+    r"^\s*-\s*Beat\s+\d+\b)",
+    re.IGNORECASE | re.MULTILINE,
+)
 BLOCK_MARKER_LINE_PATTERN = re.compile(
     r"^\s*`?\[(?:SCENES?_BLOCK_(?:START|END))\]`?\s*$",
     re.IGNORECASE | re.MULTILINE,
@@ -1413,6 +1421,20 @@ def extract_env_block_from_scene_text(scene_text: str) -> str:
     return "\n\n".join(blocks).strip()
 
 
+def extract_scene_transition_block_from_scene_text(scene_text: str) -> str:
+    """
+    Extract Stage 1【场景切换与首节拍转场】block (含服化道/换装摘要).
+    Required by Stage 2.1 costume-change → derived CHAR rules.
+    """
+    text = str(scene_text or "")
+    header_match = SCENE_TRANSITION_HEADER_PATTERN.search(text)
+    if not header_match:
+        return ""
+    end_match = SCENE_TRANSITION_BLOCK_END_PATTERN.search(text, header_match.end())
+    end = end_match.start() if end_match else len(text)
+    return text[header_match.start(): end].strip()
+
+
 def extract_scene_env_and_beats_body(
     scene_text: str,
     scene_id: str = "",
@@ -1420,7 +1442,7 @@ def extract_scene_env_and_beats_body(
     min_beats_chars: int = MIN_SCENE_BEATS_CHARS,
 ) -> Tuple[str, str]:
     """
-    Build Stage 2.1 per-scene payload: ENV_BLOCK + Beat blocks.
+    Build Stage 2.1 per-scene payload: ENV_BLOCK + transition (服化道) + Beat blocks.
     Returns `(body, source)` where source is `extracted` | `scene_fallback`.
     """
     source_text = _strip_block_level_markers_from_scene_text(scene_text).strip()
@@ -1429,6 +1451,7 @@ def extract_scene_env_and_beats_body(
         return "", "scene_fallback"
 
     env_block = extract_env_block_from_scene_text(source_text).strip()
+    transition_block = extract_scene_transition_block_from_scene_text(source_text).strip()
     beats_only = extract_beat_blocks_from_scene_text(source_text).strip()
     beats_chars = len(_strip_beat_boundary_markers(beats_only)) if beats_only else 0
     threshold = int(min_beats_chars or MIN_SCENE_BEATS_CHARS)
@@ -1436,6 +1459,8 @@ def extract_scene_env_and_beats_body(
     chunks: List[str] = []
     if env_block:
         chunks.append(env_block)
+    if transition_block:
+        chunks.append(transition_block)
     if beats_only and beats_chars >= threshold:
         chunks.append(beats_only)
 
@@ -1443,9 +1468,10 @@ def extract_scene_env_and_beats_body(
         return "\n\n".join(chunks).strip(), "extracted"
 
     logger.warning(
-        "[assets_extraction] env+beat extract fallback to full scene | scene_id=%s env=%s beats_chars=%s",
+        "[assets_extraction] env+beat extract fallback to full scene | scene_id=%s env=%s transition=%s beats_chars=%s",
         sid,
         bool(env_block),
+        bool(transition_block),
         beats_chars,
     )
     return source_text, "scene_fallback"
@@ -1489,7 +1515,8 @@ def extract_entity_profile_block_from_adapted(adapted_script: str) -> str:
 
 def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
     """
-    Rebuild Stage 2.1 script input: optional【角色设定】+ per-scene ENV_BLOCK + Beats
+    Rebuild Stage 2.1 script input: optional【角色设定】+ per-scene
+    ENV_BLOCK +【场景切换与首节拍转场】(服化道/换装) + Beats
     (replaces full Stage 1 adapted script with slim extraction).
     """
     script = str(adapted_script or "").strip()
@@ -1512,6 +1539,7 @@ def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
         parts.append(entity_profile)
     parts.append(SCENES_BLOCK_START_TOKEN)
     fallback_count = 0
+    transition_count = 0
     for unit in units:
         scene_id = str(getattr(unit, "scene_id", "") or "").strip()
         marker_start = str(getattr(unit, "marker_start_token", "") or "").strip()
@@ -1520,12 +1548,15 @@ def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
             marker_start = f"[SCENE_START:{scene_id}]"
         if not marker_end and scene_id:
             marker_end = f"[SCENE_END:{scene_id}]"
+        scene_text = getattr(unit, "scene_text", "") or ""
         body, source = extract_scene_env_and_beats_body(
-            getattr(unit, "scene_text", "") or "",
+            scene_text,
             scene_id,
         )
         if source == "scene_fallback":
             fallback_count += 1
+        if extract_scene_transition_block_from_scene_text(scene_text).strip():
+            transition_count += 1
         if marker_start:
             parts.append(marker_start)
         if body:
@@ -1535,9 +1566,11 @@ def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
     parts.append(SCENES_BLOCK_END_TOKEN)
     rebuilt = "\n".join(part for part in parts if str(part or "").strip()).strip()
     logger.info(
-        "[assets_extraction] rebuilt env+beat script | scenes=%s fallback_scenes=%s entity_profile=%s chars=%s→%s",
+        "[assets_extraction] rebuilt env+transition+beat script | scenes=%s fallback_scenes=%s "
+        "transition_scenes=%s entity_profile=%s chars=%s→%s",
         len(units),
         fallback_count,
+        transition_count,
         bool(entity_profile),
         len(script),
         len(rebuilt),
@@ -2579,6 +2612,7 @@ __all__ = [
     "extract_legacy_beat_sections_from_scene_text",
     "extract_env_block_from_scene_text",
     "extract_legacy_env_block_from_scene_text",
+    "extract_scene_transition_block_from_scene_text",
     "extract_scene_env_and_beats_body",
     "extract_entity_profile_block_from_adapted",
     "build_assets_extraction_script_from_adapted",

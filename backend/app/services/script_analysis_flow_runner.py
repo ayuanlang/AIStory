@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
 from typing import Any, Dict
 
@@ -11,7 +10,6 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.settings import get_script_analysis_flow_config
-from app.core.prompt_injection import unwrap_injection_section
 from app.models.all_models import Episode, User
 from app.schemas.agent import AnalyzeSceneRequest
 from app.services.endpoint_misc import _build_scene_analysis_blocking_failure_detail
@@ -19,13 +17,10 @@ from app.services.project_access import _require_project_access
 from app.services.scene_ai_shots_batch import _start_scene_ai_shots_batch_for_episode
 from app.services.scene_markdown_orchestration import (
     _extract_analysis_text_from_result,
-    _replace_adapted_script_in_beats_user_input,
 )
 from app.services.scene_markdown_runner import _run_scene_markdown_node_per_scene
 from app.services.script_analysis_flow import (
     STAGE_SCENE_MARKDOWN,
-    build_assets_extraction_script_from_adapted,
-    extract_adapted_script_from_beats_user_input,
     get_script_analysis_flow_registry,
     import_analyze_scene_stage_result,
     upsert_pipeline_node_status,
@@ -153,35 +148,7 @@ async def execute_scene_analysis_flow_node(
         logger.info("[剧本分析流程] 开始调用 evaluate_scene 执行节点 %s...", node_key)
         try:
             if node_key == "assets_extraction":
-                # Slim Stage 1 script to per-scene ENV_BLOCK + Beats before Subject Index LLM.
-                try:
-                    original_text = str(raw_payload.get("text") or "")
-                    adapted_for_assets = extract_adapted_script_from_beats_user_input(original_text)
-                    if not adapted_for_assets.strip():
-                        wrapped = unwrap_injection_section(original_text, "优化后剧本")
-                        if wrapped:
-                            adapted_for_assets = re.sub(
-                                r"^\[[^\]]+\]\s*\n?",
-                                "",
-                                str(wrapped),
-                            ).strip()
-                    if adapted_for_assets.strip():
-                        slim_script = build_assets_extraction_script_from_adapted(adapted_for_assets)
-                        if slim_script.strip() and slim_script.strip() != adapted_for_assets.strip():
-                            raw_payload["text"] = _replace_adapted_script_in_beats_user_input(
-                                original_text,
-                                slim_script,
-                            )
-                            logger.info(
-                                "[剧本分析流程] assets_extraction 已替换为角色设定+逐场环境+Beat 输入 | chars=%s→%s",
-                                len(adapted_for_assets),
-                                len(slim_script),
-                            )
-                except Exception as slim_exc:
-                    logger.warning(
-                        "[剧本分析流程] assets_extraction env+beat slim failed; using original text | err=%s",
-                        slim_exc,
-                    )
+                # Pass Stage 1 optimized script as-is (no ENV/Beat slim cut).
                 max_attempts = 2
                 result = None
                 assets_cover_poster_missing_after_retries = False

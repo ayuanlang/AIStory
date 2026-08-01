@@ -1079,127 +1079,6 @@ const assertSceneBeatsMinLength = (sceneText, sceneId = '') => (
     resolveSceneBeatsBodyForStage22(sceneText, sceneId).bodyText
 );
 
-/** Legacy 【主环境】…【未落环境实体清单】…【衍生环境】 when ENV_BLOCK markers are absent. */
-const extractLegacyEnvBlockFromSceneText = (sceneText) => {
-    const text = String(sceneText || '');
-    const mainIdx = text.search(/【主环境】/);
-    if (mainIdx < 0) return '';
-    const endRe = /\[BEAT_START|\[SCENE_END|【Scene实体覆盖】|【观察视角与空间建置】|【场景切换|【对白拆句/i;
-    const rest = text.slice(mainIdx);
-    const endMatch = endRe.exec(rest);
-    const body = (endMatch ? rest.slice(0, endMatch.index) : rest).trim();
-    if (!body) return '';
-    return `[ENV_BLOCK_START]\n${body}\n[ENV_BLOCK_END]`;
-};
-
-/** Extract `[ENV_BLOCK_START]…[ENV_BLOCK_END]` (主环境+未落环境实体清单+衍生环境). */
-const extractEnvBlockFromSceneText = (sceneText) => {
-    const text = String(sceneText || '');
-    if (!text.trim()) return '';
-    const startRe = /`?\[ENV_BLOCK_START(?::([^\s\]]+))?\]`?/gi;
-    const starts = [];
-    let match;
-    while ((match = startRe.exec(text)) !== null) {
-        starts.push({ index: match.index, endPos: match.index + match[0].length });
-    }
-    if (!starts.length) {
-        return extractLegacyEnvBlockFromSceneText(text);
-    }
-    const endRe = /`?\[ENV_BLOCK_END(?::([^\s\]]+))?\]`?/gi;
-    return starts.map((startItem, idx) => {
-        const nextStart = idx + 1 < starts.length ? starts[idx + 1].index : text.length;
-        endRe.lastIndex = startItem.endPos;
-        const endMatch = endRe.exec(text);
-        let block;
-        if (endMatch && endMatch.index <= nextStart) {
-            block = text.slice(startItem.index, endMatch.index + endMatch[0].length).trim();
-        } else {
-            block = text.slice(startItem.index, nextStart).replace(/\s+$/, '');
-            if (block && !/`?\[ENV_BLOCK_END(?::[^\]]+)?\]`?/i.test(block)) {
-                block = `${block}\n[ENV_BLOCK_END]`;
-            }
-        }
-        return String(block || '').trim();
-    }).filter(Boolean).join('\n\n').trim();
-};
-
-/**
- * Stage 2.1: extract 【场景切换与首节拍转场】 (含服化道核销摘要) for CHAR/PROP/ENV cues.
- * Stops before 对白拆句 / Beat markers so dialogue-split planning is not injected.
- */
-const extractSceneTransitionBlockFromSceneText = (sceneText) => {
-    const text = String(sceneText || '');
-    const startMatch = /【场景切换与首节拍转场】/.exec(text);
-    if (!startMatch) {
-        // Fallback: keep a bare 服化道核销摘要 line/paragraph if present without the parent header.
-        const summaryMatch = /服化道核销摘要[：:][\s\S]*?(?=\n\s*【|\n\s*\[BEAT_START|\n\s*-\s*Beat\s+\d+\b|$)/i.exec(text);
-        return summaryMatch ? String(summaryMatch[0] || '').trim() : '';
-    }
-    const from = startMatch.index;
-    const rest = text.slice(from);
-    const endRe = /(?:\n\s*【对白拆句|\n\s*\[BEAT_START|\n\s*-\s*Beat\s+\d+\b|\n\s*\[SCENE_END)/i;
-    const endMatch = endRe.exec(rest);
-    const block = (endMatch ? rest.slice(0, endMatch.index) : rest).trim();
-    return block;
-};
-
-/** Per-scene Stage 2.1 body: ENV_BLOCK + 场景切换/服化道核销摘要 + Beats (fallback to full scene). */
-const extractSceneEnvAndBeatsBody = (sceneText, sceneId = '') => {
-    const source = stripBlockLevelMarkersFromSceneText(sceneText).trim();
-    if (!source) return { bodyText: '', source: 'scene_fallback' };
-    const envBlock = extractEnvBlockFromSceneText(source).trim();
-    const transitionBlock = extractSceneTransitionBlockFromSceneText(source).trim();
-    const beatsOnly = extractBeatBlocksFromSceneText(source).trim();
-    const beatsChars = stripBeatBoundaryMarkers(beatsOnly).length;
-    const chunks = [];
-    if (envBlock) chunks.push(envBlock);
-    if (transitionBlock) chunks.push(transitionBlock);
-    if (beatsOnly && beatsChars >= MIN_SCENE_BEATS_CHARS) chunks.push(beatsOnly);
-    if (chunks.length) {
-        return { bodyText: chunks.join('\n\n').trim(), source: 'extracted' };
-    }
-    return { bodyText: source, source: 'scene_fallback', sceneId };
-};
-
-/**
- * Rebuild Stage 2.1 script: optional【角色设定】+ per-scene ENV_BLOCK + 场景切换/服化道 + Beats
- * (replaces full Stage 1 adapted script).
- */
-const buildAssetsExtractionScriptFromAdapted = (adaptedScript) => {
-    const script = String(adaptedScript || '').trim();
-    if (!script) return '';
-    const entityProfile = extractEntityProfileBlockFromAdapted(script);
-    let units = [];
-    try {
-        units = parseSceneUnitsFromScriptMarkersText(script);
-    } catch (_) {
-        return script;
-    }
-    if (!units.length) return script;
-    const parts = [];
-    if (entityProfile) parts.push(entityProfile);
-    parts.push(SCENES_BLOCK_START_TOKEN);
-    let fallbackCount = 0;
-    units.forEach((unit) => {
-        const sceneId = String(unit?.sceneId || '').trim();
-        let markerStart = String(unit?.markerStartToken || '').trim();
-        let markerEnd = String(unit?.markerEndToken || '').trim();
-        if (!markerStart && sceneId) markerStart = `[SCENE_START:${sceneId}]`;
-        if (!markerEnd && sceneId) markerEnd = `[SCENE_END:${sceneId}]`;
-        const resolved = extractSceneEnvAndBeatsBody(unit?.sceneText || '', sceneId);
-        if (resolved.source === 'scene_fallback') fallbackCount += 1;
-        if (markerStart) parts.push(markerStart);
-        if (resolved.bodyText) parts.push(resolved.bodyText);
-        if (markerEnd) parts.push(markerEnd);
-    });
-    parts.push(SCENES_BLOCK_END_TOKEN);
-    const rebuilt = parts.filter((p) => String(p || '').trim()).join('\n').trim();
-    if (fallbackCount > 0) {
-        // Caller may log; keep helper free of UI deps.
-    }
-    return rebuilt || script;
-};
-
 const createSceneOrchestrationProgressPoller = ({
     getSnapshot,
     episodeId,
@@ -3482,11 +3361,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const buildStage2UserInputFromStage1 = useCallback((stage1Text, reuseSubjectAssets = []) => {
         const adaptedScriptText = extractStage1AdaptedScriptBody(stage1Text);
-        // Stage 2.1: optional【角色设定】+ ENV_BLOCK + 场景切换/服化道核销摘要 + Beats.
-        const slimScriptText = buildAssetsExtractionScriptFromAdapted(adaptedScriptText) || adaptedScriptText;
+        // Stage 2.1: pass Stage 1 optimized script as-is (no ENV/Beat slim cut).
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2InputParts = [
-            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为（可选）角色设定块（`[ENTITY_PROFILE_START]`…`[ENTITY_PROFILE_END]`）+ 逐场提取的环境块（`[ENV_BLOCK_START]`…`[ENV_BLOCK_END]`，含【主环境】+【未落环境实体清单】+【衍生环境】）+【场景切换与首节拍转场】（须识别其中**服化道核销摘要**：环境细节｜服饰/换装｜道具细节）与 Beat 块（`[BEAT_START]`…`[BEAT_END]`），据此提取实体并建立 Subject Index；**服饰/换装项命中换装或第二套可区分装束时，须强制拆多条 CHAR 供下游角色设计**；角色设定块中已摘录的外形/性情/特定动作须写入对应 `entity_attributes`；【未落环境实体清单】供 PROP/建置核销线索，禁止据此另建 ENV 行；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
+            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为 Stage 1 **完整优化后剧本原样**（含角色设定、环境块、【场景切换与首节拍转场】服化道核销摘要、覆盖/速查与 Beat 等，**不做裁切**）；据此提取实体并建立 Subject Index；**服饰/换装项命中换装或第二套可区分装束时，须强制拆多条 CHAR 供下游角色设计**；角色设定块中已摘录的外形/性情/特定动作须写入对应 `entity_attributes`；【未落环境实体清单】供 PROP/建置核销线索，禁止据此另建 ENV 行；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -3520,12 +3398,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Keep SCENES_BLOCK as the last section so nothing appears after [SCENES_BLOCK_END].
         stage2InputParts.push(wrapInjectionSection(
             '优化后剧本',
-            `[优化后剧本 - Stage 2.1权威输入（角色设定+逐场环境块+场景切换/服化道核销摘要+Beat）]\n${slimScriptText || ''}`
+            `[优化后剧本 - Stage 2.1权威输入（Stage 1完整成稿，未裁切）]\n${adaptedScriptText || ''}`
         ));
 
         return {
             adaptedScriptText,
-            slimScriptText,
             userInput: stage2InputParts.filter(part => String(part || '').trim()).join('\n\n'),
         };
     }, [extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, project?.global_info]);
@@ -10292,9 +10169,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const resolveScriptOptBeatsContent = useCallback(() => {
-        // Editor/import should show the full Stage 1 adapted script per scene
-        // (场景头、主环境/未落环境实体清单/衍生环境、观察视角与空间建置、Beats 等)，not the Stage 2.1
-        // slim ENV+Beats extraction used only as assets_extraction LLM input.
+        // Editor/import shows the full Stage 1 adapted script per scene
+        // (场景头、主环境/未落环境实体清单/衍生环境、观察视角与空间建置、Beats 等)。
         const adapted = String(
             currentStageOutputs?.stages?.stage1?.outputs?.adapted_script?.content
             || adaptationText
@@ -17588,7 +17464,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 stage1PhaseRawText = String(analyzedText || '').trim();
                 const {
                     adaptedScriptText,
-                    slimScriptText,
                     userInput: stage2UserInput,
                 } = buildStage2UserInputFromStage1(analyzedText || '', selectedReuseSubjectAssets);
                 if (!String(adaptedScriptText || '').trim()) {
@@ -17596,12 +17471,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
 
                 setAdaptationText(adaptedScriptText);
-                if (onLog && slimScriptText && slimScriptText !== adaptedScriptText) {
-                    onLog(
-                        `Stage 2.1 输入已瘦身为角色设定+逐场环境块+Beat：${adaptedScriptText.length}→${slimScriptText.length} 字`,
-                        'info'
-                    );
-                }
 
                 // Guard against upstream AI model providers returning backend JSON error strings instead of markdown text.
                 let isUpstreamError = false;
@@ -18464,7 +18333,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const {
             adaptedScriptText,
-            slimScriptText,
             userInput: stage2UserInput,
         } = buildStage2UserInputFromStage1(stage1SourceText, selectedReuseSubjectAssets);
         if (!String(adaptedScriptText || '').trim()) {
@@ -18496,12 +18364,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             endSceneOrchestrationPanelTracking();
             resetStoryboardKickoffTracking();
             setAdaptationText(adaptedScriptText);
-            if (onLog && slimScriptText && slimScriptText !== adaptedScriptText) {
-                onLog(
-                    `Stage 2.1 输入已瘦身为角色设定+逐场环境块+Beat：${adaptedScriptText.length}→${slimScriptText.length} 字`,
-                    'info'
-                );
-            }
 
             await purgeEpisodeWorkspaceScenes('restart-stage2-clear');
             if (typeof onUpdateEpisodeInfo === 'function') {
