@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.all_models import Episode, User
+from app.services.db_session_utils import _release_db_connection
 from app.schemas.user_auth import (
     USER_ACTIVE_LEVEL_DEFAULT,
     resolve_user_batch_parallel_limit as _resolve_user_batch_parallel_limit,
@@ -499,6 +500,8 @@ async def _run_scene_markdown_node_per_scene(
                             )
                         except Exception:
                             task_db.rollback()
+                        # Do not hold a pool connection across retry backoff.
+                        _release_db_connection(task_db, "scene_markdown_retry_sleep")
                         await asyncio.sleep(SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC * attempt)
 
                 if last_exc is not None:
@@ -604,6 +607,8 @@ async def _run_scene_markdown_node_per_scene(
                 node_episode_id,
                 [unit.scene_id for _, unit in pending_units],
             )
+        # Outer request session must not stay checked out across parallel per-scene LLM work.
+        _release_db_connection(db, "scene_markdown_parallel_batch")
         round_outcomes = await _run_scene_batch(
             pending_units,
             batch_concurrency=batch_concurrency,

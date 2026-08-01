@@ -167,6 +167,31 @@ _pool_stats_lock = threading.Lock()
 _pool_checked_out = 0
 _pool_last_warn_at = 0.0
 
+
+def get_pool_checkout_stats() -> dict:
+    """Best-effort pool occupancy snapshot for ops / diagnostics."""
+    stats = {
+        "checked_out_estimate": _pool_checked_out,
+        "pool_size": _effective_pool_size,
+        "max_overflow": _effective_max_overflow,
+        "capacity": DB_POOL_CAPACITY_EFFECTIVE,
+        "pool_status": None,
+    }
+    if is_sqlite:
+        return stats
+    try:
+        stats["pool_status"] = engine.pool.status()
+        checkedout = getattr(engine.pool, "checkedout", None)
+        if callable(checkedout):
+            stats["pool_checkedout"] = int(checkedout())
+        overflow = getattr(engine.pool, "overflow", None)
+        if callable(overflow):
+            stats["pool_overflow"] = int(overflow())
+    except Exception as exc:
+        stats["pool_status_error"] = str(exc)
+    return stats
+
+
 # Enable WAL mode for SQLite to allow concurrent read/write access.
 # Without WAL, a long-lived read transaction (e.g. streaming SSE) holds a
 # SHARED lock that blocks ALL write operations from other connections.
@@ -200,12 +225,20 @@ def _on_pool_checkout(dbapi_con, con_record, con_proxy):
     high_watermark = _effective_pool_size + _effective_max_overflow - 2
     if high_watermark > 0 and checked_out >= high_watermark and now - _pool_last_warn_at >= 10:
         _pool_last_warn_at = now
+        pool_status = None
+        try:
+            pool_status = engine.pool.status()
+        except Exception:
+            pool_status = None
         _logger.warning(
-            "DB pool near capacity | checked_out=%s threshold=%s size=%s overflow=%s",
+            "DB pool near capacity | checked_out=%s threshold=%s size=%s overflow=%s capacity=%s pool_status=%s "
+            "| tip=hold sessions only for SQL; release before LLM/OSS/network waits",
             checked_out,
             high_watermark,
             _effective_pool_size,
             _effective_max_overflow,
+            DB_POOL_CAPACITY_EFFECTIVE,
+            pool_status,
         )
 
 

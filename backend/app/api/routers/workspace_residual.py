@@ -29,6 +29,7 @@ from app.services.soft_delete import (
     _active_shot_clause,
 )
 from app.services.task_manager import submit_async_endpoint as _submit_async
+from app.services.db_session_utils import _release_db_connection
 
 # Project ACL helper (canonical in workspace.shared).
 from app.api.routers.workspace.shared import _require_project_access  # noqa: E402
@@ -145,6 +146,7 @@ async def split_script(
     import json
     import re
 
+    _release_db_connection(db, "split_script_llm_call")
     try:
         resp = await agent_service.call_llm_agent(
             messages=[
@@ -182,6 +184,10 @@ async def split_script(
     except Exception as e:
         logger.error(f"Failed to parse script split JSON: {e}")
         raise HTTPException(status_code=500, detail="Failed to parse LLM response")
+
+    episode = db.query(Episode).filter(Episode.id == episode_id, Episode.project_id == project_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
 
     if episodes_data:
         episode.script_content = episodes_data[0].get("content", "")

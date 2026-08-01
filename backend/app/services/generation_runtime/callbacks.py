@@ -38,6 +38,7 @@ from app.services.generation_runtime.asset_registration import (  # noqa: F401
     _register_asset_helper,
 )
 from app.services.asset_meta_utils import _asset_optional_int  # noqa: F401
+from app.services.db_session_utils import _snapshot_user_principal
 
 logger = logging.getLogger("api_logger")
 
@@ -954,49 +955,55 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
     if user_id <= 0:
         return result
 
+    req_context: Dict[str, Any] = {}
+    for key in (
+        "prompt",
+        "negative_prompt",
+        "provider",
+        "model",
+        "aspect_ratio",
+        "image_size",
+        "width",
+        "height",
+        "quality",
+        "output_format",
+        "background",
+        "project_id",
+        "episode_id",
+        "scene_id",
+        "shot_id",
+        "shot_number",
+        "shot_name",
+        "entity_id",
+        "entity_name",
+        "subject_name",
+        "subject_type",
+        "entity_type",
+        "asset_type",
+        "seed",
+        "mode",
+    ):
+        value = job.get(key)
+        if value not in (None, ""):
+            req_context[key] = value
+
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
+    user_snapshot = None
+    filename_base = ""
+
+    # Short DB checkout for lookup only — never hold a pool connection across
+    # remote download / OSS upload (common cause of QueuePool timeouts).
     db = SessionLocal()
     try:
         current_user = db.query(User).filter(User.id == user_id).first()
         if not current_user:
             return result
-
-        req_context: Dict[str, Any] = {}
-        for key in (
-            "prompt",
-            "negative_prompt",
-            "provider",
-            "model",
-            "aspect_ratio",
-            "image_size",
-            "width",
-            "height",
-            "quality",
-            "output_format",
-            "background",
-            "project_id",
-            "episode_id",
-            "scene_id",
-            "shot_id",
-            "shot_number",
-            "shot_name",
-            "entity_id",
-            "entity_name",
-            "subject_name",
-            "subject_type",
-            "entity_type",
-            "asset_type",
-            "seed",
-            "mode",
-        ):
-            value = job.get(key)
-            if value not in (None, ""):
-                req_context[key] = value
-
-        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
+        user_snapshot = _snapshot_user_principal(current_user)
+        filename_base = _build_persist_filename_base_from_context(req_context, db)
         logger.info(
             "[ImageJobPersist] start | job_id=%s user_id=%s entity_id=%s entity_name=%s shot_id=%s raw_url=%s temp_filename=%s metadata_keys=%s",
             job_id,
-            getattr(current_user, "id", None),
+            user_id,
             req_context.get("entity_id"),
             req_context.get("entity_name") or req_context.get("subject_name"),
             req_context.get("shot_id"),
@@ -1004,11 +1011,20 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
             raw_temp_filename,
             sorted(list(metadata.keys())) if isinstance(metadata, dict) else [],
         )
-        normalized_url, normalized_meta = _persist_data_uri_image_result(current_user, raw_url, metadata)
+    except Exception as exc:
+        logger.warning("[ImageJob] callback persistence setup failed | job_id=%s error=%s", job_id, exc)
+        return result
+    finally:
+        db.close()
+
+    if user_snapshot is None:
+        return result
+
+    try:
+        normalized_url, normalized_meta = _persist_data_uri_image_result(user_snapshot, raw_url, metadata)
         if str(normalized_url or "").strip().lower().startswith(("http://", "https://")):
-            filename_base = _build_persist_filename_base_from_context(req_context, db)
             normalized_url, normalized_meta, oss_uploaded = _persist_remote_media_result(
-                current_user,
+                user_snapshot,
                 normalized_url,
                 normalized_meta,
                 filename_base=filename_base,
@@ -1018,7 +1034,7 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
         logger.info(
             "[ImageJobPersist] normalized | job_id=%s user_id=%s entity_id=%s shot_id=%s normalized_url=%s oss=%s",
             job_id,
-            getattr(current_user, "id", None),
+            user_id,
             req_context.get("entity_id"),
             req_context.get("shot_id"),
             normalized_url,
@@ -1044,8 +1060,17 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
             finalized_result["url"] = display_url
         if normalized_meta is not None:
             finalized_result["metadata"] = normalized_meta
+    except Exception as exc:
+        logger.warning("[ImageJob] callback persistence normalize failed | job_id=%s error=%s", job_id, exc)
+        return result
 
-        request_mode = str(req_context.get("mode") or "").strip().lower()
+    request_mode = str(req_context.get("mode") or "").strip().lower()
+    db = SessionLocal()
+    try:
+        current_user = db.query(User).filter(User.id == user_id).first()
+        if not current_user:
+            return finalized_result
+
         if bind_url:
             bind_oss_flag = bool(oss_uploaded and not ephemeral_binding)
             _register_asset_helper(db, current_user.id, bind_url, req_context, normalized_meta)
@@ -1070,7 +1095,7 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
                 logger.warning(
                     "[ImageJob] skipped asset registration/bind because no durable or fallback url | job_id=%s user_id=%s url=%s temp_filename=%s entity_id=%s shot_id=%s",
                     job_id,
-                    getattr(current_user, "id", None),
+                    user_id,
                     normalized_url,
                     _extract_media_filename_from_url(normalized_url),
                     req_context.get("entity_id"),
@@ -1079,8 +1104,8 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
 
         return finalized_result
     except Exception as exc:
-        logger.warning("[ImageJob] callback persistence finalize failed | job_id=%s error=%s", job_id, exc)
-        return result
+        logger.warning("[ImageJob] callback persistence bind failed | job_id=%s error=%s", job_id, exc)
+        return finalized_result
     finally:
         db.close()
 
@@ -1800,8 +1825,13 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
     if not raw_url:
         return result
 
-    from app.db.session import SessionLocal
+    user_snapshot = None
+    user_id = 0
+    req_context: Dict[str, Any] = {}
+    filename_base = ""
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
 
+    # Short DB checkout for lookup only — release before remote download / OSS upload.
     db = SessionLocal()
     try:
         current_user = _resolve_job_owner_user(db, job)
@@ -1814,38 +1844,52 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
             )
             return result
 
+        user_snapshot = _snapshot_user_principal(current_user)
+        try:
+            user_id = int(getattr(user_snapshot, "id", 0) or 0)
+        except Exception:
+            user_id = 0
+
         req_context = _build_generation_job_req_context(job, db)
         if not str(req_context.get("asset_type") or "").strip():
             req_context["asset_type"] = "video"
 
-        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
         metadata = _enrich_media_metadata_from_generation_context(metadata, job)
         metadata = _enrich_media_metadata_from_generation_context(metadata, req_context)
         for dim_key in ("width", "height"):
             if result.get(dim_key) not in (None, "") and metadata.get(dim_key) in (None, ""):
                 metadata[dim_key] = result.get(dim_key)
         metadata["job_id"] = job_id
+        filename_base = _build_persist_filename_base_from_context(req_context, db)
         logger.info(
             "[VideoJobPersist] start | job_id=%s user_id=%s shot_id=%s raw_url=%s metadata_keys=%s",
             job_id,
-            getattr(current_user, "id", None),
+            user_id or getattr(current_user, "id", None),
             req_context.get("shot_id"),
             raw_url,
             sorted(list(metadata.keys())) if isinstance(metadata, dict) else [],
         )
+    except Exception as exc:
+        logger.warning("[VideoJob] callback persistence setup failed | job_id=%s error=%s", job_id, exc)
+        return result
+    finally:
+        db.close()
 
-        filename_base = _build_persist_filename_base_from_context(req_context, db)
+    if user_snapshot is None or user_id <= 0:
+        return result
+
+    try:
         normalized_url, normalized_meta, oss_uploaded = _persist_remote_video_result(
-            current_user,
+            user_snapshot,
             raw_url,
             metadata,
             filename_base=filename_base,
-            db=db,
+            db=None,
         )
         logger.info(
             "[VideoJobPersist] normalized | job_id=%s user_id=%s shot_id=%s normalized_url=%s oss=%s",
             job_id,
-            getattr(current_user, "id", None),
+            user_id,
             req_context.get("shot_id"),
             normalized_url,
             oss_uploaded,
@@ -1857,6 +1901,21 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         normalized_meta = _enrich_media_metadata_from_generation_context(normalized_meta, metadata)
         normalized_meta = _enrich_media_metadata_from_generation_context(normalized_meta, job)
         normalized_meta = _enrich_media_metadata_from_generation_context(normalized_meta, req_context)
+    except Exception as exc:
+        logger.warning("[VideoJob] callback persistence normalize failed | job_id=%s error=%s", job_id, exc)
+        return result
+
+    db = SessionLocal()
+    try:
+        current_user = db.query(User).filter(User.id == user_id).first()
+        if not current_user:
+            # Network persist already finished; return normalized payload even if owner vanished.
+            fallback = dict(result)
+            if normalized_url:
+                fallback["url"] = normalized_url
+            if normalized_meta is not None:
+                fallback["metadata"] = normalized_meta
+            return fallback
 
         bind_url, ephemeral_binding, normalized_meta = _resolve_video_bind_url(
             raw_url=raw_url,
@@ -1945,7 +2004,7 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
 
         return finalized_result
     except Exception as exc:
-        logger.warning("[VideoJob] callback persistence finalize failed | job_id=%s error=%s", job_id, exc)
+        logger.warning("[VideoJob] callback persistence bind failed | job_id=%s error=%s", job_id, exc)
         return result
     finally:
         db.close()

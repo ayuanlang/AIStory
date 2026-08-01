@@ -13,6 +13,7 @@ from app.core.time_utils import now_bj_iso
 from app.db.session import SessionLocal
 from app.models.all_models import User
 from app.services.billing_service import billing_service
+from app.services.db_session_utils import _release_db_connection
 from app.services.model_invocation_billing import (  # noqa: F401
     _extract_provider_usage_from_metadata,
     _resolve_usage_token_total,
@@ -708,19 +709,22 @@ async def _settle_or_cancel_video_job_billing_from_callback(
                     or pre_api_cfg.get("base_url")
                     or pre_api_cfg.get("endpoint")
                 )
+                resolved_provider = str(runtime.get("resolved_provider") or provider or "")
+                resolved_model = str(runtime.get("resolved_model") or model or "")
+                _release_db_connection(db, "video_job_billing_usage_query")
                 fetched = await asyncio.to_thread(
                     media_service.fetch_provider_task_usage,
                     task_id=str(provider_task_id),
                     api_key=str(api_key or ""),
                     query_endpoint=str(query_endpoint or "") or None,
-                    provider=str(runtime.get("resolved_provider") or provider or ""),
+                    provider=resolved_provider,
                     refresh_if_missing=True,
                 )
                 if isinstance(fetched, dict) and fetched:
                     usage = {k: v for k, v in fetched.items() if k != "raw_task"}
                     usage_source = "task_query"
-                    provider = str(runtime.get("resolved_provider") or provider or "").strip() or provider
-                    model = str(runtime.get("resolved_model") or model or "").strip() or model
+                    provider = resolved_provider.strip() or provider
+                    model = resolved_model.strip() or model
             except Exception as usage_err:
                 logger.warning(
                     "[VideoJob] callback task usage query failed | job_id=%s task_id=%s error=%s",

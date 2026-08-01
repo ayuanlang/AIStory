@@ -14,7 +14,7 @@ from app.db.session import SessionLocal
 from app.models.all_models import Episode, Scene, Shot, User
 from app.schemas.generation import VoiceGenerationRequest
 from app.services.billing_service import billing_service
-from app.services.db_session_utils import _release_db_connection
+from app.services.db_session_utils import _release_db_connection, _snapshot_user_principal
 from app.services.generation_runtime.api_capabilities import (
     _map_text_value_to_allowed,
     _read_api_capability_bool,
@@ -535,16 +535,29 @@ async def _run_generate_voice(
         if voice_url:
             if voice_url.startswith("http"):
                 async def _bg_upload_and_update_voice(user: User, req_obj: Any, raw_url: str, prompt_text: str, meta: Optional[dict] = None):
+                    uid = int(getattr(user, "id", 0) or 0)
+                    user_snapshot = None
+                    filename_base = ""
                     bg_db = SessionLocal()
                     try:
-                        bg_user = bg_db.query(User).filter(User.id == user.id).first()
-                        if not bg_user: return
+                        bg_user = bg_db.query(User).filter(User.id == uid).first()
+                        if not bg_user:
+                            return
+                        user_snapshot = _snapshot_user_principal(bg_user)
+                        filename_base = _build_generation_filename_base(req_obj, bg_db)
+                    finally:
+                        bg_db.close()
+
+                    if user_snapshot is None:
+                        return
+
+                    try:
                         norm_url, norm_meta, oss_uploaded = await asyncio.to_thread(
                             _persist_remote_media_result,
-                            bg_user,
+                            user_snapshot,
                             raw_url,
                             meta,
-                            filename_base=_build_generation_filename_base(req_obj, bg_db),
+                            filename_base=filename_base,
                         )
                         final_url = str(norm_url or raw_url).strip()
                         final_meta = dict(norm_meta if norm_meta is not None else (meta or {}))
@@ -556,6 +569,15 @@ async def _run_generate_voice(
                             normalized_url=final_url,
                             normalized_meta=final_meta,
                         )
+                    except Exception as e:
+                        logger.error(f"[_bg_upload_and_update_voice] persist failed for user={uid} url={raw_url}: {e}")
+                        return
+
+                    bg_db = SessionLocal()
+                    try:
+                        bg_user = bg_db.query(User).filter(User.id == uid).first()
+                        if not bg_user:
+                            return
                         if bind_url and req_obj.shot_id:
                             bg_shot = bg_db.query(Shot).filter(Shot.id == int(req_obj.shot_id)).first()
                             if bg_shot:
@@ -578,7 +600,7 @@ async def _run_generate_voice(
                         if bind_url:
                             await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, bind_url, req_obj, final_meta)
                     except Exception as e:
-                        logger.error(f"[_bg_upload_and_update_voice] failed for user={user.id} url={raw_url}: {e}")
+                        logger.error(f"[_bg_upload_and_update_voice] bind failed for user={uid} url={raw_url}: {e}")
                     finally:
                         bg_db.close()
                 asyncio.create_task(_bg_upload_and_update_voice(current_user, req, voice_url, effective_prompt, result.get("metadata")))

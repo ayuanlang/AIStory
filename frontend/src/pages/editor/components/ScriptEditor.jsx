@@ -7586,6 +7586,82 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         void flushPendingStoryboardKickoffsRef.current?.(reason || 'env-ready');
     }, [onLog, t]);
 
+    /** ENV design branch aborted: convert waiting/queued storyboard kickoffs to failed (do not leave them hanging). */
+    const failWaitingStoryboardKickoffsForEnvAbort = useCallback((reason = '') => {
+        environmentAssetDesignPendingRef.current = false;
+        environmentAssetReadyRef.current = true;
+        storyboardEnvEntityCacheRef.current = {
+            projectId: 0,
+            episodeId: 0,
+            at: 0,
+            entities: null,
+        };
+        const queued = Array.isArray(pendingStoryboardKickoffsRef.current)
+            ? pendingStoryboardKickoffsRef.current.splice(0)
+            : [];
+        const errMsg = t(
+            '环境与海报资产设计未成功完成，分镜生成已终止等待。',
+            'Environment/poster asset design did not complete; storyboard wait aborted.'
+        );
+        const markers = new Map();
+        for (const item of queued) {
+            const marker = String(item?.markerSceneId || '').trim();
+            if (!marker) continue;
+            markers.set(marker, {
+                sceneOrder: item?.sceneOrder,
+                dbSceneId: Number(item?.dbSceneIdHint || 0) || undefined,
+            });
+        }
+        const items = storyboardTaskProgressRef.current?.items || {};
+        Object.entries(items).forEach(([marker, item]) => {
+            const stableMarker = String(marker || '').trim();
+            if (!stableMarker) return;
+            const status = String(item?.status || '').trim().toLowerCase();
+            const recoverable = status === 'waiting_env'
+                || (status === 'failed' && isStoryboardBlockedOnEnvDesignError(item?.error))
+                || status === ''
+                || status === 'pending';
+            if (!recoverable) return;
+            markers.set(stableMarker, {
+                sceneOrder: item?.sceneOrder,
+                dbSceneId: Number(item?.dbSceneId || 0) || undefined,
+            });
+        });
+        if (!markers.size) {
+            onLog?.(
+                t(
+                    `[分镜生成] 环境资产设计中止${reason ? `（${reason}）` : ''}，当前无等待中的分镜任务`,
+                    `[Storyboard] ENV asset design aborted${reason ? ` (${reason})` : ''}; no waiting storyboard tasks`
+                ),
+                'warning'
+            );
+            return;
+        }
+        markers.forEach((meta, stableMarker) => {
+            storyboardKickoffByMarkerRef.current.delete(stableMarker);
+            const failedProgress = updateStoryboardTaskItem(stableMarker, {
+                sceneOrder: meta?.sceneOrder,
+                status: 'failed',
+                error: errMsg,
+                dbSceneId: meta?.dbSceneId,
+            });
+            publishStoryboardTaskPanelStatus({
+                markerSceneId: stableMarker,
+                sceneOrder: meta?.sceneOrder,
+                status: 'failed',
+                errorMessage: errMsg,
+                progressSnapshot: failedProgress,
+            });
+        });
+        onLog?.(
+            t(
+                `[分镜生成] 环境资产设计中止${reason ? `（${reason}）` : ''}，已将 ${markers.size} 场等待中的分镜置为失败`,
+                `[Storyboard] ENV asset design aborted${reason ? ` (${reason})` : ''}; marked ${markers.size} waiting scene(s) failed`
+            ),
+            'warning'
+        );
+    }, [onLog, publishStoryboardTaskPanelStatus, t, updateStoryboardTaskItem]);
+
     const kickoffStoryboardForImportedScene = useCallback(async ({
         markerSceneId,
         sceneOrder,
@@ -7703,8 +7779,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         // Per-scene ENV design: every linked ENV must exist in the library with generation_prompt_cn.
-        // Pipeline (non-force): park as waiting_env so a later ENV import/retry can resume —
-        // do not hard-fail permanently (ENV may still be importing or mid-retry).
+        // Pipeline (non-force): always park as waiting_env — never surface as "分镜生成失败".
+        // Global ENV gate may already be open while this scene's linked ENVs are still importing
+        // or mid-retry; stranded flush resumes when they appear.
         // Manual force rerun: hard-fail so the user sees a clear block reason.
         const sceneEnvGate = await checkSceneLinkedEnvironmentDesignReady({
             markerSceneId: stableMarker,
@@ -7719,8 +7796,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 `本场关联环境 ENV 尚未完成资产设计：${missingLabel}`,
                 `Scene-linked ENV asset design incomplete: ${missingLabel}`
             );
-            if (!force && sceneEnvGate.reason !== 'scene_not_found' && environmentAssetDesignPendingRef.current) {
-                // First deferral: queue for the next env-ready flush.
+            if (!force && sceneEnvGate.reason !== 'scene_not_found') {
+                // First deferral: queue for the next env-ready / stranded flush.
                 // Resume path: do not re-enqueue (avoids tight retry loops while ENV is still missing);
                 // release claim so a later stranded flush / ENV retry can pick this marker up.
                 if (!resumeQueued) {
@@ -7763,7 +7840,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         `[分镜生成] ${stableMarker} 已暂缓：${errMsg}（环境补齐后将自动恢复）`,
                         `[Storyboard] ${stableMarker} deferred: ${errMsg} (will resume when ENV is ready)`
                     ),
-                    'warning'
+                    'info'
                 );
                 // First park keeps claim so residual ensure skips; resume park releases above.
                 return false;
@@ -8377,7 +8454,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const unresolved = isStoryboardProgressUnresolved(progress)
                 || promiseCount > 0
                 || queued > 0
-                || (environmentAssetDesignPendingRef.current && strandedWaitingEnvCount() > 0);
+                // Keep polling while any scene is parked on waiting_env — even after the
+                // global ENV gate opens (per-scene prompts may still be importing).
+                || strandedWaitingEnvCount() > 0;
             const withinGrace = autoStartEnabled
                 && hasExpectedImportedScenes()
                 && Number(progress.started || 0) <= 0
@@ -8400,6 +8479,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             await new Promise((resolve) => setTimeout(resolve, pollMs));
         }
 
+        // Settle leftover waiting_env so the analysis panel cannot hang forever after the
+        // wait window. Pipeline kickoffs already deferred (not failed) while ENV was incomplete.
+        const leftoverItems = storyboardTaskProgressRef.current?.items || {};
+        Object.entries(leftoverItems).forEach(([marker, item]) => {
+            const stableMarker = String(marker || '').trim();
+            if (!stableMarker) return;
+            if (String(item?.status || '').trim().toLowerCase() !== 'waiting_env') return;
+            storyboardKickoffByMarkerRef.current.delete(stableMarker);
+            const errMsg = String(item?.error || '').trim()
+                || t(
+                    '等待环境资产超时，分镜未启动',
+                    'Timed out waiting for ENV assets; storyboard not started'
+                );
+            const failedProgress = updateStoryboardTaskItem(stableMarker, {
+                sceneOrder: item?.sceneOrder,
+                status: 'failed',
+                error: errMsg,
+                dbSceneId: Number(item?.dbSceneId || 0) || undefined,
+            });
+            publishStoryboardTaskPanelStatus({
+                markerSceneId: stableMarker,
+                sceneOrder: item?.sceneOrder,
+                status: 'failed',
+                errorMessage: errMsg,
+                progressSnapshot: failedProgress,
+            });
+        });
+
         const finalProgress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
         onLog?.(
             t(
@@ -8412,7 +8519,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             started: Number(finalProgress.started || 0) > 0,
             progress: finalProgress,
         };
-    }, [ensureStoryboardTasksForImportedScenes, isStoryboardAutoStartEnabled, onLog, t]);
+    }, [
+        ensureStoryboardTasksForImportedScenes,
+        isStoryboardAutoStartEnabled,
+        onLog,
+        publishStoryboardTaskPanelStatus,
+        t,
+        updateStoryboardTaskItem,
+    ]);
 
     const buildStoryboardCompletionSuffix = useCallback((storyboardResult) => {
         if (!storyboardResult?.started) return '';
@@ -13298,7 +13412,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ),
                             'warning'
                         );
-                        markEnvironmentAssetDesignReady('env-subtask-failed');
+                        failWaitingStoryboardKickoffsForEnvAbort('env-subtask-failed');
                     }
 
                     return {
@@ -13346,6 +13460,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         project, extractPureSubjectIndexText, extractAnalysisSections, filterSubjectIndexTextForAssetTask,
         filterSubjectIndexExcludingExistingEntities, buildExistingEntityNameSet, fetchEntities,
         hasSubjectIndexStructure, hasPersistedEnvironmentAssetDesign, markEnvironmentAssetDesignReady,
+        failWaitingStoryboardKickoffsForEnvAbort,
         throwIfAnalysisStopped, registerActiveAnalysisTask, isTaskCanceledError, createAnalysisCanceledError,
         buildStage2_2UserInputFromStage1, clearAnalysisTaskMarker, finalizeAnalysisFlowHistoryForPhase,
         saveAnalysisTaskMarker, updateEpisodeAnalysisRun, resolveSelectedScriptAnalysisApiId,

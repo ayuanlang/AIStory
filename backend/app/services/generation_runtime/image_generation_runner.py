@@ -1069,19 +1069,36 @@ async def _run_generate_image(
                 if job_id:
                     _set_image_job(job_id, status="storing_asset")
                 async def _bg_upload_and_update(user: User, req_obj: Any, raw_url: str, meta: Optional[dict] = None):
+                    uid = int(getattr(user, "id", 0) or 0)
+                    user_snapshot = None
+                    filename_base = ""
                     bg_db = SessionLocal()
                     try:
-                        bg_user = bg_db.query(User).filter(User.id == user.id).first()
+                        bg_user = bg_db.query(User).filter(User.id == uid).first()
                         if not bg_user:
                             if job_id:
                                 _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
                             return
+                        user_snapshot = _snapshot_user_principal(bg_user)
+                        filename_base = _build_generation_filename_base(req_obj, bg_db)
+                    except Exception as e:
+                        logger.error(f"[_bg_upload_and_update] setup failed for user={uid} url={raw_url}: {e}")
+                        if job_id:
+                            _set_image_job(job_id, status="failed", error=str(e), finished_at=now_bj_iso())
+                        return
+                    finally:
+                        bg_db.close()
+
+                    if user_snapshot is None:
+                        return
+
+                    try:
                         norm_url, norm_meta, oss_uploaded = await asyncio.to_thread(
                             _persist_remote_media_result,
-                            bg_user,
+                            user_snapshot,
                             raw_url,
                             meta,
-                            filename_base=_build_generation_filename_base(req_obj, bg_db),
+                            filename_base=filename_base,
                         )
 
                         final_url = str(norm_url or raw_url).strip()
@@ -1094,6 +1111,19 @@ async def _run_generate_image(
                             normalized_url=final_url,
                             normalized_meta=final_meta,
                         )
+                    except Exception as e:
+                        logger.error(f"[_bg_upload_and_update] persist failed for user={uid} url={raw_url}: {e}")
+                        if job_id:
+                            _set_image_job(job_id, status="failed", error=str(e), finished_at=now_bj_iso())
+                        return
+
+                    bg_db = SessionLocal()
+                    try:
+                        bg_user = bg_db.query(User).filter(User.id == uid).first()
+                        if not bg_user:
+                            if job_id:
+                                _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
+                            return
                         if bind_url:
                             await asyncio.to_thread(
                                 _register_asset_helper,
@@ -1134,7 +1164,7 @@ async def _run_generate_image(
                         elif job_id:
                             _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
                     except Exception as e:
-                        logger.error(f"[_bg_upload_and_update] failed for user={user.id} url={raw_url}: {e}")
+                        logger.error(f"[_bg_upload_and_update] bind failed for user={uid} url={raw_url}: {e}")
                         if job_id:
                             _set_image_job(job_id, status="failed", error=str(e), finished_at=now_bj_iso())
                     finally:

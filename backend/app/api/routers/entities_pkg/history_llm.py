@@ -23,6 +23,9 @@ globals().update(
 )
 
 
+from app.services.db_session_utils import _release_db_connection  # noqa: E402
+
+
 # --- entity history/sync/llm ---
 @router.get("/entities/{entity_id}/history")
 def get_entity_history(entity_id: int, db: Session = Depends(get_db)):
@@ -258,6 +261,7 @@ async def api_generate_entity_from_text(
     )
 
     try:
+        _release_db_connection(db, "entities_llm_text_call")
         resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
         payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
         return _create_generated_entity_from_payload(
@@ -318,6 +322,7 @@ async def api_generate_entity_from_image(
     )
 
     try:
+        _release_db_connection(db, "entities_llm_image_call")
         resp = await llm_service.generate_content_with_fallback(
             user_prompt,
             system_prompt,
@@ -425,17 +430,35 @@ async def api_generate_entity_from_derive(
                 return text
         return str(fallback or "")
 
+    # Snapshot reference fields before releasing the request DB session for LLM.
+    source_en = str(base_entity.generation_prompt_en or "").strip()
+    source_cn = str(base_entity.generation_prompt_cn or "").strip()
+    source_description = str(base_entity.description or "").strip()
+    source_appearance_cn = str(base_entity.appearance_cn or "").strip()
+    source_clothing = str(base_entity.clothing or "").strip()
+    source_atmosphere = str(base_entity.atmosphere or "").strip()
+    source_narrative = str(base_entity.narrative_description or "").strip()
+    source_gender = str(base_entity.gender or "").strip()
+    source_role = str(base_entity.role or "").strip()
+    source_archetype = str(base_entity.archetype or "").strip()
+    source_action = str(base_entity.action_characteristics or "").strip()
+    source_visual_params = str(base_entity.visual_params or "").strip()
+    source_anchor = str(base_entity.anchor_description or "").strip()
+    source_name = str(base_entity.name or "").strip()
+    source_name_en = str(base_entity.name_en or "").strip()
+    source_base_name_en = str(base_entity.base_name_en or "").strip()
+    source_entity_id = int(base_entity.id)
+
     try:
+        _release_db_connection(db, "entities_llm_derive_call")
         resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
         payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
         if not isinstance(payload, dict):
             payload = {}
 
-        candidate_prompt_en = _pick_text(payload.get("generation_prompt_en"), base_entity.generation_prompt_en)
-        candidate_prompt_cn = _pick_text(payload.get("generation_prompt_cn"), base_entity.generation_prompt_cn)
+        candidate_prompt_en = _pick_text(payload.get("generation_prompt_en"), source_en)
+        candidate_prompt_cn = _pick_text(payload.get("generation_prompt_cn"), source_cn)
 
-        source_en = str(base_entity.generation_prompt_en or "").strip()
-        source_cn = str(base_entity.generation_prompt_cn or "").strip()
         if source_en or source_cn:
             en_ok, en_reason = _validate_prompt_structure(source_en, candidate_prompt_en) if source_en else (True, "ok")
             cn_ok, cn_reason = _validate_prompt_structure(source_cn, candidate_prompt_cn) if source_cn else (True, "ok")
@@ -464,36 +487,36 @@ async def api_generate_entity_from_derive(
         payload["type"] = base_type
         payload["generation_prompt_en"] = candidate_prompt_en
         payload["generation_prompt_cn"] = candidate_prompt_cn
-        payload["description"] = _pick_text(payload.get("description"), base_entity.description)
-        payload["appearance_cn"] = _pick_text(payload.get("appearance_cn"), base_entity.appearance_cn)
-        payload["clothing"] = _pick_text(payload.get("clothing"), base_entity.clothing)
-        payload["atmosphere"] = _pick_text(payload.get("atmosphere"), base_entity.atmosphere)
+        payload["description"] = _pick_text(payload.get("description"), source_description)
+        payload["appearance_cn"] = _pick_text(payload.get("appearance_cn"), source_appearance_cn)
+        payload["clothing"] = _pick_text(payload.get("clothing"), source_clothing)
+        payload["atmosphere"] = _pick_text(payload.get("atmosphere"), source_atmosphere)
         payload["narrative_description"] = _pick_text(
             payload.get("narrative_description"),
-            base_entity.narrative_description,
-            base_entity.description,
+            source_narrative,
+            source_description,
         )
-        payload["gender"] = _pick_text(payload.get("gender"), base_entity.gender)
-        payload["role"] = _pick_text(payload.get("role"), base_entity.role)
-        payload["archetype"] = _pick_text(payload.get("archetype"), base_entity.archetype)
+        payload["gender"] = _pick_text(payload.get("gender"), source_gender)
+        payload["role"] = _pick_text(payload.get("role"), source_role)
+        payload["archetype"] = _pick_text(payload.get("archetype"), source_archetype)
         payload["action_characteristics"] = _pick_text(
             payload.get("action_characteristics"),
-            base_entity.action_characteristics,
+            source_action,
         )
-        payload["visual_params"] = _pick_text(payload.get("visual_params"), base_entity.visual_params)
+        payload["visual_params"] = _pick_text(payload.get("visual_params"), source_visual_params)
         payload["anchor_description"] = _pick_text(
             payload.get("anchor_description"),
-            base_entity.anchor_description,
+            source_anchor,
         )
         if preferred_name:
             payload["name"] = preferred_name
         else:
-            payload["name"] = _pick_text(payload.get("name"), f"{base_entity.name}-变体")
-        payload["name_en"] = _pick_text(payload.get("name_en"), base_entity.name_en)
+            payload["name"] = _pick_text(payload.get("name"), f"{source_name}-变体")
+        payload["name_en"] = _pick_text(payload.get("name_en"), source_name_en)
         payload["base_name_en"] = _pick_text(
             payload.get("base_name_en"),
-            base_entity.base_name_en,
-            base_entity.name_en,
+            source_base_name_en,
+            source_name_en,
         )
 
         # Always treat the reference entity as a visual dependency of the derived entity.
@@ -506,10 +529,10 @@ async def api_generate_entity_from_derive(
         dependency_strategy = {
             "type": "derived_from_reference",
             "logic": (
-                f"Derived from reference entity `{base_dep_token}` (id={base_entity.id}). "
+                f"Derived from reference entity `{base_dep_token}` (id={source_entity_id}). "
                 f"Prompts are rewritten from the reference prompts according to: {derive_instruction}"
             ),
-            "reference_entity_id": int(base_entity.id),
+            "reference_entity_id": source_entity_id,
             "reference_entity_name": base_dep_token,
         }
 
@@ -517,7 +540,7 @@ async def api_generate_entity_from_derive(
             db,
             project_id,
             payload,
-            fallback_name=preferred_name or f"{base_entity.name}-变体",
+            fallback_name=preferred_name or f"{source_name}-变体",
             fallback_type=base_type,
             preferred_name=preferred_name or None,
             episode_id=resolved_episode_id,

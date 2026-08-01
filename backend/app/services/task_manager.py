@@ -30,7 +30,19 @@ _ASYNC_ENDPOINT_TASK_TIMEOUT_SECONDS = max(
     60,
     int(os.getenv("ASYNC_ENDPOINT_TASK_TIMEOUT_SECONDS", str(_RUNNING_TASK_MAX_AGE_SECONDS)) or _RUNNING_TASK_MAX_AGE_SECONDS),
 )
-_ASYNC_TASK_WORKER_THREADS = max(2, int(os.getenv("ASYNC_TASK_WORKER_THREADS", "8") or 8))
+def _resolve_async_task_worker_threads() -> int:
+    requested = max(2, int(os.getenv("ASYNC_TASK_WORKER_THREADS", "8") or 8))
+    try:
+        from app.db.session import DB_POOL_CAPACITY_EFFECTIVE
+
+        # Keep async LLM tasks from monopolizing the QueuePool under burst load.
+        pool_cap = max(4, int(DB_POOL_CAPACITY_EFFECTIVE or 0) // 4)
+    except Exception:
+        pool_cap = requested
+    return max(2, min(requested, pool_cap))
+
+
+_ASYNC_TASK_WORKER_THREADS = _resolve_async_task_worker_threads()
 
 # Global task store  {task_id: _TaskRecord}
 _tasks: Dict[str, "_TaskRecord"] = {}

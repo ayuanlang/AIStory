@@ -1627,6 +1627,7 @@ async def _run_generate_video(
                         uid: int,
                         jid: str,
                     ) -> None:
+                        user_snapshot = None
                         bg_db = SessionLocal()
                         try:
                             bg_user = bg_db.query(User).filter(User.id == uid).first()
@@ -1645,7 +1646,14 @@ async def _run_generate_video(
                                         error=None,
                                     )
                                 return
+                            user_snapshot = _snapshot_user_principal(bg_user)
+                        finally:
+                            bg_db.close()
 
+                        if user_snapshot is None:
+                            return
+
+                        try:
                             logger.info(
                                 "[GenerateVideo] bg OSS persist start | job_id=%s user_id=%s url=%s",
                                 jid or None,
@@ -1654,21 +1662,56 @@ async def _run_generate_video(
                             )
                             norm_url, norm_meta, oss_uploaded = await asyncio.to_thread(
                                 _persist_remote_video_result,
-                                bg_user,
+                                user_snapshot,
                                 raw_url,
                                 meta,
                                 filename_base=fname_base,
+                                db=None,
                             )
                             final_url = str(norm_url or raw_url).strip()
                             final_meta = dict(norm_meta if norm_meta is not None else (meta or {}))
                             if jid:
                                 final_meta["idempotency_key"] = jid
                             final_meta.pop("oss_persist_pending", None)
+                        except Exception:
+                            logger.exception(
+                                "[GenerateVideo] bg OSS persist failed | job_id=%s url=%s",
+                                jid or None,
+                                str(raw_url).split("?", 1)[0],
+                            )
+                            if jid:
+                                try:
+                                    _set_video_job(
+                                        jid,
+                                        status="succeeded",
+                                        finished_at=now_bj_iso(),
+                                        upstream_submit_state="completed",
+                                        error=None,
+                                    )
+                                except Exception:
+                                    pass
+                            return
+
+                        bg_db = SessionLocal()
+                        try:
+                            bg_user = bg_db.query(User).filter(User.id == uid).first()
+                            if not bg_user:
+                                if jid:
+                                    _set_video_job(
+                                        jid,
+                                        status="succeeded",
+                                        finished_at=now_bj_iso(),
+                                        upstream_submit_state="completed",
+                                        error=None,
+                                    )
+                                return
 
                             bind_url, ephemeral_binding, final_meta = _resolve_video_bind_url(
                                 raw_url=raw_url,
                                 normalized_url=final_url,
                                 normalized_meta=final_meta,
+                                oss_uploaded=bool(oss_uploaded),
+                                db=bg_db,
                             )
                             if bind_url:
                                 await asyncio.to_thread(
@@ -1715,7 +1758,7 @@ async def _run_generate_video(
                                 )
                         except Exception:
                             logger.exception(
-                                "[GenerateVideo] bg OSS persist failed | job_id=%s url=%s",
+                                "[GenerateVideo] bg OSS bind failed | job_id=%s url=%s",
                                 jid or None,
                                 str(raw_url).split("?", 1)[0],
                             )

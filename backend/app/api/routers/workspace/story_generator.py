@@ -759,6 +759,7 @@ async def structure_project_creative_input_to_story_fields(
     )
     key_elements = _normalize_llm_json_object(extract_raw, context="structure_extract_key_elements")
 
+    _release_db_connection(db, "structure_creative_input_web_search")
     search_bundle = await collect_creative_structure_search_snippets(key_elements)
     search_context = build_creative_structure_search_user_prompt(
         search_bundle,
@@ -865,10 +866,14 @@ async def fetch_industry_analysis_ai_short_dramas_report(
         )
         return JSONResponse({"task_id": tid, "async": True})
     project = _require_project_access(db, project_id, current_user)
+    gi_existing = dict(project.global_info or {})
+    project_title_str = str(project.title or "")
+    language = (req.language or gi_existing.get("language") or "").strip()
 
     month_label = (req.month_label or current_report_month_label()).strip()
     report_period = current_report_period_label(month_label)
 
+    _release_db_connection(db, "industry_analysis_web_search")
     search_bundle = await collect_industry_analysis_search_snippets(month_label=month_label)
     if not (search_bundle.get("snippets") or search_bundle.get("instant_notes")):
         raise HTTPException(status_code=502, detail="Web search returned no snippets for AI short drama industry analysis")
@@ -879,11 +884,9 @@ async def fetch_industry_analysis_ai_short_dramas_report(
         logger.error("Industry analysis AI short dramas prompt not found")
         raise HTTPException(status_code=404, detail="Prompt file 'story_generator_industry_analysis_ai_short_dramas.txt' not found.")
 
-    gi_existing = dict(project.global_info or {})
-    language = (req.language or gi_existing.get("language") or "").strip()
     search_context = build_industry_analysis_user_prompt(
         search_bundle,
-        project_title=str(project.title or ""),
+        project_title=project_title_str,
         language=language,
     )
     try:
@@ -896,6 +899,12 @@ async def fetch_industry_analysis_ai_short_dramas_report(
         f"Focus on industry-wide trends only; do not rank individual dramas.\n\n"
         f"{search_context}"
     )
+    # Reload after web-search release so billing/LLM see an attached project/user.
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    current_user = db.query(User).filter(User.id == int(current_user.id)).first() or current_user
+
     llm_result = await _run_ai_short_drama_market_llm(
         db=db,
         current_user=current_user,
@@ -907,6 +916,7 @@ async def fetch_industry_analysis_ai_short_dramas_report(
         llm_context="industry_analysis_ai_short_dramas",
     )
     raw = str((llm_result or {}).get("raw") or "").strip()
+    _release_db_connection(db, "industry_analysis_json_repair")
     data = await _normalize_llm_json_object_with_repair(
         raw,
         context="industry_analysis_ai_short_dramas",
@@ -936,6 +946,9 @@ async def fetch_industry_analysis_ai_short_dramas_report(
         },
     }
     try:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
         return _persist_market_intel_report(
             db,
             project=project,
@@ -968,6 +981,9 @@ async def fetch_trending_ai_short_dramas_report(
         )
         return JSONResponse({"task_id": tid, "async": True})
     project = _require_project_access(db, project_id, current_user)
+    gi_existing = dict(project.global_info or {})
+    project_title_str = str(project.title or "")
+    language = (req.language or gi_existing.get("language") or "").strip()
 
     month_label = (req.month_label or current_report_month_label()).strip()
     report_period = current_report_period_label(month_label)
@@ -977,6 +993,7 @@ async def fetch_trending_ai_short_dramas_report(
     except Exception:
         list_limit = 12
 
+    _release_db_connection(db, "trending_dramas_web_search")
     search_bundle = await collect_trending_dramas_search_snippets(month_label=month_label)
     if not (search_bundle.get("snippets") or search_bundle.get("instant_notes")):
         raise HTTPException(status_code=502, detail="Web search returned no snippets for trending AI short dramas")
@@ -987,11 +1004,9 @@ async def fetch_trending_ai_short_dramas_report(
         logger.error("Trending AI short dramas prompt not found")
         raise HTTPException(status_code=404, detail="Prompt file 'story_generator_trending_ai_short_dramas.txt' not found.")
 
-    gi_existing = dict(project.global_info or {})
-    language = (req.language or gi_existing.get("language") or "").strip()
     search_context = build_trending_ai_short_dramas_user_prompt(
         search_bundle,
-        project_title=str(project.title or ""),
+        project_title=project_title_str,
         language=language,
         limit=list_limit,
     )
@@ -1006,6 +1021,11 @@ async def fetch_trending_ai_short_dramas_report(
         f"For each drama, analyze climax and iconic scenes from visual, dialogue, and action angles.\n\n"
         f"{search_context}"
     )
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    current_user = db.query(User).filter(User.id == int(current_user.id)).first() or current_user
+
     llm_result = await _run_ai_short_drama_market_llm(
         db=db,
         current_user=current_user,
@@ -1017,6 +1037,7 @@ async def fetch_trending_ai_short_dramas_report(
         llm_context="trending_ai_short_dramas",
     )
     raw = str((llm_result or {}).get("raw") or "").strip()
+    _release_db_connection(db, "trending_dramas_json_repair")
     data = await _normalize_llm_json_object_with_repair(
         raw,
         context="trending_ai_short_dramas",
@@ -1046,6 +1067,9 @@ async def fetch_trending_ai_short_dramas_report(
         },
     }
     try:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
         return _persist_market_intel_report(
             db,
             project=project,

@@ -618,9 +618,6 @@ async def _execute_analyze_entity_image(
     try:
         logger.info("Sending request to LLM...")
 
-        # Do NOT release DB connection here in background task, otherwise SQLAlchemy detaches models
-        # _release_db_connection(db, "analyze_entity_image_llm_call")
-
         if billing_service.is_token_pricing(db, "analysis_character", api_provider, api_model):
             est = billing_service.estimate_reserve_tokens_from_messages(messages)
             estimated_image_tokens = 1000
@@ -647,6 +644,14 @@ async def _execute_analyze_entity_image(
                 reservation_tx_id = int(getattr(reservation_tx, "id", 0) or 0) or None
             except Exception:
                 reservation_tx_id = None
+
+        # Snapshot before release — ORM instances detach after close().
+        locked_name = str(getattr(entity, "name", "") or "").strip()
+        locked_name_en = str(getattr(entity, "name_en", "") or "").strip()
+        current_user_id = int(getattr(current_user, "id", 0) or 0)
+        had_reservation = bool(reservation_tx_id)
+        _release_db_connection(db, "analyze_entity_image_llm_call")
+        reservation_tx = None  # use reservation_tx_id only after release
 
         llm_response = await llm_service.chat_completion_with_fallback(messages, llm_config)
         
@@ -861,8 +866,6 @@ async def _execute_analyze_entity_image(
             # Stage-3 contract: full prompt lives in CN; EN field stays empty.
             updated_info["generation_prompt_en"] = ""
             # Name lock: never let reverse-prompt rename the subject.
-            locked_name = str(getattr(entity, "name", "") or "").strip()
-            locked_name_en = str(getattr(entity, "name_en", "") or "").strip()
             if locked_name:
                 updated_info["name"] = locked_name
             if locked_name_en:
@@ -873,11 +876,14 @@ async def _execute_analyze_entity_image(
         if not updated_info:
              logger.warning("updated_info is empty! LLM response might not match expected JSON schema.")
 
-        # The original ORM instance may be detached after _release_db_connection;
-        # reload a session-bound instance before applying updates.
+        # Reload session-bound instances after _release_db_connection.
         entity = db.query(Entity).filter(Entity.id == entity_id).first()
         if not entity:
             raise HTTPException(status_code=404, detail="Entity not found")
+        if current_user_id > 0:
+            reloaded_user = db.query(User).filter(User.id == current_user_id).first()
+            if reloaded_user is not None:
+                current_user = reloaded_user
 
         # Update Entity Fields
         if "base_name_en" in updated_info: entity.base_name_en = updated_info["base_name_en"]
@@ -964,7 +970,7 @@ async def _execute_analyze_entity_image(
             routing_payload=effective_llm_response,
         )
 
-        if reservation_tx:
+        if had_reservation:
             # If usage seems to miss image tokens, add a conservative estimate to avoid under-charging.
             current_input = billing_details.get("prompt_tokens", billing_details.get("input_tokens", 0))
             if current_input < 200:
@@ -975,33 +981,19 @@ async def _execute_analyze_entity_image(
                     billing_details["total_tokens"] += estimated_image_tokens
                 else:
                     billing_details["total_tokens"] = billing_details["input_tokens"] + billing_details.get("output_tokens", 0)
-            _finalize_model_invocation_billing(
-                db=db,
-                current_user=current_user,
-                task_type="analysis_character",
-                provider=api_provider,
-                model=api_model,
-                reservation_tx=reservation_tx,
-                reservation_tx_id=reservation_tx_id,
-                item="entity_image_analysis",
-                usage_payload=usage if isinstance(usage, dict) else None,
-                extra_details=billing_details,
-                routing_payload=effective_llm_response,
-            )
-        else:
-            _finalize_model_invocation_billing(
-                db=db,
-                current_user=current_user,
-                task_type="analysis_character",
-                provider=api_provider,
-                model=api_model,
-                reservation_tx=None,
-                reservation_tx_id=reservation_tx_id,
-                item="entity_image_analysis",
-                usage_payload=usage if isinstance(usage, dict) else None,
-                extra_details=billing_details,
-                routing_payload=effective_llm_response,
-            )
+        _finalize_model_invocation_billing(
+            db=db,
+            current_user=current_user,
+            task_type="analysis_character",
+            provider=api_provider,
+            model=api_model,
+            reservation_tx=None,
+            reservation_tx_id=reservation_tx_id,
+            item="entity_image_analysis",
+            usage_payload=usage if isinstance(usage, dict) else None,
+            extra_details=billing_details,
+            routing_payload=effective_llm_response,
+        )
         
         # We no longer save the prompt as a separate asset file to avoid clutter.
         # The prompt is already saved in the entity.generation_prompt_en field.
@@ -1012,8 +1004,11 @@ async def _execute_analyze_entity_image(
 
     except HTTPException as e:
         logger.error(f"Entity Analysis failed with HTTPException: {str(e.detail)}", exc_info=True)
-        _cancel_reservation_quietly(db, reservation_tx_id or reservation_tx, str(e.detail))
+        _cancel_reservation_quietly(db, reservation_tx_id, str(e.detail))
         try:
+            entity = db.query(Entity).filter(Entity.id == entity_id).first()
+            if entity is None:
+                raise
             custom_attrs = entity.custom_attributes or {}
             if isinstance(custom_attrs, str):
                 custom_attrs = json.loads(custom_attrs)
@@ -1029,8 +1024,11 @@ async def _execute_analyze_entity_image(
         raise
     except Exception as e:
         logger.error(f"Entity Analysis failed: {str(e)}", exc_info=True)
-        _cancel_reservation_quietly(db, reservation_tx_id or reservation_tx, str(e))
+        _cancel_reservation_quietly(db, reservation_tx_id, str(e))
         try:
+            entity = db.query(Entity).filter(Entity.id == entity_id).first()
+            if entity is None:
+                raise
             custom_attrs = entity.custom_attributes or {}
             if isinstance(custom_attrs, str):
                 custom_attrs = json.loads(custom_attrs)
