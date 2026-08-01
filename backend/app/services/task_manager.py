@@ -36,7 +36,7 @@ def _resolve_async_task_worker_threads() -> int:
         from app.db.session import DB_POOL_CAPACITY_EFFECTIVE
 
         # Keep async LLM tasks from monopolizing the QueuePool under burst load.
-        pool_cap = max(4, int(DB_POOL_CAPACITY_EFFECTIVE or 0) // 4)
+        pool_cap = max(2, min(8, int(DB_POOL_CAPACITY_EFFECTIVE or 0) // 6))
     except Exception:
         pool_cap = requested
     return max(2, min(requested, pool_cap))

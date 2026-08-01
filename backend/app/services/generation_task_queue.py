@@ -39,9 +39,9 @@ _POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
 _WEB_CONCURRENCY = max(1, int(os.getenv("WEB_CONCURRENCY", "1") or 1))
 _PER_PROCESS_POOL_BUDGET = max(1, _POOL_CAPACITY // _WEB_CONCURRENCY)
 _DEFAULT_WORKER_THREADS = min(8, max(2, int(DB_POOL_SIZE_EFFECTIVE or 2)))
-# Keep the default queue target at 20 for dedicated worker processes, while
-# still degrading safely when the DB pool is smaller than that target.
-_WORKER_THREAD_CAP = max(1, min(20, _PER_PROCESS_POOL_BUDGET // 2))
+# Cap queue concurrency well below pool capacity so HTTP/async/callback
+# checkouts still have headroom (avoid 60/60 QueuePool saturation).
+_WORKER_THREAD_CAP = max(1, min(12, _PER_PROCESS_POOL_BUDGET // 4))
 _QUEUE_ADVISORY_LOCK_ID = int(os.getenv("GENERATION_QUEUE_ADVISORY_LOCK_ID", "918240157") or 918240157)
 _QUEUE_LEADER_CONN = None
 _QUEUE_FILE_LOCK_FD = None

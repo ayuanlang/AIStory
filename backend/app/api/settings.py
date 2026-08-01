@@ -671,70 +671,44 @@ def _compute_binned_multiplier(score: int, min_multiplier: float, max_multiplier
 
 
 def _get_billing_rule_reset_config(db: Session) -> Dict[str, Any]:
+    # Read-only: never UPDATE the shared agent-policy row from getters.
+    # Concurrent write-on-read caused Postgres deadlocks and QueuePool exhaustion.
     row = _get_or_create_agent_policy_row(db)
     cfg = _safe_json_dict(row.config)
-    normalized = _normalize_billing_rule_reset_config(cfg.get(_BILLING_RESET_CONFIG_KEY, {}))
-    cfg[_BILLING_RESET_CONFIG_KEY] = normalized
-    row.config = cfg
-    _persist_agent_policy_row_config(db, row.id, row.config)
-    return normalized
+    return _normalize_billing_rule_reset_config(cfg.get(_BILLING_RESET_CONFIG_KEY, {}))
 
 
 def _get_sora_mention_config(db: Session) -> Dict[str, Any]:
     row = _get_or_create_agent_policy_row(db)
     cfg = _safe_json_dict(row.config)
-    normalized = _normalize_sora_mention_config(cfg.get(_SORA_MENTION_CONFIG_KEY, {}))
-    cfg[_SORA_MENTION_CONFIG_KEY] = normalized
-    row.config = cfg
-    _persist_agent_policy_row_config(db, row.id, row.config)
-    return normalized
+    return _normalize_sora_mention_config(cfg.get(_SORA_MENTION_CONFIG_KEY, {}))
 
 
 def _get_asset_image_ratio_config(db: Session) -> Dict[str, Any]:
     row = _get_or_create_agent_policy_row(db)
     cfg = _safe_json_dict(row.config)
-    normalized = _normalize_asset_image_ratio_config(cfg.get(_ASSET_IMAGE_RATIO_CONFIG_KEY, {}))
-    cfg[_ASSET_IMAGE_RATIO_CONFIG_KEY] = normalized
-    row.config = cfg
-    _persist_agent_policy_row_config(db, row.id, row.config)
-    return normalized
+    return _normalize_asset_image_ratio_config(cfg.get(_ASSET_IMAGE_RATIO_CONFIG_KEY, {}))
 
 
 def get_scene_analysis_system_config(db: Session) -> Dict[str, Any]:
     row = _get_or_create_agent_policy_row(db)
     cfg = _safe_json_dict(row.config)
-    normalized = _normalize_scene_analysis_system_config(cfg.get(_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY, {}))
-    cfg[_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY] = normalized
-    row.config = cfg
-    _persist_agent_policy_row_config(db, row.id, row.config)
-    return normalized
+    return _normalize_scene_analysis_system_config(cfg.get(_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY, {}))
 
 
 def get_script_analysis_flow_config(db: Session) -> Dict[str, Any]:
     row = _get_or_create_agent_policy_row(db)
     cfg = _safe_json_dict(row.config)
-    normalized = normalize_script_analysis_flow_config(cfg.get(_SCRIPT_ANALYSIS_FLOW_CONFIG_KEY, {}))
-    cfg[_SCRIPT_ANALYSIS_FLOW_CONFIG_KEY] = normalized
-    row.config = cfg
-    _persist_agent_policy_row_config(db, row.id, row.config)
-    return normalized
+    return normalize_script_analysis_flow_config(cfg.get(_SCRIPT_ANALYSIS_FLOW_CONFIG_KEY, {}))
 
 
 def get_project_cost_estimation_config(db: Session) -> Dict[str, Any]:
     row = _get_or_create_agent_policy_row(db)
     cfg = _safe_json_dict(row.config)
     normalized = _normalize_project_cost_estimation_config(cfg.get(_PROJECT_COST_ESTIMATION_CONFIG_KEY, {}))
-    cfg[_PROJECT_COST_ESTIMATION_CONFIG_KEY] = normalized
-
     options_cfg = _normalize_project_create_options_config(cfg.get(_PROJECT_CREATE_OPTIONS_CONFIG_KEY, {}))
-    cfg[_PROJECT_CREATE_OPTIONS_CONFIG_KEY] = options_cfg
-
     merged = dict(normalized)
     merged["project_create_options"] = options_cfg
-    cfg[_PROJECT_COST_ESTIMATION_CONFIG_KEY] = merged
-
-    row.config = cfg
-    _persist_agent_policy_row_config(db, row.id, row.config)
     return merged
 
 
@@ -742,15 +716,9 @@ def get_project_create_options_config(db: Session) -> Dict[str, List[str]]:
     row = _get_or_create_agent_policy_row(db)
     cfg = _safe_json_dict(row.config)
     cost_cfg = _normalize_project_cost_estimation_config(cfg.get(_PROJECT_COST_ESTIMATION_CONFIG_KEY, {}))
-    options_cfg = _normalize_project_create_options_config(
+    return _normalize_project_create_options_config(
         cfg.get(_PROJECT_CREATE_OPTIONS_CONFIG_KEY, cost_cfg.get("project_create_options", {}))
     )
-    cfg[_PROJECT_CREATE_OPTIONS_CONFIG_KEY] = options_cfg
-    cost_cfg["project_create_options"] = options_cfg
-    cfg[_PROJECT_COST_ESTIMATION_CONFIG_KEY] = cost_cfg
-    row.config = cfg
-    _persist_agent_policy_row_config(db, row.id, row.config)
-    return options_cfg
 
 
 def _normalize_unit_type_for_system_ai(raw: Any) -> str:
