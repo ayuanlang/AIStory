@@ -960,6 +960,10 @@ def _video_result_needs_persistence_retry(result: Any, db: Optional[Session] = N
         return False
     if meta.get("persistence_gave_up") is True:
         return False
+    # Runner already owns bg localization after provisional publish; poll-path retry
+    # would race the same OSS key and delay shot bind.
+    if meta.get("bg_persist_owned") or meta.get("oss_persist_pending"):
+        return False
     if not source:
         return False
     if meta.get("remote_localization_failed") or meta.get("needs_persistence_retry") or meta.get("ephemeral_binding"):

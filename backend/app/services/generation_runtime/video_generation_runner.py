@@ -142,6 +142,7 @@ def _publish_provisional_video_success(
     metadata: Optional[Dict[str, Any]] = None,
     callback_ticket: Optional[str] = None,
     mark_queue_completed: bool = True,
+    bind_shot: bool = True,
 ) -> bool:
     """Publish provider URL immediately so editor/job polls finish before OSS localization."""
     stable_job_id = str(job_id or "").strip()
@@ -154,6 +155,7 @@ def _publish_provisional_video_success(
         "metadata": dict(metadata) if isinstance(metadata, dict) else {},
     }
     result_payload["metadata"].setdefault("oss_persist_pending", True)
+    result_payload["metadata"].setdefault("bg_persist_owned", True)
 
     try:
         from app.services.generation_task_queue import mark_generation_task_status_external
@@ -190,6 +192,9 @@ def _publish_provisional_video_success(
             stable_url.split("?", 1)[0],
             stable_ticket or None,
         )
+
+        if bind_shot:
+            _bind_provisional_video_url_to_shot(stable_job_id, stable_url, result_payload.get("metadata"))
         return True
     except Exception:
         logger.exception(
@@ -197,6 +202,90 @@ def _publish_provisional_video_success(
             stable_job_id,
         )
         return False
+
+
+def _bind_provisional_video_url_to_shot(
+    job_id: str,
+    url: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Bind provider URL to shot as soon as poll completes (before OSS localization)."""
+    stable_job_id = str(job_id or "").strip()
+    stable_url = str(url or "").strip()
+    if not stable_job_id or not stable_url:
+        return False
+
+    db = SessionLocal()
+    try:
+        with VIDEO_JOB_LOCK:
+            job = dict(VIDEO_JOB_STORE.get(stable_job_id) or {})
+        if not job:
+            from app.services.generation_runtime.job_store import _read_video_job_file
+
+            job = dict(_read_video_job_file(stable_job_id) or {})
+        job = _hydrate_video_job_record(stable_job_id, job) or job
+
+        from app.services.generation_runtime.media_persist import (
+            _build_generation_job_req_context,
+            _resolve_job_owner_user,
+            _resolve_video_bind_url,
+        )
+
+        current_user = _resolve_job_owner_user(db, job)
+        if not current_user:
+            logger.warning(
+                "[GenerateVideo] provisional shot bind skipped; owner missing | job_id=%s",
+                stable_job_id,
+            )
+            return False
+
+        req_context = _build_generation_job_req_context(job, db)
+        req_context["asset_type"] = "video"
+        if not req_context.get("shot_id"):
+            logger.warning(
+                "[GenerateVideo] provisional shot bind skipped; shot_id missing | job_id=%s",
+                stable_job_id,
+            )
+            return False
+
+        bind_meta = dict(metadata) if isinstance(metadata, dict) else {}
+        bind_url, ephemeral_binding, bind_meta = _resolve_video_bind_url(
+            raw_url=stable_url,
+            normalized_url=stable_url,
+            normalized_meta=bind_meta,
+        )
+        if not bind_url:
+            logger.warning(
+                "[GenerateVideo] provisional shot bind skipped; bind_url empty | job_id=%s",
+                stable_job_id,
+            )
+            return False
+
+        _register_asset_helper(db, current_user.id, bind_url, req_context, bind_meta)
+        _bind_generated_media_to_shot(
+            db,
+            current_user,
+            req_context,
+            bind_url,
+            False,
+            bind_meta,
+        )
+        logger.info(
+            "[GenerateVideo] provisional shot bind done | job_id=%s shot_id=%s url=%s ephemeral=%s",
+            stable_job_id,
+            req_context.get("shot_id"),
+            bind_url.split("?", 1)[0],
+            bool(ephemeral_binding),
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "[GenerateVideo] provisional shot bind failed | job_id=%s",
+            stable_job_id,
+        )
+        return False
+    finally:
+        db.close()
 
 
 
@@ -1321,7 +1410,9 @@ async def _run_generate_video(
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
             filename_base=_build_generation_filename_base(req, db),
-            skip_download=False,
+            # Localize/bind in this runner (early bind + bg OSS). Sync download here
+            # blocks shot bind and races VideoJobPersist on the same OSS key.
+            skip_download=True,
         )
 
         if isinstance(result, dict):
@@ -1477,7 +1568,7 @@ async def _run_generate_video(
                     mark_queue_completed=True,
                 )
 
-                # Bind provider URL to the shot immediately so refresh shows video while OSS runs.
+                # Backup bind if provisional callback bind missed (e.g. shot_id not hydrated yet).
                 try:
                     early_bind_url, early_ephemeral, early_meta = _resolve_video_bind_url(
                         raw_url=temp_url,
@@ -1485,19 +1576,22 @@ async def _run_generate_video(
                         normalized_meta=dict(provisional_meta),
                     )
                     if early_bind_url:
+                        early_req = req
+                        if not str(getattr(req, "asset_type", None) or "").strip():
+                            early_req = req.model_copy(update={"asset_type": "video"}) if hasattr(req, "model_copy") else req
                         await asyncio.to_thread(
                             _register_asset_helper,
                             db,
                             current_user.id,
                             early_bind_url,
-                            req,
+                            early_req,
                             early_meta,
                         )
                         await asyncio.to_thread(
                             _bind_generated_media_to_shot,
                             db,
                             current_user,
-                            req,
+                            early_req,
                             early_bind_url,
                             False,
                             early_meta,
@@ -1603,6 +1697,7 @@ async def _run_generate_video(
                                     updated_res["url"] = bind_url
                                     updated_meta = dict(final_meta)
                                     updated_meta.pop("oss_persist_pending", None)
+                                    updated_meta.pop("bg_persist_owned", None)
                                     updated_res["metadata"] = updated_meta
                                 _set_video_job(
                                     jid,

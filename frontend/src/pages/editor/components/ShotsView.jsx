@@ -2579,13 +2579,29 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const detail = String(
             error?.code || error?.name || error?.message || error?.response?.data?.detail || ''
         ).trim().toLowerCase();
+        // Provider/job terminal failures often contain "timeout"/"cancel" wording; those must
+        // clear the generating UI instead of being treated as "still running in background".
+        if (
+            detail.includes('generation job failed')
+            || detail.includes('generation failed')
+            || detail.includes('video generation failed')
+            || detail.includes('image generation failed')
+            || detail.includes('nukoai')
+            || detail.includes('provider')
+            || detail.includes('insufficient')
+            || detail.includes('submit failed')
+        ) {
+            return false;
+        }
         return (
-            detail.includes('canceled')
-            || detail.includes('cancelled')
+            detail.includes('canceled by user')
+            || detail.includes('cancelled by user')
             || detail.includes('aborted')
             || detail.includes('econnaborted')
             || detail.includes('network error')
-            || detail.includes('timeout')
+            || detail.includes('polling cancelled')
+            || detail.includes('timed out while polling')
+            || detail.includes('timed out while waiting callback')
         );
     }, []);
 
@@ -9148,6 +9164,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         }
                         const nextStatus = String(data?.status || status || '').toLowerCase();
                         setVideoStatuses(prev => ({ ...prev, [targetShotId]: nextStatus }));
+                        if (['failed', 'error', 'canceled', 'cancelled'].includes(nextStatus)) {
+                            ignoreAsyncJobCallbacks = true;
+                            releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
+                            setVideoStatuses((prev) => {
+                                const next = { ...prev };
+                                delete next[targetShotId];
+                                return next;
+                            });
+                            return;
+                        }
                         const earlyUrl = String(
                             data?.result?.url
                             || data?.result?.video_url
@@ -9332,6 +9358,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         } finally {
             if (!keepRunningUi) {
                 ignoreAsyncJobCallbacks = true;
+                releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                 setShotGeneratingState(targetShotId, 'video', false);
                 setVideoStatuses(prev => { const n = {...prev}; delete n[targetShotId]; return n; });
             }

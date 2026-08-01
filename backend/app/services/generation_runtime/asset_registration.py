@@ -852,15 +852,18 @@ def _bind_generated_media_to_shot(
 
     shot_id = get_attr(req, "shot_id")
     if not shot_id:
+        logger.warning("[ShotMediaBind] skipped; shot_id missing | media_url=%s", str(media_url or "")[:240])
         return
 
     try:
         shot_id_int = int(shot_id)
     except Exception:
+        logger.warning("[ShotMediaBind] skipped; invalid shot_id=%s", shot_id)
         return
 
     shot = db.query(Shot).filter(Shot.id == shot_id_int).first()
     if not shot:
+        logger.warning("[ShotMediaBind] skipped; shot not found | shot_id=%s", shot_id_int)
         return
 
     try:
@@ -873,7 +876,13 @@ def _bind_generated_media_to_shot(
                     project_id = episode.project_id
         if project_id:
             _require_project_access(db, int(project_id), current_user)
-    except Exception:
+    except Exception as access_err:
+        logger.warning(
+            "[ShotMediaBind] skipped; project access failed | shot_id=%s user_id=%s err=%s",
+            shot_id_int,
+            getattr(current_user, "id", None),
+            access_err,
+        )
         return
 
     from app.services.generation_runtime.media_persist import (
@@ -882,6 +891,18 @@ def _bind_generated_media_to_shot(
     )
 
     asset_type = str(get_attr(req, "asset_type") or "").strip().lower()
+    # Video jobs sometimes omit asset_type; infer from URL so bind is not a silent no-op.
+    if not asset_type:
+        media_lower = str(media_url or "").split("?", 1)[0].lower()
+        if media_lower.endswith((".mp4", ".webm", ".mov", ".m4v", ".mkv")):
+            asset_type = "video"
+        else:
+            logger.warning(
+                "[ShotMediaBind] skipped; asset_type missing and url not video-like | shot_id=%s media_url=%s",
+                shot_id_int,
+                str(media_url or "")[:240],
+            )
+            return
     changed = False
 
     normalized_media_metadata: Optional[Dict[str, Any]] = None
@@ -900,6 +921,7 @@ def _bind_generated_media_to_shot(
         bind_value = get_attr(req, bind_key)
         if bind_value not in (None, ""):
             bind_context[bind_key] = bind_value
+    bind_context.setdefault("asset_type", asset_type)
     if isinstance(normalized_media_metadata, dict):
         normalized_media_metadata = _enrich_media_metadata_from_generation_context(
             normalized_media_metadata,

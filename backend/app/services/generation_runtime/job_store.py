@@ -676,6 +676,9 @@ _JOB_RESULT_METADATA_KEYS = (
     "temporary_source_filename",
     "persist_attempts",
     "idempotency_key",
+    # Runner-owned bg localization markers (must survive compact or poll-path races OSS again).
+    "oss_persist_pending",
+    "bg_persist_owned",
 )
 
 
@@ -1194,6 +1197,13 @@ def _set_video_job(job_id: str, **fields) -> None:
     with VIDEO_JOB_LOCK:
         _prune_video_jobs_locked()
         current = VIDEO_JOB_STORE.get(job_id, {})
+        # Overflow prune / multi-worker gaps can leave memory empty while the shared
+        # file still has status/shot_id. Hydrate before partial updates so we do not
+        # recreate a status=None shell that breaks bind/persist.
+        if not current:
+            file_job = _read_video_job_file(job_id)
+            if isinstance(file_job, dict) and file_job:
+                current = dict(file_job)
         previous_status = str(current.get("status") or "").strip().lower()
         previous_result_url = _extract_job_result_url(current.get("result"))
         if "result" in fields:

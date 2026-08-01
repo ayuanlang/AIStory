@@ -2576,29 +2576,31 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         const cancelledRef = { current: false };
         const effectiveTimeoutMs = Number(job_timeout_ms || 10 * 60 * 1000);
         const effectivePollMs = Number(job_poll_interval_ms || 2000);
-        const wrap = (p) => p.catch(err => {
-            if (cancelledRef.current) throw err;
-            throw err;
-        }).finally(() => { cancelledRef.current = true; });
-        try {
-            result = await Promise.any([
-                wrap(pollGenerationCallbackUntilDone(callbackTicket, {
-                    timeoutMs: effectiveTimeoutMs,
-                    pollIntervalMs: effectivePollMs,
-                    kind: 'image',
-                    cancelledRef,
-                })),
-                wrap(pollImageJobUntilDone(jobId, {
-                    timeoutMs: effectiveTimeoutMs,
-                    pollIntervalMs: effectivePollMs,
-                    cancelledRef,
-                    baseURL: submitBaseURL,
-                })),
-            ]);
-        } catch (anyErr) {
-            const real = anyErr?.errors?.find(e => !/polling cancelled/i.test(e?.message));
-            throw real || anyErr;
-        }
+        const isPollCancelledError = (err) => /polling cancelled/i.test(String(err?.message || ''));
+        result = await new Promise((resolve, reject) => {
+            let settled = false;
+            const finish = (fn) => (value) => {
+                if (settled) return;
+                settled = true;
+                cancelledRef.current = true;
+                fn(value);
+            };
+            pollImageJobUntilDone(jobId, {
+                timeoutMs: effectiveTimeoutMs,
+                pollIntervalMs: effectivePollMs,
+                cancelledRef,
+                baseURL: submitBaseURL,
+            }).then(finish(resolve), finish(reject));
+            pollGenerationCallbackUntilDone(callbackTicket, {
+                timeoutMs: effectiveTimeoutMs,
+                pollIntervalMs: effectivePollMs,
+                kind: 'image',
+                cancelledRef,
+            }).then(finish(resolve), (err) => {
+                if (settled || isPollCancelledError(err)) return;
+                finish(reject)(err);
+            });
+        });
     } else {
         result = await pollImageJobUntilDone(jobId, {
             timeoutMs: Number(job_timeout_ms || 10 * 60 * 1000),
@@ -2751,30 +2753,34 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
         const cancelledRef = { current: false };
         const effectiveTimeoutMs = normalizeVideoJobTimeoutMs(job_timeout_ms);
         const effectivePollMs = Number(job_poll_interval_ms || 2500);
-        const wrap = (p) => p.catch(err => {
-            if (cancelledRef.current) throw err;
-            throw err;
-        }).finally(() => { cancelledRef.current = true; });
-        try {
-            result = await Promise.any([
-                wrap(pollGenerationCallbackUntilDone(callbackTicket, {
-                    timeoutMs: effectiveTimeoutMs,
-                    pollIntervalMs: effectivePollMs,
-                    kind: 'video',
-                    cancelledRef,
-                })),
-                wrap(pollVideoJobUntilDone(jobId, {
-                    timeoutMs: effectiveTimeoutMs,
-                    pollIntervalMs: effectivePollMs,
-                    cancelledRef,
-                    baseURL: submitBaseURL,
-                    on_status: typeof options?.on_job_status === 'function' ? options.on_job_status : undefined,
-                })),
-            ]);
-        } catch (anyErr) {
-            const real = anyErr?.errors?.find(e => !/polling cancelled/i.test(e?.message));
-            throw real || anyErr;
-        }
+        const isPollCancelledError = (err) => /polling cancelled/i.test(String(err?.message || ''));
+        // First terminal outcome wins (success OR failure). Do not wait for the sibling poll
+        // via Promise.any — that keeps the UI spinning after provider/job failure.
+        result = await new Promise((resolve, reject) => {
+            let settled = false;
+            const finish = (fn) => (value) => {
+                if (settled) return;
+                settled = true;
+                cancelledRef.current = true;
+                fn(value);
+            };
+            pollVideoJobUntilDone(jobId, {
+                timeoutMs: effectiveTimeoutMs,
+                pollIntervalMs: effectivePollMs,
+                cancelledRef,
+                baseURL: submitBaseURL,
+                on_status: typeof options?.on_job_status === 'function' ? options.on_job_status : undefined,
+            }).then(finish(resolve), finish(reject));
+            pollGenerationCallbackUntilDone(callbackTicket, {
+                timeoutMs: effectiveTimeoutMs,
+                pollIntervalMs: effectivePollMs,
+                kind: 'video',
+                cancelledRef,
+            }).then(finish(resolve), (err) => {
+                if (settled || isPollCancelledError(err)) return;
+                finish(reject)(err);
+            });
+        });
     } else {
         result = await pollVideoJobUntilDone(jobId, {
             timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
