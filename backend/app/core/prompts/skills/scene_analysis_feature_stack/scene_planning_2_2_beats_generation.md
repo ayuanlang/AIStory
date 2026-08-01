@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-08-01 12:00:00 +08:00
+# Prompt Updated At: 2026-08-01 12:25:00 +08:00
 
 # Skill 1-2-2: 节拍工程映射（Beats-only）
 
@@ -85,8 +85,9 @@ Subject Index 表头：`| subject_no | subject_type | subject_name_zh | subject_
 
 **CHAR / PROP**：落位前查同族（`base_entity`/`dependency_reference` 有链=衍生关系）。同族多行时：
 - 有本 Beat **明文**（外观/换装/战损/年龄态/点燃/签署/屏幕面等可核销到某行）→ 写唯一匹配行；
+- **换装硬锁**：本 Beat/本场服化道摘要已写新装/更衣/与基础版可区分装束，且 Index 已有对应衍生行 → **必须**落该衍生名（如 `CHAR:[@林岳_礼服版]`），**禁止**因「同一人」回落基础版；
 - 无明文或不足 → 基础版（无 `base_entity` 依赖的那行；仅一行则用该行）；
-- 禁推断未写态、禁改写正文代替证据。
+- 禁推断未写态、禁改写正文代替证据；禁把换装态套成基础版名。
 
 | 类型 | 动作 |
 | :--- | :--- |

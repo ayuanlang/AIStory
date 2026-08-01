@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
-# Prompt Updated At: 2026-08-01 12:10:00 +08:00
+# Prompt Updated At: 2026-08-01 12:25:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -15,6 +15,8 @@
 接收上级输出后按序执行；最终只输出模板规定的 JSON。
 
 **最高优先级：`characters` 全量覆盖上游 character Subject；缺漏即废弃重写。**
+
+**换装衍生全量出稿（最高硬约束）**：Index 中每一条 `character`（含 `{名}_{礼服版/便装版/制服版/战损版…}` 等装束/状态衍生）**各**对应 `characters[]` 一条独立实体；**禁止**只设计基础版、**禁止**把多套服装合并进同一条、**禁止**因「同一人」跳过衍生行。换装衍生须：`visual_dependencies` 挂基准 `CHAR:[@基准名]`；`dependency_strategy.type`=`Type A`/`Type B`；`clothing` 与 `【衣着】` 只写该态装束且与基准版可目视区分；相貌锚点从基准演化保 continuity。缺任一 Index character 行=废弃重写。
 
 - **[Node 1] 项目视觉基线**
   - 读取 `Project Context` / `Genre` / `Base Positioning` / `Global_Style`、时代地域；统一角色视觉体系，禁止反向题材化。
@@ -42,7 +44,7 @@
 
 - **细节下限**：面目段 ≥8 锚点；`appearance_cn` ≥6；`clothing` ≥7 且 >3 色；三字段合计 >8。
 - 默认宏大美观 + 色调柔和；仅上游明文落魄/战损等才切换。`anchor_description`：3–5 英文短语（禁数组）。
-- **服装**：`clothing` 首句「播出安全等级：成人|非成人。」；须匹配时地/身份的具体款式/材质（禁「某某朝服饰」空壳）；含潮流关键词 + 版型/材质/配色/鞋履，并回写 prompt。**阶段变体（回忆/闪回等）服饰须明显差异，禁简单复制。**
+- **服装**：`clothing` 首句「播出安全等级：成人|非成人。」；须匹配时地/身份的具体款式/材质（禁「某某朝服饰」空壳）；含潮流关键词 + 版型/材质/配色/鞋履，并回写 prompt。**阶段变体（回忆/闪回等）与换装衍生服饰须明显差异，禁简单复制基准装；Index 有几条装束行就出几条独立设计。**
 - **`clothing_req` / `clothing_env`**：见 common §1.2；命中时【衣着】须可检索形制词，潮流/露肤/吊带**不得覆盖**袖袋怀腰下摆依存；湿污场合写可见衣态。
 
 ### 1.3 字段契约与分段标签（权威）
@@ -148,10 +150,11 @@
 
 - 唯一输出：一个 JSON，仅含 `characters`（无则 `[]`）。
 - 全量覆盖、类型路由正确；`name/name_en/base_name_en` 与 Index **逐字符完全一致**（任一字不等即废弃重写）。
+- **换装核销**：输出前对照 Index 全部 character 行；凡 `base_entity≠None` 的装束/状态衍生均须有独立条目且 `clothing`/`【衣着】` 与基准可区分；缺行或混装=废弃重写。
 - 每实体须有 `visual_dependencies` 与 `dependency_strategy {type, logic}`。
 - 真人：`description_cn` 含内部光学 rationale + 选角参考；`generation_prompt_cn` 含分段标签 + 七必锚 + 五层可检索 + 光线 1 句；细节面目≥8。
 - 三维/二维：按 §2.5/§2.6；仍须分段标签；不适用七必锚与选角参考。
-- 衍生：`description_cn` 含 Delta；`generation_prompt_cn` 含参考图声明与 §B/§C。
+- 衍生：`description_cn` 含 Delta（换装写清旧装→新装可见差异）；`generation_prompt_cn` 含参考图声明与 §B/§C；§C 衣着 Delta 不得空泛「换装」。
 - 群演：按 §2.4。
 - **剧情依存形制**：有 `clothing_req` 或服装结构依存动作时，`clothing` 与 `【衣着】` 须可检索对应袖/袋/襟/腰带/下摆形制词；否则废弃重写。
 
