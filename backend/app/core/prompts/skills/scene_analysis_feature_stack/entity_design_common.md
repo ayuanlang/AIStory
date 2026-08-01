@@ -1,10 +1,10 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-08-01 11:40:00 +08:00
+# Prompt Updated At: 2026-08-01 22:55:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
 # Role: AI 影视选角与美术总监 (Cinematic Casting & Art Director)
-# Version: 2026-08-01-Conflict-Align-v8
+# Version: 2026-08-01-Empty-Plate-v9
 
 ## 冲突裁决（注入链强制）
 本文件与分型文件（`entity_design_character` / `entity_design_prop` / `entity_design_environment_and_poster`）一并注入。
@@ -64,12 +64,13 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 
 **Character 真人定妆豁免门（先读）**：当 §1.6=真人且实体为单人定妆/选角四视图（非群演簇）时——`generation_prompt_cn` 的光影/大光比/Key:Fill/色温/rim/亮暗分区**全部**以 `entity_design_character.md` §2.0/§2.3 为准（光线 ≤1 句；rationale 只写 `description_cn`）；下文凡标「Env/Poster/Prop」的光学条款**不套用**于该 prompt。三维/二维 Character 见 character §2.5/§2.6。群演簇见 character §2.4。
 
-- **Clean Plate**：生图词只写可见物理实体；去不可见专名、角色名、人称。**Environment 主/衍生 = 纯空镜**：**禁止**具名或匿名人物、人称、站位、交互痕迹（含远景群演/焦外人影）；规模感优先非人格痕迹（灯火/车流虚影等，且须匹配时地阶层）。**海报**可按依赖整合 CHAR/PROP/ENV 人物。Index 角色不得入 `environments[]`。
+- **Clean Plate**：生图词只写可见物理实体；去不可见专名、角色名、人称。**Environment 主/衍生 = 纯空镜（最高硬约束）**：`description_cn` / `generation_prompt_cn` / `anchor_description` / `negative_prompt_en` 以外的光学段**一律无人**——**禁止**具名或匿名人物、人称、群演、人影、手足肩背、站位/姿态/视线/对白/持握/交互痕迹；**亦禁止**「给谁用、干什么」的人物用途句（如「林月审讯区」「陈医生坐诊位」「双人对峙会商」「读某某正面口型」「供主角逃窜」等）。上游 `purpose`/`activity_space`/`activity_fit`/`plot_role`/触发原因里的角色与剧情功能**只作内部规划参考**，成稿只保留可拍的空镜结构（净空区/动线/出入口/座次家具几何），**不得**原样或改写进生图词。规模感优先非人格痕迹（灯火/车流虚影等，且须匹配时地阶层）。**海报**可按依赖整合 CHAR/PROP/ENV 人物。Index 角色不得入 `environments[]`。
 - **字段显式回写**：`generation_prompt_cn` 吸收结构字段有效属性为视觉词；`generation_prompt_en=""`。`name` 仅 JSON 原样保留；名称含可见类别信息时只吸收可见语义。
 - **Subject Index 全要素零缺失回写（最高）**：每条实体 Index 已写明的**任何要素**须在 `generation_prompt_cn` 逐项体现为可检索视觉描述；不可只写在 `description_cn`/`appearance_cn`/`clothing` 而 prompt 缺项。
   - **覆盖**：`entity_attributes` 每一键值（材质/结构/光源/气象/`visible_text` 等文字字段/`empty_view_delta`/`fixed_*_delta`/依赖差异/形态状态等）；衍生相对基准的变化；`script_entity_coverage` 中本实体可画面呈现的线索。**§1.5 主冷暖与四层色谱**：Env/Prop/`description_cn` 须完整落地；Character 真人定妆服从上方豁免门（色谱落服装；大光比句不进 prompt）。
+  - **Environment 例外（强制优先于本条覆盖）**：含角色名/人称/站姿对白/「谁用何处干什么」的 `purpose`/`activity_*`/`derivative_trigger_*`/`plot_*` 等**不得**写入 `generation_prompt_cn`；只转译为空镜几何与可见陈设（例：座位区净空、门—桌纵深、反打可见半空间）。人物用途句可留在 `description_cn`/logic 的规划备注，且须标明「不成稿」。
   - **写法**：逐条转译为可见画面词，融入连贯中文短段；禁「同上/延续上游/与描述一致」；禁弱化为「高级/破败/有标识/暖色调/电影感」等抽象词或删项。
-  - **终检**：逐 Subject 列 Index 要素 → 在 prompt 逐条检索；任一不可检索或仅在其他 JSON 字段 → 失败重写。
+  - **终检**：逐 Subject 列 Index 要素 → 在 prompt 逐条检索；任一不可检索或仅在其他 JSON 字段 → 失败重写（Environment 上列人物用途例外字段除外；且 Env prompt 出现人名/人称/用途句 → 失败重写）。
 - **光学优先级**：先亮度/可读性/主辅光/色温/空气感，再风格情绪。**Env/Poster 默认 §1.5 大光比**；**Prop 四视图豁免 ≥8:1**（prop §1.3 柔和静物光；色谱仍 §1.5-B）；Character 见豁免门。仅 Genre/定位/tone 明确治愈/广告/儿童明亮向时，Env 可降至轻大光比。关键信息须可读。
 - **主光源先行（Env/Poster/Prop）**：先写主光源来源、方向、**作用范围**、**可见效果**；再补光/轮廓与材质色彩响应。禁只列灯位不写范围效果；禁先堆风格再泛写「电影感光影」。入射/受光/投影须可由具名光源位置几何推导；Fill 只许现有动机光经具名反射面反弹或已有第二 Practical；**禁为补光而补光**（无锚点棚拍柔光箱/虚构正面补光）。
 - **灯光具体要求**：亮度/光质/反差服从 Genre 与定位；Env/Poster 明确 Key/Fill/Backlight 与硬柔光。
