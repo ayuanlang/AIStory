@@ -12,6 +12,7 @@ import re
 import threading
 import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
@@ -32,8 +33,10 @@ __all__ = [
     "GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS",
     "GENERATION_CALLBACK_ASYNC_REPROCESS",
     "GENERATION_CALLBACK_FILE_DIR",
+    "GENERATION_CALLBACK_FINALIZE_EXECUTOR",
     "GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY",
     "GENERATION_CALLBACK_FINALIZE_SEMAPHORE",
+    "GENERATION_CALLBACK_IO_EXECUTOR",
     "GENERATION_CALLBACK_JOB_FILE_SCAN_MAX_FILES",
     "GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS",
     "GENERATION_CALLBACK_LOCK",
@@ -195,6 +198,16 @@ GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(
     min(int(_q_conf.get("callback_threads", _DEFAULT_CALLBACK_THREADS)), _CALLBACK_FINALIZE_CAP),
 )
 GENERATION_CALLBACK_FINALIZE_SEMAPHORE = asyncio.Semaphore(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY)
+# Dedicated pools so provider webhook ACK / store I/O never waits behind image/video
+# download+localize work that used to saturate asyncio's default to_thread executor.
+GENERATION_CALLBACK_IO_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(2, min(4, GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY + 1)),
+    thread_name_prefix="cb-io",
+)
+GENERATION_CALLBACK_FINALIZE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY,
+    thread_name_prefix="cb-finalize",
+)
 GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS", "120") or 120))
 GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS", "4000") or 4000))
 GENERATION_CALLBACK_ASYNC_INFLIGHT: Dict[str, float] = {}

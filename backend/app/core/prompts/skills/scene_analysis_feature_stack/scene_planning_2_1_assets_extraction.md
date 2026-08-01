@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-08-02 03:10:00 +08:00
+# Prompt Updated At: 2026-08-02 04:35:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -177,7 +177,7 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 - **活动空间继承（最高；主环境与衍生强制）**：Stage 1【活动空间】与各衍生`活动适配`为本场表演可用性真源；本阶段**只继承、不改写、不补造**。
   - **主环境**：须写入 `activity_space:`（或分键 `performance_zone:`/`circulation:`/`capacity_zoning:`/`ingress_egress:`），内容**逐字/等价摘抄** Stage 1【活动空间】四项（主舞台/表演区｜动线｜站位承载｜出入画口）；`script_entity_coverage` 须含「活动空间」及关键锚词。缺【活动空间】→`upstream_missing_activity_space:需要回流 Stage 1 补活动空间`，禁自拟表演区。
   - **视角/状态衍生**：须写入 `activity_fit:`，摘抄该行 Stage 1 `活动适配=…`（服务反打纵深/出门动线等）；缺则 `upstream_missing_activity_space:需要回流 Stage 1 补活动适配`。可与 `purpose:` 并存，**不得**用 `purpose` 顶替漏写的活动空间。
-  - **纯空镜边界**：活动空间描述的是**空间承载能力与动线/出入口**（空镜可核销结构），**禁止**把角色名/站姿/对白写进 ENV；人数分区用「双人对峙区+随从跪地区」等空间语，不写入具名角色。
+  - **纯空镜边界**：活动空间描述的是**空间承载能力与动线/出入口**（空镜可核销结构），**禁止**把角色名/站姿/对白写进 ENV；人数分区用「双人对峙区+随从跪地区」等空间语，不写入具名角色。**活动区净空继承**：`activity_space` 标明的主舞台/表演区/动线须保持可表演净空语义；固定清单实体落点不得与「中区净空/动线可通行」自相矛盾（装饰性立体物件挤占活动区→回流 Stage 1）。
 - **分层（字段速查）**：
   | 类型 | 关键字段 | 禁 |
   | :--- | :--- | :--- |

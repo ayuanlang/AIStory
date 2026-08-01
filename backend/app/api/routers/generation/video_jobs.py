@@ -209,7 +209,12 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
         )
         raise
 
-    await asyncio.to_thread(_set_generation_callback_payload, stable_ticket, payload)
+    # Memory-first ACK: never await default to_thread (finalize downloads used to starve it).
+    from app.services.generation_runtime.callbacks import (
+        _set_generation_callback_payload_for_ack as _ack_store_callback_payload,
+    )
+
+    _ack_store_callback_payload(stable_ticket, payload)
     normalized_payload = _get_generation_callback_payload(stable_ticket)
     payload_status = _normalize_generation_status(normalized_payload.get("status"))
     payload_result_url = _extract_job_result_url(normalized_payload)

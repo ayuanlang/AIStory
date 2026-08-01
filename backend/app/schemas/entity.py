@@ -108,6 +108,24 @@ class EntityCreate(BaseModel):
     def validate_anchor_description(cls, v: Any) -> Optional[str]:
         return coerce_anchor_description(v)
 
+    @pydantic.field_validator("visual_dependencies", mode="before")
+    @classmethod
+    def validate_visual_dependencies(cls, v: Any) -> List[str]:
+        return coerce_visual_dependencies(v)
+
+    @pydantic.field_validator("dependency_strategy", "custom_attributes", mode="before")
+    @classmethod
+    def validate_dict_fields(cls, v: Any) -> Dict[str, Any]:
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str) and v.strip():
+            try:
+                parsed = json.loads(v.strip())
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                pass
+        return {}
+
 
 class EntityOut(BaseModel):
     id: int

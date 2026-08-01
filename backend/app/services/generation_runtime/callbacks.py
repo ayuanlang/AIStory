@@ -89,10 +89,19 @@ def _generation_callback_payload_priority(payload: Dict[str, Any]) -> int:
     return 0
 
 
-def _set_generation_callback_payload(ticket: str, payload: Dict[str, Any]) -> None:
+def _set_generation_callback_payload(
+    ticket: str,
+    payload: Dict[str, Any],
+    *,
+    persist_file: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """Store callback payload in memory; optionally mirror to disk.
+
+    Returns the stored record, or None when ignored (lower-priority overwrite).
+    """
     stable_ticket = str(ticket or "").strip()
     if not stable_ticket:
-        return
+        return None
 
     normalized_payload = _compact_generation_callback_payload(payload)
 
@@ -117,10 +126,35 @@ def _set_generation_callback_payload(ticket: str, payload: Dict[str, Any]) -> No
                     existing_payload.get("status"),
                     normalized_payload.get("status"),
                 )
-                return
+                return None
         GENERATION_CALLBACK_STORE[stable_ticket] = dict(callback_record)
 
-    _write_generation_callback_file(stable_ticket, callback_record)
+    if persist_file:
+        _write_generation_callback_file(stable_ticket, callback_record)
+    return dict(callback_record)
+
+
+def _schedule_generation_callback_file_persist(ticket: str, callback_record: Dict[str, Any]) -> None:
+    """Persist callback file on the dedicated IO pool (never the default to_thread pool)."""
+    stable_ticket = str(ticket or "").strip()
+    if not stable_ticket or not isinstance(callback_record, dict):
+        return
+    try:
+        GENERATION_CALLBACK_IO_EXECUTOR.submit(
+            _write_generation_callback_file,
+            stable_ticket,
+            dict(callback_record),
+        )
+    except Exception:
+        # Executor shutdown / submit failure: fall back to sync write.
+        _write_generation_callback_file(stable_ticket, callback_record)
+
+
+def _set_generation_callback_payload_for_ack(ticket: str, payload: Dict[str, Any]) -> None:
+    """Fast webhook ACK path: memory store now, disk mirror on dedicated IO threads."""
+    record = _set_generation_callback_payload(ticket, payload, persist_file=False)
+    if record:
+        _schedule_generation_callback_file_persist(ticket, record)
 
 
 def _generation_callback_file_path(ticket: str) -> str:
@@ -2608,6 +2642,8 @@ async def _process_generation_callback_async(ticket: str, payload: Dict[str, Any
         return
 
     def _run_callback_finalizers() -> None:
+        # Runs on GENERATION_CALLBACK_FINALIZE_EXECUTOR so download/localize cannot
+        # starve webhook ACK /healthz threads on asyncio's default executor.
         if stable_ticket.startswith("image-job-"):
             asyncio.run(_finalize_image_jobs_from_provider_callback(stable_ticket))
         elif stable_ticket.startswith("video-job-"):
@@ -2621,14 +2657,18 @@ async def _process_generation_callback_async(ticket: str, payload: Dict[str, Any
     seed_payload = payload if isinstance(payload, dict) else {}
     # Caller already marked inflight before scheduling this task.
     owns_inflight = True
+    loop = asyncio.get_running_loop()
     try:
         while owns_inflight:
             try:
                 async with GENERATION_CALLBACK_FINALIZE_SEMAPHORE:
-                    latest = await asyncio.to_thread(_get_generation_callback_payload, stable_ticket)
+                    latest = _get_generation_callback_payload(stable_ticket)
                     if not latest and seed_payload:
-                        await asyncio.to_thread(_set_generation_callback_payload, stable_ticket, seed_payload)
-                    await asyncio.to_thread(_run_callback_finalizers)
+                        _set_generation_callback_payload_for_ack(stable_ticket, seed_payload)
+                    await loop.run_in_executor(
+                        GENERATION_CALLBACK_FINALIZE_EXECUTOR,
+                        _run_callback_finalizers,
+                    )
             except Exception:
                 logger.exception("[GenerationCallback] async finalize failed | ticket=%s", stable_ticket)
 

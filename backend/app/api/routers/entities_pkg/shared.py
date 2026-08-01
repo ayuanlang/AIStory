@@ -37,6 +37,9 @@ _bind_endpoint_helpers(include_routers=False)
 from app.services.generation_runtime.asset_registration import (  # noqa: E402,F401
     _find_existing_asset_for_registration,
 )
+from app.services.generation_runtime.media_persist import (  # noqa: E402,F401
+    _asset_meta_to_dict,
+)
 
 
 from app.schemas.entity import (  # noqa: E402
@@ -192,9 +195,12 @@ def create_entity(
         if entity.dependency_strategy:
             existing_entity.dependency_strategy = entity.dependency_strategy
         if entity.custom_attributes:
-            existing_attr = dict(existing_entity.custom_attributes or {})
-            existing_attr.update(entity.custom_attributes)
-            existing_entity.custom_attributes = existing_attr
+            # DB JSON may be list/str/null from older writes; never call dict() on non-mappings.
+            existing_attr = _asset_meta_to_dict(getattr(existing_entity, "custom_attributes", None))
+            incoming_attr = _asset_meta_to_dict(entity.custom_attributes)
+            if incoming_attr:
+                existing_attr.update(incoming_attr)
+                existing_entity.custom_attributes = existing_attr
 
         if entity.episode_id is not None and existing_entity.episode_id is None:
             existing_entity.episode_id = entity.episode_id
@@ -232,7 +238,7 @@ def create_entity(
         
         visual_dependencies=_coerce_visual_dependencies(entity.visual_dependencies),
         dependency_strategy=entity.dependency_strategy,
-        custom_attributes=entity.custom_attributes or {}
+        custom_attributes=_asset_meta_to_dict(entity.custom_attributes),
     )
     db.add(db_entity)
     db.commit()

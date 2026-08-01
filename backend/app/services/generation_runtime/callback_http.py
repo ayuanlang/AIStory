@@ -119,7 +119,7 @@ async def _dispatch_generation_callback(kind: str, callback_url: str, job: Dict[
     from app.services.generation_runtime.callbacks import (
         _compute_webhook_signature,
         _extract_callback_task_id,
-        _set_generation_callback_payload,
+        _set_generation_callback_payload_for_ack,
     )
 
     if not callback_url:
@@ -129,7 +129,7 @@ async def _dispatch_generation_callback(kind: str, callback_url: str, job: Dict[
     callback_result_url = _extract_job_result_url(callback_payload.get("result"))
     local_ticket = _extract_local_generation_callback_ticket(callback_url)
     if local_ticket:
-        await asyncio.to_thread(_set_generation_callback_payload, local_ticket, callback_payload)
+        _set_generation_callback_payload_for_ack(local_ticket, callback_payload)
         logger.info(
             "[GenerationCallback] dispatched locally kind=%s job_id=%s callback_ticket=%s has_result_url=%s result_url=%s",
             kind,

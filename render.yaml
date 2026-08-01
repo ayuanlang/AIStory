@@ -1,3 +1,17 @@
+# Render Blueprint — source of truth for web/worker env.
+#
+# Dashboard overrides WIN over this file:
+# - If Start Command was customized, logs show bare `gunicorn ...` instead of
+#   `[boot] starting gunicorn via run_web.py`. Fix Settings → Start Command.
+# - If env keys already exist in Dashboard with different values (e.g.
+#   GUNICORN_MAX_REQUESTS=0, DB_POOL_SIZE=30), Blueprint sync will NOT replace
+#   them. Delete/correct those keys in Dashboard, then Sync / redeploy.
+#
+# After deploy, web Runtime startup profile must show:
+#   run_generation_queue_worker=False
+#   gunicorn_max_requests=300
+#   runtime_diag_enabled=True
+
 services:
   # Backend Service
   - type: web
@@ -8,23 +22,25 @@ services:
     buildCommand: |
       cd backend
       pip install --no-cache-dir -r requirements.txt
-    # IMPORTANT: Render Dashboard "Start Command" overrides this when customized.
-    # If logs still show "--workers 2", the Dashboard command was not updated.
-    # Paste exactly:  cd backend; python run_web.py
+    # MUST match Dashboard Start Command exactly (Dashboard wins if customized).
+    # BAD (causes queue-in-web + max_requests=0 when env also wrong):
+    #   cd backend; exec gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --workers 1 --timeout 600 --keep-alive 15
+    # GOOD:
     startCommand: cd backend; python run_web.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
       - key: PYTHONUNBUFFERED
         value: "1"
+      # Keep Dashboard-managed; do not regenerate on Blueprint sync (invalidates JWTs).
       - key: SECRET_KEY
-        generateValue: true
+        sync: false
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: 43200
       - key: FRONTEND_BASE_URL
-        value: "https://aistory-frontend.onrender.com"
+        value: "https://aistory.pro"
       - key: CORS_ORIGINS
-        value: "https://aistory-frontend.onrender.com,http://localhost:3000,http://localhost:5173"
+        value: "https://aistory.pro,https://www.aistory.pro,https://woola.fun,https://www.woola.fun,https://aistory-frontend.onrender.com,http://localhost:3000,http://localhost:5173"
       - key: CORS_ALLOW_ORIGIN_REGEX
         value: "^https://.*\\.onrender\\.com$"
       - key: SECURITY_HEADERS_ENABLED
@@ -33,7 +49,8 @@ services:
         value: "31536000"
       - key: GZIP_MINIMUM_SIZE
         value: "1024"
-      # 4GB-class hosts: keep a single async worker; do not raise without more RAM.
+      # --- critical web process profile (do not override weaker in Dashboard) ---
+      # 4GB-class hosts: single async worker; queue belongs on aistory-generation-worker.
       - key: WEB_CONCURRENCY
         value: "1"
       - key: FORCE_SINGLE_WEB_WORKER
@@ -61,6 +78,7 @@ services:
         value: "3"
       - key: BILLING_RECONCILE_MAX_ROWS
         value: "500"
+      # gunicorn: never set MAX_REQUESTS=0 in Dashboard (disables worker recycle).
       - key: GUNICORN_TIMEOUT
         value: "600"
       - key: GUNICORN_GRACEFUL_TIMEOUT
@@ -71,6 +89,7 @@ services:
         value: "300"
       - key: GUNICORN_MAX_REQUESTS_JITTER
         value: "50"
+      # runtime diag: needed to catch OOM / high-watermark before Render SIGTERM.
       - key: RUNTIME_DIAG_LOG_ENABLED
         value: "1"
       - key: RUNTIME_DIAG_HEARTBEAT_ENABLED
@@ -141,6 +160,7 @@ services:
         value: "1048576"
       - key: ASSETS_LIST_MAX_SCAN_ROWS
         value: "3000"
+      # Small pool on web: Dashboard DB_POOL_SIZE=30 + queue-in-web caused memory pressure.
       - key: DB_POOL_SIZE
         value: "5"
       - key: DB_MAX_OVERFLOW
@@ -189,6 +209,7 @@ services:
         value: "1"
       - key: RUN_DB_BOOTSTRAP_ON_START
         value: "0"
+      # Only this service should run the generation queue.
       - key: RUN_GENERATION_QUEUE_WORKER_ON_START
         value: "1"
       - key: RUN_MAINTENANCE_SCHEDULER
