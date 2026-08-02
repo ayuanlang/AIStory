@@ -41,6 +41,7 @@ from app.services.generation_runtime.job_store import (
     _read_video_job_file,
     _set_video_job,
 )
+from app.services.db_session_utils import _release_db_connection, _snapshot_user_principal
 from app.services.media_service import media_service
 from app.services.oss_storage_service import oss_storage_service
 from app.services.generation_runtime.asset_registration import (  # noqa: F401
@@ -2126,6 +2127,51 @@ def _resolve_shot_media_slot_url(shot: Shot, slot: str) -> Tuple[str, str, Dict[
     raise HTTPException(status_code=400, detail=f"Unsupported media slot: {slot}")
 
 
+def _reload_shot_or_none(db: Session, shot_id: Optional[int]) -> Optional[Shot]:
+    if not shot_id:
+        return None
+    try:
+        return db.query(Shot).filter(Shot.id == int(shot_id)).first()
+    except Exception as exc:
+        logger.warning("[ShotMediaPersist] reload query failed | shot_id=%s err=%s", shot_id, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            return db.query(Shot).filter(Shot.id == int(shot_id)).first()
+        except Exception as retry_exc:
+            logger.warning(
+                "[ShotMediaPersist] reload retry failed | shot_id=%s err=%s",
+                shot_id,
+                retry_exc,
+            )
+            return None
+
+
+def _safe_refresh_shot(db: Session, shot: Optional[Shot]) -> Optional[Shot]:
+    """Refresh shot after bind; never raise if the row vanished mid-request."""
+    if not shot:
+        return None
+    shot_id = getattr(shot, "id", None)
+    try:
+        db.refresh(shot)
+        return shot
+    except Exception as exc:
+        logger.warning(
+            "[ShotMediaPersist] refresh failed; reloading | shot_id=%s err=%s",
+            shot_id,
+            exc,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        if shot_id is None:
+            return shot
+        return _reload_shot_or_none(db, int(shot_id)) or shot
+
+
 def _persist_shot_media_slot(
     db: Session,
     current_user: User,
@@ -2135,6 +2181,10 @@ def _persist_shot_media_slot(
     slot: str = "video",
     source_url_override: Optional[str] = None,
 ) -> Dict[str, Any]:
+    shot_id = int(getattr(shot, "id", 0) or 0)
+    if shot_id <= 0:
+        raise HTTPException(status_code=400, detail="Shot id is required")
+
     source_url, asset_type, notes, slot_meta = _resolve_shot_media_slot_url(shot, slot)
     if source_url_override:
         source_url = str(source_url_override or "").strip()
@@ -2161,7 +2211,7 @@ def _persist_shot_media_slot(
                 db,
                 current_user,
                 {
-                    "shot_id": int(shot.id),
+                    "shot_id": shot_id,
                     "project_id": int(getattr(shot, "project_id", None) or getattr(project, "id", None) or 0) or None,
                     "episode_id": getattr(shot, "episode_id", None),
                     "shot_number": getattr(shot, "shot_id", None),
@@ -2172,9 +2222,9 @@ def _persist_shot_media_slot(
                 True,
                 clean_meta,
             )
-            db.refresh(shot)
+            _safe_refresh_shot(db, shot)
         return {
-            "shot_id": int(shot.id),
+            "shot_id": shot_id,
             "slot": asset_type,
             "source_url": source_url,
             "persisted_url": source_url,
@@ -2184,7 +2234,7 @@ def _persist_shot_media_slot(
         }
 
     req_context: Dict[str, Any] = {
-        "shot_id": int(shot.id),
+        "shot_id": shot_id,
         "project_id": int(getattr(shot, "project_id", None) or getattr(project, "id", None) or 0) or None,
         "episode_id": getattr(shot, "episode_id", None),
         "shot_number": getattr(shot, "shot_id", None),
@@ -2192,24 +2242,37 @@ def _persist_shot_media_slot(
         "asset_type": asset_type,
     }
     filename_base = _build_persist_filename_base_from_context(req_context, db)
+    user_snapshot = _snapshot_user_principal(current_user)
+    user_id = int(getattr(user_snapshot, "id", 0) or 0)
+
+    # Do not hold a pool connection across remote download + OSS upload
+    # (can take many minutes; stale/detached Shot then breaks db.refresh).
+    try:
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    _release_db_connection(db, "persist_shot_media_localize")
 
     if asset_type == "video":
         normalized_url, normalized_meta, oss_uploaded = _persist_remote_video_result(
-            current_user,
+            user_snapshot,
             source_url,
             slot_meta,
             filename_base=filename_base,
-            db=db,
+            db=None,
         )
     else:
         normalized_url, normalized_meta = _persist_remote_image_result(
-            current_user,
+            user_snapshot,
             source_url,
             slot_meta,
-            db=db,
+            db=None,
         )
         normalized_meta = dict(normalized_meta or {})
-        oss_uploaded = _oss_upload_succeeded_for_url(normalized_url, normalized_meta, db)
+        oss_uploaded = _oss_upload_succeeded_for_url(normalized_url, normalized_meta, db=None)
 
     normalized_url = str(normalized_url or "").strip() or source_url
     normalized_meta = dict(normalized_meta or {})
@@ -2272,23 +2335,64 @@ def _persist_shot_media_slot(
         normalized_meta = _clear_ephemeral_persist_flags(normalized_meta)
         normalized_meta["oss_uploaded_success"] = True
 
+    bind_user = current_user
+    if user_id > 0:
+        try:
+            reloaded_user = db.query(User).filter(User.id == user_id).first()
+            if reloaded_user is not None:
+                bind_user = reloaded_user
+        except Exception as user_exc:
+            logger.warning(
+                "[ShotMediaPersist] user reload failed; using snapshot | user_id=%s err=%s",
+                user_id,
+                user_exc,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            bind_user = user_snapshot
+
     try:
-        _register_asset_helper(db, current_user.id, final_url, req_context, normalized_meta)
+        _register_asset_helper(db, user_id or getattr(bind_user, "id", None), final_url, req_context, normalized_meta)
     except Exception as reg_exc:
-        logger.warning("[ShotMediaPersist] register asset failed | shot_id=%s slot=%s err=%s", shot.id, asset_type, reg_exc)
+        logger.warning(
+            "[ShotMediaPersist] register asset failed | shot_id=%s slot=%s err=%s",
+            shot_id,
+            asset_type,
+            reg_exc,
+        )
+
+    shot = _reload_shot_or_none(db, shot_id)
+    if not shot:
+        logger.warning(
+            "[ShotMediaPersist] shot missing after localize; returning persisted url without bind | shot_id=%s url=%s",
+            shot_id,
+            final_url,
+        )
+        return {
+            "shot_id": shot_id,
+            "slot": asset_type,
+            "source_url": source_url,
+            "persisted_url": final_url,
+            "oss_uploaded": bind_oss_flag,
+            "already_persisted": False,
+            "shot_missing_after_persist": True,
+            "metadata": normalized_meta or None,
+        }
 
     _bind_generated_media_to_shot(
         db,
-        current_user,
+        bind_user,
         req_context,
         final_url,
         bind_oss_flag,
         normalized_meta,
     )
 
-    db.refresh(shot)
+    _safe_refresh_shot(db, shot)
     return {
-        "shot_id": int(shot.id),
+        "shot_id": shot_id,
         "slot": asset_type,
         "source_url": source_url,
         "persisted_url": final_url,
@@ -2385,9 +2489,25 @@ def _persist_entity_image(
         bool(oss_uploaded and not ephemeral_binding),
     )
 
-    db.refresh(entity)
+    entity_id = int(getattr(entity, "id", 0) or 0)
+    try:
+        db.refresh(entity)
+    except Exception as refresh_exc:
+        logger.warning(
+            "[EntityMediaPersist] refresh failed; reloading | entity_id=%s err=%s",
+            entity_id,
+            refresh_exc,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        if entity_id > 0:
+            reloaded = db.query(Entity).filter(Entity.id == entity_id).first()
+            if reloaded is not None:
+                entity = reloaded
     return {
-        "entity_id": int(entity.id),
+        "entity_id": int(getattr(entity, "id", None) or entity_id),
         "source_url": source_url,
         "persisted_url": final_url,
         "oss_uploaded": bool(oss_uploaded and not ephemeral_binding),

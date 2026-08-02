@@ -582,7 +582,16 @@ def persist_shot_media(
         raise HTTPException(status_code=404, detail="Episode not found")
     project = _require_project_access(db, episode.project_id, current_user)
 
-    _repair_shot_media_urls_from_assets(db, current_user, project, db_shot)
+    if _repair_shot_media_urls_from_assets(db, current_user, project, db_shot):
+        try:
+            db.commit()
+        except Exception as repair_exc:
+            db.rollback()
+            logger.warning(
+                "persist_shot_media repair commit failed shot_id=%s err=%s",
+                shot_id,
+                repair_exc,
+            )
 
     result = _persist_shot_media_slot(
         db,
@@ -592,13 +601,23 @@ def persist_shot_media(
         slot=str(payload.slot or "video"),
         source_url_override=payload.source_url,
     )
-    refreshed = _refresh_shot_media_urls(db_shot, db)
-    result["shot"] = {
-        "id": refreshed.id,
-        "video_url": refreshed.video_url,
-        "image_url": refreshed.image_url,
-        "technical_notes": refreshed.technical_notes,
-    }
+    # Localization releases the request session; re-query before building response.
+    refreshed = db.query(Shot).filter(Shot.id == shot_id).first()
+    if refreshed is not None:
+        refreshed = _refresh_shot_media_urls(refreshed, db)
+        result["shot"] = {
+            "id": refreshed.id,
+            "video_url": refreshed.video_url,
+            "image_url": refreshed.image_url,
+            "technical_notes": refreshed.technical_notes,
+        }
+    else:
+        result["shot"] = {
+            "id": shot_id,
+            "video_url": result.get("persisted_url") if str(result.get("slot") or "") == "video" else None,
+            "image_url": result.get("persisted_url") if str(result.get("slot") or "") != "video" else None,
+            "technical_notes": None,
+        }
     return result
 
 
