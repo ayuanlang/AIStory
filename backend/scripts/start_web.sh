@@ -34,7 +34,27 @@ if [[ "${FORCE_SINGLE_WEB_WORKER:-1}" == "1" ]] && [[ "${WORKERS}" -gt 1 ]]; the
 fi
 export WEB_CONCURRENCY="${WORKERS}"
 
-echo "[boot] starting gunicorn on PORT=${PORT:-8000} workers=${WORKERS}"
+# Single-worker recycle = full outage until the new UvicornWorker finishes boot.
+# Default max-requests to 0 on 1-worker hosts; rely on runtime diag / Render memory.
+MAX_REQUESTS="${GUNICORN_MAX_REQUESTS-}"
+MAX_REQUESTS_JITTER="${GUNICORN_MAX_REQUESTS_JITTER-}"
+if [[ -z "${MAX_REQUESTS}" ]]; then
+  if [[ "${WORKERS}" -eq 1 ]]; then
+    MAX_REQUESTS=0
+    MAX_REQUESTS_JITTER="${MAX_REQUESTS_JITTER:-0}"
+    echo "[boot] single worker: defaulting GUNICORN_MAX_REQUESTS=0 (avoid recycle outage)"
+  else
+    MAX_REQUESTS=300
+    MAX_REQUESTS_JITTER="${MAX_REQUESTS_JITTER:-50}"
+  fi
+else
+  MAX_REQUESTS_JITTER="${MAX_REQUESTS_JITTER:-50}"
+fi
+if [[ "${WORKERS}" -eq 1 ]] && [[ "${MAX_REQUESTS}" =~ ^[0-9]+$ ]] && [[ "${MAX_REQUESTS}" -gt 0 ]]; then
+  echo "[boot] WARNING: workers=1 with max-requests=${MAX_REQUESTS}; each recycle briefly drops all traffic"
+fi
+
+echo "[boot] starting gunicorn on PORT=${PORT:-8000} workers=${WORKERS} max_requests=${MAX_REQUESTS}"
 exec gunicorn app.main:app \
   -c gunicorn.conf.py \
   -k uvicorn.workers.UvicornWorker \
@@ -46,5 +66,5 @@ exec gunicorn app.main:app \
   --access-logfile - \
   --error-logfile - \
   --access-logformat '%(h)s %(l)s %(u)s [%(t)s] "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" req_time=%(D)sus pid=%(p)s' \
-  --max-requests "${GUNICORN_MAX_REQUESTS:-300}" \
-  --max-requests-jitter "${GUNICORN_MAX_REQUESTS_JITTER:-50}"
+  --max-requests "${MAX_REQUESTS}" \
+  --max-requests-jitter "${MAX_REQUESTS_JITTER}"

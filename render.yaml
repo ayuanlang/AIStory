@@ -9,7 +9,7 @@
 #
 # After deploy, web Runtime startup profile must show:
 #   run_generation_queue_worker=False
-#   gunicorn_max_requests=300
+#   gunicorn_max_requests=0
 #   runtime_diag_enabled=True
 
 services:
@@ -78,7 +78,9 @@ services:
         value: "3"
       - key: BILLING_RECONCILE_MAX_ROWS
         value: "500"
-      # gunicorn: never set MAX_REQUESTS=0 in Dashboard (disables worker recycle).
+      # gunicorn: with WEB_CONCURRENCY=1, max-requests>0 causes a full outage on every
+      # worker recycle (no spare worker). Prefer 0 + RUNTIME_DIAG_* for memory watch.
+      # Dashboard overrides win — if you still see max-requests kills, set these to 0 there.
       - key: GUNICORN_TIMEOUT
         value: "600"
       - key: GUNICORN_GRACEFUL_TIMEOUT
@@ -86,9 +88,9 @@ services:
       - key: GUNICORN_KEEPALIVE
         value: "15"
       - key: GUNICORN_MAX_REQUESTS
-        value: "300"
+        value: "0"
       - key: GUNICORN_MAX_REQUESTS_JITTER
-        value: "50"
+        value: "0"
       # runtime diag: needed to catch OOM / high-watermark before Render SIGTERM.
       - key: RUNTIME_DIAG_LOG_ENABLED
         value: "1"

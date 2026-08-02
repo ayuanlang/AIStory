@@ -9197,14 +9197,23 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 ignoreAsyncJobCallbacks = true;
                                 releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                                 const stableTargetShotId = String(targetShotId || '').trim();
+                                const earlyDurable = isDurablePersistedMediaUrl(earlyUrl);
+                                const earlyPatched = mergeShotVideoOssPersistState(
+                                    { id: stableTargetShotId, video_url: earlyUrl },
+                                    { videoUrl: earlyUrl, ossUploaded: earlyDurable }
+                                );
+                                const earlyPatch = {
+                                    video_url: earlyUrl,
+                                    technical_notes: earlyPatched.technical_notes,
+                                };
                                 setShots((prev) => prev.map((shot) => (
                                     String(shot?.id || '') === stableTargetShotId
-                                        ? { ...shot, video_url: earlyUrl }
+                                        ? { ...shot, ...earlyPatch }
                                         : shot
                                 )));
                                 setEditingShot((prev) => {
                                     if (!prev || String(prev.id) !== stableTargetShotId) return prev;
-                                    return { ...prev, video_url: earlyUrl };
+                                    return { ...prev, ...earlyPatch };
                                 });
                                 setIsEditingVideoPreviewArmed(true);
                                 setVideoStatuses((prev) => {
@@ -9212,10 +9221,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     delete next[targetShotId];
                                     return next;
                                 });
-                                // Bind early so a concurrent refresh cannot blank the preview.
-                                void onUpdateShot(targetShotId, { video_url: earlyUrl }).catch((err) => {
-                                    console.warn('[handleGenerateVideo] early shot bind patch failed:', err);
-                                });
+                                // Only PUT durable OSS URLs. Temp/provider/local paths are rejected
+                                // until persist-media / backend bg OSS finishes — keep those local-only.
+                                if (earlyDurable) {
+                                    void onUpdateShot(targetShotId, earlyPatch).catch((err) => {
+                                        console.warn('[handleGenerateVideo] early shot bind patch failed:', err);
+                                    });
+                                }
                             }
                         }
                     },
@@ -9303,10 +9315,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 onLog?.('Video Generated', 'success');
                 showNotification('Video Generated', 'success');
 
-                // 2. Always bind URL onto the shot record (incl. provider temp URLs),
-                // otherwise refreshShots/live-sync can blank the just-generated preview.
+                // 2. Only PUT durable OSS URLs (and always save prompt). Temp/provider/local
+                // paths are rejected by the API until backend bg OSS / persist-media finishes.
                 try {
-                    await onUpdateShot(targetShotId, newData);
+                    if (durableNow) {
+                        await onUpdateShot(targetShotId, newData);
+                    } else if (rawPrompt) {
+                        await onUpdateShot(targetShotId, { prompt: rawPrompt });
+                    }
                 } catch (updateErr) {
                     console.error("Failed to save shot update to backend:", updateErr);
                 }
@@ -9316,68 +9332,73 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 setVideoStatuses(prev => { const n = {...prev}; delete n[targetShotId]; return n; });
 
                 if (!durableNow) {
-                    // 3. Auto OSS persist (same path as「临时视频」), then refresh durable URL.
+                    // 3. Backend already owns bg OSS localization after provisional publish.
+                    // Prefer polling that result — do NOT race another persist-media download
+                    // (that was leaving the UI stuck on「补传中」). Keep preview playable; only
+                    // flip busy when we actually fall back to an explicit persist-media call.
                     void (async () => {
                         const busyKey = `${stableTargetShotId}:video`;
-                        setShotMediaOssPersistBusy((prev) => ({ ...prev, [busyKey]: true }));
                         try {
-                            const persistResult = await persistShotMedia(stableTargetShotId, {
-                                slot: 'video',
-                                source_url: resolvedVideoUrl,
-                            });
-                            const persistedUrl = String(
-                                persistResult?.persisted_url
-                                || persistResult?.shot?.video_url
-                                || ''
-                            ).trim();
-                            if (persistedUrl && isDurablePersistedMediaUrl(persistedUrl)) {
-                                const durablePatch = mergeShotVideoOssPersistState(
-                                    { ...shotSnapshot, ...newData, ...(persistResult?.shot || {}) },
-                                    { videoUrl: persistedUrl, ossUploaded: true }
-                                );
-                                const durableData = {
-                                    video_url: persistedUrl,
-                                    technical_notes: durablePatch.technical_notes,
-                                };
-                                setShots((prev) => prev.map((shot) => (
-                                    String(shot?.id || '') === stableTargetShotId ? { ...shot, ...durableData } : shot
-                                )));
-                                setEditingShot((prev) => (
-                                    prev && String(prev.id) === stableTargetShotId ? { ...prev, ...durableData } : prev
-                                ));
-                                setIsEditingVideoPreviewArmed(true);
-                                try {
-                                    await onUpdateShot(stableTargetShotId, durableData);
-                                } catch (persistUpdateErr) {
-                                    console.warn('[handleGenerateVideo] durable shot patch failed:', persistUpdateErr);
-                                }
-                                onLog?.(t('视频已写入 OSS，界面已刷新。', 'Video persisted to OSS; UI refreshed.'), 'success');
-                                return;
-                            }
                             const synced = await syncShotVideoAfterOssPersist({
                                 shotId: targetShotId,
                                 jobId: createdVideoJobId,
                                 initialUrl: resolvedVideoUrl,
                             });
-                            if (!synced) {
+                            if (synced) return;
+
+                            // Fallback only if bg persist did not produce a durable URL in time.
+                            onLog?.(t('后台 OSS 写入较慢，正在尝试补传...', 'Background OSS persist is slow; retrying upload...'), 'info');
+                            setShotMediaOssPersistBusy((prev) => ({ ...prev, [busyKey]: true }));
+                            try {
+                                const persistResult = await persistShotMedia(stableTargetShotId, {
+                                    slot: 'video',
+                                    source_url: resolvedVideoUrl,
+                                });
+                                const persistedUrl = String(
+                                    persistResult?.persisted_url
+                                    || persistResult?.shot?.video_url
+                                    || ''
+                                ).trim();
+                                if (persistedUrl && isDurablePersistedMediaUrl(persistedUrl)) {
+                                    const durablePatch = mergeShotVideoOssPersistState(
+                                        { ...shotSnapshot, ...newData, ...(persistResult?.shot || {}) },
+                                        { videoUrl: persistedUrl, ossUploaded: true }
+                                    );
+                                    const durableData = {
+                                        video_url: persistedUrl,
+                                        technical_notes: durablePatch.technical_notes,
+                                    };
+                                    setShots((prev) => prev.map((shot) => (
+                                        String(shot?.id || '') === stableTargetShotId ? { ...shot, ...durableData } : shot
+                                    )));
+                                    setEditingShot((prev) => (
+                                        prev && String(prev.id) === stableTargetShotId ? { ...prev, ...durableData } : prev
+                                    ));
+                                    setIsEditingVideoPreviewArmed(true);
+                                    try {
+                                        await onUpdateShot(stableTargetShotId, durableData);
+                                    } catch (persistUpdateErr) {
+                                        console.warn('[handleGenerateVideo] durable shot patch failed:', persistUpdateErr);
+                                    }
+                                    onLog?.(t('视频已写入 OSS，界面已刷新。', 'Video persisted to OSS; UI refreshed.'), 'success');
+                                    return;
+                                }
                                 notifyShotMediaOssPersistWarning({ ...shotSnapshot, video_url: resolvedVideoUrl }, 'video');
+                            } finally {
+                                setShotMediaOssPersistBusy((prev) => {
+                                    const next = { ...prev };
+                                    delete next[busyKey];
+                                    return next;
+                                });
                             }
                         } catch (persistErr) {
-                            console.warn('[handleGenerateVideo] auto OSS persist failed:', persistErr);
-                            const synced = await syncShotVideoAfterOssPersist({
-                                shotId: targetShotId,
-                                jobId: createdVideoJobId,
-                                initialUrl: resolvedVideoUrl,
-                            });
-                            if (!synced) {
-                                notifyShotMediaOssPersistWarning({ ...shotSnapshot, video_url: resolvedVideoUrl }, 'video');
-                            }
-                        } finally {
+                            console.warn('[handleGenerateVideo] auto OSS sync/persist failed:', persistErr);
                             setShotMediaOssPersistBusy((prev) => {
                                 const next = { ...prev };
                                 delete next[busyKey];
                                 return next;
                             });
+                            notifyShotMediaOssPersistWarning({ ...shotSnapshot, video_url: resolvedVideoUrl }, 'video');
                         }
                     })();
                 }

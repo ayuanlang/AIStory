@@ -44,10 +44,24 @@ def main() -> int:
     timeout = str(os.getenv("GUNICORN_TIMEOUT", "600") or "600")
     graceful = str(os.getenv("GUNICORN_GRACEFUL_TIMEOUT", "660") or "660")
     keep_alive = str(os.getenv("GUNICORN_KEEPALIVE", "15") or "15")
-    max_requests = str(os.getenv("GUNICORN_MAX_REQUESTS", "300") or "300")
-    max_requests_jitter = str(os.getenv("GUNICORN_MAX_REQUESTS_JITTER", "50") or "50")
+    # Single worker: recycling on max-requests drops all traffic during app reboot.
+    # Default 0 unless explicitly configured; multi-worker keeps the old 300 default.
+    if "GUNICORN_MAX_REQUESTS" in os.environ:
+        max_requests = str(os.getenv("GUNICORN_MAX_REQUESTS") or "0")
+    else:
+        max_requests = "0" if workers <= 1 else "300"
+    if "GUNICORN_MAX_REQUESTS_JITTER" in os.environ:
+        max_requests_jitter = str(os.getenv("GUNICORN_MAX_REQUESTS_JITTER") or "0")
+    else:
+        max_requests_jitter = "0" if max_requests == "0" else "50"
+    os.environ["GUNICORN_MAX_REQUESTS"] = max_requests
+    os.environ["GUNICORN_MAX_REQUESTS_JITTER"] = max_requests_jitter
 
-    print(f"[boot] starting gunicorn via run_web.py | port={port} workers={workers}", flush=True)
+    print(
+        f"[boot] starting gunicorn via run_web.py | port={port} workers={workers} "
+        f"max_requests={max_requests}",
+        flush=True,
+    )
 
     # Prefer the shared shell entry when present (migrations + clamp).
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "start_web.sh")

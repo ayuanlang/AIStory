@@ -3297,16 +3297,30 @@ export const mergeShotVideoOssPersistState = (shotLike, patch = {}) => {
             : (patch.technical_notes !== undefined ? patch.technical_notes : merged.technical_notes)
     );
 
-    const ossUploaded = patch.ossUploaded !== false && patch.oss_uploaded !== false;
+    const hasOssFlag = patch.ossUploaded !== undefined || patch.oss_uploaded !== undefined;
+    const ossUploaded = hasOssFlag
+        ? (patch.ossUploaded !== false && patch.oss_uploaded !== false)
+        : true;
+    const meta = tech.video_metadata && typeof tech.video_metadata === 'object'
+        ? { ...tech.video_metadata }
+        : {};
     if (ossUploaded) {
         tech.video_oss_uploaded = true;
-        const meta = tech.video_metadata && typeof tech.video_metadata === 'object'
-            ? { ...tech.video_metadata }
-            : {};
         delete meta.ephemeral_binding;
         delete meta.needs_persistence_retry;
         delete meta.remote_localization_failed;
         meta.oss_uploaded_success = true;
+        tech.video_metadata = meta;
+    } else if (hasOssFlag && videoUrl) {
+        // Explicit non-durable bind: keep preview locally and mark for OSS sync.
+        tech.video_oss_uploaded = false;
+        meta.ephemeral_binding = true;
+        meta.needs_persistence_retry = true;
+        meta.remote_localization_failed = true;
+        meta.pending_source_url = meta.pending_source_url || videoUrl;
+        if (!meta.media_bound_at) {
+            meta.media_bound_at = new Date().toISOString();
+        }
         tech.video_metadata = meta;
     }
 
