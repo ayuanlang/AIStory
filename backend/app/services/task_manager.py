@@ -106,7 +106,11 @@ def _is_truncated_task_result(value: Any) -> bool:
 
 
 def _compact_task_result(value: Any) -> Any:
-    """Keep process heap small; full payload remains in async_tasks DB row."""
+    """Keep process heap small; full payload remains in async_tasks DB row.
+
+    For script-analysis / entity-design payloads, always preserve subjects_json so
+    category-level asset imports still work if DB hydration of the full result fails.
+    """
     if value is None:
         return None
     nbytes = _estimate_json_bytes(value)
@@ -125,9 +129,31 @@ def _compact_task_result(value: Any) -> Any:
             "__original_bytes__": nbytes,
             "preview_keys": [str(k) for k in list(value.keys())[:48]],
         }
-        for key in ("status", "ok", "error", "code", "task_id", "job_id"):
+        for key in ("status", "ok", "error", "code", "task_id", "job_id", "node_key", "success"):
             if key in value and not isinstance(value.get(key), (dict, list)):
                 kept[key] = value.get(key)
+        # Import-critical fields: keep even when truncating large raw LLM text.
+        if isinstance(value.get("subjects_json"), dict):
+            kept["subjects_json"] = value.get("subjects_json")
+        if isinstance(value.get("subjects_json_count"), dict):
+            kept["subjects_json_count"] = value.get("subjects_json_count")
+        nested = value.get("result")
+        if isinstance(nested, dict):
+            nested_kept: Dict[str, Any] = {}
+            if isinstance(nested.get("subjects_json"), dict):
+                nested_kept["subjects_json"] = nested.get("subjects_json")
+            if isinstance(nested.get("subjects_json_count"), dict):
+                nested_kept["subjects_json_count"] = nested.get("subjects_json_count")
+            for key in ("success", "status", "node_key"):
+                if key in nested and not isinstance(nested.get(key), (dict, list)):
+                    nested_kept[key] = nested.get(key)
+            raw_text = nested.get("result")
+            if isinstance(raw_text, str) and raw_text:
+                nested_kept["result"] = raw_text[:_RESULT_PREVIEW_MAX_CHARS]
+            if nested_kept:
+                kept["result"] = nested_kept
+        elif isinstance(nested, str) and nested:
+            kept["result"] = nested[:_RESULT_PREVIEW_MAX_CHARS]
         return kept
     if isinstance(value, list):
         return {

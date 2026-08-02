@@ -4909,9 +4909,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, []);
 
     const resolveSubjectsJsonFromAnalyzeResult = useCallback((result, analysisText) => {
-        const backendJson = (result?.subjects_json && typeof result.subjects_json === 'object')
-            ? result.subjects_json
-            : null;
+        const pickSubjectsJson = (obj) => {
+            if (!obj || typeof obj !== 'object') return null;
+            if (obj.subjects_json && typeof obj.subjects_json === 'object') return obj.subjects_json;
+            if (obj.result && typeof obj.result === 'object' && obj.result.subjects_json && typeof obj.result.subjects_json === 'object') {
+                return obj.result.subjects_json;
+            }
+            if (obj.data && typeof obj.data === 'object' && obj.data.subjects_json && typeof obj.data.subjects_json === 'object') {
+                return obj.data.subjects_json;
+            }
+            return null;
+        };
+        const backendJson = pickSubjectsJson(result);
         const rawText = String(analysisText || '').trim();
         const mergedPayload = rawText ? getMergedEntitiesPayloadFromText(rawText) : null;
         const textJson = mergedPayload?.payload
@@ -13208,7 +13217,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 onLog?.(`[Stage 3 Asset Design] Subtask import failed key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}: ${subImportErr?.message || subImportErr}`, 'warning');
                             }
                         } else {
-                            onLog?.(`[Stage 3 Asset Design] Subtask has no importable subjects key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`, 'warning');
+                            const countMeta = res?.subjects_json_count || res?.result?.subjects_json_count || {};
+                            const truncated = Boolean(res?.__truncated__ || res?.result?.__truncated__);
+                            onLog?.(
+                                `[Stage 3 Asset Design] Subtask has no importable subjects key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`
+                                + ` counts=${JSON.stringify(countMeta)} truncated=${truncated ? 'yes' : 'no'}`
+                                + ` analysis_chars=${String(aText || '').length}`,
+                                'warning'
+                            );
                         }
 
                         const completedAssetTaskLabels = assetsGenCompletedKeys.map(getAssetDesignTaskLabel).filter(Boolean).join('、');
@@ -13281,16 +13297,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const aText = r.value.analysisText || '';
 
                                           if (bJson) {
-                          if (r.value.key === 'characters' && bJson.characters) mergedBackendSubjectsJson.characters = bJson.characters;
-                          if (r.value.key === 'environments') {
-                              if (bJson.environments && (!options.targetEntityTypes || options.targetEntityTypes.includes('environments'))) mergedBackendSubjectsJson.environments = bJson.environments;
-                              if (bJson.posters && (!options.targetEntityTypes || options.targetEntityTypes.includes('posters') || options.targetEntityTypes.includes('covers'))) mergedBackendSubjectsJson.posters = bJson.posters;
-                              if (bJson.covers && (!options.targetEntityTypes || options.targetEntityTypes.includes('covers') || options.targetEntityTypes.includes('posters'))) mergedBackendSubjectsJson.covers = bJson.covers;
+                          // Only replace a category when the subtask returned non-empty rows.
+                          // Empty arrays must not wipe previously merged / persisted subjects.
+                          if (r.value.key === 'characters' && Array.isArray(bJson.characters) && bJson.characters.length > 0) {
+                              mergedBackendSubjectsJson.characters = bJson.characters;
                           }
-                          if (r.value.key === 'props' && bJson.props) mergedBackendSubjectsJson.props = bJson.props;
+                          if (r.value.key === 'environments') {
+                              if (Array.isArray(bJson.environments) && bJson.environments.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('environments'))) {
+                                  mergedBackendSubjectsJson.environments = bJson.environments;
+                              }
+                              if (Array.isArray(bJson.posters) && bJson.posters.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('posters') || options.targetEntityTypes.includes('covers'))) {
+                                  mergedBackendSubjectsJson.posters = bJson.posters;
+                              }
+                              if (Array.isArray(bJson.covers) && bJson.covers.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('covers') || options.targetEntityTypes.includes('posters'))) {
+                                  mergedBackendSubjectsJson.covers = bJson.covers;
+                              }
+                          }
+                          if (r.value.key === 'props' && Array.isArray(bJson.props) && bJson.props.length > 0) {
+                              mergedBackendSubjectsJson.props = bJson.props;
+                          }
                         if (r.value.key === 'posters') {
-                            if (bJson.posters && (!options.targetEntityTypes || options.targetEntityTypes.includes('posters') || options.targetEntityTypes.includes('covers'))) mergedBackendSubjectsJson.posters = bJson.posters;
-                            if (bJson.covers && (!options.targetEntityTypes || options.targetEntityTypes.includes('covers') || options.targetEntityTypes.includes('posters'))) mergedBackendSubjectsJson.covers = bJson.covers;
+                            if (Array.isArray(bJson.posters) && bJson.posters.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('posters') || options.targetEntityTypes.includes('covers'))) {
+                                mergedBackendSubjectsJson.posters = bJson.posters;
+                            }
+                            if (Array.isArray(bJson.covers) && bJson.covers.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('covers') || options.targetEntityTypes.includes('posters'))) {
+                                mergedBackendSubjectsJson.covers = bJson.covers;
+                            }
                         }
                     }
                     if (aText) {

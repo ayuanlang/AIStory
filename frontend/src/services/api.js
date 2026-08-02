@@ -3864,15 +3864,56 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
         throw new Error(detail || 'Script analysis workflow failed');
     }
 
-    const result = data?.result && typeof data.result === 'object' ? data.result : data;
+    if (data?.__truncated__) {
+        const bytes = data?.__original_bytes__ || '?';
+        throw new Error(
+            `Script analysis workflow result was truncated (${bytes} bytes) and subjects_json is unavailable. `
+            + 'Retry with fewer entities (single-entity rerun), or raise ASYNC_TASK_RESULT_MAX_BYTES on the backend.'
+        );
+    }
+
+    // Flow envelope: { status, node_key, result: analyzePayload }. Prefer analyze payload.
+    let result = data;
+    if (data?.result && typeof data.result === 'object') {
+        const nested = data.result;
+        const looksLikeFlowEnvelope = Boolean(data.node_key || data.executor || data.injection_chain);
+        const nestedHasSubjects = Boolean(nested?.subjects_json && typeof nested.subjects_json === 'object');
+        const nestedIsAnalyze = nestedHasSubjects
+            || typeof nested?.success === 'boolean'
+            || typeof nested?.result === 'string'
+            || typeof nested?.result_content === 'string';
+        if (looksLikeFlowEnvelope || nestedIsAnalyze) {
+            result = nested;
+        }
+    }
+
+    if (result?.__truncated__ && !(result?.subjects_json && typeof result.subjects_json === 'object')) {
+        const bytes = result?.__original_bytes__ || data?.__original_bytes__ || '?';
+        throw new Error(
+            `Script analysis analyze payload was truncated (${bytes} bytes) without subjects_json. `
+            + 'Retry with fewer entities (single-entity rerun), or raise ASYNC_TASK_RESULT_MAX_BYTES on the backend.'
+        );
+    }
+
     if (!result || typeof result !== 'object') {
         throw new Error('Script analysis workflow returned an invalid response format.');
     }
     const explicitSuccess = typeof result?.success === 'boolean' ? result.success : null;
     const statusText = String(result?.status || '').trim().toLowerCase();
+    // Flow envelope uses status=completed; only treat explicit analyze failures as errors.
     if (explicitSuccess === false || statusText === 'error' || statusText === 'failed' || statusText === 'fail') {
         const detail = result?.detail || result?.message || result?.error || result?.reason || 'Script analysis workflow failed';
         throw new Error(String(detail));
+    }
+    // If still sitting on a flow envelope, hoist nested subjects_json for importers.
+    if (!result.subjects_json && result?.result && typeof result.result === 'object' && result.result.subjects_json) {
+        result = {
+            ...result.result,
+            meta: {
+                ...(result.result.meta || {}),
+                flow_node_key: result.node_key || data?.node_key || null,
+            },
+        };
     }
     try { window.dispatchEvent(new CustomEvent('aistory:generation-complete', { detail: { type: 'analysis' } })); } catch {}
     return result;
