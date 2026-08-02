@@ -86,6 +86,7 @@ def _runtime_version_info() -> Dict[str, Any]:
         "render_service_name": os.getenv("RENDER_SERVICE_NAME") or None,
         "render_instance_id": os.getenv("RENDER_INSTANCE_ID") or None,
         "run_generation_queue_worker": _RUN_GENERATION_QUEUE_WORKER_ON_START if "_RUN_GENERATION_QUEUE_WORKER_ON_START" in globals() else None,
+        "generation_queue_standby_failover": _GENERATION_QUEUE_STANDBY_FAILOVER if "_GENERATION_QUEUE_STANDBY_FAILOVER" in globals() else None,
         "run_db_bootstrap": _RUN_DB_BOOTSTRAP_ON_START if "_RUN_DB_BOOTSTRAP_ON_START" in globals() else None,
         "run_maintenance_scheduler": _RUN_MAINTENANCE_SCHEDULER if "_RUN_MAINTENANCE_SCHEDULER" in globals() else None,
     }
@@ -408,6 +409,15 @@ def _bootstrap_db_post_init() -> None:
 
 _RUN_DB_BOOTSTRAP_ON_START = os.getenv("RUN_DB_BOOTSTRAP_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
 _RUN_GENERATION_QUEUE_WORKER_ON_START = os.getenv("RUN_GENERATION_QUEUE_WORKER_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
+# When the dedicated generation-worker is down, web can still acquire the leader lock
+# and drain queued tasks. Default ON so RUN_GENERATION_QUEUE_WORKER_ON_START=0 does not
+# leave the queue permanently stuck. Set GENERATION_QUEUE_STANDBY_FAILOVER=0 to opt out.
+_GENERATION_QUEUE_STANDBY_FAILOVER = os.getenv("GENERATION_QUEUE_STANDBY_FAILOVER", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 _RUN_MAINTENANCE_SCHEDULER = os.getenv(
     "RUN_MAINTENANCE_SCHEDULER",
     "1" if os.getenv("RENDER") else "0",
@@ -444,7 +454,7 @@ def _env_for_log(name: str) -> str:
 def _log_runtime_startup_profile() -> None:
     version_info = _runtime_version_info()
     logger.info(
-        "Runtime startup profile | pid=%s commit=%s service=%s instance=%s python=%s web_concurrency=%s gunicorn_worker_id=%s db_bootstrap_role=%s gunicorn_timeout=%s gunicorn_graceful_timeout=%s gunicorn_keepalive=%s gunicorn_max_requests=%s gunicorn_max_requests_jitter=%s run_db_bootstrap=%s run_generation_queue_worker=%s run_maintenance_scheduler=%s generation_queue_worker_threads=%s runtime_diag_enabled=%s runtime_diag_interval_seconds=%s runtime_diag_high_watermark_mb=%s runtime_diag_high_watermark_cooldown_seconds=%s runtime_diag_store_sample_items=%s runtime_diag_tracemalloc_enabled=%s runtime_diag_tracemalloc_frames=%s runtime_diag_tracemalloc_top=%s",
+        "Runtime startup profile | pid=%s commit=%s service=%s instance=%s python=%s web_concurrency=%s gunicorn_worker_id=%s db_bootstrap_role=%s gunicorn_timeout=%s gunicorn_graceful_timeout=%s gunicorn_keepalive=%s gunicorn_max_requests=%s gunicorn_max_requests_jitter=%s run_db_bootstrap=%s run_generation_queue_worker=%s generation_queue_standby_failover=%s run_maintenance_scheduler=%s generation_queue_worker_threads=%s runtime_diag_enabled=%s runtime_diag_interval_seconds=%s runtime_diag_high_watermark_mb=%s runtime_diag_high_watermark_cooldown_seconds=%s runtime_diag_store_sample_items=%s runtime_diag_tracemalloc_enabled=%s runtime_diag_tracemalloc_frames=%s runtime_diag_tracemalloc_top=%s",
         os.getpid(),
         version_info.get("commit_short") or "unknown",
         version_info.get("render_service_name") or "unset",
@@ -460,6 +470,7 @@ def _log_runtime_startup_profile() -> None:
         _env_for_log("GUNICORN_MAX_REQUESTS_JITTER"),
         _RUN_DB_BOOTSTRAP_ON_START,
         _RUN_GENERATION_QUEUE_WORKER_ON_START,
+        _GENERATION_QUEUE_STANDBY_FAILOVER,
         _RUN_MAINTENANCE_SCHEDULER,
         str(_read_queue_worker_threads_setting() or "").strip() or "unset",
         _RUNTIME_DIAG_LOG_ENABLED,
@@ -926,6 +937,13 @@ async def lifespan(app: FastAPI):
         logger.info("Application startup: generation queue worker enabled in web process")
         from app.services.generation_runtime.queue_worker import start_generation_queue_worker
         await asyncio.to_thread(start_generation_queue_worker)
+    elif _GENERATION_QUEUE_STANDBY_FAILOVER:
+        logger.info(
+            "Application startup: generation queue standby failover enabled "
+            "(web will consume only if no dedicated worker holds the leader lock)"
+        )
+        from app.services.generation_runtime.queue_worker import start_generation_queue_worker
+        await asyncio.to_thread(start_generation_queue_worker, standby=True)
     else:
         logger.info("Application startup: generation queue worker disabled in web process")
     maintenance_stop_event: asyncio.Event | None = None

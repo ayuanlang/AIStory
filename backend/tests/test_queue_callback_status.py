@@ -49,6 +49,26 @@ def test_poll_mode_submit_job_is_not_callback_waiting():
     ) is True
 
 
+def test_normalize_keeps_queued_distinct_from_running():
+    from app.services.generation_runtime.callbacks import _normalize_generation_status
+
+    assert _normalize_generation_status("queued") == "queued"
+    assert _normalize_generation_status("running") == "running"
+    assert _normalize_generation_status("pending") == "running"
+
+
+def test_queued_job_not_subject_to_running_timeout():
+    from app.services.generation_runtime.job_timeout import _job_is_subject_to_running_timeout
+
+    assert _job_is_subject_to_running_timeout(
+        {
+            "status": "queued",
+            "created_at": "2026-07-21T16:43:16+08:00",
+            "provider_callback_ticket": "image-job-abc",
+        }
+    ) is False
+
+
 def test_naive_beijing_timestamp_not_inflated_by_eight_hours():
     from app.services.generation_runtime.job_store import _parse_iso_datetime, _seconds_since_iso_timestamp
 

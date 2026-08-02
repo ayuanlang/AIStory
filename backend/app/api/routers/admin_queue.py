@@ -185,9 +185,52 @@ def admin_cancel_queue_task(job_id: str, current_user: "User" = Depends(get_curr
 def admin_cancel_all_queued(current_user: "User" = Depends(get_current_user)):
     if not getattr(current_user, "is_superuser", False):
         raise HTTPException(status_code=403, detail="Superuser required")
+    from app.core.time_utils import now_bj_iso
+    from app.services.generation_runtime.job_store import (
+        IMAGE_ACTIVE_SCOPE_STORE,
+        IMAGE_JOB_TASKS,
+        VIDEO_ACTIVE_SCOPE_STORE,
+        VIDEO_JOB_TASKS,
+    )
     from app.services.generation_task_queue import cancel_generation_tasks
+
     count = cancel_generation_tasks(reason="Cleared queued by Admin")
-    return {"status": "ok", "canceled_count": count}
+    # Also sweep local runtime ghosts: a prior Cancel All may have cleared DB while
+    # leaving IMAGE/VIDEO stores stuck in queued/running (blocks parallel submit 429).
+    mem_cleared = 0
+    active_like = {"queued", "submit", "pending", "running", "waiting_callback", "callback_processing"}
+    finished_at = now_bj_iso()
+    with IMAGE_JOB_LOCK:
+        _prune_image_jobs_locked()
+        image_ids = [
+            str(job_id)
+            for job_id, job in IMAGE_JOB_STORE.items()
+            if str((job or {}).get("status") or "").strip().lower() in active_like
+        ]
+    for job_id in image_ids:
+        _set_image_job(job_id, status="canceled", finished_at=finished_at, error="Cleared queued by Admin")
+        with IMAGE_JOB_LOCK:
+            IMAGE_JOB_TASKS.pop(job_id, None)
+            scope_key = str((IMAGE_JOB_STORE.get(job_id) or {}).get("task_scope") or "").strip()
+            if scope_key and IMAGE_ACTIVE_SCOPE_STORE.get(scope_key) == job_id:
+                IMAGE_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+        mem_cleared += 1
+    with VIDEO_JOB_LOCK:
+        _prune_video_jobs_locked()
+        video_ids = [
+            str(job_id)
+            for job_id, job in VIDEO_JOB_STORE.items()
+            if str((job or {}).get("status") or "").strip().lower() in active_like
+        ]
+    for job_id in video_ids:
+        _set_video_job(job_id, status="canceled", finished_at=finished_at, error="Cleared queued by Admin")
+        with VIDEO_JOB_LOCK:
+            VIDEO_JOB_TASKS.pop(job_id, None)
+            scope_key = str((VIDEO_JOB_STORE.get(job_id) or {}).get("task_scope") or "").strip()
+            if scope_key and VIDEO_ACTIVE_SCOPE_STORE.get(scope_key) == job_id:
+                VIDEO_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+        mem_cleared += 1
+    return {"status": "ok", "canceled_count": count, "runtime_store_cleared": mem_cleared}
 
 
 @router.get("/admin/queue/stats")

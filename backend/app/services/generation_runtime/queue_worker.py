@@ -179,15 +179,16 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
     raise ValueError(f"Unsupported generation queue task kind: {kind}")
 
 
-def start_generation_queue_worker() -> None:
+def start_generation_queue_worker(*, standby: bool = False) -> None:
     from app.services.generation_task_queue import start_generation_task_worker
 
     logger.info(
-        "generation callback mode at startup | pure_callback_mode=%s auto=%s",
+        "generation callback mode at startup | pure_callback_mode=%s auto=%s standby=%s",
         _is_pure_callback_mode_enabled(),
         _queue_cfg_bool("pure_callback_mode_auto", True),
+        bool(standby),
     )
-    start_generation_task_worker(_process_generation_queue_task)
+    start_generation_task_worker(_process_generation_queue_task, standby=bool(standby))
     _start_callback_compensation_worker()
 
 
@@ -208,6 +209,7 @@ def _run_callback_compensation_once() -> None:
     from app.services.endpoint_misc import _safe_int
     from app.services.generation_runtime.callbacks import (
         _extract_job_provider_callback_ticket,
+        _extract_job_provider_task_id,
         _get_generation_callback_payload,
         _maybe_finalize_image_job_from_grsai_callback,
         _maybe_finalize_video_job_from_provider_callback,
@@ -449,6 +451,10 @@ def _run_callback_compensation_once() -> None:
         # Hard stop: status=submit/running without waiting_callback is always poll-mode.
         poll_like_status = _normalize_generation_status(job.get("status")) in {"submit", "running"}
         if poll_like_status and "callback_pending" not in str(job.get("upstream_submit_state") or "").strip().lower():
+            continue
+
+        # Never invent waiting_callback for jobs that never received a provider task id.
+        if not _extract_job_provider_task_id(job):
             continue
 
         mark_generation_task_status_external(job_id, status="waiting_callback", error=None)

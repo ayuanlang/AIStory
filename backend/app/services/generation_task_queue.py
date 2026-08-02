@@ -3,6 +3,7 @@ import os
 import asyncio
 import contextlib
 import json
+import socket
 
 from app.core.queue_config import DEFAULT_QUEUE_CONFIG, load_queue_config
 
@@ -26,8 +27,10 @@ logger = logging.getLogger(__name__)
 
 _QUEUE_TABLE_READY = False
 _JOB_STATE_TABLE_READY = False
+_LEADER_HEARTBEAT_TABLE_READY = False
 _QUEUE_TABLE_LOCK = threading.Lock()
 _JOB_STATE_TABLE_LOCK = threading.Lock()
+_LEADER_HEARTBEAT_TABLE_LOCK = threading.Lock()
 _QUEUE_START_LOCK = threading.Lock()
 _QUEUE_STARTED = False
 _ACTIVE_PROCESSOR: Optional[Callable[[str, str, int, Dict[str, Any]], Any]] = None
@@ -35,6 +38,15 @@ _QUEUE_STOP_EVENT = threading.Event()
 _QUEUE_ASYNC_STOP_EVENT = None  # asyncio.Event initialized when needed
 _QUEUE_POLL_SECONDS = max(0.25, float(os.getenv("GENERATION_QUEUE_POLL_SECONDS", "1.0") or 1.0))
 _QUEUE_RECLAIM_SECONDS = max(900.0, float(os.getenv("GENERATION_QUEUE_RECLAIM_SECONDS", "900") or 900.0))
+_LEADER_HEARTBEAT_STALE_SECONDS = max(
+    30.0,
+    float(os.getenv("GENERATION_QUEUE_LEADER_HEARTBEAT_STALE_SECONDS", "45") or 45.0),
+)
+_LEADER_HEARTBEAT_PULSE_SECONDS = max(
+    5.0,
+    min(30.0, float(os.getenv("GENERATION_QUEUE_LEADER_HEARTBEAT_PULSE_SECONDS", "10") or 10.0)),
+)
+_QUEUE_STANDBY_MODE = False
 _POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
 _WEB_CONCURRENCY = max(1, int(os.getenv("WEB_CONCURRENCY", "1") or 1))
 _PER_PROCESS_POOL_BUDGET = max(1, _POOL_CAPACITY // _WEB_CONCURRENCY)
@@ -132,6 +144,26 @@ def _is_postgres_engine() -> bool:
         return False
 
 
+def _leader_lock_connection_is_alive() -> bool:
+    conn = _QUEUE_LEADER_CONN
+    if conn is None:
+        return False
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        return True
+    except Exception:
+        return False
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+
 def _try_acquire_queue_leader_lock() -> bool:
     global _QUEUE_LEADER_CONN
     global _QUEUE_FILE_LOCK_FD
@@ -172,7 +204,10 @@ def _try_acquire_queue_leader_lock() -> bool:
                 except Exception:
                     pass
     if _QUEUE_LEADER_CONN is not None:
-        return True
+        if _leader_lock_connection_is_alive():
+            return True
+        logger.warning("generation queue leader lock connection is dead; releasing stale handle")
+        _release_queue_leader_lock()
 
     def _open_dedicated_lock_connection():
         # Keep leader-lock connection outside SQLAlchemy pool so it does not
@@ -226,6 +261,141 @@ def _try_acquire_queue_leader_lock() -> bool:
                 conn.close()
             except Exception:
                 pass
+
+
+def _ensure_leader_heartbeat_table_ready() -> None:
+    global _LEADER_HEARTBEAT_TABLE_READY
+    if _LEADER_HEARTBEAT_TABLE_READY:
+        return
+    with _LEADER_HEARTBEAT_TABLE_LOCK:
+        if _LEADER_HEARTBEAT_TABLE_READY:
+            return
+        ddl = """
+        CREATE TABLE IF NOT EXISTS generation_queue_leader_heartbeat (
+            id INTEGER PRIMARY KEY,
+            worker_id TEXT,
+            heartbeat_at REAL NOT NULL,
+            pid INTEGER,
+            hostname TEXT,
+            effective_threads INTEGER,
+            mode TEXT
+        )
+        """
+        with engine.begin() as conn:
+            conn.execute(text(ddl))
+        _LEADER_HEARTBEAT_TABLE_READY = True
+
+
+def _pulse_queue_leader_heartbeat(worker_id: str = "leader") -> None:
+    """Cluster-visible liveness signal from the process that currently consumes the queue."""
+    try:
+        _ensure_leader_heartbeat_table_ready()
+    except Exception as exc:
+        logger.debug("generation queue leader heartbeat table ensure skipped: %s", exc)
+        return
+    now = time.time()
+    try:
+        hostname = socket.gethostname()
+    except Exception:
+        hostname = ""
+    mode = "standby" if _QUEUE_STANDBY_MODE else "primary"
+    db = SessionLocal()
+    try:
+        db.execute(
+            text(
+                """
+                INSERT INTO generation_queue_leader_heartbeat (
+                    id, worker_id, heartbeat_at, pid, hostname, effective_threads, mode
+                ) VALUES (
+                    1, :worker_id, :heartbeat_at, :pid, :hostname, :effective_threads, :mode
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    worker_id = excluded.worker_id,
+                    heartbeat_at = excluded.heartbeat_at,
+                    pid = excluded.pid,
+                    hostname = excluded.hostname,
+                    effective_threads = excluded.effective_threads,
+                    mode = excluded.mode
+                """
+            ),
+            {
+                "worker_id": str(worker_id or "leader"),
+                "heartbeat_at": now,
+                "pid": int(os.getpid()),
+                "hostname": str(hostname or "")[:200] or None,
+                "effective_threads": int(_QUEUE_WORKER_THREADS or 0),
+                "mode": mode,
+            },
+        )
+        db.commit()
+    except Exception as exc:
+        logger.debug("generation queue leader heartbeat pulse failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+def get_queue_leader_heartbeat() -> Dict[str, Any]:
+    """Read cluster leader heartbeat (cross-process; safe to call from web)."""
+    now = time.time()
+    empty = {
+        "alive": False,
+        "stale": True,
+        "heartbeat_at": None,
+        "age_seconds": None,
+        "stale_after_seconds": float(_LEADER_HEARTBEAT_STALE_SECONDS),
+        "worker_id": None,
+        "pid": None,
+        "hostname": None,
+        "effective_threads": None,
+        "mode": None,
+    }
+    try:
+        _ensure_leader_heartbeat_table_ready()
+    except Exception:
+        return empty
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            text(
+                """
+                SELECT worker_id, heartbeat_at, pid, hostname, effective_threads, mode
+                FROM generation_queue_leader_heartbeat
+                WHERE id = 1
+                """
+            )
+        ).mappings().first()
+        if not row:
+            return empty
+        heartbeat_at = float(row.get("heartbeat_at") or 0.0)
+        if heartbeat_at <= 0:
+            return empty
+        age = max(0.0, now - heartbeat_at)
+        alive = age <= float(_LEADER_HEARTBEAT_STALE_SECONDS)
+        return {
+            "alive": bool(alive),
+            "stale": not bool(alive),
+            "heartbeat_at": heartbeat_at,
+            "age_seconds": int(age),
+            "stale_after_seconds": float(_LEADER_HEARTBEAT_STALE_SECONDS),
+            "worker_id": str(row.get("worker_id") or "") or None,
+            "pid": int(row.get("pid") or 0) or None,
+            "hostname": str(row.get("hostname") or "") or None,
+            "effective_threads": int(row.get("effective_threads") or 0) or None,
+            "mode": str(row.get("mode") or "") or None,
+        }
+    except Exception as exc:
+        logger.debug("generation queue leader heartbeat read failed: %s", exc)
+        return empty
+    finally:
+        db.close()
+
+
+def is_queue_leader_alive() -> bool:
+    return bool(get_queue_leader_heartbeat().get("alive"))
 
 
 def _ensure_job_state_table_ready() -> None:
@@ -740,6 +910,14 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
         worker_slots_total = int(effective_threads)
         worker_slots_in_use = max(0, min(worker_slots_total, submit_count + running_count))
         worker_slots_available = max(0, worker_slots_total - worker_slots_in_use)
+        leader_hb = get_queue_leader_heartbeat()
+        cluster_effective = int(leader_hb.get("effective_threads") or 0) or int(effective_threads)
+        # Prefer cluster leader capacity when a live consumer exists (web stats otherwise
+        # report this process's idle defaults while the dedicated worker is the leader).
+        if leader_hb.get("alive") and int(leader_hb.get("effective_threads") or 0) > 0:
+            worker_slots_total = int(leader_hb.get("effective_threads") or cluster_effective)
+            worker_slots_in_use = max(0, min(worker_slots_total, submit_count + running_count))
+            worker_slots_available = max(0, worker_slots_total - worker_slots_in_use)
 
         return {
             "queue": {
@@ -757,6 +935,12 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
                 "worker_slots_available": worker_slots_available,
                 "queued_oldest_wait_seconds": queued_oldest_wait_seconds,
                 "finished_last_hour": int((recent_completed_row or {}).get("cnt") or 0),
+                "leader_alive": bool(leader_hb.get("alive")),
+                "drain_stuck": bool(
+                    queued_count > 0
+                    and submit_count + running_count == 0
+                    and not bool(leader_hb.get("alive"))
+                ),
             },
             "workers": {
                 "configured_threads": int(configured_threads),
@@ -765,7 +949,14 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
                 "thread_cap": int(_WORKER_THREAD_CAP),
                 "restart_required_for_thread_change": bool(configured_threads != int(requested_threads)),
                 "worker_thread_started": bool(_QUEUE_STARTED),
-                "leader_lock_held_by_process": bool(_QUEUE_LEADER_CONN is not None) if _is_postgres_engine() else True,
+                "standby_mode": bool(_QUEUE_STANDBY_MODE),
+                "leader_lock_held_by_process": (
+                    bool(_QUEUE_LEADER_CONN is not None and _leader_lock_connection_is_alive())
+                    if _is_postgres_engine()
+                    else bool(_QUEUE_FILE_LOCK_FD is not None)
+                ),
+                "cluster_leader": leader_hb,
+                "cluster_leader_alive": bool(leader_hb.get("alive")),
                 "active_running_workers": len(active_workers),
                 "slots_total": worker_slots_total,
                 "slots_in_use": worker_slots_in_use,
@@ -808,6 +999,17 @@ def enqueue_generation_task(*, job_id: str, kind: str, user_id: int, payload: Di
         db.commit()
     finally:
         db.close()
+    try:
+        if not is_queue_leader_alive():
+            logger.error(
+                "generation queue enqueue while cluster leader heartbeat is stale/missing | job_id=%s kind=%s user_id=%s "
+                "(tasks will stay queued until aistory-generation-worker or a standby consumer acquires the leader lock)",
+                job_id,
+                kind,
+                user_id,
+            )
+    except Exception:
+        pass
     return str(job_id)
 
 
@@ -874,6 +1076,11 @@ def mark_generation_task_status_external(
     where_sql = "WHERE job_id = :job_id"
     if preserve_canceled:
         where_sql += " AND status <> 'canceled'"
+    # Never leapfrog queued → waiting_callback (no provider submit happened yet).
+    if normalized_status == "waiting_callback":
+        where_sql += " AND status IN ('submit', 'running', 'waiting_callback', 'callback_processing')"
+    elif normalized_status == "callback_processing":
+        where_sql += " AND status IN ('submit', 'running', 'waiting_callback', 'callback_processing')"
 
     db = SessionLocal()
     try:
@@ -899,7 +1106,16 @@ def mark_generation_task_status_external(
             },
         )
         db.commit()
-        return int(result.rowcount or 0) > 0
+        updated = int(result.rowcount or 0) > 0
+        if not updated and normalized_status in {"waiting_callback", "callback_processing"}:
+            latest = get_generation_task_status(str(job_id)) or {}
+            logger.warning(
+                "generation queue refused status leap | job_id=%s requested=%s current=%s",
+                job_id,
+                normalized_status,
+                latest.get("status"),
+            )
+        return updated
     finally:
         db.close()
 
@@ -1033,14 +1249,19 @@ def cancel_generation_task(job_id: str, *, reason: str = "Task canceled by user"
 
 
 def cancel_generation_tasks(*, kind: Optional[str] = None, user_id: Optional[int] = None, reason: str = "Task canceled by stop-all") -> int:
-    """Bulk-cancel active generation queue tasks and return affected row count."""
+    """Bulk-cancel active generation queue tasks and return affected row count.
+
+    Also best-effort syncs image/video runtime job stores so Cancel All cannot leave
+    in-memory ``queued`` ghosts that keep blocking parallel submit (HTTP 429).
+    """
     _ensure_queue_table_ready()
     now = time.time()
+    reason_text = str(reason or "Task canceled by stop-all")
 
     clauses = ["status IN ('queued', 'submit', 'running', 'waiting_callback', 'callback_processing')"]
     params: Dict[str, Any] = {
         "finished_at": now,
-        "error": str(reason or "Task canceled by stop-all"),
+        "error": reason_text,
     }
     if kind:
         clauses.append("kind = :kind")
@@ -1051,6 +1272,7 @@ def cancel_generation_tasks(*, kind: Optional[str] = None, user_id: Optional[int
 
     where_sql = " AND ".join(clauses)
     db = SessionLocal()
+    canceled_rows: List[Dict[str, Any]] = []
     try:
         result = db.execute(
             text(
@@ -1061,14 +1283,70 @@ def cancel_generation_tasks(*, kind: Optional[str] = None, user_id: Optional[int
                     finished_at = :finished_at,
                     error = :error
                 WHERE {where_sql}
+                RETURNING job_id, kind, user_id
                 """
             ),
             params,
         )
+        canceled_rows = [dict(row) for row in result.mappings().all()]
         db.commit()
-        return int(result.rowcount or 0)
     finally:
         db.close()
+
+    if canceled_rows:
+        try:
+            from app.core.time_utils import now_bj_iso
+            from app.services.generation_runtime.job_store import (
+                IMAGE_ACTIVE_SCOPE_STORE,
+                IMAGE_JOB_LOCK,
+                IMAGE_JOB_STORE,
+                IMAGE_JOB_TASKS,
+                VIDEO_ACTIVE_SCOPE_STORE,
+                VIDEO_JOB_LOCK,
+                VIDEO_JOB_STORE,
+                VIDEO_JOB_TASKS,
+                _set_image_job,
+                _set_video_job,
+            )
+
+            finished_at = now_bj_iso()
+            for row in canceled_rows:
+                job_id = str(row.get("job_id") or "").strip()
+                safe_kind = str(row.get("kind") or "").strip().lower()
+                if not job_id:
+                    continue
+                if safe_kind == "image":
+                    _set_image_job(
+                        job_id,
+                        status="canceled",
+                        finished_at=finished_at,
+                        error=reason_text,
+                    )
+                    with IMAGE_JOB_LOCK:
+                        IMAGE_JOB_TASKS.pop(job_id, None)
+                        scope_key = str((IMAGE_JOB_STORE.get(job_id) or {}).get("task_scope") or "").strip()
+                        if scope_key and IMAGE_ACTIVE_SCOPE_STORE.get(scope_key) == job_id:
+                            IMAGE_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+                elif safe_kind == "video":
+                    _set_video_job(
+                        job_id,
+                        status="canceled",
+                        finished_at=finished_at,
+                        error=reason_text,
+                    )
+                    with VIDEO_JOB_LOCK:
+                        VIDEO_JOB_TASKS.pop(job_id, None)
+                        scope_key = str((VIDEO_JOB_STORE.get(job_id) or {}).get("task_scope") or "").strip()
+                        if scope_key and VIDEO_ACTIVE_SCOPE_STORE.get(scope_key) == job_id:
+                            VIDEO_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+        except Exception:
+            logger.warning(
+                "cancel_generation_tasks runtime store sync failed | canceled=%s",
+                len(canceled_rows),
+                exc_info=True,
+            )
+
+    return int(len(canceled_rows))
 
 
 def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
@@ -1444,7 +1722,21 @@ async def _async_event_loop(processor: Callable[[str, str, int, Dict[str, Any]],
     global _QUEUE_ASYNC_STOP_EVENT
     _QUEUE_ASYNC_STOP_EVENT = asyncio.Event()
     logger.info("generation queue async event loop started with %s concurrent workers", _QUEUE_WORKER_THREADS)
+
+    async def _leader_heartbeat_loop() -> None:
+        while _QUEUE_ASYNC_STOP_EVENT is not None and not _QUEUE_ASYNC_STOP_EVENT.is_set():
+            try:
+                await asyncio.to_thread(_pulse_queue_leader_heartbeat, "generation-queue-leader")
+            except Exception:
+                pass
+            try:
+                await asyncio.sleep(_LEADER_HEARTBEAT_PULSE_SECONDS)
+            except asyncio.CancelledError:
+                break
+
+    heartbeat_task = asyncio.create_task(_leader_heartbeat_loop())
     try:
+        await asyncio.to_thread(_pulse_queue_leader_heartbeat, "generation-queue-leader")
         tasks = []
         for index in range(_QUEUE_WORKER_THREADS):
             worker_name = f"generation-queue-{index + 1}"
@@ -1454,6 +1746,11 @@ async def _async_event_loop(processor: Callable[[str, str, int, Dict[str, Any]],
     except Exception as exc:
         logger.exception("generation queue async event loop failed")
     finally:
+        if _QUEUE_ASYNC_STOP_EVENT is not None:
+            _QUEUE_ASYNC_STOP_EVENT.set()
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
         logger.info("generation queue async event loop stopped")
 
 
@@ -1512,32 +1809,46 @@ def _worker_thread_main(processor: Callable[[str, str, int, Dict[str, Any]], Non
         if not _try_acquire_queue_leader_lock():
             _QUEUE_STOP_EVENT.wait(15.0)
             continue
-            
+
         try:
-            logger.info("generation queue worker acquired leader lock, starting event loop...")
+            logger.info(
+                "generation queue worker acquired leader lock, starting event loop | standby=%s threads=%s",
+                _QUEUE_STANDBY_MODE,
+                _QUEUE_WORKER_THREADS,
+            )
             _ensure_queue_table_ready()
             asyncio.run(_async_event_loop(processor))
         except Exception as exc:
             logger.exception("generation queue event loop crashed | err=%s", exc)
             _QUEUE_STOP_EVENT.wait(15.0)
         finally:
+            # Drop the advisory/file lock so a sibling web/worker process can fail over.
+            _release_queue_leader_lock()
             if not _QUEUE_STOP_EVENT.is_set():
                 logger.warning("generation queue event loop exited. Re-checking lock...")
                 _QUEUE_STOP_EVENT.wait(5.0)
 
-def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, Any]], None]) -> None:
+def start_generation_task_worker(
+    processor: Callable[[str, str, int, Dict[str, Any]], None],
+    *,
+    standby: bool = False,
+) -> None:
     """Start generation task workers using async event loop."""
-    global _QUEUE_STARTED, _ACTIVE_PROCESSOR
+    global _QUEUE_STARTED, _ACTIVE_PROCESSOR, _QUEUE_STANDBY_MODE
     # Always refresh processor so StatReload picks up fixed runners without a
     # full process restart (daemon queue thread survives module reloads).
     _ACTIVE_PROCESSOR = processor
+    if standby:
+        _QUEUE_STANDBY_MODE = True
     if _QUEUE_STARTED:
-        logger.info("generation queue worker already running; processor hot-swapped")
+        logger.info("generation queue worker already running; processor hot-swapped | standby=%s", _QUEUE_STANDBY_MODE)
         return
     with _QUEUE_START_LOCK:
         _ACTIVE_PROCESSOR = processor
+        if standby:
+            _QUEUE_STANDBY_MODE = True
         if _QUEUE_STARTED:
-            logger.info("generation queue worker already running; processor hot-swapped")
+            logger.info("generation queue worker already running; processor hot-swapped | standby=%s", _QUEUE_STANDBY_MODE)
             return
 
         # Re-read after DB bootstrap so admin-saved thread counts actually apply.
@@ -1552,7 +1863,7 @@ def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, A
                 )
         except Exception as exc:
             logger.warning("generation queue startup waiting_callback lease repair failed: %s", exc)
-            
+
         thread = threading.Thread(
             target=_worker_thread_main,
             args=(processor,),
@@ -1562,6 +1873,8 @@ def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, A
         thread.start()
         _QUEUE_STARTED = True
         logger.info(
-            "generation queue async event loop thread started, waiting for %s concurrent workers to become leader",
+            "generation queue async event loop thread started | standby=%s effective_threads=%s "
+            "(waiting to become cluster leader)",
+            _QUEUE_STANDBY_MODE,
             effective_threads,
         )

@@ -1190,29 +1190,116 @@ _USER_MEDIA_GENERATION_ACTIVE_STATUSES = frozenset(
 
 
 def _count_user_active_media_jobs_in_memory(user_id: int) -> int:
+    """Count in-memory active jobs, healing zombies that the queue DB already finished/canceled.
+
+    Cancel All previously only flipped ``generation_task_queue`` rows; web-process
+    IMAGE/VIDEO stores could keep ``queued`` ghosts and permanently trip HTTP 429 via
+    ``max(db, mem)``. Reconcile against the queue row before counting.
+    """
     uid = int(user_id or 0)
     if uid <= 0:
         return 0
-    active_ids: set[str] = set()
+
+    from app.services.generation_task_queue import get_generation_task_status
+
+    terminal_queue = {"canceled", "cancelled", "completed", "failed"}
+    candidates: List[tuple[str, str, Dict[str, Any]]] = []
     with IMAGE_JOB_LOCK:
         for job_id, job in IMAGE_JOB_STORE.items():
             if int((job or {}).get("user_id") or 0) != uid:
                 continue
             status = str((job or {}).get("status") or "").strip().lower()
             if status in _USER_MEDIA_GENERATION_ACTIVE_STATUSES:
-                active_ids.add(str(job_id))
+                candidates.append((str(job_id), "image", dict(job or {})))
     with VIDEO_JOB_LOCK:
         for job_id, job in VIDEO_JOB_STORE.items():
             if int((job or {}).get("user_id") or 0) != uid:
                 continue
             status = str((job or {}).get("status") or "").strip().lower()
             if status in _USER_MEDIA_GENERATION_ACTIVE_STATUSES:
-                active_ids.add(str(job_id))
+                candidates.append((str(job_id), "video", dict(job or {})))
+
+    if not candidates:
+        return 0
+
+    active_ids: set[str] = set()
+    for job_id, kind, job in candidates:
+        queue_info = None
+        try:
+            queue_info = get_generation_task_status(job_id)
+        except Exception:
+            queue_info = None
+        queue_status = str((queue_info or {}).get("status") or "").strip().lower()
+
+        if queue_status in terminal_queue:
+            # Heal local ghost left behind by Cancel All / external finalize.
+            try:
+                if kind == "image":
+                    _set_image_job(
+                        job_id,
+                        status="canceled" if queue_status in {"canceled", "cancelled"} else queue_status,
+                        finished_at=(job or {}).get("finished_at") or now_bj_iso(),
+                        error=(job or {}).get("error") or (queue_info or {}).get("error"),
+                    )
+                    with IMAGE_JOB_LOCK:
+                        IMAGE_JOB_TASKS.pop(job_id, None)
+                        scope_key = str((IMAGE_JOB_STORE.get(job_id) or {}).get("task_scope") or "").strip()
+                        if scope_key and IMAGE_ACTIVE_SCOPE_STORE.get(scope_key) == job_id:
+                            IMAGE_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+                else:
+                    _set_video_job(
+                        job_id,
+                        status="canceled" if queue_status in {"canceled", "cancelled"} else queue_status,
+                        finished_at=(job or {}).get("finished_at") or now_bj_iso(),
+                        error=(job or {}).get("error") or (queue_info or {}).get("error"),
+                    )
+                    with VIDEO_JOB_LOCK:
+                        VIDEO_JOB_TASKS.pop(job_id, None)
+                        scope_key = str((VIDEO_JOB_STORE.get(job_id) or {}).get("task_scope") or "").strip()
+                        if scope_key and VIDEO_ACTIVE_SCOPE_STORE.get(scope_key) == job_id:
+                            VIDEO_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+            except Exception:
+                logger.debug(
+                    "[MediaParallelLimit] heal terminal mem job failed | kind=%s job_id=%s",
+                    kind,
+                    job_id,
+                    exc_info=True,
+                )
+            continue
+
+        if queue_info is None:
+            # No queue row: count only briefly (submit→enqueue race). Older orphans are zombies.
+            age = _seconds_since_iso_timestamp((job or {}).get("created_at"))
+            if age is not None and age > 120:
+                try:
+                    if kind == "image":
+                        _set_image_job(
+                            job_id,
+                            status="canceled",
+                            finished_at=now_bj_iso(),
+                            error="Orphaned job missing queue row",
+                        )
+                    else:
+                        _set_video_job(
+                            job_id,
+                            status="canceled",
+                            finished_at=now_bj_iso(),
+                            error="Orphaned job missing queue row",
+                        )
+                except Exception:
+                    pass
+                continue
+            active_ids.add(job_id)
+            continue
+
+        if queue_status in _USER_MEDIA_GENERATION_ACTIVE_STATUSES:
+            active_ids.add(job_id)
+
     return len(active_ids)
 
 
 def _count_user_active_media_generation_jobs(user_id: int) -> int:
-    """Active image+video jobs for one user (queue DB + local job stores)."""
+    """Active image+video jobs for one user (queue DB + reconciled local job stores)."""
     from app.services.generation_task_queue import count_active_generation_tasks_for_user
 
     db_count = count_active_generation_tasks_for_user(int(user_id), kinds=["image", "video"])
@@ -1227,11 +1314,23 @@ def _enforce_user_media_generation_parallel_limit(user: "User") -> int:
     limit = _resolve_user_media_generation_parallel_limit(getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT))
     active = _count_user_active_media_generation_jobs(int(getattr(user, "id", 0) or 0))
     if active >= limit:
+        leader_hint = ""
+        try:
+            from app.services.generation_task_queue import is_queue_leader_alive
+
+            if not is_queue_leader_alive():
+                leader_hint = (
+                    " 检测到队列消费端未心跳（任务可能一直停在 queued）；"
+                    "请检查 aistory-generation-worker / 队列管理页「集群 leader 存活」。"
+                )
+        except Exception:
+            leader_hint = ""
         raise HTTPException(
             status_code=429,
             detail=(
                 f"并行图片/视频生成已达上限（当前 {active}/{limit}）。"
                 f"启用级别 is_active={active_level}（上限=is_active+2），请等待进行中的任务完成后再提交。"
+                f"{leader_hint}"
             ),
         )
     return limit

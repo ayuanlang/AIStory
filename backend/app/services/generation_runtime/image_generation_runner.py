@@ -1390,6 +1390,18 @@ async def _run_generate_image_job(
                 or result.get("provider_task_id")
                 or ""
             ).strip()
+            if not provider_task_id:
+                detail = "Image submit returned pending_callback without provider task id"
+                logger.error("[ImageJob] %s | job_id=%s", detail, job_id)
+                _set_image_job(
+                    job_id,
+                    status="failed",
+                    finished_at=now_bj_iso(),
+                    error=detail,
+                    upstream_submit_state="submit_missing_task_id",
+                )
+                mark_generation_task_status_external(job_id, status="failed", error=detail)
+                return {"defer_completion": False}
             reservation_tx_id_pending = result.get("reservation_tx_id") or current_job.get("reservation_tx_id")
             try:
                 reservation_tx_id_pending = int(reservation_tx_id_pending) if reservation_tx_id_pending is not None else None
@@ -1405,9 +1417,8 @@ async def _run_generate_image_job(
                 "upstream_submit_state": "callback_pending",
                 "billing_pending": bool(result.get("billing_pending") and reservation_tx_id_pending),
                 "billing_settled": False,
+                "provider_task_id": provider_task_id,
             }
-            if provider_task_id:
-                update_fields["provider_task_id"] = provider_task_id
             if reservation_tx_id_pending:
                 update_fields["reservation_tx_id"] = int(reservation_tx_id_pending)
             if billing_context:
@@ -1550,22 +1561,26 @@ async def _run_generate_image_job(
             )
             return
         if _is_ambiguous_image_submit_detail(e.detail):
+            # No provider_task_id ⇒ callback can never arrive. Do not park as waiting_callback
+            # (that was a recent regression: queued/submit leapt to waiting_callback forever).
+            detail = str(e.detail)
             _set_image_job(
                 job_id,
-                status="waiting_callback",
-                error=None,
+                status="failed",
+                finished_at=now_bj_iso(),
+                error=detail,
                 ambiguous_submit=True,
                 ambiguous_submit_at=now_bj_iso(),
-                upstream_submit_state="unknown",
+                upstream_submit_state="ambiguous_submit",
             )
             logger.warning(
-                "[ImageJob] ambiguous submit retained as running | job_id=%s callback_ticket=%s detail=%s",
+                "[ImageJob] ambiguous submit failed closed (no task id to wait on) | job_id=%s callback_ticket=%s detail=%s",
                 job_id,
                 provider_callback_ticket or None,
-                str(e.detail),
+                detail,
             )
-            mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
-            return {"defer_completion": True}
+            mark_generation_task_status_external(job_id, status="failed", error=detail)
+            return {"defer_completion": False}
         _set_image_job(
             job_id,
             status="failed",

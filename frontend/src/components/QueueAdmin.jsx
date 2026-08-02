@@ -402,7 +402,17 @@ export default function QueueAdmin() {
           <div className="text-xs text-gray-300">配置线程: {queueStats?.runtime?.workers?.configured_threads ?? 0}</div>
           <div className="text-xs text-gray-300">线程: {queueStats?.runtime?.workers?.effective_threads ?? 0} / 请求 {queueStats?.runtime?.workers?.requested_threads ?? 0}</div>
           <div className="text-xs text-cyan-300">进程位 已用/总量/可用: {queueStats?.runtime?.workers?.slots_in_use ?? 0} / {queueStats?.runtime?.workers?.slots_total ?? 0} / {queueStats?.runtime?.workers?.slots_available ?? 0}</div>
-          <div className="text-xs text-gray-300">队列线程已启动: {queueStats?.runtime?.workers?.worker_thread_started ? '是' : '否'} | 本进程持有 leader: {queueStats?.runtime?.workers?.leader_lock_held_by_process ? '是' : '否'}</div>
+          <div className="text-xs text-gray-300">队列线程已启动: {queueStats?.runtime?.workers?.worker_thread_started ? '是' : '否'}{queueStats?.runtime?.workers?.standby_mode ? '（standby）' : ''} | 本进程持有 leader: {queueStats?.runtime?.workers?.leader_lock_held_by_process ? '是' : '否'}</div>
+          <div className={`text-xs ${(queueStats?.runtime?.workers?.cluster_leader_alive ?? queueStats?.runtime?.queue?.leader_alive) ? 'text-emerald-300' : 'text-red-400'}`}>
+            集群 leader 存活: {(queueStats?.runtime?.workers?.cluster_leader_alive ?? queueStats?.runtime?.queue?.leader_alive) ? '是' : '否'}
+            {queueStats?.runtime?.workers?.cluster_leader?.age_seconds != null ? ` | 心跳年龄: ${formatDuration(queueStats.runtime.workers.cluster_leader.age_seconds)}` : ''}
+            {queueStats?.runtime?.workers?.cluster_leader?.hostname ? ` | host: ${queueStats.runtime.workers.cluster_leader.hostname}` : ''}
+            {queueStats?.runtime?.workers?.cluster_leader?.pid ? ` | pid: ${queueStats.runtime.workers.cluster_leader.pid}` : ''}
+            {queueStats?.runtime?.workers?.cluster_leader?.mode ? ` | mode: ${queueStats.runtime.workers.cluster_leader.mode}` : ''}
+          </div>
+          {queueStats?.runtime?.queue?.drain_stuck ? (
+            <div className="text-xs text-red-400">队列卡住：有 queued 任务但无 submit/running，且集群 leader 无心跳。请重启 aistory-generation-worker，或确认 web standby failover 已启用。</div>
+          ) : null}
           {queueStats?.runtime?.workers?.restart_required_for_thread_change ? (
             <div className="text-xs text-amber-300">检测到线程配置已变化，需重启后端以应用</div>
           ) : (

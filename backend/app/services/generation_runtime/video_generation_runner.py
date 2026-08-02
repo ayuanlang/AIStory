@@ -2413,20 +2413,35 @@ async def _run_generate_video_job(
                 )
                 return {"defer_completion": False}
 
+            if not provider_task_id:
+                detail = "Video submit returned pending_callback without provider task id"
+                logger.error("[VideoJob] %s | job_id=%s", detail, job_id)
+                _set_video_job(
+                    job_id,
+                    status="failed",
+                    finished_at=now_bj_iso(),
+                    error=detail,
+                    upstream_submit_state="submit_missing_task_id",
+                )
+                with VIDEO_JOB_LOCK:
+                    current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+                _cancel_video_job_pending_reservation(job_id, current_job, detail)
+                mark_generation_task_status_external(job_id, status="failed", error=detail)
+                return {"defer_completion": False}
+
             update_fields: Dict[str, Any] = {
                 "status": "waiting_callback",
                 "error": None,
                 "upstream_submit_state": "callback_pending",
                 "billing_pending": bool(result.get("billing_pending") and reservation_tx_id_pending),
                 "billing_context": billing_context,
+                "provider_task_id": provider_task_id,
             }
             # Do not clobber billing_settled=True from another worker.
             if not already_settled:
                 update_fields["billing_settled"] = False
             if reservation_tx_id_pending:
                 update_fields["reservation_tx_id"] = int(reservation_tx_id_pending)
-            if provider_task_id:
-                update_fields["provider_task_id"] = provider_task_id
             if provider_task_id and reservation_tx_id_pending:
                 try:
                     attach_db = SessionLocal()
@@ -2549,22 +2564,27 @@ async def _run_generate_video_job(
             )
             return
         if _is_ambiguous_image_submit_detail(e.detail):
+            detail = str(e.detail)
             _set_video_job(
                 job_id,
-                status="waiting_callback",
-                error=None,
+                status="failed",
+                finished_at=now_bj_iso(),
+                error=detail,
                 ambiguous_submit=True,
                 ambiguous_submit_at=now_bj_iso(),
-                upstream_submit_state="unknown",
+                upstream_submit_state="ambiguous_submit",
             )
             logger.warning(
-                "[VideoJob] ambiguous submit retained as running | job_id=%s callback_ticket=%s detail=%s",
+                "[VideoJob] ambiguous submit failed closed (no task id to wait on) | job_id=%s callback_ticket=%s detail=%s",
                 job_id,
                 provider_callback_ticket or None,
-                str(e.detail),
+                detail,
             )
-            mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
-            return {"defer_completion": True}
+            with VIDEO_JOB_LOCK:
+                current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+            _cancel_video_job_pending_reservation(job_id, current_job, detail)
+            mark_generation_task_status_external(job_id, status="failed", error=detail)
+            return {"defer_completion": False}
         logger.warning(
             "[VideoJob] failed | job_id=%s user_id=%s detail=%s",
             job_id,

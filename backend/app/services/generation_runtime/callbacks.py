@@ -721,7 +721,11 @@ def _normalize_generation_status(value: Any) -> str:
         return "failed"
     if status in {"canceled", "cancelled"}:
         return "canceled"
-    if status in {"queued", "pending", "running", "processing", "in_progress", "in-progress"}:
+    # Keep queue lifecycle distinct: queued must NOT collapse to running, or
+    # compensation/timeout treat never-submitted jobs as in-flight / callback-wait.
+    if status == "queued":
+        return "queued"
+    if status in {"pending", "running", "processing", "in_progress", "in-progress"}:
         return "running"
     return status
 
