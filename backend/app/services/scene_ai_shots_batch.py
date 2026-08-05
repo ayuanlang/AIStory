@@ -140,9 +140,14 @@ def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int,
         user_principal = _snapshot_user_principal(user)
 
         scene_label = str(scene.scene_no or scene.scene_name or f"#{scene_id}")
+        # Match GET /scenes/{id}/shots visibility (episode-scoped); ignore orphans.
         existing_shot_count = (
             item_db.query(Shot)
-            .filter(Shot.scene_id == scene_id, _active_shot_clause())
+            .filter(
+                Shot.scene_id == scene_id,
+                Shot.episode_id == int(episode_id),
+                _active_shot_clause(),
+            )
             .count()
         )
         if existing_shot_count > 0:

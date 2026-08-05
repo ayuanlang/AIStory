@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.time_utils import now_bj_iso
 from app.models.all_models import Entity, Episode, Project, Scene, Shot
 from app.services.deletion_ops import _soft_delete_shots
 from app.services.shot_markdown import (
@@ -51,7 +52,42 @@ def _import_scene_shot_rows_to_db(
     if not locked_scene:
         raise HTTPException(status_code=404, detail="Scene not found")
 
+    # Count/visibility must match GET /scenes/{id}/shots (episode + project scoped).
+    # Rows with mismatched episode_id/project_id are invisible in the UI but used to
+    # block import — soft-delete those orphans so pipeline apply can proceed.
     existing_shots = db.query(Shot).filter(Shot.scene_id == scene_id, _active_shot_clause()).all()
+    episode_id_i = int(getattr(episode, "id", 0) or 0)
+    project_id_i = int(getattr(project, "id", 0) or 0)
+
+    def _shot_visible_in_scene_api(shot: Shot) -> bool:
+        shot_ep = getattr(shot, "episode_id", None)
+        shot_proj = getattr(shot, "project_id", None)
+        if shot_ep is not None and int(shot_ep or 0) != episode_id_i:
+            return False
+        if shot_proj is not None and int(shot_proj or 0) != project_id_i:
+            return False
+        return True
+
+    visible_shots = [s for s in (existing_shots or []) if _shot_visible_in_scene_api(s)]
+    orphan_shots = [s for s in (existing_shots or []) if not _shot_visible_in_scene_api(s)]
+    if orphan_shots:
+        orphan_ids = [int(s.id) for s in orphan_shots if getattr(s, "id", None) is not None]
+        if orphan_ids:
+            now = now_bj_iso()
+            db.query(Shot).filter(Shot.id.in_(orphan_ids)).update(
+                {Shot.is_deleted: True, Shot.deleted_at: now},
+                synchronize_session=False,
+            )
+            logger.warning(
+                "[apply_scene_ai_result] soft_deleted invisible orphan shots | scene_id=%s count=%s "
+                "episode_id=%s project_id=%s",
+                scene_id,
+                len(orphan_ids),
+                episode_id_i,
+                project_id_i,
+            )
+        existing_shots = visible_shots
+
     existing_count = len(existing_shots or [])
     if existing_count > 0 and not replace_existing:
         logger.info(

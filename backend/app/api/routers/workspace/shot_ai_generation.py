@@ -475,17 +475,37 @@ def apply_scene_ai_result(
     Pass replace_existing=true only for intentional overwrite (UI confirm).
     Duplicate Shot IDs within the payload are deduped (last row wins).
     """
-    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    requested_scene_id = int(scene_id)
+    scene = db.query(Scene).filter(Scene.id == requested_scene_id).first()
     if not scene:
         raise HTTPException(status_code=404, detail="Scene not found")
-        
+
+    # Soft-deleted rows are invisible in the workspace scene list; remap to the
+    # active successor so generated markdown is not applied onto a ghost scene.
+    if _is_soft_deleted(scene):
+        remapped, remapped_from = _resolve_scene_for_shot_persist(
+            db,
+            scene_id=requested_scene_id,
+            episode_id=getattr(scene, "episode_id", None),
+            scene_no=getattr(scene, "scene_no", None),
+        )
+        if remapped is None or _is_soft_deleted(remapped):
+            raise HTTPException(status_code=404, detail="Scene not found")
+        logger.warning(
+            "[apply_scene_ai_result] remapped soft-deleted scene_id=%s -> active scene_id=%s",
+            remapped_from or requested_scene_id,
+            getattr(remapped, "id", None),
+        )
+        scene = remapped
+        scene_id = int(scene.id)
+
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
     project = _require_project_access(db, episode.project_id, current_user)
-         
+
     shots_data = []
     skipped_row_errors: List[str] = []
     replace_existing = bool(getattr(data, "replace_existing", False)) if data is not None else False
-    
+
     # 1. Determine Source
     provided_content = None
     if data and data.content is not None:
@@ -529,7 +549,7 @@ def apply_scene_ai_result(
             len(skipped_row_errors),
             skipped_row_errors[:5],
         )
-                 
+
     return _import_scene_shot_rows_to_db(
         scene_id=scene_id,
         db=db,

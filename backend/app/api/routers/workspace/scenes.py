@@ -258,6 +258,9 @@ def batch_upsert_scenes(
         duplicate_scene_ids.append(int(drop.id))
     if duplicate_scene_ids:
         now = now_bj_iso()
+        # Cascade soft-delete shots; otherwise orphan active shots keep blocking
+        # apply_ai_result while the UI only lists the kept active scene (empty).
+        _soft_delete_shots(db, scene_ids=duplicate_scene_ids, now=now)
         db.query(Scene).filter(Scene.id.in_(duplicate_scene_ids)).update(
             {Scene.is_deleted: True, Scene.deleted_at: now},
             synchronize_session=False,
@@ -317,6 +320,10 @@ def batch_upsert_scenes(
             soft_deleted.environment_name = item.environment_name
             soft_deleted.linked_characters = item.linked_characters
             soft_deleted.key_props = item.key_props
+            # Stale shots from a prior life of this row must not block a fresh
+            # storyboard apply while looking "empty" after episode-scoped filters.
+            _soft_delete_shots(db, scene_id=int(soft_deleted.id))
+            soft_deleted.ai_shots_result = None
             existing_by_no[scene_no] = soft_deleted
             updated += 1
             continue

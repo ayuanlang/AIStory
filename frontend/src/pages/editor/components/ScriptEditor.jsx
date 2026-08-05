@@ -8018,7 +8018,60 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     );
                     return false;
                 }
-                await applySceneAIResult(dbSceneId, { content: generatedRows });
+                const applyGeneratedRows = async (replaceExisting = false) => {
+                    await applySceneAIResult(dbSceneId, {
+                        content: generatedRows,
+                        ...(replaceExisting ? { replace_existing: true } : {}),
+                    });
+                };
+                try {
+                    await applyGeneratedRows(Boolean(force));
+                } catch (applyErr) {
+                    const applyStatus = Number(applyErr?.response?.status || 0);
+                    const applyDetail = String(
+                        applyErr?.response?.data?.detail || applyErr?.message || applyErr || ''
+                    );
+                    const isAlreadyHasShots = applyStatus === 409 || /already has .*shot/i.test(applyDetail);
+                    if (!isAlreadyHasShots) throw applyErr;
+
+                    // Backend may still see invisible/orphan shots that GET /shots filters out.
+                    // If the UI-visible list is empty, overwrite once so generated rows land.
+                    let visibleAfterConflict = [];
+                    try {
+                        visibleAfterConflict = await fetchShots(dbSceneId);
+                    } catch (_) {
+                        visibleAfterConflict = [];
+                    }
+                    const visibleCount = Array.isArray(visibleAfterConflict) ? visibleAfterConflict.length : 0;
+                    if (visibleCount > 0 && !force) {
+                        const skippedProgress = updateStoryboardTaskItem(stableMarker, {
+                            status: 'completed',
+                            error: '',
+                        });
+                        publishStoryboardTaskPanelStatus({
+                            markerSceneId: stableMarker,
+                            sceneOrder,
+                            status: 'completed',
+                            progressSnapshot: skippedProgress,
+                        });
+                        onLog?.(
+                            t(
+                                `[分镜生成] ${stableMarker} 场景已有 ${visibleCount} 条可见分镜，放弃导入`,
+                                `[Storyboard] ${stableMarker} already has ${visibleCount} visible shot(s); import abandoned`
+                            ),
+                            'warning'
+                        );
+                        return false;
+                    }
+                    onLog?.(
+                        t(
+                            `[分镜生成] ${stableMarker} 后端报已有分镜但页面可见 0 条，正在覆盖导入…`,
+                            `[Storyboard] ${stableMarker}: backend reports existing shots but UI sees 0; retrying with replace…`
+                        ),
+                        'warning'
+                    );
+                    await applyGeneratedRows(true);
+                }
                 const completedProgress = updateStoryboardTaskItem(stableMarker, { status: 'completed', error: '' });
                 publishStoryboardTaskPanelStatus({
                     markerSceneId: stableMarker,
@@ -8036,26 +8089,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return true;
             } catch (err) {
                 const errMsg = String(err?.response?.data?.detail || err?.message || err || 'unknown error');
-                const abandoned = err?.response?.status === 409 || /already has .*shot/i.test(errMsg);
                 const failedProgress = updateStoryboardTaskItem(stableMarker, {
-                    status: abandoned ? 'completed' : 'failed',
-                    error: abandoned ? '' : errMsg,
+                    status: 'failed',
+                    error: errMsg,
                 });
                 publishStoryboardTaskPanelStatus({
                     markerSceneId: stableMarker,
                     sceneOrder,
-                    status: abandoned ? 'completed' : 'failed',
-                    errorMessage: abandoned ? '' : errMsg,
+                    status: 'failed',
+                    errorMessage: errMsg,
                     progressSnapshot: failedProgress,
                 });
                 onLog?.(
                     t(
-                        abandoned
-                            ? `[分镜生成] ${stableMarker} 场景已有分镜，放弃导入：${errMsg}`
-                            : `[分镜生成] ${stableMarker} 分镜启动/生成失败：${errMsg}`,
-                        abandoned
-                            ? `[Storyboard] ${stableMarker} already has shots; import abandoned: ${errMsg}`
-                            : `[Storyboard] ${stableMarker} shot kickoff/generation failed: ${errMsg}`
+                        `[分镜生成] ${stableMarker} 分镜启动/生成失败：${errMsg}`,
+                        `[Storyboard] ${stableMarker} shot kickoff/generation failed: ${errMsg}`
                     ),
                     'warning'
                 );

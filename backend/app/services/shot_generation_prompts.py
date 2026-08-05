@@ -968,18 +968,22 @@ def _resolve_scene_for_shot_persist(
     Resolve the workspace scene row to persist shot markdown onto.
 
     During script-analysis orchestration, a purge+reimport can replace the row
-    while ai_generate_shots LLM is in flight. Prefer the original id; if missing,
-    fall back to the active scene in the same episode with the same scene_no.
+    while ai_generate_shots LLM is in flight. Prefer the original id when still
+    active; if missing or soft-deleted, fall back to the active scene in the same
+    episode with the same scene_no.
     Returns (scene, remapped_from_scene_id|None).
     """
+    from app.services.deletion_ops import _is_soft_deleted
+
     scene = db.query(Scene).filter(Scene.id == int(scene_id)).first()
-    if scene is not None:
+    if scene is not None and not _is_soft_deleted(scene):
         return scene, None
 
-    ep_id = int(episode_id or 0)
+    ep_id = int(episode_id or getattr(scene, "episode_id", None) or 0)
+    resolve_scene_no = scene_no or (getattr(scene, "scene_no", None) if scene is not None else None)
     keys = [
         str(k or "").strip()
-        for k in _scene_no_lookup_keys(scene_no, scene_id=scene_no)
+        for k in _scene_no_lookup_keys(resolve_scene_no, scene_id=resolve_scene_no)
         if str(k or "").strip()
     ]
     if ep_id <= 0 or not keys:
