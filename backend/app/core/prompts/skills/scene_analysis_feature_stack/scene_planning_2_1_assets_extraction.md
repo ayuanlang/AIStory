@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-08-02 04:35:00 +08:00
+# Prompt Updated At: 2026-08-05 14:10:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -8,7 +8,7 @@
 
 ## 输入形态（强制）
 
-本环节「优化后剧本」= **Stage 1 完整成稿原样传入（不做裁切）**，可含第一部分补充说明 + 第二部分 `[ADAPTED_SCRIPT]` / Scene 全文（角色设定、环境块、【场景切换与首节拍转场】含服化道、覆盖/速查、Beat 等）+ 可选第三部分 Visual Backfill（**本环节不消费**）。Scene 边界须为 `[SCENES_BLOCK_START/END]` + 成对 `[SCENE_START:EPxx_SCyy]`/`[SCENE_END:EPxx_SCyy]`（**禁裸标记**）。提取时重点核销下列块（其余只读、禁臆补）：
+本环节「优化后剧本」= Stage 1 成稿注入（角色设定、环境块、【场景切换与首节拍转场】含服化道、覆盖/速查、Beat 建置/入戏等）；**注入前系统已按配对标记清除** `────【Beat切换说明】────`…`────【Beat切换说明结束】────`（缺结束标记则不清除；本环节**不依赖**切换说明段）。可含第一部分补充说明 + 第二部分 `[ADAPTED_SCRIPT]` / Scene 全文 + 可选第三部分 Visual Backfill（**本环节不消费**）。Scene 边界须为 `[SCENES_BLOCK_START/END]` + 成对 `[SCENE_START:EPxx_SCyy]`/`[SCENE_END:EPxx_SCyy]`（**禁裸标记**）。提取时重点核销下列块（其余只读、禁臆补）：
 
 ```
 [ENTITY_PROFILE_START]

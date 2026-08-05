@@ -892,6 +892,25 @@ const stripBeatBoundaryMarkers = (beatsText) => String(beatsText || '')
     .trim();
 
 /**
+ * Strip Stage 1 Beat切换说明 blocks before Stage 2.1 / 2.2 injection.
+ * Only removes paired segments:
+ *   ────【Beat切换说明】──── … ────【Beat切换说明结束】────
+ * Unclosed blocks are left untouched (never greedy-eat past SCENE/BEAT markers).
+ */
+const stripBeatTransitionNotesFromScript = (scriptText) => {
+    let text = String(scriptText || '').replace(/\r\n/g, '\n');
+    if (!text) return '';
+    const pairedRe = new RegExp(
+        String.raw`(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*Beat[ \t]*切换说明[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*\n` +
+        String.raw`[\s\S]*?` +
+        String.raw`(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*Beat[ \t]*切换说明结束[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*(?=\n|$)`,
+        'gi'
+    );
+    text = text.replace(pairedRe, '\n');
+    return text.replace(/\n{3,}/g, '\n\n').trim();
+};
+
+/**
  * Resolve Stage 2.2 Beat body: prefer BEAT_START/END extraction;
  * on split failure / too-short Beats, fall back to the entire scene text.
  * Returns `{ bodyText, usedSceneFallback }`. Throws only if final body is still too short.
@@ -3227,11 +3246,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, []);
 
     const buildStage2UserInputFromStage1 = useCallback((stage1Text, reuseSubjectAssets = []) => {
-        const adaptedScriptText = extractStage1AdaptedScriptBody(stage1Text);
-        // Stage 2.1: pass Stage 1 optimized script as-is (no ENV/Beat slim cut).
+        // Stage 2.1: inject Stage 1 script with paired 【Beat切换说明】…【Beat切换说明结束】 stripped.
+        const adaptedScriptText = stripBeatTransitionNotesFromScript(
+            extractStage1AdaptedScriptBody(stage1Text)
+        );
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2InputParts = [
-            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为 Stage 1 **完整优化后剧本原样**（含角色设定、环境块、【场景切换与首节拍转场】服化道核销摘要、覆盖/速查与 Beat 等，**不做裁切**）；据此提取实体并建立 Subject Index；**服饰/换装项命中换装或第二套可区分装束时，须强制拆多条 CHAR 供下游角色设计**；角色设定块中已摘录的外形/性情/特定动作须写入对应 `entity_attributes`；【未落环境实体清单】供 PROP/建置核销线索，禁止据此另建 ENV 行；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
+            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为 Stage 1 优化后剧本（含角色设定、环境块、【场景切换与首节拍转场】服化道核销摘要、覆盖/速查与 Beat 建置/入戏；**已清除配对【Beat切换说明】…【Beat切换说明结束】段**）；据此提取实体并建立 Subject Index；**服饰/换装项命中换装或第二套可区分装束时，须强制拆多条 CHAR 供下游角色设计**；角色设定块中已摘录的外形/性情/特定动作须写入对应 `entity_attributes`；【未落环境实体清单】供 PROP/建置核销线索，禁止据此另建 ENV 行；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -3265,7 +3286,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Keep SCENES_BLOCK as the last section so nothing appears after [SCENES_BLOCK_END].
         stage2InputParts.push(wrapInjectionSection(
             '优化后剧本',
-            `[优化后剧本 - Stage 2.1权威输入（Stage 1完整成稿，未裁切）]\n${adaptedScriptText || ''}`
+            `[优化后剧本 - Stage 2.1权威输入（已清除【Beat切换说明】配对段）]\n${adaptedScriptText || ''}`
         ));
 
         return {
@@ -3278,12 +3299,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const buildStage2_2UserInputFromStage1 = useCallback((stage1Text, adaptedScriptOverride = null) => {
         // Align with Stage 2.1: derive adapted script from the passed Stage 1 source text
         // (workspace / current run), not stale episode.ai_scene_analysis_adaptation.
-        const adaptedScriptText = adaptedScriptOverride != null
-            ? String(adaptedScriptOverride || '').trim()
-            : String(extractStage1AdaptedScriptBody(stage1Text) || '').trim();
+        const adaptedScriptText = stripBeatTransitionNotesFromScript(
+            adaptedScriptOverride != null
+                ? String(adaptedScriptOverride || '').trim()
+                : String(extractStage1AdaptedScriptBody(stage1Text) || '').trim()
+        );
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2_2InputParts = [
-            '请执行第二阶段的第二步：节拍工程映射（Stage 2.2）。输入为 Subject Index + 单场 `【场景名称】{短名}｜{日·内/外}` 场景头 + Beat 块（`[BEAT_START:…]`…`[BEAT_END:…]`，不含 Scene 级【主环境】等其它说明块）。将 `{短名}｜{日·内/外}` 原样落入 Scene Name；仅对 Beat 叙述层做 Index 名称转译并落入《Scenes Table》的 `{Beats}`；禁止改情节/对白/建置/补实体。',
+            '请执行第二阶段的第二步：节拍工程映射（Stage 2.2）。输入为 Subject Index + 单场 `【场景名称】{短名}｜{日·内/外}` 场景头 + Beat 块（`[BEAT_START:…]`…`[BEAT_END:…]`，含建置/入戏；**已清除【Beat切换说明】…【Beat切换说明结束】**；不含 Scene 级【主环境】等其它说明块）。将 `{短名}｜{日·内/外}` 原样落入 Scene Name；仅对 Beat 叙述层做 Index 名称转译并落入《Scenes Table》的 `{Beats}`；禁止改情节/对白/建置/补实体；禁止补写切换说明段。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -3320,6 +3343,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         // Prefer Beat blocks; fall back to full scene when split fails / too short.
         const { bodyText, usedSceneFallback } = resolveSceneBeatsBodyForStage22(sceneText, sceneId);
+        const bodyWithoutTransitionNotes = stripBeatTransitionNotesFromScript(bodyText);
         // Inject Stage 1 scene header only for beats-only body; full-scene fallback already contains it.
         const sceneNameMatch = !usedSceneFallback
             ? String(sceneText || '').match(/【场景名称】\s*[^\n【]+/)
@@ -3329,7 +3353,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             SCENES_BLOCK_START_TOKEN,
             markerStartToken,
             sceneNameHeader,
-            bodyText,
+            bodyWithoutTransitionNotes,
             markerEndToken,
             SCENES_BLOCK_END_TOKEN,
         ].filter((part) => String(part || '').trim()).join('\n');

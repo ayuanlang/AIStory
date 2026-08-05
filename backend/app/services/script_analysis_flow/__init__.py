@@ -1325,10 +1325,10 @@ def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
         units = parse_scene_units_from_markers(script)
     except Exception as exc:
         logger.warning("[assets_extraction] scene parse failed; using full adapted script | err=%s", exc)
-        return script
+        return strip_beat_transition_notes_from_script(script)
 
     if not units:
-        return script
+        return strip_beat_transition_notes_from_script(script)
 
     parts: List[str] = []
     if entity_profile:
@@ -1371,7 +1371,7 @@ def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
         len(script),
         len(rebuilt),
     )
-    return rebuilt or script
+    return strip_beat_transition_notes_from_script(rebuilt or script)
 
 
 def extract_legacy_beat_sections_from_scene_text(scene_text: str) -> str:
@@ -1448,6 +1448,27 @@ def _strip_beat_boundary_markers(beats_text: str) -> str:
     cleaned = BEAT_START_PATTERN.sub("", str(beats_text or ""))
     cleaned = BEAT_END_PATTERN.sub("", cleaned)
     return cleaned.strip()
+
+
+_BEAT_TRANSITION_NOTES_PAIR_RE = re.compile(
+    r"(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*Beat[ \t]*切换说明[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*\n"
+    r"[\s\S]*?"
+    r"(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*Beat[ \t]*切换说明结束[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*(?=\n|$)",
+    re.IGNORECASE,
+)
+
+
+def strip_beat_transition_notes_from_script(script_text: str) -> str:
+    """Remove paired Stage 1 【Beat切换说明】…【Beat切换说明结束】 before Stage 2.x injection.
+
+    Unclosed blocks are left untouched (never greedy-eat past SCENE/BEAT markers).
+    """
+    text = str(script_text or "").replace("\r\n", "\n")
+    if not text.strip():
+        return ""
+    text = _BEAT_TRANSITION_NOTES_PAIR_RE.sub("\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def measure_scene_beats_char_count(scene_text: str) -> int:
@@ -1537,6 +1558,7 @@ def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
     if not scene_text_has_beat_1(scene_text):
         raise SceneMissingBeat1Error(scene_id or "unknown")
     body_text, used_fallback = resolve_scene_beats_body_for_stage_2_2(scene_text, scene_id)
+    body_text = strip_beat_transition_notes_from_script(body_text)
     # Inject Stage 1 scene header only for beats-only body; full-scene fallback already contains it.
     scene_name_header = (
         ""
@@ -2412,6 +2434,7 @@ __all__ = [
     "extract_scene_env_and_beats_body",
     "extract_entity_profile_block_from_adapted",
     "build_assets_extraction_script_from_adapted",
+    "strip_beat_transition_notes_from_script",
     "extract_scene_markdown_text_from_analyze_result",
     "import_analyze_scene_stage_result",
     "import_scene_markdown_stage",
