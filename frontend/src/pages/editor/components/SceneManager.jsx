@@ -3058,7 +3058,6 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
 
         onLog?.(`SceneManager: Shot list generated for Scene ${sceneId}.`, 'success');
         generatedWarnings.forEach((msg) => onLog?.(`SceneManager: ${msg}`, 'warning'));
-        setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
 
         const sceneObj = scenes.find(s => Number(s?.id) === Number(sceneId)) || { id: sceneId, scene_no: sceneId };
         setEditingScene(sceneObj);
