@@ -15,7 +15,6 @@ from app.services.script_analysis_flow import (
     SCENES_BLOCK_START_TOKEN,
     SceneBeatsTooShortError,
     SceneMissingBeat1Error,
-    strip_beat_transition_notes_from_script,
 )
 from app.services.script_analysis_flow.analyze_scene_stages import import_scene_markdown_stage
 
@@ -43,7 +42,7 @@ def _extract_analysis_text_from_result(result: Any) -> str:
 
 def _replace_adapted_script_in_beats_user_input(user_text: str, adapted_script_text: str) -> str:
     source = str(user_text or "")
-    adapted = strip_beat_transition_notes_from_script(adapted_script_text)
+    adapted = str(adapted_script_text or "").strip()
     if not source.strip():
         return adapted
     wrapped_adapted = unwrap_injection_section(source, "优化后剧本")

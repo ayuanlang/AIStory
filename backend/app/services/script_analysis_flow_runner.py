@@ -148,7 +148,7 @@ async def execute_scene_analysis_flow_node(
         logger.info("[剧本分析流程] 开始调用 evaluate_scene 执行节点 %s...", node_key)
         try:
             if node_key == "assets_extraction":
-                # Stage 2.1: inject optimized script with Beat切换说明 stripped (frontend/helpers).
+                # Pass Stage 1 optimized script as-is (no ENV/Beat slim cut).
                 max_attempts = 2
                 result = None
                 assets_cover_poster_missing_after_retries = False
