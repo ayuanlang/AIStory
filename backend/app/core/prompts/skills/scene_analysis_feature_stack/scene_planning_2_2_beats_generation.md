@@ -54,7 +54,7 @@
 
 | 输入块 | 是否接收 | 说明 |
 | :--- | :---: | :--- |
-| `[SCENE_START]` / `[SCENE_END]` | **是** | Scene ID / 场序权威源 |
+| `[SCENE_START:{scene_id}]` / `[SCENE_END:{scene_id}]` | **是** | Scene ID / 场序权威源；**必须带 ID 且同场配对**；禁裸标记 |
 | `【场景名称】{短名}｜{日·夜}·{内/外}｜{季节}｜{气候}｜{正常叙事/闪回/倒叙}` | **是** | Stage 1 场景头；原样落入 `Scene Name`（不含 `【场景名称】` 前缀） |
 | `[BEAT_START:{n}]`…`[BEAT_END:{n}]` | **是** | **Beat 内容唯一源**；须保留内外部分隔符 |
 | `[ENV_BLOCK_START]`…`[ENV_BLOCK_END]` | **否** | 归 Stage 1 / 2.1；本环节不接收、不输出 |

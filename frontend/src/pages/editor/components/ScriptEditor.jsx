@@ -692,8 +692,6 @@ const SCENES_BLOCK_END_TOKEN = '[SCENES_BLOCK_END]';
 const ENTITY_PROFILE_START_TOKEN = '[ENTITY_PROFILE_START]';
 const ENTITY_PROFILE_END_TOKEN = '[ENTITY_PROFILE_END]';
 const BLOCK_MARKER_LINE_PATTERN = /^\s*`?\[(?:SCENES?_BLOCK_(?:START|END))\]`?\s*$/gim;
-const SCENE_MARKER_LINE_PATTERN = /^\s*`?\[SCENE_(?:START|END)(?::[^\]]+)?\]`?\s*$/gim;
-const MIN_SCENE_UNIT_BODY_CHARS = 50;
 
 /**
  * Extract Part 2【角色设定】block (`[ENTITY_PROFILE_START]…[ENTITY_PROFILE_END]`)
@@ -712,7 +710,7 @@ const extractEntityProfileBlockFromAdapted = (adaptedScript) => {
         if (endMatch) {
             return afterStart.slice(0, endMatch.index + endMatch[0].length).trim();
         }
-        const sceneMatch = /`?\[SCENE_START(?::([^\s\]]+))?\]`?/i.exec(afterStart);
+        const sceneMatch = /`?\[SCENE_START:([^\s\]]+)\]`?/i.exec(afterStart);
         let body = (sceneMatch ? afterStart.slice(0, sceneMatch.index) : afterStart).replace(/\s+$/, '');
         if (body && !endRe.test(body)) {
             body = `${body}\n${ENTITY_PROFILE_END_TOKEN}`;
@@ -722,7 +720,7 @@ const extractEntityProfileBlockFromAdapted = (adaptedScript) => {
 
     const headerIdx = text.search(/【角色设定】/);
     if (headerIdx < 0) return '';
-    const firstScene = /`?\[SCENE_START(?::([^\s\]]+))?\]`?/i.exec(text);
+    const firstScene = /`?\[SCENE_START:([^\s\]]+)\]`?/i.exec(text);
     if (firstScene && headerIdx >= firstScene.index) return '';
     const end = firstScene ? firstScene.index : text.length;
     const body = text.slice(headerIdx, end).trim();
@@ -737,19 +735,6 @@ const stripBlockLevelMarkersFromSceneText = (text) => (
         .trim()
 );
 
-const normalizeSceneUnitBodyForMeasure = (text) => (
-    stripBlockLevelMarkersFromSceneText(text)
-        .replace(SCENE_MARKER_LINE_PATTERN, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-);
-
-const sceneUnitBodyCharCount = (text) => normalizeSceneUnitBodyForMeasure(text).length;
-
-const isViableSceneUnitBody = (text, minChars = MIN_SCENE_UNIT_BODY_CHARS) => (
-    sceneUnitBodyCharCount(text) >= Math.max(1, Number(minChars) || MIN_SCENE_UNIT_BODY_CHARS)
-);
-
 const normalizeSceneMarkerScriptText = (scriptText) => {
     const text = String(scriptText || '').replace(/\r\n/g, '\n');
     if (!text.trim()) return '';
@@ -759,225 +744,82 @@ const normalizeSceneMarkerScriptText = (scriptText) => {
     );
 };
 
-const resolveSceneBlockText = (scriptText) => {
-    const normalized = normalizeSceneMarkerScriptText(scriptText);
-    if (!normalized.trim()) return '';
-    const startMatch = /`?\[SCENES_BLOCK_START\]`?/i.exec(normalized);
-    if (!startMatch) return normalized.trim();
-    const afterStart = normalized.slice(startMatch.index + startMatch[0].length);
-    const endMatches = [...afterStart.matchAll(/`?\[SCENES_BLOCK_END\]`?/gi)];
-    const blockText = (endMatches.length > 0
-        ? afterStart.slice(0, endMatches[endMatches.length - 1].index)
-        : afterStart).trim();
-    return blockText || normalized.trim();
-};
-
-const inferSceneIdFromBareStartContext = (blockText, markerEndPos) => {
-    const after = String(blockText || '').slice(Math.max(0, Number(markerEndPos) || 0), Math.max(0, Number(markerEndPos) || 0) + 120);
-    const firstLine = after.split('\n')[0] || after;
-    const patterns = [
-        /^\s*(EP\d+_SC\d+[A-Za-z]?)\b/i,
-        /^\s*Scene\s*(\d+)\b/i,
-        /^\s*【场景\s*(\d+)/,
-        /^\s*场景\s*(\d+)\s*[：:\-—–]/,
-        /^\s*(\d+)\s*[—–:\-【]/,
-    ];
-    for (const pattern of patterns) {
-        const match = firstLine.match(pattern);
-        if (!match) continue;
-        const value = String(match[1] || '').trim();
-        if (value) return value;
-    }
-    return '';
-};
-
-const collectSceneBoundaryMarkers = (blockText) => {
-    const markers = [];
-    // Accept both [SCENE_START:ID] and bare [SCENE_START] (Stage 1 template historically used bare form).
-    // Also recover IDs from title lines like: [SCENE_START] Scene 4 — Winery Courtyard...
-    const startPattern = /`?\[SCENE_START(?::([^\s\]]+))?\]`?/gi;
-    const endPattern = /`?\[SCENE_END(?::([^\s\]]+))?\]`?/gi;
-    let match;
-    while ((match = startPattern.exec(blockText)) !== null) {
-        const explicitId = String(match[1] || '').trim();
-        const inferredId = explicitId || inferSceneIdFromBareStartContext(blockText, match.index + match[0].length);
-        markers.push({
-            pos: match.index,
-            endPos: match.index + match[0].length,
-            kind: 'start',
-            sceneId: inferredId,
-        });
-    }
-    while ((match = endPattern.exec(blockText)) !== null) {
-        markers.push({
-            pos: match.index,
-            endPos: match.index + match[0].length,
-            kind: 'end',
-            sceneId: String(match[1] || '').trim(),
-        });
-    }
-    markers.sort((a, b) => (a.pos - b.pos) || (a.kind === 'end' ? -1 : 1));
-
-    let autoIndex = 0;
-    let lastStartId = '';
-    return markers.map((marker) => {
-        if (marker.kind === 'start') {
-            let sceneId = marker.sceneId;
-            if (!sceneId) {
-                autoIndex += 1;
-                sceneId = String(autoIndex);
-            } else {
-                const numericId = Number(sceneId);
-                if (Number.isFinite(numericId) && numericId > autoIndex) {
-                    autoIndex = numericId;
-                }
-            }
-            lastStartId = sceneId;
-            return { ...marker, sceneId };
-        }
-        const sceneId = marker.sceneId || lastStartId || String(Math.max(autoIndex, 1));
-        return { ...marker, sceneId };
-    });
-};
-
-const decrementCanonicalSceneId = (sceneId) => {
-    const match = String(sceneId || '').trim().match(/^(EP\d+)_SC(\d+)$/i);
-    if (!match) return '';
-    const order = Number(match[2]);
-    if (!Number.isFinite(order) || order <= 1) return '';
-    return `${String(match[1]).toUpperCase()}_SC${String(order - 1).padStart(2, '0')}`;
-};
-
-const incrementCanonicalSceneId = (sceneId) => {
-    const match = String(sceneId || '').trim().match(/^(EP\d+)_SC(\d+)$/i);
-    if (!match) return '';
-    return `${String(match[1]).toUpperCase()}_SC${String(Number(match[2]) + 1).padStart(2, '0')}`;
-};
-
-const inferPreludeSceneId = (startMarker, segmentCount) => (
-    decrementCanonicalSceneId(startMarker?.sceneId) || String(segmentCount + 1)
-);
-
-const inferTrailingSceneId = (activeStartId, segments, markers) => {
-    if (activeStartId) return activeStartId;
-    const lastMarker = markers[markers.length - 1];
-    if (lastMarker?.kind === 'end') {
-        const incremented = incrementCanonicalSceneId(lastMarker.sceneId);
-        if (incremented) return incremented;
-    }
-    if (segments.length > 0) {
-        const incremented = incrementCanonicalSceneId(segments[segments.length - 1][0]);
-        if (incremented) return incremented;
-    }
-    return String(segments.length + 1);
-};
-
-const dedupeSegmentSceneIds = (segments) => {
-    const seen = new Set();
-    const deduped = [];
-    segments.forEach(([sceneId, sceneText], idx) => {
-        const body = String(sceneText || '').trim();
-        if (!body || !isViableSceneUnitBody(body)) return;
-        let resolvedId = String(sceneId || '').trim() || String(idx + 1);
-        if (seen.has(resolvedId)) resolvedId = String(idx + 1);
-        seen.add(resolvedId);
-        deduped.push([resolvedId, body]);
-    });
-    return deduped;
-};
-
-const segmentScenesByBoundaryMarkers = (blockText) => {
-    const markers = collectSceneBoundaryMarkers(blockText);
-    if (!markers.length) {
-        const body = String(blockText || '').trim();
-        return body && isViableSceneUnitBody(body) ? [['1', body]] : [];
-    }
-
-    const segments = [];
-    let contentCursor = 0;
-    let activeStartId = '';
-    let pendingLeading = '';
-
-    markers.forEach((marker) => {
-        const chunk = stripBlockLevelMarkersFromSceneText(blockText.slice(contentCursor, marker.pos));
-        if (marker.kind === 'end') {
-            let body = chunk;
-            if (pendingLeading) {
-                body = body ? `${pendingLeading}\n\n${body}`.trim() : pendingLeading;
-                pendingLeading = '';
-            }
-            if (body) segments.push([marker.sceneId, body]);
-            activeStartId = '';
-        } else {
-            if (chunk) {
-                if (activeStartId) {
-                    segments.push([activeStartId, chunk]);
-                } else {
-                    pendingLeading = chunk;
-                }
-            }
-            activeStartId = marker.sceneId;
-        }
-        contentCursor = marker.endPos;
-    });
-
-    const trailing = stripBlockLevelMarkersFromSceneText(blockText.slice(contentCursor));
-    if (trailing) {
-        let trailBody = trailing;
-        if (pendingLeading) {
-            trailBody = `${pendingLeading}\n\n${trailBody}`.trim();
-            pendingLeading = '';
-        }
-        segments.push([inferTrailingSceneId(activeStartId, segments, markers), trailBody]);
-    } else if (pendingLeading) {
-        if (activeStartId) {
-            segments.push([activeStartId, pendingLeading]);
-        } else if (segments.length > 0) {
-            const last = segments[segments.length - 1];
-            segments[segments.length - 1] = [last[0], `${last[1]}\n\n${pendingLeading}`.trim()];
-        } else {
-            segments.push([inferPreludeSceneId(markers[0], segments.length), pendingLeading]);
-        }
-    }
-    return segments;
-};
-
-const buildSingleSceneUnitFromText = (scriptText) => {
-    const normalized = normalizeSceneMarkerScriptText(scriptText);
-    const body = resolveSceneBlockText(normalized).trim() || normalized.trim();
-    if (!body || !isViableSceneUnitBody(body)) return null;
-    return {
-        sceneId: '1',
-        sceneOrder: 1,
-        sceneText: body,
-        markerStartToken: '[SCENE_START:1]',
-        markerEndToken: '[SCENE_END:1]',
-    };
-};
-
+/**
+ * Strict SCENE_START:ID / SCENE_END:ID pair walker (original split path).
+ * Uses first SCENES_BLOCK_END after START. Throws on pair mismatch / duplicate IDs.
+ */
 const parseSceneUnitsFromScriptMarkersText = (scriptText) => {
-    const normalized = normalizeSceneMarkerScriptText(scriptText);
-    if (!normalized.trim()) return [];
+    const text = normalizeSceneMarkerScriptText(scriptText);
+    if (!text.trim()) return [];
 
-    const blockText = resolveSceneBlockText(normalized);
-    if (!blockText.trim()) {
-        const fallbackUnit = buildSingleSceneUnitFromText(normalized);
-        return fallbackUnit ? [fallbackUnit] : [];
+    const startRegex = /`?\[SCENES_BLOCK_START\]`?/i;
+    const endRegex = /`?\[SCENES_BLOCK_END\]`?/i;
+    const startMatch = startRegex.exec(text);
+    if (!startMatch) {
+        throw new Error('Scene marker parse error: SCENES_BLOCK_START missing');
     }
 
-    const segments = dedupeSegmentSceneIds(segmentScenesByBoundaryMarkers(blockText));
-    if (!segments.length) {
-        const fallbackUnit = buildSingleSceneUnitFromText(normalized);
-        return fallbackUnit ? [fallbackUnit] : [];
+    const afterStart = text.slice(startMatch.index + startMatch[0].length);
+    const endMatch = endRegex.exec(afterStart);
+    if (!endMatch) {
+        throw new Error('Scene marker parse error: SCENES_BLOCK_END missing');
     }
 
-    return segments.map(([sceneId, sceneText], idx) => ({
-        sceneId,
-        sceneOrder: idx + 1,
-        sceneText,
-        markerStartToken: `[SCENE_START:${sceneId}]`,
-        markerEndToken: `[SCENE_END:${sceneId}]`,
-    }));
+    const blockText = afterStart.slice(0, endMatch.index);
+    if (!String(blockText || '').trim()) {
+        throw new Error('Scene marker parse error: scene block is empty');
+    }
+
+    const sceneStartPattern = /\[SCENE_START:([^\s\]]+)\]/g;
+    const sceneEndPattern = /\[SCENE_END:([^\s\]]+)\]/;
+    const units = [];
+    const seenSceneIds = new Set();
+    let cursor = 0;
+
+    while (true) {
+        sceneStartPattern.lastIndex = cursor;
+        const startUnitMatch = sceneStartPattern.exec(blockText);
+        if (!startUnitMatch) break;
+
+        const sceneId = String(startUnitMatch[1] || '').trim();
+        if (!sceneId) {
+            throw new Error('Scene marker parse error: empty scene_id in SCENE_START');
+        }
+        if (seenSceneIds.has(sceneId)) {
+            throw new Error(`Scene marker parse error: duplicate scene_id ${sceneId}`);
+        }
+        seenSceneIds.add(sceneId);
+
+        const afterStartMarker = blockText.slice(startUnitMatch.index + startUnitMatch[0].length);
+        const endUnitMatch = sceneEndPattern.exec(afterStartMarker);
+        if (!endUnitMatch) {
+            throw new Error(`Scene marker parse error: missing SCENE_END for ${sceneId}`);
+        }
+        const endSceneId = String(endUnitMatch[1] || '').trim();
+        if (endSceneId !== sceneId) {
+            throw new Error(`Scene marker parse error: SCENE_START/END mismatch (${sceneId} vs ${endSceneId})`);
+        }
+
+        const sceneBody = afterStartMarker.slice(0, endUnitMatch.index).trim();
+        units.push({
+            sceneId,
+            sceneOrder: units.length + 1,
+            sceneText: sceneBody,
+            markerStartToken: startUnitMatch[0],
+            markerEndToken: endUnitMatch[0],
+        });
+        cursor = startUnitMatch.index + startUnitMatch[0].length + endUnitMatch.index + endUnitMatch[0].length;
+    }
+
+    if (!units.length) {
+        throw new Error('Scene marker parse error: no scenes found between scene block markers');
+    }
+
+    const trailing = blockText.slice(cursor).trim();
+    if (trailing && /\[SCENE_(?:START|END):/i.test(trailing)) {
+        throw new Error('Scene marker parse error: unmatched trailing content after scene markers');
+    }
+    return units;
 };
 
 /** Extract legacy `- Beat N` sections and wrap with BEAT_START/END. */
@@ -3249,18 +3091,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!source.trim()) return '';
             // Accept optional markdown inline-code wrapping around markers.
             const startRegex = /`?\[SCENES_BLOCK_START\]`?/i;
-            const endRegex = /`?\[SCENES_BLOCK_END\]`?/gi;
+            const endRegex = /`?\[SCENES_BLOCK_END\]`?/i;
             const startMatch = startRegex.exec(source);
             if (!startMatch) return '';
             const startIdx = startMatch.index;
             const afterStart = source.slice(startIdx + startMatch[0].length);
-            const endMatches = [...afterStart.matchAll(endRegex)];
+            // Strict: first SCENES_BLOCK_END after START (same as scene pair walker).
+            const endMatch = endRegex.exec(afterStart);
             let scenesBlock = '';
-            if (!endMatches.length) {
+            if (!endMatch) {
                 scenesBlock = source.slice(startIdx).trim();
             } else {
-                const lastEnd = endMatches[endMatches.length - 1];
-                const endIdxAbs = startIdx + startMatch[0].length + lastEnd.index + lastEnd[0].length;
+                const endIdxAbs = startIdx + startMatch[0].length + endMatch.index + endMatch[0].length;
                 scenesBlock = source.slice(startIdx, endIdxAbs).trim();
             }
             // Keep Part 2【角色设定】before SCENES_BLOCK for Stage 2.1 entity_attributes.
@@ -3280,7 +3122,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const strictBlock = extractScenesBlockOnly(candidate);
             if (strictBlock) return strictBlock;
 
-            if (/\[SCENE_START(?::[^\s\]]+)?\]/i.test(candidate)) {
+            if (/\[SCENE_START:[^\s\]]+\]/i.test(candidate)) {
                 const endMarkerMatch = candidate.match(/(?:^|\n)\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|\[Project Metadata\]|\[Reusable Subject Assets)/im);
                 const fallbackEndMarkerMatch = candidate.match(/(?:^|\n)\s*(?:###\s*第三部分|##\s*第三部分|第三部分[:：]?\s*Project\s*Visual\s*Backfill|[-]{5,}\s*$|\{\s*"project_visual_backfill"\s*:)/im);
                 if (endMarkerMatch?.index >= 0) {
@@ -11837,15 +11679,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             sceneUnits = parseSceneUnitsFromScriptMarkers(adaptedScriptForSplit);
         } catch (parseErr) {
-            onLog?.(`[${label}] scene marker parse warning: ${parseErr?.message || parseErr}`, 'warning');
-            sceneUnits = [];
+            // Do not collapse multi-scene scripts into a single fallback scene.
+            throw new Error(t(
+                `场景分割符解析失败，无法执行场景编排：${parseErr?.message || parseErr}`,
+                `Scene marker parse failed; cannot run scene orchestration: ${parseErr?.message || parseErr}`
+            ));
         }
         if (!sceneUnits.length) {
-            const fallbackUnit = buildSingleSceneUnitFromText(adaptedScriptForSplit);
-            if (fallbackUnit) {
-                onLog?.(`[${label}] no scene markers detected; treating entire adapted script as one scene.`, 'info');
-                sceneUnits = [fallbackUnit];
-            }
+            throw new Error(t(
+                '场景分割结果为空，请检查优化后剧本中的 [SCENE_START:ID]/[SCENE_END:ID] 配对。',
+                'Scene split returned no units. Check [SCENE_START:ID]/[SCENE_END:ID] pairs in the adapted script.'
+            ));
         }
         const episodePrefix = resolveEpisodeSceneIdPrefix(
             activeEpisode,
@@ -18931,23 +18775,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             return { stage1SourceText, candidates, error: '', adaptedScriptSource };
         } catch (error) {
-            const fallbackUnit = buildSingleSceneUnitFromText(adaptedScriptText);
-            if (fallbackUnit) {
-                const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode, adaptedScriptText);
-                let candidates = applyCanonicalSceneIdsToUnits(
-                    [{
-                        ...fallbackUnit,
-                        displayLabel: extractSceneDisplayLabel(fallbackUnit),
-                    }],
-                    episodePrefix
-                );
-                candidates = alignSceneBeatsCandidatesWithStage2(
-                    candidates,
-                    resolveStage2BySceneMap(),
-                    episodePrefix
-                );
-                return { stage1SourceText, candidates, error: '', adaptedScriptSource };
-            }
             return {
                 stage1SourceText,
                 candidates: [],

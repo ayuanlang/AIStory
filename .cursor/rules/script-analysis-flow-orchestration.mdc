@@ -70,6 +70,7 @@ API: `runScriptAnalysisFlowAnalyzeNode` -> `POST /prompts/scene-analysis/flow/ru
 - `run_scene_analysis_flow_node`: runs one node; does **not** auto fan-out after `assets_extraction` (frontend orchestrates)
 - `scene_markdown`: `_run_scene_markdown_node_per_scene` — per-scene parallel orchestration and import
 - Asset design nodes: `analyze_scene` per category, separate persist
+- **Scene split (strict pair walker)**: `parse_scene_units_from_markers` / FE twin require `[SCENES_BLOCK_START]`…`[SCENES_BLOCK_END]` (first END) and paired `[SCENE_START:{id}]`…`[SCENE_END:{id}]` (ID required, same id both sides). **No** bare `[SCENE_START]`/`[SCENE_END]`, no 50-char drop filter, no single-scene soft collapse on parse failure. Stage 1 prompt (`scene_planning_1_script_optimization.md` §10) **must** stay in lockstep with this contract.
 
 ## Constraints when changing code
 
@@ -80,6 +81,7 @@ API: `runScriptAnalysisFlowAnalyzeNode` -> `POST /prompts/scene-analysis/flow/ru
 5. After each scene imports to workspace, start that scene's storyboard only when **ENV** asset design is ready (`asset_design_environment` ok / imported, or no ENV rows / env auto-start off); queue as `waiting_env` until then. Do **not** open the gate when character or prop finishes. Arm the ENV gate (`environmentAssetDesignPendingRef`) before parallel scene+asset branches so early imports cannot use stale episode JSON. End-of-pipeline only residual-kicks scenes not yet started once the ENV gate is open.
 6. Storyboard prompt injection (`# Scene Subject Image Prompts (CN)`): **ENV-only** for the current scene's linked environments — do **not** inject CHAR/PROP `generation_prompt_cn`. Subject Index may still list CHAR/PROP/ENV for naming.
 7. Manual storyboard rerun (`force` kickoff) must still verify each scene's linked ENV exists in the entity library with `generation_prompt_cn`; block/skip scenes that fail this check.
+8. Changing scene-marker parse rules requires updating Stage 1/2.1/2.2 prompts in the same change (ban bare markers; require `EPxx_SCyy` pairs).
 
 ## Scene orchestration asset annotation (prompt contract)
 

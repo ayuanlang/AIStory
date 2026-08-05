@@ -1,8 +1,8 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md
-# Prompt Updated At: 2026-08-05 09:35:00 +08:00
+# Prompt Updated At: 2026-08-05 12:45:00 +08:00
 # Skill 1-1: 剧本改编与整体规划 [SCRIPT_OPT]
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]
-# Version: 2026-08-05-GrandVFXDetail
+# Version: 2026-08-05-StrictSceneMarkers
 ## 核心任务
 产出适合 AI 影视的可拍剧本；擅长多线交叉剪辑。
 **【环节】**Stage 1 =「拍什么」唯一内容权威（建置/入戏/剧情/对白/站位/动作链定稿）。
@@ -12,7 +12,7 @@
 **【下游】**`shot_generation.md` 做「怎么拍」；本阶段禁代写分镜处方，亦禁假设下游补建置。
 **【允许】**特效奇观/微表演/特写（打斗追逐须穿插；**情绪高点可主动增角色/环境特写切口**）/拆动作/标点节奏/多线重排呈现序（不改因果）。
 **【AI优势】**轻功空战｜宏观阵列｜高成本奇观；可增特效不改因果；**宏大特效须分相写满变化细节以撑满幅与时长**。
-**【输出】**Scene切分+场景名｜ENV 三块闭合｜`[ADAPTED_SCRIPT]`（首段【角色设定】禁发散）｜`project_visual_backfill` JSON。
+**【输出】**Scene切分+场景名｜ENV 三块闭合｜`[ADAPTED_SCRIPT]`（首段【角色设定】禁发散；**场景分割符硬格式**见§10）｜`project_visual_backfill` JSON。
 ## 阅读地图
 > `## N`=生产流大节；正文 `§N`=强约束号（≠章节号）。例：§9–§11∈章2；§12∈章3。旧称§一/二/四=章7/6/5专题。Canonical 只展开一次，他处写指针。
 | 任务 | 章 | 强约束 |
@@ -433,8 +433,37 @@
 - **【服化道/环境初始态锁定自检】（§7；强制）**：`环境细节=原文开场/场头/空境初始｜服饰道具=入场初态｜无剧情终态回填｜剧变处置=仅Beat|状态衍生|新Scene/新主环境(依据停留时长)`；把后文狼藉/战损/废墟写进摘要或【主环境】基准=失败。
 - **【桥段落地】【动作库闭合】【三阶保真】【潜台词/钩子】**：格式见§38–41；缺环标缺口。
 ### 第二部分：修改后的剧本 [ADAPTED_SCRIPT]
-序：①【角色设定】(§19a)→②按Scene；Beat格式见文末模板。角色设定仅摘原文外形/性情/特定动作。
-**Scene块序**：`[SCENE_START]`→【场景名称】→核销/内核/节拍/Duration→**【高潮与核心情绪点】**→(决战/宏观/打斗/追杀规划)→ENV三块→【实体覆盖】→【观察视角与空间建置】→【场景切换与首节拍转场】【对白拆句判定】→Beat(**一Beat一ENV**；情绪点特写切口落此处)→`[SCENE_END]`。
+序：①【角色设定】(§19a)→②`[SCENES_BLOCK_START]`…按Scene…`[SCENES_BLOCK_END]`；Beat格式见文末模板。角色设定仅摘原文外形/性情/特定动作。
+
+**场景分割符（最高硬约束；下游严格配对解析，禁裸标记）**：
+- 全体 Scene **必须**包在一对 `[SCENES_BLOCK_START]` … `[SCENES_BLOCK_END]` 内（全稿各出现**恰好一次**；禁嵌套、禁中途再开块）。
+- 每一场必须成对：`[SCENE_START:{scene_id}]` … `[SCENE_END:{scene_id}]`；`{scene_id}` **必填**、同场首尾**逐字相同**（推荐 `EP01_SC01`、`EP01_SC02`…；2 位零填充）。
+- **禁止**裸写 `[SCENE_START]` / `[SCENE_END]`（无 `:ID`）；禁 START/END ID 不一致；禁缺 END；禁重复 `scene_id`；禁在块外写 Scene。
+- Beat 外层须写 `[BEAT_START:{n}]` … `[BEAT_END:{n}]`（与文末模板一致；`n` 场内从 1 连续）。
+
+**Scene块序**：`[SCENE_START:{scene_id}]`→【场景名称】→核销/内核/节拍/Duration→**【高潮与核心情绪点】**→(决战/宏观/打斗/追杀规划)→ENV三块→【实体覆盖】→【观察视角与空间建置】→【场景切换与首节拍转场】【对白拆句判定】→Beat(**一Beat一ENV**；情绪点特写切口落此处)→`[SCENE_END:{scene_id}]`。
+
+**成稿骨架（强制）**：
+```
+[ENTITY_PROFILE_START]
+【角色设定】
+…
+[ENTITY_PROFILE_END]
+[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+【场景名称】…
+…
+[BEAT_START:1]
+Beat 1：
+…
+[BEAT_END:1]
+…
+[SCENE_END:EP01_SC01]
+[SCENE_START:EP01_SC02]
+…
+[SCENE_END:EP01_SC02]
+[SCENES_BLOCK_END]
+```
 ### 第三部分：Project Visual Backfill
 末尾单一JSON。`color_spectrum`：**必填**；基于`borrowed_films`四选一(冷调主导|暖调主导|冷暖对比|同温层次)+≥1依据；禁K值/四层色谱/`color_palette`(归Stage3)。
 ```json
@@ -467,6 +496,7 @@
 
 ## 统一成稿模板（canonical）
 **【角色设定】**：`[ENTITY_PROFILE_START]`…`[ENTITY_PROFILE_END]`（见Part2）。
+**【场景分割符】**：`[SCENES_BLOCK_START]` → 多场 `[SCENE_START:EPxx_SCyy]`…`[SCENE_END:EPxx_SCyy]`（ID 必填且同场配对）→ `[SCENES_BLOCK_END]`；禁裸 `[SCENE_START]`/`[SCENE_END]`。
 **环境块**（快速闪回/蒙太奇同场异地时可重复【主环境】块；较长回忆则在独立闪回 Scene 内单块或多块；衍生须覆盖每一主环境族）：
 ```
 [ENV_BLOCK_START]
@@ -502,6 +532,7 @@
 ```
 **Beat**：
 ```
+[BEAT_START:{n}]
 Beat {n}：
 ────【建置】────
 {Wide|…}，当前环境 `{N}度{名}`（**永远用衍生行**；Master=`0度{名}`，**禁裸主环境名**；=本视角直接可见背景半空间；**按背景内容选角，禁机械轮角**；守轴/禁无动机越轴；有变：【上一→触发→本 ENV】；反打主名段不变；闪回/蒙太奇切主环境则主名段=目标主环境名）。**画面初始态**：{每人：前景(离镜近处)|中景|后景(远处)+画左|中央|画右+正背面+面向+姿态}；{应可见全员}…（**禁 F≈/°侧**；**禁写本拍运动后落点**；背景锚须∈该N°半空间；同ENV承接上拍`终态画面纵深`）
@@ -519,4 +550,5 @@ Beat {n}：
 视角换算台账=…（ENV变=否→N/A；**输入池全员**；→前/中/后景者必须在建置；台账=开拍投影，终态以终态画面纵深为准）
 建置逻辑核销=通过；摘要=①–⑧全过+终态抽样…；（冲突→失败｜冲突=…→整拍重写）
 速查更新={名}|扇区=…|锚=…|F≈…|姿态=…|主场ENV=…|可见性=画内|暂不可见；（场内未出画全员；画内投影≡终态画面纵深）
+[BEAT_END:{n}]
 ```

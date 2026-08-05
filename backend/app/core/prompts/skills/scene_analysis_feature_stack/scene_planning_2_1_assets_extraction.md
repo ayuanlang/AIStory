@@ -8,7 +8,7 @@
 
 ## 输入形态（强制）
 
-本环节「优化后剧本」= **Stage 1 完整成稿原样传入（不做裁切）**，可含第一部分补充说明 + 第二部分 `[ADAPTED_SCRIPT]` / Scene 全文（角色设定、环境块、【场景切换与首节拍转场】含服化道、覆盖/速查、Beat 等）+ 可选第三部分 Visual Backfill（**本环节不消费**）。提取时重点核销下列块（其余只读、禁臆补）：
+本环节「优化后剧本」= **Stage 1 完整成稿原样传入（不做裁切）**，可含第一部分补充说明 + 第二部分 `[ADAPTED_SCRIPT]` / Scene 全文（角色设定、环境块、【场景切换与首节拍转场】含服化道、覆盖/速查、Beat 等）+ 可选第三部分 Visual Backfill（**本环节不消费**）。Scene 边界须为 `[SCENES_BLOCK_START/END]` + 成对 `[SCENE_START:EPxx_SCyy]`/`[SCENE_END:EPxx_SCyy]`（**禁裸标记**）。提取时重点核销下列块（其余只读、禁臆补）：
 
 ```
 [ENTITY_PROFILE_START]
