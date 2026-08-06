@@ -32,7 +32,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, pickBestEntityMatch, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, compareShotEnvironmentChange, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, getProjectPreferredResolution, getProjectPreferredVideoResolution, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick, triggerMediaReload
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, pickBestEntityMatch, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, collectShotVideoReferenceWarnings, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, compareShotEnvironmentChange, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, getProjectPreferredResolution, getProjectPreferredVideoResolution, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotPreservingLocalMedia, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick, triggerMediaReload
 } from '../editorHelpers';
 
 import { 
@@ -1890,7 +1890,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     if (!prev || String(prev?.id || '') !== String(fullShot.id)) {
                         return prev;
                     }
-                    return { ...prev, ...fullShot, is_compact: false };
+                    return mergeShotPreservingLocalMedia(prev, fullShot, { markHydrated: true });
                 });
             } catch (e) {
                 console.error('Failed to hydrate shot detail', e);
@@ -2915,6 +2915,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             : (generatingStateByShotRef.current?.[stableShotId] || { start: false, end: false, video: false, videoAt: 0 });
         if (!shotState?.video) return false;
 
+        // Local preview already bound to a new URL — never keep blocking the player.
+        const localShot = (
+            (editingShotRef.current && String(editingShotRef.current?.id || '') === stableShotId)
+                ? editingShotRef.current
+                : null
+        ) || (shotsRef.current || []).find((item) => String(item?.id || '') === stableShotId);
+        const localVideoUrl = String(localShot?.video_url || '').trim();
+        const baselineVideoUrl = String(generationMediaBaselineRef.current?.[stableShotId]?.video || '').trim();
+        if (localVideoUrl && localVideoUrl !== baselineVideoUrl) {
+            return false;
+        }
+
         const statusText = String(videoStatuses?.[stableShotId] || '').trim();
         const normalizedStatus = normalizeGenerationPhase(statusText);
         // Provider URL / OSS-pending success must not keep the spinner forever.
@@ -2994,7 +3006,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     if (!fullShot?.id) return;
                     setEditingShot((prev) => {
                         if (!prev || String(prev?.id || '') !== String(fullShot.id)) return prev;
-                        return { ...prev, ...fullShot, is_compact: false };
+                        return mergeShotPreservingLocalMedia(prev, fullShot, { markHydrated: true });
                     });
                 }) : Promise.resolve(),
             ]);
@@ -5369,7 +5381,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             });
 
             if (requestSeq === shotsRefreshRequestSeqRef.current) {
-                setShots(filtered);
+                // Keep just-generated local media when compact list briefly returns empty URLs
+                // (common before OSS bind lands).
+                setShots((prev) => {
+                    const prevById = new Map((Array.isArray(prev) ? prev : []).map((shot) => [String(shot?.id || ''), shot]));
+                    return filtered.map((shot) => {
+                        const local = prevById.get(String(shot?.id || ''));
+                        return local ? mergeShotPreservingLocalMedia(local, shot) : shot;
+                    });
+                });
                 setHasShotInitialLoadCompleted(true);
                 
                 // Keep editingShot in sync with the freshly loaded master data
@@ -5377,18 +5397,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     if (!prev) return prev;
                     const updated = filtered.find(s => String(s.id) === String(prev.id));
                     if (!updated) return prev;
-
-                    const prevImageUrl = String(prev.image_url || '').trim();
-                    const nextImageUrl = String(updated.image_url || '').trim();
-                    const prevVideoUrl = String(prev.video_url || '').trim();
-                    const nextVideoUrl = String(updated.video_url || '').trim();
-                    // Never blank a just-generated local preview with an empty list/compact payload.
-                    const mergedImageUrl = nextImageUrl || prevImageUrl;
-                    const mergedVideoUrl = nextVideoUrl || prevVideoUrl;
-                    if (mergedImageUrl !== prevImageUrl || mergedVideoUrl !== prevVideoUrl) {
-                        return { ...prev, image_url: mergedImageUrl, video_url: mergedVideoUrl };
-                    }
-                    return prev;
+                    return mergeShotPreservingLocalMedia(prev, updated);
                 });
             }
 
@@ -5450,6 +5459,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 String(item?.id) === stableShotId ? { ...item, ...patch } : item
             )));
             setEditingShot((prev) => (prev && String(prev.id) === stableShotId ? { ...prev, ...patch } : prev));
+            setIsEditingVideoPreviewArmed(true);
+            if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(durableUrl);
+            triggerMediaReload();
             setMediaPersistGraceRefreshSeq((seq) => seq + 1);
             refreshShotAssetsMeta();
 
@@ -6132,6 +6144,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         String(shot?.id || '') === stableShotId ? { ...shot, ...newData } : shot
                                     )));
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
+                                    setIsEditingVideoPreviewArmed(true);
+                                    if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(serverBoundVideoUrl);
+                                    triggerMediaReload();
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
                                 }
                                 if (serverBoundVideoUrl && !isDurablePersistedMediaUrl(serverBoundVideoUrl)) {
@@ -6171,6 +6186,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         String(shot?.id || '') === stableShotId ? { ...shot, ...newData } : shot
                                     )));
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
+                                    setIsEditingVideoPreviewArmed(true);
+                                    if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(serverBoundVideoUrl);
+                                    triggerMediaReload();
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
                                     if (!isDurablePersistedMediaUrl(serverBoundVideoUrl)) {
                                         const synced = await syncShotVideoAfterOssPersist({
@@ -6689,14 +6707,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 latest.technical_notes,
                 { latestIsCompact: latest?.is_compact === true }
             );
+            const mediaMerged = mergeShotPreservingLocalMedia(prev, {
+                image_url: latest.image_url,
+                video_url: latest.video_url,
+            });
             const prevImageUrl = String(prev.image_url || '').trim();
-            const latestImageUrl = String(latest.image_url || '').trim();
             const prevVideoUrl = String(prev.video_url || '').trim();
-            const latestVideoUrl = String(latest.video_url || '').trim();
-            // Prefer non-empty local media when list/live sync briefly returns empty
-            // (common right after provider temp URL is shown, before OSS bind lands).
-            const mergedImageUrl = latestImageUrl || prevImageUrl;
-            const mergedVideoUrl = latestVideoUrl || prevVideoUrl;
+            const mergedImageUrl = String(mediaMerged.image_url || '').trim();
+            const mergedVideoUrl = String(mediaMerged.video_url || '').trim();
             const imageAssetChanged = normalizeAssetUrlToken(prevImageUrl) !== normalizeAssetUrlToken(mergedImageUrl);
             const videoAssetChanged = normalizeAssetUrlToken(prevVideoUrl) !== normalizeAssetUrlToken(mergedVideoUrl);
 
@@ -7366,7 +7384,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 tech = parseTechnicalNotesSafe(fullShot.technical_notes);
                 setEditingShot((prev) => {
                     if (!prev || String(prev.id) !== String(fullShot.id)) return prev;
-                    return { ...prev, ...fullShot, is_compact: false };
+                    return mergeShotPreservingLocalMedia(prev, fullShot, { markHydrated: true });
                 });
             }
         } catch (error) {
@@ -8225,17 +8243,57 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         video.preload = 'auto';
         video.muted = true;
         video.playsInline = true;
+        // Keep the element in-document: some Chromium builds leave the canvas
+        // texture black for mid-timeline seeks on fully detached <video> nodes.
+        video.setAttribute('playsinline', 'true');
+        video.setAttribute('webkit-playsinline', 'true');
+        Object.assign(video.style, {
+            position: 'fixed',
+            left: '-10000px',
+            top: '0',
+            width: '16px',
+            height: '9px',
+            opacity: '0',
+            pointerEvents: 'none',
+            zIndex: '-1',
+        });
+        document.body.appendChild(video);
 
         const cleanup = () => {
             video.onloadedmetadata = null;
+            video.onloadeddata = null;
             video.onseeked = null;
             video.onerror = null;
+            try { video.pause(); } catch (_) {}
+            video.removeAttribute('src');
+            try { video.load(); } catch (_) {}
             video.src = '';
+            if (video.parentNode) {
+                video.parentNode.removeChild(video);
+            }
         };
 
         const loadVideoMetadata = (useProxy = false) => new Promise((resolve, reject) => {
-            video.onloadedmetadata = () => resolve();
-            video.onerror = () => reject(new Error(useProxy ? 'video proxy load error' : 'video load error'));
+            const handleReady = () => {
+                video.onloadedmetadata = null;
+                video.onloadeddata = null;
+                video.onerror = null;
+                resolve();
+            };
+            video.onloadedmetadata = () => {
+                // Prefer first decoded frame when available; otherwise metadata is enough to proceed.
+                if (video.readyState >= 2) {
+                    handleReady();
+                    return;
+                }
+                video.onloadeddata = handleReady;
+            };
+            video.onerror = () => {
+                video.onloadedmetadata = null;
+                video.onloadeddata = null;
+                video.onerror = null;
+                reject(new Error(useProxy ? 'video proxy load error' : 'video load error'));
+            };
             video.src = getMediaUrlWithFallback(videoUrl, useProxy);
             try {
                 video.load();
@@ -8253,28 +8311,106 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
         };
 
-        const waitSeek = (targetSec) => new Promise((resolve, reject) => {
-            const safeTarget = Math.max(0, Number(targetSec || 0));
-            const handleSeeked = () => {
-                video.onseeked = null;
-                video.onerror = null;
+        const waitPresentedFrame = () => new Promise((resolve) => {
+            let settled = false;
+            const done = () => {
+                if (settled) return;
+                settled = true;
                 resolve();
-            };
-            const handleError = () => {
-                video.onseeked = null;
-                video.onerror = null;
-                reject(new Error('video seek error'));
             };
 
-            if (Math.abs(Number(video.currentTime || 0) - safeTarget) < 0.01) {
-                resolve();
-                return;
+            if (typeof video.requestVideoFrameCallback === 'function') {
+                try {
+                    video.requestVideoFrameCallback(() => done());
+                } catch (_) {
+                    // fall through to rAF / timeout
+                }
             }
 
-            video.onseeked = handleSeeked;
-            video.onerror = handleError;
-            video.currentTime = safeTarget;
+            // Double-rAF covers browsers without rvfc and races where seeked
+            // fires before the compositor has a paintable frame.
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => done());
+            });
+            setTimeout(done, 160);
         });
+
+        const primeDecoder = async () => {
+            try {
+                const playPromise = video.play();
+                if (playPromise && typeof playPromise.then === 'function') {
+                    await playPromise.catch(() => {});
+                }
+                await waitPresentedFrame();
+            } catch (_) {
+                // Autoplay / decode priming is best-effort.
+            } finally {
+                try { video.pause(); } catch (_) {}
+            }
+        };
+
+        const waitSeekAndFrame = async (targetSec) => {
+            const safeTarget = Math.max(0, Number(targetSec || 0));
+            const alreadyThere = Math.abs(Number(video.currentTime || 0) - safeTarget) < 0.01;
+
+            if (!alreadyThere) {
+                await new Promise((resolve, reject) => {
+                    const handleSeeked = () => {
+                        video.onseeked = null;
+                        video.onerror = null;
+                        resolve();
+                    };
+                    const handleError = () => {
+                        video.onseeked = null;
+                        video.onerror = null;
+                        reject(new Error('video seek error'));
+                    };
+
+                    video.onseeked = handleSeeked;
+                    video.onerror = handleError;
+                    try {
+                        video.currentTime = safeTarget;
+                    } catch (seekError) {
+                        video.onseeked = null;
+                        video.onerror = null;
+                        reject(seekError instanceof Error ? seekError : new Error('video seek error'));
+                    }
+                });
+            }
+
+            // seeked != frame ready: briefly advance decode so canvas can sample
+            // a real bitmap (especially for non-zero timestamps).
+            try {
+                const playPromise = video.play();
+                if (playPromise && typeof playPromise.then === 'function') {
+                    await playPromise.catch(() => {});
+                }
+            } catch (_) {}
+            await waitPresentedFrame();
+            try { video.pause(); } catch (_) {}
+            // Re-snap after the brief play nudge so we don't drift past the sample point.
+            if (Math.abs(Number(video.currentTime || 0) - safeTarget) > 0.04) {
+                await new Promise((resolve) => {
+                    const handleSeeked = () => {
+                        video.onseeked = null;
+                        resolve();
+                    };
+                    video.onseeked = handleSeeked;
+                    try {
+                        video.currentTime = safeTarget;
+                    } catch (_) {
+                        video.onseeked = null;
+                        resolve();
+                        return;
+                    }
+                    setTimeout(() => {
+                        video.onseeked = null;
+                        resolve();
+                    }, 200);
+                });
+                await waitPresentedFrame();
+            }
+        };
 
         const canvas = document.createElement('canvas');
         let width = 0;
@@ -8287,6 +8423,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 throw new Error('video resolution unavailable');
             }
 
+            await primeDecoder();
+
             canvas.width = width;
             canvas.height = height;
             const ctx = canvas.getContext('2d');
@@ -8296,7 +8434,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             const results = [];
             for (const ts of sampledTimes) {
-                await waitSeek(ts);
+                await waitSeekAndFrame(ts);
                 ctx.drawImage(video, 0, 0, width, height);
                 const blob = await new Promise((resolve, reject) => {
                     canvas.toBlob((encodedBlob) => {
@@ -8899,6 +9037,56 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     };
 
+    const buildShotVideoReferenceWarningMessage = useCallback((warnings, { shotLabel = '' } = {}) => {
+        if (!warnings?.hasWarnings) return '';
+        const lines = [];
+        const prefix = shotLabel ? `${shotLabel}\n` : '';
+        const missingSlots = Array.isArray(warnings.missingEntityRefSlots) ? warnings.missingEntityRefSlots : [];
+        if (missingSlots.length > 0) {
+            const missingNames = missingSlots
+                .map((slot) => slot.name || slot.nameEn)
+                .filter(Boolean)
+                .join('、');
+            lines.push(t(
+                `• ${missingSlots.length} 个参考实体尚未生成参考图${missingNames ? `：${missingNames}` : ''}`,
+                `• ${missingSlots.length} referenced entit${missingSlots.length === 1 ? 'y is' : 'ies are'} missing reference images${missingNames ? `: ${missingNames}` : ''}`
+            ));
+        }
+        if (warnings.missingEnv) {
+            lines.push(t(
+                '• 未检测到环境(ENV)参考图，可能导致背景不一致',
+                '• No environment (ENV) reference image detected; backgrounds may be inconsistent'
+            ));
+        }
+        if (warnings.missingStartFrame) {
+            lines.push(t('• 缺少起始帧图片', '• Start frame image is missing'));
+        }
+        if (warnings.missingEndFrame) {
+            lines.push(t('• 缺少结束帧图片', '• End frame image is missing'));
+        }
+        if (!lines.length) return '';
+        return (
+            prefix
+            + t('检测到参考图缺失或尚未生成：\n', 'Missing or ungenerated reference images detected:\n')
+            + lines.join('\n')
+            + t(
+                '\n\n缺失的参考图不会提交到视频 API。是否仍要提交？',
+                '\n\nMissing references will not be sent to the video API. Submit anyway?'
+            )
+        );
+    }, [t]);
+
+    const confirmShotVideoReferenceWarnings = useCallback(async (warnings, options = {}) => {
+        if (!warnings?.hasWarnings) return true;
+        const message = buildShotVideoReferenceWarningMessage(warnings, options);
+        if (!message) return true;
+        return confirmUiMessage(message, {
+            title: t('参考图缺失提示', 'Missing Reference Images'),
+            confirmText: t('仍要提交', 'Submit Anyway'),
+            cancelText: t('取消', 'Cancel'),
+        });
+    }, [buildShotVideoReferenceWarningMessage, t]);
+
     const handleGenerateVideo = async (promptOverride = null) => {
         if (!editingShot) return;
         let shotSnapshot = editingShot;
@@ -8908,8 +9096,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (targetGeneratingState.start || targetGeneratingState.end || isVideoGenerating) {
              return; 
         }
-
-        setShotGeneratingState(targetShotId, 'video', true);
 
         const resolvedEntities = await awaitShotGenerationEntities();
 
@@ -8923,83 +9109,57 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
 
+        let tech = JSON.parse(shotSnapshot.technical_notes || '{}');
+        const hadUnifiedMode = Boolean(String(tech?.video_mode_unified || '').trim());
+        ensureShotDefaultVideoMode(tech);
+        let techDirty = !hadUnifiedMode;
+
+        // Sync end=NO reuse before warning checks so end-frame gaps are accurate.
+        const normalizedEndPrompt = String(shotSnapshot.end_frame || '').trim().toUpperCase();
+        const shouldReuseStartAsEnd = normalizedEndPrompt === 'NO';
+        const currentStartFrameUrl = String(shotSnapshot.image_url || '').trim();
+        if (shouldReuseStartAsEnd && currentStartFrameUrl) {
+            const previousEndUrl = String(tech.end_frame_url || '').trim();
+            if (previousEndUrl !== currentStartFrameUrl) {
+                tech.end_frame_url = currentStartFrameUrl;
+                tech.end_frame_reused_from_start = true;
+                techDirty = true;
+            }
+        }
+
+        const refWarnings = collectShotVideoReferenceWarnings({
+            shotLike: shotSnapshot,
+            techObj: tech,
+            entityPool: resolvedEntities,
+            preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
+        });
+        if (!(await confirmShotVideoReferenceWarnings(refWarnings))) {
+            return;
+        }
+
         let createdVideoJobId = '';
         let keepRunningUi = false;
         let ignoreAsyncJobCallbacks = false;
         let ignoredAsyncJobCallbackCount = 0;
 
+        setShotGeneratingState(targetShotId, 'video', true);
         onLog?.('Generating Video...', 'info');
         try {
-            let tech = JSON.parse(shotSnapshot.technical_notes || '{}');
-            const hadUnifiedMode = Boolean(String(tech?.video_mode_unified || '').trim());
-            ensureShotDefaultVideoMode(tech);
-            if (!hadUnifiedMode) {
+            if (techDirty) {
                 const updatedTechNotes = JSON.stringify(tech);
                 await onUpdateShot(targetShotId, { technical_notes: updatedTechNotes });
                 shotSnapshot = { ...shotSnapshot, technical_notes: updatedTechNotes };
                 setEditingShot((prev) => (prev && prev.id === targetShotId
                     ? { ...prev, technical_notes: updatedTechNotes }
                     : prev));
-            }
-
-            const keyframes = tech.keyframes || [];
-
-            const normalizedEndPrompt = String(shotSnapshot.end_frame || '').trim().toUpperCase();
-            const shouldReuseStartAsEnd = normalizedEndPrompt === 'NO';
-            const currentStartFrameUrl = String(shotSnapshot.image_url || '').trim();
-            if (shouldReuseStartAsEnd && currentStartFrameUrl) {
-                const previousEndUrl = String(tech.end_frame_url || '').trim();
-                if (previousEndUrl !== currentStartFrameUrl) {
-                    tech.end_frame_url = currentStartFrameUrl;
-                    tech.end_frame_reused_from_start = true;
-                    const updatedTechNotes = JSON.stringify(tech);
-                    await onUpdateShot(targetShotId, { technical_notes: updatedTechNotes });
-                    setEditingShot((prev) => (prev && prev.id === targetShotId
-                        ? { ...prev, technical_notes: updatedTechNotes }
-                        : prev));
+                if (shouldReuseStartAsEnd && currentStartFrameUrl && tech.end_frame_reused_from_start) {
                     onLog?.(t('结束帧为 NO，已将结束帧 URL 同步为起始帧 URL。', 'End frame is NO; synced End Frame URL to Start Frame URL.'), 'info');
                 }
             }
 
+            const keyframes = tech.keyframes || [];
             const effectiveVideoMode = resolveUnifiedVideoMode(tech);
             const videoRefPromptText = buildShotVideoRefPromptText(shotSnapshot, tech);
-
-            if (effectiveVideoMode.includes('entity_refs')) {
-                const entityRefSlots = buildShotVideoEntityRefSlots({
-                    promptText: videoRefPromptText,
-                    entityPool: resolvedEntities,
-                    includeAssociatedEntities: false,
-                    preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
-                });
-                const missingEntityRefSlots = getMissingShotVideoEntityRefSlots(entityRefSlots);
-                
-                if (missingEntityRefSlots.length > 0) {
-                    const missingNames = missingEntityRefSlots
-                        .map((slot) => slot.name || slot.nameEn)
-                        .filter(Boolean)
-                        .join('、');
-                    const proceed = await confirmUiMessage(t(
-                        `检测到 ${missingEntityRefSlots.length} 个参考实体尚未生成参考图${missingNames ? `：${missingNames}` : ''}。缺失的参考图不会提交到视频 API。是否仍要提交？`,
-                        `Detected ${missingEntityRefSlots.length} referenced entities without reference images${missingNames ? `: ${missingNames}` : ''}. Missing references will not be sent to the video API. Submit anyway?`
-                    ));
-                    if (!proceed) {
-                        setShotGeneratingState(targetShotId, 'video', false);
-                        return;
-                    }
-                }
-
-                const hasEnvRef = entityRefSlots.some(slot => String(slot.type).toLowerCase() === 'environment' || String(slot.type).toLowerCase() === 'env');
-                if (!hasEnvRef) {
-                    const proceedEnv = await confirmUiMessage(t(
-                        `当前视频参考图中没有检测到环境(ENV)参考图。这可能导致生成的视频背景不一致。是否继续提交？`,
-                        `No environment (ENV) reference image detected. This may result in inconsistent video backgrounds. Submit anyway?`
-                    ));
-                    if (!proceedEnv) {
-                        setShotGeneratingState(targetShotId, 'video', false);
-                        return;
-                    }
-                }
-            }
 
             const hasManualVideoRefOverride = Boolean(
                 tech.video_ref_image_urls_manual === true
@@ -9216,6 +9376,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     return { ...prev, ...earlyPatch };
                                 });
                                 setIsEditingVideoPreviewArmed(true);
+                                if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(earlyUrl);
+                                triggerMediaReload();
                                 setVideoStatuses((prev) => {
                                     const next = { ...prev };
                                     delete next[targetShotId];
@@ -9242,10 +9404,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             if (videoSettled[0].status === 'fulfilled' && videoSettled[0].value) {
                 const res = videoSettled[0].value;
-                const resolvedVideoUrl = String(res?.url || res?.video_url || '').trim();
+                let resolvedVideoUrl = String(res?.url || res?.video_url || '').trim();
+                if (!resolvedVideoUrl && createdVideoJobId) {
+                    try {
+                        const status = await getVideoGenerationJobStatus(createdVideoJobId);
+                        resolvedVideoUrl = extractVideoJobResultUrl(status);
+                    } catch (jobUrlErr) {
+                        console.warn('[handleGenerateVideo] job URL recovery failed:', jobUrlErr);
+                    }
+                }
                 if (!resolvedVideoUrl) {
                     // Some providers finish asynchronously and do not return URL in immediate response.
                     // Force a server resync so UI still updates when the shot record has been updated.
+                    // Never blank a local preview that on_job_status already bound.
                     ignoreAsyncJobCallbacks = true;
                     releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                     onLog?.(t('视频任务已完成，正在同步最新镜头数据...', 'Video task completed, syncing latest shot data...'), 'info');
@@ -9254,15 +9425,32 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     try {
                         const latestShot = await fetchShot(targetShotId);
                         if (latestShot?.id) {
+                            const normalized = normalizeShotPromptDefaults(latestShot);
                             setEditingShot((prev) => {
                                 if (!prev || String(prev.id) !== String(targetShotId)) return prev;
-                                return { ...prev, ...normalizeShotPromptDefaults(latestShot) };
+                                return mergeShotPreservingLocalMedia(prev, normalized, { markHydrated: true });
                             });
+                            if (String(normalized?.video_url || editingShotRef.current?.video_url || '').trim()) {
+                                setIsEditingVideoPreviewArmed(true);
+                            }
+                            setShots((prev) => prev.map((shot) => (
+                                String(shot?.id || '') === String(targetShotId)
+                                    ? mergeShotPreservingLocalMedia(shot, normalized)
+                                    : shot
+                            )));
                         }
                     } catch (syncErr) {
                         console.warn('Failed to sync latest shot after video completion:', syncErr);
                     }
+                    // Backend may still be writing OSS; keep polling so the edit panel gets a URL.
+                    if (createdVideoJobId) {
+                        void syncShotVideoAfterOssPersist({
+                            shotId: targetShotId,
+                            jobId: createdVideoJobId,
+                        });
+                    }
                     setVideoStatuses(prev => { const n = { ...prev }; delete n[targetShotId]; return n; });
+                    triggerMediaReload();
                 } else {
                 ignoreAsyncJobCallbacks = true;
                 if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(resolvedVideoUrl);
@@ -9311,6 +9499,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                    return { ...prev, ...newData };
                 });
                 setIsEditingVideoPreviewArmed(true);
+                triggerMediaReload();
                 
                 onLog?.('Video Generated', 'success');
                 showNotification('Video Generated', 'success');
@@ -11023,6 +11212,65 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             return;
         }
 
+        if (mode === 'videos') {
+            const resolvedEntities = await awaitShotGenerationEntities();
+            const shotsWithMissingRefs = [];
+            for (const shot of targetShots) {
+                let tech = {};
+                try {
+                    tech = JSON.parse(shot?.technical_notes || '{}');
+                } catch {
+                    tech = {};
+                }
+                ensureShotDefaultVideoMode(tech);
+                const warnings = collectShotVideoReferenceWarnings({
+                    shotLike: shot,
+                    techObj: tech,
+                    entityPool: resolvedEntities,
+                    preferredEpisodeId: activeEpisode?.id ?? shot?.episode_id ?? null,
+                });
+                if (!warnings.hasWarnings) continue;
+                const shotLabel = String(shot?.shot_id || shot?.shot_name || shot?.id || '').trim()
+                    || t('未命名镜头', 'Unnamed shot');
+                shotsWithMissingRefs.push({ shotLabel, warnings });
+            }
+            if (shotsWithMissingRefs.length > 0) {
+                const preview = shotsWithMissingRefs.slice(0, 8).map(({ shotLabel, warnings }) => {
+                    const missingNames = (warnings.missingEntityRefSlots || [])
+                        .map((slot) => slot.name || slot.nameEn)
+                        .filter(Boolean)
+                        .join('、');
+                    const parts = [];
+                    if ((warnings.missingEntityRefSlots || []).length > 0) {
+                        parts.push(t(
+                            `缺参考图${missingNames ? `（${missingNames}）` : ''}`,
+                            `missing refs${missingNames ? ` (${missingNames})` : ''}`
+                        ));
+                    }
+                    if (warnings.missingEnv) parts.push(t('缺ENV', 'missing ENV'));
+                    if (warnings.missingStartFrame) parts.push(t('缺起始帧', 'missing start'));
+                    if (warnings.missingEndFrame) parts.push(t('缺结束帧', 'missing end'));
+                    return `• ${shotLabel}: ${parts.join(' / ')}`;
+                }).join('\n');
+                const moreCount = Math.max(0, shotsWithMissingRefs.length - 8);
+                const moreLine = moreCount > 0
+                    ? t(`\n…另有 ${moreCount} 个镜头也有缺失`, `\n…and ${moreCount} more shot(s) with gaps`)
+                    : '';
+                const proceedMissing = await confirmUiMessage(
+                    t(
+                        `批量视频生成前检测到 ${shotsWithMissingRefs.length}/${targetShots.length} 个镜头存在参考图缺失或尚未生成：\n${preview}${moreLine}\n\n缺失的参考图不会提交到视频 API。是否仍要继续批量提交？`,
+                        `Before batch video generation, ${shotsWithMissingRefs.length}/${targetShots.length} shot(s) have missing or ungenerated reference images:\n${preview}${moreLine}\n\nMissing references will not be sent to the video API. Continue batch submit anyway?`
+                    ),
+                    {
+                        title: t('参考图缺失提示', 'Missing Reference Images'),
+                        confirmText: t('仍要继续', 'Continue Anyway'),
+                        cancelText: t('取消', 'Cancel'),
+                    }
+                );
+                if (!proceedMissing) return;
+            }
+        }
+
         const ok = mode === 'videos'
             ? await confirmUiMessage(t(
                 `将为 ${targetShots.length} 个镜头批量生成视频。只会提交至少已有一张首尾帧、且当前没有视频的镜头；后端会按你的账号等级并发执行。是否继续？`,
@@ -12564,9 +12812,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[420px] 2xl:h-[480px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center`}
                                             onClick={() => openAssetDetailModal('video')}
                                         >
-                                            {(currentGeneratingState.video
+                                            {((currentGeneratingState.video && !editingShot.video_url)
                                                 || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
-                                                || Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])) && (
+                                                || (Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`]) && !editingShot.video_url)) && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
                                                     <span className="text-[10px] text-white/70 animate-pulse">{t(
@@ -12593,20 +12841,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     )}</span>
                                                 </div>
                                             )}
-                                            {(currentGeneratingState.video
-                                                || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
-                                                || Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])) ? (
-                                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/20 overflow-hidden pointer-events-none">
-                                                    {resolveShotVideoPosterUrl(editingShot) ? (
-                                                        <SafeImage
-                                                            src={resolveShotVideoPosterUrl(editingShot)}
-                                                            alt={editingShot.shot_name || 'video poster'}
-                                                            loading="lazy"
-                                                            className="absolute inset-0 w-full h-full object-contain opacity-40 mix-blend-overlay"
-                                                        />
-                                                    ) : null}
-                                                </div>
-                                            ) : (editingShot.video_url) ? (
+                                            {(editingShot.video_url) ? (
                                                 isEditingVideoPreviewArmed ? (
                                                     <ManagedVideoPlayer
                                                         key={`${editingShot.id}:${String(editingShot.video_url || '')}`}
@@ -12643,6 +12878,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         </span>
                                                     </button>
                                                 )
+                                            ) : (currentGeneratingState.video
+                                                || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
+                                                || Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])) ? (
+                                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/20 overflow-hidden pointer-events-none">
+                                                    {resolveShotVideoPosterUrl(editingShot) ? (
+                                                        <SafeImage
+                                                            src={resolveShotVideoPosterUrl(editingShot)}
+                                                            alt={editingShot.shot_name || 'video poster'}
+                                                            loading="lazy"
+                                                            className="absolute inset-0 w-full h-full object-contain opacity-40 mix-blend-overlay"
+                                                        />
+                                                    ) : null}
+                                                </div>
                                             ) : (
                                                 <div className="absolute inset-0 flex items-center justify-center opacity-20 flex-col gap-2">
                                                     <Video className="w-10 h-10"/>

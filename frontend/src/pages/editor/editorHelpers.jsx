@@ -1336,6 +1336,61 @@ export const ensureShotDefaultVideoMode = (techObj = {}) => {
     return techObj;
 };
 
+const isEnvironmentEntityRefSlot = (slot) => {
+    const type = String(slot?.type || '').trim().toLowerCase();
+    return type === 'environment' || type === 'env';
+};
+
+/**
+ * Collect pre-submit warnings for shot video generation when reference images
+ * are missing / not generated (and related ENV / frame gaps).
+ */
+export const collectShotVideoReferenceWarnings = ({
+    shotLike = {},
+    techObj = {},
+    entityPool = [],
+    preferredEpisodeId = null,
+    promptText = null,
+} = {}) => {
+    const tech = techObj && typeof techObj === 'object' ? techObj : {};
+    const mode = resolveUnifiedVideoMode(tech);
+    const videoRefPromptText = promptText ?? buildShotVideoRefPromptText(shotLike, tech);
+    const usesEntityRefs = String(mode || '').includes('entity_refs');
+    const entityRefSlots = usesEntityRefs
+        ? buildShotVideoEntityRefSlots({
+            promptText: videoRefPromptText,
+            entityPool,
+            includeAssociatedEntities: false,
+            preferredEpisodeId,
+        })
+        : [];
+    const missingEntityRefSlots = getMissingShotVideoEntityRefSlots(entityRefSlots);
+    const hasEnvSlot = entityRefSlots.some(isEnvironmentEntityRefSlot);
+    const missingEnv = Boolean(usesEntityRefs && !hasEnvSlot);
+
+    const startFrameUrl = String(shotLike?.image_url || '').trim();
+    const endFrameUrl = String(tech?.end_frame_url || '').trim();
+    const needsStartFrame = mode === 'start' || mode === 'start_end' || mode === 'entity_refs_start_end';
+    const needsEndFrame = mode === 'end' || mode === 'start_end' || mode === 'entity_refs_start_end';
+    const missingStartFrame = Boolean(needsStartFrame && !startFrameUrl);
+    const missingEndFrame = Boolean(needsEndFrame && !endFrameUrl);
+
+    return {
+        mode,
+        entityRefSlots,
+        missingEntityRefSlots,
+        missingEnv,
+        missingStartFrame,
+        missingEndFrame,
+        hasWarnings: Boolean(
+            missingEntityRefSlots.length > 0
+            || missingEnv
+            || missingStartFrame
+            || missingEndFrame
+        ),
+    };
+};
+
 export const buildAutoVideoRefList = (shotLike = {}, techObj = {}, explicitMode = null, entityRefUrls = []) => {
     const mode = String(explicitMode || resolveUnifiedVideoMode(techObj) || DEFAULT_SHOT_VIDEO_MODE).trim().toLowerCase();
     const refs = [];
@@ -3284,6 +3339,55 @@ export const extractVideoJobResultUrl = (statusPayload) => {
         || root.videoUrl
         || ''
     ).trim();
+};
+
+/**
+ * Merge a server/list shot into local shot state without blanking just-generated
+ * media that has not been persisted yet (provider temp URLs stay local-only).
+ * Prefer durable OSS URLs when the incoming payload has them.
+ */
+export const mergeShotPreservingLocalMedia = (prevShot, incomingShot, options = {}) => {
+    const prev = prevShot && typeof prevShot === 'object' ? prevShot : null;
+    const incoming = incomingShot && typeof incomingShot === 'object' ? incomingShot : null;
+    if (!incoming) return prev;
+    if (!prev) {
+        return options.markHydrated ? { ...incoming, is_compact: false } : { ...incoming };
+    }
+
+    const pickMediaUrl = (prevUrl, nextUrl, nextDefined) => {
+        const prevTrim = String(prevUrl || '').trim();
+        if (!nextDefined) return prevTrim;
+        const nextTrim = String(nextUrl || '').trim();
+        if (!nextTrim) return prevTrim;
+        if (!prevTrim) return nextTrim;
+        const nextDurable = isDurablePersistedMediaUrl(nextTrim);
+        const prevDurable = isDurablePersistedMediaUrl(prevTrim);
+        if (nextDurable && !prevDurable) return nextTrim;
+        if (prevDurable && !nextDurable) return prevTrim;
+        return nextTrim;
+    };
+
+    const merged = { ...prev, ...incoming };
+    const nextImageDefined = Object.prototype.hasOwnProperty.call(incoming, 'image_url');
+    const nextVideoDefined = Object.prototype.hasOwnProperty.call(incoming, 'video_url');
+    merged.image_url = pickMediaUrl(prev.image_url, incoming.image_url, nextImageDefined);
+    merged.video_url = pickMediaUrl(prev.video_url, incoming.video_url, nextVideoDefined);
+
+    if (Object.prototype.hasOwnProperty.call(incoming, 'technical_notes')) {
+        const prevTech = parseShotTechnicalNotes(prev.technical_notes);
+        const nextTech = parseShotTechnicalNotes(incoming.technical_notes);
+        const prevEnd = String(prevTech?.end_frame_url || '').trim();
+        const nextEnd = String(nextTech?.end_frame_url || '').trim();
+        if (!nextEnd && prevEnd) {
+            nextTech.end_frame_url = prevEnd;
+            merged.technical_notes = JSON.stringify(nextTech);
+        }
+    }
+
+    if (options.markHydrated) {
+        merged.is_compact = false;
+    }
+    return merged;
 };
 
 export const mergeShotVideoOssPersistState = (shotLike, patch = {}) => {
