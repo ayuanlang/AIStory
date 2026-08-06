@@ -1862,9 +1862,19 @@ const probeEpisodeAnalysisCompleteness = async ({
         : [];
     const dbSceneCount = Array.isArray(scenes) ? scenes.length : 0;
     const expected = Math.max(0, Number(expectedSceneCount) || 0);
-    const scenesOk = expected > 0
-        ? dbSceneCount >= expected
-        : (dbSceneCount > 0 || !hasSceneMarkdown);
+    // After Subject Index exists, scene orchestration/import is mandatory.
+    // Never treat "expected=0 + no markdown" as complete — that was ending the pipeline
+    // while Stage 2.2 had actually failed / never produced scenes.
+    const scenesRequired = Boolean(hasSubjectIndex || hasSceneMarkdown || expected > 0);
+    const minRequiredScenes = expected > 0 ? expected : (scenesRequired ? 1 : 0);
+    const scenesOk = !scenesRequired
+        ? true
+        : (
+            dbSceneCount >= minRequiredScenes
+            // Prefer persisted scene markdown. Allow markdown-less only when an explicit
+            // expected count is met (e.g. skip-existing workspace scenes).
+            && (hasSceneMarkdown || (expected > 0 && dbSceneCount >= expected))
+        );
 
     const entries = (typeof parseSubjectIndexEntries === 'function' && subjectIndex)
         ? (parseSubjectIndexEntries(subjectIndex) || [])
@@ -1920,17 +1930,18 @@ const probeEpisodeAnalysisCompleteness = async ({
     let storyboardsOk = true;
     let storyboardCoverage = null;
     if (checkStoryboards && typeof fetchEpisodeShotsFn === 'function' && typeof fetchScenesFn === 'function') {
-        storyboardCoverage = await waitForEpisodeStoryboardCoverage(
-            fetchScenesFn,
-            fetchEpisodeShotsFn,
-            id,
-            { allowedSceneMarkers },
-        );
-        storyboardsOk = Boolean(
-            !storyboardCoverage
-            || Number(storyboardCoverage.sceneCount || 0) <= 0
-            || storyboardCoverage.ok
-        );
+        // No workspace scenes yet → storyboards cannot be complete when scenes are required.
+        if (scenesRequired && dbSceneCount <= 0) {
+            storyboardsOk = false;
+        } else if (dbSceneCount > 0) {
+            storyboardCoverage = await waitForEpisodeStoryboardCoverage(
+                fetchScenesFn,
+                fetchEpisodeShotsFn,
+                id,
+                { allowedSceneMarkers },
+            );
+            storyboardsOk = Boolean(storyboardCoverage?.ok);
+        }
     }
 
     if (!hasAdaptation) gaps.push('script_optimization');
@@ -17176,8 +17187,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             const supervisorEnsure = ensureEpisodeAnalysisCompleteByPersistenceRef.current;
             if (typeof supervisorEnsure === 'function') {
+                const resumeExpectedScenes = firstPositiveFiniteNumber(
+                    resumeState?.dbSceneCount,
+                    orchestrationCanonicalSceneIdsRef.current instanceof Set
+                        ? orchestrationCanonicalSceneIdsRef.current.size
+                        : 0,
+                    resolvedSubjectIndexText ? 1 : 0,
+                );
                 const supervisorResult = await supervisorEnsure({
-                    expectedSceneCount: Number(resumeState?.dbSceneCount || 0) || undefined,
+                    expectedSceneCount: resumeExpectedScenes,
                     subjectIndexText: resolvedSubjectIndexText,
                     importReport,
                     postImportSceneSubjectReport,
@@ -17187,6 +17205,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (supervisorResult?.importReport) importReport = supervisorResult.importReport;
                 if (supervisorResult?.postImportSceneSubjectReport) {
                     postImportSceneSubjectReport = supervisorResult.postImportSceneSubjectReport;
+                }
+                const resumeSceneCount = Number(supervisorResult?.probe?.dbSceneCount || 0);
+                if (resumeExpectedScenes > 0 && resumeSceneCount < resumeExpectedScenes) {
+                    throw new Error(t(
+                        `场景编排未完成：工作区仅 ${resumeSceneCount} 场（需要 ${resumeExpectedScenes} 场），分析不能结束。`,
+                        `Scene orchestration incomplete: workspace has ${resumeSceneCount} scene(s) (need ${resumeExpectedScenes}); analysis cannot finish.`
+                    ));
                 }
             }
 
@@ -18496,6 +18521,39 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ? (assetOutcome.value || null)
                     : null;
 
+                // Backfill expected scene count from orchestration markers / Stage 1 units when
+                // the branch returned without a usable table (avoids false "complete" later).
+                if (!expectedSceneImportCount) {
+                    const fromPatch = parallelSceneMarkdownPatchMap
+                        ? Object.keys(parallelSceneMarkdownPatchMap).filter(Boolean).length
+                        : 0;
+                    const fromCanonical = orchestrationCanonicalSceneIdsRef.current instanceof Set
+                        ? orchestrationCanonicalSceneIdsRef.current.size
+                        : 0;
+                    const fromLive = orchestrationLiveImportedScenesRef.current instanceof Set
+                        ? orchestrationLiveImportedScenesRef.current.size
+                        : 0;
+                    expectedSceneImportCount = firstPositiveFiniteNumber(fromPatch, fromCanonical, fromLive);
+                }
+                const dbSceneCountAfterBranch = await waitForEpisodeSceneCount(
+                    fetchScenes,
+                    activeEpisode?.id,
+                    Math.max(1, expectedSceneImportCount || 1),
+                    { retries: 8, delayMs: 500 },
+                );
+                if (dbSceneCountAfterBranch <= 0) {
+                    throw new Error(t(
+                        '场景编排未成功写入工作区（0 场），分析不能继续结束。请重试场景编排。',
+                        'Scene orchestration did not write any workspace scenes; analysis cannot finish. Retry scene orchestration.'
+                    ));
+                }
+                assertWorkspaceSceneImportComplete({
+                    importReport,
+                    expectedSceneCount: Math.max(1, expectedSceneImportCount || 1),
+                    dbSceneCount: dbSceneCountAfterBranch,
+                    t,
+                });
+
                 analysisSections = extractAnalysisSections(stage2PhaseRawText);
                 analysisSections.hasStructuredSubjectIndex = true;
                 analysisSections.subjectIndexText = String(stage2_1Text || '').trim();
@@ -18729,6 +18787,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             if (supervisorResult?.postImportSceneSubjectReport) {
                 postImportSceneSubjectReport = supervisorResult.postImportSceneSubjectReport;
+            }
+            // Hard stop: never mark the whole analysis complete without workspace scenes.
+            const supervisorSceneCount = Number(supervisorResult?.probe?.dbSceneCount || 0);
+            const minScenesForComplete = Math.max(1, Number(expectedSceneImportCount || 0));
+            if (supervisorSceneCount < minScenesForComplete) {
+                throw new Error(t(
+                    `场景编排未完成：工作区仅 ${supervisorSceneCount} 场（至少需要 ${minScenesForComplete} 场），分析不能结束。请重试场景编排。`,
+                    `Scene orchestration incomplete: workspace has ${supervisorSceneCount} scene(s) (need at least ${minScenesForComplete}); analysis cannot finish. Retry scene orchestration.`
+                ));
+            }
+            if (!supervisorResult?.probe?.hasSceneMarkdown && Number(expectedSceneImportCount || 0) <= 0) {
+                throw new Error(t(
+                    '场景编排结果未落库（缺少场景表），分析不能结束。请重试场景编排。',
+                    'Scene orchestration result was not persisted (missing scenes table); analysis cannot finish. Retry scene orchestration.'
+                ));
             }
             const coverage = supervisorResult?.probe?.storyboardCoverage;
             if (coverage) {
@@ -21637,15 +21710,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             if (!didWork) {
                 throw new Error(t(
-                    `落库仍未齐套且无可自动补跑动作：${probe.gaps.join('；')}`,
-                    `Persistence still incomplete with no automatic repair actions: ${probe.gaps.join('; ')}`
+                    probe.needsScenes
+                        ? `场景编排仍未齐套且无法自动补跑（工作区 ${probe.dbSceneCount} 场）。请手动重试场景编排。`
+                        : `落库仍未齐套且无可自动补跑动作：${probe.gaps.join('；')}`,
+                    probe.needsScenes
+                        ? `Scene orchestration still incomplete and cannot auto-repair (workspace ${probe.dbSceneCount} scene(s)). Retry scene orchestration manually.`
+                        : `Persistence still incomplete with no automatic repair actions: ${probe.gaps.join('; ')}`
                 ));
             }
 
             if (stagnantRounds >= 3) {
                 throw new Error(t(
-                    `落库缺口连续多轮未缩小，已停止自动重试：${probe.gaps.join('；')}`,
-                    `Persistence gaps did not shrink across retries; stopping auto-repair: ${probe.gaps.join('; ')}`
+                    probe.needsScenes
+                        ? `场景编排连续多轮仍未写入工作区（当前 ${probe.dbSceneCount} 场），已停止自动重试。请检查场景分隔符后重试场景编排。`
+                        : `落库缺口连续多轮未缩小，已停止自动重试：${probe.gaps.join('；')}`,
+                    probe.needsScenes
+                        ? `Scene orchestration still missing after several retries (workspace ${probe.dbSceneCount} scene(s)); auto-repair stopped. Check scene markers and retry.`
+                        : `Persistence gaps did not shrink across retries; stopping auto-repair: ${probe.gaps.join('; ')}`
                 ));
             }
 
