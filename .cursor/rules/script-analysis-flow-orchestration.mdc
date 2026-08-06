@@ -88,7 +88,7 @@ API: `runScriptAnalysisFlowAnalyzeNode` -> `POST /prompts/scene-analysis/flow/ru
 
 - **Stage 2.2 定位（强制）**：`scene_markdown` / `beats_generation` **仅为** Stage 1 成稿 + Subject Index 的工程结合与转译——零丢失落表、Index 名称标准化；**禁止**改情节、改对白、改建置、补实体、推断填洞或回填上游缺口。
 - **Subject Index 白名单 / 命名绝对锁**：场景编排（Stage 2.2 / `scene_markdown`）与资产设计（Stage 3 / `asset_design_*`）生成时，凡实体名（`CHAR:`/`ENV:`/`PROP:` 方括号名、JSON `name`/`name_en`/`base_name_en`、`visual_dependencies` 内名称）**必须**与 Subject Index 对应行 `subject_name_zh` / `subject_name_en` **逐字符完全一致**；**禁止任何形式的修改**（润色、规范化、翻译、缩写、同义替换、标点/空格/大小写修正、合并拆分等）。**禁止**对 Index 无行实体套用任何类型前缀或自创格式（`EXTRA:`、`LOCATION:` 等）；Index 外语义只保留 Stage 1 自然语言并在 `{覆盖核销}` 标缺口。
-- **CHAR/PROP 衍生族证据匹配（强制）**：落位每个角色/道具时，须据 Index `base_entity`/`dependency_reference` 判别是否存在衍生关系实体（有依赖链即衍生关系）；同族多行时**仅**按 Stage 1 本 Beat **明文证据**匹配对应行；无明文证据则落基础版并标核销备注；**禁止**推断未写态、禁止改写剧情以迁就 Index、禁止错套与明文不符的衍生态。
+- **CHAR/PROP 衍生族按场换版（强制）**：Stage 2.1 衍生行须在 `entity_attributes` 写明 `applicable_scenes`（`EPxx_SCyy`，多场`|`分隔）、可选 `activation_beat`，以及 `derivative_kind`/`derivative_trigger`/`activation_evidence`/`variant_delta`/`return_or_continue`。Stage 2.2 落位时：①仅选用 `applicable_scenes`∋本场 `Scene ID` 的衍生行；②再按 `activation_beat`/`activation_evidence`/`variant_delta`∩本 Beat 明文匹配；③`continue` 同场后续拍无冲突时沿用；④无适用衍生→基础版。**禁止**跨场借用未列场景号的衍生、推断未写态、改写剧情迁就 Index、错套与明文不符的衍生态。
 - **ENV 仅整体切换（强制）**：`ENV:[]` **只**标注 Index `environment` 整场行，且须为 Stage 1 **已写明**的主环境或 `{N}度…`/状态衍生；**禁止**补 Stage 1 未写衍生 ENV；留在 ENV 空镜、**未**升格为 `PROP` 的固定陈设/建筑构件**禁止**单切为 `ENV:[会议桌]` 等；环境只能整场切换，不得把环境内部件工程化为局部 `ENV:`。
 
 ## Environment reference model (prompt contract)
