@@ -6,9 +6,78 @@ const analysisProgressByEpisode = new Map();
 const analysisProgressListenersByEpisode = new Map();
 /** Episodes whose ScriptEditor unmounted while a run promise is still live. */
 const detachedAnalysisEpisodes = new Set();
+/**
+ * Pipeline control plane that survives ScriptEditor remount.
+ * Stop/timeout must be readable by the original run closure after the user leaves and returns.
+ */
+const analysisPipelineControlByEpisode = new Map();
 
 function toEpisodeId(episodeId) {
     return Number(episodeId || 0);
+}
+
+function emptyPipelineControl() {
+    return {
+        stopRequested: false,
+        stopReason: '', // 'user' | 'timeout' | ''
+        deadlineAt: 0,
+        supervisorActive: false,
+        startedAt: 0,
+        updatedAt: 0,
+    };
+}
+
+export function getEpisodeAnalysisPipelineControl(episodeId) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return emptyPipelineControl();
+    return analysisPipelineControlByEpisode.get(id) || emptyPipelineControl();
+}
+
+export function armEpisodeAnalysisPipelineControl(episodeId, {
+    startedAt = Date.now(),
+    maxMs = 30 * 60 * 1000,
+} = {}) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return null;
+    const start = Number(startedAt || Date.now());
+    const budget = Math.max(60 * 1000, Number(maxMs || 0) || (30 * 60 * 1000));
+    const next = {
+        stopRequested: false,
+        stopReason: '',
+        deadlineAt: (Number.isFinite(start) && start > 0 ? start : Date.now()) + budget,
+        supervisorActive: true,
+        startedAt: Number.isFinite(start) && start > 0 ? start : Date.now(),
+        updatedAt: Date.now(),
+    };
+    analysisPipelineControlByEpisode.set(id, next);
+    return next;
+}
+
+export function requestEpisodeAnalysisPipelineStop(episodeId, reason = 'user') {
+    const id = toEpisodeId(episodeId);
+    if (!id) return null;
+    const prev = analysisPipelineControlByEpisode.get(id) || emptyPipelineControl();
+    const next = {
+        ...prev,
+        stopRequested: true,
+        stopReason: String(reason || 'user').trim() || 'user',
+        updatedAt: Date.now(),
+    };
+    analysisPipelineControlByEpisode.set(id, next);
+    return next;
+}
+
+export function clearEpisodeAnalysisPipelineControl(episodeId) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return;
+    analysisPipelineControlByEpisode.delete(id);
+}
+
+export function getEpisodeAnalysisPipelineRemainingMs(episodeId) {
+    const control = getEpisodeAnalysisPipelineControl(episodeId);
+    const deadline = Number(control.deadlineAt || 0);
+    if (!Number.isFinite(deadline) || deadline <= 0) return Number.POSITIVE_INFINITY;
+    return Math.max(0, deadline - Date.now());
 }
 
 function emptyProgressSnapshot() {
@@ -61,6 +130,7 @@ export function trackEpisodeAnalysisRun(episodeId, runPromise, meta = {}) {
         }
         releaseEpisodeAnalysisClaim(id, entry.claimToken);
         clearEpisodeAnalysisDetached(id);
+        clearEpisodeAnalysisPipelineControl(id);
     });
 
     return entry;

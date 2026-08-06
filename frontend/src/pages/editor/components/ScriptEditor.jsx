@@ -29,6 +29,10 @@ import {
     markEpisodeAnalysisDetached,
     clearEpisodeAnalysisDetached,
     isEpisodeAnalysisDetached,
+    armEpisodeAnalysisPipelineControl,
+    requestEpisodeAnalysisPipelineStop,
+    getEpisodeAnalysisPipelineControl,
+    getEpisodeAnalysisPipelineRemainingMs,
 } from '../../../lib/analysisRunRegistry';
 import { unwrapInjectionSection, wrapInjectionSection } from '../../../lib/promptInjection';
 import { collectLlmJsonTextCandidates, sanitizeLlmTextForJsonImport } from '../../../lib/llmJsonExtract';
@@ -1029,8 +1033,12 @@ const createSceneOrchestrationProgressPoller = ({
     };
 };
 
-/** Max automatic fallback reruns for scene beats / asset generation (excluding the initial run). */
+/** Legacy Auto Zero fallback cap (supervisor path is not capped by this). */
 const MAX_ANALYSIS_FALLBACK_ATTEMPTS = 2;
+/** Full script-analysis pipeline wall-clock budget (user stop / completion can end earlier). */
+const ANALYSIS_PIPELINE_MAX_MS = 30 * 60 * 1000;
+const ANALYSIS_PIPELINE_RETRY_BASE_DELAY_MS = 2000;
+const ANALYSIS_PIPELINE_RETRY_MAX_DELAY_MS = 8000;
 
 
 const TERMINAL_ASYNC_TASK_STATUSES = new Set([
@@ -1799,6 +1807,158 @@ const runAnalysisPipelineIntegrityGate = async ({
     return { dbSceneCount, storyboardCoverage, ok: true };
 };
 
+/**
+ * Persistence-ground-truth probe for script-analysis completeness.
+ * Success = episode fields + workspace scenes/entities/(optional) shots, not LLM response alone.
+ */
+const probeEpisodeAnalysisCompleteness = async ({
+    fetchEpisodeFn,
+    fetchScenesFn,
+    fetchEntitiesFn,
+    fetchEpisodeShotsFn = null,
+    projectId = null,
+    episodeId,
+    expectedSceneCount = 0,
+    subjectIndexText = '',
+    parseSubjectIndexEntries = null,
+    checkStoryboards = false,
+    stage3AutoStart = null,
+    allowedSceneMarkers = null,
+} = {}) => {
+    const id = Number(episodeId || 0);
+    const gaps = [];
+    if (!id) {
+        return {
+            ok: false,
+            gaps: ['missing_episode'],
+            hasAdaptation: false,
+            hasSubjectIndex: false,
+            hasSceneMarkdown: false,
+            dbSceneCount: 0,
+            expectedSceneCount: 0,
+            pendingAssetTargets: [],
+            needsScenes: true,
+            needsAssets: false,
+            needsStoryboard: false,
+            storyboardCoverage: null,
+            subjectIndex: '',
+        };
+    }
+
+    const fresh = typeof fetchEpisodeFn === 'function'
+        ? await fetchEpisodeFn(id).catch(() => null)
+        : null;
+    const subjectIndex = String(
+        subjectIndexText
+        || fresh?.ai_scene_analysis_subject_index
+        || ''
+    ).trim();
+    const hasSubjectIndex = Boolean(subjectIndex);
+    const hasAdaptation = Boolean(String(fresh?.ai_scene_analysis_adaptation || '').trim());
+    const hasSceneMarkdown = Boolean(String(fresh?.ai_scene_analysis_scene_markdown || '').trim());
+
+    const scenes = typeof fetchScenesFn === 'function'
+        ? await fetchScenesFn(id).catch(() => [])
+        : [];
+    const dbSceneCount = Array.isArray(scenes) ? scenes.length : 0;
+    const expected = Math.max(0, Number(expectedSceneCount) || 0);
+    const scenesOk = expected > 0
+        ? dbSceneCount >= expected
+        : (dbSceneCount > 0 || !hasSceneMarkdown);
+
+    const entries = (typeof parseSubjectIndexEntries === 'function' && subjectIndex)
+        ? (parseSubjectIndexEntries(subjectIndex) || [])
+        : [];
+    const entities = (projectId && typeof fetchEntitiesFn === 'function')
+        ? await fetchEntitiesFn(projectId, { episode_id: id }).catch(() => [])
+        : [];
+
+    const pendingAssetTargets = [];
+    const pendingAssetLabels = [];
+    const categorySpecs = [
+        {
+            key: 'characters',
+            targets: ['characters'],
+            reportType: 'character',
+            autoKey: 'asset_design_character',
+            label: 'characters',
+        },
+        {
+            key: 'props',
+            targets: ['props'],
+            reportType: 'prop',
+            autoKey: 'asset_design_prop',
+            label: 'props',
+        },
+        {
+            key: 'environments',
+            targets: ['environments'],
+            reportType: 'environment',
+            autoKey: 'asset_design_environment',
+            label: 'environments',
+        },
+        {
+            key: 'posters',
+            targets: ['posters', 'covers'],
+            reportType: 'poster',
+            autoKey: 'asset_design_environment',
+            label: 'posters',
+        },
+    ];
+    for (const spec of categorySpecs) {
+        const categoryEntries = (entries || []).filter((entry) => entry?.category === spec.key);
+        if (!categoryEntries.length) continue;
+        if (stage3AutoStart && stage3AutoStart[spec.autoKey] === false) continue;
+        const covered = countSubjectIndexEntriesCoveredInDb(categoryEntries, spec.reportType, entities);
+        if (covered >= categoryEntries.length) continue;
+        pendingAssetLabels.push(spec.label);
+        spec.targets.forEach((target) => {
+            if (!pendingAssetTargets.includes(target)) pendingAssetTargets.push(target);
+        });
+    }
+
+    let storyboardsOk = true;
+    let storyboardCoverage = null;
+    if (checkStoryboards && typeof fetchEpisodeShotsFn === 'function' && typeof fetchScenesFn === 'function') {
+        storyboardCoverage = await waitForEpisodeStoryboardCoverage(
+            fetchScenesFn,
+            fetchEpisodeShotsFn,
+            id,
+            { allowedSceneMarkers },
+        );
+        storyboardsOk = Boolean(
+            !storyboardCoverage
+            || Number(storyboardCoverage.sceneCount || 0) <= 0
+            || storyboardCoverage.ok
+        );
+    }
+
+    if (!hasAdaptation) gaps.push('script_optimization');
+    if (!hasSubjectIndex) gaps.push('assets_extraction');
+    if (!scenesOk) gaps.push('scene_markdown');
+    if (pendingAssetTargets.length > 0) {
+        gaps.push(`asset_design:${pendingAssetTargets.join(',')}`);
+    }
+    if (!storyboardsOk) gaps.push('storyboard_generation');
+
+    return {
+        ok: gaps.length === 0,
+        gaps,
+        hasAdaptation,
+        hasSubjectIndex,
+        hasSceneMarkdown,
+        dbSceneCount,
+        expectedSceneCount: expected,
+        pendingAssetTargets,
+        pendingAssetLabels,
+        needsScenes: !scenesOk,
+        needsAssets: pendingAssetTargets.length > 0,
+        needsStoryboard: !storyboardsOk,
+        storyboardCoverage,
+        subjectIndex,
+    };
+};
+
 const ANALYSIS_FLOW_HISTORY_CAP = 500;
 const ANALYSIS_DETAIL_LOG_CAP = 500;
 
@@ -1963,8 +2123,13 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
 
     const replacements = [
         [/\[Integrity Gate\]/gi, t('[齐套检查]', '[Readiness check]')],
+        [/\[Pipeline Supervisor\]/gi, t('[齐套补跑]', '[Readiness repair]')],
+        [/\[管线监督器\]/gi, t('[齐套补跑]', '[Readiness repair]')],
         [/\[Analysis Resume\]/gi, t('[继续分析]', '[Resume analysis]')],
         [/\[Auto Zero Report Rerun\]/gi, t('[自动补齐]', '[Auto refill]')],
+        [/\[分镜生成\]/gi, t('[分镜生成]', '[Storyboard]')],
+        [/Persistence gap — auto-retry/gi, t('落库未齐套，正在自动重试', 'Persistence incomplete; auto-retrying')],
+        [/Reconnecting to in-progress analysis task/gi, t('正在恢复后台分析进度', 'Restoring background analysis progress')],
         [/\[Scene Units Sync\]/gi, t('[场景同步]', '[Scene sync]')],
         [/\[Stage 2 Asset Index\]/gi, t('[资产清单]', '[Asset inventory]')],
         [/\[Stage 1 Adapted Script\]/gi, t('[剧本统筹]', '[Script coordination]')],
@@ -2042,11 +2207,43 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
 
 const normalizeAnalysisLivePhase = (phase) => {
     const key = String(phase || '').trim().toLowerCase();
+    // Supervisor / readiness repair: keep concurrent fan-out highlight on scene+assets,
+    // and map storyboard-only repair to the storyboard step.
     if (key === 'supplement') return 'assets_gen';
+    if (key === 'readiness' || key === 'repair') return 'assets_gen';
     if (key === 'running') return 'script_opt';
     // Terminal "completed" means all 5 stages finished; treat as past storyboard.
     if (key === 'completed') return 'storyboard';
     return key;
+};
+
+/** Map persistence gaps → business progress phase for the 5-step strip. */
+const resolveSupervisorProgressPhase = (probe = {}) => {
+    if (probe?.needsScenes) return 'scene_beats';
+    if (probe?.needsAssets) return 'assets_gen';
+    if (probe?.needsStoryboard) return 'storyboard';
+    return 'assets_gen';
+};
+
+const formatSupervisorGapLabels = (probe = {}, tFn = (zh) => zh) => {
+    const t = typeof tFn === 'function' ? tFn : (zh) => zh;
+    const labels = [];
+    if (probe?.needsScenes) labels.push(t('场景编排入库', 'scene import'));
+    if (probe?.needsAssets) {
+        const assetLabels = Array.isArray(probe?.pendingAssetLabels) && probe.pendingAssetLabels.length
+            ? probe.pendingAssetLabels.map((item) => {
+                const key = String(item || '').toLowerCase();
+                if (key.includes('char')) return t('角色', 'characters');
+                if (key.includes('prop')) return t('道具', 'props');
+                if (key.includes('env')) return t('环境', 'environments');
+                if (key.includes('poster') || key.includes('cover')) return t('封面', 'posters');
+                return item;
+            }).join('、')
+            : t('视觉资产', 'visual assets');
+        labels.push(t(`资产设计（${assetLabels}）`, `asset design (${assetLabels})`));
+    }
+    if (probe?.needsStoryboard) labels.push(t('分镜生成', 'storyboards'));
+    return labels.join('、') || t('未齐套项', 'incomplete items');
 };
 
 /** During a live run, ignore leftover artifacts from stages not yet reached. */
@@ -8359,13 +8556,41 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             await Promise.allSettled(pending);
         }
 
-        const maxWaitMs = 30 * 60 * 1000;
+        const episodeIdForDeadline = Number(activeEpisode?.id || latestActiveEpisodeIdRef.current || 0);
+        const moduleRemainingMs = episodeIdForDeadline
+            ? getEpisodeAnalysisPipelineRemainingMs(episodeIdForDeadline)
+            : Number.POSITIVE_INFINITY;
+        const localDeadline = Number(analysisPipelineDeadlineRef.current || 0);
+        const localRemainingMs = localDeadline > 0
+            ? Math.max(0, localDeadline - Date.now())
+            : ANALYSIS_PIPELINE_MAX_MS;
+        const pipelineRemainingMs = Number.isFinite(moduleRemainingMs)
+            ? Math.min(moduleRemainingMs, localRemainingMs)
+            : localRemainingMs;
+        const maxWaitMs = Math.min(ANALYSIS_PIPELINE_MAX_MS, pipelineRemainingMs);
         const pollMs = 500;
         const strandedFlushMinIntervalMs = 8 * 1000;
         const waitStartedAt = Date.now();
         let lastStrandedFlushAt = 0;
         while (Date.now() - waitStartedAt < maxWaitMs) {
-            if (analysisStopRequestedRef.current) break;
+            const control = episodeIdForDeadline
+                ? getEpisodeAnalysisPipelineControl(episodeIdForDeadline)
+                : null;
+            if (analysisStopRequestedRef.current || control?.stopRequested) {
+                analysisStopRequestedRef.current = true;
+                analysisStopReasonRef.current = String(
+                    analysisStopReasonRef.current || control?.stopReason || 'user'
+                );
+                break;
+            }
+            if (Number.isFinite(pipelineRemainingMs) && getEpisodeAnalysisPipelineRemainingMs(episodeIdForDeadline) <= 0) {
+                analysisStopRequestedRef.current = true;
+                analysisStopReasonRef.current = 'timeout';
+                if (episodeIdForDeadline) {
+                    requestEpisodeAnalysisPipelineStop(episodeIdForDeadline, 'timeout');
+                }
+                break;
+            }
 
             const pendingNow = pendingQueueCount();
             const strandedNow = strandedWaitingEnvCount();
@@ -10811,6 +11036,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const environmentAssetDesignPendingRef = useRef(false);
     const stage3AutoStartCacheRef = useRef(null);
     const analysisStopRequestedRef = useRef(false);
+    /** 'user' | 'timeout' | '' — why stop was armed (shared by manual stop + pipeline deadline). */
+    const analysisStopReasonRef = useRef('');
+    /** Absolute epoch ms when the full analysis pipeline must stop (0 = inactive). */
+    const analysisPipelineDeadlineRef = useRef(0);
+    /** When true, Auto Zero Report Rerun must not dual-track persistence retries. */
+    const analysisPipelineSupervisorActiveRef = useRef(false);
+    /** Late-bound persistence supervisor (defined after asset/scene helpers). */
+    const ensureEpisodeAnalysisCompleteByPersistenceRef = useRef(null);
     const activeAnalysisTaskIdsRef = useRef(new Set());
     const analysisRunInFlightRef = useRef(false);
     const analysisResumeCoordinatorRef = useRef({ running: false, episodeId: null });
@@ -10922,11 +11155,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const isTaskCanceledError = useCallback((error) => {
         if (!error) return false;
-        if (error?.isCanceled) return true;
+        if (error?.isCanceled || error?.isPipelineTimeout) return true;
         const code = Number(error?.errorCode || error?.response?.status || 0);
         if (code === 499) return true;
         const text = String(error?.message || error?.response?.data?.detail || '').toLowerCase();
-        return text.includes('cancel') || text.includes('取消');
+        if (text.includes('cancel') || text.includes('取消')) return true;
+        // Only treat the full-pipeline wall-clock stop as a soft cancel (not generic LLM timeouts).
+        return text.includes('30-minute pipeline')
+            || text.includes('30 分钟全流程')
+            || text.includes('pipeline limit');
     }, []);
 
     const createAnalysisCanceledError = useCallback(() => {
@@ -10936,11 +11173,109 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return error;
     }, [t]);
 
+    const createAnalysisPipelineTimeoutError = useCallback(() => {
+        const error = new Error(t(
+            '剧本分析已超过 30 分钟全流程时限，任务已自动停止。',
+            'Script analysis exceeded the 30-minute pipeline limit and was stopped automatically.'
+        ));
+        error.isCanceled = true;
+        error.isPipelineTimeout = true;
+        error.errorCode = 408;
+        return error;
+    }, [t]);
+
+    const getAnalysisPipelineRemainingMs = useCallback(() => {
+        const episodeId = Number(activeEpisode?.id || latestActiveEpisodeIdRef.current || 0);
+        if (episodeId) {
+            return getEpisodeAnalysisPipelineRemainingMs(episodeId);
+        }
+        const deadline = Number(analysisPipelineDeadlineRef.current || 0);
+        if (!Number.isFinite(deadline) || deadline <= 0) return Number.POSITIVE_INFINITY;
+        return Math.max(0, deadline - Date.now());
+    }, [activeEpisode?.id]);
+
+    const armAnalysisPipelineDeadline = useCallback((startedAt = Date.now()) => {
+        const start = Number(startedAt || Date.now());
+        const episodeId = Number(activeEpisode?.id || latestActiveEpisodeIdRef.current || 0);
+        analysisPipelineDeadlineRef.current = (
+            Number.isFinite(start) && start > 0 ? start : Date.now()
+        ) + ANALYSIS_PIPELINE_MAX_MS;
+        analysisPipelineSupervisorActiveRef.current = true;
+        analysisStopRequestedRef.current = false;
+        analysisStopReasonRef.current = '';
+        if (episodeId) {
+            armEpisodeAnalysisPipelineControl(episodeId, {
+                startedAt: start,
+                maxMs: ANALYSIS_PIPELINE_MAX_MS,
+            });
+        }
+    }, [activeEpisode?.id]);
+
+    const clearAnalysisPipelineDeadline = useCallback(() => {
+        // Local UI refs only. Module control (stop/deadline) must survive remount and
+        // stay readable by the original run closure until the tracked promise settles.
+        analysisPipelineDeadlineRef.current = 0;
+        analysisPipelineSupervisorActiveRef.current = false;
+    }, []);
+
+    const cancelActiveAnalysisTasksBestEffort = useCallback(async (reason = '') => {
+        const taskIds = Array.from(new Set([
+            ...Array.from(activeAnalysisTaskIdsRef.current || []),
+            String(activeAnalysisTaskId || '').trim(),
+        ].filter(Boolean)));
+        if (taskIds.length <= 0) return;
+        try {
+            await Promise.allSettled(taskIds.map((taskId) => stopAsyncTask(taskId)));
+            if (onLog) {
+                onLog(
+                    `Scene analysis stop/cancel tasks (${reason || 'unspecified'}): task_ids=${taskIds.join(',')}`,
+                    'warning'
+                );
+            }
+        } catch (_) {
+            // best-effort
+        }
+    }, [activeAnalysisTaskId, onLog]);
+
     const throwIfAnalysisStopped = useCallback(() => {
-        if (analysisStopRequestedRef.current) {
+        const episodeId = Number(activeEpisode?.id || latestActiveEpisodeIdRef.current || 0);
+        const control = episodeId ? getEpisodeAnalysisPipelineControl(episodeId) : null;
+        const stopRequested = Boolean(
+            analysisStopRequestedRef.current
+            || control?.stopRequested
+        );
+        const stopReason = String(
+            analysisStopReasonRef.current
+            || control?.stopReason
+            || ''
+        ).trim();
+
+        if (stopRequested) {
+            analysisStopRequestedRef.current = true;
+            analysisStopReasonRef.current = stopReason || 'user';
+            if (stopReason === 'timeout') {
+                throw createAnalysisPipelineTimeoutError();
+            }
             throw createAnalysisCanceledError();
         }
-    }, [createAnalysisCanceledError]);
+
+        const remainingMs = getAnalysisPipelineRemainingMs();
+        if (Number.isFinite(remainingMs) && remainingMs <= 0) {
+            analysisStopRequestedRef.current = true;
+            analysisStopReasonRef.current = 'timeout';
+            if (episodeId) {
+                requestEpisodeAnalysisPipelineStop(episodeId, 'timeout');
+            }
+            void cancelActiveAnalysisTasksBestEffort('pipeline-timeout');
+            throw createAnalysisPipelineTimeoutError();
+        }
+    }, [
+        activeEpisode?.id,
+        cancelActiveAnalysisTasksBestEffort,
+        createAnalysisCanceledError,
+        createAnalysisPipelineTimeoutError,
+        getAnalysisPipelineRemainingMs,
+    ]);
 
     const registerActiveAnalysisTask = useCallback((taskId) => {
         const stableTaskId = String(taskId || '').trim();
@@ -11499,6 +11834,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (taskIds.length <= 0) {
             if (isAnalyzing || isRetryingPhase2 || phase2GenerationInFlightRef.current || analysisRunInFlightRef.current) {
                 analysisStopRequestedRef.current = true;
+                analysisStopReasonRef.current = 'user';
+                analysisPipelineSupervisorActiveRef.current = false;
+                if (activeEpisode?.id) {
+                    requestEpisodeAnalysisPipelineStop(activeEpisode.id, 'user');
+                }
+                clearAnalysisPipelineDeadline();
                 setIsAnalyzing(false);
                 setIsRetryingPhase2(false);
                 phase2GenerationInFlightRef.current = false;
@@ -11524,6 +11865,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setIsStoppingAnalysisTask(true);
         analysisStopRequestedRef.current = true;
+        analysisStopReasonRef.current = 'user';
+        analysisPipelineSupervisorActiveRef.current = false;
+        if (activeEpisode?.id) {
+            requestEpisodeAnalysisPipelineStop(activeEpisode.id, 'user');
+        }
         try {
             const stopResults = await Promise.allSettled(taskIds.map((taskId) => stopAsyncTask(taskId)));
             const failedStops = stopResults.filter((item) => item.status === 'rejected');
@@ -11542,6 +11888,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             if (onLog) onLog(`Failed to stop scene analysis task: ${e?.message || e}`, 'error');
             analysisStopRequestedRef.current = false;
+            analysisStopReasonRef.current = '';
         } finally {
             setIsStoppingAnalysisTask(false);
             setIsAnalyzing(false);
@@ -11549,12 +11896,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phase2GenerationInFlightRef.current = false;
             analysisRunInFlightRef.current = false;
             analysisEntryLockRef.current = false;
+            clearAnalysisPipelineDeadline();
             if (activeEpisode?.id) {
                 releaseEpisodeAnalysisClaim(activeEpisode.id);
                 analysisClaimTokenRef.current = '';
             }
         }
-    }, [activeAnalysisTaskId, activeEpisode?.id, clearAnalysisTaskMarker, isAnalyzing, isRetryingPhase2, loadAnalysisTaskMarker, onLog, t]);
+    }, [activeAnalysisTaskId, activeEpisode?.id, clearAnalysisPipelineDeadline, clearAnalysisTaskMarker, isAnalyzing, isRetryingPhase2, loadAnalysisTaskMarker, onLog, t]);
     const refreshAnalysisFromDB = useCallback(async ({ resultField = 'ai_scene_analysis_result' } = {}) => {
         const episodeId = Number(activeEpisode?.id || 0);
         if (!episodeId) return;
@@ -12979,11 +13327,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         // Run character / prop / environment concurrently (Promise.allSettled).
             // Each category binds episode_id so pipeline status + subject-index gates work for all three;
             // skip_episode_persist avoids concurrent overwrite of ai_entity_design_result (frontend merges).
+            // Failed / incomplete categories auto-retry until DB coverage, user stop, or pipeline timeout.
             const episodeIdForAssetSubtasks = activeEpisode?.id || null;
-            const results = await Promise.allSettled(
-                promptsData.map(async (pData, index) => {
+            const runOneAssetSubtask = async (pData, index, roundTag = '') => {
                     throwIfAnalysisStopped();
-                    const subtaskTraceId = `${phase2BatchTraceId}-${pData.key || `slot${index + 1}`}`;
+                    const subtaskTraceId = `${phase2BatchTraceId}-${pData.key || `slot${index + 1}`}${roundTag}`;
                     const subtaskImportSessionId = `import-${subtaskTraceId}`;
                     onLog?.(`[Stage 3 Asset Design] Subtask submit key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`, 'info');
 
@@ -13175,8 +13523,118 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             subtaskImportError,
                         };
                     });
-                })
-            );
+            };
+
+            const resultByKey = new Map();
+            let pendingAssetPrompts = [...promptsData];
+            let assetRetryRound = 0;
+            while (pendingAssetPrompts.length > 0) {
+                throwIfAnalysisStopped();
+                assetRetryRound += 1;
+                if (assetRetryRound > 1) {
+                    const retryTypes = pendingAssetPrompts.map((item) => item.key).filter(Boolean).join(', ');
+                    onLog?.(
+                        `[Stage 3 Asset Design] Persistence gap — auto-retry round ${assetRetryRound} for: ${retryTypes || 'unknown'}.`,
+                        'warning'
+                    );
+                    setAnalysisFlowStatus({
+                        phase: 'assets_gen',
+                        message: t(
+                            `资产落库未齐套，正在自动重试（第 ${assetRetryRound} 轮）：${retryTypes}`,
+                            `Asset persistence incomplete; auto-retry round ${assetRetryRound}: ${retryTypes}`
+                        ),
+                    });
+                    const delayMs = Math.min(
+                        ANALYSIS_PIPELINE_RETRY_BASE_DELAY_MS * assetRetryRound,
+                        ANALYSIS_PIPELINE_RETRY_MAX_DELAY_MS
+                    );
+                    await new Promise((resolve) => setTimeout(resolve, delayMs));
+                    throwIfAnalysisStopped();
+                }
+
+                const batchResults = await Promise.allSettled(
+                    pendingAssetPrompts.map((pData, index) => {
+                        const stableIndex = Math.max(0, promptsData.findIndex((item) => item.key === pData.key));
+                        return runOneAssetSubtask(
+                            pData,
+                            stableIndex >= 0 ? stableIndex : index,
+                            assetRetryRound > 1 ? `-r${assetRetryRound}` : ''
+                        );
+                    })
+                );
+                pendingAssetPrompts.forEach((pData, idx) => {
+                    resultByKey.set(String(pData.key || ''), batchResults[idx]);
+                });
+
+                const nextPending = [];
+                for (const pData of pendingAssetPrompts) {
+                    const settled = resultByKey.get(String(pData.key || ''));
+                    if (!settled) {
+                        nextPending.push(pData);
+                        continue;
+                    }
+                    if (settled.status === 'fulfilled' && settled.value?.skippedExisting) continue;
+                    if (settled.status === 'fulfilled') {
+                        const created = Number(settled.value?.subtaskImportReport?.createdSubjectItems?.length || 0);
+                        const skipped = Number(settled.value?.subtaskImportReport?.skippedSubjectItems?.length || 0);
+                        const hasImportableSubjects = Boolean(settled.value?.hasImportableSubjects);
+                        const importErr = String(settled.value?.subtaskImportError || '').trim();
+                        const ok = !importErr && (hasImportableSubjects || created > 0 || skipped > 0);
+                        if (ok) continue;
+                    }
+                    nextPending.push(pData);
+                }
+
+                if (nextPending.length <= 0) {
+                    pendingAssetPrompts = [];
+                    break;
+                }
+
+                // Drop categories already covered in the entity library (persistence ground truth).
+                if (projectId && episodeIdForAssetSubtasks && typeof fetchEntities === 'function') {
+                    try {
+                        const dbEntities = await fetchEntities(projectId, {
+                            episode_id: Number(episodeIdForAssetSubtasks) || undefined,
+                        }).catch(() => []);
+                        const stillMissing = [];
+                        for (const pData of nextPending) {
+                            const filtered = filterSubjectIndexTextForAssetTask(
+                                finalSubjectIndexText,
+                                pData.key,
+                                requestedTargetFilters
+                            );
+                            if (Number(filtered?.keptRows || 0) <= 0) continue;
+                            const reportType = pData.key === 'characters'
+                                ? 'character'
+                                : (pData.key === 'props'
+                                    ? 'prop'
+                                    : (pData.key === 'environments' ? 'environment' : 'poster'));
+                            const dbCount = countDbEntitiesByType(reportType, dbEntities);
+                            if (dbCount >= Number(filtered.keptRows || 0)) {
+                                onLog?.(
+                                    `[Stage 3 Asset Design] ${pData.key} already covered in DB (${dbCount}/${filtered.keptRows}); stop retrying.`,
+                                    'info'
+                                );
+                                continue;
+                            }
+                            stillMissing.push(pData);
+                        }
+                        pendingAssetPrompts = stillMissing;
+                    } catch (_) {
+                        pendingAssetPrompts = nextPending;
+                    }
+                } else {
+                    pendingAssetPrompts = nextPending;
+                }
+            }
+
+            const results = promptsData.map((pData) => (
+                resultByKey.get(String(pData.key || ''))
+                || {
+                    status: 'rejected',
+                    reason: new Error(`Missing asset subtask result for ${pData.key || 'unknown'}`),
+                }
+            ));
 
             throwIfAnalysisStopped();
 
@@ -13363,7 +13821,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                     if (failedSubtaskItems.length > 0) {
                         const retryTypes = failedSubtaskItems.map((x) => x.key).filter(Boolean).join(', ');
-                        onLog?.(`[Stage 3 Asset Design] Incomplete subtask result detected. Retry missing asset type(s): ${retryTypes || 'unknown'}.`, 'warning');
+                        onLog?.(
+                            `[Stage 3 Asset Design] Incomplete after persistence retries (will be rechecked by pipeline supervisor): ${retryTypes || 'unknown'}.`,
+                            'warning'
+                        );
                     }
 
                     const envSubtaskOk = subtaskReports.some((report) => (
@@ -14093,12 +14554,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setActiveAnalysisTaskId(String(entry.taskId));
         }
         const resolvedPhase = entry.phase === 2 ? 'assets_gen' : (entry.phase === 'scene_beats' ? 'scene_beats' : 'script_opt');
+        // Sync module control plane (survives leave/return) into this instance's refs.
+        const control = getEpisodeAnalysisPipelineControl(activeEpisode.id);
+        if (control?.stopRequested) {
+            analysisStopRequestedRef.current = true;
+            analysisStopReasonRef.current = String(control.stopReason || 'user');
+        }
+        if (Number(control?.deadlineAt || 0) > 0) {
+            analysisPipelineDeadlineRef.current = Number(control.deadlineAt);
+            analysisPipelineSupervisorActiveRef.current = Boolean(control.supervisorActive);
+        }
         setAnalysisFlowStatus((prev) => {
             const prevPhase = String(prev?.phase || '').trim().toLowerCase();
             if (prevPhase && prevPhase !== 'idle') return prev;
             return {
                 phase: resolvedPhase,
-                message: t('正在重新连接分析任务...', 'Reconnecting to in-progress analysis task...'),
+                message: t(
+                    '已回到剧本页，正在恢复后台分析进度…',
+                    'Back on the script page; restoring background analysis progress...'
+                ),
             };
         });
         setAnalysisUiReport((prev) => {
@@ -14530,10 +15004,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         mountResumeReadyRef.current = false;
         restoreAnalysisProgressFromSession(episodeId);
         bootstrapPendingAnalysisUi();
+        // Remount: rehydrate stop/deadline control so this instance matches the background run.
+        const pipelineControl = getEpisodeAnalysisPipelineControl(episodeId);
+        if (Number(pipelineControl?.deadlineAt || 0) > 0) {
+            analysisPipelineDeadlineRef.current = Number(pipelineControl.deadlineAt);
+            analysisPipelineSupervisorActiveRef.current = Boolean(pipelineControl.supervisorActive);
+        }
+        if (pipelineControl?.stopRequested) {
+            analysisStopRequestedRef.current = true;
+            analysisStopReasonRef.current = String(pipelineControl.stopReason || 'user');
+        }
         // Remount during prep/clear must keep the CTA in running state if a module claim is held.
-        if (isEpisodeAnalysisClaimed(episodeId)) {
+        if (isEpisodeAnalysisClaimed(episodeId) || getEpisodeAnalysisRun(episodeId)?.promise) {
             setIsAnalyzing(true);
             latestIsAnalyzingRef.current = true;
+            if (!String(analysisFlowStatusRef.current?.message || '').trim()
+                || String(analysisFlowStatusRef.current?.phase || '').trim().toLowerCase() === 'idle') {
+                setAnalysisFlowStatus({
+                    phase: String(analysisFlowStatusRef.current?.phase || 'script_opt').trim() || 'script_opt',
+                    message: t(
+                        '后台分析进行中，正在恢复进度显示…',
+                        'Background analysis in progress; restoring progress display...'
+                    ),
+                });
+            }
         }
 
         const unsubscribeProgress = subscribeEpisodeAnalysisProgress(episodeId, (snapshot) => {
@@ -14541,6 +15035,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (analysisProgressDismissedRef.current) return;
             if (!snapshot || typeof snapshot !== 'object') return;
             // Owner instance already has React state; avoid echo loops while writing.
+            // After leave/return the original owner is marked detached, so the new instance hydrates.
             if (analysisRunInFlightRef.current && !isEpisodeAnalysisDetached(episodeId)) return;
             applyLiveAnalysisProgressSnapshot(snapshot);
         });
@@ -14594,8 +15089,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const now = Date.now();
                 if (now - lastScriptLeaveNoticeAtRef.current > 3000) {
                     lastScriptLeaveNoticeAtRef.current = now;
+                    const remainingMs = getEpisodeAnalysisPipelineRemainingMs(leavingEpisodeId);
+                    const remainMin = Number.isFinite(remainingMs)
+                        ? Math.max(1, Math.ceil(remainingMs / 60000))
+                        : null;
                     onLog?.(
-                        '已离开剧本页，分析任务仍在后台运行。返回剧本页后会自动恢复完整进度与日志。',
+                        remainMin
+                            ? t(
+                                `已暂时离开剧本页：分析仍在后台继续（约剩 ${remainMin} 分钟时限）。返回后会自动恢复进度条与日志；停止请点「停止分析」。`,
+                                `Left the script page temporarily: analysis continues in the background (~${remainMin} min left). Progress restores on return; use Stop Analysis to cancel.`
+                            )
+                            : t(
+                                '已暂时离开剧本页：分析仍在后台继续。返回后会自动恢复进度条与日志；停止请点「停止分析」。',
+                                'Left the script page temporarily: analysis continues in the background. Progress restores on return; use Stop Analysis to cancel.'
+                            ),
                         'info'
                     );
                 }
@@ -16402,6 +16909,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisRunInFlightRef.current = true;
         setIsAnalyzing(true);
         const startedAt = Date.now();
+        analysisStopRequestedRef.current = false;
+        analysisStopReasonRef.current = '';
+        armAnalysisPipelineDeadline(startedAt);
         const needsSceneOrchestration = Boolean(resumeState?.needsSceneOrchestration);
         const needsAssetDesign = Boolean(resumeState?.needsAssetDesign);
         const artifactsAlreadyComplete = resumeState.decision === 'completed';
@@ -16590,11 +17100,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                     if (assetOutcome.status !== 'fulfilled') {
                         const assetErr = assetOutcome.reason;
-                        onLog?.(`Stage 3 asset design resume failed: ${assetErr?.message || assetErr}`, 'error');
-                        throw assetErr instanceof Error ? assetErr : new Error(String(assetErr || 'Stage 3 asset design resume failed'));
+                        onLog?.(
+                            `Stage 3 asset design resume incomplete; persistence supervisor will auto-repair: ${assetErr?.message || assetErr}`,
+                            'warning'
+                        );
                     }
                     importReport = sceneOutcome.value || importReport;
-                    postImportSceneSubjectReport = assetOutcome.value || null;
+                    postImportSceneSubjectReport = assetOutcome.status === 'fulfilled'
+                        ? (assetOutcome.value || null)
+                        : null;
                 } else if (needsSceneOrchestration) {
                     // Assets already complete — open ENV gate so per-scene storyboard can start after import.
                     if (hasPersistedEnvironmentAssetDesign()) {
@@ -16660,6 +17174,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
+            const supervisorEnsure = ensureEpisodeAnalysisCompleteByPersistenceRef.current;
+            if (typeof supervisorEnsure === 'function') {
+                const supervisorResult = await supervisorEnsure({
+                    expectedSceneCount: Number(resumeState?.dbSceneCount || 0) || undefined,
+                    subjectIndexText: resolvedSubjectIndexText,
+                    importReport,
+                    postImportSceneSubjectReport,
+                    stage1SourceText,
+                    allowSceneOrchestrationRetry: true,
+                });
+                if (supervisorResult?.importReport) importReport = supervisorResult.importReport;
+                if (supervisorResult?.postImportSceneSubjectReport) {
+                    postImportSceneSubjectReport = supervisorResult.postImportSceneSubjectReport;
+                }
+            }
+
             const resumeStoryboard = await awaitPendingStoryboardTasks({
                 importReport,
                 ensureResidual: true,
@@ -16700,21 +17230,50 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         } catch (err) {
             console.error(err);
-            setAnalysisFlowStatus({ phase: 'failed', message: '❌ 资产生成失败: ' + err.message });
-            setAnalysisUiReport({
-                status: 'failed',
-                startedAt,
-                durationMs: Date.now() - startedAt,
-                phaseTimings: null,
-                importReport: null,
-                runtimeMeta: null,
-                warning: combinedWarning,
-                error: err.message,
-            });
+            const timedOut = Boolean(err?.isPipelineTimeout) || analysisStopReasonRef.current === 'timeout';
+            const canceled = isTaskCanceledError(err) || analysisStopRequestedRef.current;
+            if (canceled) {
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: timedOut
+                        ? t('分析任务因超时已停止。', 'Analysis task was stopped due to timeout.')
+                        : t('分析任务已停止。', 'Analysis task was stopped.'),
+                });
+                setAnalysisUiReport({
+                    status: 'warning',
+                    startedAt,
+                    durationMs: Date.now() - startedAt,
+                    phaseTimings: null,
+                    importReport: null,
+                    runtimeMeta: null,
+                    warning: timedOut
+                        ? t(
+                            '剧本分析已超过 30 分钟全流程时限，任务已自动停止。',
+                            'Script analysis exceeded the 30-minute pipeline limit and was stopped automatically.'
+                        )
+                        : t('分析任务已由用户停止。', 'Analysis task was stopped by user.'),
+                    error: '',
+                });
+            } else {
+                setAnalysisFlowStatus({ phase: 'failed', message: '❌ 资产生成失败: ' + err.message });
+                setAnalysisUiReport({
+                    status: 'failed',
+                    startedAt,
+                    durationMs: Date.now() - startedAt,
+                    phaseTimings: null,
+                    importReport: null,
+                    runtimeMeta: null,
+                    warning: combinedWarning,
+                    error: err.message,
+                });
+            }
         } finally {
             clearAnalysisTaskMarker(activeEpisode?.id);
             setIsAnalyzing(false);
             analysisRunInFlightRef.current = false;
+            clearAnalysisPipelineDeadline();
+            analysisStopRequestedRef.current = false;
+            analysisStopReasonRef.current = '';
         }
 
         return true;
@@ -17396,6 +17955,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const runAnalysisPipeline = async () => {
         analysisProgressDismissedRef.current = false;
         analysisStopRequestedRef.current = false;
+        analysisStopReasonRef.current = '';
+        armAnalysisPipelineDeadline(startedAt);
         if (!forceRegenerate) {
             resetAnalysisRunProgressLogs();
         }
@@ -17917,11 +18478,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 if (assetOutcome.status !== 'fulfilled') {
                     const assetErr = assetOutcome.reason;
+                    // Defer hard-fail: persistence supervisor will retry missing asset categories by DB gaps.
                     onLog?.(t(
-                        `资产设计失败：${assetErr?.message || assetErr}`,
-                        `Asset design failed: ${assetErr?.message || assetErr}`
-                    ), 'error');
-                    throw assetErr instanceof Error ? assetErr : new Error(String(assetErr || t('资产设计失败', 'Asset design failed')));
+                        `资产设计本轮未完成，将由落库监督器自动补跑：${assetErr?.message || assetErr}`,
+                        `Asset design incomplete this round; persistence supervisor will auto-repair: ${assetErr?.message || assetErr}`
+                    ), 'warning');
                 }
 
                 const sceneBranch = sceneOutcome.value || {};
@@ -17931,7 +18492,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 stage2PhaseRawText = sceneBranch.branchStage2PhaseRawText || stage2PhaseRawText;
                 importReport = sceneBranch.branchImportReport || null;
                 splitFlowScenesImported = true;
-                postImportSceneSubjectReport = assetOutcome.value || null;
+                postImportSceneSubjectReport = assetOutcome.status === 'fulfilled'
+                    ? (assetOutcome.value || null)
+                    : null;
 
                 analysisSections = extractAnalysisSections(stage2PhaseRawText);
                 analysisSections.hasStructuredSubjectIndex = true;
@@ -18140,21 +18703,40 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             firstPassReport = firstPassReport || buildSubjectConsistencyReport(analyzedText || '');
 
             setAnalysisFlowStatus({
-                phase: 'supplement',
-                message: t('🔍 各步骤已完成，正在检查本集是否齐套…', 'All steps finished; checking whether this episode is ready...'),
+                phase: 'assets_gen',
+                message: t(
+                    '各步骤已完成，正在核对场景/资产/分镜是否齐套，缺项将自动补齐…',
+                    'Steps finished; verifying scenes/assets/storyboards and auto-filling gaps...'
+                ),
             });
-            await runAnalysisPipelineIntegrityGate({
-                t,
-                onLog,
-                fetchScenesFn: fetchScenes,
-                fetchEntitiesFn: fetchEntities,
-                projectId,
-                episodeId: activeEpisode?.id,
-                importReport,
-                postImportSceneSubjectReport,
+            const supervisorEnsure = ensureEpisodeAnalysisCompleteByPersistenceRef.current;
+            if (typeof supervisorEnsure !== 'function') {
+                throw new Error(t(
+                    '管线监督器尚未就绪，无法完成落库齐套检查。',
+                    'Pipeline supervisor is not ready; cannot finish persistence checks.'
+                ));
+            }
+            const supervisorResult = await supervisorEnsure({
                 expectedSceneCount: expectedSceneImportCount,
                 subjectIndexText: stage2SubjectIndexForAssets || globalStage2_1Text || '',
+                importReport,
+                postImportSceneSubjectReport,
+                stage1SourceText: stage1PhaseRawText || '',
+                allowSceneOrchestrationRetry: true,
             });
+            if (supervisorResult?.importReport) {
+                importReport = supervisorResult.importReport;
+            }
+            if (supervisorResult?.postImportSceneSubjectReport) {
+                postImportSceneSubjectReport = supervisorResult.postImportSceneSubjectReport;
+            }
+            const coverage = supervisorResult?.probe?.storyboardCoverage;
+            if (coverage) {
+                setDiagnosticsEpisodeShotStats({
+                    shotCount: Number(coverage.shotCount || 0),
+                    sceneCountWithShots: Number(coverage.sceneCountWithShots || 0),
+                });
+            }
 
             const { reviewIssues } = await publishAnalysisReviewFindings({
                 subjectReport: firstPassReport,
@@ -18167,37 +18749,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ensureResidual: true,
             });
             if (analysisStopRequestedRef.current) {
-                throw createAnalysisCanceledError();
+                throw analysisStopReasonRef.current === 'timeout'
+                    ? createAnalysisPipelineTimeoutError()
+                    : createAnalysisCanceledError();
             }
             const aiShotsBatchStarted = Boolean(storyboardWaitResult?.started);
             const storyboardProgressSnapshot = storyboardWaitResult?.progress || EMPTY_STORYBOARD_TASK_PROGRESS;
-
-            if (await isStoryboardAutoStartEnabled()) {
-                setAnalysisFlowStatus({
-                    phase: 'supplement',
-                    message: t('🔍 正在检查本集分镜是否齐套…', 'Checking whether every scene has storyboards...'),
-                });
-                const storyboardGateResult = await runAnalysisPipelineIntegrityGate({
-                    t,
-                    onLog,
-                    fetchScenesFn: fetchScenes,
-                    fetchEpisodeShotsFn: fetchEpisodeShots,
-                    episodeId: activeEpisode?.id,
-                    checkStoryboards: true,
-                    skipNonStoryboardChecks: true,
-                    allowedSceneMarkers: [
-                        ...(orchestrationCanonicalSceneIdsRef.current || []),
-                        ...(orchestrationLiveImportedScenesRef.current || []),
-                    ],
-                });
-                const coverage = storyboardGateResult?.storyboardCoverage;
-                if (coverage) {
-                    setDiagnosticsEpisodeShotStats({
-                        shotCount: Number(coverage.shotCount || 0),
-                        sceneCountWithShots: Number(coverage.sceneCountWithShots || 0),
-                    });
-                }
-            }
 
             setPendingSwitchAfterPostChecks(false);
             phaseMarks.completedAt = Date.now();
@@ -18252,6 +18809,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             
             analysisError = e;
             analysisCanceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
+            const timedOut = Boolean(e?.isPipelineTimeout) || analysisStopReasonRef.current === 'timeout';
             if (!scriptEditorMountedRef.current) {
                 // Remount must observe rejection via the tracked registry promise; do not swallow.
                 throw e;
@@ -18266,12 +18824,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
             if (analysisCanceled) {
-                if (onLog) onLog('Advanced analysis task canceled by user.', 'warning');
+                if (onLog) {
+                    onLog(
+                        timedOut
+                            ? 'Advanced analysis stopped by 30-minute pipeline timeout.'
+                            : 'Advanced analysis task canceled by user.',
+                        'warning'
+                    );
+                }
             } else if (!retainMarker) {
                 if (onLog) onLog(`Advanced analysis failed: ${friendlyAnalysisError}`);
             }
             if (analysisCanceled) {
-                setAnalysisFlowStatus({ phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') });
+                const stopWarning = timedOut
+                    ? t(
+                        '剧本分析已超过 30 分钟全流程时限，任务已自动停止。',
+                        'Script analysis exceeded the 30-minute pipeline limit and was stopped automatically.'
+                    )
+                    : t('分析任务已由用户停止。', 'Analysis task was stopped by user.');
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: timedOut
+                        ? t('分析任务因超时已停止。', 'Analysis task was stopped due to timeout.')
+                        : t('分析任务已停止。', 'Analysis task was stopped.'),
+                });
                 setAnalysisUiReport({
                     status: 'warning',
                     startedAt,
@@ -18279,7 +18855,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     phaseTimings,
                     importReport: importReport,
                     runtimeMeta,
-                    warning: t('分析任务已由用户停止。', 'Analysis task was stopped by user.'),
+                    warning: stopWarning,
                     error: '',
                 });
             } else if (retainMarker) {
@@ -18309,12 +18885,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 clearAnalysisTaskMarker(episodeId);
             }
             analysisRunInFlightRef.current = false;
+            clearAnalysisPipelineDeadline();
             if (!scriptEditorMountedRef.current) {
                 // still allow registry.finally cleanup; skip UI-only resume kick
             } else if (!retainMarker) {
                 setIsAnalyzing(false);
                 setActiveAnalysisTaskId('');
                 analysisStopRequestedRef.current = false;
+                analysisStopReasonRef.current = '';
             } else {
                 setTimeout(() => { void tryResumePendingAnalysis(); }, 0);
             }
@@ -20837,6 +21415,272 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return entries;
     }, [buildMarkdownTable, detectSubjectIndexLineType, mapSubjectIndexTypeToRerunTarget, normalizeSubjectIndexTypeForAssetTask]);
 
+    /**
+     * Persistence supervisor: probe episode DB/workspace, retry only missing nodes until
+     * complete, user stop, or ANALYSIS_PIPELINE_MAX_MS deadline.
+     */
+    const ensureEpisodeAnalysisCompleteByPersistence = useCallback(async ({
+        expectedSceneCount = 0,
+        subjectIndexText = '',
+        importReport = null,
+        postImportSceneSubjectReport = null,
+        stage1SourceText = '',
+        allowSceneOrchestrationRetry = true,
+    } = {}) => {
+        let workingImportReport = importReport;
+        let workingPostImport = postImportSceneSubjectReport;
+        let supervisorRound = 0;
+        let lastGapSignature = '';
+        let stagnantRounds = 0;
+
+        while (true) {
+            throwIfAnalysisStopped();
+            const storyboardEnabled = await isStoryboardAutoStartEnabled();
+            const stage3AutoStart = await ensureStage3AutoStartCache();
+            const probe = await probeEpisodeAnalysisCompleteness({
+                fetchEpisodeFn: fetchEpisode,
+                fetchScenesFn: fetchScenes,
+                fetchEntitiesFn: fetchEntities,
+                fetchEpisodeShotsFn: fetchEpisodeShots,
+                projectId,
+                episodeId: activeEpisode?.id,
+                expectedSceneCount,
+                subjectIndexText,
+                parseSubjectIndexEntries: parseSubjectIndexEntriesForAssetRerun,
+                checkStoryboards: storyboardEnabled,
+                stage3AutoStart,
+                allowedSceneMarkers: [
+                    ...(orchestrationCanonicalSceneIdsRef.current || []),
+                    ...(orchestrationLiveImportedScenesRef.current || []),
+                ],
+            });
+
+            if (probe.ok) {
+                onLog?.(
+                    t(
+                        `[齐套补跑] 本集内容已齐套（场景 ${probe.dbSceneCount} 场）。`,
+                        `[Readiness repair] Episode content is complete (${probe.dbSceneCount} scene(s)).`
+                    ),
+                    'success'
+                );
+                return {
+                    ok: true,
+                    probe,
+                    importReport: workingImportReport,
+                    postImportSceneSubjectReport: workingPostImport,
+                };
+            }
+
+            if (!probe.hasAdaptation) {
+                throw new Error(t(
+                    '落库缺少第一阶段优化剧本，无法自动续跑。请重新执行剧本分析。',
+                    'Stage 1 adapted script is missing from storage; cannot auto-continue. Re-run script analysis.'
+                ));
+            }
+            if (!probe.hasSubjectIndex) {
+                throw new Error(t(
+                    '落库缺少资产清单，无法自动续跑。请重新执行资产提取。',
+                    'Subject Index is missing from storage; cannot auto-continue. Re-run asset extraction.'
+                ));
+            }
+
+            const gapSignature = probe.gaps.join('|');
+            if (gapSignature === lastGapSignature) {
+                stagnantRounds += 1;
+            } else {
+                stagnantRounds = 0;
+                lastGapSignature = gapSignature;
+            }
+
+            supervisorRound += 1;
+            const gapLabels = formatSupervisorGapLabels(probe, t);
+            setAnalysisFlowStatus({
+                phase: resolveSupervisorProgressPhase(probe),
+                message: t(
+                    `内容尚未齐套，正在自动补齐（第 ${supervisorRound} 轮）：${gapLabels}`,
+                    `Episode content incomplete; auto-filling round ${supervisorRound}: ${gapLabels}`
+                ),
+            });
+            onLog?.(
+                t(
+                    `[齐套补跑] 第 ${supervisorRound} 轮：${gapLabels}`,
+                    `[Readiness repair] round ${supervisorRound}: ${gapLabels}`
+                ),
+                'warning'
+            );
+
+            let didWork = false;
+
+            if (probe.needsScenes && allowSceneOrchestrationRetry) {
+                throwIfAnalysisStopped();
+                if (probe.hasSceneMarkdown && Number(probe.dbSceneCount || 0) <= 0) {
+                    const fresh = await fetchEpisode(activeEpisode.id).catch(() => null);
+                    const markdown = String(fresh?.ai_scene_analysis_scene_markdown || '').trim();
+                    if (markdown) {
+                        onLog?.('[Pipeline Supervisor] Re-importing scenes from persisted markdown...', 'process');
+                        workingImportReport = await runAutoImportAndSwitchToScenes(markdown, {
+                            switchToScenes: false,
+                            importOptions: {
+                                autoSupplementSceneSubjects: false,
+                                suppressAlerts: true,
+                            },
+                        });
+                        didWork = true;
+                    }
+                }
+                if (!didWork || Number((await fetchScenes(activeEpisode.id).catch(() => []))?.length || 0) < Math.max(1, Number(expectedSceneCount || 0))) {
+                    const stage1Text = String(
+                        stage1SourceText
+                        || activeEpisode?.ai_scene_analysis_adaptation
+                        || activeEpisode?.ai_scene_analysis_result
+                        || ''
+                    ).trim();
+                    const indexText = String(probe.subjectIndex || subjectIndexText || '').trim();
+                    if (stage1Text && indexText) {
+                        onLog?.('[Pipeline Supervisor] Re-running scene orchestration for missing workspace scenes...', 'process');
+                        const stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1Text);
+                        const beatsResult = await runStage2_2WithValidationRetry({
+                            label: 'Stage 2.2 supervisor',
+                            logPhasePrefix: 'supervisor',
+                            finalStage2_2UserInput: stage2_2UserInputBody,
+                            stage2_2UserInputBody,
+                            stage2_1SubjectIndexText: indexText,
+                            stage1SourceText: stage1Text,
+                            startedAt: Date.now(),
+                            baselineText: '',
+                            skipExistingScenes: true,
+                            onTaskCreated: (taskId) => {
+                                registerActiveAnalysisTask(taskId);
+                                saveAnalysisTaskMarker(activeEpisode?.id, {
+                                    taskId,
+                                    startedAt: Date.now(),
+                                    phase: 'scene_beats',
+                                });
+                            },
+                        });
+                        const {
+                            stage2_2Text,
+                            perSceneParallel = false,
+                            sceneMarkdownPatchMap = null,
+                        } = beatsResult || {};
+                        if (perSceneParallel && sceneMarkdownPatchMap && Object.keys(sceneMarkdownPatchMap).length > 0) {
+                            await persistSceneMarkdownPatch(sceneMarkdownPatchMap, {
+                                source: 'pipeline-supervisor-per-scene',
+                                stage1RawText: stage1Text,
+                                stage2_1Text: indexText,
+                                replaceSceneMarkdownByScene: true,
+                            });
+                            workingImportReport = await importScenesFromPerScenePatchMap(sceneMarkdownPatchMap, {
+                                replaceExistingScenes: false,
+                            });
+                        } else {
+                            const stage2_2Check = validateStage2_2BeatsOutput(stage2_2Text || '', 'Stage 2.2 supervisor');
+                            if (!stage2_2Check.ok) {
+                                throw new Error(stage2_2Check.reason || 'Stage 2.2 supervisor validation failed.');
+                            }
+                            await persistSceneMarkdownBundle(stage2_2Check.normalizedText, {
+                                source: 'pipeline-supervisor',
+                                stage1RawText: stage1Text,
+                                stage2RawText: [indexText, stage2_2Check.normalizedText].filter(Boolean).join('\n\n'),
+                                stage2_1Text: indexText,
+                            });
+                            workingImportReport = await runAutoImportAndSwitchToScenes(stage2_2Check.normalizedText, {
+                                switchToScenes: false,
+                                importOptions: {
+                                    autoSupplementSceneSubjects: false,
+                                    suppressAlerts: true,
+                                },
+                            });
+                        }
+                        didWork = true;
+                    }
+                }
+            }
+
+            if (probe.needsAssets && Array.isArray(probe.pendingAssetTargets) && probe.pendingAssetTargets.length > 0) {
+                throwIfAnalysisStopped();
+                onLog?.(
+                    `[Pipeline Supervisor] Re-running asset design for: ${probe.pendingAssetTargets.join(', ')}`,
+                    'process'
+                );
+                workingPostImport = await runPostImportSceneSubjectPipeline(
+                    workingImportReport || { importedSceneRows: [] },
+                    probe.subjectIndex || subjectIndexText,
+                    {
+                        explicitSubjectIndexText: probe.subjectIndex || subjectIndexText,
+                        targetEntityTypes: probe.pendingAssetTargets,
+                        isRetryPhase2: true,
+                        skipExistingAssets: true,
+                    }
+                );
+                if (workingImportReport && typeof workingImportReport === 'object' && workingPostImport) {
+                    workingImportReport = {
+                        ...workingImportReport,
+                        sceneSubjectPostImportReport: syncScenePostImportCheckedCount(
+                            workingImportReport,
+                            workingPostImport
+                        ),
+                    };
+                }
+                didWork = true;
+            }
+
+            if (probe.needsStoryboard || storyboardEnabled) {
+                throwIfAnalysisStopped();
+                onLog?.('[Pipeline Supervisor] Ensuring residual storyboard kickoffs...', 'process');
+                await awaitPendingStoryboardTasks({
+                    importReport: workingImportReport,
+                    ensureResidual: true,
+                });
+                didWork = true;
+            }
+
+            if (!didWork) {
+                throw new Error(t(
+                    `落库仍未齐套且无可自动补跑动作：${probe.gaps.join('；')}`,
+                    `Persistence still incomplete with no automatic repair actions: ${probe.gaps.join('; ')}`
+                ));
+            }
+
+            if (stagnantRounds >= 3) {
+                throw new Error(t(
+                    `落库缺口连续多轮未缩小，已停止自动重试：${probe.gaps.join('；')}`,
+                    `Persistence gaps did not shrink across retries; stopping auto-repair: ${probe.gaps.join('; ')}`
+                ));
+            }
+
+            const delayMs = Math.min(
+                ANALYSIS_PIPELINE_RETRY_BASE_DELAY_MS * supervisorRound,
+                ANALYSIS_PIPELINE_RETRY_MAX_DELAY_MS
+            );
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+    }, [
+        activeEpisode?.ai_scene_analysis_adaptation,
+        activeEpisode?.ai_scene_analysis_result,
+        activeEpisode?.id,
+        awaitPendingStoryboardTasks,
+        buildStage2_2UserInputFromStage1,
+        ensureStage3AutoStartCache,
+        importScenesFromPerScenePatchMap,
+        isStoryboardAutoStartEnabled,
+        onLog,
+        parseSubjectIndexEntriesForAssetRerun,
+        persistSceneMarkdownBundle,
+        persistSceneMarkdownPatch,
+        projectId,
+        registerActiveAnalysisTask,
+        runAutoImportAndSwitchToScenes,
+        runPostImportSceneSubjectPipeline,
+        runStage2_2WithValidationRetry,
+        saveAnalysisTaskMarker,
+        t,
+        throwIfAnalysisStopped,
+        validateStage2_2BeatsOutput,
+    ]);
+
+    ensureEpisodeAnalysisCompleteByPersistenceRef.current = ensureEpisodeAnalysisCompleteByPersistence;
+
     const phase2RerunSubjectEntries = useMemo(
         () => parseSubjectIndexEntriesForAssetRerun(resolveSubjectIndexTextForAssetRerun()),
         [parseSubjectIndexEntriesForAssetRerun, resolveSubjectIndexTextForAssetRerun]
@@ -21498,226 +22342,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!activeEpisode?.id) return;
         if (isAnalyzing || isRetryingPhase2 || analysisRunInFlightRef.current || phase2GenerationInFlightRef.current) return;
         if (sceneBeatsOnlyRerunInFlightRef.current || autoImportRunningRef.current) return;
-
         const activeRun = getEpisodeAnalysisRun(activeEpisode.id);
         const pendingMarker = loadAnalysisTaskMarker(activeEpisode.id);
         if (activeRun?.promise || pendingMarker?.taskId || analysisResumeInFlightRef.current) return;
 
         const reportStatus = String(analysisUiReport?.status || '').trim().toLowerCase();
-        const runTag = String(analysisUiReport?.runTag || '').trim().toLowerCase();
-        const isSceneBeatsOnlyRerun = runTag === 'scene_beats_only_rerun';
         if (reportStatus !== 'completed') return;
 
+        const runTag = String(analysisUiReport?.runTag || '').trim().toLowerCase();
         const fallbackState = ensureAnalysisFallbackState(activeEpisode.id);
         const reportKey = `${activeEpisode.id}:${analysisUiReport?.startedAt || 0}:${analysisUiReport?.durationMs || 0}:${runTag}:sceneAttempts=${Number(fallbackState?.sceneBeatsAttempts || 0)}:assetAttempts=${Number(fallbackState?.assetAttempts || 0)}:resolvedScenes=${Number(analysisUiReport?.resolvedSceneImportCount || 0)}:stage3Ok=${analysisUiReport?.stage3SubtasksOk ? 1 : 0}`;
         if (autoZeroReportHandledRef.current.key === reportKey) return;
-        if (analysisFallbackRetryRef.current.running) return;
-
-        analysisFallbackRetryRef.current.running = true;
-
-        (async () => {
-            try {
-                if (isSceneBeatsOnlyRerun) {
-                    onLog?.('[Auto Zero Report Rerun] scene-beats-only rerun completed; skipping asset/scene fallback checks.', 'info');
-                    return;
-                }
-
-                const importReport = (analysisUiReport?.importReport && typeof analysisUiReport.importReport === 'object')
-                    ? analysisUiReport.importReport
-                    : {};
-                const scenePostReport = (importReport.sceneSubjectPostImportReport && typeof importReport.sceneSubjectPostImportReport === 'object')
-                    ? importReport.sceneSubjectPostImportReport
-                    : {};
-
-                const snapshotResolvedSceneCount = firstPositiveFiniteNumber(
-                    analysisUiReport?.resolvedSceneImportCount,
-                    lastSceneImportSuccessRef.current?.episodeId === activeEpisode.id
-                        ? lastSceneImportSuccessRef.current?.count
-                        : 0,
-                    resolveImportReportSceneCount(importReport, scenePostReport, null),
-                );
-                const dbSceneCount = snapshotResolvedSceneCount > 0
-                    ? snapshotResolvedSceneCount
-                    : await fetchEpisodeSceneCountWithRetry(fetchScenes, activeEpisode.id);
-                const resolvedSceneCount = firstPositiveFiniteNumber(snapshotResolvedSceneCount, dbSceneCount);
-                const hasPersistedSceneMarkdown = Boolean(String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim());
-
-                const subjectIndexText = resolveSubjectIndexTextForAssetRerun();
-                const subjectIndexEntries = parseSubjectIndexEntriesForAssetRerun(subjectIndexText);
-                const expectedAssetCategories = new Set(
-                    (subjectIndexEntries || []).map((entry) => String(entry?.category || '').trim()).filter(Boolean)
-                );
-
-                const dbEntities = (projectId && activeEpisode?.id)
-                    ? await fetchEntities(projectId, { episode_id: Number(activeEpisode.id) }).catch(() => [])
-                    : [];
-                const subtaskReports = Array.isArray(scenePostReport?.subtaskReports) ? scenePostReport.subtaskReports : [];
-                const hasEntityDesignPayload = hasPersistedEntityDesignPayload(activeEpisode?.ai_entity_design_result);
-                const stage3CompletedOk = Boolean(analysisUiReport?.stage3SubtasksOk)
-                    || (subtaskReports.length > 0 && subtaskReports.every(
-                        (report) => String(report?.status || '').trim().toLowerCase() === 'ok'
-                    ));
-
-                const assetCategorySpecs = [
-                    { key: 'characters', labelZh: '角色', targets: ['characters'], reportType: 'character' },
-                    { key: 'props', labelZh: '道具', targets: ['props'], reportType: 'prop' },
-                    { key: 'environments', labelZh: '场景/环境', targets: ['environments'], reportType: 'environment' },
-                    { key: 'posters', labelZh: '封面/海报', targets: ['posters', 'covers'], reportType: 'poster' },
-                ];
-
-                const pendingAssetTargets = [];
-                const pendingLabels = [];
-
-                if (hasEntityDesignPayload && stage3CompletedOk && expectedAssetCategories.size > 0) {
-                    onLog?.('[Auto Zero Report Rerun] Stage 3 completed with persisted entity design; skipping asset auto-rerun.', 'info');
-                } else {
-                for (const spec of assetCategorySpecs) {
-                    if (!expectedAssetCategories.has(spec.key)) continue;
-
-                    if (isAssetCategorySatisfiedBySubtaskReports(subtaskReports, spec.key)) {
-                        onLog?.(
-                            `[Auto Zero Report Rerun] ${spec.labelZh} Stage 3 subtask ok (created+skipped>0); skipping auto-rerun.`,
-                            'info'
-                        );
-                        continue;
-                    }
-
-                    const insertedCount = resolveImportReportAssetInsertedCount(importReport, spec.reportType);
-                    const skippedCount = resolveImportReportAssetSkippedCount(importReport, spec.reportType);
-                    const handledCount = resolveImportReportAssetHandledCount(importReport, spec.reportType, spec.key);
-                    if (handledCount > 0 && (insertedCount > 0 || skippedCount > 0)) {
-                        onLog?.(
-                            `[Auto Zero Report Rerun] ${spec.labelZh} handled=${handledCount} (created=${insertedCount} skipped=${skippedCount}); skipping auto-rerun.`,
-                            'info'
-                        );
-                        continue;
-                    }
-
-                    const categoryEntries = (subjectIndexEntries || []).filter((entry) => entry?.category === spec.key);
-                    if (categoryEntries.length > 0 && dbEntities.length > 0) {
-                        const coveredCount = countSubjectIndexEntriesCoveredInDb(categoryEntries, spec.reportType, dbEntities);
-                        if (coveredCount >= categoryEntries.length) {
-                            onLog?.(
-                                `[Auto Zero Report Rerun] ${spec.labelZh} already present in DB (${coveredCount}/${categoryEntries.length}); skipping auto-rerun.`,
-                                'info'
-                            );
-                            continue;
-                        }
-                    }
-
-                    pendingLabels.push(spec.labelZh);
-                    spec.targets.forEach((target) => {
-                        if (!pendingAssetTargets.includes(target)) pendingAssetTargets.push(target);
-                    });
-                }
-                }
-
-                const shouldRerunScenes = !isSceneBeatsOnlyRerun
-                    && resolvedSceneCount === 0
-                    && !hasPersistedSceneMarkdown
-                    && canAttemptAnalysisFallback(activeEpisode.id, 'scene_beats')
-                    && Boolean(buildStage1RestartSourceText())
-                    && Boolean(subjectIndexText);
-
-                if (resolvedSceneCount > 0 && onLog) {
-                    onLog?.(`[Auto Zero Report Rerun] scene count resolved=${resolvedSceneCount}; skipping scene beats auto-rerun.`, 'info');
-                } else if (hasPersistedSceneMarkdown && onLog) {
-                    onLog?.('[Auto Zero Report Rerun] scene markdown already persisted; skipping scene beats auto-rerun.', 'info');
-                } else if (isSceneBeatsOnlyRerun && onLog) {
-                    onLog?.('[Auto Zero Report Rerun] scene-beats-only rerun report; skipping scene beats auto-rerun.', 'info');
-                }
-
-                if (pendingAssetTargets.length > 0 && onLog) {
-                    onLog?.(
-                        `[Auto Zero Report Rerun] zero-count asset categories detected from report: ${pendingLabels.join('、')} (expected from subject index=${expectedAssetCategories.size}).`,
-                        'warning'
-                    );
-                } else if (expectedAssetCategories.size > 0 && onLog) {
-                    onLog?.('[Auto Zero Report Rerun] asset categories look healthy (created/skipped/subtasks/DB); skipping asset auto-rerun.', 'info');
-                }
-
-                if (!shouldRerunScenes && pendingAssetTargets.length <= 0) return;
-
-                const shouldRerunAssets = pendingAssetTargets.length > 0
-                    && canAttemptAnalysisFallback(activeEpisode.id, 'asset_gen');
-
-                if (!shouldRerunScenes && !shouldRerunAssets) {
-                    onLog?.(
-                        `[Auto Zero Report Rerun] skipped: fallback retry limit reached (max ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} per category).`,
-                        'warning'
-                    );
-                    return;
-                }
-
-                if (shouldRerunScenes) {
-                    recordAnalysisFallbackAttempt(activeEpisode.id, 'scene_beats');
-                    const remaining = getAnalysisFallbackRemaining(activeEpisode.id, 'scene_beats');
-                    onLog?.(
-                        `[Auto Zero Report Rerun] scenes count is 0, rerunning scene beats (remaining auto retries: ${remaining}).`,
-                        'warning'
-                    );
-                    setAnalysisFlowStatus({
-                        phase: 'scene_beats',
-                        message: t(
-                            `检查报告发现“场景”为 0，正在自动单独重排场景（剩余 ${remaining} 次）...`,
-                            `Report found scenes=0. Auto-rerunning scene beats (${remaining} auto retries left)...`
-                        ),
-                    });
-                    await executeSceneBeatsRerun({ mode: 'all' });
-                }
-
-                if (shouldRerunAssets) {
-                    if (isSceneBeatsOnlyRerun) {
-                        onLog?.('[Auto Zero Report Rerun] skipped asset auto-rerun for scene-beats-only rerun report.', 'info');
-                        return;
-                    }
-                    autoZeroReportHandledRef.current = { key: reportKey, handledAt: Date.now() };
-                    persistAnalysisSessionSnapshot(activeEpisode.id);
-                    const targetEntityTypes = Array.from(new Set(pendingAssetTargets));
-                    const remaining = getAnalysisFallbackRemaining(activeEpisode.id, 'asset_gen');
-                    onLog?.(
-                        `[Auto Zero Report Rerun] asset count is 0, rerunning categories=${targetEntityTypes.join(',')} (remaining auto retries: ${remaining}).`,
-                        'warning'
-                    );
-                    setAnalysisFlowStatus({
-                        phase: 'assets_gen',
-                        message: t(
-                            `检查报告发现 ${pendingLabels.join('、')} 为 0，正在自动单独重跑对应资产类型（剩余 ${remaining} 次）...`,
-                            `Report found zero-count asset categories (${pendingLabels.join(', ')}). Auto-rerunning (${remaining} auto retries left)...`
-                        ),
-                    });
-                    await handleRetryPhase2({ targetEntityTypes, autoZeroReportRerun: true });
-                }
-            } catch (error) {
-                const detail = String(error?.message || error || 'unknown error');
-                onLog?.(`[Auto Zero Report Rerun] failed: ${detail}`, 'warning');
-            } finally {
-                autoZeroReportHandledRef.current = { key: reportKey, handledAt: Date.now() };
-                analysisFallbackRetryRef.current.running = false;
-                persistAnalysisSessionSnapshot(activeEpisode.id);
-            }
-        })();
+        // Persistence-gap retries are owned by the pipeline supervisor (complete / user stop / 30min).
+        autoZeroReportHandledRef.current = { key: reportKey, handledAt: Date.now() };
+        onLog?.('[Auto Zero Report Rerun] skipped: pipeline supervisor owns persistence retries.', 'info');
     }, [
-        activeEpisode?.ai_scene_analysis_scene_markdown,
         activeEpisode?.id,
         analysisUiReport,
-        buildStage1RestartSourceText,
-        canAttemptAnalysisFallback,
-        fetchEntities,
-        fetchScenes,
-        getAnalysisFallbackRemaining,
-        handleRetryPhase2,
-        executeSceneBeatsRerun,
+        ensureAnalysisFallbackState,
         isAnalyzing,
         isRetryingPhase2,
         loadAnalysisTaskMarker,
         onLog,
-        parseSubjectIndexEntriesForAssetRerun,
-        persistAnalysisSessionSnapshot,
-        projectId,
-        recordAnalysisFallbackAttempt,
-        resolveSubjectIndexTextForAssetRerun,
-        t,
     ]);
 
     const phase1AnalysisReport = useMemo(() => {
