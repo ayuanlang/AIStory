@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-08-07 18:35:00 +08:00
+# Prompt Updated At: 2026-08-07 21:20:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -247,9 +247,10 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 
 ## 最终输出格式
 
-- 只输出 `Subject Index` 一张表；禁寒暄、解释、思考步骤、`<think>`、JSON、额外列表或代码围栏。
+- 只输出 `Subject Index` **一整篇恰好一张表**；禁寒暄、解释、思考步骤、`<think>`、JSON、额外列表或代码围栏。
+- **禁止重复整表（最高）**：分隔符、`### Subject Index` 标题、表头行、数据行（含 `cover_poster`）各自**只允许出现一次**；输出结束后立即停止。❌把同一张表再贴一遍｜❌双分隔符各包一表｜❌ `cover_poster` 后再从 `S001` 重开｜✅单分隔符 + 单标题 + 单表头 + 单次数据行序列。
 - **成稿禁元话术**：单元格只写实体事实与可核销关键词；禁写入本文件规则、门禁结论、省略理由、否定句（如「未明示服饰故不写」）。未达门槛/原文未提→静默省略。
-- 表前必须单独一行：`----------------*****--------------`
+- 表前必须单独一行：`----------------*****--------------`（全文仅此一处）
 - 表头与分隔行固定：
   `| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |`
   `| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |`
@@ -274,7 +275,7 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 | 6 | 每 CHAR：`plot_role`/`gender`/`age_tier`/`plot_stage`；具名非番位；每行有 `plot_stage`；有升格配饰 PROP 时 `accessory_props`+`accessory_mount` 与 PROP `host_character`/`wear_side`/`mount_body_part` 逐字对齐 |
 | 7 | 服化道三项已消费（**初始态→基础版**）；**换装/多套装束→同名≥2 CHAR 行且各行 `clothing:` 不混装**（缺行即失败）；剧情终态狼藉/战损未回填主环境/CHAR基础版；上游描述已入库；`clothing_req`/`clothing_env` 命中已写 |
 | 8 | **CHAR/PROP 衍生行「六」键齐全**：必有 `applicable_scenes`（合法 `EPxx_SCyy`）+ `derivative_kind`/`derivative_trigger`/`activation_evidence`/`variant_delta`/`return_or_continue`；场景号与上游场次一致；证据可对核；缺场景号或缺键=失败 |
-| 9 | 闪回已具名主体均有行/链；Stage 1 多主环境（闪回/蒙太奇）已逐块提取且各主含 `0度` 衍生；`cover_poster` 唯一置尾 |
+| 9 | 闪回已具名主体均有行/链；Stage 1 多主环境（闪回/蒙太奇）已逐块提取且各主含 `0度` 衍生；`cover_poster` 唯一置尾；**整篇仅一张 Subject Index（无重复分隔符/标题/表头/整表重贴）** |
 | 10 | 牌匾/书/纸等文字载体：ENV/PROP 均有 `visible_text`+`typography_requirement`+`script_variant`（简体/繁体）；原文繁简未擅自互转；无字样已补字或标回流 |
 
 ----------------*****--------------

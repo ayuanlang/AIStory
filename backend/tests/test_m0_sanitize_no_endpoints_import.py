@@ -59,6 +59,57 @@ def test_sanitize_subject_index_table_before_delimiter():
     assert "S001" in idx
 
 
+def test_sanitize_subject_index_collapses_duplicate_tables():
+    import re
+
+    _drop_modules(("app.services.llm_markdown_sanitize", "app.api.endpoints"))
+    from app.services.llm_markdown_sanitize import sanitize_subject_index_text
+    from app.services.subject_index_resolve import _subject_index_has_usable_content
+
+    table = (
+        "### Subject Index\n"
+        "| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |\n"
+        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+        "| S001 | character | LinYue | Lin Yue | None | None | plot_role:lead | LinYue |\n"
+        "| S002 | cover_poster | Project Cover Poster | Project Cover Poster | LinYue | Lin Yue | poster | poster |\n"
+    )
+    raw = (
+        "----------------*****--------------\n"
+        f"{table}\n"
+        "----------------*****--------------\n"
+        f"{table}"
+    )
+    idx = sanitize_subject_index_text(raw)
+    assert _subject_index_has_usable_content(idx)
+    assert len(re.findall(r"(?im)^\s*\|?\s*S001\s*\|", idx)) == 1
+    assert len(re.findall(r"(?im)^\s*\|?\s*S002\s*\|", idx)) == 1
+    assert len(re.findall(r"(?i)subject\s*index", idx)) == 1
+    assert idx.count("----------------*****--------------") == 0
+
+
+def test_sanitize_subject_index_stops_after_cover_poster_replay():
+    import re
+
+    _drop_modules(("app.services.llm_markdown_sanitize", "app.api.endpoints"))
+    from app.services.llm_markdown_sanitize import sanitize_subject_index_text
+
+    raw = (
+        "### Subject Index\n"
+        "| subject_no | subject_type | subject_name_zh |\n"
+        "| :--- | :--- | :--- |\n"
+        "| S001 | character | LinYue |\n"
+        "| S002 | cover_poster | Project Cover Poster |\n"
+        "\n"
+        "| subject_no | subject_type | subject_name_zh |\n"
+        "| :--- | :--- | :--- |\n"
+        "| S001 | character | LinYue |\n"
+        "| S002 | cover_poster | Project Cover Poster |\n"
+    )
+    idx = sanitize_subject_index_text(raw)
+    assert len(re.findall(r"(?im)^\s*\|?\s*S001\s*\|", idx)) == 1
+    assert idx.lower().count("cover_poster") == 1
+
+
 def test_analyze_scene_stages_import_does_not_load_endpoints():
     _drop_modules(
         (
