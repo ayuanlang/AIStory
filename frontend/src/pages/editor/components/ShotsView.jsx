@@ -1844,13 +1844,27 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const stableShotId = String(shotId);
 
         if (value === true) {
-            const matchedShot = (shots || []).find((item) => String(item?.id) === stableShotId)
-                || (editingShot && String(editingShot?.id) === stableShotId ? editingShot : null);
+            // Prefer the hydrated editing shot — list/compact rows may omit local-only
+            // temp media URLs, which would make regenerate look "not running".
+            const matchedShot = (
+                (editingShot && String(editingShot?.id) === stableShotId ? editingShot : null)
+                || (shots || []).find((item) => String(item?.id) === stableShotId)
+                || (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId
+                    ? editingShotRef.current
+                    : null)
+            );
+            const listShot = (shots || []).find((item) => String(item?.id) === stableShotId);
             const prevBase = generationMediaBaselineRef.current[stableShotId] || {};
             const nextBase = { ...prevBase };
-            if (key === 'start') nextBase.start = String(matchedShot?.image_url || '');
-            if (key === 'end') nextBase.end = String(getShotEndFrameUrl(matchedShot));
-            if (key === 'video') nextBase.video = String(matchedShot?.video_url || '');
+            if (key === 'start') {
+                nextBase.start = String(matchedShot?.image_url || listShot?.image_url || '').trim();
+            }
+            if (key === 'end') {
+                nextBase.end = String(getShotEndFrameUrl(matchedShot) || getShotEndFrameUrl(listShot) || '').trim();
+            }
+            if (key === 'video') {
+                nextBase.video = String(matchedShot?.video_url || listShot?.video_url || '').trim();
+            }
             generationMediaBaselineRef.current[stableShotId] = nextBase;
         } else {
             const prevBase = generationMediaBaselineRef.current[stableShotId] || {};
@@ -2915,16 +2929,24 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             : (generatingStateByShotRef.current?.[stableShotId] || { start: false, end: false, video: false, videoAt: 0 });
         if (!shotState?.video) return false;
 
-        // Local preview already bound to a new URL — never keep blocking the player.
-        const localShot = (
-            (editingShotRef.current && String(editingShotRef.current?.id || '') === stableShotId)
-                ? editingShotRef.current
-                : null
-        ) || (shotsRef.current || []).find((item) => String(item?.id || '') === stableShotId);
-        const localVideoUrl = String(localShot?.video_url || '').trim();
-        const baselineVideoUrl = String(generationMediaBaselineRef.current?.[stableShotId]?.video || '').trim();
-        if (localVideoUrl && localVideoUrl !== baselineVideoUrl) {
-            return false;
+        // Only treat as complete when a baseline was captured at start AND the local
+        // URL moved to a different result. Missing baseline must not hide regenerate UI
+        // (list rows often lack local-only temp video_url).
+        const baselineEntry = generationMediaBaselineRef.current?.[stableShotId];
+        const hasVideoBaseline = Boolean(
+            baselineEntry && Object.prototype.hasOwnProperty.call(baselineEntry, 'video')
+        );
+        if (hasVideoBaseline) {
+            const localShot = (
+                (editingShotRef.current && String(editingShotRef.current?.id || '') === stableShotId)
+                    ? editingShotRef.current
+                    : null
+            ) || (shotsRef.current || []).find((item) => String(item?.id || '') === stableShotId);
+            const localVideoUrl = String(localShot?.video_url || '').trim();
+            const baselineVideoUrl = String(baselineEntry.video || '').trim();
+            if (localVideoUrl && localVideoUrl !== baselineVideoUrl) {
+                return false;
+            }
         }
 
         const statusText = String(videoStatuses?.[stableShotId] || '').trim();
@@ -4056,11 +4078,85 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return await onUpdateShot(editingShot.id, updates);
     };
 
-    const persistEditingShotUpdates = async (updates = {}) => {
-        if (!editingShot?.id) return;
+    const persistEditingShotUpdates = useCallback(async (updates = {}) => {
+        const shotId = editingShotRef.current?.id || editingShot?.id;
+        if (!shotId) return;
         setEditingShot(prev => ({ ...(prev || {}), ...updates }));
-        return await onUpdateShot(editingShot.id, updates);
-    };
+        return await onUpdateShot(shotId, updates);
+    }, [editingShot?.id, onUpdateShot, setEditingShot]);
+
+    /** Add a frame/image URL into start + video ref panels without losing auto refs. */
+    const addUrlToEditingShotRefs = useCallback(async (rawUrl) => {
+        const url = String(rawUrl || '').trim();
+        if (!url) return { changed: false, alreadyExists: false };
+
+        const baseShot = editingShotRef.current || editingShot;
+        if (!baseShot?.id) return { changed: false, alreadyExists: false };
+
+        let nextTech = {};
+        try {
+            nextTech = { ...JSON.parse(baseShot.technical_notes || '{}') };
+        } catch (e) {
+            nextTech = {};
+        }
+
+        const alreadyManual = nextTech.video_ref_image_urls_manual === true
+            || nextTech.video_ref_image_urls_user_edited === true;
+        let videoUrls = Array.isArray(nextTech.video_ref_image_urls)
+            ? normalizeMediaRefList(nextTech.video_ref_image_urls)
+            : [];
+
+        // Entering manual mode from auto: snapshot the currently displayed refs first,
+        // otherwise「加入参考」would replace the whole panel with a single URL.
+        if (!alreadyManual || videoUrls.length === 0) {
+            const displayed = resolveShotVideoActiveRefs({
+                shotLike: baseShot,
+                techObj: nextTech,
+                entityPool: entities,
+                includeAdditionalAutoRefs: true,
+                additionalAutoRefs: resolvePrevContinuationVideoRefs(baseShot.id),
+                preferredEpisodeId: baseShot.episode_id ?? activeEpisode?.id ?? null,
+            });
+            videoUrls = normalizeMediaRefList([...displayed, ...videoUrls]);
+        }
+
+        let startUrls = Array.isArray(nextTech.ref_image_urls)
+            ? normalizeMediaRefList(nextTech.ref_image_urls)
+            : [];
+
+        let changed = false;
+        if (!startUrls.includes(url)) {
+            startUrls = [...startUrls, url];
+            nextTech.ref_image_urls = startUrls;
+            nextTech.ref_image_urls_user_edited = true;
+            changed = true;
+        }
+        if (!videoUrls.includes(url)) {
+            videoUrls = [...videoUrls, url];
+            changed = true;
+        }
+        nextTech.video_ref_image_urls = videoUrls;
+        nextTech.video_ref_image_urls_user_edited = true;
+        nextTech.video_ref_image_urls_manual = true;
+
+        if (Array.isArray(nextTech.deleted_ref_urls) && nextTech.deleted_ref_urls.includes(url)) {
+            nextTech.deleted_ref_urls = nextTech.deleted_ref_urls.filter((item) => String(item || '').trim() !== url);
+            changed = true;
+        }
+
+        if (!changed && alreadyManual && videoUrls.includes(url)) {
+            return { changed: false, alreadyExists: true };
+        }
+
+        await persistEditingShotUpdates({ technical_notes: JSON.stringify(nextTech) });
+        return { changed: true, alreadyExists: false };
+    }, [
+        activeEpisode?.id,
+        editingShot,
+        entities,
+        persistEditingShotUpdates,
+        resolvePrevContinuationVideoRefs,
+    ]);
 
     const handleRestoreShotFromAiStaging = useCallback(async () => {
         if (!editingShot?.id || restoringFromStaging) return;
@@ -12812,10 +12908,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[420px] 2xl:h-[480px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center`}
                                             onClick={() => openAssetDetailModal('video')}
                                         >
-                                            {((currentGeneratingState.video && !editingShot.video_url)
+                                            {(currentGeneratingState.video
                                                 || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
-                                                || (Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`]) && !editingShot.video_url)) && (
-                                                <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
+                                                || Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])) && (
+                                                <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2 pointer-events-none">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
                                                     <span className="text-[10px] text-white/70 animate-pulse">{t(
                                                         videoStatuses[editingShot.id] === 're_downloading' ? '正在处理重下载...' :
@@ -12850,7 +12946,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         className="max-w-full max-h-full object-contain"
                                                         wrapperClassName="w-full h-full"
                                                         preload="metadata"
-                                                        suspend={assetDetailModal.open && assetDetailModal.type === 'video'}
+                                                        suspend={
+                                                            (assetDetailModal.open && assetDetailModal.type === 'video')
+                                                            || currentGeneratingState.video
+                                                            || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
+                                                            || Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])
+                                                        }
                                                         hideBusyOverlay={false}
                                                         uiLang={uiLang}
                                                         onClick={(e) => e?.preventDefault?.()}
@@ -13258,25 +13359,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                                     title={t('加入参考图', 'Add to Refs')}
                                                                                     onClick={async (e) => {
                                                                                         e.stopPropagation();
-                                                                                        const nextTech = { ...JSON.parse(editingShot?.technical_notes || '{}') };
-                                                                                        let changed = false;
-                                                                                        const startUrls = Array.isArray(nextTech.ref_image_urls) ? [...nextTech.ref_image_urls] : [];
-                                                                                        if (!startUrls.includes(frame.url)) {
-                                                                                            startUrls.push(frame.url);
-                                                                                            nextTech.ref_image_urls = startUrls;
-                                                                                            nextTech.ref_image_urls_user_edited = true;
-                                                                                            changed = true;
-                                                                                        }
-                                                                                        const videoUrls = Array.isArray(nextTech.video_ref_image_urls) ? [...nextTech.video_ref_image_urls] : [];
-                                                                                        if (!videoUrls.includes(frame.url)) {
-                                                                                            videoUrls.push(frame.url);
-                                                                                            nextTech.video_ref_image_urls = videoUrls;
-                                                                                            nextTech.video_ref_image_urls_user_edited = true;
-                                                                                            nextTech.video_ref_image_urls_manual = true;
-                                                                                            changed = true;
-                                                                                        }
-                                                                                        if (changed) {
-                                                                                            await persistEditingShotUpdates({ technical_notes: JSON.stringify(nextTech) });
+                                                                                        const result = await addUrlToEditingShotRefs(frame.url);
+                                                                                        if (result.changed) {
                                                                                             onLog?.(t('已加入参考图', 'Added to Refs'), 'success');
                                                                                         } else {
                                                                                             onLog?.(t('参考图已存在', 'Ref already exists'), 'info');
@@ -13414,25 +13498,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     title={t('加入参考图', 'Add to Refs')}
                                                                     onClick={async (e) => {
                                                                         e.stopPropagation();
-                                                                        const nextTech = { ...JSON.parse(editingShot?.technical_notes || '{}') };
-                                                                        let changed = false;
-                                                                        const startUrls = Array.isArray(nextTech.ref_image_urls) ? [...nextTech.ref_image_urls] : [];
-                                                                        if (!startUrls.includes(kf.url)) {
-                                                                            startUrls.push(kf.url);
-                                                                            nextTech.ref_image_urls = startUrls;
-                                                                            nextTech.ref_image_urls_user_edited = true;
-                                                                            changed = true;
-                                                                        }
-                                                                        const videoUrls = Array.isArray(nextTech.video_ref_image_urls) ? [...nextTech.video_ref_image_urls] : [];
-                                                                        if (!videoUrls.includes(kf.url)) {
-                                                                            videoUrls.push(kf.url);
-                                                                            nextTech.video_ref_image_urls = videoUrls;
-                                                                            nextTech.video_ref_image_urls_user_edited = true;
-                                                                            nextTech.video_ref_image_urls_manual = true;
-                                                                            changed = true;
-                                                                        }
-                                                                        if (changed) {
-                                                                            await persistEditingShotUpdates({ technical_notes: JSON.stringify(nextTech) });
+                                                                        const result = await addUrlToEditingShotRefs(kf.url);
+                                                                        if (result.changed) {
                                                                             onLog?.(t('已加入参考图', 'Added to Refs'), 'success');
                                                                         } else {
                                                                             onLog?.(t('参考图已存在', 'Ref already exists'), 'info');

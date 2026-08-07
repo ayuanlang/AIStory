@@ -3341,10 +3341,43 @@ export const extractVideoJobResultUrl = (statusPayload) => {
     ).trim();
 };
 
+/** Tech keys that compact episode shot lists are allowed to refresh into a hydrated editor. */
+const COMPACT_TECH_NOTES_SYNC_KEYS = [
+    'end_frame_url',
+    'prev_shot_frames',
+    'prev_shot_frame_images',
+    'prev_shot_frame_meta',
+    'keyframes',
+    'keyframe_images',
+    'multi_panel_image_url',
+    'multi_panel_image_preset',
+    'storyboard_url',
+    'start_frame_oss_uploaded',
+    'end_frame_oss_uploaded',
+    'video_oss_uploaded',
+    'start_frame_metadata',
+    'end_frame_metadata',
+    'video_metadata',
+];
+
+const LOCAL_MANUAL_REF_TECH_KEYS = [
+    'video_ref_image_urls',
+    'video_ref_image_urls_manual',
+    'video_ref_image_urls_user_edited',
+    'ref_image_urls',
+    'ref_image_urls_user_edited',
+    'end_ref_image_urls',
+    'end_ref_image_urls_user_edited',
+    'deleted_ref_urls',
+];
+
 /**
  * Merge a server/list shot into local shot state without blanking just-generated
  * media that has not been persisted yet (provider temp URLs stay local-only).
  * Prefer durable OSS URLs when the incoming payload has them.
+ *
+ * Compact list `technical_notes` omit ref/manual fields — never let them wipe
+ * hydrated editor refs (e.g. 上镜帧「加入参考」).
  */
 export const mergeShotPreservingLocalMedia = (prevShot, incomingShot, options = {}) => {
     const prev = prevShot && typeof prevShot === 'object' ? prevShot : null;
@@ -3373,18 +3406,66 @@ export const mergeShotPreservingLocalMedia = (prevShot, incomingShot, options = 
     merged.image_url = pickMediaUrl(prev.image_url, incoming.image_url, nextImageDefined);
     merged.video_url = pickMediaUrl(prev.video_url, incoming.video_url, nextVideoDefined);
 
+    const incomingIsCompact = incoming?.is_compact === true;
     if (Object.prototype.hasOwnProperty.call(incoming, 'technical_notes')) {
         const prevTech = parseShotTechnicalNotes(prev.technical_notes);
         const nextTech = parseShotTechnicalNotes(incoming.technical_notes);
-        const prevEnd = String(prevTech?.end_frame_url || '').trim();
-        const nextEnd = String(nextTech?.end_frame_url || '').trim();
-        if (!nextEnd && prevEnd) {
-            nextTech.end_frame_url = prevEnd;
-            merged.technical_notes = JSON.stringify(nextTech);
+
+        if (incomingIsCompact) {
+            // Keep hydrated notes; only refresh compact-known media keys when present.
+            const syncedTech = { ...prevTech };
+            let techChanged = false;
+            COMPACT_TECH_NOTES_SYNC_KEYS.forEach((key) => {
+                if (!Object.prototype.hasOwnProperty.call(nextTech, key)) return;
+                const nextValue = nextTech[key];
+                if (nextValue === undefined || nextValue === null || nextValue === '') return;
+                if (JSON.stringify(syncedTech[key]) !== JSON.stringify(nextValue)) {
+                    syncedTech[key] = nextValue;
+                    techChanged = true;
+                }
+            });
+            merged.technical_notes = techChanged
+                ? JSON.stringify(syncedTech)
+                : (prev.technical_notes ?? JSON.stringify(prevTech));
+        } else {
+            const mergedTech = { ...prevTech, ...nextTech };
+            const prevEnd = String(prevTech?.end_frame_url || '').trim();
+            const nextEnd = String(nextTech?.end_frame_url || '').trim();
+            if (!nextEnd && prevEnd) {
+                mergedTech.end_frame_url = prevEnd;
+            }
+
+            // Protect in-flight manual ref edits if a full fetch races ahead of persist.
+            const prevVideoManual = prevTech.video_ref_image_urls_manual === true
+                || prevTech.video_ref_image_urls_user_edited === true;
+            const nextVideoManual = nextTech.video_ref_image_urls_manual === true
+                || nextTech.video_ref_image_urls_user_edited === true;
+            if (prevVideoManual && !nextVideoManual) {
+                LOCAL_MANUAL_REF_TECH_KEYS.forEach((key) => {
+                    if (Object.prototype.hasOwnProperty.call(prevTech, key)) {
+                        mergedTech[key] = prevTech[key];
+                    }
+                });
+            } else {
+                ['ref_image_urls_user_edited', 'end_ref_image_urls_user_edited'].forEach((flagKey) => {
+                    if (prevTech[flagKey] === true && nextTech[flagKey] !== true) {
+                        const listKey = flagKey.replace(/_user_edited$/, '');
+                        if (Object.prototype.hasOwnProperty.call(prevTech, listKey)) {
+                            mergedTech[listKey] = prevTech[listKey];
+                        }
+                        mergedTech[flagKey] = true;
+                    }
+                });
+            }
+
+            merged.technical_notes = JSON.stringify(mergedTech);
         }
     }
 
     if (options.markHydrated) {
+        merged.is_compact = false;
+    } else if (incomingIsCompact && prev.is_compact === false) {
+        // Never downgrade a hydrated editor shot to a compact stub.
         merged.is_compact = false;
     }
     return merged;

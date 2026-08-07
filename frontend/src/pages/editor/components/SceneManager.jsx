@@ -202,6 +202,9 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         preferredEpisodeId,
     });
 
+    const onUpdateRef = useRef(onUpdate);
+    onUpdateRef.current = onUpdate;
+
     useEffect(() => {
         if (useSequenceLogic || !isVideoRefManager || isVideoManualOverride) return;
 
@@ -220,8 +223,10 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
             ...tech,
             [storageKey]: seededRefs,
         };
-        onUpdate({ technical_notes: JSON.stringify(seededTech) });
-    }, [useSequenceLogic, isVideoRefManager, isVideoManualOverride, shot?.technical_notes, storageKey, shot?.id, shot?.episode_id, resolvedVideoMode, onUpdate, promptText, entities, strictPromptOnly, preferredEpisodeId]);
+        // Use ref so unstable parent onUpdate identity does not re-seed and wipe
+        // in-flight manual「加入参考」writes.
+        onUpdateRef.current?.({ technical_notes: JSON.stringify(seededTech) });
+    }, [useSequenceLogic, isVideoRefManager, isVideoManualOverride, shot?.technical_notes, storageKey, shot?.id, shot?.episode_id, resolvedVideoMode, promptText, entities, strictPromptOnly, preferredEpisodeId]);
 
     let activeRefs = [];
     
