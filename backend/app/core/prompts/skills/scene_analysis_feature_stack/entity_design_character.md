@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
-# Prompt Updated At: 2026-08-02 01:35:00 +08:00
+# Prompt Updated At: 2026-08-07 18:35:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -24,7 +24,8 @@
   - **渲染风格**按 `entity_design_common.md` §1.6 三选一（仅接受显式制式词；都市/职场/纪实/电影级写实等题材标签**不得单独**触发真人专属）：三维→§2.5；二维→§2.6；真人/未声明默认→§2.0–§2.3。
   - 题材/气质映射只提供**视觉语言边界**（材质、光气质、制度层级），**不得**替代个体设计；禁武侠/江湖默认落魄游侠或默认侠女。
 - **[Node 2] 选角落地**：反同质化、合理头身比；真人按 §2.0–§2.3 以面目为绝对重心；三维/二维按 §2.5/§2.6。群演簇改 §2.4。
-- **[Node 3] 依赖**：仅继承道具/环境依赖，不设计非角色实体。
+- **[Node 3] 依赖**：仅继承道具/环境依赖，不设计非角色实体。**配饰 PROP（强制）**：若 Index 该 CHAR 行 `entity_attributes` 含 `accessory_props:{名}|…`，则本实体 `visual_dependencies` **必须**包含对应 `PROP:[{名}]`（名与 Index prop 行 `subject_name_zh` 逐字符一致；多件逐条列入）。换装衍生：Index 该衍生行若仍列 `accessory_props` 则同挂；未列则不挂（勿从基础版臆补）。`dependency_strategy.logic` 须一句说明配饰依赖用途（如「定妆参考随身火机形制/材质，角色图不画手持特写」）。纯装饰、Index 未提为 prop 的配饰只进 `clothing`/`【衣着】`，**禁止**自造 `PROP:[…]`。
+- **[Node 3b] 配饰挂载部位对齐（强制）**：Index 若含 `accessory_mount:{名}@{wear_side}/{mount_body_part}`（或 PROP 行 `wear_side`/`mount_body_part`），角色 `clothing` / `appearance_cn` / `generation_prompt_cn`【衣着】**必须**把该件画在对应身体面与具体部位——与 Index **逐字对齐**（正面=胸前/颈前等只出现在正视图与¾可读正面；背面=后腰/后背只在背视图与侧视可见后背时；左/右侧面同理）。四视图须一致：正面格可见正面挂件、背面格可见背面挂件，禁四格乱挂或漏挂。写配饰铭文/符纹等细节前过 **common 实体物件可视性核验**（该面在该格是否朝镜可读）。缺 `accessory_mount`/`wear_side` 却有 `accessory_props` → 标上游缺口，禁自拟挂胸/挂腰。
 - **[Node 4] 数据封装**：清单只读；`subject_type=trim+lowercase`；仅 `character→characters[]`；单实体单归属。
 
 ---
@@ -44,7 +45,7 @@
 
 - **细节下限**：面目段 ≥8 锚点；`appearance_cn` ≥6；`clothing` ≥7 且 >3 色；三字段合计 >8。
 - 默认宏大美观 + 色调柔和；仅上游明文落魄/战损等才切换。`anchor_description`：3–5 英文短语（禁数组）。
-- **服装**：`clothing` 首句「播出安全等级：成人|非成人。」；须匹配时地/身份的具体款式/材质（禁「某某朝服饰」空壳）；含潮流关键词 + 版型/材质/配色/鞋履，并回写 prompt。**阶段变体（回忆/闪回等）与换装衍生服饰须明显差异，禁简单复制基准装；Index 有几条装束行就出几条独立设计。**基础版服装锁定 Index/服化道**入场初装**——禁把剧情战损/湿透/血污终态画进基础版；此类只出在对应装束/状态衍生行。
+- **服装**：`clothing` 首句「播出安全等级：成人|非成人。」；须匹配时地/身份的具体款式/材质（禁「某某朝服饰」空壳）；含潮流关键词 + 版型/材质/配色/鞋履，并回写 prompt。**阶段变体（回忆/闪回等）与换装衍生服饰须明显差异，禁简单复制基准装；Index 有几条装束行就出几条独立设计。**基础版服装锁定 Index/服化道**入场初装**——禁把剧情战损/湿透/血污终态画进基础版；此类只出在对应装束/状态衍生行。**升格配饰**：`clothing`/【衣着】须含 Index `accessory_mount` 部位短注（如`胸前佩戴玉牌`），与 PROP 依赖形制一致、部位不漂移。
 - **`clothing_req` / `clothing_env`**：见 common §1.2；命中时【衣着】须可检索形制词，潮流/露肤/吊带**不得覆盖**袖袋怀腰下摆依存；湿污场合写可见衣态。
 
 ### 1.3 字段契约与分段标签（权威）
@@ -151,7 +152,7 @@
 - 唯一输出：一个 JSON，仅含 `characters`（无则 `[]`）。
 - 全量覆盖、类型路由正确；`name/name_en/base_name_en` 与 Index **逐字符完全一致**（任一字不等即废弃重写）。
 - **换装核销**：输出前对照 Index 全部 character 行；凡 `base_entity≠None` 的装束/状态衍生均须有独立条目且 `clothing`/`【衣着】` 与基准可区分；缺行或混装=废弃重写。
-- 每实体须有 `visual_dependencies` 与 `dependency_strategy {type, logic}`。
+- 每实体须有 `visual_dependencies` 与 `dependency_strategy {type, logic}`。Index `accessory_props` → 必挂对应 `PROP:[…]`（见 Node 3）；缺挂=废弃。
 - 真人：`description_cn` 含内部光学 rationale + 选角参考；`generation_prompt_cn` 含分段标签 + 七必锚 + 五层可检索 + 光线 1 句；细节面目≥8。
 - 三维/二维：按 §2.5/§2.6；仍须分段标签；不适用七必锚与选角参考。
 - 衍生：`description_cn` 含 Delta（换装写清旧装→新装可见差异）；`generation_prompt_cn` 含参考图声明与 §B/§C；§C 衣着 Delta 不得空泛「换装」。
@@ -181,7 +182,7 @@
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original",
-        "logic": "Original。剧情地位：女主。相貌组合：冷艳骨相型（女主/调查记者）。真人感七必锚 0–6、五层增强 1–5 已覆盖；光学：内部侧逆光+正面 Fill，成图无感。"
+        "logic": "Original。剧情地位：女主。相貌组合：冷艳骨相型（女主/调查记者）。真人感七必锚 0–6、五层增强 1–5 已覆盖；光学：内部侧逆光+正面 Fill，成图无感。本例 Index 无 accessory_props（腕表/耳环等纯装饰只进 clothing）；若有升格配饰 PROP 则 visual_dependencies 须挂 PROP:[…]。"
       }
     }
   ]
