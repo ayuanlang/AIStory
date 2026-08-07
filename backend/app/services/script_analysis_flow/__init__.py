@@ -1800,7 +1800,7 @@ def sync_scene_units_from_script_text(
         parse_source = "scene_markers"
     else:
         try:
-            # Stage 2.2 output contract is Part 1: Scenes Table only.
+            # Stage 2.2 output contract is Scenes Table markdown only (title optional).
             # Parse table first; marker parsing is kept as backward compatibility.
             units = parse_scene_units_from_scenes_table(script_text)
         except SceneMarkerParseError:
@@ -2333,36 +2333,27 @@ def patch_episode_scene_markdown_by_scene(
                 by_scene_map[sid] = entry
                 by_scene_slot["content"] = json.dumps(by_scene_map, ensure_ascii=False, indent=2)
 
-                ordered_markdowns = [
-                    str((item or {}).get("markdown") or "").strip()
-                    for _, item in sorted(
-                        by_scene_map.items(),
-                        key=lambda pair: int((pair[1] or {}).get("scene_order") or 0)
-                        if isinstance(pair[1], dict)
-                        else 0,
-                    )
-                    if isinstance(item, dict) and str((item or {}).get("markdown") or "").strip()
-                ]
-                merged_scene_markdown = merge_scenes_table_markdown_outputs(ordered_markdowns)
-                if merged_scene_markdown:
-                    episode.ai_scene_analysis_scene_markdown = merged_scene_markdown
-                    raw_text_slot = outputs.setdefault(
-                        "raw_text",
-                        {
-                            "key": "raw_text",
-                            "kind": "markdown",
-                            "title": "场景分析原始输出",
-                            "content": "",
-                        },
-                    )
-                    raw_text_slot["content"] = merged_scene_markdown
-                    logger.info(
-                        "[scene_markdown.patch] episode_id=%s scene_id=%s field=ai_scene_analysis_scene_markdown merged_chars=%s scene_count=%s",
-                        episode_id_int,
-                        sid,
-                        len(merged_scene_markdown),
-                        len(by_scene_map),
-                    )
+                # Presence marker only: keep the latest single-scene importable table.
+                # Do not merge multi-scene rows into ai_scene_analysis_scene_markdown.
+                episode.ai_scene_analysis_scene_markdown = md
+                scene_markdown_slot = outputs.setdefault(
+                    "scene_markdown",
+                    {
+                        "key": "scene_markdown",
+                        "kind": "markdown",
+                        "title": "场景分析结果（分场）",
+                        "content": "",
+                    },
+                )
+                scene_markdown_slot["content"] = md
+                scene_markdown_slot["title"] = "场景分析结果（分场）"
+                logger.info(
+                    "[scene_markdown.patch] episode_id=%s scene_id=%s field=scene_markdown_by_scene chars=%s scene_count=%s",
+                    episode_id_int,
+                    sid,
+                    len(md),
+                    len(by_scene_map),
+                )
                 episode.ai_stage_outputs = json.dumps(stage_outputs, ensure_ascii=False, indent=2)
                 db.commit()
                 try:

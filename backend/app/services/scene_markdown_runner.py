@@ -34,7 +34,6 @@ from app.services.script_analysis_flow import (
     extract_scene_markdown_text_from_analyze_result,
     extract_scene_name_value_from_scene_text,
     extract_scenes_table_markdown_block,
-    merge_scenes_table_markdown_outputs,
     patch_episode_scene_markdown_by_scene,
     patch_single_scene_markdown_for_orchestration,
     resolve_scene_units_for_markdown_orchestration,
@@ -115,7 +114,7 @@ async def _run_scene_markdown_node_per_scene(
             "请将 `【场景名称】` 后的 `{短名}｜{日·内/外}` 原样落入 Scene Name 列，并对 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。"
             f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`。"
             "禁止输出思考过程、解释、规划说明或任何非表格内容；"
-            "直接以 Markdown 表格输出 Part 1: Scenes Table（仅含表头、分隔行与本场一行数据）。"
+            "直接以 Markdown 表格输出（仅含表头、分隔行与本场一行数据；不要输出 Part 1: Scenes Table 标题）。"
         )
         single_payload = dict(raw_payload)
         single_payload["text"] = _replace_adapted_script_in_beats_user_input(
@@ -274,7 +273,7 @@ async def _run_scene_markdown_node_per_scene(
                             f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`，"
                             "不得仅填场次序号或其他别名。"
                             "禁止输出思考过程、解释、规划说明或任何非表格内容；"
-                            "直接以 Markdown 表格输出 Part 1: Scenes Table（仅含表头、分隔行与本场一行数据）。"
+                            "直接以 Markdown 表格输出（仅含表头、分隔行与本场一行数据；不要输出 Part 1: Scenes Table 标题）。"
                         )
                         scene_payload = dict(raw_payload)
                         scene_payload["skip_episode_persist"] = True
@@ -719,9 +718,12 @@ async def _run_scene_markdown_node_per_scene(
         )
         last_result = result
 
-    merged_text = merge_scenes_table_markdown_outputs(per_scene_outputs)
-    if not merged_text:
-        raise HTTPException(status_code=422, detail="SCENE_MARKDOWN_MERGE_FAILED")
+    if not per_scene_results:
+        raise HTTPException(status_code=422, detail="SCENE_MARKDOWN_NO_SCENE_OUTPUTS")
+
+    # No episode-level multi-row merge: each scene keeps its own importable table
+    # (already patched via patch_episode_scene_markdown_by_scene).
+    presence_text = str(per_scene_outputs[-1] or "").strip()
 
     orchestration_meta = {
         "per_scene_retried_scene_ids": sorted(retried_scene_ids),
@@ -732,25 +734,25 @@ async def _run_scene_markdown_node_per_scene(
     }
 
     if isinstance(last_result, dict):
-        merged_result = dict(last_result)
-        merged_result["result"] = merged_text
-        merged_result["content"] = merged_text
-        merged_result["scenes_markdown"] = merged_text
-        merged_result["per_scene_count"] = total_scenes
-        merged_result["per_scene_parallel"] = max_concurrency
-        merged_result["per_scene_source"] = scene_units_source
-        merged_result["per_scene_persist_mode"] = "by_scene"
-        merged_result["per_scene_outputs"] = per_scene_results
-        merged_result.update(orchestration_meta)
-        return merged_result
+        result_payload = dict(last_result)
+        result_payload["result"] = presence_text
+        result_payload["content"] = presence_text
+        result_payload["scenes_markdown"] = presence_text
+        result_payload["per_scene_count"] = total_scenes
+        result_payload["per_scene_parallel"] = max_concurrency
+        result_payload["per_scene_source"] = scene_units_source
+        result_payload["per_scene_persist_mode"] = "by_scene_only"
+        result_payload["per_scene_outputs"] = per_scene_results
+        result_payload.update(orchestration_meta)
+        return result_payload
     return {
-        "result": merged_text,
-        "content": merged_text,
-        "scenes_markdown": merged_text,
+        "result": presence_text,
+        "content": presence_text,
+        "scenes_markdown": presence_text,
         "per_scene_count": total_scenes,
         "per_scene_parallel": max_concurrency,
         "per_scene_source": scene_units_source,
-        "per_scene_persist_mode": "by_scene",
+        "per_scene_persist_mode": "by_scene_only",
         "per_scene_outputs": per_scene_results,
         **orchestration_meta,
     }

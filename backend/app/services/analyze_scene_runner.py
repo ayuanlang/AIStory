@@ -367,8 +367,8 @@ async def execute_analyze_scene(
 
 
         # Keep full outputs for stage1/stage2.1/stage2.2.
-        # Stage 2.2 contract is "Part 1: Scenes Table", not SCENES_BLOCK markers,
-        # so do not trim to marker block for beats stage.
+        # Stage 2.2 contract is Scenes Table markdown (header+sep+rows; title optional),
+        # not SCENES_BLOCK markers, so do not trim to marker block for beats stage.
         should_trim_before_submit = False
 
 

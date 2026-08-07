@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-08-06 21:15:00 +08:00
+# Prompt Updated At: 2026-08-07 14:20:00 +08:00
 
 # Skill 1-2-2: 节拍工程映射（Beats-only）
 
@@ -105,9 +105,11 @@ Index 化落位于：`{Beats}` 叙述层（Observer View/建置/环境切换等�
 
 ## 输出形态（强制）
 
-- **仅输出**一个 Markdown 表格，标题固定为：`Part 1: Scenes Table`
+- **仅输出**一个 Markdown 表格：表头行 + 分隔行 + **本场一行**数据；**直接从表头行起笔**
+- **禁止**输出表格标题/章节名（含 `Part 1: Scenes Table` / `### Part 1: …` 等）；系统落库时会为该场单表自行加回
+- **禁止**把多场合成一张总表；本环节按场独立产出、独立可导入
 - **禁止**代码块、解释、思考过程、额外前言/后记
-- 每 Scene **一行**；本环节**主责**是 `{Beats}`
+- 本场 **恰好一行**；本环节**主责**是 `{Beats}`
 - Scene/Beat 数量/顺序/边界以输入 Beat 块为准；同 Scene 全部 Beat 写入同一 `{Beats}`
 - `{Beats}` **必须保留**：
   - 外层：`[BEAT_START:{n}]`…`[BEAT_END:{n}]`
