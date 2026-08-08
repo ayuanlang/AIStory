@@ -6297,6 +6297,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }, []);
 
+    const isSubjectsImportPersistOk = useCallback((importResult) => {
+        if (!importResult || typeof importResult !== 'object') return false;
+        const created = Number(importResult?.createdSubjectItems?.length || 0);
+        const skipped = Number(importResult?.skippedSubjectItems?.length || 0);
+        const counts = importResult?.importedSubjectCounts || {};
+        const countedImported = (
+            Number(counts.character || 0)
+            + Number(counts.prop || 0)
+            + Number(counts.environment || 0)
+            + Number(counts.poster || 0)
+        );
+        return created > 0 || skipped > 0 || countedImported > 0;
+    }, []);
+
     const importSubjectsJsonWithDedupe = useCallback(async (text, options = {}) => {
         const importOptions = (options && typeof options.importOptions === 'object') ? options.importOptions : {};
         const subjectsJson = (options?.subjectsJson && typeof options.subjectsJson === 'object')
@@ -6308,8 +6322,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
         const importReason = String(options?.reason || 'auto-subjects-import').trim() || 'auto-subjects-import';
         const signature = buildSubjectsImportSignature(subjectsJson);
+        const forceRetry = Boolean(options?.forceRetry || importOptions?.forceRetry);
 
-        if (signature && lastAutoSubjectsImportRef.current.signature === signature) {
+        // Only short-circuit on a prior SUCCESS for the same payload.
+        // Caching failed/empty imports made Stage-3 retries permanently stuck at 0 rows.
+        if (
+            !forceRetry
+            && signature
+            && lastAutoSubjectsImportRef.current.signature === signature
+            && isSubjectsImportPersistOk(lastAutoSubjectsImportRef.current.result)
+        ) {
             onLog?.(`[Asset Gen Tracking] Skipped duplicate subjects import (${importReason}); identical payload already imported in this run.`, 'info');
             return lastAutoSubjectsImportRef.current.result || {
                 ok: true,
@@ -6326,12 +6348,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             suppressAlerts: importOptions.suppressAlerts !== false,
         });
 
-        if (signature && importResult) {
+        if (signature && isSubjectsImportPersistOk(importResult)) {
             lastAutoSubjectsImportRef.current = { signature, result: importResult };
+        } else if (
+            signature
+            && lastAutoSubjectsImportRef.current.signature === signature
+            && !isSubjectsImportPersistOk(importResult)
+        ) {
+            // Drop stale failed cache so later retries can try again.
+            lastAutoSubjectsImportRef.current = { signature: '', result: null };
         }
 
         return importResult;
-    }, [buildSubjectsImportSignature, doImportText, getAnalysisEntitiesPayloadFromJsonText, normalizePosterBucketsInSubjectsPayload, onLog]);
+    }, [buildSubjectsImportSignature, doImportText, getAnalysisEntitiesPayloadFromJsonText, isSubjectsImportPersistOk, normalizePosterBucketsInSubjectsPayload, onLog]);
 
     const ensureSubjectsImportedBeforePostChecks = useCallback(async (analysisResult, importReport = null) => {
         const subjectsJson = (analysisResult?.subjects_json && typeof analysisResult.subjects_json === 'object')
@@ -13638,11 +13667,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     if (subCreated <= 0 && subSkipped <= 0 && countedImported <= 0) {
                                         subtaskImportError = String(
                                             subtaskImportReport?.reason
+                                            || subtaskImportReport?.importDiagnostics?.entitiesPayloadSource
                                             || 'import produced zero created/skipped rows'
                                         );
                                         onLog?.(
                                             `[Stage 3 Asset Design] Subtask import empty key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`
-                                            + ` reason=${subtaskImportError} ok=${String(subtaskImportReport?.ok)} changed=${String(subtaskImportReport?.changed)}`,
+                                            + ` reason=${subtaskImportError} ok=${String(subtaskImportReport?.ok)} changed=${String(subtaskImportReport?.changed)}`
+                                            + ` source=${String(subtaskImportReport?.importDiagnostics?.entitiesPayloadSource || 'n/a')}`
+                                            + ` — LLM成功≠已入库；请看本条原因`,
                                             'warning'
                                         );
                                     } else {
@@ -13783,6 +13815,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         {
                             reason: `phase2-subtask-${key}-importonly`,
                             subjectsJson: subtaskPayload,
+                            forceRetry: true,
                             importOptions: {
                                 onLog,
                                 projectId,
@@ -13791,6 +13824,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 targetEntityTypes: subtaskTargetTypes,
                                 overwriteExistingSubjects: Boolean(options?.isRetryPhase2),
                                 suppressAlerts: true,
+                                forceRetry: true,
                             },
                         }
                     );
@@ -13874,6 +13908,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         + (lastPersistFailureSummary ? ` reasons=${lastPersistFailureSummary}` : ''),
                         'warning'
                     );
+                    // Failed empty imports must not block the next persistence attempt.
+                    resetAutoSubjectsImportCache();
                     refreshAssetDesignProgressStatus({
                         pendingKeys: pendingAssetPrompts.map((item) => item.key).filter(Boolean),
                         failureLines: lastPersistFailureLines,
