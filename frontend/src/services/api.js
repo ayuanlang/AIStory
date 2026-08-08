@@ -3896,16 +3896,26 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
             )
     );
     const isTruncatedPayload = Boolean(result?.__truncated__ || data?.__truncated__);
-    if (isTruncatedPayload && !resolvedSubjectsJson) {
-        const bytes = result?.__original_bytes__ || data?.__original_bytes__ || '?';
-        throw new Error(
-            `Script analysis workflow result was truncated (${bytes} bytes) without subjects_json. `
-            + 'Retry with fewer entities (single-entity rerun), or raise ASYNC_TASK_RESULT_MAX_BYTES on the backend.'
-        );
-    }
     // Hoist preserved subjects_json onto the analyze payload when compact truncation stripped nesting.
     if (resolvedSubjectsJson && !(result?.subjects_json && typeof result.subjects_json === 'object')) {
         result = { ...(result && typeof result === 'object' ? result : {}), subjects_json: resolvedSubjectsJson };
+    }
+    // Do not hard-throw on truncation: category import can still recover from subjects_json
+    // or from remaining result text. Soft-flag so callers can report a precise reason.
+    if (isTruncatedPayload) {
+        const hasSubjects = Boolean(
+            resolvedSubjectsJson
+            && typeof resolvedSubjectsJson === 'object'
+            && ['characters', 'props', 'environments', 'posters', 'covers'].some(
+                (key) => Array.isArray(resolvedSubjectsJson[key]) && resolvedSubjectsJson[key].length > 0
+            )
+        );
+        result = {
+            ...(result && typeof result === 'object' ? result : {}),
+            __truncated__: true,
+            __original_bytes__: result?.__original_bytes__ || data?.__original_bytes__ || undefined,
+            __truncated_without_subjects__: !hasSubjects,
+        };
     }
 
     if (!result || typeof result !== 'object') {

@@ -1036,6 +1036,8 @@ const createSceneOrchestrationProgressPoller = ({
 
 /** Legacy Auto Zero fallback cap (supervisor path is not capped by this). */
 const MAX_ANALYSIS_FALLBACK_ATTEMPTS = 2;
+/** Stage-3 per-category persistence retries after the first LLM+import attempt. */
+const MAX_ASSET_PERSIST_RETRY_ROUNDS = 2;
 /** Full script-analysis pipeline wall-clock budget (user stop / completion can end earlier). */
 const ANALYSIS_PIPELINE_MAX_MS = 30 * 60 * 1000;
 const ANALYSIS_PIPELINE_RETRY_BASE_DELAY_MS = 2000;
@@ -2292,7 +2294,10 @@ const canTrustStageArtifactDuringLiveRun = (phase, stepKey, { isLive = false } =
     return phaseIdx > stepIdx;
 };
 
-const isAnalysisLiveStepActive = (phase, stepKey, { isLive = false } = {}) => {
+const isAnalysisLiveStepActive = (phase, stepKey, { isLive = false, stepReady = false } = {}) => {
+    // Once a stage artifact is ready, clear that stage's running UI even if later
+    // stages (or the sibling concurrent branch) are still in flight.
+    if (stepReady) return false;
     if (!isLive) return false;
     const rawPhase = String(phase || '').trim().toLowerCase();
     if (['failed', 'warning', 'completed', 'idle'].includes(rawPhase)) return false;
@@ -13494,13 +13499,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     subtaskImportError = 'import returned non-object result';
                                     onLog?.(`[Stage 3 Asset Design] Subtask import failed key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}: ${subtaskImportError}`, 'warning');
                                 } else {
-                                    const subCreated = subtaskImportReport?.createdSubjectItems?.length || 0;
-                                    const subSkipped = subtaskImportReport?.skippedSubjectItems?.length || 0;
-                                    if (subCreated <= 0 && subSkipped <= 0) {
-                                        subtaskImportError = 'import produced zero created/skipped rows';
-                                        onLog?.(`[Stage 3 Asset Design] Subtask import empty key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`, 'warning');
+                                    const subCreated = Number(subtaskImportReport?.createdSubjectItems?.length || 0);
+                                    const subSkipped = Number(subtaskImportReport?.skippedSubjectItems?.length || 0);
+                                    const counts = subtaskImportReport?.importedSubjectCounts || {};
+                                    const countedImported = (
+                                        Number(counts.character || 0)
+                                        + Number(counts.prop || 0)
+                                        + Number(counts.environment || 0)
+                                        + Number(counts.poster || 0)
+                                    );
+                                    if (subCreated <= 0 && subSkipped <= 0 && countedImported <= 0) {
+                                        subtaskImportError = String(
+                                            subtaskImportReport?.reason
+                                            || 'import produced zero created/skipped rows'
+                                        );
+                                        onLog?.(
+                                            `[Stage 3 Asset Design] Subtask import empty key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`
+                                            + ` reason=${subtaskImportError} ok=${String(subtaskImportReport?.ok)} changed=${String(subtaskImportReport?.changed)}`,
+                                            'warning'
+                                        );
                                     } else {
-                                        onLog?.(`[Stage 3 Asset Design] Subtask import done key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} created=${subCreated} skipped=${subSkipped}`, 'success');
+                                        onLog?.(`[Stage 3 Asset Design] Subtask import done key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} created=${subCreated} skipped=${subSkipped} counted=${countedImported}`, 'success');
                                     }
                                 }
                             } catch (subImportErr) {
@@ -13510,15 +13529,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         } else {
                             const countMeta = res?.subjects_json_count || res?.result?.subjects_json_count || {};
                             const truncated = Boolean(res?.__truncated__ || res?.result?.__truncated__);
+                            const truncatedNoSubjects = Boolean(
+                                res?.__truncated_without_subjects__
+                                || res?.result?.__truncated_without_subjects__
+                            );
+                            const emptyReason = truncatedNoSubjects
+                                ? 'truncated_result_missing_subjects_json'
+                                : (truncated ? 'truncated_result_empty_subjects' : 'llm_json_not_parsed');
                             onLog?.(
                                 `[Stage 3 Asset Design] Subtask has no importable subjects key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`
-                                + ` counts=${JSON.stringify(countMeta)} truncated=${truncated ? 'yes' : 'no'}`
+                                + ` reason=${emptyReason} counts=${JSON.stringify(countMeta)} truncated=${truncated ? 'yes' : 'no'}`
                                 + ` analysis_chars=${String(aText || '').length}`,
                                 'warning'
                             );
+                            subtaskImportError = emptyReason;
                         }
 
                         const completedAssetTaskLabels = assetsGenCompletedKeys.map(getAssetDesignTaskLabel).filter(Boolean).join('、');
+                        const readyCounts = subtaskImportReport?.importedSubjectCounts || {};
+                        const readyCountedImported = (
+                            Number(readyCounts.character || 0)
+                            + Number(readyCounts.prop || 0)
+                            + Number(readyCounts.environment || 0)
+                            + Number(readyCounts.poster || 0)
+                        );
                         const assetImportReady = Boolean(
                             subtaskHasImportableSubjects
                             && subtaskImportReport
@@ -13527,6 +13561,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             && (
                                 Number(subtaskImportReport?.createdSubjectItems?.length || 0) > 0
                                 || Number(subtaskImportReport?.skippedSubjectItems?.length || 0) > 0
+                                || readyCountedImported > 0
                             )
                         );
                         setAnalysisFlowStatus({
@@ -13559,6 +13594,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             const resultByKey = new Map();
             const cachedSubjectsByKey = new Map();
+            const summarizeCategoryFailure = (key, settled) => {
+                if (!settled) return `${key}:missing_result`;
+                if (settled.status === 'rejected') {
+                    const reason = String(settled.reason?.message || settled.reason || 'llm_failed').slice(0, 160);
+                    return `${key}:${reason}`;
+                }
+                const value = settled.value || {};
+                if (value.skippedExisting) return '';
+                const err = String(value.subtaskImportError || '').trim();
+                if (err) return `${key}:${err}`;
+                if (!value.hasImportableSubjects) return `${key}:llm_json_not_parsed`;
+                return `${key}:not_persisted`;
+            };
             const isCategoryPersistOk = (settled) => {
                 if (!settled || settled.status !== 'fulfilled' || !settled.value) return false;
                 if (settled.value.skippedExisting) return true;
@@ -13566,10 +13614,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (!report || typeof report !== 'object') return false;
                 const created = Number(report?.createdSubjectItems?.length || 0);
                 const skipped = Number(report?.skippedSubjectItems?.length || 0);
+                const counts = report?.importedSubjectCounts || {};
+                const countedImported = (
+                    Number(counts.character || 0)
+                    + Number(counts.prop || 0)
+                    + Number(counts.environment || 0)
+                    + Number(counts.poster || 0)
+                );
                 const importErr = String(settled.value?.subtaskImportError || '').trim();
                 // Category completes independently only when that category actually landed in DB
                 // (created or skipped-as-existing). LLM-returned JSON alone is not enough.
-                return !importErr && (created > 0 || skipped > 0);
+                return !importErr && (created > 0 || skipped > 0 || countedImported > 0);
             };
             const importCachedCategorySubjects = async (pData, roundTag = '') => {
                 const key = String(pData.key || '');
@@ -13617,13 +13672,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     } else {
                         const subCreated = Number(subtaskImportReport?.createdSubjectItems?.length || 0);
                         const subSkipped = Number(subtaskImportReport?.skippedSubjectItems?.length || 0);
-                        if (subCreated <= 0 && subSkipped <= 0) {
-                            subtaskImportError = 'import produced zero created/skipped rows';
+                        const counts = subtaskImportReport?.importedSubjectCounts || {};
+                        const countedImported = (
+                            Number(counts.character || 0)
+                            + Number(counts.prop || 0)
+                            + Number(counts.environment || 0)
+                            + Number(counts.poster || 0)
+                        );
+                        if (subCreated <= 0 && subSkipped <= 0 && countedImported <= 0) {
+                            subtaskImportError = String(
+                                subtaskImportReport?.reason
+                                || 'import produced zero created/skipped rows'
+                            );
                         }
                     }
                 } catch (subImportErr) {
                     subtaskImportError = String(subImportErr?.message || subImportErr || 'unknown import error');
                 }
+                const counts = subtaskImportReport?.importedSubjectCounts || {};
+                const countedImported = (
+                    Number(counts.character || 0)
+                    + Number(counts.prop || 0)
+                    + Number(counts.environment || 0)
+                    + Number(counts.poster || 0)
+                );
                 const assetImportReady = Boolean(
                     !subtaskImportError
                     && subtaskImportReport
@@ -13631,6 +13703,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     && (
                         Number(subtaskImportReport?.createdSubjectItems?.length || 0) > 0
                         || Number(subtaskImportReport?.skippedSubjectItems?.length || 0) > 0
+                        || countedImported > 0
                     )
                 );
                 if (key === 'environments' && assetImportReady) {
@@ -13671,20 +13744,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
             let pendingAssetPrompts = [...promptsData];
             let assetRetryRound = 0;
+            let lastPersistFailureSummary = '';
             while (pendingAssetPrompts.length > 0) {
                 throwIfAnalysisStopped();
                 assetRetryRound += 1;
                 if (assetRetryRound > 1) {
                     const retryTypes = pendingAssetPrompts.map((item) => item.key).filter(Boolean).join(', ');
                     onLog?.(
-                        `[Stage 3 Asset Design] Persistence gap — auto-retry round ${assetRetryRound} for incomplete categories only: ${retryTypes || 'unknown'}.`,
+                        `[Stage 3 Asset Design] Persistence gap — auto-retry round ${assetRetryRound} for incomplete categories only: ${retryTypes || 'unknown'}.`
+                        + (lastPersistFailureSummary ? ` reasons=${lastPersistFailureSummary}` : ''),
                         'warning'
                     );
                     setAnalysisFlowStatus({
                         phase: 'assets_gen',
                         message: t(
-                            `资产落库未齐套，正在自动重试未完成分类（第 ${assetRetryRound} 轮）：${retryTypes}`,
-                            `Asset persistence incomplete; auto-retrying unfinished categories (round ${assetRetryRound}): ${retryTypes}`
+                            `资产落库未齐套，正在自动重试未完成分类（第 ${assetRetryRound} 轮）：${retryTypes}${lastPersistFailureSummary ? `（原因：${lastPersistFailureSummary}）` : ''}`,
+                            `Asset persistence incomplete; auto-retrying unfinished categories (round ${assetRetryRound}): ${retryTypes}${lastPersistFailureSummary ? ` (reason: ${lastPersistFailureSummary})` : ''}`
                         ),
                     });
                     const delayMs = Math.min(
@@ -13707,6 +13782,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             if (importOnlySettled && isCategoryPersistOk(importOnlySettled)) {
                                 return importOnlySettled.value;
                             }
+                            // Import-only failed: keep prior failure details, then re-call LLM below.
+                            if (importOnlySettled?.status === 'fulfilled' && importOnlySettled.value) {
+                                resultByKey.set(key, importOnlySettled);
+                            }
                         }
                         const stableIndex = Math.max(0, promptsData.findIndex((item) => item.key === pData.key));
                         return runOneAssetSubtask(
@@ -13725,20 +13804,47 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             cachedSubjectsByKey.set(String(pData.key || ''), settled.value.subjectsJson);
                         }
                     }
+                    if (settled?.status === 'rejected') {
+                        onLog?.(
+                            `[Stage 3 Asset Design] Subtask rejected key=${pData.key}: ${settled.reason?.message || settled.reason}`,
+                            'warning'
+                        );
+                    }
                 });
 
                 const nextPending = [];
+                const failureParts = [];
                 for (const pData of pendingAssetPrompts) {
                     const settled = resultByKey.get(String(pData.key || ''));
                     if (!settled) {
                         nextPending.push(pData);
+                        failureParts.push(`${pData.key}:missing_result`);
                         continue;
                     }
                     if (isCategoryPersistOk(settled)) continue;
                     nextPending.push(pData);
+                    const part = summarizeCategoryFailure(pData.key, settled);
+                    if (part) failureParts.push(part);
                 }
+                lastPersistFailureSummary = failureParts.join('；').slice(0, 360);
 
                 if (nextPending.length <= 0) {
+                    pendingAssetPrompts = [];
+                    break;
+                }
+
+                if (assetRetryRound >= (1 + MAX_ASSET_PERSIST_RETRY_ROUNDS)) {
+                    onLog?.(
+                        `[Stage 3 Asset Design] Stopping persistence retries after ${assetRetryRound} rounds. Remaining: ${nextPending.map((x) => x.key).join(', ')}. ${lastPersistFailureSummary}`,
+                        'warning'
+                    );
+                    setAnalysisFlowStatus({
+                        phase: 'assets_gen',
+                        message: t(
+                            `资产落库仍未齐套，已停止自动重试：${nextPending.map((x) => x.key).join(', ')}${lastPersistFailureSummary ? `（原因：${lastPersistFailureSummary}）` : ''}`,
+                            `Asset persistence still incomplete; stopped auto-retry: ${nextPending.map((x) => x.key).join(', ')}${lastPersistFailureSummary ? ` (reason: ${lastPersistFailureSummary})` : ''}`
+                        ),
+                    });
                     pendingAssetPrompts = [];
                     break;
                 }
@@ -20650,7 +20756,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const openSceneBeatsRerunModal = useCallback(() => {
-        if (!activeEpisode?.id || isAnalyzing) return;
+        // Allow opening scene-beats edit/rerun once Stage 2.1+ is available, even if
+        // asset design / storyboard branches are still running in the main pipeline.
+        if (!activeEpisode?.id || sceneBeatsOnlyRerunInFlightRef.current) return;
 
         const { stage1SourceText, candidates, error: candidateError, adaptedScriptSource } = resolveSceneBeatsRerunCandidates();
         if (!stage1SourceText) {
@@ -20721,7 +20829,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         extractPureSubjectIndexText,
         getStageOutputContent,
         hasUsableSubjectIndexRows,
-        isAnalyzing,
         onLog,
         resolveSceneBeatsRerunCandidates,
         resolveStage1AdaptedScriptText,
@@ -21129,7 +21236,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const openStoryboardRerunModal = useCallback(async () => {
-        if (!activeEpisode?.id || isAnalyzing || isRerunningStoryboard) return;
+        // Storyboard rerun is independent of Stage 1–4 pipeline liveness.
+        if (!activeEpisode?.id || isRerunningStoryboard) return;
         setStoryboardRerunModal({
             open: true,
             mode: 'all',
@@ -21160,7 +21268,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 `Failed to load scene list: ${err?.message || err}`
             ));
         }
-    }, [activeEpisode?.id, buildStoryboardRerunCandidates, isAnalyzing, isRerunningStoryboard, t]);
+    }, [activeEpisode?.id, buildStoryboardRerunCandidates, isRerunningStoryboard, t]);
 
     const confirmStoryboardRerunSelection = useCallback(async () => {
         const mode = String(storyboardRerunModal.mode || 'all').trim().toLowerCase() === 'single' ? 'single' : 'all';
@@ -21204,7 +21312,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const handleDiagnosticPanelImport = useCallback(async (kind) => {
         const stableKind = String(kind || '').trim();
-        if (!stableKind || isAnalyzing || diagnosticImportingKind) return;
+        // Allow importing a completed stage while later pipeline stages are still running.
+        if (!stableKind || diagnosticImportingKind) return;
         setDiagnosticImportingKind(stableKind);
         try {
             if (stableKind === 'script_opt') {
@@ -21391,7 +21500,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         diagnosticImportingKind,
         getStageOutputContent,
         handleImportStageArtifact,
-        isAnalyzing,
         onLog,
         onUpdateScript,
         persistAdaptedScriptEdit,
@@ -23063,7 +23171,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         label: t('回填剧本', 'Restore Script'),
                         icon: 'refresh',
                         onClick: handleRestoreAdaptedScript,
-                        disabled: isAnalyzing || !beatsPortion,
+                        disabled: !beatsPortion,
                         loading: false,
                     },
                     {
@@ -23095,7 +23203,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             importType: 'json',
                             label: 'stage1 project visual backfill',
                         }),
-                        disabled: isAnalyzing || !visualBackfillJson,
+                        disabled: !visualBackfillJson,
                         loading: false,
                     },
                 ],
@@ -23459,7 +23567,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ),
                             { replaceExistingScenes: false }
                         ),
-                        disabled: isAnalyzing || importableSceneEntries.length <= 0,
+                        disabled: importableSceneEntries.length <= 0,
                         loading: false,
                     },
                     {
@@ -23467,8 +23575,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         label: t('重跑覆盖', 'Rerun & Overwrite'),
                         icon: 'refresh',
                         onClick: handleRerunSceneBeatsOnly,
-                        disabled: isAnalyzing || !getStageOutputContent('stage1', 'adapted_script'),
-                        loading: isAnalyzing,
+                        disabled: !getStageOutputContent('stage1', 'adapted_script'),
+                        loading: false,
                     },
                 ],
                 placeholder: t('第二阶段尚未生成场景 Markdown。', 'No Stage 2 scene markdown yet.'),
@@ -23498,7 +23606,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             importType: 'scene',
                             label: `stage2 scene ${sceneId}`,
                         }),
-                        disabled: isAnalyzing || !sceneContent,
+                        disabled: !sceneContent,
                         loading: false,
                     },
                     {
@@ -23506,8 +23614,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         label: t('重跑该场景', 'Rerun This Scene'),
                         icon: 'refresh',
                         onClick: () => executeSceneBeatsRerun({ mode: 'single', sceneId }),
-                        disabled: isAnalyzing || !getStageOutputContent('stage1', 'adapted_script'),
-                        loading: isAnalyzing,
+                        disabled: !getStageOutputContent('stage1', 'adapted_script'),
+                        loading: false,
                     },
                 ],
                 placeholder: t('该场尚未生成场景 Markdown。', 'No scene markdown for this scene yet.'),
@@ -23550,7 +23658,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             importType: 'auto',
                             label: 'stage2 subject index',
                         }),
-                        disabled: isAnalyzing || !subjectIndex,
+                        disabled: !subjectIndex,
                         loading: false,
                     },
                     {
@@ -23606,7 +23714,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         });
                         notifyUiMessage(t('资产设计已导入。', 'Asset design imported.'), 'success', 3200);
                     },
-                    disabled: isAnalyzing || !assetDesignJson,
+                    disabled: !assetDesignJson,
                     loading: false,
                 },
                 {
@@ -23614,7 +23722,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     label: t('选择重跑', 'Choose Rerun'),
                     icon: 'play',
                     onClick: () => openPhase2RerunModal({ mode: 'all' }),
-                    disabled: isAnalyzing || isRetryingPhase2 || !hasAssetGenerationPrerequisite,
+                    disabled: isRetryingPhase2 || !hasAssetGenerationPrerequisite,
                     loading: isRetryingPhase2 && (!phase2RetryOptionsRef.current?.targetEntityTypes),
                 }
             ],
@@ -23670,7 +23778,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 3200
                             );
                         },
-                        disabled: isAnalyzing || !catJson,
+                        disabled: !catJson,
                         loading: false,
                     },
                     {
@@ -23678,7 +23786,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         label: t(cat.btnZh, cat.btnEn),
                         icon: 'repeat',
                         onClick: () => handleRetryPhase2({ targetEntityTypes: cat.key === 'posters' ? ['posters', 'covers'] : [cat.key] }),
-                        disabled: isAnalyzing || isRetryingPhase2 || !hasAssetGenerationPrerequisite,
+                        disabled: isRetryingPhase2 || !hasAssetGenerationPrerequisite,
                         loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes(cat.key),
                     }
                 ],
@@ -23910,7 +24018,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const livePhase = analysisFlowStatus?.phase || 'idle';
                         const analysisLive = analysisProgressDisplay.isLive;
                         const trustArtifact = (stepKey) => canTrustStageArtifactDuringLiveRun(livePhase, stepKey, { isLive: analysisLive });
-                        const stepActive = (stepKey) => isAnalysisLiveStepActive(livePhase, stepKey, { isLive: analysisLive });
                         const hasScriptOptArtifact = Boolean(
                             getStageOutputContent('stage1', 'adapted_script')
                             || String(adaptationText || '').trim()
@@ -23928,15 +24035,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             || workspaceSceneCount > 0
                             || workspaceStoryboardPresent
                         );
-                        const hasAssetDesignArtifact = !!getStageOutputContent('stage3', 'asset_design_json');
+                        const hasAssetDesignArtifact = !!getStageOutputContent('stage3', 'asset_design_json')
+                            || Boolean(String(llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '').trim());
                         const scriptOptReady = hasScriptOptArtifact && trustArtifact('script_opt');
                         const subjectIndexReady = hasSubjectIndexArtifact && trustArtifact('extract_assets');
                         const sceneMarkdownReady = hasSceneMarkdownArtifact && trustArtifact('scene_beats');
                         const assetDesignReady = hasAssetDesignArtifact && trustArtifact('assets_gen');
-                        const scriptOptActive = stepActive('script_opt');
-                        const subjectIndexActive = stepActive('extract_assets');
-                        const sceneMarkdownActive = stepActive('scene_beats');
-                        const assetDesignActive = stepActive('assets_gen');
+                        // Per-stage running UI: clear as soon as that stage's artifact is ready.
+                        const scriptOptActive = isAnalysisLiveStepActive(livePhase, 'script_opt', { isLive: analysisLive, stepReady: scriptOptReady });
+                        const subjectIndexActive = isAnalysisLiveStepActive(livePhase, 'extract_assets', { isLive: analysisLive, stepReady: subjectIndexReady });
+                        const sceneMarkdownActive = isAnalysisLiveStepActive(livePhase, 'scene_beats', { isLive: analysisLive, stepReady: sceneMarkdownReady });
+                        const assetDesignActive = isAnalysisLiveStepActive(livePhase, 'assets_gen', { isLive: analysisLive, stepReady: assetDesignReady })
+                            || Boolean(isRetryingPhase2);
                         const showAssetFailure = workflowCompletenessStats.hasFailedSubtask && (
                             !analysisLive || assetDesignReady
                         );
@@ -23946,25 +24056,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const storyboardSettled = storyboardAutoStarted
                             && !storyboardInFlight
                             && storyboardStartedCount > 0;
-                        // Stage 1 has no workspace import; edit stays enabled after Stage 1 finishes,
-                        // even while later analysis stages are still running.
-                        const canEditScriptOpt = Boolean(scriptOptReady && hasScriptOptArtifact);
-                        // Same for Subject Index: unlock Edit as soon as 2.1 is trusted/ready.
-                        const canEditSubjectIndex = Boolean(subjectIndexReady && hasSubjectIndexArtifact);
-                        const canImportSubjectIndex = Boolean(resolveSubjectIndexEditContent());
+                        // Completed stages unlock edit/import/rerun independently of global isAnalyzing.
+                        const canEditScriptOpt = Boolean(scriptOptReady && hasScriptOptArtifact && !scriptOptActive);
+                        const canEditSubjectIndex = Boolean(subjectIndexReady && hasSubjectIndexArtifact && !subjectIndexActive);
+                        const canEditSceneBeats = Boolean(sceneMarkdownReady && !sceneMarkdownActive);
+                        const canImportSubjectIndex = Boolean(resolveSubjectIndexEditContent()) && !subjectIndexActive;
                         const canImportSceneBeats = Boolean(String(
                             getStageOutputContent('stage2', 'scene_markdown')
                             || activeEpisode?.ai_scene_analysis_scene_markdown
                             || ''
-                        ).trim());
+                        ).trim()) && !sceneMarkdownActive;
                         const canImportStoryboard = Boolean(storyboardCanStart || storyboardStartedCount > 0);
-                        const canImportAssets = Boolean(resolveDiagnosticAssetDesignImport().assetDesignJson);
+                        const canImportAssets = Boolean(resolveDiagnosticAssetDesignImport().assetDesignJson) && !assetDesignActive;
+                        // Per-stage actions unlock when that stage (or its prerequisite) is ready,
+                        // without waiting for the whole pipeline / global isAnalyzing to clear.
+                        // Full Stage1/Stage2 restarts stay blocked while the main pipeline is live
+                        // (they clear downstream work). Scene/asset/storyboard local actions may run.
+                        const canRerunScriptOpt = Boolean(!scriptOptActive && !analysisLive && (scriptOptReady || Boolean(activeEpisode?.id)));
+                        const canRerunSubjectIndex = Boolean(!subjectIndexActive && !analysisLive && (subjectIndexReady || scriptOptReady));
+                        const canRerunSceneBeats = Boolean(!sceneMarkdownActive && (sceneMarkdownReady || subjectIndexReady));
+                        const canRerunAssets = Boolean(!assetDesignActive && (assetDesignReady || subjectIndexReady || hasAssetGenerationPrerequisite));
+                        const canRerunStoryboard = Boolean((storyboardCanStart || storyboardSettled) && !storyboardInFlight && !isRerunningStoryboard);
                         const diagnosticBtnClass = 'text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-40 disabled:cursor-not-allowed hover:text-white transition-colors';
                         const renderImportButton = (kind, enabled) => (
                             <button
                                 type="button"
                                 onClick={() => handleDiagnosticPanelImport(kind)}
-                                disabled={isAnalyzing || !enabled || diagnosticImportingKind === kind}
+                                disabled={!enabled || diagnosticImportingKind === kind}
                                 className={diagnosticBtnClass}
                                 title={enabled
                                     ? t('将当前阶段产物导入工作区', 'Import this stage output into the workspace')
@@ -24005,16 +24123,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         >
                                             {t('编辑', 'Edit')}
                                         </button>
-                                        <button onClick={handleRerunScriptOptOnly} disabled={isAnalyzing} className={diagnosticBtnClass}>
+                                        <button onClick={handleRerunScriptOptOnly} disabled={!canRerunScriptOpt} className={diagnosticBtnClass}>
                                             {t('重跑', 'Rerun')}
                                         </button>
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
                                         {scriptOptActive ? renderProcessingLabel() : (
-                                            <button onClick={handleRerunScriptOptOnly} disabled={isAnalyzing || !activeEpisode?.id} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                                {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                                {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
+                                            <button onClick={handleRerunScriptOptOnly} disabled={!activeEpisode?.id || !canRerunScriptOpt} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                                {t('可重跑', 'Ready')}
                                             </button>
                                         )}
                                     </div>
@@ -24043,16 +24160,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                          >
                                             {t('编辑', 'Edit')}
                                          </button>
-                                         <button onClick={handleRestartStage2} disabled={isAnalyzing} className={diagnosticBtnClass}>
+                                         <button onClick={handleRestartStage2} disabled={!canRerunSubjectIndex} className={diagnosticBtnClass}>
                                             {t('重跑', 'Rerun')}
                                          </button>
                                      </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
                                         {subjectIndexActive ? renderProcessingLabel() : (scriptOptReady ? (
-                                            <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                                {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                                {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
+                                            <button onClick={handleRestartStage2} disabled={!canRerunSubjectIndex} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                                {t('可重跑', 'Ready')}
                                             </button>
                                         ) : (
                                             <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
@@ -24075,31 +24191,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         {renderImportButton('scene_beats', canImportSceneBeats)}
                                         <button
                                             onClick={() => openStageArtifactEditModal('scene_beats')}
-                                            disabled={isAnalyzing || !canImportSceneBeats}
+                                            disabled={!canEditSceneBeats}
                                             className={diagnosticBtnClass}
                                         >
                                             {t('编辑', 'Edit')}
                                         </button>
-                                        <button onClick={handleRerunSceneBeatsOnly} disabled={isAnalyzing} className={diagnosticBtnClass}>
+                                        <button onClick={handleRerunSceneBeatsOnly} disabled={!canRerunSceneBeats} className={diagnosticBtnClass}>
                                             {t('重排', 'Rerun')}
                                         </button>
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
                                         {sceneMarkdownActive ? renderProcessingLabel() : (subjectIndexReady ? (
-                                            <button onClick={handleRerunSceneBeatsOnly} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                                {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                                {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
+                                            <button onClick={handleRerunSceneBeatsOnly} disabled={!canRerunSceneBeats} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                                {t('可重跑', 'Ready')}
                                             </button>
                                         ) : (
                                             <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
                                         ))}
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
                                             {renderImportButton('scene_beats', canImportSceneBeats)}
-                                            {canImportSceneBeats ? (
+                                            {canEditSceneBeats ? (
                                                 <button
                                                     onClick={() => openStageArtifactEditModal('scene_beats')}
-                                                    disabled={isAnalyzing}
+                                                    disabled={!canEditSceneBeats}
                                                     className={diagnosticBtnClass}
                                                 >
                                                     {t('编辑', 'Edit')}
@@ -24139,7 +24254,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         </span>
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
                                             {renderImportButton('assets', canImportAssets)}
-                                            <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                            <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={!canRerunAssets} className="text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                                 {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                                 {isRetryingPhase2 ? t('处理中', 'Processing') : t('重跑失败项', 'Rerun failed')}
                                             </button>
@@ -24149,7 +24264,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                         {renderImportButton('assets', canImportAssets)}
-                                        <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className={`${diagnosticBtnClass} flex items-center gap-1`}>
+                                        <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={!canRerunAssets} className={`${diagnosticBtnClass} flex items-center gap-1`}>
                                             {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                             {t('重跑', 'Rerun')}
                                         </button>
@@ -24157,7 +24272,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
                                         {assetDesignActive ? renderProcessingLabel() : ((subjectIndexReady || hasAssetGenerationPrerequisite) ? (
-                                             <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                             <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={!canRerunAssets} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                                 {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                                 {isRetryingPhase2 ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
                                             </button>
@@ -24215,7 +24330,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             {renderImportButton('storyboard', canImportStoryboard)}
                                             <button
                                                 onClick={handleRerunStoryboardTasks}
-                                                disabled={isAnalyzing || isRerunningStoryboard || storyboardRerunModal.loading}
+                                                disabled={!canRerunStoryboard || storyboardRerunModal.loading}
                                                 className={diagnosticBtnClass}
                                             >
                                                 {t('重跑', 'Rerun')}
@@ -24227,7 +24342,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         {storyboardCanStart ? (
                                             <button
                                                 onClick={handleRerunStoryboardTasks}
-                                                disabled={isAnalyzing || isRerunningStoryboard || storyboardRerunModal.loading}
+                                                disabled={!canRerunStoryboard || storyboardRerunModal.loading}
                                                 className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1"
                                             >
                                                 {(isRerunningStoryboard || storyboardRerunModal.loading) ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
@@ -24353,7 +24468,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         <div className="pt-0.5">
                             <button
                                 onClick={() => openPhase2RerunModal({ mode: 'all' })}
-                                disabled={isAnalyzing || isRetryingPhase2}
+                                disabled={isRetryingPhase2}
                                 className="text-[11px] px-2.5 py-1 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors disabled:opacity-50 inline-flex items-center gap-1"
                             >
                                 {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}

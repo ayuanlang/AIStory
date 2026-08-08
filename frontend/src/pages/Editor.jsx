@@ -1929,7 +1929,9 @@ const Editor = ({
         if (jsonBlocks.length === 0 && !hasScriptTable && !hasSceneTable && !hasShotTable && !projectVisualBackfill) {
 
             addLog("No recognizable markers found.", "error");
-            alert("No supported format detected. Please check your markers.");
+            if (!suppressAlerts) {
+                alert("No supported format detected. Please check your markers.");
+            }
             return {
                 ok: false,
                 changed: false,

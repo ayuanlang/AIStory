@@ -133,15 +133,38 @@ def _compact_task_result(value: Any) -> Any:
             if key in value and not isinstance(value.get(key), (dict, list)):
                 kept[key] = value.get(key)
         # Import-critical fields: keep even when truncating large raw LLM text.
-        if isinstance(value.get("subjects_json"), dict):
-            kept["subjects_json"] = value.get("subjects_json")
+        subjects_json = value.get("subjects_json") if isinstance(value.get("subjects_json"), dict) else None
+        if subjects_json is not None:
+            kept["subjects_json"] = subjects_json
         if isinstance(value.get("subjects_json_count"), dict):
             kept["subjects_json_count"] = value.get("subjects_json_count")
+        subjects_item_count = 0
+        if isinstance(subjects_json, dict):
+            for _bucket in ("characters", "props", "environments", "posters", "covers"):
+                subjects_item_count += len(subjects_json.get(_bucket) or [])
+        # When subjects_json is empty, keep a much larger text preview so frontend can re-parse JSON.
+        text_preview_chars = (
+            max(_RESULT_PREVIEW_MAX_CHARS, 120_000)
+            if subjects_item_count <= 0
+            else _RESULT_PREVIEW_MAX_CHARS
+        )
         nested = value.get("result")
         if isinstance(nested, dict):
             nested_kept: Dict[str, Any] = {}
-            if isinstance(nested.get("subjects_json"), dict):
-                nested_kept["subjects_json"] = nested.get("subjects_json")
+            nested_subjects = nested.get("subjects_json") if isinstance(nested.get("subjects_json"), dict) else None
+            if nested_subjects is not None:
+                nested_kept["subjects_json"] = nested_subjects
+                if subjects_json is None:
+                    kept["subjects_json"] = nested_subjects
+                    subjects_json = nested_subjects
+                    subjects_item_count = 0
+                    for _bucket in ("characters", "props", "environments", "posters", "covers"):
+                        subjects_item_count += len(nested_subjects.get(_bucket) or [])
+                    text_preview_chars = (
+                        max(_RESULT_PREVIEW_MAX_CHARS, 120_000)
+                        if subjects_item_count <= 0
+                        else _RESULT_PREVIEW_MAX_CHARS
+                    )
             if isinstance(nested.get("subjects_json_count"), dict):
                 nested_kept["subjects_json_count"] = nested.get("subjects_json_count")
             for key in ("success", "status", "node_key"):
@@ -149,11 +172,11 @@ def _compact_task_result(value: Any) -> Any:
                     nested_kept[key] = nested.get(key)
             raw_text = nested.get("result")
             if isinstance(raw_text, str) and raw_text:
-                nested_kept["result"] = raw_text[:_RESULT_PREVIEW_MAX_CHARS]
+                nested_kept["result"] = raw_text[:text_preview_chars]
             if nested_kept:
                 kept["result"] = nested_kept
         elif isinstance(nested, str) and nested:
-            kept["result"] = nested[:_RESULT_PREVIEW_MAX_CHARS]
+            kept["result"] = nested[:text_preview_chars]
         return kept
     if isinstance(value, list):
         return {
