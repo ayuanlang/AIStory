@@ -2158,9 +2158,17 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
         [/\[Analysis Resume\]/gi, t('[继续分析]', '[Resume analysis]')],
         [/\[Auto Zero Report Rerun\]/gi, t('[自动补齐]', '[Auto refill]')],
         [/\[分镜生成\]/gi, t('[分镜生成]', '[Storyboard]')],
-        [/Persistence gap — auto-retry/gi, t('落库未齐套，正在自动重试', 'Persistence incomplete; auto-retrying')],
-        [/auto-retry round \d+ for incomplete categories only/gi, t('仅重试未完成分类', 'retry unfinished categories only')],
-        [/Import-only retry/gi, t('仅重试落库', 'import-only retry')],
+        [/Persistence gap — auto-retry/gi, t('分类入库失败，正在按类重试', 'Category import failed; retrying by category')],
+        [/auto-retry round \d+ for incomplete categories only/gi, t('仅重试未入库分类', 'retry unimported categories only')],
+        [/Import-only retry/gi, t('仅重试入库', 'import-only retry')],
+        [/will not re-call LLM for this category/gi, t('该类不再重跑AI生成', 'will not re-call LLM for this category')],
+        [/skipping LLM re-call to avoid duplicate generation/gi, t('跳过重跑AI以避免重复生成', 'skipping LLM re-call to avoid duplicate generation')],
+        [/llm_json_not_parsed/gi, t('AI已返回但未解析到可入库JSON', 'AI returned but no importable JSON parsed')],
+        [/truncated_result_missing_subjects_json/gi, t('结果被截断且缺少结构化资产', 'result truncated without structured assets')],
+        [/truncated_result_empty_subjects/gi, t('结果被截断且资产为空', 'result truncated with empty assets')],
+        [/import produced zero created\/skipped rows/gi, t('导入结果为0条', 'import produced 0 rows')],
+        [/import returned non-object result/gi, t('导入未返回有效结果', 'import returned invalid result')],
+        [/No supported format detected/gi, t('未识别到可导入的资产格式', 'no importable asset format detected')],
         [/Reconnecting to in-progress analysis task/gi, t('正在恢复后台分析进度', 'Restoring background analysis progress')],
         [/\[Scene Units Sync\]/gi, t('[场景同步]', '[Scene sync]')],
         [/\[Stage 2 Asset Index\]/gi, t('[资产清单]', '[Asset inventory]')],
@@ -13121,6 +13129,45 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return labels[key] || String(key || '');
         };
 
+        const describeAssetFailureReason = (rawReason) => {
+            const reason = String(rawReason || '').trim();
+            if (!reason) return t('原因未知', 'unknown reason');
+            const map = [
+                [/llm_json_not_parsed/i, t('AI已返回但未解析到可入库JSON', 'AI returned but no importable JSON parsed')],
+                [/truncated_result_missing_subjects_json/i, t('结果被截断且缺少结构化资产', 'result truncated without structured assets')],
+                [/truncated_result_empty_subjects/i, t('结果被截断且资产为空', 'result truncated with empty assets')],
+                [/import produced zero created\/skipped rows/i, t('导入结果为0条', 'import produced 0 rows')],
+                [/import returned non-object result/i, t('导入未返回有效结果', 'import returned invalid result')],
+                [/No supported format detected/i, t('未识别到可导入的资产格式', 'no importable asset format detected')],
+                [/missing_result/i, t('未收到分类结果', 'missing category result')],
+                [/not_persisted/i, t('未写入实体库', 'not persisted to entity library')],
+                [/llm_failed/i, t('AI任务失败', 'AI task failed')],
+            ];
+            for (const [pattern, label] of map) {
+                if (pattern.test(reason)) return label;
+            }
+            // "characters:some detail" → keep detail, drop english key prefix when possible
+            const stripped = reason.replace(/^(characters|props|environments|posters)\s*[:：]\s*/i, '');
+            return stripped || reason;
+        };
+
+        const formatAssetCategoryFailureLine = (key, settled) => {
+            const label = getAssetDesignTaskLabel(key);
+            if (!settled) return t(`${label}：未收到结果`, `${label}: no result`);
+            if (settled.status === 'rejected') {
+                const detail = describeAssetFailureReason(settled.reason?.message || settled.reason || 'llm_failed');
+                return t(`${label}：${detail}`, `${label}: ${detail}`);
+            }
+            const value = settled.value || {};
+            if (value.skippedExisting) return '';
+            const err = String(value.subtaskImportError || '').trim();
+            if (err) return t(`${label}：${describeAssetFailureReason(err)}`, `${label}: ${describeAssetFailureReason(err)}`);
+            if (!value.hasImportableSubjects) {
+                return t(`${label}：AI已返回但未解析到可入库JSON`, `${label}: AI returned but no importable JSON parsed`);
+            }
+            return t(`${label}：未写入实体库`, `${label}: not persisted`);
+        };
+
         const buildAssetReadyHint = (taskKey) => {
             const label = getAssetDesignTaskLabel(taskKey);
             if (!label) return '';
@@ -13128,6 +13175,44 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 `「${label}」已入库，可前往资产库开始生成`,
                 `"${label}" is ready — open the Assets library to start generation`
             );
+        };
+
+        const buildAssetProgressMessage = ({
+            persistedKeys = [],
+            llmDoneKeys = [],
+            pendingKeys = [],
+            failureLines = [],
+            retryRound = 0,
+            stopped = false,
+        } = {}) => {
+            const persistedLabels = persistedKeys.map(getAssetDesignTaskLabel).filter(Boolean);
+            const pendingLabels = pendingKeys.map(getAssetDesignTaskLabel).filter(Boolean);
+            const llmOnlyKeys = llmDoneKeys.filter((key) => !persistedKeys.includes(key) && pendingKeys.includes(key));
+            const llmOnlyLabels = llmOnlyKeys.map(getAssetDesignTaskLabel).filter(Boolean);
+            const parts = [];
+            if (persistedLabels.length) {
+                parts.push(t(`已入库：${persistedLabels.join('、')}`, `Imported: ${persistedLabels.join(', ')}`));
+            }
+            // Prefer concrete failure lines over the softer "awaiting import" wording.
+            if (llmOnlyLabels.length && failureLines.length === 0) {
+                parts.push(t(`已交稿待入库：${llmOnlyLabels.join('、')}`, `LLM done, awaiting import: ${llmOnlyLabels.join(', ')}`));
+            }
+            const stillRunning = pendingKeys.filter((key) => !llmDoneKeys.includes(key) && !persistedKeys.includes(key));
+            const runningLabels = stillRunning.map(getAssetDesignTaskLabel).filter(Boolean);
+            if (runningLabels.length && retryRound <= 1 && !stopped && failureLines.length === 0) {
+                parts.push(t(`推演中：${runningLabels.join('、')}`, `Generating: ${runningLabels.join(', ')}`));
+            }
+            if (failureLines.length) {
+                parts.push(failureLines.join('；'));
+            } else if (pendingLabels.length && retryRound > 1) {
+                parts.push(t(`待重试：${pendingLabels.join('、')}`, `Retrying: ${pendingLabels.join(', ')}`));
+            }
+            const head = stopped
+                ? t('资产设计入库未完成，已停止自动重试', 'Asset design import incomplete; auto-retry stopped')
+                : (retryRound > 1
+                    ? t(`资产设计按类重试入库（第 ${retryRound} 轮）`, `Asset design category import retry (round ${retryRound})`)
+                    : t('资产设计进行中', 'Asset design in progress'));
+            return `${head}${parts.length ? ` — ${parts.join('；')}` : ''}`;
         };
 
         const promptFilesRaw = [
@@ -13242,7 +13327,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
 
         let assetsGenCompletedCount = 0;
-        const assetsGenCompletedKeys = [];
+        const assetsGenCompletedKeys = []; // persisted / skipped-existing only
+        const assetsLlmDoneKeys = [];
+        let assetRetryRound = 0;
+        let assetPromptKeysSnapshot = [];
 
 
 
@@ -13263,6 +13351,43 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     content: commonPromptContent + "\n\n" + ((await fetchPrompt(p.path).catch(() => null))?.content || "")
                 }))
             );
+            assetPromptKeysSnapshot = promptsData.map((item) => item?.key).filter(Boolean);
+
+            const refreshAssetDesignProgressStatus = ({
+                pendingKeys = null,
+                failureLines = null,
+                stopped = false,
+                highlightHint = '',
+            } = {}) => {
+                const pending = Array.isArray(pendingKeys)
+                    ? pendingKeys.filter(Boolean)
+                    : assetPromptKeysSnapshot.filter((key) => !assetsGenCompletedKeys.includes(key));
+                setAnalysisFlowStatus({
+                    phase: 'assets_gen',
+                    message: buildAssetProgressMessage({
+                        persistedKeys: [...assetsGenCompletedKeys],
+                        llmDoneKeys: [...assetsLlmDoneKeys],
+                        pendingKeys: pending,
+                        failureLines: Array.isArray(failureLines) ? failureLines.filter(Boolean) : [],
+                        retryRound: assetRetryRound,
+                        stopped,
+                    }),
+                    highlightHint: highlightHint || '',
+                });
+            };
+
+            const markAssetCategoryPersisted = (key, { highlightHint = '' } = {}) => {
+                const stableKey = String(key || '').trim();
+                if (!stableKey) return;
+                if (!assetsGenCompletedKeys.includes(stableKey)) {
+                    assetsGenCompletedKeys.push(stableKey);
+                }
+                assetsGenCompletedCount = assetsGenCompletedKeys.length;
+                refreshAssetDesignProgressStatus({
+                    pendingKeys: assetPromptKeysSnapshot.filter((k) => !assetsGenCompletedKeys.includes(k)),
+                    highlightHint,
+                });
+            };
 
             const pureSubjectIndexText = extractPureSubjectIndexText(subjectIndexTextForDesign);
             
@@ -13375,10 +13500,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ),
                             'info'
                         );
-                        assetsGenCompletedCount += 1;
-                        if (pData.key && !assetsGenCompletedKeys.includes(pData.key)) {
-                            assetsGenCompletedKeys.push(pData.key);
+                        if (pData.key && !assetsLlmDoneKeys.includes(pData.key)) {
+                            assetsLlmDoneKeys.push(pData.key);
                         }
+                        markAssetCategoryPersisted(pData.key, {
+                            highlightHint: buildAssetReadyHint(pData.key),
+                        });
                         if (pData.key === 'environments') {
                             markEnvironmentAssetDesignReady(`env-skip-existing:${subtaskTraceId}`);
                         }
@@ -13455,11 +13582,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const aText = extractAnalysisTextFromResult(res);
                         const bJson = resolveSubjectsJsonFromAnalyzeResult(res, aText);
 
-                        assetsGenCompletedCount += 1;
-                        if (pData.key && !assetsGenCompletedKeys.includes(pData.key)) {
-                            assetsGenCompletedKeys.push(pData.key);
+                        if (pData.key && !assetsLlmDoneKeys.includes(pData.key)) {
+                            assetsLlmDoneKeys.push(pData.key);
                         }
                         onLog?.(`[Stage 3 Asset Design] Subtask completed key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}${responseTraceId ? ` response_trace_id=${responseTraceId}` : ''}`, 'info');
+                        refreshAssetDesignProgressStatus();
 
                         const subtaskPayload = buildSubtaskSubjectsPayload(pData.key, bJson || {});
                         let subtaskImportReport = null;
@@ -13545,7 +13672,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             subtaskImportError = emptyReason;
                         }
 
-                        const completedAssetTaskLabels = assetsGenCompletedKeys.map(getAssetDesignTaskLabel).filter(Boolean).join('、');
                         const readyCounts = subtaskImportReport?.importedSubjectCounts || {};
                         const readyCountedImported = (
                             Number(readyCounts.character || 0)
@@ -13564,14 +13690,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 || readyCountedImported > 0
                             )
                         );
-                        setAnalysisFlowStatus({
-                            phase: "assets_gen",
-                            message: t(
-                                `✨ 第四阶段资产推演中 (${assetsGenCompletedCount}/${targetAssetsCount} 已完成${completedAssetTaskLabels ? `：${completedAssetTaskLabels}` : ''})...`,
-                                `Running Stage 4 asset design (${assetsGenCompletedCount}/${targetAssetsCount} completed${completedAssetTaskLabels ? `: ${completedAssetTaskLabels.replace(/、/g, ', ')}` : ''})...`
-                            ),
-                            highlightHint: assetImportReady ? buildAssetReadyHint(pData.key) : '',
-                        });
+                        if (assetImportReady) {
+                            markAssetCategoryPersisted(pData.key, {
+                                highlightHint: buildAssetReadyHint(pData.key),
+                            });
+                        } else {
+                            // Round-1 mid-flight: distinguish "LLM done awaiting import" vs "imported".
+                            // Concrete per-category failure lines are shown when the batch decides to retry.
+                            refreshAssetDesignProgressStatus();
+                        }
 
                         // Storyboard gate: ENV asset design only — never open on character/prop completion.
                         if (pData.key === 'environments' && assetImportReady) {
@@ -13714,15 +13841,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         `[Stage 3 Asset Design] Import-only retry succeeded key=${key} created=${Number(subtaskImportReport?.createdSubjectItems?.length || 0)} skipped=${Number(subtaskImportReport?.skippedSubjectItems?.length || 0)}`,
                         'success'
                     );
-                    if (key && !assetsGenCompletedKeys.includes(key)) {
-                        assetsGenCompletedKeys.push(key);
-                    }
-                    setAnalysisFlowStatus({
-                        phase: 'assets_gen',
-                        message: t(
-                            `✨ 第四阶段资产推演中 (${assetsGenCompletedKeys.length}/${targetAssetsCount} 已完成${assetsGenCompletedKeys.map(getAssetDesignTaskLabel).filter(Boolean).join('、') ? `：${assetsGenCompletedKeys.map(getAssetDesignTaskLabel).filter(Boolean).join('、')}` : ''})...`,
-                            `Running Stage 4 asset design (${assetsGenCompletedKeys.length}/${targetAssetsCount} completed)...`
-                        ),
+                    markAssetCategoryPersisted(key, {
                         highlightHint: buildAssetReadyHint(key),
                     });
                 }
@@ -13743,8 +13862,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 };
             };
             let pendingAssetPrompts = [...promptsData];
-            let assetRetryRound = 0;
             let lastPersistFailureSummary = '';
+            let lastPersistFailureLines = [];
             while (pendingAssetPrompts.length > 0) {
                 throwIfAnalysisStopped();
                 assetRetryRound += 1;
@@ -13755,12 +13874,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         + (lastPersistFailureSummary ? ` reasons=${lastPersistFailureSummary}` : ''),
                         'warning'
                     );
-                    setAnalysisFlowStatus({
-                        phase: 'assets_gen',
-                        message: t(
-                            `资产落库未齐套，正在自动重试未完成分类（第 ${assetRetryRound} 轮）：${retryTypes}${lastPersistFailureSummary ? `（原因：${lastPersistFailureSummary}）` : ''}`,
-                            `Asset persistence incomplete; auto-retrying unfinished categories (round ${assetRetryRound}): ${retryTypes}${lastPersistFailureSummary ? ` (reason: ${lastPersistFailureSummary})` : ''}`
-                        ),
+                    refreshAssetDesignProgressStatus({
+                        pendingKeys: pendingAssetPrompts.map((item) => item.key).filter(Boolean),
+                        failureLines: lastPersistFailureLines,
                     });
                     const delayMs = Math.min(
                         ANALYSIS_PIPELINE_RETRY_BASE_DELAY_MS * assetRetryRound,
@@ -13768,24 +13884,48 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     );
                     await new Promise((resolve) => setTimeout(resolve, delayMs));
                     throwIfAnalysisStopped();
+                } else {
+                    refreshAssetDesignProgressStatus({
+                        pendingKeys: pendingAssetPrompts.map((item) => item.key).filter(Boolean),
+                    });
                 }
 
                 const batchResults = await Promise.allSettled(
                     pendingAssetPrompts.map(async (pData, index) => {
                         const key = String(pData.key || '');
-                        // Category-level: if prior LLM already returned subjects_json, retry import only.
+                        // If this category already has parseable subjects_json, NEVER re-call LLM.
+                        // Re-generation causes duplicate design work and can create duplicate entities.
+                        // Retries are import-only until persist OK / DB coverage / retry budget exhausted.
                         if (assetRetryRound > 1 && cachedSubjectsByKey.has(key)) {
                             const importOnlySettled = await importCachedCategorySubjects(
                                 pData,
                                 `-r${assetRetryRound}`
                             );
-                            if (importOnlySettled && isCategoryPersistOk(importOnlySettled)) {
+                            if (importOnlySettled) {
+                                if (!isCategoryPersistOk(importOnlySettled)) {
+                                    onLog?.(
+                                        `[Stage 3 Asset Design] Import-only retry still failing key=${key};`
+                                        + ' keeping cached subjects_json and will not re-call LLM for this category.',
+                                        'warning'
+                                    );
+                                }
                                 return importOnlySettled.value;
                             }
-                            // Import-only failed: keep prior failure details, then re-call LLM below.
-                            if (importOnlySettled?.status === 'fulfilled' && importOnlySettled.value) {
-                                resultByKey.set(key, importOnlySettled);
-                            }
+                            onLog?.(
+                                `[Stage 3 Asset Design] Cached subjects_json present but import-only retry returned null key=${key};`
+                                + ' skipping LLM re-call to avoid duplicate generation.',
+                                'warning'
+                            );
+                            return (
+                                resultByKey.get(key)?.value
+                                || {
+                                    key,
+                                    subjectsJson: cachedSubjectsByKey.get(key),
+                                    hasImportableSubjects: true,
+                                    subtaskImportReport: null,
+                                    subtaskImportError: 'import_only_retry_returned_null',
+                                }
+                            );
                         }
                         const stableIndex = Math.max(0, promptsData.findIndex((item) => item.key === pData.key));
                         return runOneAssetSubtask(
@@ -13814,19 +13954,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 const nextPending = [];
                 const failureParts = [];
+                const failureLines = [];
                 for (const pData of pendingAssetPrompts) {
                     const settled = resultByKey.get(String(pData.key || ''));
                     if (!settled) {
                         nextPending.push(pData);
                         failureParts.push(`${pData.key}:missing_result`);
+                        failureLines.push(formatAssetCategoryFailureLine(pData.key, null));
                         continue;
                     }
-                    if (isCategoryPersistOk(settled)) continue;
+                    if (isCategoryPersistOk(settled)) {
+                        markAssetCategoryPersisted(pData.key, {
+                            highlightHint: buildAssetReadyHint(pData.key),
+                        });
+                        continue;
+                    }
                     nextPending.push(pData);
                     const part = summarizeCategoryFailure(pData.key, settled);
                     if (part) failureParts.push(part);
+                    const line = formatAssetCategoryFailureLine(pData.key, settled);
+                    if (line) failureLines.push(line);
                 }
                 lastPersistFailureSummary = failureParts.join('；').slice(0, 360);
+                lastPersistFailureLines = failureLines;
 
                 if (nextPending.length <= 0) {
                     pendingAssetPrompts = [];
@@ -13838,12 +13988,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         `[Stage 3 Asset Design] Stopping persistence retries after ${assetRetryRound} rounds. Remaining: ${nextPending.map((x) => x.key).join(', ')}. ${lastPersistFailureSummary}`,
                         'warning'
                     );
-                    setAnalysisFlowStatus({
-                        phase: 'assets_gen',
-                        message: t(
-                            `资产落库仍未齐套，已停止自动重试：${nextPending.map((x) => x.key).join(', ')}${lastPersistFailureSummary ? `（原因：${lastPersistFailureSummary}）` : ''}`,
-                            `Asset persistence still incomplete; stopped auto-retry: ${nextPending.map((x) => x.key).join(', ')}${lastPersistFailureSummary ? ` (reason: ${lastPersistFailureSummary})` : ''}`
-                        ),
+                    refreshAssetDesignProgressStatus({
+                        pendingKeys: nextPending.map((x) => x.key).filter(Boolean),
+                        failureLines: lastPersistFailureLines,
+                        stopped: true,
                     });
                     pendingAssetPrompts = [];
                     break;
@@ -13892,6 +14040,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         subtaskImportError: '',
                                     },
                                 });
+                                markAssetCategoryPersisted(pData.key, {
+                                    highlightHint: buildAssetReadyHint(pData.key),
+                                });
                                 continue;
                             }
                             stillMissing.push(pData);
@@ -13916,10 +14067,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             throwIfAnalysisStopped();
 
             const completedAssetTaskLabels = assetsGenCompletedKeys.map(getAssetDesignTaskLabel).filter(Boolean).join('、');
-            const assetsGenCompleteMessage = t(
-                `✅ 第四阶段资产推演已完成 (${assetsGenCompletedCount}/${targetAssetsCount}${completedAssetTaskLabels ? `：${completedAssetTaskLabels}` : ''})`,
-                `Stage 4 asset design completed (${assetsGenCompletedCount}/${targetAssetsCount}${completedAssetTaskLabels ? `: ${completedAssetTaskLabels.replace(/、/g, ', ')}` : ''})`
-            );
+            const unfinishedKeys = assetPromptKeysSnapshot.filter((key) => !assetsGenCompletedKeys.includes(key));
+            const unfinishedLines = unfinishedKeys
+                .map((key) => formatAssetCategoryFailureLine(key, resultByKey.get(key)))
+                .filter(Boolean);
+            const assetsGenCompleteMessage = unfinishedKeys.length > 0
+                ? buildAssetProgressMessage({
+                    persistedKeys: [...assetsGenCompletedKeys],
+                    llmDoneKeys: [...assetsLlmDoneKeys],
+                    pendingKeys: unfinishedKeys,
+                    failureLines: unfinishedLines,
+                    retryRound: Math.max(assetRetryRound, 2),
+                    stopped: true,
+                })
+                : t(
+                    `✅ 第四阶段资产设计已入库完成 (${assetsGenCompletedCount}/${targetAssetsCount}${completedAssetTaskLabels ? `：${completedAssetTaskLabels}` : ''})`,
+                    `Stage 4 asset design imported (${assetsGenCompletedCount}/${targetAssetsCount}${completedAssetTaskLabels ? `: ${completedAssetTaskLabels.replace(/、/g, ', ')}` : ''})`
+                );
             finalizeAnalysisFlowHistoryForPhase('assets_gen', assetsGenCompleteMessage);
             setAnalysisFlowStatus({
                 phase: 'assets_gen',
