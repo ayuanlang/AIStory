@@ -1759,6 +1759,17 @@ const Editor = ({
         const importedSubjectCounts = { character: 0, prop: 0, environment: 0, poster: 0 };
         const createdSubjectItems = [];
         const skippedSubjectItems = [];
+        const failedSubjectItems = [];
+        const recordFailedSubject = (type, entityName, entityNameEn, reason) => {
+            const item = {
+                type: String(type || '').trim().toLowerCase() || 'unknown',
+                name: String(entityName || '').trim(),
+                name_en: String(entityNameEn || '').trim(),
+                reason: String(reason || 'unknown').trim() || 'unknown',
+            };
+            failedSubjectItems.push(item);
+            return item;
+        };
         const normalizeImportTargetType = (value) => {
             const key = String(value || '').trim().toLowerCase();
             if (!key) return '';
@@ -1929,6 +1940,16 @@ const Editor = ({
         if (jsonBlocks.length === 0 && !hasScriptTable && !hasSceneTable && !hasShotTable && !projectVisualBackfill) {
 
             addLog("No recognizable markers found.", "error");
+            addLog(
+                `[Asset Import Failure] reason=No supported format detected.`
+                + ` mode=${effectiveImportType}`
+                + ` source=${importDiagnostics.entitiesPayloadSource}`
+                + ` has_subjectsJson=${Boolean(importOptions?.subjectsJson)}`
+                + ` target_types=${Array.isArray(targetTypeFilters) ? targetTypeFilters.join(',') || 'none' : 'all'}`
+                + ` text_chars=${String(text || '').length}`
+                + ` episode_id=${importEpisodeId ?? 'null'}`,
+                'error'
+            );
             if (!suppressAlerts) {
                 alert("No supported format detected. Please check your markers.");
             }
@@ -1937,6 +1958,9 @@ const Editor = ({
                 changed: false,
                 reason: 'No supported format detected.',
                 importedSubjectCounts,
+                createdSubjectItems,
+                skippedSubjectItems,
+                failedSubjectItems,
                 importStats,
                 importDiagnostics,
                 postImportStatusNote,
@@ -2137,10 +2161,11 @@ const Editor = ({
                                 addLog(`Skipped entity payload named '${entityName}' (it matched subject index fallback rules).`, 'warning');
                                 continue;
                             }
-                            if (!entityName) {
-                                addLog('Skipped character entity without name aliases (name/subject_name_exact/name_en).', 'warning');
+                             if (!entityName) {
+                                          addLog('Skipped character entity without name aliases (name/subject_name_exact/name_en).', 'warning');
+                                recordFailedSubject('character', entityNameEn || '(unnamed)', entityNameEn, 'missing_name');
                                 continue;
-                            }
+                             }
                             const existingForName = existingEntityMap.get(normalizeEntityKey('character', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('character', entityNameEn)) : null);
                             if (existingForName && isSameEpisodeSubject(existingForName)) {
                                 logSkippedExistingSubject('character', entityName, entityNameEn);
@@ -2203,8 +2228,12 @@ const Editor = ({
                                         name_en: entityNameEn || '',
                                         id: created.id,
                                     });
+                                } else {
+                                    recordFailedSubject('character', entityName, entityNameEn, 'createEntity returned no id');
+                                    addLog(`Character import failed (${entityName}): createEntity returned no id`, 'warning');
                                 }
                             } catch (err) {
+                                recordFailedSubject('character', entityName, entityNameEn, err?.message || err);
                                 addLog(`Character import failed (${entityName}): ${err?.message || err}`, 'warning');
                             }
                         }
@@ -2225,6 +2254,7 @@ const Editor = ({
                              if (skipSubjectIndex(entityName, entityNameEn)) continue;
                              if (!entityName) {
                                           addLog('Skipped prop entity without name aliases (name/subject_name_exact/name_en).', 'warning');
+                                recordFailedSubject('prop', entityNameEn || '(unnamed)', entityNameEn, 'missing_name');
                                 continue;
                              }
                              const existingPropForName = existingEntityMap.get(normalizeEntityKey('prop', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('prop', entityNameEn)) : null);
@@ -2279,8 +2309,12 @@ const Editor = ({
                                         name_en: entityNameEn || '',
                                         id: created.id,
                                     });
+                                } else {
+                                    recordFailedSubject('prop', entityName, entityNameEn, 'createEntity returned no id');
+                                    addLog(`Prop import failed (${entityName}): createEntity returned no id`, 'warning');
                                 }
                             } catch (err) {
+                                recordFailedSubject('prop', entityName, entityNameEn, err?.message || err);
                                 addLog(`Prop import failed (${entityName}): ${err?.message || err}`, 'warning');
                             }
                         }
@@ -2301,6 +2335,7 @@ const Editor = ({
                              if (skipSubjectIndex(entityName, entityNameEn)) continue;
                              if (!entityName) {
                                           addLog('Skipped environment entity without name aliases (name/subject_name_exact/name_en).', 'warning');
+                                recordFailedSubject('environment', entityNameEn || '(unnamed)', entityNameEn, 'missing_name');
                                 continue;
                              }
                              const existingEnvForName = existingEntityMap.get(normalizeEntityKey('environment', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('environment', entityNameEn)) : null);
@@ -2363,8 +2398,12 @@ const Editor = ({
                                         name_en: entityNameEn || '',
                                         id: created.id,
                                     });
+                                } else {
+                                    recordFailedSubject('environment', entityName, entityNameEn, 'createEntity returned no id');
+                                    addLog(`Environment import failed (${entityName}): createEntity returned no id`, 'warning');
                                 }
                             } catch (err) {
+                                recordFailedSubject('environment', entityName, entityNameEn, err?.message || err);
                                 addLog(`Environment import failed (${entityName}): ${err?.message || err}`, 'warning');
                             }
                         }
@@ -2386,6 +2425,7 @@ const Editor = ({
                              if (skipSubjectIndex(entityName, entityNameEn)) continue;
                              if (!entityName) {
                                           addLog('Skipped poster entity without name aliases (name/subject_name_exact/name_en).', 'warning');
+                                recordFailedSubject('poster', entityNameEn || '(unnamed)', entityNameEn, 'missing_name');
                                 continue;
                              }
                              const existingPoster = existingEntityMap.get(normalizeEntityKey('poster', entityName))
@@ -2447,6 +2487,7 @@ const Editor = ({
                                         addLog(`Updated existing poster subject during import: ${entityName}${entityNameEn ? ` / ${entityNameEn}` : ''}`, 'success');
                                     }
                                 } catch (err) {
+                                    recordFailedSubject('poster', entityName, entityNameEn, err?.message || err);
                                     addLog(`Poster update failed (${entityName}): ${err?.message || err}`, 'warning');
                                 }
                                 continue;
@@ -2501,8 +2542,12 @@ const Editor = ({
                                         name_en: entityNameEn || '',
                                         id: created.id,
                                     });
+                                } else {
+                                    recordFailedSubject('poster', entityName, entityNameEn, 'createEntity returned no id');
+                                    addLog(`Poster import failed (${entityName}): createEntity returned no id`, 'warning');
                                 }
                             } catch (err) {
+                                recordFailedSubject('poster', entityName, entityNameEn, err?.message || err);
                                 addLog(`Poster import failed (${entityName}): ${err?.message || err}`, 'warning');
                             }
                         }
@@ -2525,12 +2570,28 @@ const Editor = ({
                                 `Entities block matched existing subjects only; no overwrite performed. Reused existing subjects: character=${skippedExistingSubjectCounts.character}, prop=${skippedExistingSubjectCounts.prop}, environment=${skippedExistingSubjectCounts.environment}, poster=${skippedExistingSubjectCounts.poster}.`,
                                 'info'
                             );
+                            // Skipped-as-existing still counts as successful persistence for Stage 3.
+                            changesMade = true;
                         } else {
+                            const failPreview = failedSubjectItems
+                                .slice(0, 8)
+                                .map((item) => `${item.type}:${item.name || '(unnamed)'}=${item.reason}`)
+                                .join('；');
                             addLog('Entities block found but no importable subjects were created.', 'warning');
+                            addLog(
+                                `[Asset Import Failure] reason=entities_block_zero_created`
+                                + ` planned=character:${plannedCharacterCount},prop:${plannedPropCount},environment:${plannedEnvironmentCount},poster:${plannedPosterCount}`
+                                + ` failed=${failedSubjectItems.length}`
+                                + (failPreview ? ` detail=${failPreview}` : '')
+                                + ` episode_id=${importEpisodeId ?? 'null'}`
+                                + ` source=${importDiagnostics.entitiesPayloadSource}`,
+                                'error'
+                            );
                         }
                     }
                 } catch (e) {
                     addLog(`Entity Import Failed: ${e.message}`, "error");
+                    addLog(`[Asset Import Failure] reason=entity_block_exception message=${e?.message || e}`, 'error');
                     console.error(e);
                 }
             }
@@ -3425,6 +3486,8 @@ const Editor = ({
                 );
             }
             if (postImportStatusNote) summaryLines.push(postImportStatusNote);
+            // Always persist summary to system log — Stage 3 uses suppressAlerts and previously swallowed this.
+            addLog(summaryLines.join('\n'), 'success');
             if (!suppressAlerts) {
                 const toastMessage = [
                     'Import Successful!',
@@ -3433,7 +3496,6 @@ const Editor = ({
                     `Shots=${importStats.shotsCreated}`,
                 ].join(' · ');
                 notifyUiMessage(toastMessage, 'success', 4200);
-                addLog(summaryLines.join('\n'), 'success');
             }
             return {
                 ok: true,
@@ -3441,6 +3503,7 @@ const Editor = ({
                 importedSubjectCounts,
                 createdSubjectItems,
                 skippedSubjectItems,
+                failedSubjectItems,
                 importedSceneRows,
                 sceneSubjectAutoSupplementReport,
                 dbPersistedCounts,
@@ -3451,23 +3514,51 @@ const Editor = ({
                 summaryLines,
             };
         } else {
+            const failPreview = failedSubjectItems
+                .slice(0, 8)
+                .map((item) => `${item.type}:${item.name || '(unnamed)'}=${item.reason}`)
+                .join('；');
+            const noChangeReason = failedSubjectItems.length > 0
+                ? `create_failed:${failedSubjectItems.length}`
+                : (
+                    importDiagnostics.entitiesPayloadSource === 'none'
+                        ? 'no_entities_payload'
+                        : 'zero_created_or_skipped'
+                );
             const noChangeLines = [
                 'Import finished, but no new data was applied.',
                 'Please verify table headers and entities JSON keys.',
                 `Import mode: requested=${requestedImportType}, effective=${effectiveImportType}`,
                 `Parse diagnostics: source=${importDiagnostics.entitiesPayloadSource}, subject_index_rows=${importDiagnostics.subjectIndexTableRows}, subject_index_extracted=${importDiagnostics.subjectIndexExtracted}, generic_json_blocks=${importStats.genericJsonBlocks}`,
                 `Markers: script=${importDiagnostics.markers.script}, scene=${importDiagnostics.markers.scene}, shot=${importDiagnostics.markers.shot}`,
+                `Subjects: created=${createdSubjectItems.length}, skipped=${skippedSubjectItems.length}, failed=${failedSubjectItems.length}`,
+                `Failure reason=${noChangeReason}`,
             ];
+            if (failPreview) noChangeLines.push(`Failed detail=${failPreview}`);
+            // Always log — suppressAlerts must not hide Stage 3 import failures.
+            addLog(noChangeLines.join('\n'), 'warning');
+            addLog(
+                `[Asset Import Failure] reason=${noChangeReason}`
+                + ` source=${importDiagnostics.entitiesPayloadSource}`
+                + ` created=${createdSubjectItems.length}`
+                + ` skipped=${skippedSubjectItems.length}`
+                + ` failed=${failedSubjectItems.length}`
+                + ` episode_id=${importEpisodeId ?? 'null'}`
+                + ` target_types=${Array.isArray(targetTypeFilters) ? targetTypeFilters.join(',') || 'none' : 'all'}`
+                + (failPreview ? ` detail=${failPreview}` : ''),
+                'error'
+            );
             if (!suppressAlerts) {
                 notifyUiMessage('Import finished, but no new data was applied.', 'warning', 4200);
-                addLog(noChangeLines.join('\n'), 'warning');
             }
             return {
                 ok: true,
                 changed: false,
+                reason: noChangeReason,
                 importedSubjectCounts,
                 createdSubjectItems,
                 skippedSubjectItems,
+                failedSubjectItems,
                 importedSceneRows,
                 sceneSubjectAutoSupplementReport,
                 dbPersistedCounts,

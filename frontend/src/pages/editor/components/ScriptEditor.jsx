@@ -2169,6 +2169,11 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
         [/import produced zero created\/skipped rows/gi, t('导入结果为0条', 'import produced 0 rows')],
         [/import returned non-object result/gi, t('导入未返回有效结果', 'import returned invalid result')],
         [/No supported format detected/gi, t('未识别到可导入的资产格式', 'no importable asset format detected')],
+        [/\[Asset Import Failure\]/gi, t('[资产入库失败]', '[Asset Import Failure]')],
+        [/entities_block_zero_created/gi, t('实体块解析到了但创建0条', 'entities block parsed but created 0')],
+        [/zero_created_or_skipped/gi, t('创建与跳过均为0', 'zero created or skipped')],
+        [/no_entities_payload/gi, t('未解析到实体JSON', 'no entities payload')],
+        [/create_failed:/gi, t('创建实体失败:', 'create failed:')],
         [/Reconnecting to in-progress analysis task/gi, t('正在恢复后台分析进度', 'Restoring background analysis progress')],
         [/\[Scene Units Sync\]/gi, t('[场景同步]', '[Scene sync]')],
         [/\[Stage 2 Asset Index\]/gi, t('[资产清单]', '[Asset inventory]')],
@@ -13197,6 +13202,57 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return t(`${label}：未写入实体库`, `${label}: not persisted`);
         };
 
+        const logAssetImportFailureDiagnostic = (key, {
+            traceId = '',
+            importReport = null,
+            importError = '',
+            subjectsPayload = null,
+            phase = 'import',
+        } = {}) => {
+            const label = getAssetDesignTaskLabel(key);
+            const counts = importReport?.importedSubjectCounts || {};
+            const created = Number(importReport?.createdSubjectItems?.length || 0);
+            const skipped = Number(importReport?.skippedSubjectItems?.length || 0);
+            const failedItems = Array.isArray(importReport?.failedSubjectItems) ? importReport.failedSubjectItems : [];
+            const planned = {
+                characters: Array.isArray(subjectsPayload?.characters) ? subjectsPayload.characters.length : 0,
+                props: Array.isArray(subjectsPayload?.props) ? subjectsPayload.props.length : 0,
+                environments: Array.isArray(subjectsPayload?.environments) ? subjectsPayload.environments.length : 0,
+                posters: (Array.isArray(subjectsPayload?.posters) ? subjectsPayload.posters.length : 0)
+                    + (Array.isArray(subjectsPayload?.covers) ? subjectsPayload.covers.length : 0),
+            };
+            const failPreview = failedItems
+                .slice(0, 8)
+                .map((item) => `${item?.type || '?'}:${item?.name || '(unnamed)'}=${item?.reason || '?'}`)
+                .join('；');
+            const reason = String(
+                importError
+                || importReport?.reason
+                || (failedItems.length ? `create_failed:${failedItems.length}` : '')
+                || 'import produced zero created/skipped rows'
+            ).trim();
+            onLog?.(
+                t(
+                    `[资产入库失败] ${label} phase=${phase}`
+                    + ` reason=${describeAssetFailureReason(reason)}`
+                    + ` planned=角色${planned.characters}/道具${planned.props}/环境${planned.environments}/海报${planned.posters}`
+                    + ` created=${created} skipped=${skipped} failed=${failedItems.length}`
+                    + ` counts=c${Number(counts.character || 0)}/p${Number(counts.prop || 0)}/e${Number(counts.environment || 0)}/po${Number(counts.poster || 0)}`
+                    + ` source=${String(importReport?.importDiagnostics?.entitiesPayloadSource || 'n/a')}`
+                    + (traceId ? ` trace=${traceId}` : '')
+                    + (failPreview ? ` detail=${failPreview}` : ''),
+                    `[Asset Import Failure] ${label} phase=${phase}`
+                    + ` reason=${describeAssetFailureReason(reason)}`
+                    + ` planned=char${planned.characters}/prop${planned.props}/env${planned.environments}/poster${planned.posters}`
+                    + ` created=${created} skipped=${skipped} failed=${failedItems.length}`
+                    + ` source=${String(importReport?.importDiagnostics?.entitiesPayloadSource || 'n/a')}`
+                    + (traceId ? ` trace=${traceId}` : '')
+                    + (failPreview ? ` detail=${failPreview}` : '')
+                ),
+                'error'
+            );
+        };
+
         const buildAssetReadyHint = (taskKey) => {
             const label = getAssetDesignTaskLabel(taskKey);
             if (!label) return '';
@@ -13653,7 +13709,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 );
                                 if (!subtaskImportReport || typeof subtaskImportReport !== 'object') {
                                     subtaskImportError = 'import returned non-object result';
-                                    onLog?.(`[Stage 3 Asset Design] Subtask import failed key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}: ${subtaskImportError}`, 'warning');
+                                    logAssetImportFailureDiagnostic(pData.key, {
+                                        traceId: subtaskTraceId,
+                                        importError: subtaskImportError,
+                                        subjectsPayload: subtaskPayload,
+                                        phase: 'import',
+                                    });
                                 } else {
                                     const subCreated = Number(subtaskImportReport?.createdSubjectItems?.length || 0);
                                     const subSkipped = Number(subtaskImportReport?.skippedSubjectItems?.length || 0);
@@ -13667,23 +13728,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     if (subCreated <= 0 && subSkipped <= 0 && countedImported <= 0) {
                                         subtaskImportError = String(
                                             subtaskImportReport?.reason
-                                            || subtaskImportReport?.importDiagnostics?.entitiesPayloadSource
                                             || 'import produced zero created/skipped rows'
                                         );
-                                        onLog?.(
-                                            `[Stage 3 Asset Design] Subtask import empty key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`
-                                            + ` reason=${subtaskImportError} ok=${String(subtaskImportReport?.ok)} changed=${String(subtaskImportReport?.changed)}`
-                                            + ` source=${String(subtaskImportReport?.importDiagnostics?.entitiesPayloadSource || 'n/a')}`
-                                            + ` — LLM成功≠已入库；请看本条原因`,
-                                            'warning'
-                                        );
+                                        logAssetImportFailureDiagnostic(pData.key, {
+                                            traceId: subtaskTraceId,
+                                            importReport: subtaskImportReport,
+                                            importError: subtaskImportError,
+                                            subjectsPayload: subtaskPayload,
+                                            phase: 'import',
+                                        });
                                     } else {
                                         onLog?.(`[Stage 3 Asset Design] Subtask import done key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} created=${subCreated} skipped=${subSkipped} counted=${countedImported}`, 'success');
                                     }
                                 }
                             } catch (subImportErr) {
                                 subtaskImportError = String(subImportErr?.message || subImportErr || 'unknown import error');
-                                onLog?.(`[Stage 3 Asset Design] Subtask import failed key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}: ${subImportErr?.message || subImportErr}`, 'warning');
+                                logAssetImportFailureDiagnostic(pData.key, {
+                                    traceId: subtaskTraceId,
+                                    importError: subtaskImportError,
+                                    subjectsPayload: subtaskPayload,
+                                    phase: 'import_exception',
+                                });
                             }
                         } else {
                             const countMeta = res?.subjects_json_count || res?.result?.subjects_json_count || {};
@@ -13695,13 +13760,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const emptyReason = truncatedNoSubjects
                                 ? 'truncated_result_missing_subjects_json'
                                 : (truncated ? 'truncated_result_empty_subjects' : 'llm_json_not_parsed');
+                            subtaskImportError = emptyReason;
                             onLog?.(
                                 `[Stage 3 Asset Design] Subtask has no importable subjects key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`
                                 + ` reason=${emptyReason} counts=${JSON.stringify(countMeta)} truncated=${truncated ? 'yes' : 'no'}`
                                 + ` analysis_chars=${String(aText || '').length}`,
                                 'warning'
                             );
-                            subtaskImportError = emptyReason;
+                            logAssetImportFailureDiagnostic(pData.key, {
+                                traceId: subtaskTraceId,
+                                importError: emptyReason,
+                                subjectsPayload: subtaskPayload,
+                                phase: 'parse',
+                            });
                         }
 
                         const readyCounts = subtaskImportReport?.importedSubjectCounts || {};
@@ -13877,6 +13948,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     );
                     markAssetCategoryPersisted(key, {
                         highlightHint: buildAssetReadyHint(key),
+                    });
+                } else {
+                    logAssetImportFailureDiagnostic(key, {
+                        traceId: subtaskTraceId,
+                        importReport: subtaskImportReport,
+                        importError: subtaskImportError || 'import_only_retry_failed',
+                        subjectsPayload: subtaskPayload,
+                        phase: 'import_only_retry',
                     });
                 }
                 return {
