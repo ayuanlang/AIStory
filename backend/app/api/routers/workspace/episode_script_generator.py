@@ -29,6 +29,11 @@ from app.schemas.episode_requests import (  # noqa: E402,F401
     EPISODE_SCENE_GEN_STATUS_KEY,
     ScriptScenesGenerateRequest,
 )
+from app.services.emergency_recovery_block import (  # noqa: E402,F401
+    audit_emergency_recovery_block,
+    build_previous_episode_handoff_prompt_block,
+    format_emergency_recovery_reject_message,
+)
 
 def _read_episode_scene_generation_status(episode: Episode) -> Dict[str, Any]:
     try:
@@ -1391,21 +1396,40 @@ async def generate_project_episode_scripts_from_global_framework(
             prev_ep = by_idx.get(idx - 1)
             _prev_ep_db = db.query(Episode).filter(Episode.id == prev_ep.id).first() if prev_ep else None
             if not _prev_ep_db:
-                 prev_ep_id_temp = next((ed["id"] for ed in episodes_data if ed.get("idx") == idx - 1), None)
-                 if prev_ep_id_temp:
-                     _prev_ep_db = db.query(Episode).get(prev_ep_id_temp)
-            
+                prev_ep_id_temp = next((ed["id"] for ed in episodes_data if ed.get("idx") == idx - 1), None)
+                if prev_ep_id_temp:
+                    _prev_ep_db = db.query(Episode).get(prev_ep_id_temp)
+
             p_text = getattr(_prev_ep_db, "script_content", None) or getattr(prev_ep, "script_content", None)
-            if p_text and p_text.strip():
-                p_text_clean = p_text.strip()
-                last_500 = p_text_clean[-500:]
+            if p_text and str(p_text).strip():
+                handoff = build_previous_episode_handoff_prompt_block(
+                    str(p_text),
+                    previous_episode_number=int(idx - 1),
+                    current_episode_number=int(idx),
+                )
+                prev_episode_block = str(handoff.get("prompt_block") or "")
+                logger.info(
+                    "[generate_episode_scripts] PREV_EPISODE_HANDOFF episode_number=%s prev_episode=%s "
+                    "has_emergency_recovery=%s has_bridge=%s has_ending_tail=%s missing=%s",
+                    idx,
+                    idx - 1,
+                    handoff.get("has_emergency_recovery_block"),
+                    handoff.get("has_bridge_block"),
+                    handoff.get("has_ending_tail"),
+                    handoff.get("missing_blocks"),
+                )
+            else:
+                logger.warning(
+                    "[generate_episode_scripts] PREV_EPISODE_HANDOFF_MISSING_SCRIPT "
+                    "episode_number=%s prev_episode=%s",
+                    idx,
+                    idx - 1,
+                )
                 prev_episode_block = (
-                    "Previous Episode Context (Constraint):\n"
-                    f"- The previous episode (Episode {idx - 1}) script ends with the following text.\n"
-                    "- You must ensure the opening of the current episode (Episode {idx}) connects logically with this ending.\n"
-                    "```markdown\n"
-                    f"...{last_500}\n"
-                    "```\n\n"
+                    "Previous Episode Handoff (Hard Constraint — MUST consume before writing):\n"
+                    f"- Source: Episode {idx - 1} → writing Episode {idx}.\n"
+                    "- WARNING: previous episode script_content is empty. "
+                    "Use Global Story DNA Carry-in / Hook Ledger only; do not invent conflicting prior events.\n\n"
                 )
 
         episode_language = _pick_first_text(
@@ -1529,6 +1553,42 @@ async def generate_project_episode_scripts_from_global_framework(
                     f"LLM episode heading mismatch: expected episode {idx}, got episode {llm_episode_number}. Import blocked."
                 )
 
+            recovery_audit = audit_emergency_recovery_block(content, episode_number=int(idx))
+            if int(idx) >= 2 and not recovery_audit.get("ok"):
+                logger.error(
+                    "[generate_episode_scripts] EMERGENCY_RECOVERY_BLOCK_REJECTED "
+                    "episode_number=%s episode_id=%s ok=%s applicable=%r item_count=%s issues=%s",
+                    idx,
+                    ep_id,
+                    recovery_audit.get("ok"),
+                    recovery_audit.get("applicable"),
+                    recovery_audit.get("item_count"),
+                    recovery_audit.get("issues"),
+                )
+                raise RuntimeError(
+                    format_emergency_recovery_reject_message(recovery_audit, episode_number=int(idx))
+                )
+            if not recovery_audit.get("ok"):
+                logger.warning(
+                    "[generate_episode_scripts] EMERGENCY_RECOVERY_BLOCK_AUDIT "
+                    "episode_number=%s episode_id=%s ok=%s applicable=%r item_count=%s issues=%s",
+                    idx,
+                    ep_id,
+                    recovery_audit.get("ok"),
+                    recovery_audit.get("applicable"),
+                    recovery_audit.get("item_count"),
+                    recovery_audit.get("issues"),
+                )
+            else:
+                logger.info(
+                    "[generate_episode_scripts] EMERGENCY_RECOVERY_BLOCK_AUDIT "
+                    "episode_number=%s episode_id=%s ok=True applicable=%r item_count=%s",
+                    idx,
+                    ep_id,
+                    recovery_audit.get("applicable"),
+                    recovery_audit.get("item_count"),
+                )
+
             usage = (generated_payload or {}).get("usage") if isinstance(generated_payload, dict) else {}
             if not usage:
                 usage = billing_service.estimate_input_output_tokens_from_messages(
@@ -1582,6 +1642,7 @@ async def generate_project_episode_scripts_from_global_framework(
                     ei["episode_script_source"] = "promo_global_framework_plus_project_character_canon"
                 else:
                     ei["episode_script_source"] = "project_global_framework_plus_project_character_canon"
+                ei["emergency_recovery_block_audit"] = recovery_audit
                 ep_db.episode_info = ei
                 logger.info(
                     "[generate_episode_scripts] PERSIST_PREPARE episode_number=%s episode_id=%s previous_title=%r next_title=%r episode_info_title=%r script_chars=%s",
