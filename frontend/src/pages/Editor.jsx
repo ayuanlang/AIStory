@@ -2150,7 +2150,8 @@ const Editor = ({
                                 // Use format expected by the backend/prompts
                                 char.visual_dependencies.push(`existing_id:${reuseFromOtherEpisode.id}`);
                             }
-                            const desc = [
+                            const promptCn = String(char.generation_prompt_cn || '').trim();
+                            const desc = promptCn || [
                                 `Name (EN): ${entityNameEn || char.name_en || ''}`,
                                 `Description: ${char.description_cn || char.description || char.narrative_description || ''}`,
                                 `Role: ${char.role}`,
@@ -2158,7 +2159,6 @@ const Editor = ({
                                 `Appearance: ${char.appearance_cn}`,
                                 `Clothing: ${char.clothing}`,
                                 `Action: ${char.action_characteristics}`,
-                                char.generation_prompt_cn ? `Prompt (CN): ${char.generation_prompt_cn}` : '',
                                 `Prompt: ${char.generation_prompt_en}`,
                                 char.negative_prompt_en ? `Negative Prompt: ${char.negative_prompt_en}` : ''
                             ].filter(Boolean).join('\n\n');
@@ -2169,7 +2169,7 @@ const Editor = ({
                                     type: 'character',
                                     episode_id: importEpisodeId || undefined,
                                     description: desc,
-                                    generation_prompt_cn: char.generation_prompt_cn || '',
+                                    generation_prompt_cn: promptCn || char.generation_prompt_cn || '',
                                     generation_prompt_en: char.generation_prompt_en || '',
                                     anchor_description: normalizeAnchorDescription(char.anchor_description),
 
@@ -2235,11 +2235,11 @@ const Editor = ({
                                     prop.visual_dependencies = Array.isArray(prop.visual_dependencies) ? prop.visual_dependencies : (typeof prop.visual_dependencies === 'string' ? [prop.visual_dependencies] : []);
                                     prop.visual_dependencies.push(`existing_id:${reusePropFromOtherEpisode.id}`);
                              }
-                             const desc = [
+                             const promptCn = String(prop.generation_prompt_cn || '').trim();
+                             const desc = promptCn || [
                                           `Name (EN): ${entityNameEn || prop.name_en || ''}`,
                                 `Type: ${prop.type}`, // inner type from JSON
                                           `Description: ${prop.description_cn || prop.description || ''}`,
-                                prop.generation_prompt_cn ? `Prompt (CN): ${prop.generation_prompt_cn}` : '',
                                 `Prompt: ${prop.generation_prompt_en}`,
                                 prop.negative_prompt_en ? `Negative Prompt: ${prop.negative_prompt_en}` : '',
                                 prop.dependency_strategy?.logic ? `Dependency: ${prop.dependency_strategy.logic}` : ''
@@ -2251,7 +2251,7 @@ const Editor = ({
                                     type: 'prop',
                                     episode_id: importEpisodeId || undefined,
                                     description: desc,
-                                    generation_prompt_cn: prop.generation_prompt_cn || '',
+                                    generation_prompt_cn: promptCn || prop.generation_prompt_cn || '',
                                     generation_prompt_en: prop.generation_prompt_en || '',
                                     anchor_description: normalizeAnchorDescription(prop.anchor_description),
 
@@ -2315,12 +2315,12 @@ const Editor = ({
                                         'info'
                                     );
                              }
-                             const desc = [
+                             const promptCn = String(env.generation_prompt_cn || '').trim();
+                             const desc = promptCn || [
                                           `Name (EN): ${entityNameEn || env.name_en || ''}`,
                                 `Atmosphere: ${env.atmosphere}`,
                                 `Visual Params: ${env.visual_params}`,
                                           `Description: ${env.description_cn || env.description || env.narrative_description || ''}`,
-                                env.generation_prompt_cn ? `Prompt (CN): ${env.generation_prompt_cn}` : '',
                                 `Prompt: ${env.generation_prompt_en}`,
                                 env.negative_prompt_en ? `Negative Prompt: ${env.negative_prompt_en}` : ''
                             ].filter(Boolean).join('\n\n');
@@ -2331,7 +2331,7 @@ const Editor = ({
                                     type: 'environment',
                                     episode_id: importEpisodeId || undefined,
                                     description: desc,
-                                    generation_prompt_cn: env.generation_prompt_cn || '',
+                                    generation_prompt_cn: promptCn || env.generation_prompt_cn || '',
                                     generation_prompt_en: env.generation_prompt_en || '',
                                     anchor_description: normalizeAnchorDescription(env.anchor_description),
 
@@ -2339,7 +2339,7 @@ const Editor = ({
                                     base_name_en: env.base_name_en || '',
                                     atmosphere: env.atmosphere,
                                     visual_params: env.visual_params,
-                                    narrative_description: env.description_cn,
+                                    narrative_description: promptCn || env.description_cn || '',
 
                                     visual_dependencies: parseVisualDependencies(env.visual_dependencies),
                                     dependency_strategy: env.dependency_strategy || {},
@@ -2396,12 +2396,12 @@ const Editor = ({
                                     }) || null)
                                     : null);
                              if (existingPoster && shouldOverwritePoster) {
-                                const desc = [
+                                const promptCn = String(poster.generation_prompt_cn || '').trim();
+                                const desc = promptCn || [
                                           `Name (EN): ${entityNameEn || poster.name_en || ''}`,
                                 `Atmosphere: ${poster.atmosphere}`,
                                 `Visual Params: ${poster.visual_params}`,
                                           `Description: ${poster.description_cn || poster.description || poster.narrative_description || ''}`,
-                                poster.generation_prompt_cn ? `Prompt (CN): ${poster.generation_prompt_cn}` : '',
                                 `Prompt: ${poster.generation_prompt_en}`,
                                 poster.negative_prompt_en ? `Negative Prompt: ${poster.negative_prompt_en}` : ''
                             ].filter(Boolean).join('\n\n');
@@ -2411,14 +2411,14 @@ const Editor = ({
                                         type: 'poster',
                                         episode_id: importEpisodeId || existingPoster.episode_id || undefined,
                                         description: desc,
-                                        generation_prompt_cn: poster.generation_prompt_cn || '',
+                                        generation_prompt_cn: promptCn || poster.generation_prompt_cn || '',
                                         generation_prompt_en: poster.generation_prompt_en || '',
                                         anchor_description: normalizeAnchorDescription(poster.anchor_description),
                                         name_en: entityNameEn,
                                         base_name_en: poster.base_name_en || '',
                                         atmosphere: poster.atmosphere,
                                         visual_params: poster.visual_params,
-                                        narrative_description: poster.description_cn,
+                                        narrative_description: promptCn || poster.description_cn || '',
                                         visual_dependencies: parseVisualDependencies(poster.visual_dependencies),
                                         dependency_strategy: poster.dependency_strategy || {},
                                         custom_attributes: {
@@ -2453,12 +2453,12 @@ const Editor = ({
                                 logSkippedExistingSubject('poster', entityName, entityNameEn);
                                 continue;
                              }
-                             const desc = [
+                             const promptCn = String(poster.generation_prompt_cn || '').trim();
+                             const desc = promptCn || [
                                           `Name (EN): ${entityNameEn || poster.name_en || ''}`,
                                 `Atmosphere: ${poster.atmosphere}`,
                                 `Visual Params: ${poster.visual_params}`,
                                           `Description: ${poster.description_cn || poster.description || poster.narrative_description || ''}`,
-                                poster.generation_prompt_cn ? `Prompt (CN): ${poster.generation_prompt_cn}` : '',
                                 `Prompt: ${poster.generation_prompt_en}`,
                                 poster.negative_prompt_en ? `Negative Prompt: ${poster.negative_prompt_en}` : ''
                             ].filter(Boolean).join('\n\n');
@@ -2469,7 +2469,7 @@ const Editor = ({
                                     type: 'poster',
                                     episode_id: importEpisodeId || undefined,
                                     description: desc,
-                                    generation_prompt_cn: poster.generation_prompt_cn || '',
+                                    generation_prompt_cn: promptCn || poster.generation_prompt_cn || '',
                                     generation_prompt_en: poster.generation_prompt_en || '',
                                     anchor_description: normalizeAnchorDescription(poster.anchor_description),
 
@@ -2477,7 +2477,7 @@ const Editor = ({
                                     base_name_en: poster.base_name_en || '',
                                     atmosphere: poster.atmosphere,
                                     visual_params: poster.visual_params,
-                                    narrative_description: poster.description_cn,
+                                    narrative_description: promptCn || poster.description_cn || '',
 
                                     visual_dependencies: parseVisualDependencies(poster.visual_dependencies),
                                     dependency_strategy: poster.dependency_strategy || {},

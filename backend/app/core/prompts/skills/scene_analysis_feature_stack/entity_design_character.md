@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
-# Prompt Updated At: 2026-08-07 18:35:00 +08:00
+# Prompt Updated At: 2026-08-08 16:55:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -51,7 +51,7 @@
 ### 1.3 字段契约与分段标签（权威）
 - Clean Plate / 合规 / 引擎控制符：见 common；角色只写当前主体可见实体。
 - **无记忆性**：prompt 只写最终画面；禁「见 appearance_cn / 按 §x / 同上」。
-- **双字段**：`description_cn`=择型/选角参考/Key·Fill·Rim 内部 rationale/Delta；`generation_prompt_cn`=分段可画指令（面目≥8；光线≤1 句）；禁组合型名/节号/鼻影·rim·色温数值扩写。
+- **双字段**：`description_cn` 恒为 `""`（禁正文）；择型/选角参考/Key·Fill·Rim 内部 rationale/Delta → `dependency_strategy.logic`；`generation_prompt_cn`=分段可画指令（面目≥8；光线≤1 句）；禁组合型名/节号/鼻影·rim·色温数值扩写。
 - **分段标签（Mandatory）**：开篇`【其他】`→`【相貌】`→`【衣着】`→`【光线】`→收尾`【其他】`；相貌最长；缺标签或相貌短于光线→废弃。衍生：§A 参考（开篇其他）→§B 一致项→§C Delta；`visual_dependencies`=`CHAR:[@名]`。
 - **机位**：平视静态站姿、四格横排；焦段见 §2.3 层5。
 
@@ -63,12 +63,12 @@
 ## 二、角色专项
 
 ### 2.0 真人写实光影铁律（权威 · 仅 §1.6 判真人时）
-**成图目标**：无感打光 + 色调柔和 + 聚焦面目。内部默认 setup=柔和侧逆光 + 正面大面积 Fill（细节只写 `description_cn`）。
+**成图目标**：无感打光 + 色调柔和 + 聚焦面目。内部默认 setup=柔和侧逆光 + 正面大面积 Fill（细节只写 `dependency_strategy.logic`；`description_cn` 恒 `""`）。
 
 **显式豁免 common §1.3「禁虚构正面补光」（定妆专用）**：定妆白底四视图允许棚拍式「正面大面积均匀补光」；与 common「Character 真人定妆豁免门」一致。该豁免**仅**适用于 character 真人定妆，不适用于 Environment/Poster/Prop。
 
 1. 光线存在感极低；禁可识别鼻影/颊影/rim 条/阴阳脸/强冷暖戏剧光。
-2. 色调低饱和、柔和统一；`generation_prompt_cn` 写「色调柔和统一」即可（项目「冷暖对比」气质若有，只进 `description_cn` 叙事，**不成图可见色光对冲**）。
+2. 色调低饱和、柔和统一；`generation_prompt_cn` 写「色调柔和统一」即可（项目「冷暖对比」气质若有，只进 `dependency_strategy.logic`，**不成图可见色光对冲**）。
 3. 面目段篇幅 ≥ 光线段 3 倍；光线 **≤1 句**。
 4. 面部大面积均匀受光；禁鼻梁/颧骨/额头独立 spotlight。例外：双眼自然 catchlight；鼻尖/耳廓极轻次表面透光（非皮肤发光）。
 5. 全脸哑光；禁水光肌/glowing/美颜光晕。
@@ -80,9 +80,9 @@
 ### 2.1 相貌择型与反同质化（Mandatory · 具名主要角色）
 - 每位主要角色**仅一套**相貌组合；先读 `entity_attributes.plot_role`，再写 `appearance_cn`。
 - **男女主**：`appearance_cn` 与 `generation_prompt_cn` 须可检索 **`大眼睛`**（禁仅写「中大眼/偏大眼」替代）。
-- **偶像风（无特别限定时）**：主要角色默认上镜完成度；`description_cn`「选角参考：」须含 **≥1 条** K-pop idol 气质对照（或明确写「上游禁用美化/纪实粗砺」而豁免），另可列影视作品；禁止作品名原样入 `generation_prompt_cn`。
+- **偶像风（无特别限定时）**：主要角色默认上镜完成度；`dependency_strategy.logic`「选角参考：」须含 **≥1 条** K-pop idol 气质对照（或明确写「上游禁用美化/纪实粗砺」而豁免），另可列影视作品；禁止作品名原样入 `generation_prompt_cn`。
 - **身高与体态**：无剧情约束时，主要成年角色（18岁及以上）女性身高不得低于 180cm，男性身高不得低于 190cm；头身比最低 1:8.5（默认约 1:9）；体态设定要求宽肩、直腿、细腰，修长脖颈；下半身视觉占比约 0.62–0.65。须明确写出身高与体态特征。
-- 同龄同性别主要角色：骨相/发型/服饰各至少 3 处可分差异。**必须更明确地强调主要角色的容貌与服饰排他性特征，确保其与其他角色之间存在极为醒目的区分度。**
+- 同龄同性别主要角色：骨相/发型/服饰各至少 6 处可分差异。**必须更明确地强调主要角色的容貌与服饰排他性特征，确保其与其他角色之间存在极为醒目的区分度。**
 - **6 槽位落地**：①脸型下颌 ②眼型睫毛（男女主含「大眼睛」）③鼻梁鼻尖 ④唇形眉形 ⑤肤质发型（真人含 §2.3）⑥气质锚点。
 
 **身份 → 首选组合（速查；冲突取叙事功能最强）**
@@ -104,12 +104,13 @@
 `dependency_strategy.logic` 须含：`剧情地位：{plot_role}`；`相貌组合：{名}；依据：{关键词}`。
 
 ### 2.2 Prompt 字段模板
-- `description_cn`：身份/叙事功能、择型依据、内部光学 rationale、变体 Delta；主要角色末尾「选角参考：」。
+- `description_cn`：恒为 `""`（禁任何正文）。
+- `dependency_strategy.logic`：身份/叙事功能、择型依据、内部光学 rationale、变体 Delta；主要角色含「选角参考：」。
 - `appearance_cn` / `clothing`：结构化可见数据；真人须覆盖 §2.3 七必锚；须完整转写进 `generation_prompt_cn`。
 - `archetype`：上游 Action Characteristics 原文；只保留静态姿态语义转入 prompt。
 - `role`=职业/社会身份；`plot_role` 不得与 `role` 混写。
-- **`gender`（强制继承）**：读取 Index `entity_attributes.gender`（`男`→`M`，`女`→`F`；群演簇 `混合`→按簇主导或写 `M/F` 并在 logic 注明混合）；**禁止**留空或与 Index 矛盾；缺 `gender:` 时据 `plot_role`/身份说明补写并在 logic 注明「上游缺 gender，已据…补」。
-- **年龄（强制继承）**：读取 Index `entity_attributes.age_tier`（及并存的 `约N岁`）；写入 `description_cn`/`appearance_cn`/`generation_prompt_cn` 可检索年龄语义——有岁数用岁数，无则用层次（如「青年」）；**禁止**留空或与 Index 矛盾；缺 `age_tier:` 时默认「青年」并在 logic 注明。
+- **`gender`（人态强制继承；神兽/非人豁免）**：读取 Index `entity_attributes.gender`（`男`→`M`，`女`→`F`；群演簇 `混合`→按簇主导或写 `M/F` 并在 logic 注明混合）；**禁止**与 Index 矛盾。**人态角色**：缺 `gender:` 时据 `plot_role`/身份说明补写并在 logic 注明「上游缺 gender，已据…补」。**神兽/异兽/魔兽/妖兽/灵兽/坐骑/宠物/非人集群等**：Index 无 `gender:` → **禁止**臆造男/女；JSON `gender` 可省略或写物种中性标注并在 logic 注明「非人/神兽类，上游未明确性别，不强填」；成稿字段**不**强写性别词。
+- **年龄（人态强制继承；神兽/非人豁免）**：读取 Index `entity_attributes.age_tier`（及并存的 `约N岁`）；写入 `appearance_cn`/`generation_prompt_cn` 可检索年龄语义——有岁数用岁数；仅有层次无岁数时用层次；**禁止**与 Index 矛盾。**未明确年龄默认 23 岁（仅人态；强制）**：人态角色 Index 既无具体岁数、亦无可用年龄层次/年龄态证据时，按 **23 岁** 写入上述字段，logic 注明「上游未明确年龄，默认23岁」；有 `age_tier` 但无岁数时，层次按 Index，**岁数仍默认 23**（除非层次与 23 明显冲突——如幼童/儿童/少年/中年/老年——则只写层次、不套 23）。**不适用**：群演簇、宠物、神兽/异兽/魔兽/妖兽/灵兽/坐骑/非人集群——Index 无龄态则**不强写**岁数/年龄层次，禁套 23。
 - 默认表情中性、静态站姿；上游另有指定时覆盖。
 
 ### 2.3 真人感七必锚 + 五层增强（权威 · 仅 §1.6 判真人；群演豁免择型/七必锚全量）
@@ -132,12 +133,16 @@
 **`negative_prompt_en` Tier1（须置前）**：`oily skin, plastic skin, poreless skin, glowing skin, luminous skin, beauty filter`；Tier2 按需短补（dramatic lighting / rim light / anime proportion / cropped shoes 等），勿稀释 Tier1。
 
 ### 2.4 群演簇（Collective）
-触发：`crowd_role:群演簇` 或匿名背景集合体。替代单人四视图/择型/七必锚全量。
+触发：`crowd_role:群演簇` 或匿名背景集合体（含人态卫兵/路人/宾客，以及异兽/神兽/魔兽/妖兽/灵兽/坐骑群、非人集群等）。替代单人四视图/择型/七必锚全量。
 
-- 16:9 横排四等分全身；禁 2×2、禁第一宫特写、禁四格同一人。
-- 先判 **制服类**（服饰统一、相貌差异）或 **普通人群**（服饰+相貌均可差异）。
+- 16:9 横排四等分全身；禁 2×2、禁第一宫特写、**禁四格同一人/同一体**（四格须为簇内可辨的四个不同个体）。
+- **个体差异硬约束（最高；反克隆）**：群演设计**必须**体现簇内个体之间的外形与装束**不一致性**——禁止四格同脸同体同装、禁止「复制粘贴同一模板仅改站姿」。`appearance_cn` / `clothing` / `generation_prompt_cn`【相貌】【衣着】须能逐格核销差异；logic 注明差异策略。
+- **先判制式（读 Index `服饰倾向` / 身份 / 时地礼制 / 上游明文）**：
+  1. **普通人群（默认）**：无制服/制式/军警僧道仪仗等统一着装要求 → **服饰 + 相貌/外形均须差异**（至少：体型/年龄层次/发型发色肤色骨相或物种斑纹角鳞等 ≥3 类可分点；衣着款式/配色/新旧破损/配饰 ≥2 类可分点）。四格不得像同一套服装的四个复制品。
+  2. **制服/制式类**：上游明文或身份制度要求统一着装（军警/卫兵/僧侣/仪仗/校服/工装/甲胄同制等）→ **服饰统一**（同款制式、同主色与徽章层级；允许品秩微差如袖章/肩章/新旧磨损，但廓形与制式识别须一致）；**相貌/外形必须不一致**（脸型骨相/发型发量/肤色年龄/微瑕体态等 ≥3 处可分；**禁止**制服导致同脸克隆）。
+  3. **异兽/神兽/魔兽/妖兽/灵兽/坐骑群等非人集群**：无「衣着」时以皮毛/鳞甲/角冠/体型斑纹/伤痕/光泽/体态等**特征差异**落实——四格同种同系但**禁止**同模复制；每格 ≥2 处可核销特征差（体型大小、斑纹位置、角叉数、鳞色深浅、伤疤、姿态气质等）。若上游要求鞍辔/甲胄/符纹**制式统一**，则装具统一、本体特征仍须分异（同制服类逻辑）。
 - 仍须 §1.2A、分段标签、光线 ≤1 句、色调柔和。
-- 单条 `characters[]`；logic 注明 `群演簇：{制服类|普通人群}四等分横排`。
+- 单条 `characters[]`；logic 注明 `群演簇：{制服类|普通人群|非人集群}四等分横排；差异：{服饰+相貌|仅相貌/外形|装具统一+本体特征差}`。
 
 ### 2.5 三维动画（仅显式三维制式）
 §2.0/§2.3 不生效。子风格择一次世代 PBR 或风格化 toon，写入 logic。四视图骨架同 §1.1；特写改几何体块/材质分区。禁真人毛孔/选角话术。`negative_prompt_en` 追加 photoreal/live-action 类。
@@ -153,10 +158,10 @@
 - 全量覆盖、类型路由正确；`name/name_en/base_name_en` 与 Index **逐字符完全一致**（任一字不等即废弃重写）。
 - **换装核销**：输出前对照 Index 全部 character 行；凡 `base_entity≠None` 的装束/状态衍生均须有独立条目且 `clothing`/`【衣着】` 与基准可区分；缺行或混装=废弃重写。
 - 每实体须有 `visual_dependencies` 与 `dependency_strategy {type, logic}`。Index `accessory_props` → 必挂对应 `PROP:[…]`（见 Node 3）；缺挂=废弃。
-- 真人：`description_cn` 含内部光学 rationale + 选角参考；`generation_prompt_cn` 含分段标签 + 七必锚 + 五层可检索 + 光线 1 句；细节面目≥8。
-- 三维/二维：按 §2.5/§2.6；仍须分段标签；不适用七必锚与选角参考。
-- 衍生：`description_cn` 含 Delta（换装写清旧装→新装可见差异）；`generation_prompt_cn` 含参考图声明与 §B/§C；§C 衣着 Delta 不得空泛「换装」。
-- 群演：按 §2.4。
+- 真人：`description_cn=""`；`dependency_strategy.logic` 含内部光学 rationale + 选角参考；`generation_prompt_cn` 含分段标签 + 七必锚 + 五层可检索 + 光线 1 句；细节面目≥8。
+- 三维/二维：按 §2.5/§2.6；仍须分段标签；不适用七必锚与选角参考；`description_cn=""`。
+- 衍生：`description_cn=""`；logic 含 Delta（换装写清旧装→新装可见差异）；`generation_prompt_cn` 含参考图声明与 §B/§C；§C 衣着 Delta 不得空泛「换装」。
+- 群演：按 §2.4（四格不同个体；普通=服饰+相貌差；制式=服饰统一+相貌/外形差；非人集群=特征差，装具制式时本体仍差）。
 - **剧情依存形制**：有 `clothing_req` 或服装结构依存动作时，`clothing` 与 `【衣着】` 须可检索对应袖/袋/襟/腰带/下摆形制词；否则废弃重写。
 
 #### 统一 JSON 示例（字段形态；禁止照抄占位剧情）
@@ -168,7 +173,7 @@
       "name": "林月",
       "name_en": "Lin Yue",
       "base_name_en": "Lin Yue",
-      "description_cn": "剧情地位：女主。调查记者，28岁。项目基础定位为情感悬疑，项目全局风格为真人实拍与克制压迫，年代/时代为当代都市，地域/国家为东亚一线华语城市，语言环境为中文现实职场语境，风格定位为冷峻克制——冷灰蓝主辅色、利落机能廓形、柔和统一光气质。相貌组合：冷艳骨相型（依据：女主/调查记者）。窄长鹅蛋脸、大眼睛、中大内双眼、长睫毛、高直鼻梁、偏薄唇、清晰下颌折角、真实冷白哑光肤质（毛孔、左颊浅痣、薄透裸妆）、齐肩黑发右侧挽耳。光学 rationale（仅推导）：内部柔和侧逆光+正面大面积 Fill；Key/Fill 色温差不转写入生图词，成图须无感、无可见 rim/半影戏剧。选角参考：K-pop 女团冷感骨相与层次齐肩发的上镜完成度；《龙纹身的女孩》冷感 investigative 气质；《社交网络》机能极简叠穿。",
+      "description_cn": "",
       "gender": "F",
       "role": "Investigative Reporter",
       "archetype": "习惯有0.5秒的停滞停顿等动作特征原文",
@@ -182,7 +187,7 @@
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original",
-        "logic": "Original。剧情地位：女主。相貌组合：冷艳骨相型（女主/调查记者）。真人感七必锚 0–6、五层增强 1–5 已覆盖；光学：内部侧逆光+正面 Fill，成图无感。本例 Index 无 accessory_props（腕表/耳环等纯装饰只进 clothing）；若有升格配饰 PROP 则 visual_dependencies 须挂 PROP:[…]。"
+        "logic": "Original。剧情地位：女主。相貌组合：冷艳骨相型（女主/调查记者）。真人感七必锚 0–6、五层增强 1–5 已覆盖；光学 rationale（仅推导）：内部柔和侧逆光+正面大面积 Fill；Key/Fill 色温差不转写入生图词，成图须无感。选角参考：K-pop 女团冷感骨相与层次齐肩发的上镜完成度；《龙纹身的女孩》冷感 investigative 气质；《社交网络》机能极简叠穿。本例 Index 无 accessory_props（腕表/耳环等纯装饰只进 clothing）；若有升格配饰 PROP 则 visual_dependencies 须挂 PROP:[…]。"
       }
     }
   ]

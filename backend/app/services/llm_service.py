@@ -703,6 +703,33 @@ class LLMService:
 
         return payload
 
+    # Responses API terminal events re-emit the full assistant text after deltas.
+    # Consumers must treat these as snapshots (fallback only), not append again.
+    _STREAM_FULL_TEXT_SNAPSHOT_TYPES = frozenset({
+        "response.output_text.done",
+        "response.output_item.done",
+        "response.completed",
+    })
+
+    @staticmethod
+    def _coalesce_streamed_assistant_text(accumulated: str, piece: str) -> str:
+        """Append stream deltas; collapse full-text snapshots that re-emit prior content."""
+        acc = str(accumulated or "")
+        part = str(piece or "")
+        if not part:
+            return acc
+        if not acc:
+            return part
+        if part == acc:
+            return acc
+        # Snapshot after deltas: full text starts with (or equals) already-aggregated deltas.
+        if len(part) >= len(acc) and part.startswith(acc):
+            return part
+        # Prefix replay of already-aggregated text (avoid whole-response doubling in logs).
+        if len(part) >= 64 and acc.startswith(part):
+            return acc
+        return acc + part
+
     def _extract_stream_chunk_text_and_finish(self, chunk: Dict[str, Any]) -> Tuple[str, Optional[str]]:
         choices = chunk.get("choices") or []
         if isinstance(choices, list) and choices:
@@ -740,9 +767,9 @@ class LLMService:
 
         # OpenAI responses-style SSE events (also used by some gateways):
         # - response.output_text.delta {"delta":"..."}
-        # - response.output_text.done {"text":"..."}
-        # - response.output_item.done {"item": {"type":"message", "content":[{"type":"output_text","text":"..."}]}}
-        # - response.completed {"response": {...}}
+        # - response.output_text.done {"text":"..."}  ← full snapshot (do not append after deltas)
+        # - response.output_item.done {"item": {...}} ← full snapshot
+        # - response.completed {"response": {...}}    ← full snapshot + finish
         if event_type == "response.output_text.delta":
             return str(chunk.get("delta") or ""), None
         if event_type == "response.output_text.done":
@@ -2501,7 +2528,11 @@ class LLMService:
                 async for chunk in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config_stream):
                     parts_count += 1
                     if chunk.get("type") == "token":
-                        raw_content += str(chunk.get("content", ""))
+                        # Collapse Responses-API full-text snapshots that re-emit prior deltas
+                        # (otherwise LLM call logs show a doubled Subject Index / reply body).
+                        raw_content = self._coalesce_streamed_assistant_text(
+                            raw_content, str(chunk.get("content", ""))
+                        )
                     elif chunk.get("type") == "done":
                         if chunk.get("usage"):
                             usage = self._normalize_provider_llm_usage(chunk.get("usage"))
@@ -3464,6 +3495,8 @@ class LLMService:
         usage: Dict[str, Any] = {}
         finish_reason: Optional[str] = None
         token_batch_buf = ""
+        saw_streamed_text = False
+        pending_full_snapshot = ""
 
         timeout = httpx.Timeout(
             connect=30.0,
@@ -3574,6 +3607,7 @@ class LLMService:
                             Returns (events, should_stop, parsed_ok).
                             """
                             nonlocal usage, finish_reason, token_batch_buf, _last_yield_time
+                            nonlocal saw_streamed_text, pending_full_snapshot
 
                             if not data_str:
                                 return [], False, True
@@ -3597,8 +3631,20 @@ class LLMService:
                             content, chunk_finish_reason = self._extract_stream_chunk_text_and_finish(chunk)
                             if chunk_finish_reason:
                                 finish_reason = chunk_finish_reason
+                            event_type = str(chunk.get("type") or "").strip().lower()
+                            # Responses API: after output_text.delta*, done/completed re-send the
+                            # entire assistant text. Keep as fallback only when no deltas arrived.
+                            if content and event_type in self._STREAM_FULL_TEXT_SNAPSHOT_TYPES:
+                                pending_full_snapshot = content
+                                if saw_streamed_text:
+                                    logger.debug(
+                                        "[STREAM_SKIP_FULL_SNAPSHOT] provider=%s type=%s chars=%d (already streamed)",
+                                        provider, event_type, len(content),
+                                    )
+                                    content = ""
                             events: List[Dict[str, Any]] = []
                             if content:
+                                saw_streamed_text = True
                                 if use_claude_api:
                                     token_batch_buf += content
                                     if len(token_batch_buf) >= 32 or "\n" in token_batch_buf:
@@ -3769,7 +3815,15 @@ class LLMService:
 
         if token_batch_buf:
             logger.debug("[STREAM_TOKEN][claude_batch_final] provider=%s len=%d snippet=%r", provider, len(token_batch_buf), token_batch_buf[:80])
+            saw_streamed_text = True
             yield {"type": "token", "content": token_batch_buf}
+        # Snapshot-only streams (no deltas): emit the terminal full text once.
+        if (not saw_streamed_text) and pending_full_snapshot:
+            logger.info(
+                "[STREAM_SNAPSHOT_FALLBACK] provider=%s chars=%d",
+                provider, len(pending_full_snapshot),
+            )
+            yield {"type": "token", "content": pending_full_snapshot}
         usage = self._normalize_provider_llm_usage(usage)
         logger.info("[STREAM_DONE] provider=%s finish_reason=%s usage=%s", provider, finish_reason, usage)
         yield {"type": "done", "usage": usage, "finish_reason": finish_reason}

@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-08-07 18:10:00 +08:00
+# Prompt Updated At: 2026-08-08 16:55:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -46,8 +46,9 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 ### 1.2 语言与项目语境
 - **语言总契约**：自然语言默认跟随剧本原语；`Project Context.Language` / `project_language` 明确时覆盖。仅 ID、固定键名、约定标签可保留既定格式；其余禁中英混杂。**同义中英重复**：叙述字段只保留项目语言侧（`_cn`/`_en` 固定双语列各填各语除外，禁同格堆叠同义双语）。
 - **双语字段**：`_cn` 中文；`_en` 英文；`anchor_description` 英文短语（3–5 个高密度短语定位同一实体；Character 优先身份/相貌轮廓/区分服饰）。例外：`generation_prompt_en` 恒为 `""`；完整生图词只写 `generation_prompt_cn`。
+- **`description_cn` 禁输出正文（最高；全实体）**：JSON 键可保留，但值**必须**为 `""`。禁止写入择型/选角/光学 rationale/美学参考/拓扑/Delta/规划备注等任何正文；此类不成稿内容只进 `dependency_strategy.logic`。界面展示以 `generation_prompt_cn` 替代描述。若 `description_cn` 非空 = 失败重写。
 - **可见/可听文本**：对白、字幕、屏幕字、招牌口号、牌匾题字、书册封面/内页、纸笺文书等须为目标项目语言后写入中文提示词；禁无依据翻译剧本原有非英语可见元素。
-- **载体可见文字（强制；ENV 陈设与 PROP 共用）**：凡画内可辨识文字的载体——牌匾/匾额/店招/门牌/路牌/横幅/霓虹/灯箱/电子屏、书册/卷轴/册页、纸笺/文书/告示/符箓/菜单/铭牌等——`description_cn` 与 `generation_prompt_cn` **必须同时写清三项**（缺任一=失败重写）：
+- **载体可见文字（强制；ENV 陈设与 PROP 共用）**：凡画内可辨识文字的载体——牌匾/匾额/店招/门牌/路牌/横幅/霓虹/灯箱/电子屏、书册/卷轴/册页、纸笺/文书/告示/符箓/菜单/铭牌等——`generation_prompt_cn` **必须写清三项**（缺任一=失败重写）：
   1. **文字内容**：逐字可读文案（上游 `visible_text` 有原文→逐字透传；标注「原文未明示；根据剧情补写」或仅载体无字→本阶段据剧情/场域/机构/时代/项目语言**补写具体可读字**；禁「某店招牌/一本古书/一叠纸」无字占位；禁乱码、模糊「看不清的字」冒充实文案——除非上游明文要求不可读/污损遮挡，且须写明遮挡原因与仍可见残字）。
   2. **字体/书体**：写清可检索字体或书体（如楷书/隶书/行书/魏碑/篆书/宋体/黑体/仿宋/手写体/招牌美术字等）及工艺载体（鎏金阴刻/墨迹/印刷/烫金等）；须匹配时代/地域/机构礼仪，禁时代错置（如秦汉匾额却用现代黑体无核销）。
   3. **中文繁简体（强制裁定）**：凡中文可见字须显式标注并落实为 **`简体`｜`繁体`｜`繁简混排（须核销）`** 之一，且文案字形与裁定一致——不得只写「中文」；不得简体文案却标繁体（或反之）。裁定序：①上游原文已是繁或简→**保持原字形体系**，禁擅自繁简互转；②原文未给字样→按 `Project Context` 地域/时代/项目语言默认（大陆当代语境→简体；台港/古装礼制/碑匾书卷常例→繁体；有 Era/Region 硬核销从时地）；③异体/篆隶等非印刷繁简→写清书体，并注明「非现代简繁印刷体」。禁无据外语或时代错置文案。
@@ -65,16 +66,16 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 
 ### 1.3 生图提示词与 Imagen 兼容规范
 
-**Character 真人定妆豁免门（先读）**：当 §1.6=真人且实体为单人定妆/选角四视图（非群演簇）时——`generation_prompt_cn` 的光影/大光比/Key:Fill/色温/rim/亮暗分区**全部**以 `entity_design_character.md` §2.0/§2.3 为准（光线 ≤1 句；rationale 只写 `description_cn`）；下文凡标「Env/Poster/Prop」的光学条款**不套用**于该 prompt。三维/二维 Character 见 character §2.5/§2.6。群演簇见 character §2.4。
+**Character 真人定妆豁免门（先读）**：当 §1.6=真人且实体为单人定妆/选角四视图（非群演簇）时——`generation_prompt_cn` 的光影/大光比/Key:Fill/色温/rim/亮暗分区**全部**以 `entity_design_character.md` §2.0/§2.3 为准（光线 ≤1 句；rationale 只写 `dependency_strategy.logic`）；下文凡标「Env/Poster/Prop」的光学条款**不套用**于该 prompt。三维/二维 Character 见 character §2.5/§2.6。群演簇见 character §2.4。
 
-- **Clean Plate**：生图词只写可见物理实体；去不可见专名、角色名、人称。**Environment 主/衍生 = 纯空镜（最高硬约束）**：`description_cn` / `generation_prompt_cn` / `anchor_description` / `negative_prompt_en` 以外的光学段**一律无人**——**禁止**具名或匿名人物、人称、群演、人影、手足肩背、站位/姿态/视线/对白/持握/交互痕迹；**亦禁止**「给谁用、干什么」的人物用途句（如「林月审讯区」「陈医生坐诊位」「双人对峙会商」「读某某正面口型」「供主角逃窜」等）。上游 `purpose`/`activity_space`/`activity_fit`/`plot_role`/触发原因里的角色与剧情功能**只作内部规划参考**，成稿只保留可拍的空镜结构（净空区/动线/出入口/座次家具几何），**不得**原样或改写进生图词。规模感优先非人格痕迹（灯火/车流虚影等，且须匹配时地阶层）。**海报**可按依赖整合 CHAR/PROP/ENV 人物。Index 角色不得入 `environments[]`。
-- **字段显式回写**：`generation_prompt_cn` 吸收结构字段有效属性为视觉词；`generation_prompt_en=""`。`name` 仅 JSON 原样保留；名称含可见类别信息时只吸收可见语义。
-- **实体物件可视性核验（最高；描述前强制）**：对任一实体写 `description_cn` / `generation_prompt_cn` / 角色【衣着】配饰落点时，须先核「该细节在对应视图是否可见」——①道具四视图：正面格只强化正面可读细节，背面格写背面结构，侧面写厚度/侧缘，禁正面铭文出现在背视面板；②角色四视图+配饰：按 Index `accessory_mount`/`wear_side` 落位——正面挂件出现在正视/¾，背面挂件出现在背视，侧面挂件在对应侧视可读；③ENV 四向：各向只写该观察轴可见半空间实体（禁对向串写）；④遮挡/Clean Plate：不写镜头外、板外、被遮挡才「应存在」的细节当成本视图可见事实。缺挂载/朝向上游证据→标缺口，禁臆造可见面。
-- **Subject Index 全要素零缺失回写（最高）**：每条实体 Index 已写明的**任何要素**须在 `generation_prompt_cn` 逐项体现为可检索视觉描述；不可只写在 `description_cn`/`appearance_cn`/`clothing` 而 prompt 缺项。
-  - **覆盖**：`entity_attributes` 每一键值（材质/结构/光源/气象/`visible_text` 等文字字段/`empty_view_delta`/`fixed_*_delta`/依赖差异/形态状态等）；衍生相对基准的变化；`script_entity_coverage` 中本实体可画面呈现的线索。**§1.5 主冷暖与四层色谱**：Env/Prop/`description_cn` 须完整落地；Character 真人定妆服从上方豁免门（色谱落服装；大光比句不进 prompt）。
-  - **Environment 例外（强制优先于本条覆盖）**：含角色名/人称/站姿对白/「谁用何处干什么」的 `purpose`/`activity_*`/`derivative_trigger_*`/`plot_*` 等**不得**写入 `generation_prompt_cn`；只转译为空镜几何与可见陈设（例：座位区净空、门—桌纵深、反打可见半空间）。人物用途句可留在 `description_cn`/logic 的规划备注，且须标明「不成稿」。
+- **Clean Plate**：生图词只写可见物理实体；去不可见专名、角色名、人称。**Environment 主/衍生 = 纯空镜（最高硬约束）**：`generation_prompt_cn` / `anchor_description` / `negative_prompt_en`**一律无人**——**禁止**具名或匿名人物、人称、群演、人影、手足肩背、站位/姿态/视线/对白/持握/交互痕迹；**亦禁止**「给谁用、干什么」的人物用途句（如「林月审讯区」「陈医生坐诊位」「双人对峙会商」「读某某正面口型」「供主角逃窜」等）。上游 `purpose`/`activity_space`/`activity_fit`/`plot_role`/触发原因里的角色与剧情功能**只作内部规划参考**，成稿只保留可拍的空镜结构（净空区/动线/出入口/座次家具几何），**不得**原样或改写进生图词。规模感优先非人格痕迹（灯火/车流虚影等，且须匹配时地阶层）。**海报**可按依赖整合 CHAR/PROP/ENV 人物。Index 角色不得入 `environments[]`。
+- **字段显式回写**：`generation_prompt_cn` 吸收结构字段有效属性为视觉词；`generation_prompt_en=""`；`description_cn=""`。`name` 仅 JSON 原样保留；名称含可见类别信息时只吸收可见语义。
+- **实体物件可视性核验（最高；描述前强制）**：对任一实体写 `generation_prompt_cn` / 角色【衣着】配饰落点时，须先核「该细节在对应视图是否可见」——①道具四视图：正面格只强化正面可读细节，背面格写背面结构，侧面写厚度/侧缘，禁正面铭文出现在背视面板；②角色四视图+配饰：按 Index `accessory_mount`/`wear_side` 落位——正面挂件出现在正视/¾，背面挂件出现在背视，侧面挂件在对应侧视可读；③ENV 四向：各向只写该观察轴可见半空间实体（禁对向串写）；④遮挡/Clean Plate：不写镜头外、板外、被遮挡才「应存在」的细节当成本视图可见事实。缺挂载/朝向上游证据→标缺口，禁臆造可见面。
+- **Subject Index 全要素零缺失回写（最高）**：每条实体 Index 已写明的**任何要素**须在 `generation_prompt_cn` 逐项体现为可检索视觉描述；不可只写在 `appearance_cn`/`clothing`/`dependency_strategy.logic` 而 prompt 缺项。
+  - **覆盖**：`entity_attributes` 每一键值（材质/结构/光源/气象/`visible_text` 等文字字段/`empty_view_delta`/`fixed_*_delta`/依赖差异/形态状态等）；衍生相对基准的变化；`script_entity_coverage` 中本实体可画面呈现的线索。**§1.5 主冷暖与四层色谱**：Env/Prop 须完整落进 `generation_prompt_cn`；Character 真人定妆服从上方豁免门（色谱落服装；大光比句不进 prompt，rationale 进 logic）。
+  - **Environment 例外（强制优先于本条覆盖）**：含角色名/人称/站姿对白/「谁用何处干什么」的 `purpose`/`activity_*`/`derivative_trigger_*`/`plot_*` 等**不得**写入 `generation_prompt_cn`；只转译为空镜几何与可见陈设（例：座位区净空、门—桌纵深、反打可见半空间）。人物用途句可留在 `dependency_strategy.logic` 的规划备注，且须标明「不成稿」。
   - **写法**：逐条转译为可见画面词，融入连贯中文短段；禁「同上/延续上游/与描述一致」；禁弱化为「高级/破败/有标识/暖色调/电影感」等抽象词或删项。
-  - **终检**：逐 Subject 列 Index 要素 → 在 prompt 逐条检索；任一不可检索或仅在其他 JSON 字段 → 失败重写（Environment 上列人物用途例外字段除外；且 Env prompt 出现人名/人称/用途句 → 失败重写）。
+  - **终检**：逐 Subject 列 Index 要素 → 在 prompt 逐条检索；任一不可检索或仅在其他 JSON 字段 → 失败重写（Environment 上列人物用途例外字段除外；且 Env prompt 出现人名/人称/用途句 → 失败重写）。`description_cn` 非空 → 失败重写。
 - **光学优先级**：先亮度/可读性/主辅光/色温/空气感，再风格情绪。**Env/Poster 默认 §1.5 大光比**；**Prop 四视图豁免 ≥8:1**（prop §1.3 柔和静物光；色谱仍 §1.5-B）；Character 见豁免门。仅 Genre/定位/tone 明确治愈/广告/儿童明亮向时，Env 可降至轻大光比（仍须光向与纵深微差）。关键信息须可读。
 - **主光源先行（Env/Poster/Prop）**：先写主光源来源、方向、**作用范围**、**可见效果**；再补光/轮廓与材质色彩响应。禁只列灯位不写范围效果；禁先堆风格再泛写「电影感光影」。入射/受光/投影须可由具名光源位置几何推导；Fill 只许现有动机光经具名反射面反弹或已有第二 Practical；**禁为补光而补光**（无锚点棚拍柔光箱/虚构正面补光）。
 - **灯光具体要求**：亮度/光质/反差服从 Genre 与定位；Env/Poster 明确 Key/Fill/Backlight 与硬柔光；Env 另须 FG/MG/BG 纵深光层与半影/投影落点，防平板；执行见 §1.5-A 与 environment §2.7。
@@ -90,7 +91,7 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 - **清晰度与景深**：写清焦平面、主体清晰度、景深策略。四视图：边缘清、纹理可读、四面板一致。环境明确 deep focus / moderate DoF / background slightly softened，保护主舞台/关键道具/标题区锐度。海报保护标题区、主角面部、关键识别物。
 - 同条 prompt 内描述协调；排除引擎参数/控制符（`--ar`/`--v`/`--stylize`/`::`/`<lora:...>`）；方位精准。
 - 默认器材：仅剧情明确要求时才把 camera/lens/operator 写成画面实体。
-- **真人 Character 拍摄载体例外**：§1.6=真人且单人定妆时，`generation_prompt_cn` **须**含精简拍摄载体短语（机身+镜头+ISO+RAW+未修图；见 character §2.3 层5）；完整 Key/Fill/Rim 仍只写 `description_cn`。不适用道具/环境/群演簇；禁把摄影师写成画面内实体。
+- **真人 Character 拍摄载体例外**：§1.6=真人且单人定妆时，`generation_prompt_cn` **须**含精简拍摄载体短语（机身+镜头+ISO+RAW+未修图；见 character §2.3 层5）；完整 Key/Fill/Rim 只写 `dependency_strategy.logic`（`description_cn` 恒 `""`）。不适用道具/环境/群演簇；禁把摄影师写成画面内实体。
 - **单状态只读**：同一 Subject 只呈现一个物理状态（以 Index 为准）；需多状态而上游仅一条 → Node 4 回流。
 - **变体与继承链**：允许的 `dependency_strategy.type`：`Original`（角色/道具基准）｜`BaselineDefinition`（主环境基准，`visual_dependencies=[]`）｜`Type A` / `Type B`（派生）。派生指向剧情时序**紧邻上一完整形象**。同 Scene 视角衍生→主环境/基础版；状态/破坏链→前一完整状态，禁跳链。破坏态被依赖→新衍生须逐项回补破损可见细节；修复态写恢复细节，禁跳跃抹除。提示词写清不变锚点与当前变化。`visual_dependencies` 禁 `subject_no`；实体名与 Index 逐字符一致。
 - 每实体专属 `negative_prompt_en`（短而自适应）：真人滤假人感/平滑/CGI；道具环境滤塑料/微缩；及其他时代错置/多余肢体等。
@@ -132,15 +133,15 @@ Key 与 Fill 对比显著，亮暗分层清楚；**不等于**无脑压黑或刀
 
 #### C. 分实体落地
 
-| 实体 | `description_cn` | `generation_prompt_cn` |
+| 实体 | `description_cn` | `generation_prompt_cn` / logic |
 | :--- | :--- | :--- |
-| **Character** | Key/Fill/Backlight 类型/方向/色温/冷暖 rationale；服装色服从 §B | **真人定妆豁免**：character §2.0/§2.3——prompt 光照 ≤1 句，禁 Key/Fill/色温/rim/大光比亮暗转写；rationale 只写 `description_cn`。三维/二维见 §2.5/§2.6 |
-| **Environment / Poster** | 光学 rationale（§2.7）+ §2.9 色彩规格（含纵深色层）+ 主辅点缀实体落点 + 各层受光；夜景 §2.8 | §2.7 全段（Key/Fill/纵深光层/半影投影/材质响应）+ 可见动机光 1–3（上限 3）+ 每源作用范围与效果；§2.9 全段；四向共享光色秩序且各格有可见受光与表面色落点；禁平板光/单色糊 |
-| **Prop** | 材质色绑 §B；光学 rationale 简写 | **豁免 ≥8:1**：prop §1.3 柔和静物光；色谱仍 §B；三维/二维见 §4.2/§4.3 |
+| **Character** | 恒 `""` | **真人定妆豁免**：character §2.0/§2.3——prompt 光照 ≤1 句，禁 Key/Fill/色温/rim/大光比亮暗转写；Key/Fill/Backlight rationale + 选角参考写 `dependency_strategy.logic`。三维/二维见 §2.5/§2.6 |
+| **Environment / Poster** | 恒 `""` | prompt：§2.7 全段（Key/Fill/纵深光层/半影投影/材质响应）+ 可见动机光 1–3（上限 3）+ 每源作用范围与效果；§2.9 全段；四向共享光色秩序且各格有可见受光与表面色落点。拓扑/美学参考/含不可见源的光学 rationale → `dependency_strategy.logic` |
+| **Prop** | 恒 `""` | prompt：**豁免 ≥8:1**——prop §1.3 柔和静物光；色谱仍 §B；三维/二维见 §4.2/§4.3。简要光学 rationale → logic |
 
 #### D. 输出前光色自检
-1. Env/Poster 已落实大光比？Prop 未误套 ≥8:1？Character 定妆 prompt **未**写大光比/Key:Fill？
-2. 已回写主冷暖+四层色谱（Character 色谱落服装；大光比亮暗句仅 Env/Poster 与 Character `description_cn`）？
+1. Env/Poster 已落实大光比？Prop 未误套 ≥8:1？Character 定妆 prompt **未**写大光比/Key:Fill？`description_cn` 均为 `""`？
+2. 已回写主冷暖+四层色谱（Character 色谱落服装；大光比亮暗句仅 Env/Poster prompt 与 Character logic）？
 3. Env/Poster 能答：哪区暖/冷、哪层亮/暗、光从哪来、作用范围与效果？Prop：光向一致且材质高光/半影/接触影可读？
 4. 夜景按 environment §2.8，可见动机光 ≤3，主舞台+动线可读且仍有纵深光层？
 5. 未与同项目其他 Subject 主色谱冲突或回退均匀平光？

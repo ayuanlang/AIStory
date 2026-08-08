@@ -1419,7 +1419,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     base_name_en: String(row?.base_name_en || '').trim() || nameEn || undefined,
                     type: entityType,
                     episode_id: currentEpisode?.id || undefined,
-                    description: String(row?.description_cn || row?.description || row?.entity_attributes || '').trim(),
+                    description: String(row?.generation_prompt_cn || row?.description_cn || row?.description || row?.entity_attributes || '').trim(),
+                    generation_prompt_cn: String(row?.generation_prompt_cn || '').trim() || undefined,
                     role: String(row?.role || '').trim() || undefined,
                     archetype: String(row?.archetype || row?.action_characteristics || '').trim() || undefined,
                     gender: String(row?.gender || '').trim() || undefined,
@@ -8100,7 +8101,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             <div className="text-[10px] text-white/55 uppercase tracking-[0.16em] mt-1">{subTab}</div>
                             <div className="mt-3 text-[10px] text-white/45 uppercase tracking-[0.16em]">{t('Subject介绍', 'Subject Intro')}</div>
                             <div className="text-xs text-white/70 mt-1 line-clamp-3 leading-relaxed min-h-[3.5rem]">
-                                {String(entity.description || '').trim() || t('暂无介绍，点击卡片可编辑主体描述。', 'No intro yet. Click the card to edit subject description.')}
+                                {String(entity.generation_prompt_cn || entity.description || '').trim() || t('暂无介绍，点击卡片可编辑主体描述。', 'No intro yet. Click the card to edit subject description.')}
                             </div>
                         </div>
                     </div>
@@ -8383,13 +8384,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                         ))}
                                     </div>
 
-                                    {/* Description */}
+                                    {/* Description — display falls back to generation prompt when empty */}
                                     <div className="space-y-2">
                                         <h4 className="text-xs font-bold uppercase text-muted-foreground flex items-center gap-2">
                                             <FileText size={12} /> Description
                                         </h4>
                                         <textarea 
-                                            value={viewingEntity.description || ''}
+                                            value={viewingEntity.description || viewingEntity.generation_prompt_cn || ''}
                                             onChange={(e) => setViewingEntity(prev => ({ ...prev, description: e.target.value }))}
                                             onBlur={(e) => handleFieldUpdate('description', e.target.value)}
                                             className="w-full text-sm leading-relaxed text-white/80 bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-24 resize-none transition-colors"

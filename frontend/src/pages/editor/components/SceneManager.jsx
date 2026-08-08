@@ -513,7 +513,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                                     <div className="bg-white/5 p-3 rounded-lg border border-white/5">
                                         <span className="text-[10px] uppercase font-bold text-primary/70 block mb-1">{t('描述', 'Description')}</span>
                                         <p className="text-sm text-gray-300 leading-relaxed max-h-[200px] overflow-y-auto custom-scrollbar">
-                                            {entity.description || 'No description available.'}
+                                            {entity.generation_prompt_cn || entity.description || 'No description available.'}
                                         </p>
                                     </div>
                                     

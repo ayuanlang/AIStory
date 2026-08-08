@@ -3864,15 +3864,9 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
         throw new Error(detail || 'Script analysis workflow failed');
     }
 
-    if (data?.__truncated__) {
-        const bytes = data?.__original_bytes__ || '?';
-        throw new Error(
-            `Script analysis workflow result was truncated (${bytes} bytes) and subjects_json is unavailable. `
-            + 'Retry with fewer entities (single-entity rerun), or raise ASYNC_TASK_RESULT_MAX_BYTES on the backend.'
-        );
-    }
-
     // Flow envelope: { status, node_key, result: analyzePayload }. Prefer analyze payload.
+    // Do NOT reject on top-level __truncated__ before unwrap — task_manager keeps subjects_json
+    // when compacting large asset-design payloads so category import can still proceed.
     let result = data;
     if (data?.result && typeof data.result === 'object') {
         const nested = data.result;
@@ -3887,12 +3881,31 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
         }
     }
 
-    if (result?.__truncated__ && !(result?.subjects_json && typeof result.subjects_json === 'object')) {
+    const resolvedSubjectsJson = (
+        (result?.subjects_json && typeof result.subjects_json === 'object')
+            ? result.subjects_json
+            : (
+                (result?.result && typeof result.result === 'object' && result.result.subjects_json
+                    && typeof result.result.subjects_json === 'object')
+                    ? result.result.subjects_json
+                    : (
+                        (data?.subjects_json && typeof data.subjects_json === 'object')
+                            ? data.subjects_json
+                            : null
+                    )
+            )
+    );
+    const isTruncatedPayload = Boolean(result?.__truncated__ || data?.__truncated__);
+    if (isTruncatedPayload && !resolvedSubjectsJson) {
         const bytes = result?.__original_bytes__ || data?.__original_bytes__ || '?';
         throw new Error(
-            `Script analysis analyze payload was truncated (${bytes} bytes) without subjects_json. `
+            `Script analysis workflow result was truncated (${bytes} bytes) without subjects_json. `
             + 'Retry with fewer entities (single-entity rerun), or raise ASYNC_TASK_RESULT_MAX_BYTES on the backend.'
         );
+    }
+    // Hoist preserved subjects_json onto the analyze payload when compact truncation stripped nesting.
+    if (resolvedSubjectsJson && !(result?.subjects_json && typeof result.subjects_json === 'object')) {
+        result = { ...(result && typeof result === 'object' ? result : {}), subjects_json: resolvedSubjectsJson };
     }
 
     if (!result || typeof result !== 'object') {

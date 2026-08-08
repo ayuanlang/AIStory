@@ -160,7 +160,7 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
         return (
             "道具分析硬约束（只按原图分析）：\n"
             f"{name_lock}"
-            "- 以提供的图片为唯一视觉权威：description_cn / generation_prompt_cn 必须忠实描述图中可见物体。\n"
+            "- 以提供的图片为唯一视觉权威：generation_prompt_cn 必须忠实描述图中可见物体；description_cn 必须为空字符串 \"\"。\n"
             "- 不要为了凑「四宫格/四视图」而臆造图中不存在的视角或面板；图是什么构图就按什么写。\n"
             "- 优先写结构、材质、工艺、磨损、比例与可见细节；无手/无人物除非图中确实出现。\n"
             "- CURRENT 文本仅用于保留名称；与图片冲突时一律以图片为准。"
@@ -195,7 +195,7 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
             "- 首句声明：生成四向拼图基准参考图；16:9 横幅；2×2 四宫格；禁止拉成 1:1；禁止俯拍/鸟瞰。\n"
             "- 格位固定：左上=0度、右上=90度、左下=180度、右下=270度；各格眼高约 50mm；四格共享材质/光源；Clean Plate。\n"
             "- 成稿逐格写 [0度格-左上]/[90度格-右上]/[180度格-左下]/[270度格-右下]，每格按「背景→中景→前景/邻向斜切→天花地面→光照」。\n"
-            "- description_cn 写俯视 360 + 0 度轴与固定实体清单；dependency_strategy.type 必须为 BaselineDefinition；visual_dependencies=[]。\n"
+            "- description_cn 必须为 \"\"；俯视 360 + 0 度轴与固定实体清单写入 dependency_strategy.logic；dependency_strategy.type 必须为 BaselineDefinition；visual_dependencies=[]。\n"
             "- 若图片本身已是四宫格，按四格可见内容回写；若图片是单视角，仍须输出完整四向拼图格式（其余格据空间一致性合理补齐，并在 logic 标明推断格）。\n"
             "- 严禁改成单镜头可拍空镜、§A/§B/§C 衍生三段式、或角色/道具白底四视图。"
         )
@@ -205,7 +205,7 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
         "- §A：参考主环境四向拼图指定格/半空间（或上一状态空镜）。\n"
         "- §B：与参考图一致的具象清单（地面/家具/门窗/色谱/锚点；前景/中景/背景 + 上中下）。\n"
         "- §C：本镜 Delta（机位、左右重组、背景半空间）；Clean Plate；禁人物。\n"
-        "- description_cn 须含本衍生独立四向自然语言；保留既有 visual_dependencies / dependency_strategy 语义。"
+        "- description_cn 必须为 \"\"；衍生元数据/Delta 写入 dependency_strategy.logic；保留既有 visual_dependencies / dependency_strategy 语义。"
     )
 
 
@@ -224,6 +224,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
     {{
       "name": "{name_lock}",
       "name_en": "{name_en_lock or "English Name"}",
+      "description_cn": "",
       "gender": "M/F",
       "role": "Role",
       "archetype": "Archetype",
@@ -254,7 +255,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
       "name": "{name_lock}",
       "name_en": "{name_en_lock or "English Name"}",
       "type": "held/static",
-      "description_cn": "Chinese Description (Mobility & Mutable States)",
+      "description_cn": "",
       "generation_prompt_cn": "只按原图可见内容写的中文生图提示词（不强迫四宫格）",
       "generation_prompt_en": "",
       "negative_prompt_en": "short English negatives",
@@ -280,7 +281,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
       "name_en": "{name_en_lock or "English Name"}",
       "atmosphere": "Atmosphere",
       "visual_params": "Poster/Cover/4:3",
-      "description_cn": "Chinese Description",
+      "description_cn": "",
       "generation_prompt_cn": "按上方海报 4:3 原格式写满的中文生图提示词",
       "generation_prompt_en": "",
       "negative_prompt_en": "short English negatives",
@@ -325,7 +326,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
       "name_en": "{name_en_lock or "English Name"}",
       "atmosphere": "Atmosphere",
       "visual_params": "{"Baseline/Interior/Day" if is_main_env else "Wide/Interior/Day"}",
-      "description_cn": "Chinese Description",
+      "description_cn": "",
       "generation_prompt_cn": "{prompt_placeholder}",
       "generation_prompt_en": "",
       "negative_prompt_en": "short English negatives",
@@ -887,7 +888,6 @@ async def _execute_analyze_entity_image(
 
         # Update Entity Fields
         if "base_name_en" in updated_info: entity.base_name_en = updated_info["base_name_en"]
-        if "description_cn" in updated_info: entity.description = updated_info["description_cn"] # Map description_cn to description
         if "appearance_cn" in updated_info: entity.appearance_cn = updated_info["appearance_cn"]
         if "clothing" in updated_info: entity.clothing = updated_info["clothing"]
         if "action_characteristics" in updated_info: entity.action_characteristics = updated_info["action_characteristics"]
@@ -900,6 +900,13 @@ async def _execute_analyze_entity_image(
         
         if "generation_prompt_cn" in updated_info: entity.generation_prompt_cn = updated_info["generation_prompt_cn"]
         entity.generation_prompt_en = ""
+        # description_cn is no longer LLM content; UI/import use generation_prompt_cn as description substitute.
+        prompt_cn_for_desc = str(updated_info.get("generation_prompt_cn") or entity.generation_prompt_cn or "").strip()
+        desc_cn = str(updated_info.get("description_cn") or "").strip()
+        if prompt_cn_for_desc:
+            entity.description = prompt_cn_for_desc
+        elif "description_cn" in updated_info:
+            entity.description = desc_cn
         if "negative_prompt_en" in updated_info and hasattr(entity, "negative_prompt_en"):
             entity.negative_prompt_en = updated_info["negative_prompt_en"]
         if "anchor_description" in updated_info:
@@ -1150,7 +1157,6 @@ def apply_entity_analysis(
     # 2. Apply Updates (Same logic as analyze_entity_image)
     if "name_en" in updated_info: entity.name_en = updated_info["name_en"]
     if "base_name_en" in updated_info: entity.base_name_en = updated_info["base_name_en"]
-    if "description_cn" in updated_info: entity.description = updated_info["description_cn"] 
     if "appearance_cn" in updated_info: entity.appearance_cn = updated_info["appearance_cn"]
     if "clothing" in updated_info: entity.clothing = updated_info["clothing"]
     if "action_characteristics" in updated_info: entity.action_characteristics = updated_info["action_characteristics"]
@@ -1163,6 +1169,12 @@ def apply_entity_analysis(
     
     if "generation_prompt_cn" in updated_info: entity.generation_prompt_cn = updated_info["generation_prompt_cn"]
     if "generation_prompt_en" in updated_info: entity.generation_prompt_en = updated_info["generation_prompt_en"]
+    prompt_cn_for_desc = str(updated_info.get("generation_prompt_cn") or entity.generation_prompt_cn or "").strip()
+    desc_cn = str(updated_info.get("description_cn") or "").strip()
+    if prompt_cn_for_desc:
+        entity.description = prompt_cn_for_desc
+    elif "description_cn" in updated_info:
+        entity.description = desc_cn
     if "anchor_description" in updated_info:
         entity.anchor_description = coerce_anchor_description(updated_info["anchor_description"])
     

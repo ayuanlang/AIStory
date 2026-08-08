@@ -2157,6 +2157,8 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
         [/\[Auto Zero Report Rerun\]/gi, t('[自动补齐]', '[Auto refill]')],
         [/\[分镜生成\]/gi, t('[分镜生成]', '[Storyboard]')],
         [/Persistence gap — auto-retry/gi, t('落库未齐套，正在自动重试', 'Persistence incomplete; auto-retrying')],
+        [/auto-retry round \d+ for incomplete categories only/gi, t('仅重试未完成分类', 'retry unfinished categories only')],
+        [/Import-only retry/gi, t('仅重试落库', 'import-only retry')],
         [/Reconnecting to in-progress analysis task/gi, t('正在恢复后台分析进度', 'Restoring background analysis progress')],
         [/\[Scene Units Sync\]/gi, t('[场景同步]', '[Scene sync]')],
         [/\[Stage 2 Asset Index\]/gi, t('[资产清单]', '[Asset inventory]')],
@@ -13488,9 +13490,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         },
                                     }
                                 );
-                                const subCreated = subtaskImportReport?.createdSubjectItems?.length || 0;
-                                const subSkipped = subtaskImportReport?.skippedSubjectItems?.length || 0;
-                                onLog?.(`[Stage 3 Asset Design] Subtask import done key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} created=${subCreated} skipped=${subSkipped}`, 'success');
+                                if (!subtaskImportReport || typeof subtaskImportReport !== 'object') {
+                                    subtaskImportError = 'import returned non-object result';
+                                    onLog?.(`[Stage 3 Asset Design] Subtask import failed key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}: ${subtaskImportError}`, 'warning');
+                                } else {
+                                    const subCreated = subtaskImportReport?.createdSubjectItems?.length || 0;
+                                    const subSkipped = subtaskImportReport?.skippedSubjectItems?.length || 0;
+                                    if (subCreated <= 0 && subSkipped <= 0) {
+                                        subtaskImportError = 'import produced zero created/skipped rows';
+                                        onLog?.(`[Stage 3 Asset Design] Subtask import empty key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`, 'warning');
+                                    } else {
+                                        onLog?.(`[Stage 3 Asset Design] Subtask import done key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} created=${subCreated} skipped=${subSkipped}`, 'success');
+                                    }
+                                }
                             } catch (subImportErr) {
                                 subtaskImportError = String(subImportErr?.message || subImportErr || 'unknown import error');
                                 onLog?.(`[Stage 3 Asset Design] Subtask import failed key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}: ${subImportErr?.message || subImportErr}`, 'warning');
@@ -13510,7 +13522,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const assetImportReady = Boolean(
                             subtaskHasImportableSubjects
                             && subtaskImportReport
+                            && typeof subtaskImportReport === 'object'
                             && !subtaskImportError
+                            && (
+                                Number(subtaskImportReport?.createdSubjectItems?.length || 0) > 0
+                                || Number(subtaskImportReport?.skippedSubjectItems?.length || 0) > 0
+                            )
                         );
                         setAnalysisFlowStatus({
                             phase: "assets_gen",
@@ -13541,6 +13558,117 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
 
             const resultByKey = new Map();
+            const cachedSubjectsByKey = new Map();
+            const isCategoryPersistOk = (settled) => {
+                if (!settled || settled.status !== 'fulfilled' || !settled.value) return false;
+                if (settled.value.skippedExisting) return true;
+                const report = settled.value.subtaskImportReport;
+                if (!report || typeof report !== 'object') return false;
+                const created = Number(report?.createdSubjectItems?.length || 0);
+                const skipped = Number(report?.skippedSubjectItems?.length || 0);
+                const importErr = String(settled.value?.subtaskImportError || '').trim();
+                // Category completes independently only when that category actually landed in DB
+                // (created or skipped-as-existing). LLM-returned JSON alone is not enough.
+                return !importErr && (created > 0 || skipped > 0);
+            };
+            const importCachedCategorySubjects = async (pData, roundTag = '') => {
+                const key = String(pData.key || '');
+                const cached = cachedSubjectsByKey.get(key);
+                if (!cached || typeof cached !== 'object') return null;
+                const subtaskPayload = buildSubtaskSubjectsPayload(key, cached);
+                if (!hasAnySubjects(subtaskPayload)) return null;
+                const subtaskTraceId = `${phase2BatchTraceId}-${key}${roundTag}-importonly`;
+                const subtaskImportSessionId = `import-${subtaskTraceId}`;
+                const subtaskTargetTypes = (() => {
+                    if (key === 'characters') return ['characters'];
+                    if (key === 'props') return ['props'];
+                    if (key === 'environments' && Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0) {
+                        return requestedTargetFilters.filter((item) => ['environments', 'posters', 'covers'].includes(item));
+                    }
+                    if (key === 'environments') return ['environments', 'posters', 'covers'];
+                    if (key === 'posters') return ['posters', 'covers'];
+                    return undefined;
+                })();
+                onLog?.(
+                    `[Stage 3 Asset Design] Import-only retry key=${key} trace_id=${subtaskTraceId} (reuse prior LLM subjects_json; no LLM re-call)`,
+                    'info'
+                );
+                let subtaskImportReport = null;
+                let subtaskImportError = '';
+                try {
+                    subtaskImportReport = await importSubjectsJsonWithDedupe(
+                        JSON.stringify(subtaskPayload, null, 2),
+                        {
+                            reason: `phase2-subtask-${key}-importonly`,
+                            subjectsJson: subtaskPayload,
+                            importOptions: {
+                                onLog,
+                                projectId,
+                                episodeId: activeEpisode?.id,
+                                importSessionId: subtaskImportSessionId,
+                                targetEntityTypes: subtaskTargetTypes,
+                                overwriteExistingSubjects: Boolean(options?.isRetryPhase2),
+                                suppressAlerts: true,
+                            },
+                        }
+                    );
+                    if (!subtaskImportReport || typeof subtaskImportReport !== 'object') {
+                        subtaskImportError = 'import returned non-object result';
+                    } else {
+                        const subCreated = Number(subtaskImportReport?.createdSubjectItems?.length || 0);
+                        const subSkipped = Number(subtaskImportReport?.skippedSubjectItems?.length || 0);
+                        if (subCreated <= 0 && subSkipped <= 0) {
+                            subtaskImportError = 'import produced zero created/skipped rows';
+                        }
+                    }
+                } catch (subImportErr) {
+                    subtaskImportError = String(subImportErr?.message || subImportErr || 'unknown import error');
+                }
+                const assetImportReady = Boolean(
+                    !subtaskImportError
+                    && subtaskImportReport
+                    && typeof subtaskImportReport === 'object'
+                    && (
+                        Number(subtaskImportReport?.createdSubjectItems?.length || 0) > 0
+                        || Number(subtaskImportReport?.skippedSubjectItems?.length || 0) > 0
+                    )
+                );
+                if (key === 'environments' && assetImportReady) {
+                    markEnvironmentAssetDesignReady(`env-import-only-ok:${subtaskTraceId}`);
+                }
+                if (assetImportReady) {
+                    onLog?.(
+                        `[Stage 3 Asset Design] Import-only retry succeeded key=${key} created=${Number(subtaskImportReport?.createdSubjectItems?.length || 0)} skipped=${Number(subtaskImportReport?.skippedSubjectItems?.length || 0)}`,
+                        'success'
+                    );
+                    if (key && !assetsGenCompletedKeys.includes(key)) {
+                        assetsGenCompletedKeys.push(key);
+                    }
+                    setAnalysisFlowStatus({
+                        phase: 'assets_gen',
+                        message: t(
+                            `✨ 第四阶段资产推演中 (${assetsGenCompletedKeys.length}/${targetAssetsCount} 已完成${assetsGenCompletedKeys.map(getAssetDesignTaskLabel).filter(Boolean).join('、') ? `：${assetsGenCompletedKeys.map(getAssetDesignTaskLabel).filter(Boolean).join('、')}` : ''})...`,
+                            `Running Stage 4 asset design (${assetsGenCompletedKeys.length}/${targetAssetsCount} completed)...`
+                        ),
+                        highlightHint: buildAssetReadyHint(key),
+                    });
+                }
+                return {
+                    status: 'fulfilled',
+                    value: {
+                        key,
+                        traceId: subtaskTraceId,
+                        importSessionId: subtaskImportSessionId,
+                        result: null,
+                        analysisText: '',
+                        subjectsJson: cached,
+                        hasImportableSubjects: true,
+                        subtaskImportReport,
+                        subtaskImportError,
+                        importOnlyRetry: true,
+                    },
+                };
+            };
             let pendingAssetPrompts = [...promptsData];
             let assetRetryRound = 0;
             while (pendingAssetPrompts.length > 0) {
@@ -13549,14 +13677,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (assetRetryRound > 1) {
                     const retryTypes = pendingAssetPrompts.map((item) => item.key).filter(Boolean).join(', ');
                     onLog?.(
-                        `[Stage 3 Asset Design] Persistence gap — auto-retry round ${assetRetryRound} for: ${retryTypes || 'unknown'}.`,
+                        `[Stage 3 Asset Design] Persistence gap — auto-retry round ${assetRetryRound} for incomplete categories only: ${retryTypes || 'unknown'}.`,
                         'warning'
                     );
                     setAnalysisFlowStatus({
                         phase: 'assets_gen',
                         message: t(
-                            `资产落库未齐套，正在自动重试（第 ${assetRetryRound} 轮）：${retryTypes}`,
-                            `Asset persistence incomplete; auto-retry round ${assetRetryRound}: ${retryTypes}`
+                            `资产落库未齐套，正在自动重试未完成分类（第 ${assetRetryRound} 轮）：${retryTypes}`,
+                            `Asset persistence incomplete; auto-retrying unfinished categories (round ${assetRetryRound}): ${retryTypes}`
                         ),
                     });
                     const delayMs = Math.min(
@@ -13568,7 +13696,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
 
                 const batchResults = await Promise.allSettled(
-                    pendingAssetPrompts.map((pData, index) => {
+                    pendingAssetPrompts.map(async (pData, index) => {
+                        const key = String(pData.key || '');
+                        // Category-level: if prior LLM already returned subjects_json, retry import only.
+                        if (assetRetryRound > 1 && cachedSubjectsByKey.has(key)) {
+                            const importOnlySettled = await importCachedCategorySubjects(
+                                pData,
+                                `-r${assetRetryRound}`
+                            );
+                            if (importOnlySettled && isCategoryPersistOk(importOnlySettled)) {
+                                return importOnlySettled.value;
+                            }
+                        }
                         const stableIndex = Math.max(0, promptsData.findIndex((item) => item.key === pData.key));
                         return runOneAssetSubtask(
                             pData,
@@ -13578,7 +13717,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     })
                 );
                 pendingAssetPrompts.forEach((pData, idx) => {
-                    resultByKey.set(String(pData.key || ''), batchResults[idx]);
+                    const settled = batchResults[idx];
+                    resultByKey.set(String(pData.key || ''), settled);
+                    if (settled?.status === 'fulfilled' && settled.value?.subjectsJson) {
+                        const payload = buildSubtaskSubjectsPayload(pData.key, settled.value.subjectsJson);
+                        if (hasAnySubjects(payload)) {
+                            cachedSubjectsByKey.set(String(pData.key || ''), settled.value.subjectsJson);
+                        }
+                    }
                 });
 
                 const nextPending = [];
@@ -13588,15 +13734,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         nextPending.push(pData);
                         continue;
                     }
-                    if (settled.status === 'fulfilled' && settled.value?.skippedExisting) continue;
-                    if (settled.status === 'fulfilled') {
-                        const created = Number(settled.value?.subtaskImportReport?.createdSubjectItems?.length || 0);
-                        const skipped = Number(settled.value?.subtaskImportReport?.skippedSubjectItems?.length || 0);
-                        const hasImportableSubjects = Boolean(settled.value?.hasImportableSubjects);
-                        const importErr = String(settled.value?.subtaskImportError || '').trim();
-                        const ok = !importErr && (hasImportableSubjects || created > 0 || skipped > 0);
-                        if (ok) continue;
-                    }
+                    if (isCategoryPersistOk(settled)) continue;
                     nextPending.push(pData);
                 }
 
@@ -13627,9 +13765,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const dbCount = countDbEntitiesByType(reportType, dbEntities);
                             if (dbCount >= Number(filtered.keptRows || 0)) {
                                 onLog?.(
-                                    `[Stage 3 Asset Design] ${pData.key} already covered in DB (${dbCount}/${filtered.keptRows}); stop retrying.`,
+                                    `[Stage 3 Asset Design] ${pData.key} already covered in DB (${dbCount}/${filtered.keptRows}); stop retrying this category.`,
                                     'info'
                                 );
+                                // Synthesize an ok settled result so merge/status treat this category as done.
+                                resultByKey.set(String(pData.key || ''), {
+                                    status: 'fulfilled',
+                                    value: {
+                                        key: pData.key,
+                                        skippedExisting: true,
+                                        hasImportableSubjects: false,
+                                        subtaskImportReport: {
+                                            createdSubjectItems: [],
+                                            skippedSubjectItems: [{
+                                                type: reportType,
+                                                reason: 'db_coverage',
+                                                count: dbCount,
+                                            }],
+                                        },
+                                        subtaskImportError: '',
+                                    },
+                                });
                                 continue;
                             }
                             stillMissing.push(pData);
@@ -13780,12 +13936,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const created = Number(item.value.subtaskImportReport?.createdSubjectItems?.length || 0);
                             const skipped = Number(item.value.subtaskImportReport?.skippedSubjectItems?.length || 0);
                             const hasImportableSubjects = Boolean(item.value.hasImportableSubjects);
-                            const status = item.value.subtaskImportError
-                                ? 'import_failed'
-                                : (hasImportableSubjects || created > 0 || skipped > 0 ? 'ok' : 'incomplete_return');
+                            const status = item.value.skippedExisting
+                                ? 'ok'
+                                : (item.value.subtaskImportError
+                                    ? 'import_failed'
+                                    : ((created > 0 || skipped > 0)
+                                        ? 'ok'
+                                        : (hasImportableSubjects ? 'import_failed' : 'incomplete_return')));
                             const recommendation = status === 'incomplete_return'
                                 ? `LLM 已返回但未解析到可入库的 ${fallbackKey} 资产。建议点击“重跑失败路由”，仅重跑缺失资产类型：${fallbackKey}。`
-                                : '';
+                                : (status === 'import_failed' && !item.value.subtaskImportError
+                                    ? `LLM 已返回 ${fallbackKey}，但实体库落库为 0。建议仅重跑该分类：${fallbackKey}。`
+                                    : '');
                             return {
                                 key: item.value.key || fallbackKey,
                                 traceId: item.value.traceId || fallbackTraceId,
