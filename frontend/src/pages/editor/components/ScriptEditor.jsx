@@ -39,7 +39,7 @@ import { unwrapInjectionSection, wrapInjectionSection } from '../../../lib/promp
 import { collectLlmJsonTextCandidates, sanitizeLlmTextForJsonImport } from '../../../lib/llmJsonExtract';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex, useTabMediaRefreshEffect
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex, getMainEnvironmentName, useTabMediaRefreshEffect
 } from '../editorHelpers';
 
 import { 
@@ -7264,6 +7264,77 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setStoryboardTaskProgress(EMPTY_STORYBOARD_TASK_PROGRESS);
     }, []);
 
+    /** Drop kickoff/progress claims for selected scenes only; keep unrelated storyboards. */
+    const clearStoryboardTrackingForScenes = useCallback((markerSceneIds = [], dbSceneIds = [], {
+        rearmEnvGate = false,
+    } = {}) => {
+        const markerSet = new Set(
+            (Array.isArray(markerSceneIds) ? markerSceneIds : [])
+                .map((id) => String(id || '').trim())
+                .filter(Boolean)
+        );
+        const dbIdSet = new Set(
+            (Array.isArray(dbSceneIds) ? dbSceneIds : [])
+                .map((id) => Number(id))
+                .filter((id) => Number.isFinite(id) && id > 0)
+        );
+        if (markerSet.size <= 0 && dbIdSet.size <= 0) return;
+
+        const nextMarkerKickoffs = new Set();
+        for (const marker of (storyboardKickoffByMarkerRef.current || [])) {
+            if (!markerSet.has(String(marker || '').trim())) nextMarkerKickoffs.add(marker);
+        }
+        storyboardKickoffByMarkerRef.current = nextMarkerKickoffs;
+
+        const nextDbKickoffs = new Set();
+        for (const dbId of (storyboardKickoffByDbIdRef.current || [])) {
+            if (!dbIdSet.has(Number(dbId))) nextDbKickoffs.add(dbId);
+        }
+        storyboardKickoffByDbIdRef.current = nextDbKickoffs;
+
+        const nextPromises = new Map();
+        for (const [key, value] of (storyboardKickoffPromisesRef.current || new Map()).entries()) {
+            const asMarker = String(key || '').trim();
+            const asDbId = Number(key);
+            if (markerSet.has(asMarker) || (Number.isFinite(asDbId) && dbIdSet.has(asDbId))) continue;
+            nextPromises.set(key, value);
+        }
+        storyboardKickoffPromisesRef.current = nextPromises;
+
+        pendingStoryboardKickoffsRef.current = (pendingStoryboardKickoffsRef.current || []).filter((item) => {
+            const marker = String(item?.markerSceneId || '').trim();
+            const dbId = Number(item?.dbSceneIdHint || item?.dbSceneId || 0);
+            if (marker && markerSet.has(marker)) return false;
+            if (Number.isFinite(dbId) && dbId > 0 && dbIdSet.has(dbId)) return false;
+            return true;
+        });
+
+        const prevProgress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
+        const nextItems = {};
+        Object.entries(prevProgress.items || {}).forEach(([marker, item]) => {
+            const stableMarker = String(marker || '').trim();
+            const itemDbId = Number(item?.dbSceneId || 0);
+            if (markerSet.has(stableMarker)) return;
+            if (Number.isFinite(itemDbId) && itemDbId > 0 && dbIdSet.has(itemDbId)) return;
+            nextItems[stableMarker] = item;
+        });
+        const rebuilt = normalizeStoryboardTaskProgress({
+            ...prevProgress,
+            items: nextItems,
+            started: Object.keys(nextItems).length,
+            completed: Object.values(nextItems).filter((row) => String(row?.status || '').toLowerCase() === 'completed').length,
+            failed: Object.values(nextItems).filter((row) => String(row?.status || '').toLowerCase() === 'failed').length,
+            running: Object.values(nextItems).filter((row) => ['starting', 'generating', 'importing', 'waiting_env'].includes(String(row?.status || '').toLowerCase())).length,
+        });
+        storyboardTaskProgressRef.current = rebuilt;
+        setStoryboardTaskProgress(rebuilt);
+
+        if (rearmEnvGate) {
+            environmentAssetReadyRef.current = false;
+            environmentAssetDesignPendingRef.current = true;
+        }
+    }, []);
+
     const isStoryboardAutoStartEnabled = useCallback(async () => {
         if (stage3AutoStartCacheRef.current && typeof stage3AutoStartCacheRef.current === 'object') {
             return stage3AutoStartCacheRef.current.storyboard_generation !== false;
@@ -7400,6 +7471,64 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         return Array.from(byKey.values());
     }, []);
+
+    /**
+     * Reverse of collectSceneLinkedEnvironmentNames: find workspace scenes whose
+     * linked ENV set intersects the ENV names being regenerated/cleared.
+     * familyMatch: main ENV X also matches `{N}度X` / `X_状态` derivatives.
+     * When envNames is null/empty → all scenes that link to any ENV.
+     */
+    const resolveScenesLinkedToEnvironmentNames = useCallback(async (envNames = null, {
+        familyMatch = true,
+    } = {}) => {
+        const empty = { dbSceneIds: [], markerSceneIds: [], matchedEnvNames: [] };
+        if (!activeEpisode?.id || typeof fetchScenes !== 'function') return empty;
+        const dbScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+        if (!Array.isArray(dbScenes) || dbScenes.length <= 0) return empty;
+
+        const named = Array.isArray(envNames)
+            ? envNames.map((n) => normalizeSubjectName(n)).filter(Boolean)
+            : [];
+        const anyEnv = named.length <= 0;
+        const targetKeys = new Set(named.map((n) => normalizeSubjectKey(n)).filter(Boolean));
+        const targetMains = new Set(
+            named.map((n) => normalizeSubjectKey(getMainEnvironmentName(n))).filter(Boolean)
+        );
+
+        const dbSceneIds = [];
+        const markerSceneIds = [];
+        const matchedEnvNames = new Set();
+
+        for (const scene of dbScenes) {
+            const linked = collectSceneLinkedEnvironmentNames(scene);
+            if (!linked.length) continue;
+            let hit = false;
+            if (anyEnv) {
+                hit = true;
+                linked.forEach((name) => matchedEnvNames.add(name));
+            } else {
+                for (const name of linked) {
+                    const key = normalizeSubjectKey(name);
+                    const mainKey = normalizeSubjectKey(getMainEnvironmentName(name));
+                    if (targetKeys.has(key) || (familyMatch && mainKey && targetMains.has(mainKey))) {
+                        hit = true;
+                        matchedEnvNames.add(name);
+                    }
+                }
+            }
+            if (!hit) continue;
+            const dbId = Number(scene?.id || 0);
+            if (Number.isFinite(dbId) && dbId > 0) dbSceneIds.push(dbId);
+            const marker = String(scene?.scene_no || scene?.scene_id || scene?.scene_code || '').trim();
+            if (marker) markerSceneIds.push(marker);
+        }
+
+        return {
+            dbSceneIds: [...new Set(dbSceneIds)],
+            markerSceneIds: [...new Set(markerSceneIds)],
+            matchedEnvNames: [...matchedEnvNames],
+        };
+    }, [activeEpisode?.id, collectSceneLinkedEnvironmentNames]);
 
     const loadEnvironmentEntitiesForStoryboardGate = useCallback(async () => {
         const pid = Number(projectId || 0);
@@ -17375,8 +17504,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
      *   all | script_opt → everything (Stage 1+)
      *   extract_assets → keep Stage 1; clear 2.1+ (index/scenes/assets/storyboard)
      *   scene_beats → keep Stage 1+2.1 (+ assets); clear scene markdown/scenes/shots
-     *   assets_gen → clear entity design (+ entities); clear storyboard when ENV involved
+     *   assets_gen → clear entity design (+ entities); clear storyboard only when ENV design is touched
      *   storyboard → clear shots / shot_content only
+     *
+     * Storyboard depends on asset_design_environment only — character / prop / poster-cover
+     * clears must never wipe workspace shots. Pass purgeStoryboard=true|false to override.
      */
     async function clearAnalysisArtifactsFromStage(fromStage, options = {}) {
         if (!activeEpisode?.id) return false;
@@ -17387,9 +17519,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             targetEntityTypes = null,
             markerSceneIds = null,
             dbSceneIds = null,
+            environmentNamesToPurge = null,
             reason = 'analysis-downstream-clear',
             refreshEpisode = true,
             resetRuntimePanels = true,
+            purgeStoryboard = null,
         } = options;
 
         const clearAll = stage === 'all' || stage === 'script_opt';
@@ -17406,9 +17540,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const assetDesignKeys = entityDesignKeysFromPurgeTypes(
             stage === 'assets_gen' ? purgeTypes : null
         );
-        const assetsIncludeEnv = !purgeTypes
-            || purgeTypes.includes('environment')
-            || purgeTypes.includes('cover_poster');
+        // ENV-only storyboard dependency. Never treat cover_poster as ENV.
+        const assetsTouchEnvironment = (() => {
+            if (stage !== 'assets_gen') return false;
+            if (purgeStoryboard === true) return true;
+            if (purgeStoryboard === false) return false;
+            if (Array.isArray(purgeTypes)) return purgeTypes.includes('environment');
+            // Full clear (null types): assume ENV is included unless caller overrides.
+            return true;
+        })();
 
         if (onLog) {
             onLog(
@@ -17426,9 +17566,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 endSceneOrchestrationPanelTracking();
             }
-            if (clearFromStoryboard && (clearFromSceneBeats || assetsIncludeEnv || stage === 'storyboard')) {
+            if (clearFromStoryboard && (clearFromSceneBeats || stage === 'storyboard')) {
                 resetStoryboardKickoffTracking();
             }
+            // assets_gen + ENV: defer tracking reset until linked scenes are resolved (scoped).
             if (clearAll) {
                 clearAnalysisSessionProgressSnapshot(activeEpisode.id);
                 clearEpisodeAnalysisProgress(activeEpisode.id);
@@ -17486,12 +17627,60 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     );
                 }
             }
-        } else if (stage === 'storyboard' || (stage === 'assets_gen' && assetsIncludeEnv)) {
-            await purgeEpisodeWorkspaceShots({
-                dbSceneIds,
-                markerSceneIds,
-                reason: `${reason}-shots`,
-            });
+        } else if (stage === 'storyboard' || (stage === 'assets_gen' && assetsTouchEnvironment)) {
+            let scopedDbSceneIds = Array.isArray(dbSceneIds) ? dbSceneIds : null;
+            let scopedMarkerSceneIds = Array.isArray(markerSceneIds) ? markerSceneIds : null;
+            // ENV clear: only wipe shots for scenes linked to the regenerated ENV set.
+            // Unrelated scenes keep their storyboards.
+            if (stage === 'assets_gen' && assetsTouchEnvironment) {
+                const hasExplicitScope = (
+                    (Array.isArray(scopedDbSceneIds) && scopedDbSceneIds.length > 0)
+                    || (Array.isArray(scopedMarkerSceneIds) && scopedMarkerSceneIds.length > 0)
+                );
+                if (!hasExplicitScope) {
+                    const linked = await resolveScenesLinkedToEnvironmentNames(
+                        Array.isArray(environmentNamesToPurge) ? environmentNamesToPurge : null,
+                        { familyMatch: true }
+                    );
+                    scopedDbSceneIds = linked.dbSceneIds;
+                    scopedMarkerSceneIds = linked.markerSceneIds;
+                    if (onLog) {
+                        onLog(
+                            linked.dbSceneIds.length > 0
+                                ? t(
+                                    `[资产清理] 仅清除关联 ENV 的分镜：${linked.dbSceneIds.length} 场（${(linked.markerSceneIds || []).slice(0, 8).join('、') || '—'}${(linked.markerSceneIds || []).length > 8 ? '…' : ''}）`,
+                                    `[Asset clear] Purging storyboards only for ENV-linked scenes: ${linked.dbSceneIds.length} scene(s) (${(linked.markerSceneIds || []).slice(0, 8).join(', ') || '—'}${(linked.markerSceneIds || []).length > 8 ? '…' : ''})`
+                                )
+                                : t(
+                                    '[资产清理] 未找到关联 ENV 的场景，跳过分镜清理',
+                                    '[Asset clear] No ENV-linked scenes found; skipping storyboard purge'
+                                ),
+                            'info'
+                        );
+                    }
+                }
+                if (
+                    (!Array.isArray(scopedDbSceneIds) || scopedDbSceneIds.length <= 0)
+                    && (!Array.isArray(scopedMarkerSceneIds) || scopedMarkerSceneIds.length <= 0)
+                ) {
+                    // Nothing ENV-related to clear — keep all storyboards.
+                } else {
+                    clearStoryboardTrackingForScenes(scopedMarkerSceneIds, scopedDbSceneIds, {
+                        rearmEnvGate: true,
+                    });
+                    await purgeEpisodeWorkspaceShots({
+                        dbSceneIds: scopedDbSceneIds,
+                        markerSceneIds: scopedMarkerSceneIds,
+                        reason: `${reason}-shots`,
+                    });
+                }
+            } else {
+                await purgeEpisodeWorkspaceShots({
+                    dbSceneIds: scopedDbSceneIds,
+                    markerSceneIds: scopedMarkerSceneIds,
+                    reason: `${reason}-shots`,
+                });
+            }
         }
 
         if (clearFromAssets || clearAll) {
@@ -17528,9 +17717,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     assetDesignKeys
                 );
                 episodePatch.ai_entity_design_result = filteredDesign;
-                if (assetsIncludeEnv) {
-                    episodePatch.shot_content = '';
-                }
+                // Do not blank episode-level shot_content on scoped ENV clear —
+                // workspace shots for unrelated scenes must remain authoritative.
             } else if (stage === 'storyboard') {
                 episodePatch.shot_content = '';
             }
@@ -22116,10 +22304,48 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 throw new Error(t('缺少第二阶段资产清单，无法重跑资产生成。', 'Missing Stage 2 subject index. Cannot rerun asset generation.'));
             }
 
-            // Clear targeted asset-design temp (+ storyboard when ENV/poster types are included).
+            // Storyboard depends on ENV design only — wipe shots only when ENV will actually rerun.
+            const retryTargetTypes = Array.isArray(options.targetEntityTypes)
+                ? options.targetEntityTypes
+                : null;
+            const normalizedPurgeTypes = normalizeEntityPurgeTypes(retryTargetTypes);
+            let shouldPurgeStoryboard = false;
+            if (Array.isArray(normalizedPurgeTypes)) {
+                shouldPurgeStoryboard = normalizedPurgeTypes.includes('environment');
+            } else {
+                const stage3Config = await ensureStage3AutoStartCache();
+                const envAutoStartOn = stage3Config?.asset_design_environment !== false;
+                const subjectHasEnvRows = /(?:^|\n)\s*\|[^|\n]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(resolvedSubjectIndexText)
+                    || /(?:^|\n)\s*S\d+[^\n|]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(resolvedSubjectIndexText);
+                shouldPurgeStoryboard = Boolean(envAutoStartOn && subjectHasEnvRows);
+            }
+
+            // Clear targeted asset-design temp (+ storyboard only for ENV-linked scenes).
+            const singleEnvName = String(options?.rerunSubject?.name || '').trim();
+            const environmentNamesToPurge = shouldPurgeStoryboard
+                ? (singleEnvName ? [singleEnvName] : null) // null = all scenes linked to any ENV
+                : [];
+            onLog?.(
+                shouldPurgeStoryboard
+                    ? (
+                        singleEnvName
+                            ? t(
+                                `[资产清理] 将仅清除关联环境「${singleEnvName}」的分镜`,
+                                `[Asset clear] Will purge storyboards only for scenes linked to ENV "${singleEnvName}"`
+                            )
+                            : t(
+                                '[资产清理] 将仅清除关联 ENV 的分镜（无关场景保留）',
+                                '[Asset clear] Will purge storyboards only for ENV-linked scenes (unrelated scenes kept)'
+                            )
+                    )
+                    : t('[资产清理] 保留现有分镜（本次不重跑环境资产设计）', '[Asset clear] Keeping existing storyboards (environment design is not being regenerated)'),
+                'info'
+            );
             await clearAnalysisArtifactsFromStage('assets_gen', {
                 preserveProgressUi: true,
-                targetEntityTypes: options.targetEntityTypes || null,
+                targetEntityTypes: retryTargetTypes,
+                purgeStoryboard: shouldPurgeStoryboard,
+                environmentNamesToPurge: shouldPurgeStoryboard ? environmentNamesToPurge : [],
                 reason: 'retry-phase2-downstream-clear',
                 refreshEpisode: true,
             });
@@ -22192,13 +22418,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 
                 onLog?.('Stage 3 asset design retry completed.', 'success');
 
-                // Resume storyboards deferred/blocked while ENV was incomplete.
-                const retryTargets = Array.isArray(options?.targetEntityTypes)
-                    ? options.targetEntityTypes.map((x) => String(x || '').trim().toLowerCase())
-                    : [];
-                const touchedEnv = retryTargets.length === 0
-                    || retryTargets.some((k) => ['environments', 'environment', 'env', 'posters', 'covers'].includes(k));
-                if (touchedEnv) {
+                // Resume storyboards only when ENV design was (re)touched — posters alone do not count.
+                if (shouldPurgeStoryboard) {
                     markEnvironmentAssetDesignReady('phase2-asset-retry');
                     try {
                         await flushPendingStoryboardKickoffsRef.current?.('phase2-asset-retry');
