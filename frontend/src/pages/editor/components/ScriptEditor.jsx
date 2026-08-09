@@ -2295,22 +2295,25 @@ const formatSupervisorGapLabels = (probe = {}, tFn = (zh) => zh) => {
 const canTrustStageArtifactDuringLiveRun = (phase, stepKey, { isLive = false } = {}) => {
     if (!isLive) return true;
     const rawPhase = String(phase || '').trim().toLowerCase();
-    if (['failed', 'warning', 'idle'].includes(rawPhase)) return true;
-    if (rawPhase === 'completed') return true;
+    if (['failed', 'warning', 'idle', 'completed'].includes(rawPhase)) return true;
     const normalizedPhase = normalizeAnalysisLivePhase(phase);
     const phaseIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(normalizedPhase);
     const stepIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(String(stepKey || '').trim());
     if (phaseIdx < 0 || stepIdx < 0) return false;
-    // After 2.1, scene orchestration and asset design run concurrently.
-    if (phaseIdx >= 2 && (stepKey === 'scene_beats' || stepKey === 'assets_gen')) return true;
-    if (stepKey === 'script_opt' || stepKey === 'extract_assets') return phaseIdx > stepIdx;
+    // Never trust leftovers for the stage currently being (re)generated — stage reruns
+    // keep prior outputs until the rewrite lands; those must not look "Ready".
+    if (phaseIdx === stepIdx) return false;
+    // After 2.1 fan-out: trust only the concurrent sibling, not the current phase.
+    if (
+        (normalizedPhase === 'scene_beats' && stepKey === 'assets_gen')
+        || (normalizedPhase === 'assets_gen' && stepKey === 'scene_beats')
+    ) {
+        return true;
+    }
     return phaseIdx > stepIdx;
 };
 
 const isAnalysisLiveStepActive = (phase, stepKey, { isLive = false, stepReady = false } = {}) => {
-    // Once a stage artifact is ready, clear that stage's running UI even if later
-    // stages (or the sibling concurrent branch) are still in flight.
-    if (stepReady) return false;
     if (!isLive) return false;
     const rawPhase = String(phase || '').trim().toLowerCase();
     if (['failed', 'warning', 'completed', 'idle'].includes(rawPhase)) return false;
@@ -2318,10 +2321,11 @@ const isAnalysisLiveStepActive = (phase, stepKey, { isLive = false, stepReady = 
     const phaseIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(normalizedPhase);
     const stepIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(String(stepKey || '').trim());
     if (phaseIdx < 0 || stepIdx < 0) return false;
+    // Current phase always shows running — even when a leftover artifact still exists.
     if (phaseIdx === stepIdx) return true;
-    // Mirror concurrent fan-out after Subject Index (scene orchestration ∥ asset design).
-    if (phaseIdx === 2 && stepKey === 'assets_gen') return true;
-    if (phaseIdx === 3 && stepKey === 'scene_beats') return true;
+    // Sibling concurrent branch: clear its spinner once that sibling's artifact is ready.
+    if (phaseIdx === 2 && stepKey === 'assets_gen') return !stepReady;
+    if (phaseIdx === 3 && stepKey === 'scene_beats') return !stepReady;
     return false;
 };
 
@@ -2350,6 +2354,7 @@ const isStoryboardProgressUnresolved = (progressValue) => {
 const resolveAnalysisProgressDisplayState = ({
     isAnalyzing = false,
     isRetryingPhase2 = false,
+    isRerunningStoryboard = false,
     phase = 'idle',
     reportStatus = '',
     storyboardProgress = null,
@@ -2359,7 +2364,12 @@ const resolveAnalysisProgressDisplayState = ({
     const normalizedReport = String(reportStatus || '').trim().toLowerCase();
     const storyboardUnresolved = Boolean(hasOpenStoryboardWork)
         || isStoryboardProgressUnresolved(storyboardProgress);
-    const isLive = Boolean(isAnalyzing || isRetryingPhase2 || storyboardUnresolved);
+    const isLive = Boolean(
+        isAnalyzing
+        || isRetryingPhase2
+        || isRerunningStoryboard
+        || storyboardUnresolved
+    );
 
     if (isLive) {
         return { isLive: true, displayPhase: 'running' };
@@ -3886,6 +3896,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return resolveAnalysisProgressDisplayState({
             isAnalyzing,
             isRetryingPhase2,
+            isRerunningStoryboard,
             phase: analysisFlowStatus?.phase,
             reportStatus: analysisUiReport?.status,
             storyboardProgress: progress,
@@ -3898,6 +3909,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisUiReport?.storyboardTaskProgress,
         isAnalyzing,
         isRetryingPhase2,
+        isRerunningStoryboard,
         storyboardTaskProgress,
     ]);
 
@@ -4085,9 +4097,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         if (terminalPhase || terminalReport) {
-            // A leftover completed/failed report from a prior run must not kill a new
-            // in-flight pipeline that already entered an active phase (Stage 1/2 rerun).
-            if (pipelineStillLive && !terminalPhase) {
+            // Never heal-away live flags while any pipeline lock is held — leftover
+            // terminal report/phase from a prior run is common on repeated reruns.
+            if (pipelineStillLive) {
                 return;
             }
             // Terminal UI means the run has finished writing results; never leave the
@@ -4095,9 +4107,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             latestIsAnalyzingRef.current = false;
             setIsAnalyzing(false);
             setIsRetryingPhase2(false);
-            if (!pipelineStillLive) {
-                setActiveAnalysisTaskId('');
-            }
+            setActiveAnalysisTaskId('');
             return;
         }
 
@@ -17702,6 +17712,41 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
     }, [beginAnalysisTimer, resetAnalysisRunProgressLogs, t]);
 
+    /** Shared entry for stage rerun buttons — must flip status/phase before any await. */
+    const beginStageRerunUi = useCallback(({
+        phase = 'script_opt',
+        message = '',
+        startedAt = Date.now(),
+        resetLogs = false,
+        setAnalyzing = true,
+        setRetryingPhase2 = false,
+        runTag = '',
+    } = {}) => {
+        analysisProgressDismissedRef.current = false;
+        analysisStopRequestedRef.current = false;
+        // Block stale session/progress snapshots from overwriting this rerun's UI.
+        analysisRunInFlightRef.current = true;
+        latestIsAnalyzingRef.current = Boolean(setAnalyzing || setRetryingPhase2);
+        if (resetLogs) resetAnalysisRunProgressLogs();
+        beginAnalysisTimer(startedAt);
+        if (setAnalyzing) setIsAnalyzing(true);
+        if (setRetryingPhase2) setIsRetryingPhase2(true);
+        setAnalysisUiReport((prev) => ({
+            ...(prev && typeof prev === 'object' ? prev : {}),
+            status: 'running',
+            startedAt,
+            durationMs: 0,
+            error: '',
+            warning: '',
+            ...(runTag ? { runTag } : {}),
+        }));
+        setAnalysisFlowStatus({
+            phase: String(phase || 'script_opt').trim() || 'script_opt',
+            message: String(message || '').trim()
+                || t('正在重跑当前阶段...', 'Rerunning the current stage...'),
+        });
+    }, [beginAnalysisTimer, resetAnalysisRunProgressLogs, t]);
+
     const prepareSceneAnalysisResumeState = useCallback(async () => {
         const sceneAnalysisText = String(
             activeEpisode?.ai_scene_analysis_scene_markdown
@@ -20045,28 +20090,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let importReport = null;
         let runtimeMeta = null;
 
-        analysisProgressDismissedRef.current = false;
         analysisRunInFlightRef.current = true;
         phase2AutoCompletedEpisodeRef.current = null;
         phase2GenerationInFlightRef.current = false;
         sceneBeatsOnlyRerunInFlightRef.current = false;
-        analysisStopRequestedRef.current = false;
-        latestIsAnalyzingRef.current = true;
-        beginAnalysisTimer(startedAt);
-        setIsAnalyzing(true);
-        // Must flip status away from a prior "completed" before any await; otherwise the
-        // heal effect clears isAnalyzing and the progress UI never shows as live.
-        setAnalysisUiReport((prev) => ({
-            ...(prev && typeof prev === 'object' ? prev : {}),
-            status: 'running',
-            startedAt,
-            durationMs: 0,
-            error: '',
-            warning: '',
-        }));
-        setAnalysisFlowStatus({
+        beginStageRerunUi({
             phase: 'extract_assets',
             message: t('正在读取第一阶段产物并重新执行第二阶段。', 'Re-running Stage 2 from saved Stage 1 outputs.'),
+            startedAt,
+            resetLogs: true,
         });
 
         try {
@@ -20541,20 +20573,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const unitsForRerun = rerunMode === 'single' ? (targetSceneUnits || []) : executableCandidates;
         const orchestrationSceneCount = unitsForRerun.length;
 
-        analysisProgressDismissedRef.current = false;
-        setIsAnalyzing(true);
         analysisRunInFlightRef.current = true;
-        analysisStopRequestedRef.current = false;
-        setAnalysisUiReport((prev) => ({
-            ...(prev && typeof prev === 'object' ? prev : {}),
-            status: 'running',
-            startedAt,
-            durationMs: 0,
-            runTag: 'scene_beats_only_rerun',
-            error: '',
-            warning: '',
-        }));
-        setAnalysisFlowStatus({
+        sceneBeatsOnlyRerunInFlightRef.current = true;
+        beginStageRerunUi({
             phase: 'scene_beats',
             message: shouldRunEnvAssetDesign
                 ? (
@@ -20573,8 +20594,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ? t(`正在重排单个场景：${targetSceneId}...`, `Rerunning scene beats for ${targetSceneId}...`)
                         : t(`正在同步发起全部 ${orchestrationSceneCount} 场场景编排...`, `Sync-launching all ${orchestrationSceneCount} scene beats...`)
                 ),
+            startedAt,
+            runTag: 'scene_beats_only_rerun',
         });
-        sceneBeatsOnlyRerunInFlightRef.current = true;
         logSelectedScriptAnalysisApi(rerunLabel);
 
         let envAssetDesignPromise = null;
@@ -21002,6 +21024,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ensurePersistedSubjectIndexForDownstream,
         ensureStage3AutoStartCache,
         awaitPendingStoryboardTasks,
+        beginStageRerunUi,
         extractPureSubjectIndexText,
         extractSceneDisplayLabel,
         extractStage1AdaptedScriptBody,
@@ -21176,25 +21199,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
         const startedAt = Date.now();
-        analysisProgressDismissedRef.current = false;
         analysisRunInFlightRef.current = true;
-        analysisStopRequestedRef.current = false;
-        latestIsAnalyzingRef.current = true;
-        beginAnalysisTimer(startedAt);
-        setIsAnalyzing(true);
-        // Must flip status away from a prior "completed" before any await; otherwise the
-        // heal effect clears isAnalyzing and the progress UI never shows as live.
-        setAnalysisUiReport((prev) => ({
-            ...(prev && typeof prev === 'object' ? prev : {}),
-            status: 'running',
-            startedAt,
-            durationMs: 0,
-            error: '',
-            warning: '',
-        }));
-        setAnalysisFlowStatus({
+        beginStageRerunUi({
             phase: 'script_opt',
             message: t('正在重跑剧本统筹...', 'Rerunning script coordination...'),
+            startedAt,
+            resetLogs: true,
         });
 
         try {
@@ -21241,8 +21251,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             lastLoadedAnalysisRef.current = analyzedText || "";
 
             notifyUiMessage(t('剧本统筹重跑完成。', 'Script coordination rerun completed.'), 'success');
-            setAnalysisUiReport({
+            setAnalysisUiReport((prev) => ({
+                ...(prev && typeof prev === 'object' ? prev : {}),
                 status: 'completed',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                message: t('剧本统筹重跑已完成！', 'Script coordination rerun has finished!'),
+                error: '',
+                warning: '',
+            }));
+            setAnalysisFlowStatus({
+                phase: 'completed',
                 message: t('剧本统筹重跑已完成！', 'Script coordination rerun has finished!'),
             });
             if (typeof triggerStageOutputsRefresh === 'function') {
@@ -21252,23 +21271,37 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             console.error('[ScriptEditor] Failed to rerun script optimization:', error);
             const friendlyErr = (error?.response?.data?.detail) || error?.message || String(error);
             if (error?.message && error.message.includes('用户已中断')) {
-                setAnalysisUiReport({
+                setAnalysisUiReport((prev) => ({
+                    ...(prev && typeof prev === 'object' ? prev : {}),
                     status: 'warning',
+                    startedAt,
+                    durationMs: Date.now() - startedAt,
                     error: '',
                     warning: t('剧本统筹重跑已由用户停止。', 'Script coordination rerun was stopped by user.'),
+                }));
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: t('剧本统筹重跑已由用户停止。', 'Script coordination rerun was stopped by user.'),
                 });
             } else {
-                setAnalysisUiReport({
+                setAnalysisUiReport((prev) => ({
+                    ...(prev && typeof prev === 'object' ? prev : {}),
                     status: 'error',
+                    startedAt,
+                    durationMs: Date.now() - startedAt,
                     error: friendlyErr,
+                    message: t(`剧本统筹重跑失败：${friendlyErr}`, `Script coordination rerun failed: ${friendlyErr}`),
+                }));
+                setAnalysisFlowStatus({
+                    phase: 'failed',
                     message: t(`剧本统筹重跑失败：${friendlyErr}`, `Script coordination rerun failed: ${friendlyErr}`),
                 });
                 alert(t(`剧本统筹重跑失败：${friendlyErr}`, `Script coordination rerun failed: ${friendlyErr}`));
             }
         } finally {
+            latestIsAnalyzingRef.current = false;
             setIsAnalyzing(false);
             analysisRunInFlightRef.current = false;
-            setAnalysisFlowStatus({ phase: 'idle', message: '' });
             setActiveAnalysisTaskId('');
             analysisStopRequestedRef.current = false;
             clearAnalysisTaskMarker(activeEpisode?.id);
@@ -21390,23 +21423,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
-        analysisProgressDismissedRef.current = false;
-        setIsRerunningStoryboard(true);
         const rerunStartedAt = Date.now();
-        beginAnalysisTimer(rerunStartedAt);
-        setAnalysisFlowStatus({
+        setIsRerunningStoryboard(true);
+        beginStageRerunUi({
             phase: 'storyboard',
             message: rerunMode === 'single'
                 ? t(`正在重跑分镜生成：${targetSceneId}...`, `Rerunning storyboard for ${targetSceneId}...`)
                 : t(`正在重跑全部 ${targets.length} 场分镜生成...`, `Rerunning storyboard for all ${targets.length} scenes...`),
-        });
-        setAnalysisUiReport((prev) => ({
-            ...(prev && typeof prev === 'object' ? prev : {}),
-            status: 'running',
             startedAt: rerunStartedAt,
-            durationMs: 0,
-            error: '',
-        }));
+            // Storyboard local rerun owns its own flag; keep global analyzing off so Stage 1–4 actions stay usable.
+            setAnalyzing: false,
+        });
+        latestIsAnalyzingRef.current = false;
 
         let started = 0;
         try {
@@ -21534,10 +21562,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }));
         } finally {
             setIsRerunningStoryboard(false);
+            analysisRunInFlightRef.current = false;
         }
     }, [
         awaitPendingStoryboardTasks,
-        beginAnalysisTimer,
+        beginStageRerunUi,
         checkSceneLinkedEnvironmentDesignReady,
         kickoffStoryboardForImportedScene,
         loadEnvironmentEntitiesForStoryboardGate,
@@ -21875,13 +21904,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ));
         if (!confirmed) return;
 
-        analysisStopRequestedRef.current = false;
         activeAnalysisTaskIdsRef.current.clear();
         setActiveAnalysisTaskId('');
-        setIsRetryingPhase2(true);
-        setAnalysisFlowStatus({
+        beginStageRerunUi({
             phase: 'assets_gen',
             message: t('正在重跑失败子任务路由（仅失败路由）...', 'Rerunning failed asset subtask routes only...'),
+            startedAt: Date.now(),
+            setAnalyzing: false,
+            setRetryingPhase2: true,
+            runTag: 'failed_asset_subtask_rerun',
         });
         logSelectedScriptAnalysisApi('Failed subtask rerun');
 
@@ -22013,12 +22044,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } finally {
             clearAnalysisTaskMarker(activeEpisode?.id);
             setIsRetryingPhase2(false);
+            analysisRunInFlightRef.current = false;
         }
     }, [
         isAnalyzing,
         analysisUiReport,
         activeEpisode?.id,
         activeEpisode?.ai_scene_analysis_subject_index,
+        beginStageRerunUi,
         clearAnalysisTaskMarker,
         ensureStoryboardTasksForImportedScenes,
         llmRawResultContent,
@@ -22057,20 +22090,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             persistAnalysisSessionSnapshot(activeEpisode.id);
         }
         phase2RetryOptionsRef.current = options;
-        analysisStopRequestedRef.current = false;
-        analysisProgressDismissedRef.current = false;
         activeAnalysisTaskIdsRef.current.clear();
         setActiveAnalysisTaskId('');
-        setIsRetryingPhase2(true);
-        setAnalysisUiReport((prev) => ({
-            ...(prev && typeof prev === 'object' ? prev : {}),
-            status: 'running',
+        beginStageRerunUi({
+            phase: 'assets_gen',
+            message: t('正在重跑资产设计...', 'Rerunning asset design...'),
             startedAt: Date.now(),
-            durationMs: 0,
+            setAnalyzing: false,
+            setRetryingPhase2: true,
             runTag: 'phase2_retry',
-            error: '',
-            warning: '',
-        }));
+        });
         clearAnalysisTaskMarker(activeEpisode?.id);
         logSelectedScriptAnalysisApi('Stage 3 asset rerun');
         try {
@@ -22204,6 +22233,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } finally {
             clearAnalysisTaskMarker(activeEpisode?.id);
             setIsRetryingPhase2(false);
+            analysisRunInFlightRef.current = false;
         }
     };
 
@@ -24361,7 +24391,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             !analysisLive || assetDesignReady
                         );
                         const storyboardCanStart = Boolean(sceneMarkdownReady || hasSceneMarkdownArtifact);
-                        const storyboardInFlight = storyboardRunningCount > 0
+                        const storyboardInFlight = Boolean(isRerunningStoryboard)
+                            || storyboardRunningCount > 0
                             || (trackedStoryboardStartedCount > (trackedStoryboardCompletedCount + storyboardFailedCount));
                         const storyboardSettled = storyboardAutoStarted
                             && !storyboardInFlight
@@ -24414,12 +24445,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         <div className="absolute top-4 left-10 right-10 h-0.5 bg-white/10 -z-10"></div>
                         
                         <div className="flex flex-col items-center gap-2 relative">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${scriptOptReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (scriptOptActive ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
-                                {scriptOptReady ? <Check className="w-4 h-4" /> : (scriptOptActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 1)}
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${scriptOptActive ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : (scriptOptReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                                {scriptOptActive ? <Loader2 className="w-4 h-4 animate-spin" /> : (scriptOptReady ? <Check className="w-4 h-4" /> : 1)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{getAnalysisStageLabel('script_opt', t)}</span>
-                                {scriptOptReady ? (
+                                {scriptOptActive ? (
+                                    <div className="flex flex-col items-center gap-1">
+                                        {renderProcessingLabel()}
+                                    </div>
+                                ) : scriptOptReady ? (
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                         <button
@@ -24439,23 +24474,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
-                                        {scriptOptActive ? renderProcessingLabel() : (
-                                            <button onClick={handleRerunScriptOptOnly} disabled={!activeEpisode?.id || !canRerunScriptOpt} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                                {t('可重跑', 'Ready')}
-                                            </button>
-                                        )}
+                                        <button onClick={handleRerunScriptOptOnly} disabled={!activeEpisode?.id || !canRerunScriptOpt} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                            {t('可重跑', 'Ready')}
+                                        </button>
                                     </div>
                                 )}
                             </div>
                         </div>
 
                         <div className="flex flex-col items-center gap-2 relative">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${subjectIndexReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : ((subjectIndexActive || scriptOptReady) ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
-                                {subjectIndexReady ? <Check className="w-4 h-4" /> : (subjectIndexActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 2)}
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${subjectIndexActive ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : (subjectIndexReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : ((scriptOptReady || scriptOptActive) ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                                {subjectIndexActive ? <Loader2 className="w-4 h-4 animate-spin" /> : (subjectIndexReady ? <Check className="w-4 h-4" /> : 2)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{getAnalysisStageLabel('extract_assets', t)}</span>
-                                {subjectIndexReady ? (
+                                {subjectIndexActive ? (
+                                    <div className="flex flex-col items-center gap-1">
+                                        {renderProcessingLabel()}
+                                        {renderImportButton('subject_index', canImportSubjectIndex)}
+                                    </div>
+                                ) : subjectIndexReady ? (
                                      <div className="flex items-center gap-1 flex-wrap justify-center">
                                          <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                          {renderImportButton('subject_index', canImportSubjectIndex)}
@@ -24476,13 +24514,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                      </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
-                                        {subjectIndexActive ? renderProcessingLabel() : (scriptOptReady ? (
+                                        {scriptOptReady ? (
                                             <button onClick={handleRestartStage2} disabled={!canRerunSubjectIndex} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                                 {t('可重跑', 'Ready')}
                                             </button>
                                         ) : (
                                             <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
-                                        ))}
+                                        )}
                                         {renderImportButton('subject_index', canImportSubjectIndex)}
                                     </div>
                                 )}
@@ -24490,12 +24528,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
 
                         <div className="flex flex-col items-center gap-2 relative">
-                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${sceneMarkdownReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : ((sceneMarkdownActive || subjectIndexReady) ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
-                                {sceneMarkdownReady ? <Check className="w-4 h-4" /> : (sceneMarkdownActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 3)}
+                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${sceneMarkdownActive ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : (sceneMarkdownReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : ((subjectIndexReady || subjectIndexActive) ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                                {sceneMarkdownActive ? <Loader2 className="w-4 h-4 animate-spin" /> : (sceneMarkdownReady ? <Check className="w-4 h-4" /> : 3)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{getAnalysisStageLabel('scene_beats', t)}</span>
-                                {sceneMarkdownReady ? (
+                                {sceneMarkdownActive ? (
+                                    <div className="flex flex-col items-center gap-1">
+                                        {renderProcessingLabel()}
+                                        <div className="flex items-center gap-1 flex-wrap justify-center">
+                                            {renderImportButton('scene_beats', canImportSceneBeats)}
+                                        </div>
+                                    </div>
+                                ) : sceneMarkdownReady ? (
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                         {renderImportButton('scene_beats', canImportSceneBeats)}
@@ -24512,13 +24557,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
-                                        {sceneMarkdownActive ? renderProcessingLabel() : (subjectIndexReady ? (
+                                        {subjectIndexReady ? (
                                             <button onClick={handleRerunSceneBeatsOnly} disabled={!canRerunSceneBeats} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                                 {t('可重跑', 'Ready')}
                                             </button>
                                         ) : (
                                             <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
-                                        ))}
+                                        )}
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
                                             {renderImportButton('scene_beats', canImportSceneBeats)}
                                             {canEditSceneBeats ? (
@@ -24538,23 +24583,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                         <div className="flex flex-col items-center gap-2 relative">
                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
-                                showAssetFailure
-                                    ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
-                                    : assetDesignReady
-                                        ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
-                                        : (assetDesignActive || subjectIndexReady || hasAssetGenerationPrerequisite
-                                            ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
-                                            : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')
+                                assetDesignActive
+                                    ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                                    : showAssetFailure
+                                        ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
+                                        : assetDesignReady
+                                            ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
+                                            : (subjectIndexReady || hasAssetGenerationPrerequisite
+                                                ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                                                : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')
                             }`}>
-                                {showAssetFailure
-                                    ? <X className="w-4 h-4" />
-                                    : (assetDesignReady
-                                        ? <Check className="w-4 h-4" />
-                                        : (assetDesignActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 4))}
+                                {assetDesignActive
+                                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                                    : (showAssetFailure
+                                        ? <X className="w-4 h-4" />
+                                        : (assetDesignReady
+                                            ? <Check className="w-4 h-4" />
+                                            : 4))}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{getAnalysisStageLabel('assets_gen', t)}</span>
-                                {showAssetFailure ? (
+                                {assetDesignActive ? (
+                                    <div className="flex flex-col items-center gap-1">
+                                        {renderProcessingLabel()}
+                                        {renderImportButton('assets', canImportAssets)}
+                                    </div>
+                                ) : showAssetFailure ? (
                                     <div
                                         className="flex flex-col items-center gap-0.5"
                                         title={workflowCompletenessStats.failedCategories.map((row) => `${t(row.labelZh, row.labelEn)}: ${row.errorMessage || t('生成失败', 'Generation failed')}`).join('\n')}
@@ -24565,8 +24619,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
                                             {renderImportButton('assets', canImportAssets)}
                                             <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={!canRerunAssets} className="text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                                {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                                {isRetryingPhase2 ? t('处理中', 'Processing') : t('重跑失败项', 'Rerun failed')}
+                                                {t('重跑失败项', 'Rerun failed')}
                                             </button>
                                         </div>
                                     </div>
@@ -24575,20 +24628,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                         {renderImportButton('assets', canImportAssets)}
                                         <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={!canRerunAssets} className={`${diagnosticBtnClass} flex items-center gap-1`}>
-                                            {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                             {t('重跑', 'Rerun')}
                                         </button>
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
-                                        {assetDesignActive ? renderProcessingLabel() : ((subjectIndexReady || hasAssetGenerationPrerequisite) ? (
+                                        {(subjectIndexReady || hasAssetGenerationPrerequisite) ? (
                                              <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={!canRerunAssets} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                                {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                                {isRetryingPhase2 ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
+                                                {t('可重跑', 'Ready')}
                                             </button>
                                         ) : (
                                             <span className="text-[10px] text-white/30">{t('待资产清单完成', 'Wait asset inventory')}</span>
-                                        ))}
+                                        )}
                                         {renderImportButton('assets', canImportAssets)}
                                     </div>
                                 )}
@@ -24596,46 +24647,54 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
                         <div className="flex flex-col items-center gap-2 relative">
                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
-                                storyboardFailedCount > 0 && storyboardSettled && storyboardCompletedCount <= 0
-                                    ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
-                                    : storyboardSettled
-                                        ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
-                                        : (storyboardInFlight || storyboardAutoStarted || storyboardCanStart
-                                            ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
-                                            : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')
+                                storyboardInFlight
+                                    ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                                    : storyboardFailedCount > 0 && storyboardSettled && storyboardCompletedCount <= 0
+                                        ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
+                                        : storyboardSettled
+                                            ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
+                                            : (storyboardAutoStarted || storyboardCanStart
+                                                ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                                                : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')
                              }`}>
-                                {storyboardFailedCount > 0 && storyboardSettled && storyboardCompletedCount <= 0
-                                    ? <X className="w-4 h-4" />
-                                    : (storyboardSettled
-                                        ? <Check className="w-4 h-4" />
-                                        : (storyboardInFlight ? <Loader2 className="w-4 h-4 animate-spin" /> : 5))}
+                                {storyboardInFlight
+                                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                                    : (storyboardFailedCount > 0 && storyboardSettled && storyboardCompletedCount <= 0
+                                        ? <X className="w-4 h-4" />
+                                        : (storyboardSettled
+                                            ? <Check className="w-4 h-4" />
+                                            : 5))}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{getAnalysisStageLabel('storyboard', t)}</span>
-                                {storyboardAutoStarted ? (
+                                {storyboardInFlight ? (
+                                    <div className="flex flex-col items-center gap-1">
+                                        {renderProcessingLabel()}
+                                        <span className="text-[10px] text-purple-300">
+                                            {t(
+                                                `进行中 ${storyboardCompletedCount}/${Math.max(storyboardStartedCount, 1)}（运行 ${storyboardRunningCount}）`,
+                                                `Running ${storyboardCompletedCount}/${Math.max(storyboardStartedCount, 1)} (${storyboardRunningCount} active)`
+                                            )}
+                                        </span>
+                                        {renderImportButton('storyboard', canImportStoryboard)}
+                                    </div>
+                                ) : storyboardAutoStarted ? (
                                     <div className="flex flex-col items-center gap-1">
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
                                             <span className={`text-[10px] ${
                                                 storyboardFailedCount > 0 && storyboardCompletedCount <= 0 && storyboardSettled
                                                     ? 'text-red-300'
-                                                    : storyboardInFlight
-                                                        ? 'text-purple-300'
-                                                        : 'text-emerald-400/80'
+                                                    : 'text-emerald-400/80'
                                             }`}>
-                                                {storyboardInFlight
+                                                {storyboardFailedCount > 0
                                                     ? t(
-                                                        `进行中 ${storyboardCompletedCount}/${storyboardStartedCount}（运行 ${storyboardRunningCount}）`,
-                                                        `Running ${storyboardCompletedCount}/${storyboardStartedCount} (${storyboardRunningCount} active)`
+                                                        `完成 ${storyboardCompletedCount}/${storyboardStartedCount}（失败 ${storyboardFailedCount}）`,
+                                                        `Done ${storyboardCompletedCount}/${storyboardStartedCount} (${storyboardFailedCount} failed)`
                                                     )
-                                                    : storyboardFailedCount > 0
-                                                        ? t(
-                                                            `完成 ${storyboardCompletedCount}/${storyboardStartedCount}（失败 ${storyboardFailedCount}）`,
-                                                            `Done ${storyboardCompletedCount}/${storyboardStartedCount} (${storyboardFailedCount} failed)`
-                                                        )
-                                                        : t(
-                                                            `完成 ${storyboardCompletedCount}/${storyboardStartedCount}`,
-                                                            `Done ${storyboardCompletedCount}/${storyboardStartedCount}`
-                                                        )}
+                                                    : t(
+                                                        `完成 ${storyboardCompletedCount}/${storyboardStartedCount}`,
+                                                        `Done ${storyboardCompletedCount}/${storyboardStartedCount}`
+                                                    )}
                                             </span>
                                             {renderImportButton('storyboard', canImportStoryboard)}
                                             <button
@@ -24655,8 +24714,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 disabled={!canRerunStoryboard || storyboardRerunModal.loading}
                                                 className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1"
                                             >
-                                                {(isRerunningStoryboard || storyboardRerunModal.loading) ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                                {(isRerunningStoryboard || storyboardRerunModal.loading)
+                                                {storyboardRerunModal.loading ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                                {storyboardRerunModal.loading
                                                     ? t('处理中', 'Processing')
                                                     : t('可重跑', 'Ready')}
                                             </button>
