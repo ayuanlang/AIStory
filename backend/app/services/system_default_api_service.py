@@ -66,6 +66,8 @@ def normalize_task_category(value: Optional[str]) -> str:
         return "VOICE"
     if raw in {"music"}:
         return "MUSIC"
+    if raw in {"embeddings", "embedding", "embed", "vector"}:
+        return "EMBEDDINGS"
     if raw:
         return raw.upper()
     return "LLM"
@@ -85,6 +87,8 @@ def _candidate_system_categories(task_category: str) -> List[str]:
         return ["Voice"]
     if normalized == "MUSIC":
         return ["Music"]
+    if normalized == "EMBEDDINGS":
+        return ["Embeddings", "Embedding", "LLM"]
     return [normalized.title()]
 
 

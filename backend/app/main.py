@@ -1498,6 +1498,8 @@ from app.api.routers.entities import router as entities_router
 app.include_router(entities_router, prefix=settings.API_V1_STR)
 from app.api.routers.assets import router as assets_router
 app.include_router(assets_router, prefix=settings.API_V1_STR)
+from app.api.routers.knowledge_base import router as knowledge_base_router
+app.include_router(knowledge_base_router, prefix=settings.API_V1_STR)
 from app.api.routers.generate import router as generate_router
 app.include_router(generate_router, prefix=settings.API_V1_STR)
 from app.api.routers.workspace_residual import router as workspace_residual_router

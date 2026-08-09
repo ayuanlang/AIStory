@@ -92,6 +92,7 @@ from app.services.script_analysis_llm_config import (
     _resolve_script_analysis_dropdown_llm_config,
     _script_analysis_action_label,
 )
+from app.services.kb_rag_service import build_kb_rag_injection_for_analyze
 from app.services.shot_generation_prompts import _build_project_prompt_context
 from app.services.soft_delete import _active_entity_clause
 from app.services.subject_index_resolve import (
@@ -534,6 +535,30 @@ async def execute_analyze_scene(
                     len(meta_str),
                     _estimate_tokens(meta_str),
                 )
+
+        # Optional platform knowledge-base RAG (reference-only; never mutates Subject Index names).
+        if is_script_optimization_stage or is_entity_design_phase:
+            try:
+                kb_query_source = str(getattr(request, "text", "") or "")
+                kb_inject = build_kb_rag_injection_for_analyze(
+                    db,
+                    project_metadata=request.project_metadata if isinstance(request.project_metadata, dict) else {},
+                    request_text=kb_query_source,
+                    is_script_optimization_stage=is_script_optimization_stage,
+                    is_entity_design_phase=is_entity_design_phase,
+                    prompt_file=getattr(request, "prompt_file", ""),
+                )
+                kb_block = str((kb_inject or {}).get("block") or "").strip()
+                if kb_block:
+                    user_content = f"{kb_block}\n\n{user_content}"
+                    logger.info(
+                        "[analyze_scene] injected KB RAG references hit_count=%s categories=%s chars=%s",
+                        (kb_inject or {}).get("hit_count"),
+                        (kb_inject or {}).get("categories"),
+                        len(kb_block),
+                    )
+            except Exception as kb_exc:
+                logger.warning("[analyze_scene] KB RAG injection skipped: %s", kb_exc)
 
         if is_script_optimization_stage and getattr(request, "project_id", None):
             try:

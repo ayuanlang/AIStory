@@ -827,14 +827,20 @@ def _find_latest_video_provider_task_from_audit(
     *,
     current_user_id: Optional[int] = None,
     is_superuser: bool = False,
+    allow_result_url_only: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    """Latest video provider_task_id for a shot from billing audit / job snapshots."""
+    """Latest video recovery ref for a shot from billing audit / job snapshots / job files.
+
+    Prefer rows with provider_task_id. When allow_result_url_only=True, also accept
+    succeeded jobs that only retained result.url (common for KIE before task-id persist fix).
+    """
     shot_keys = _resolve_shot_pk_candidates(db, shot_id)
     if not shot_keys:
         return None
 
     from sqlalchemy import String, cast, or_
 
+    from app.services.generation_runtime.job_store import _extract_job_result_url
     from app.services.generation_task_queue import (
         _shot_id_sql_like_patterns,
         find_generation_job_states_by_shot_id,
@@ -996,12 +1002,58 @@ def _find_latest_video_provider_task_from_audit(
         except Exception:
             logger.exception("[VideoJob] audit task_queue lookup failed | shot_id=%s", key)
 
+        # Memory / file / hydrated job snapshots (includes result.url even when task id was lost).
+        try:
+            for job in _collect_video_jobs_for_shot(key):
+                provider_task_id = _extract_provider_task_id_from_mapping(job)
+                result_url = str(_extract_job_result_url((job or {}).get("result")) or "").strip()
+                if not provider_task_id and not (allow_result_url_only and result_url):
+                    continue
+                owner_id = (job or {}).get("user_id")
+                try:
+                    safe_oid = int(owner_id) if owner_id is not None else None
+                except Exception:
+                    safe_oid = None
+                if (
+                    not is_superuser
+                    and current_user_id is not None
+                    and safe_oid is not None
+                    and int(current_user_id) != safe_oid
+                ):
+                    continue
+                candidates.append(
+                    {
+                        "provider_task_id": provider_task_id or None,
+                        "provider": (job or {}).get("provider"),
+                        "model": (job or {}).get("model"),
+                        "system_api_id": (job or {}).get("system_api_id"),
+                        "query_endpoint": (job or {}).get("query_endpoint"),
+                        "shot_id": str((job or {}).get("shot_id") or key),
+                        "user_id": safe_oid,
+                        "job_id": str((job or {}).get("job_id") or "").strip() or None,
+                        "transaction_id": None,
+                        "status": (job or {}).get("status"),
+                        "created_at": (
+                            (job or {}).get("finished_at")
+                            or (job or {}).get("updated_at")
+                            or (job or {}).get("created_at")
+                        ),
+                        "recency_ts": _video_job_recency_ts(job),
+                        "result_url": result_url or None,
+                        "source": (job or {}).get("_lookup_source") or "video_job",
+                    }
+                )
+        except Exception:
+            logger.exception("[VideoJob] audit video_job lookup failed | shot_id=%s", key)
+
     if not candidates:
         return None
 
-    # Latest provider_task_id only: sort by recency, then transaction/job id.
+    # Prefer provider_task_id rows, then result-url-only, then recency.
     candidates.sort(
         key=lambda item: (
+            1 if str(item.get("provider_task_id") or "").strip() else 0,
+            1 if str(item.get("result_url") or "").strip() else 0,
             float(item.get("recency_ts") or 0.0),
             int(item.get("transaction_id") or 0),
             str(item.get("created_at") or ""),
@@ -1297,9 +1349,12 @@ def get_latest_video_job_for_shot(
         safe_shot_id,
         current_user_id=safe_cid,
         is_superuser=is_superuser,
+        allow_result_url_only=True,
     )
-    if not latest or not latest.get("provider_task_id"):
-        raise HTTPException(status_code=404, detail="No provider_task_id found for this shot")
+    if not latest or not (
+        latest.get("provider_task_id") or latest.get("result_url") or latest.get("job_id")
+    ):
+        raise HTTPException(status_code=404, detail="No provider_task_id or stored video result found for this shot")
 
     return {
         "ok": True,
@@ -1309,6 +1364,7 @@ def get_latest_video_job_for_shot(
         "model": latest.get("model"),
         "system_api_id": latest.get("system_api_id"),
         "provider_task_id": latest.get("provider_task_id"),
+        "result_url": latest.get("result_url"),
         "query_endpoint": latest.get("query_endpoint"),
         "shot_id": str(latest.get("shot_id") or safe_shot_id),
         "created_at": latest.get("created_at"),
@@ -1345,12 +1401,62 @@ def query_video_shot_provider_task(
         safe_shot_id,
         current_user_id=safe_cid,
         is_superuser=is_superuser,
+        allow_result_url_only=True,
     )
-    if not latest or not latest.get("provider_task_id"):
-        raise HTTPException(status_code=404, detail="No provider_task_id found for this shot")
+    if not latest:
+        raise HTTPException(status_code=404, detail="No provider_task_id or stored video result found for this shot")
+
+    provider_task_id = str(latest.get("provider_task_id") or "").strip()
+    stored_result_url = str(latest.get("result_url") or "").strip()
+    real_job_id = str(latest.get("job_id") or "").strip()
+
+    # Fallback: job retained the video URL but never persisted provider_task_id (legacy KIE).
+    # Return that URL so the client can re-download / persist-media without a provider poll.
+    if not provider_task_id:
+        if real_job_id:
+            loaded = _load_video_job_for_query(real_job_id)
+            if loaded:
+                from app.services.generation_runtime.job_store import _extract_job_result_url
+                from app.services.generation_runtime.callbacks import _extract_job_provider_task_id
+
+                provider_task_id = (
+                    _extract_job_provider_task_id(loaded)
+                    or _extract_provider_task_id_from_mapping(loaded)
+                    or ""
+                ).strip()
+                stored_result_url = stored_result_url or str(
+                    _extract_job_result_url(loaded.get("result")) or ""
+                ).strip()
+                if provider_task_id:
+                    latest = dict(latest)
+                    latest["provider_task_id"] = provider_task_id
+
+        if not provider_task_id:
+            if not stored_result_url:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No provider_task_id found for this shot, and no stored video result URL is available",
+                )
+            return {
+                "ok": True,
+                "job_id": real_job_id or None,
+                "job_status": latest.get("status") or "succeeded",
+                "provider": latest.get("provider"),
+                "provider_task_id": None,
+                "query_endpoint": latest.get("query_endpoint"),
+                "provider_status": "succeeded",
+                "result_url": stored_result_url,
+                "can_recover": True,
+                "recovery_applied": False,
+                "recovery_skipped_reason": "awaiting_client_confirm",
+                "usage": None,
+                "raw_response": None,
+                "source": latest.get("source") or "job_result",
+                "transaction_id": latest.get("transaction_id"),
+                "shot_id": safe_shot_id,
+            }
 
     job = _build_synthetic_job_from_provider_task_ref(latest, shot_id=safe_shot_id)
-    real_job_id = str(latest.get("job_id") or "").strip()
     if real_job_id:
         loaded = _load_video_job_for_query(real_job_id)
         if loaded:
@@ -1373,6 +1479,10 @@ def query_video_shot_provider_task(
     result["shot_id"] = safe_shot_id
     result["source"] = latest.get("source") or result.get("source")
     result["transaction_id"] = latest.get("transaction_id") or result.get("transaction_id")
+    if not str(result.get("result_url") or "").strip() and stored_result_url:
+        result["result_url"] = stored_result_url
+        result["can_recover"] = True
+        result.setdefault("recovery_skipped_reason", "awaiting_client_confirm")
     return result
 
 

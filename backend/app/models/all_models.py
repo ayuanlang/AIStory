@@ -987,3 +987,128 @@ class MarketIntelReport(Base):
     markdown = Column(Text, nullable=True)
     payload_json = Column(JSON, default={})
     created_at = Column(String, default=now_bj_iso, index=True)
+
+
+class KbWork(Base):
+    """Platform knowledge-base work (IP / title anchor)."""
+    __tablename__ = "kb_works"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=False, index=True)
+    title_en = Column(String, nullable=True)
+    year = Column(String, nullable=True, index=True)
+    genre = Column(String, nullable=True)
+    region = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    created_at = Column(String, default=now_bj_iso, index=True)
+    updated_at = Column(String, default=now_bj_iso)
+
+    entries = relationship("KbEntry", back_populates="work")
+
+
+class KbEntry(Base):
+    """Platform knowledge-base entry (portrait / costume / scenery / plot)."""
+    __tablename__ = "kb_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    work_id = Column(Integer, ForeignKey("kb_works.id"), nullable=True, index=True)
+    # portrait | costume | scenery | plot
+    category = Column(String, nullable=False, index=True)
+    # trope | dialogue | action (plot only)
+    plot_subtype = Column(String, nullable=True, index=True)
+    title = Column(String, nullable=False, index=True)
+    summary = Column(Text, nullable=True)
+    body_text = Column(Text, nullable=True)
+    tags = Column(JSON, default=list)
+    style_keywords = Column(JSON, default=list)
+    # public_domain | reference_ok | fair_use_ref | restricted | blocked
+    license_tier = Column(String, default="reference_ok", nullable=False, index=True)
+    copyright_note = Column(Text, nullable=True)
+    # upload | manual | web | llm
+    source_type = Column(String, default="manual", nullable=False, index=True)
+    source_url = Column(String, nullable=True)
+    # provenance for web/llm ingest (queries, urls, snippet counts, etc.)
+    source_meta = Column(JSON, default=dict)
+    # pending | approved | rejected
+    review_status = Column(String, default="pending", nullable=False, index=True)
+    review_note = Column(Text, nullable=True)
+    reviewed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    reviewed_at = Column(String, nullable=True)
+    cover_url = Column(String, nullable=True)
+    # 0.0–5.0 editorial quality for ranking / governance
+    quality_score = Column(Float, default=3.0, nullable=False, index=True)
+    quality_notes = Column(Text, nullable=True)
+    # mark as gold label for RAG evaluation
+    is_eval_gold = Column(Boolean, default=False, nullable=False, index=True)
+    inject_count = Column(Integer, default=0, nullable=False)
+    # none | pending | ready | failed
+    index_status = Column(String, default="none", nullable=False, index=True)
+    indexed_at = Column(String, nullable=True)
+    index_error = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    created_at = Column(String, default=now_bj_iso, index=True)
+    updated_at = Column(String, default=now_bj_iso)
+
+    work = relationship("KbWork", back_populates="entries")
+    media = relationship("KbEntryMedia", back_populates="entry", cascade="all, delete-orphan")
+    chunks = relationship("KbChunk", back_populates="entry", cascade="all, delete-orphan")
+
+
+class KbEntryMedia(Base):
+    """Media attachments for knowledge-base entries (images / short videos)."""
+    __tablename__ = "kb_entry_media"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entry_id = Column(Integer, ForeignKey("kb_entries.id"), nullable=False, index=True)
+    url = Column(String, nullable=False)
+    # image | video
+    media_type = Column(String, default="image", nullable=False, index=True)
+    filename = Column(String, nullable=True)
+    caption = Column(Text, nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    meta_info = Column(JSON, default=dict)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    created_at = Column(String, default=now_bj_iso, index=True)
+
+    entry = relationship("KbEntry", back_populates="media")
+
+
+class KbChunk(Base):
+    """RAG chunks + embeddings for knowledge-base entries (P1)."""
+    __tablename__ = "kb_chunks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entry_id = Column(Integer, ForeignKey("kb_entries.id"), nullable=False, index=True)
+    chunk_index = Column(Integer, default=0, nullable=False)
+    chunk_text = Column(Text, nullable=False)
+    # JSON float vector (SQLite/Postgres portable; pgvector can replace later)
+    embedding = Column(JSON, nullable=True)
+    embedding_model = Column(String, nullable=True, index=True)
+    embedding_dim = Column(Integer, nullable=True)
+    meta_info = Column(JSON, default=dict)
+    created_at = Column(String, default=now_bj_iso, index=True)
+    updated_at = Column(String, default=now_bj_iso)
+
+    entry = relationship("KbEntry", back_populates="chunks")
+
+
+class KbEvalCase(Base):
+    """Gold queries for knowledge-base RAG evaluation (P4)."""
+    __tablename__ = "kb_eval_cases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=True)
+    query = Column(String, nullable=False)
+    category = Column(String, nullable=True, index=True)
+    # expected entry ids that should appear in top_k
+    expected_entry_ids = Column(JSON, default=list)
+    expected_tags = Column(JSON, default=list)
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(String, default=now_bj_iso, index=True)
+    updated_at = Column(String, default=now_bj_iso)

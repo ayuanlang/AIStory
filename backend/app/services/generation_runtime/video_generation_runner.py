@@ -156,18 +156,30 @@ def _publish_provisional_video_success(
     }
     result_payload["metadata"].setdefault("oss_persist_pending", True)
     result_payload["metadata"].setdefault("bg_persist_owned", True)
+    provider_task_id = ""
+    for key in ("provider_task_id", "task_id", "taskId"):
+        provider_task_id = str(result_payload["metadata"].get(key) or "").strip()
+        if provider_task_id:
+            result_payload["metadata"].setdefault("provider_task_id", provider_task_id)
+            result_payload["metadata"].setdefault("task_id", provider_task_id)
+            result_payload["metadata"].setdefault("taskId", provider_task_id)
+            break
 
     try:
         from app.services.generation_task_queue import mark_generation_task_status_external
 
-        _set_video_job(
-            stable_job_id,
-            status="succeeded",
-            upstream_submit_state="storing_asset",
-            result=result_payload,
-            error=None,
-            finished_at=now_bj_iso(),
-        )
+        job_fields = {
+            "status": "succeeded",
+            "upstream_submit_state": "storing_asset",
+            "result": result_payload,
+            "error": None,
+            "finished_at": now_bj_iso(),
+        }
+        if provider_task_id:
+            job_fields["provider_task_id"] = provider_task_id
+            job_fields["task_id"] = provider_task_id
+            job_fields["taskId"] = provider_task_id
+        _set_video_job(stable_job_id, **job_fields)
         if mark_queue_completed:
             mark_generation_task_status_external(stable_job_id, status="completed", error=None)
 
@@ -2245,6 +2257,26 @@ async def _run_generate_video_job(
         query_endpoint = str(payload_snapshot.get("query_endpoint") or payload_snapshot.get("queryEndpoint") or "").strip()
         if query_endpoint:
             patch_fields["query_endpoint"] = query_endpoint
+        # Persist provider payload markers onto the video job itself (not only the queue row),
+        # so re-download can recover provider_task_id after workers restart.
+        try:
+            job_patch = {
+                "final_provider_payload": payload_snapshot,
+                "final_provider_payload_at": patch_fields.get("final_provider_payload_at"),
+            }
+            if nested_task_id:
+                job_patch["provider_task_id"] = nested_task_id
+                job_patch["task_id"] = nested_task_id
+                job_patch["taskId"] = nested_task_id
+            if query_endpoint:
+                job_patch["query_endpoint"] = query_endpoint
+            _set_video_job(job_id, **job_patch)
+        except Exception:
+            logger.exception(
+                "[VideoJob] persist provider payload onto job failed | job_id=%s provider_task_id=%s",
+                job_id,
+                nested_task_id or None,
+            )
         patch_generation_task_payload(job_id, patch_fields)
         logger.info(
             "[VideoJob] final provider payload recorded | job_id=%s provider=%s model=%s provider_task_id=%s",

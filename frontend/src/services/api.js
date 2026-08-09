@@ -4364,6 +4364,158 @@ export const generateEntityDerived = async (projectId, entityName, baseEntityId,
 
 
 
+export const fetchKbWorks = async (params = {}) => {
+    const response = await api.get('/kb/works', { params });
+    return response.data;
+};
+
+export const createKbWork = async (data) => {
+    const response = await api.post('/kb/works', data);
+    return response.data;
+};
+
+export const fetchKbEntries = async (params = {}) => {
+    const response = await api.get('/kb/entries', { params });
+    return response.data;
+};
+
+export const searchKbEntries = async (payload = {}) => {
+    const response = await api.post('/kb/search', payload);
+    return response.data;
+};
+
+export const searchKbEntriesByImage = async (file, {
+    query = '',
+    category = null,
+    plotSubtype = null,
+    topK = 40,
+    mode = 'hybrid',
+} = {}) => {
+    const payload = new FormData();
+    payload.append('file', file);
+    if (query) payload.append('query', query);
+    if (category) payload.append('category', category);
+    if (plotSubtype) payload.append('plot_subtype', plotSubtype);
+    payload.append('top_k', String(topK));
+    payload.append('mode', mode);
+    const response = await api.post('/kb/search/image', payload);
+    return response.data;
+};
+
+export const captionKbEntryMedia = async (entryId, mediaId, { force = true } = {}) => {
+    const response = await api.post(`/kb/entries/${entryId}/media/${mediaId}/caption`, null, {
+        params: { force: force ? 'true' : 'false' },
+    });
+    return response.data;
+};
+
+export const ingestKbFromWeb = async (payload = {}) => {
+    return await asyncLLMPost('/kb/ingest/web', payload);
+};
+
+export const ingestKbFromText = async (payload = {}) => {
+    return await asyncLLMPost('/kb/ingest/llm', payload);
+};
+
+export const updateKbEntryQuality = async (id, data) => {
+    const response = await api.post(`/kb/entries/${id}/quality`, data);
+    return response.data;
+};
+
+export const fetchKbEvalCases = async () => {
+    const response = await api.get('/kb/eval/cases');
+    return response.data;
+};
+
+export const createKbEvalCase = async (data) => {
+    const response = await api.post('/kb/eval/cases', data);
+    return response.data;
+};
+
+export const runKbEval = async (payload = {}) => {
+    const response = await api.post('/kb/eval/run', payload);
+    return response.data;
+};
+
+export const fetchProjectKbCollection = async (projectId) => {
+    const response = await api.get(`/kb/projects/${projectId}/collection`);
+    return response.data;
+};
+
+export const updateProjectKbCollection = async (projectId, data) => {
+    const response = await api.put(`/kb/projects/${projectId}/collection`, data);
+    return response.data;
+};
+
+export const downloadKbImportTemplateCsv = async () => {
+    const response = await api.get('/kb/import/template.csv', { responseType: 'blob' });
+    return response.data;
+};
+
+export const downloadKbImportTemplateJson = async () => {
+    const response = await api.get('/kb/import/template.json');
+    return response.data;
+};
+
+export const importKbFile = async (file, { dryRun = false, autoApprove = false, reindexApproved = true } = {}) => {
+    const payload = new FormData();
+    payload.append('file', file);
+    payload.append('dry_run', dryRun ? 'true' : 'false');
+    payload.append('auto_approve', autoApprove ? 'true' : 'false');
+    payload.append('reindex_approved', reindexApproved ? 'true' : 'false');
+    const response = await api.post('/kb/import', payload);
+    return response.data;
+};
+
+export const reindexKbEntry = async (id, { sync = false } = {}) => {
+    const response = await api.post(`/kb/entries/${id}/reindex`, null, {
+        params: { sync: sync ? 'true' : 'false' },
+    });
+    return response.data;
+};
+
+export const fetchKbEntry = async (id) => {
+    const response = await api.get(`/kb/entries/${id}`);
+    return response.data;
+};
+
+export const createKbEntry = async (data) => {
+    const response = await api.post('/kb/entries', data);
+    return response.data;
+};
+
+export const updateKbEntry = async (id, data) => {
+    const response = await api.put(`/kb/entries/${id}`, data);
+    return response.data;
+};
+
+export const deleteKbEntry = async (id) => {
+    const response = await api.delete(`/kb/entries/${id}`);
+    return response.data;
+};
+
+export const reviewKbEntry = async (id, data) => {
+    const response = await api.post(`/kb/entries/${id}/review`, data);
+    return response.data;
+};
+
+export const uploadKbEntryMedia = async (entryId, file, optionalData = {}) => {
+    const payload = new FormData();
+    payload.append('file', file);
+    Object.keys(optionalData || {}).forEach((key) => {
+        if (optionalData[key] != null && optionalData[key] !== '') {
+            payload.append(key, optionalData[key]);
+        }
+    });
+    const response = await api.post(`/kb/entries/${entryId}/media/upload`, payload);
+    return response.data;
+};
+
+export const deleteKbEntryMedia = async (entryId, mediaId) => {
+    const response = await api.delete(`/kb/entries/${entryId}/media/${mediaId}`);
+    return response.data;
+};
+
 export const runAdminBillingReconcileSingle = async (payload = {}) => {
     const response = await api.post('/admin/billing-reconcile/single', payload || {});
     return response.data;

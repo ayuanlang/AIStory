@@ -4026,6 +4026,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const stableShotId = String(shotId || '').trim();
             const currentShot = shots.find((s) => String(s?.id || '').trim() === stableShotId);
             const editingBase = (editingShot && String(editingShot?.id || '').trim() === stableShotId) ? editingShot : null;
+            const localBase = { ...(currentShot || editingBase || {}) };
 
             // Important: avoid sending full stale shot object during async generation flows.
             // Only send required fields + explicit changes to prevent overwriting already-generated media URLs.
@@ -4042,20 +4043,31 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             };
 
             const updatedShot = await updateShot(shotId, payload);
+            // Server responses often blank not-yet-persisted provider URLs (temp video stays
+            // local-only until OSS bind). Preserve local media, then let explicit changes win
+            // (including intentional clears like video_url: "").
             const nextShot = (updatedShot && typeof updatedShot === 'object')
-                ? { ...(currentShot || editingBase || {}), ...updatedShot, ...changes }
-                : { ...(currentShot || editingBase || {}), ...changes };
+                ? { ...mergeShotPreservingLocalMedia(localBase, updatedShot), ...changes }
+                : { ...localBase, ...changes };
             setShots(prev => prev.map((s) => {
                 if (String(s?.id || '').trim() !== stableShotId) return s;
                 // Keep list row compact-flagged, but retain any media fields we just persisted
                 // (e.g. prev_shot_frames) so reopen/refresh can still render them.
-                return { ...s, ...nextShot, is_compact: s?.is_compact === true ? true : nextShot?.is_compact };
+                const mergedRow = mergeShotPreservingLocalMedia(s, nextShot);
+                return {
+                    ...mergedRow,
+                    ...changes,
+                    is_compact: s?.is_compact === true ? true : nextShot?.is_compact,
+                };
             }));
 
             // Sync editingShot safely
             setEditingShot(prev => {
                 if (prev && String(prev?.id || '').trim() === stableShotId) {
-                    const merged = { ...prev, ...nextShot };
+                    const merged = {
+                        ...mergeShotPreservingLocalMedia(prev, nextShot),
+                        ...changes,
+                    };
                     // Never re-compact a hydrated drawer after a partial/list-based merge.
                     if (prev.is_compact === false || changes?.technical_notes != null) {
                         merged.is_compact = false;
@@ -5764,9 +5776,44 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 }
             };
 
-            // Resolve + query by shot: latest provider_task_id from billing audit / job snapshots.
-            const result = await queryVideoShotProviderTask(stableShotId, { apply_recovery: false });
-            jobId = String(result?.job_id || '').trim();
+            // Resolve + query by shot: prefer provider_task_id; fall back to stored job result URL.
+            let result = null;
+            try {
+                result = await queryVideoShotProviderTask(stableShotId, { apply_recovery: false });
+            } catch (shotQueryErr) {
+                const detail = shotQueryErr?.response?.data?.detail || shotQueryErr?.message || '';
+                onLog?.('warning', `[VideoTaskQuery] shot query failed: ${detail}`);
+                // Fall back to last known local/job-pool id → job status / provider query.
+                const fallbackJobId = await resolveVideoJobIdForShot(stableShotId);
+                if (fallbackJobId) {
+                    jobId = fallbackJobId;
+                    try {
+                        const status = await getVideoGenerationJobStatus(fallbackJobId);
+                        const statusUrl = extractVideoJobResultUrl(status);
+                        if (statusUrl) {
+                            result = {
+                                ok: true,
+                                job_id: fallbackJobId,
+                                job_status: status?.status,
+                                provider_status: status?.status || 'succeeded',
+                                provider_task_id: status?.provider_task_id || status?.task_id || status?.taskId || null,
+                                result_url: statusUrl,
+                                can_recover: true,
+                                source: 'job_status_fallback',
+                            };
+                        } else {
+                            result = await queryVideoJobProviderTask(fallbackJobId, { apply_recovery: false });
+                        }
+                    } catch (jobFallbackErr) {
+                        console.warn('[VideoTaskQuery] job fallback failed:', jobFallbackErr);
+                        throw shotQueryErr;
+                    }
+                } else {
+                    throw shotQueryErr;
+                }
+            }
+
+            jobId = String(result?.job_id || jobId || '').trim();
             if (jobId && !jobId.startsWith('audit-tx:') && !jobId.startsWith('provider-task:')) {
                 rememberLastVideoJobId(stableShotId, jobId);
             }
@@ -5783,11 +5830,27 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 'succeeded', 'success', 'completed', 'done', 'finish', 'finished', 'complete', 'successful',
             ].includes(statusLower);
             const canDownload = Boolean(result?.can_recover) || Boolean(resultUrl && statusLooksReady);
-            onLog?.('info', `[VideoTaskQuery] shot=${stableShotId} job=${jobId || '-'} provider_task_id=${providerTaskId || '-'} provider_status=${statusText} can_recover=${Boolean(result?.can_recover)} can_download=${canDownload} result_url=${resultUrl ? 'yes' : 'no'}`);
+            onLog?.('info', `[VideoTaskQuery] shot=${stableShotId} job=${jobId || '-'} provider_task_id=${providerTaskId || '-'} provider_status=${statusText} can_recover=${Boolean(result?.can_recover)} can_download=${canDownload} result_url=${resultUrl ? 'yes' : 'no'} source=${result?.source || '-'}`);
 
-            if (!providerTaskId) {
-                showNotification(t('当前镜头没有可查询的供应商任务 ID', 'No provider_task_id available for this shot'), 'warning');
+            if (!providerTaskId && !resultUrl) {
+                showNotification(
+                    t(
+                        '当前镜头没有可查询的供应商任务 ID，也没有可恢复的视频地址',
+                        'No provider_task_id or recoverable video URL for this shot'
+                    ),
+                    'warning'
+                );
                 return;
+            }
+
+            if (!providerTaskId && resultUrl) {
+                onLog?.(
+                    'info',
+                    t(
+                        '未找到供应商任务 ID，将使用任务已保存的视频地址重下载',
+                        'No provider_task_id; re-downloading from the stored job result URL'
+                    )
+                );
             }
 
             if (canDownload) {
@@ -5845,6 +5908,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         refreshShots,
         releaseShotVideoUi,
         rememberLastVideoJobId,
+        resolveVideoJobIdForShot,
         setShotGeneratingState,
         showNotification,
         t,
@@ -9602,6 +9666,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                 // 2. Only PUT durable OSS URLs (and always save prompt). Temp/provider/local
                 // paths are rejected by the API until backend bg OSS / persist-media finishes.
+                // Do NOT include ephemeral video_url in the PUT payload — onUpdateShot preserves
+                // the local preview URL when the server response still has a blank video_url.
                 try {
                     if (durableNow) {
                         await onUpdateShot(targetShotId, newData);
@@ -12010,7 +12076,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             <div 
                                 key={shot.id} 
                                 className="bg-card/90 backdrop-blur-sm rounded-2xl border border-white/10 overflow-hidden group hover:border-primary/40 hover:shadow-[0_8px_30px_rgb(0,0,0,0.5)] shadow-[0_4px_20px_rgb(0,0,0,0.3)] hover:-translate-y-1 transition-all duration-300 cursor-pointer relative"
-                                onClick={() => setEditingShot(shot)}
+                                onClick={() => setEditingShot((prev) => {
+                                    if (prev && String(prev?.id || '') === String(shot?.id || '')) {
+                                        return mergeShotPreservingLocalMedia(prev, shot, {
+                                            markHydrated: prev?.is_compact === false,
+                                        });
+                                    }
+                                    return shot;
+                                })}
                             >
                                 {/* Image / Thumbnail */}
                                 <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "" : "aspect-video"} bg-black/60 flex items-center justify-center text-muted-foreground relative group-hover:bg-black/40 transition-colors overflow-hidden`}>

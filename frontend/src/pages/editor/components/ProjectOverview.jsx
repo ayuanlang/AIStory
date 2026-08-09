@@ -256,6 +256,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         language: "英文 / English",
         season_occurrence: "",
         video_sound: true,
+        kb_enabled: false,
+        kb_collection_only: false,
+        kb_collection_ids: [],
         borrowed_films: [],
         plot_summary: "",
         music_recommendation: "",
@@ -2860,6 +2863,34 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             />
                             <label htmlFor="hasExistingAssetsOverview" className="text-sm font-semibold text-primary/95 cursor-pointer">
                                 {t('有现有资产', 'Has Existing Assets')}
+                            </label>
+                        </div>
+                        <div className="flex items-center gap-2 mt-[28px] pl-1 md:col-span-2">
+                            <input
+                                type="checkbox"
+                                id="kbEnabledOverview"
+                                checked={!!info.kb_enabled}
+                                onChange={(e) => updateField('kb_enabled', e.target.checked)}
+                                className="w-4 h-4 text-primary focus:ring-primary/30 rounded border-white/20 bg-background"
+                            />
+                            <label htmlFor="kbEnabledOverview" className="text-sm font-semibold text-primary/95 cursor-pointer">
+                                {t('启用知识库参考（Stage1/资产设计 RAG）', 'Enable Knowledge Base refs (Stage1 / asset design RAG)')}
+                            </label>
+                        </div>
+                        <div className="flex items-center gap-2 mt-[28px] pl-1 md:col-span-2">
+                            <input
+                                type="checkbox"
+                                id="kbCollectionOnlyOverview"
+                                checked={!!info.kb_collection_only}
+                                onChange={(e) => updateField('kb_collection_only', e.target.checked)}
+                                className="w-4 h-4 text-primary focus:ring-primary/30 rounded border-white/20 bg-background"
+                                disabled={!info.kb_enabled}
+                            />
+                            <label htmlFor="kbCollectionOnlyOverview" className="text-sm font-semibold text-primary/95 cursor-pointer">
+                                {t('仅使用项目收藏集（知识库）', 'KB collection-only mode')}
+                                {Array.isArray(info.kb_collection_ids) && info.kb_collection_ids.length > 0
+                                    ? ` · ${info.kb_collection_ids.length}`
+                                    : ''}
                             </label>
                         </div>
                     </div>

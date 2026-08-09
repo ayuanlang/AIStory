@@ -39,6 +39,7 @@ import Editor from './Editor';
 import InputGroup from './editor/components/InputGroup';
 import SettingsPage from './Settings';
 import AssetsLibrary from '../components/AssetsLibrary';
+import KnowledgeLibrary from '../components/KnowledgeLibrary';
 import { ProjectOverview } from './editor/components/ProjectOverview';
 import { 
     Plus, 
@@ -77,6 +78,7 @@ import {
     TrendingUp,
     Eye,
     EyeOff,
+    BookOpen,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -1891,25 +1893,29 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         ? t('我的项目', 'My Projects')
         : activeTab === 'assets'
             ? t('素材库', 'Assets Library')
-            : activeTab === 'market_research'
-                ? t('行业分析 & 热榜', 'Industry & Trending')
-                : activeTab === 'settings'
-                    ? t('设置', 'Settings')
-                    : activeTab === 'about'
-                        ? t('关于', 'About')
-                        : activeTab;
+            : activeTab === 'knowledge'
+                ? t('知识库', 'Knowledge Base')
+                : activeTab === 'market_research'
+                    ? t('行业分析 & 热榜', 'Industry & Trending')
+                    : activeTab === 'settings'
+                        ? t('设置', 'Settings')
+                        : activeTab === 'about'
+                            ? t('关于', 'About')
+                            : activeTab;
 
     const activeTabDescription = activeTab === 'projects'
         ? t('管理和编辑你的分镜脚本。', 'Manage and edit your storyboard scripts.')
         : activeTab === 'assets'
             ? t('管理你生成的角色和场景素材。', 'Manage your generated characters and scenes.')
-            : activeTab === 'market_research'
-                ? t('拉取 AI 短剧行业分析与热榜，并按时间存档。', 'Fetch AI short-drama industry analysis and trending lists, archived by time.')
-                : activeTab === 'settings'
-                    ? t('管理你的账户偏好设置。', 'Manage your account preferences.')
-                    : activeTab === 'about'
-                        ? t('了解产品定位与支持方式。', 'Learn about the product and support channels.')
-                        : '';
+            : activeTab === 'knowledge'
+                ? t('肖像、服饰、美景与剧情经典参考，经审核后供创作检索。', 'Classic portrait, costume, scenery and plot references for creative retrieval after review.')
+                : activeTab === 'market_research'
+                    ? t('拉取 AI 短剧行业分析与热榜，并按时间存档。', 'Fetch AI short-drama industry analysis and trending lists, archived by time.')
+                    : activeTab === 'settings'
+                        ? t('管理你的账户偏好设置。', 'Manage your account preferences.')
+                        : activeTab === 'about'
+                            ? t('了解产品定位与支持方式。', 'Learn about the product and support channels.')
+                            : '';
 
     const openSettingsPage = () => {
         trackMenuAction('project_list.sidebar.settings', t('设置', 'Settings'), () => {
@@ -2054,6 +2060,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                         onClick={openTrashModal}
                     />
                     <SidebarItem id="assets" icon={Image} label={t('素材库', 'Assets Library')} />
+                    <SidebarItem id="knowledge" icon={BookOpen} label={t('知识库', 'Knowledge Base')} />
                     <SidebarItem id="market_research" icon={TrendingUp} label={t('行业分析', 'Industry')} />
                     
                     {currentUser?.is_superuser && (
@@ -2128,6 +2135,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                 <div className="space-y-2 flex-1 overflow-y-auto pr-1">
                     <SidebarItem id="projects" icon={Folder} label={t('我的项目', 'My Projects')} compact={false} mobile badgeCount={totalUnreadReviewCount} />
                     <SidebarItem id="assets" icon={Image} label={t('素材库', 'Assets Library')} compact={false} mobile />
+                    <SidebarItem id="knowledge" icon={BookOpen} label={t('知识库', 'Knowledge Base')} compact={false} mobile />
                     <SidebarItem id="market_research" icon={TrendingUp} label={t('行业分析', 'Industry')} compact={false} mobile />
                     {currentUser?.is_superuser && (
                         <>
@@ -2748,6 +2756,12 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                     currentEpisodeId={assetsScopeSnapshot?.activeEpisodeId ?? null}
                                     projectOptionsProp={projects}
                                 />
+                            </div>
+                        )}
+
+                        {activeTab === 'knowledge' && (
+                            <div className="h-full bg-card/30 rounded-3xl border border-white/5 overflow-hidden">
+                                <KnowledgeLibrary currentUser={currentUser} projectOptions={projects} />
                             </div>
                         )}
 

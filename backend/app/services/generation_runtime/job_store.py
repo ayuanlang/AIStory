@@ -664,11 +664,13 @@ def _job_sort_key(item: Dict[str, Any]) -> datetime:
     return datetime.utcnow()
 
 
-_JOB_RESULT_TOP_LEVEL_KEYS = ("url", "type", "provider", "model", "error")
+_JOB_RESULT_TOP_LEVEL_KEYS = ("url", "video_url", "image_url", "type", "provider", "model", "error")
 _JOB_RESULT_METADATA_KEYS = (
     "provider",
     "model",
     "task_id",
+    "taskId",
+    "provider_task_id",
     "job_id",
     "status",
     "persistence_retry_count",
@@ -1206,6 +1208,42 @@ def _set_image_job(job_id: str, **fields) -> None:
     _clear_generation_job_pool_cache()
 
 
+def _promote_provider_task_ids_into_job_fields(fields: Dict[str, Any], current: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Keep provider task ids on the job record so re-download / audit recovery can find them."""
+    patched = dict(fields or {})
+    current = current if isinstance(current, dict) else {}
+
+    def _first_task_id(*sources: Any) -> str:
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            for key in ("provider_task_id", "task_id", "taskId"):
+                value = str(source.get(key) or "").strip()
+                if value:
+                    return value
+        return ""
+
+    result = patched.get("result") if isinstance(patched.get("result"), dict) else {}
+    result_meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    existing = _first_task_id(patched, current, result, result_meta)
+    if not existing:
+        return patched
+
+    patched.setdefault("provider_task_id", existing)
+    patched.setdefault("task_id", existing)
+    patched.setdefault("taskId", existing)
+
+    if isinstance(result, dict):
+        next_result = dict(result)
+        next_meta = dict(result_meta)
+        next_meta.setdefault("provider_task_id", existing)
+        next_meta.setdefault("task_id", existing)
+        next_meta.setdefault("taskId", existing)
+        next_result["metadata"] = next_meta
+        patched["result"] = next_result
+    return patched
+
+
 def _set_video_job(job_id: str, **fields) -> None:
     with VIDEO_JOB_LOCK:
         _prune_video_jobs_locked()
@@ -1221,6 +1259,13 @@ def _set_video_job(job_id: str, **fields) -> None:
         previous_result_url = _extract_job_result_url(current.get("result"))
         if "result" in fields:
             fields["result"] = _compact_job_result(fields.get("result"))
+        fields = _promote_provider_task_ids_into_job_fields(fields, current)
+        # Never clobber an already-known provider task id with blank updates.
+        for task_key in ("provider_task_id", "task_id", "taskId"):
+            incoming = str(fields.get(task_key) or "").strip()
+            existing = str(current.get(task_key) or "").strip()
+            if existing and not incoming:
+                fields.pop(task_key, None)
         current.update(fields)
         current["job_id"] = job_id
 

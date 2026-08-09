@@ -1267,6 +1267,11 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             ("script_progress_pipeline_nodes", getattr(models, "ScriptProgressPipelineNode", None)),
             ("script_progress_issues", getattr(models, "ScriptProgressIssue", None)),
             ("market_intel_reports", getattr(models, "MarketIntelReport", None)),
+            ("kb_works", getattr(models, "KbWork", None)),
+            ("kb_entries", getattr(models, "KbEntry", None)),
+            ("kb_entry_media", getattr(models, "KbEntryMedia", None)),
+            ("kb_chunks", getattr(models, "KbChunk", None)),
+            ("kb_eval_cases", getattr(models, "KbEvalCase", None)),
         ]:
             try:
                 if tmodel is None:
