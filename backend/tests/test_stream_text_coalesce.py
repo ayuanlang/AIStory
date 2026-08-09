@@ -59,3 +59,45 @@ def test_extract_stream_marks_snapshot_event_types():
     })
     assert text == "Hello"
     assert finish is None
+
+
+def test_responses_api_terminal_events_are_stream_stop_signals():
+    """KIE GPT (e.g. gpt-5-6-luna) uses /codex/v1/responses and may never send [DONE]."""
+    from app.services.llm_service import LLMService
+
+    svc = LLMService()
+    for event_type in (
+        "response.completed",
+        "response.failed",
+        "response.incomplete",
+        "error",
+        "message_stop",
+    ):
+        assert event_type in svc._STREAM_TERMINAL_EVENT_TYPES
+
+    text, finish = svc._extract_stream_chunk_text_and_finish({
+        "type": "response.completed",
+        "response": {
+            "status": "completed",
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "done-body"}]}],
+        },
+    })
+    assert "done-body" in text
+    assert finish == "completed"
+
+
+def test_kie_responses_input_keeps_system_and_user_prompts():
+    """KIE codex responses has no instructions field — system must be in input."""
+    from app.services.llm_service import LLMService
+
+    svc = LLMService()
+    instructions, response_input = svc._build_kie_responses_input([
+        {"role": "system", "content": "SYSTEM_RULES"},
+        {"role": "user", "content": "USER_SCRIPT"},
+        {"role": "assistant", "content": "PRIOR"},
+    ])
+    assert instructions == "SYSTEM_RULES"
+    assert [row["role"] for row in response_input] == ["system", "user", "assistant"]
+    assert response_input[0]["content"] == [{"type": "input_text", "text": "SYSTEM_RULES"}]
+    assert response_input[1]["content"] == [{"type": "input_text", "text": "USER_SCRIPT"}]
+    assert response_input[2]["content"] == [{"type": "output_text", "text": "PRIOR"}]

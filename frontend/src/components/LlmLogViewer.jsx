@@ -21,12 +21,36 @@ export default function LlmLogViewer({ log, onClose }) {
   let messages = [];
   let completionContent = '';
 
+  const normalizeResponsesInput = (input, instructions) => {
+    const rows = [];
+    if (Array.isArray(input)) {
+      for (const item of input) {
+        if (!item || typeof item !== 'object') continue;
+        const role = String(item.role || 'user').toLowerCase() || 'user';
+        rows.push({ role, content: item.content });
+      }
+    }
+    const instr = typeof instructions === 'string' ? instructions.trim() : '';
+    const hasSystem = rows.some((r) => r.role === 'system' || r.role === 'developer');
+    // Legacy KIE payloads put system text only in top-level instructions.
+    if (instr && !hasSystem) {
+      rows.unshift({ role: 'system', content: instr });
+    }
+    return rows.length ? rows : null;
+  };
+
   const getMsgs = (obj) => {
     if (!obj) return null;
     if (Array.isArray(obj)) return obj;
     if (obj.messages && Array.isArray(obj.messages)) return obj.messages;
     if (obj.payload && obj.payload.messages && Array.isArray(obj.payload.messages)) return obj.payload.messages;
     if (obj.request && obj.request.messages && Array.isArray(obj.request.messages)) return obj.request.messages;
+    // KIE / OpenAI Responses API: prompts live in payload.input (+ optional instructions).
+    const responsesMsgs =
+      normalizeResponsesInput(obj.input, obj.instructions)
+      || normalizeResponsesInput(obj.payload?.input, obj.payload?.instructions)
+      || normalizeResponsesInput(obj.request?.input, obj.request?.instructions);
+    if (responsesMsgs) return responsesMsgs;
     return null;
   };
 
@@ -60,8 +84,13 @@ export default function LlmLogViewer({ log, onClose }) {
     if (typeof content === 'string') return <div className="prose prose-invert max-w-none prose-sm"><Markdown>{content}</Markdown></div>;
     if (Array.isArray(content)) {
       return content.map((c, i) => {
-        if (c.type === 'text') return <div key={i} className="prose prose-invert max-w-none prose-sm overflow-x-auto break-words"><Markdown>{c.text}</Markdown></div>;
-        if (c.type === 'image_url') return <div key={i} className="mt-2 opacity-50 text-xs truncate">[Image URL: {c.image_url.url ? c.image_url.url.substring(0, 80) : ''}...]</div>;
+        if (c.type === 'text' || c.type === 'input_text' || c.type === 'output_text') {
+          return <div key={i} className="prose prose-invert max-w-none prose-sm overflow-x-auto break-words"><Markdown>{c.text || ''}</Markdown></div>;
+        }
+        if (c.type === 'image_url' || c.type === 'input_image') {
+          const url = typeof c.image_url === 'string' ? c.image_url : (c.image_url?.url || '');
+          return <div key={i} className="mt-2 opacity-50 text-xs truncate">[Image URL: {url ? url.substring(0, 80) : ''}...]</div>;
+        }
         return <div key={i}>{JSON.stringify(c)}</div>;
       });
     }

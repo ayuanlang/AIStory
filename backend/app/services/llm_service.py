@@ -710,6 +710,16 @@ class LLMService:
         "response.output_item.done",
         "response.completed",
     })
+    # Responses/Claude streams may never emit Chat Completions `[DONE]`.
+    # Stop the SSE loop on these terminal event types so callers (e.g. KIE GPT
+    # via /codex/v1/responses) do not hang until the provider read timeout.
+    _STREAM_TERMINAL_EVENT_TYPES = frozenset({
+        "response.completed",
+        "response.failed",
+        "response.incomplete",
+        "error",
+        "message_stop",
+    })
 
     @staticmethod
     def _coalesce_streamed_assistant_text(accumulated: str, piece: str) -> str:
@@ -1295,7 +1305,14 @@ class LLMService:
         return f"{root}/v1/responses"
 
     def _build_kie_responses_input(self, messages: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
-        """Convert chat messages into KIE responses API input format."""
+        """Convert chat messages into KIE responses API input format.
+
+        KIE `/codex/v1/responses` (gpt-5-* family) documents only `input` (plus
+        model/stream/reasoning/tools) — not top-level `instructions`. System /
+        developer prompts must therefore be present in `input`, or the model
+        runs without the skill/system prompt. We still return `instructions` for
+        OpenAI-native Responses gateways that accept that field.
+        """
         instructions_parts: List[str] = []
         response_input: List[Dict[str, Any]] = []
 
@@ -1305,29 +1322,25 @@ class LLMService:
 
             role = str(message.get("role") or "user").strip().lower() or "user"
             raw_content = message.get("content")
-
-            if role == "system":
-                text = self._extract_text_from_content(raw_content)
-                if text:
-                    instructions_parts.append(text)
-                continue
-
-            if role not in {"user", "assistant"}:
+            if role not in {"system", "developer", "user", "assistant"}:
                 role = "user"
 
+            # Responses API: prior assistant turns use output_text; all other
+            # roles (system/developer/user) use input_text.
+            text_part_type = "output_text" if role == "assistant" else "input_text"
             content_parts: List[Dict[str, Any]] = []
 
             if isinstance(raw_content, list):
                 for part in raw_content:
                     if isinstance(part, dict):
                         part_type = str(part.get("type") or "").strip().lower()
-                        if part_type in {"text", "input_text"}:
+                        if part_type in {"text", "input_text", "output_text"}:
                             text = str(part.get("text") or "").strip()
                             if text:
-                                content_parts.append({"type": "input_text", "text": text})
+                                content_parts.append({"type": text_part_type, "text": text})
                             continue
 
-                        if part_type == "image_url":
+                        if part_type in {"image_url", "input_image"}:
                             image_value = part.get("image_url")
                             if isinstance(image_value, dict):
                                 image_url = str(image_value.get("url") or "").strip()
@@ -1339,14 +1352,23 @@ class LLMService:
 
                     fallback_text = self._extract_text_from_content(part)
                     if fallback_text:
-                        content_parts.append({"type": "input_text", "text": fallback_text})
+                        content_parts.append({"type": text_part_type, "text": fallback_text})
             else:
                 text = self._extract_text_from_content(raw_content)
                 if text:
-                    content_parts.append({"type": "input_text", "text": text})
+                    content_parts.append({"type": text_part_type, "text": text})
+
+            if role in {"system", "developer"}:
+                text = self._extract_text_from_content(raw_content)
+                if text:
+                    instructions_parts.append(text)
 
             if not content_parts:
-                content_parts.append({"type": "input_text", "text": ""})
+                # Skip empty system/developer rows; keep an empty user/assistant
+                # slot only when the caller explicitly sent that role.
+                if role in {"system", "developer"}:
+                    continue
+                content_parts.append({"type": text_part_type, "text": ""})
 
             response_input.append({
                 "role": role,
@@ -3656,7 +3678,17 @@ class LLMService:
                                     logger.debug("[STREAM_TOKEN] provider=%s len=%d snippet=%r", provider, len(content), content[:80])
                                     events.append({"type": "token", "content": content})
                                     _last_yield_time = _asyncio.get_event_loop().time()
-                            return events, False, True
+                            should_stop = event_type in self._STREAM_TERMINAL_EVENT_TYPES
+                            if should_stop:
+                                if event_type in {"response.failed", "error"} and not chunk_finish_reason:
+                                    finish_reason = "error"
+                                elif event_type == "response.incomplete" and not chunk_finish_reason:
+                                    finish_reason = "incomplete"
+                                logger.info(
+                                    "[STREAM_TERMINAL_EVENT] provider=%s type=%s finish_reason=%s saw_text=%s",
+                                    provider, event_type, finish_reason, saw_streamed_text,
+                                )
+                            return events, should_stop, True
 
                         def _flush_pending_event() -> Tuple[List[Dict[str, Any]], bool]:
                             """Parse one buffered SSE event assembled from pending lines."""
@@ -3717,11 +3749,10 @@ class LLMService:
                                     break
 
                         # Flush trailing event if stream closed without final blank line.
-                        events, should_stop = _flush_pending_event()
+                        # Do not return early: fall through so STREAM_DONE is always emitted.
+                        events, _should_stop = _flush_pending_event()
                         for _event in events:
                             yield _event
-                        if should_stop:
-                            return
 
         except httpx.ConnectError as exc:
             human_summary = self._build_human_readable_transport_error_summary(
