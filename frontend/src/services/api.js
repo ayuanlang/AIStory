@@ -873,7 +873,7 @@ export const sendSystemManagementAgentCommand = async (query, context = {}, hist
  * Stream an agent command via SSE (Server-Sent Events).
  * @param {string} url - API path (e.g. '/agent/command/stream')
  * @param {object} body - Request body {query, context, history}
- * @param {object} callbacks - { onToken(text), onToolStart(tool,params), onToolResult(tool,status,result), onDone(result), onError(msg) }
+ * @param {object} callbacks - { onToken(text,event), onPhase(phase,message,event), onToolStart, onToolResult, onDone(result), onError(msg), onEvent(event), signal }
  * @returns {Promise<object>} The final "done" payload
  */
 async function streamSSE(url, body, callbacks = {}) {
@@ -888,6 +888,7 @@ async function streamSSE(url, body, callbacks = {}) {
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(body),
+        signal: callbacks.signal,
     });
 
     if (!response.ok) {
@@ -905,6 +906,7 @@ async function streamSSE(url, body, callbacks = {}) {
     const decoder = new TextDecoder();
     let buffer = '';
     let finalResult = null;
+    let streamError = null;
 
     while (true) {
         const { done, value } = await reader.read();
@@ -926,18 +928,24 @@ async function streamSSE(url, body, callbacks = {}) {
                 try {
                     const event = JSON.parse(dataStr);
                     const type = event.type || currentEventType;
+                    if (typeof callbacks.onEvent === 'function') {
+                        try { callbacks.onEvent(event); } catch (_) { /* ignore */ }
+                    }
 
                     if (type === 'token' && callbacks.onToken) {
-                        callbacks.onToken(event.content || '');
+                        callbacks.onToken(event.content || '', event);
+                    } else if (type === 'phase' && callbacks.onPhase) {
+                        callbacks.onPhase(event.phase || '', event.message || '', event);
                     } else if (type === 'tool_start' && callbacks.onToolStart) {
-                        callbacks.onToolStart(event.tool, event.parameters);
+                        callbacks.onToolStart(event.tool, event.parameters, event);
                     } else if (type === 'tool_result' && callbacks.onToolResult) {
-                        callbacks.onToolResult(event.tool, event.status, event.result);
+                        callbacks.onToolResult(event.tool, event.status, event.result, event);
                     } else if (type === 'done') {
                         finalResult = event;
                         if (callbacks.onDone) callbacks.onDone(event);
                     } else if (type === 'error') {
-                        if (callbacks.onError) callbacks.onError(event.message || 'Unknown error');
+                        streamError = event.message || 'Unknown error';
+                        if (callbacks.onError) callbacks.onError(streamError, event);
                     }
                 } catch (_) { /* ignore malformed JSON */ }
             }
@@ -945,6 +953,12 @@ async function streamSSE(url, body, callbacks = {}) {
                 currentEventType = 'message'; // reset after blank line
             }
         }
+    }
+
+    if (streamError && !finalResult) {
+        const err = new Error(streamError);
+        err.isStreamError = true;
+        throw err;
     }
 
     return finalResult || {};
@@ -1395,8 +1409,7 @@ export const fetchSceneShotsPrompt = async (sceneId) => {
     return response.data;
 }
 
-export const generateSceneShots = async (sceneId, promptData = null, runtimeHooks = {}) => {
-// Inject intelligent routing meta for AI shots
+const enrichSceneShotsPayload = (promptData = null) => {
     const enrichedPromptData = promptData ? { ...promptData } : {};
     enrichedPromptData.function_name = 'script_analysis';
     enrichedPromptData.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
@@ -1408,16 +1421,62 @@ export const generateSceneShots = async (sceneId, promptData = null, runtimeHook
                 enrichedPromptData.system_api_id = ctx['script_analysis'].system_api_id;
             }
         } catch (e) {
-            console.warn('[API] generateSceneShots: Failed to parse function API context', e);
+            console.warn('[API] enrichSceneShotsPayload: Failed to parse function API context', e);
         }
     }
-    // This now returns the Staging result (timestamp, content=[]), not the applied shots
-    const payloadMeta = {
-        hasUserPrompt: Boolean(enrichedPromptData?.user_prompt),
-        hasSystemPrompt: Boolean(enrichedPromptData?.system_prompt),
-        userPromptLen: String(enrichedPromptData?.user_prompt || '').length,
-        systemPromptLen: String(enrichedPromptData?.system_prompt || '').length,
-    };
+    return enrichedPromptData;
+};
+
+export const streamGenerateSceneShots = async (sceneId, promptData = null, callbacks = {}) => {
+    const enrichedPromptData = enrichSceneShotsPayload(promptData);
+    try {
+        const doneEvent = await streamSSE(
+            `/scenes/${sceneId}/ai_generate_shots/stream`,
+            enrichedPromptData,
+            callbacks,
+        );
+        return doneEvent?.result || doneEvent || {};
+    } catch (error) {
+        console.error('[API] streamGenerateSceneShots failed', {
+            sceneId,
+            status: error?.response?.status,
+            detail: error?.response?.data?.detail,
+            message: error?.message,
+        });
+        throw error;
+    }
+};
+
+export const generateSceneShots = async (sceneId, promptData = null, runtimeHooks = {}) => {
+    const enrichedPromptData = enrichSceneShotsPayload(promptData);
+    const preferStream = runtimeHooks?.stream !== false;
+    const hasStreamCallbacks = Boolean(
+        runtimeHooks?.onToken
+        || runtimeHooks?.onPhase
+        || runtimeHooks?.onEvent
+        || runtimeHooks?.onToolStart
+        || runtimeHooks?.onToolResult
+    );
+
+    // Interactive UI path: continuous Agent SSE delivery.
+    if (preferStream && (hasStreamCallbacks || runtimeHooks?.forceStream)) {
+        try {
+            return await streamGenerateSceneShots(sceneId, enrichedPromptData, {
+                onToken: runtimeHooks?.onToken,
+                onPhase: runtimeHooks?.onPhase,
+                onToolStart: runtimeHooks?.onToolStart,
+                onToolResult: runtimeHooks?.onToolResult,
+                onEvent: runtimeHooks?.onEvent,
+                onDone: runtimeHooks?.onDone,
+                onError: runtimeHooks?.onError,
+                signal: runtimeHooks?.signal,
+            });
+        } catch (error) {
+            if (runtimeHooks?.fallbackAsync === false) throw error;
+            console.warn('[API] streamGenerateSceneShots failed; falling back to async poll', error?.message || error);
+        }
+    }
+
     try {
         return await asyncLLMPost(`/scenes/${sceneId}/ai_generate_shots`, enrichedPromptData, {
             onTaskCreated: runtimeHooks?.onTaskCreated,

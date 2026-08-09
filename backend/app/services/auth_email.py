@@ -16,6 +16,7 @@ from sqlalchemy import inspect
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import all_models as models
+from app.schemas.user_auth import EMAIL_VERIFICATION_TRIAL_CREDITS
 
 logger = logging.getLogger("api_logger")
 SMTPSystemConfig = models.SMTPSystemConfig
@@ -207,7 +208,7 @@ def send_email_verification_code(to_email: str, code: str) -> None:
 def send_welcome_trial_credits_email(to_email: str) -> None:
     content = (
         "Welcome to AI Story!\n\n"
-        "Your email has been verified successfully. We have gifted 500 trial credits to your account.\n\n"
+        f"Your email has been verified successfully. We have gifted {EMAIL_VERIFICATION_TRIAL_CREDITS} trial credits to your account.\n\n"
         "You are welcome to start exploring now.\n"
         "If you submit valid issues and suggestions, we may grant additional credits as rewards.\n\n"
         "Thank you for trying AI Story."

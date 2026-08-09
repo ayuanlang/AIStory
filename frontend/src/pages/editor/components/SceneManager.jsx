@@ -1155,8 +1155,17 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
     });
     const [pendingShotSupplementSceneId, setPendingShotSupplementSceneId] = useState(null);
     const [shotSupplementImportReport, setShotSupplementImportReport] = useState(null);
-    const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
+    const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({
+        phase: 'idle',
+        message: '',
+        sceneId: null,
+        streamText: '',
+        streamPhase: '',
+    });
     const aiShotsBusySceneIdsRef = useRef(new Set());
+    const aiShotsStreamAbortRef = useRef(null);
+    const aiShotsStreamBufRef = useRef('');
+    const aiShotsStreamFlushRef = useRef(null);
     const [batchAiShotsProgress, setBatchAiShotsProgress] = useState(() => createBatchAiShotsProgressState());
     const [isSceneBatchProgressDismissed, setIsSceneBatchProgressDismissed] = useState(false);
     const [isStoppingBatchAiShots, setIsStoppingBatchAiShots] = useState(false);
@@ -3179,10 +3188,34 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
 
         aiShotsBusySceneIdsRef.current.add(stableSceneId);
         armAiShotsAutoSwitchTicket(activeEpisode?.id, sceneId);
+        aiShotsStreamBufRef.current = '';
+        if (aiShotsStreamFlushRef.current) {
+            clearTimeout(aiShotsStreamFlushRef.current);
+            aiShotsStreamFlushRef.current = null;
+        }
+        if (aiShotsStreamAbortRef.current) {
+            try { aiShotsStreamAbortRef.current.abort(); } catch (_) { /* ignore */ }
+        }
+        const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        aiShotsStreamAbortRef.current = abortController;
+
+        const flushStreamBuf = () => {
+            aiShotsStreamFlushRef.current = null;
+            const text = aiShotsStreamBufRef.current;
+            setAiShotsFlowStatus((prev) => ({
+                ...prev,
+                phase: prev?.phase === 'idle' ? 'generating' : prev.phase,
+                sceneId: stableSceneId,
+                streamText: text,
+            }));
+        };
+
         setAiShotsFlowStatus({
             phase: 'generating',
             sceneId,
-            message: t('AI Shots 生成中...', 'AI Shots generating...'),
+            message: t('AI Shots Agent 流式生成中...', 'AI Shots agent streaming...'),
+            streamText: '',
+            streamPhase: 'preparing',
         });
         onLog?.(`SceneManager: Generating shots for Scene ${sceneId}...`, 'info');
 
@@ -3191,27 +3224,75 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             const result = await generateSceneShots(sceneId, {
                 function_name: 'script_analysis',
             }, {
+                forceStream: true,
+                fallbackAsync: true,
+                signal: abortController?.signal,
+                onPhase: (phase, message) => {
+                    setAiShotsFlowStatus((prev) => ({
+                        ...prev,
+                        phase: 'generating',
+                        sceneId: stableSceneId,
+                        streamPhase: phase || prev.streamPhase,
+                        message: message || prev.message || t('AI Shots Agent 流式生成中...', 'AI Shots agent streaming...'),
+                    }));
+                },
+                onToken: (text) => {
+                    aiShotsStreamBufRef.current = `${aiShotsStreamBufRef.current || ''}${text || ''}`;
+                    if (aiShotsStreamBufRef.current.length > 12000) {
+                        aiShotsStreamBufRef.current = aiShotsStreamBufRef.current.slice(-12000);
+                    }
+                    if (!aiShotsStreamFlushRef.current) {
+                        aiShotsStreamFlushRef.current = setTimeout(flushStreamBuf, 80);
+                    }
+                },
+                onToolStart: (tool) => {
+                    setAiShotsFlowStatus((prev) => ({
+                        ...prev,
+                        message: t(`Agent 工具：${tool || 'tool'}`, `Agent tool: ${tool || 'tool'}`),
+                    }));
+                },
                 onTaskCreated: (taskId) => {
+                    // Fallback async poll path still supports resume markers.
                     saveAiShotsTaskMarker(activeEpisode?.id, {
                         taskId,
                         sceneId,
                         startedAt,
                     });
+                    setAiShotsFlowStatus((prev) => ({
+                        ...prev,
+                        message: t('流式失败，已切换异步任务轮询…', 'Stream failed; switched to async polling…'),
+                    }));
                 },
             });
+            if (aiShotsStreamFlushRef.current) {
+                clearTimeout(aiShotsStreamFlushRef.current);
+                aiShotsStreamFlushRef.current = null;
+            }
             clearAiShotsTaskMarker(activeEpisode?.id, sceneId);
             await finalizeAiShotsGenerationResult({ sceneId, result });
         } catch (e) {
             console.error(e);
             clearAiShotsTaskMarker(activeEpisode?.id, sceneId);
-            onLog?.(`SceneManager: Failed to generate/apply shots - ${e.message}`, 'error');
+            const aborted = Boolean(e?.name === 'AbortError' || abortController?.signal?.aborted);
+            onLog?.(`SceneManager: Failed to generate/apply shots - ${e.message}`, aborted ? 'warning' : 'error');
             setAiShotsFlowStatus({
                 phase: 'failed',
                 sceneId,
-                message: t(`AI Shots 失败：${e.message}`, `AI Shots failed: ${e.message}`),
+                message: aborted
+                    ? t('AI Shots 已停止。', 'AI Shots stopped.')
+                    : t(`AI Shots 失败：${e.message}`, `AI Shots failed: ${e.message}`),
+                streamText: aiShotsStreamBufRef.current || '',
+                streamPhase: 'failed',
             });
-            alert("Failed to generate shots: " + e.message);
+            if (!aborted) alert("Failed to generate shots: " + e.message);
         } finally {
+            if (aiShotsStreamFlushRef.current) {
+                clearTimeout(aiShotsStreamFlushRef.current);
+                aiShotsStreamFlushRef.current = null;
+            }
+            if (aiShotsStreamAbortRef.current === abortController) {
+                aiShotsStreamAbortRef.current = null;
+            }
             aiShotsBusySceneIdsRef.current.delete(stableSceneId);
         }
     };
@@ -3290,7 +3371,14 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         try {
             if (!window.confirm(t('确定要停止生成该场景的 AI 镜头吗？', 'Are you sure you want to stop generating AI Shots for this scene?'))) return;
             
-            setAiShotsFlowStatus({ phase: 'failed', sceneId: stableSceneId, message: t('正在停止...', 'Stopping...') });
+            setAiShotsFlowStatus({
+                phase: 'failed',
+                sceneId: stableSceneId,
+                message: t('正在停止...', 'Stopping...'),
+                streamText: aiShotsStreamBufRef.current || '',
+                streamPhase: 'stopping',
+            });
+            try { aiShotsStreamAbortRef.current?.abort(); } catch (_) { /* ignore */ }
             
             if (marker?.taskId) {
                 await stopAsyncTask(marker.taskId);
@@ -3301,7 +3389,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         } finally {
             clearAiShotsTaskMarker(activeEpisode?.id, stableSceneId);
             aiShotsBusySceneIdsRef.current.delete(stableSceneId);
-            setAiShotsFlowStatus({ phase: '', sceneId: null, message: '' });
+            setAiShotsFlowStatus({ phase: 'idle', sceneId: null, message: '', streamText: '', streamPhase: '' });
             onLog?.(t(`已停止场景 ${stableSceneId} 的 AI 镜头任务。`, `Stopped AI Shots task for scene ${stableSceneId}.`), 'warning');
         }
     };
@@ -4138,21 +4226,31 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             </div>
 
             {aiShotsFlowStatus.phase !== 'idle' && (
-                <div className={`mb-4 rounded-lg border px-4 py-2.5 flex items-center gap-2 text-sm shrink-0 ${
+                <div className={`mb-4 rounded-lg border px-4 py-2.5 text-sm shrink-0 ${
                     aiShotsFlowStatus.phase === 'failed'
                         ? 'border-red-500/30 bg-red-500/10 text-red-200'
                         : aiShotsFlowStatus.phase === 'completed'
                             ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
                             : 'border-primary/30 bg-primary/10 text-primary'
                 }`}>
-                    {aiShotsFlowStatus.phase === 'completed' ? (
-                        <CheckCircle className="w-4 h-4" />
-                    ) : aiShotsFlowStatus.phase === 'failed' ? (
-                        <X className="w-4 h-4" />
-                    ) : (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                    )}
-                    <span>{aiShotsFlowStatus.message}</span>
+                    <div className="flex items-center gap-2">
+                        {aiShotsFlowStatus.phase === 'completed' ? (
+                            <CheckCircle className="w-4 h-4 shrink-0" />
+                        ) : aiShotsFlowStatus.phase === 'failed' ? (
+                            <X className="w-4 h-4 shrink-0" />
+                        ) : (
+                            <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                        )}
+                        <span className="min-w-0 flex-1">{aiShotsFlowStatus.message}</span>
+                        {aiShotsFlowStatus.streamPhase ? (
+                            <span className="text-[11px] opacity-70 shrink-0">{aiShotsFlowStatus.streamPhase}</span>
+                        ) : null}
+                    </div>
+                    {aiShotsFlowStatus.streamText ? (
+                        <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-white/10 bg-black/30 px-3 py-2 text-[11px] leading-relaxed text-white/80 whitespace-pre-wrap break-words custom-scrollbar">
+                            {aiShotsFlowStatus.streamText}
+                        </pre>
+                    ) : null}
                 </div>
             )}
 

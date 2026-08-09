@@ -317,6 +317,23 @@ def stop_scene_ai_shots_batch(
         "message": "Force removed",
     }
 
+async def _sse_event_generator(events_gen):
+    import json as _json
+    try:
+        from contextlib import aclosing
+        async with aclosing(events_gen) as _stream:
+            async for event in _stream:
+                if event is None:
+                    continue
+                event_type = event.get("type", "message")
+                data = _json.dumps(event, ensure_ascii=False, default=str)
+                yield f"event: {event_type}\ndata: {data}\n\n"
+    except Exception as exc:
+        logger.error("shot SSE generator error: %s", exc)
+        err = _json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
+        yield f"event: error\ndata: {err}\n\n"
+
+
 @router.post("/scenes/{scene_id}/ai_generate_shots")
 async def ai_generate_shots(
     scene_id: int,
@@ -334,6 +351,32 @@ async def ai_generate_shots(
         req=req,
         db=db,
         current_user=current_user,
+    )
+
+
+@router.post("/scenes/{scene_id}/ai_generate_shots/stream")
+async def ai_generate_shots_stream(
+    scene_id: int,
+    req: Optional[AIShotGenRequest] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """SSE stream: draft shots then AgentScope-optimize Video Content with live tokens."""
+    from app.services.shot_ai_generation_ops import stream_execute_ai_generate_shots
+
+    async def _generate():
+        async for event in stream_execute_ai_generate_shots(
+            scene_id=scene_id,
+            req=req,
+            db=db,
+            current_user=current_user,
+        ):
+            yield event
+
+    return StreamingResponse(
+        _sse_event_generator(_generate()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

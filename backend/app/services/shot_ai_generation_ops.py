@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import re
 import traceback
-from typing import Any, Dict, List, Optional
+import asyncio
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -15,7 +16,7 @@ from app.models.all_models import Episode, Scene, User
 from app.services.db_session_utils import _release_db_connection
 from app.services.billing_service import billing_service
 from app.services.llm_markdown_sanitize import sanitize_llm_markdown_output
-from app.services.llm_service import llm_service
+from app.services.shot_generation_agentscope import generate_shots_content
 from app.services.model_invocation_billing import _apply_llm_routing_to_billing_details
 from app.services.project_access import _require_project_access
 from app.services.prompt_resolve import _resolve_prompt_text
@@ -49,12 +50,24 @@ from app.services.user_model_preferences import _inject_user_advanced_llm_prefer
 logger = logging.getLogger("api_logger")
 
 
+async def _emit_shot_event(on_event: Optional[Callable[[Dict[str, Any]], Any]], event: Dict[str, Any]) -> None:
+    if not on_event:
+        return
+    try:
+        result = on_event(event)
+        if hasattr(result, "__await__"):
+            await result  # type: ignore[misc]
+    except Exception:
+        logger.debug("shot event callback failed", exc_info=True)
+
+
 async def execute_ai_generate_shots(
     *,
     scene_id: int,
     req: Any,
     db: Session,
     current_user: User,
+    on_event: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ) -> Any:
     current_user_id = int(getattr(current_user, "id", 0) or 0)
     try:
@@ -186,7 +199,12 @@ async def execute_ai_generate_shots(
             billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
 
         _release_db_connection(db, "ai_generate_shots_llm_call")
-        response_dict = await llm_service.generate_content_with_fallback(
+        await _emit_shot_event(on_event, {
+            "type": "phase",
+            "phase": "generating",
+            "message": "分镜生成流水线启动（草稿 → Agent 优化）…",
+        })
+        response_dict = await generate_shots_content(
             user_input,
             system_prompt,
             llm_config,
@@ -197,6 +215,8 @@ async def execute_ai_generate_shots(
                 source_label="Generate Shots",
                 strip_reasoning_prefixes=True,
             ),
+            context="ai_generate_shots",
+            on_event=on_event,
         )
         response_content_raw = response_dict.get("content", "")
         usage = response_dict.get("usage", {})
@@ -205,6 +225,11 @@ async def execute_ai_generate_shots(
             f"[ai_generate_shots] llm_response_received scene_id={scene_id} "
             f"llm_response_len_raw={len(response_content_raw)} usage_keys={list((usage or {}).keys())}"
         )
+        await _emit_shot_event(on_event, {
+            "type": "phase",
+            "phase": "parsing",
+            "message": "正在解析分镜表并落库暂存…",
+        })
 
         if str(response_content_raw).startswith("Error:"):
             if reservation_tx_id is not None:
@@ -403,6 +428,62 @@ async def execute_ai_generate_shots(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def stream_execute_ai_generate_shots(
+    *,
+    scene_id: int,
+    req: Any,
+    db: Session,
+    current_user: User,
+) -> AsyncIterator[Dict[str, Any]]:
+    """SSE-friendly event stream for AI shot generation + AgentScope optimize."""
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _on_event(event: Dict[str, Any]) -> None:
+        await queue.put(event)
+
+    async def _worker() -> None:
+        try:
+            result = await execute_ai_generate_shots(
+                scene_id=scene_id,
+                req=req,
+                db=db,
+                current_user=current_user,
+                on_event=_on_event,
+            )
+            await queue.put({"type": "done", "result": result})
+        except HTTPException as exc:
+            await queue.put({
+                "type": "error",
+                "message": str(getattr(exc, "detail", None) or exc),
+                "status_code": int(getattr(exc, "status_code", 500) or 500),
+            })
+        except Exception as exc:
+            logger.exception("[stream_ai_generate_shots] failed scene_id=%s", scene_id)
+            await queue.put({"type": "error", "message": str(exc)})
+        finally:
+            await queue.put(None)
+
+    task = asyncio.create_task(_worker())
+    try:
+        yield {
+            "type": "phase",
+            "phase": "preparing",
+            "message": "准备分镜 Agent 流式交付…",
+        }
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except Exception:
+                pass
+
+
 async def execute_ai_regenerate_shots(
     *,
     scene_id: int,
@@ -534,7 +615,7 @@ async def execute_ai_regenerate_shots(
             billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
 
         _release_db_connection(db, "ai_regenerate_shots_llm_call")
-        response_dict = await llm_service.generate_content_with_fallback(
+        response_dict = await generate_shots_content(
             user_input,
             system_prompt,
             llm_config,
@@ -545,6 +626,7 @@ async def execute_ai_regenerate_shots(
                 source_label="Regenerate Shots",
                 validate_regenerate_markers=True,
             ),
+            context="ai_regenerate_shots",
         )
         response_content_raw = response_dict.get("content", "")
         usage = response_dict.get("usage", {})
