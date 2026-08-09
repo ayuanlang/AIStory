@@ -58,6 +58,15 @@ def _env_optimize_enabled() -> bool:
     return True
 
 
+def _agentscope_importable() -> bool:
+    """agentscope>=2 needs Python >=3.11; Render 3.10 builds omit it."""
+    try:
+        import agentscope  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def _should_skip_agentscope_for_config(llm_config: Dict[str, Any]) -> bool:
     provider = str((llm_config or {}).get("provider") or "").strip().lower()
     model = str((llm_config or {}).get("model") or "").strip().lower()
@@ -444,7 +453,11 @@ async def generate_shots_content(
         "message": f"草稿表已生成（{len(draft_content)} 字符），准备 Agent 优化…",
     })
 
-    if not _env_optimize_enabled() or _should_skip_agentscope_for_config(llm_config or {}):
+    if (
+        not _env_optimize_enabled()
+        or _should_skip_agentscope_for_config(llm_config or {})
+        or not _agentscope_importable()
+    ):
         logger.info("[%s] video_optimize_skipped", context)
         await _emit(on_event, {"type": "phase", "phase": "optimize_skipped", "message": "已跳过视频提示词优化"})
         return draft

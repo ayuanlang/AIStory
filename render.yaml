@@ -4,9 +4,10 @@
 # - If Start Command was customized, logs show bare `gunicorn ...` instead of
 #   `[boot] starting gunicorn via run_web.py`. Fix Settings → Start Command.
 # - If env keys already exist in Dashboard with different values (e.g.
-#   PYTHON_VERSION=3.10.0, GUNICORN_MAX_REQUESTS=0, DB_POOL_SIZE=30), Blueprint
-#   sync will NOT replace them. Set PYTHON_VERSION=3.13.5 on web+worker in
-#   Dashboard (Environment), then Manual Deploy — agentscope==2.0.6 needs >=3.11.
+#   GUNICORN_MAX_REQUESTS=0, DB_POOL_SIZE=30), Blueprint sync will NOT replace
+#   them. Delete/correct those keys in Dashboard, then Sync / redeploy.
+# - Keep PYTHON_VERSION=3.10.0 to match the live Render Dashboard runtime.
+#   agentscope>=2 (needs Python >=3.11) is optional via requirements-agentscope.txt.
 #
 # After deploy, web Runtime startup profile must show:
 #   run_generation_queue_worker=False
@@ -22,7 +23,6 @@ services:
     healthCheckPath: /healthz
     buildCommand: |
       cd backend
-      python -c "import sys; print('[build] python', sys.version); raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" || { echo "[build] FAIL: need Python >=3.11 for agentscope==2.0.6. Dashboard PYTHON_VERSION is still <3.11 (Blueprint sync will not overwrite an existing key). Set Environment PYTHON_VERSION=3.13.5 on this service, then Manual Deploy."; exit 1; }
       python -m pip install --upgrade pip
       pip install --no-cache-dir -r requirements.txt
     # MUST match Dashboard Start Command exactly (Dashboard wins if customized).
@@ -31,10 +31,8 @@ services:
     # GOOD:
     startCommand: cd backend; python run_web.py
     envVars:
-      # agentscope>=2 requires Python >=3.11; keep in sync with Docker/local (3.13).
-      # If Dashboard already has PYTHON_VERSION, edit that value manually — sync won't.
       - key: PYTHON_VERSION
-        value: 3.13.5
+        value: 3.10.0
       - key: PYTHONUNBUFFERED
         value: "1"
       # Keep Dashboard-managed; do not regenerate on Blueprint sync (invalidates JWTs).
@@ -200,7 +198,6 @@ services:
     region: oregon
     buildCommand: |
       cd backend
-      python -c "import sys; print('[build] python', sys.version); raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" || { echo "[build] FAIL: need Python >=3.11 for agentscope==2.0.6. Dashboard PYTHON_VERSION is still <3.11 (Blueprint sync will not overwrite an existing key). Set Environment PYTHON_VERSION=3.13.5 on this service, then Manual Deploy."; exit 1; }
       python -m pip install --upgrade pip
       pip install --no-cache-dir -r requirements.txt
     startCommand: |
@@ -210,10 +207,8 @@ services:
       export RUN_GENERATION_QUEUE_WORKER_ON_START=1
       python -m app.generation_worker
     envVars:
-      # agentscope>=2 requires Python >=3.11; keep in sync with Docker/local (3.13).
-      # If Dashboard already has PYTHON_VERSION, edit that value manually — sync won't.
       - key: PYTHON_VERSION
-        value: 3.13.5
+        value: 3.10.0
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: WEB_CONCURRENCY

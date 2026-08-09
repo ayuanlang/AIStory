@@ -11,7 +11,8 @@ ENV PYTHONUNBUFFERED=1
 COPY requirements.txt .
 
 # 安装依赖，使用阿里云等国内镜像加速
-RUN pip install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+# agentscope (Python >=3.11) is optional on Render 3.10; install here for Docker 3.13.
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-agentscope.txt -i https://mirrors.aliyun.com/pypi/simple/
 
 # 拷贝后端的所有代码
 COPY . .

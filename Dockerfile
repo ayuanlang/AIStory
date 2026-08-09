@@ -19,8 +19,9 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # 安装后端依赖 (利用阿里云源加速)
-COPY backend/requirements.txt ./backend/
-RUN pip install --no-cache-dir -r ./backend/requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+# agentscope (Python >=3.11) is optional on Render 3.10; install here for Docker 3.13.
+COPY backend/requirements.txt backend/requirements-agentscope.txt ./backend/
+RUN pip install --no-cache-dir -r ./backend/requirements.txt -r ./backend/requirements-agentscope.txt -i https://mirrors.aliyun.com/pypi/simple/
 
 # 拷贝后端业务代码
 COPY backend/ ./backend/

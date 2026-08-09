@@ -1,0 +1,4 @@
+# Optional: AgentScope video-prompt optimizer (Python >=3.11 only).
+# Render native runtime is Python 3.10 — do not install this on that stack.
+# Local / Docker (3.11+): pip install -r requirements-agentscope.txt
+agentscope==2.0.6

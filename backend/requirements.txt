@@ -37,7 +37,6 @@ moviepy==2.2.1
 msgpack==1.1.2
 numpy==2.2.6
 openai==2.21.0
-agentscope==2.0.6
 packageurl-python==0.17.6
 packaging==26.0
 pillow==11.3.0
