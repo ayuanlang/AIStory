@@ -28,8 +28,9 @@ services:
     # GOOD:
     startCommand: cd backend; python run_web.py
     envVars:
+      # agentscope>=2 requires Python >=3.11; keep in sync with Docker/local (3.13).
       - key: PYTHON_VERSION
-        value: 3.10.0
+        value: 3.13.5
       - key: PYTHONUNBUFFERED
         value: "1"
       # Keep Dashboard-managed; do not regenerate on Blueprint sync (invalidates JWTs).
@@ -203,8 +204,9 @@ services:
       export RUN_GENERATION_QUEUE_WORKER_ON_START=1
       python -m app.generation_worker
     envVars:
+      # agentscope>=2 requires Python >=3.11; keep in sync with Docker/local (3.13).
       - key: PYTHON_VERSION
-        value: 3.10.0
+        value: 3.13.5
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: WEB_CONCURRENCY
