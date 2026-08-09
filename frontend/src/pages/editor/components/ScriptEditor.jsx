@@ -4085,6 +4085,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         if (terminalPhase || terminalReport) {
+            // A leftover completed/failed report from a prior run must not kill a new
+            // in-flight pipeline that already entered an active phase (Stage 1/2 rerun).
+            if (pipelineStillLive && !terminalPhase) {
+                return;
+            }
             // Terminal UI means the run has finished writing results; never leave the
             // primary CTA stuck in "分析中..." just because a bootstrap/marker raced.
             latestIsAnalyzingRef.current = false;
@@ -20040,14 +20045,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let importReport = null;
         let runtimeMeta = null;
 
-        setIsAnalyzing(true);
+        analysisProgressDismissedRef.current = false;
         analysisRunInFlightRef.current = true;
         phase2AutoCompletedEpisodeRef.current = null;
         phase2GenerationInFlightRef.current = false;
         sceneBeatsOnlyRerunInFlightRef.current = false;
         analysisStopRequestedRef.current = false;
+        latestIsAnalyzingRef.current = true;
+        beginAnalysisTimer(startedAt);
+        setIsAnalyzing(true);
+        // Must flip status away from a prior "completed" before any await; otherwise the
+        // heal effect clears isAnalyzing and the progress UI never shows as live.
+        setAnalysisUiReport((prev) => ({
+            ...(prev && typeof prev === 'object' ? prev : {}),
+            status: 'running',
+            startedAt,
+            durationMs: 0,
+            error: '',
+            warning: '',
+        }));
         setAnalysisFlowStatus({
-            phase: 'script_opt',
+            phase: 'extract_assets',
             message: t('正在读取第一阶段产物并重新执行第二阶段。', 'Re-running Stage 2 from saved Stage 1 outputs.'),
         });
 
@@ -21158,9 +21176,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
         const startedAt = Date.now();
-        setIsAnalyzing(true);
+        analysisProgressDismissedRef.current = false;
         analysisRunInFlightRef.current = true;
         analysisStopRequestedRef.current = false;
+        latestIsAnalyzingRef.current = true;
+        beginAnalysisTimer(startedAt);
+        setIsAnalyzing(true);
+        // Must flip status away from a prior "completed" before any await; otherwise the
+        // heal effect clears isAnalyzing and the progress UI never shows as live.
+        setAnalysisUiReport((prev) => ({
+            ...(prev && typeof prev === 'object' ? prev : {}),
+            status: 'running',
+            startedAt,
+            durationMs: 0,
+            error: '',
+            warning: '',
+        }));
         setAnalysisFlowStatus({
             phase: 'script_opt',
             message: t('正在重跑剧本统筹...', 'Rerunning script coordination...'),
