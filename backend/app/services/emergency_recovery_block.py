@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Parse/audit [EMERGENCY_RECOVERY_BLOCK_*] in episode scripts."""
+"""Parse/audit [EMERGENCY_RECOVERY_BLOCK_*] in episode scripts.
+
+Semantics (episode writer contract):
+- Footer EMERGENCY_RECOVERY_BLOCK = pending items for the NEXT episode to urgently resolve
+  (handoff inject). Not proof of what THIS episode already solved.
+- Proof of resolving previous pending items lives in 类型执行摘要「上集紧急回收核销块」.
+"""
 from __future__ import annotations
 
 import re
@@ -14,16 +20,18 @@ _START_RE = re.compile(r"\[\s*EMERGENCY_RECOVERY_BLOCK_START\s*\]", re.IGNORECAS
 _END_RE = re.compile(r"\[\s*EMERGENCY_RECOVERY_BLOCK_END\s*\]", re.IGNORECASE)
 _BRIDGE_START_RE = re.compile(r"\[\s*BRIDGE_BLOCK_START\s*\]", re.IGNORECASE)
 _BRIDGE_END_RE = re.compile(r"\[\s*BRIDGE_BLOCK_END\s*\]", re.IGNORECASE)
-_APPLICABLE_RE = re.compile(r"适用\s*=\s*(有上集|无上集)", re.IGNORECASE)
+# New contract: 有下集|末集无下集. Legacy 有上集|无上集 still parsed for migration diagnostics.
+_APPLICABLE_RE = re.compile(r"适用\s*=\s*(有下集|末集无下集|有上集|无上集)", re.IGNORECASE)
 _ITEM_RE = re.compile(r"^#项\s*\d+\s*[：:]", re.MULTILINE)
-_ITEM_NA_RE = re.compile(r"^#项\s*[：:]\s*(无紧急项|N/?A)", re.MULTILINE | re.IGNORECASE)
-_FULFILL_RE = re.compile(
-    r"兑现\s*=\s*(EP\d{2}_SC\d{2})\s*@\s*Beat\s*\d+",
-    re.IGNORECASE,
+_ITEM_NA_RE = re.compile(
+    r"^#项\s*[：:]\s*(无紧急待核销|无紧急项|N/?A)",
+    re.MULTILINE | re.IGNORECASE,
 )
+_STATUS_PENDING_RE = re.compile(r"状态\s*=\s*待下集核销")
 _STATUS_DONE_RE = re.compile(r"状态\s*=\s*已兑现")
 _SUMMARY_RE = re.compile(r"^#集级\s*[：:]", re.MULTILINE)
 _SELF_CHECK_PASS_RE = re.compile(r"自检\s*=\s*通过")
+_PENDING_FIELD_RE = re.compile(r"紧急待核销\s*=")
 
 
 def _extract_marked_span(
@@ -103,11 +111,14 @@ def build_previous_episode_handoff_prompt_block(
         "Previous Episode Handoff (Hard Constraint — MUST consume before writing):\n",
         f"- Source: Episode {prev_n} → writing Episode {cur_n}.\n",
         "- Read and use BOTH structured blocks below (when present):\n",
-        "  1) Previous EMERGENCY_RECOVERY_BLOCK: inherit `#延后` unfinished items; do NOT re-solve already `状态=已兑现` items as if still open; "
-        "combine with Previous Ending Tail / 结尾钩子 / Carry-out to build THIS episode's emergency-recovery list.\n",
+        "  1) Previous EMERGENCY_RECOVERY_BLOCK = PENDING emergency items THIS episode must resolve "
+        "in opening/early scenes (待本集紧急核销). Prove resolution in 类型执行摘要「上集紧急回收核销块」 "
+        "with `兑现=scene_id@Beat` + `状态=已兑现`. Do NOT treat this footer block as 'already solved'.\n",
         "  2) Previous BRIDGE_BLOCK: continue/contrast trope motifs; avoid mindless repeat; localize upgrades; "
         "do NOT treat its `回收=` as this episode's emergency-recovery checklist.\n",
-        "- Then write THIS episode's own EMERGENCY_RECOVERY_BLOCK + BRIDGE_BLOCK at the end.\n",
+        "- Then: (a) write resolved proof in 类型执行摘要; "
+        "(b) write THIS episode's footer EMERGENCY_RECOVERY_BLOCK = NEW pending items for the NEXT episode "
+        "(`状态=待下集核销`); (c) write THIS episode's BRIDGE_BLOCK.\n",
     ]
     if missing:
         parts.append(
@@ -154,14 +165,15 @@ def audit_emergency_recovery_block(
     episode_number: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Audit episode-script footer block.
+    Audit episode-script footer pending-handoff block.
 
     Does not raise; returns ok/issues for logging + episode_info diagnostics.
     Callers may hard-reject when episode_number >= 2 and ok is False.
     """
     issues: List[str] = []
     ep_num = int(episode_number) if episode_number else None
-    has_prior_episode = bool(ep_num and ep_num > 1)
+    # EP>=2 always has a prior episode; footer must still exist as outgoing handoff.
+    hard_required = bool(ep_num and ep_num > 1)
     body = extract_emergency_recovery_block(text)
     if body is None:
         raw = str(text or "")
@@ -177,8 +189,8 @@ def audit_emergency_recovery_block(
             "applicable": None,
             "item_count": 0,
             "issues": issues,
-            "expects_recovery": has_prior_episode,
-            "hard_required": has_prior_episode,
+            "expects_pending_handoff": True,
+            "hard_required": hard_required,
         }
 
     applicable_match = _APPLICABLE_RE.search(body)
@@ -186,44 +198,51 @@ def audit_emergency_recovery_block(
     if not applicable:
         issues.append("missing_applicable")
 
-    expects_recovery = False
-    if applicable == "有上集":
-        expects_recovery = True
+    # Legacy footer wrote resolved-proof (有上集 + 已兑现). Reject that shape for the footer.
+    legacy_resolved_shape = applicable in {"有上集", "无上集"} or bool(_STATUS_DONE_RE.search(body))
+    if legacy_resolved_shape and applicable not in {"有下集", "末集无下集"}:
+        issues.append("legacy_resolved_proof_in_footer")
+
+    expects_pending_items = False
+    if applicable == "有下集":
+        expects_pending_items = True
+    elif applicable == "末集无下集":
+        expects_pending_items = False
     elif applicable == "无上集":
-        expects_recovery = False
-        if has_prior_episode:
-            # EP02+ always has a prior episode in the series; forbid N/A shortcut.
-            issues.append("prior_episode_marked_none")
-            expects_recovery = True
-    elif has_prior_episode:
-        expects_recovery = True
-        issues.append("applicable_unspecified_assumed_prior_episode")
+        # Old EP01 form — treat as incomplete under new contract.
+        expects_pending_items = True
+        issues.append("legacy_applicable_no_prior")
+    elif applicable == "有上集":
+        expects_pending_items = True
+        issues.append("legacy_applicable_has_prior")
+    else:
+        # Unspecified: still require a pending-handoff shape.
+        expects_pending_items = True
 
     item_lines = _ITEM_RE.findall(body)
     item_na = bool(_ITEM_NA_RE.search(body))
     item_count = len(item_lines)
 
-    if expects_recovery:
+    if expects_pending_items:
         if item_count == 0 and not item_na:
             issues.append("missing_items")
         for m in _ITEM_RE.finditer(body):
-            # take the rest of the line for field checks
             line_start = m.start()
             line_end = body.find("\n", line_start)
             line = body[line_start:] if line_end < 0 else body[line_start:line_end]
-            if not _FULFILL_RE.search(line):
-                issues.append("item_missing_scene_beat_fulfillment")
-            if not _STATUS_DONE_RE.search(line):
-                issues.append("item_not_marked_fulfilled")
+            if _STATUS_DONE_RE.search(line):
+                issues.append("item_marked_fulfilled_in_pending_block")
+            if not _STATUS_PENDING_RE.search(line) and not _PENDING_FIELD_RE.search(line):
+                # Allow `#项:无紧急待核销` via item_na path; numbered items need pending markers.
+                issues.append("item_missing_pending_markers")
         if not _SUMMARY_RE.search(body):
             issues.append("missing_summary_line")
         elif not _SELF_CHECK_PASS_RE.search(body):
             issues.append("self_check_not_pass")
     else:
         if not _SUMMARY_RE.search(body) and not item_na:
-            # allow minimal N/A form
             if "N/A" not in body and "n/a" not in body.lower():
-                issues.append("no_prior_episode_form_incomplete")
+                issues.append("finale_form_incomplete")
 
     # de-dupe issues while preserving order
     seen = set()
@@ -240,8 +259,8 @@ def audit_emergency_recovery_block(
         "item_count": item_count,
         "item_na": item_na,
         "issues": unique_issues,
-        "expects_recovery": expects_recovery,
-        "hard_required": has_prior_episode,
+        "expects_pending_handoff": expects_pending_items,
+        "hard_required": hard_required,
     }
 
 
@@ -254,6 +273,8 @@ def format_emergency_recovery_reject_message(
     issue_text = ", ".join(str(x) for x in (issues or [])) or "unknown"
     return (
         f"EMERGENCY_RECOVERY_BLOCK rejected for episode {int(episode_number)}: {issue_text}. "
-        "EP>=2 requires [EMERGENCY_RECOVERY_BLOCK_START]…[EMERGENCY_RECOVERY_BLOCK_END] "
-        "with 适用=有上集 and fulfilled scene@Beat items (or #项:无紧急项). Import blocked."
+        "Footer block must list pending items for the NEXT episode "
+        "([EMERGENCY_RECOVERY_BLOCK_START]…END, 适用=有下集|末集无下集, "
+        "状态=待下集核销 or #项:无紧急待核销). "
+        "Resolved proof belongs in 类型执行摘要, not this footer. Import blocked."
     )
