@@ -311,8 +311,8 @@ def _filter_subject_index_text_by_types(
         sorted(allowed_types),
         total_subject_rows,
         kept_subject_rows,
-        effective_scene_analysis_mode,
-        getattr(request, "prompt_file", None),
+        log_mode,
+        log_prompt_file,
     )
     return filtered_text
 

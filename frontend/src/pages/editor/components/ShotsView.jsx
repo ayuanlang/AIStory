@@ -1807,14 +1807,17 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, [generationStateStorageKey, normalizeGeneratingState]);
 
-    const applyGeneratingStateChange = useCallback((state, shotId, key, value) => {
+    const applyGeneratingStateChange = useCallback((state, shotId, key, value, options = {}) => {
         if (!shotId) return state;
         const now = Date.now();
         const prev = state[shotId] || { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 };
         const previousValue = Boolean(prev[key]);
         const previousAt = Number(prev[`${key}At`] || 0);
+        const forceRestartAt = Boolean(options?.forceRestartAt);
+        // Regenerate passes forceRestartAt so the startup grace window re-arms even if a
+        // stale true flag was left behind; normal keep-alive set(true) keeps the original At.
         const nextAt = value
-            ? (previousValue ? previousAt : now)
+            ? ((forceRestartAt || !previousValue) ? now : previousAt)
             : 0;
 
         if (previousValue === Boolean(value) && previousAt === nextAt) {
@@ -1833,13 +1836,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return { ...state, [shotId]: next };
     }, []);
 
-    const setStoredShotGeneratingState = useCallback((shotId, key, value) => {
+    const setStoredShotGeneratingState = useCallback((shotId, key, value, options = {}) => {
         const prev = readGenerationStateStorage();
-        const next = applyGeneratingStateChange(prev, String(shotId), key, value);
+        const next = applyGeneratingStateChange(prev, String(shotId), key, value, options);
         writeGenerationStateStorage(next);
     }, [applyGeneratingStateChange, readGenerationStateStorage, writeGenerationStateStorage]);
 
-    const setShotGeneratingState = useCallback((shotId, key, value) => {
+    const setShotGeneratingState = useCallback((shotId, key, value, options = {}) => {
         if (!shotId) return;
         const stableShotId = String(shotId);
 
@@ -1863,14 +1866,34 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 nextBase.end = String(getShotEndFrameUrl(matchedShot) || getShotEndFrameUrl(listShot) || '').trim();
             }
             if (key === 'video') {
-                nextBase.video = String(matchedShot?.video_url || listShot?.video_url || '').trim();
+                // Prefer list/server URL for completion-sync (that effect reads `shots`),
+                // and keep the hydrated local URL as an alternate baseline so temp↔OSS
+                // dual forms of the same prior video do not look like a "fresh" result.
+                const editVideoUrl = String(matchedShot?.video_url || '').trim();
+                const listVideoUrl = String(listShot?.video_url || '').trim();
+                nextBase.video = listVideoUrl || editVideoUrl;
+                if (editVideoUrl && listVideoUrl && editVideoUrl !== listVideoUrl) {
+                    nextBase.videoAlt = editVideoUrl;
+                } else {
+                    delete nextBase.videoAlt;
+                }
             }
             generationMediaBaselineRef.current[stableShotId] = nextBase;
         } else {
             const prevBase = generationMediaBaselineRef.current[stableShotId] || {};
-            if (prevBase && Object.prototype.hasOwnProperty.call(prevBase, key)) {
+            const hasBaselineKey = Boolean(
+                prevBase
+                && (
+                    Object.prototype.hasOwnProperty.call(prevBase, key)
+                    || (key === 'video' && Object.prototype.hasOwnProperty.call(prevBase, 'videoAlt'))
+                )
+            );
+            if (hasBaselineKey) {
                 const nextBase = { ...prevBase };
                 delete nextBase[key];
+                if (key === 'video') {
+                    delete nextBase.videoAlt;
+                }
                 if (Object.keys(nextBase).length === 0) {
                     delete generationMediaBaselineRef.current[stableShotId];
                 } else {
@@ -1879,9 +1902,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
         }
 
-        setStoredShotGeneratingState(stableShotId, key, value);
+        setStoredShotGeneratingState(stableShotId, key, value, options);
         setGeneratingStateByShot(prev => {
-            return applyGeneratingStateChange(prev, stableShotId, key, value);
+            return applyGeneratingStateChange(prev, stableShotId, key, value, options);
         });
     }, [applyGeneratingStateChange, setStoredShotGeneratingState, shots, editingShot, getShotEndFrameUrl]);
 
@@ -2927,7 +2950,32 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const shotState = (stateOverride && typeof stateOverride === 'object')
             ? stateOverride
             : (generatingStateByShotRef.current?.[stableShotId] || { start: false, end: false, video: false, videoAt: 0 });
-        if (!shotState?.video) return false;
+        const hasGeneratingFlag = Boolean(shotState?.video);
+        const pendingVideoJobId = getPendingVideoJobId(stableShotId);
+        // Pending job can still drive the spinner if a sync race cleared the local flag.
+        if (!hasGeneratingFlag && !pendingVideoJobId) return false;
+
+        const statusText = String(videoStatuses?.[stableShotId] || '').trim();
+        const normalizedStatus = normalizeGenerationPhase(statusText);
+        const statusIsTerminal = Boolean(statusText && isTerminalGenerationPhase(normalizedStatus));
+        const startedAtMs = Number(shotState?.videoAt || 0);
+        const withinStartupGrace = Boolean(
+            hasGeneratingFlag
+            && startedAtMs > 0
+            && (Date.now() - startedAtMs) < SHOT_MEDIA_STARTUP_GRACE_MS
+        );
+
+        // Keep regenerate UI alive through submit latency / job bootstrap before any
+        // baseline/URL heuristics can hide it (existing video often has temp↔OSS dual URLs).
+        if (pendingVideoJobId && !statusIsTerminal) {
+            return true;
+        }
+        if (withinStartupGrace) {
+            return true;
+        }
+        if (statusText && !statusIsTerminal) {
+            return true;
+        }
 
         // Only treat as complete when a baseline was captured at start AND the local
         // URL moved to a different result. Missing baseline must not hide regenerate UI
@@ -2936,7 +2984,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const hasVideoBaseline = Boolean(
             baselineEntry && Object.prototype.hasOwnProperty.call(baselineEntry, 'video')
         );
-        if (hasVideoBaseline) {
+        if (hasVideoBaseline && hasGeneratingFlag) {
             const localShot = (
                 (editingShotRef.current && String(editingShotRef.current?.id || '') === stableShotId)
                     ? editingShotRef.current
@@ -2944,30 +2992,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             ) || (shotsRef.current || []).find((item) => String(item?.id || '') === stableShotId);
             const localVideoUrl = String(localShot?.video_url || '').trim();
             const baselineVideoUrl = String(baselineEntry.video || '').trim();
-            if (localVideoUrl && localVideoUrl !== baselineVideoUrl) {
+            const baselineVideoAltUrl = String(baselineEntry.videoAlt || '').trim();
+            if (
+                localVideoUrl
+                && localVideoUrl !== baselineVideoUrl
+                && (!baselineVideoAltUrl || localVideoUrl !== baselineVideoAltUrl)
+            ) {
                 return false;
             }
         }
 
-        const statusText = String(videoStatuses?.[stableShotId] || '').trim();
-        const normalizedStatus = normalizeGenerationPhase(statusText);
         // Provider URL / OSS-pending success must not keep the spinner forever.
-        if (statusText && isTerminalGenerationPhase(normalizedStatus)) {
+        if (statusIsTerminal) {
             return false;
-        }
-
-        const pendingVideoJobId = getPendingVideoJobId(stableShotId);
-        if (pendingVideoJobId && !(statusText && isTerminalGenerationPhase(normalizedStatus))) {
-            return true;
-        }
-
-        if (statusText && !isTerminalGenerationPhase(normalizedStatus)) {
-            return true;
-        }
-
-        const startedAtMs = Number(shotState?.videoAt || 0);
-        if (startedAtMs > 0 && (Date.now() - startedAtMs) < SHOT_MEDIA_STARTUP_GRACE_MS) {
-            return true;
         }
 
         return false;
@@ -6813,9 +6850,23 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const baseStartToken = normalizeAssetUrlToken(String(base.start || ''));
                 const baseEndToken = normalizeAssetUrlToken(String(base.end || ''));
                 const baseVideoToken = normalizeAssetUrlToken(String(base.video || ''));
+                const baseVideoAltToken = normalizeAssetUrlToken(String(base.videoAlt || ''));
                 const hasFreshStartUrl = Boolean(currentStartToken) && currentStartToken !== baseStartToken;
                 const hasFreshEndUrl = Boolean(currentEndToken) && currentEndToken !== baseEndToken;
-                const hasFreshVideoUrl = Boolean(currentVideoToken) && currentVideoToken !== baseVideoToken;
+                // Treat list/edit dual forms of the prior video as the same baseline (not "fresh").
+                const hasFreshVideoUrl = Boolean(currentVideoToken)
+                    && currentVideoToken !== baseVideoToken
+                    && (!baseVideoAltToken || currentVideoToken !== baseVideoAltToken);
+                const videoStartedAtMs = Number(updated.videoAt || 0);
+                const videoWithinStartupGrace = Boolean(
+                    updated.video
+                    && videoStartedAtMs > 0
+                    && (Date.now() - videoStartedAtMs) < SHOT_MEDIA_STARTUP_GRACE_MS
+                );
+                const hasPendingVideoJob = Boolean(getPendingVideoJobId(shotId));
+                const videoStatusText = String(videoStatuses?.[shotId] || '').trim();
+                const videoStatusPhase = normalizeGenerationPhase(videoStatusText);
+                const videoStatusActive = Boolean(videoStatusText && !isTerminalGenerationPhase(videoStatusPhase));
 
                 if (updated.start && Object.prototype.hasOwnProperty.call(base, 'start') && hasFreshStartUrl) {
                     updated.start = false;
@@ -6825,7 +6876,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     updated.end = false;
                     updated.endAt = 0;
                 }
-                if (updated.video && Object.prototype.hasOwnProperty.call(base, 'video') && hasFreshVideoUrl) {
+                // Never clear regenerate video UI from a URL race while the job is still live.
+                if (
+                    updated.video
+                    && Object.prototype.hasOwnProperty.call(base, 'video')
+                    && hasFreshVideoUrl
+                    && !hasPendingVideoJob
+                    && !videoWithinStartupGrace
+                    && !videoStatusActive
+                ) {
                     updated.video = false;
                     updated.videoAt = 0;
                 }
@@ -6852,7 +6911,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             writeGenerationStateStorage(next);
             return next;
         });
-    }, [shots, hasActiveGeneration, writeGenerationStateStorage, getShotEndFrameUrl, normalizeAssetUrlToken]);
+    }, [
+        shots,
+        hasActiveGeneration,
+        writeGenerationStateStorage,
+        getShotEndFrameUrl,
+        normalizeAssetUrlToken,
+        getPendingVideoJobId,
+        videoStatuses,
+        normalizeGenerationPhase,
+        isTerminalGenerationPhase,
+        SHOT_MEDIA_STARTUP_GRACE_MS,
+    ]);
 
     useEffect(() => {
         if (!editingShot?.id || (shots || []).length === 0) return;
@@ -9302,7 +9372,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         let ignoreAsyncJobCallbacks = false;
         let ignoredAsyncJobCallbackCount = 0;
 
-        setShotGeneratingState(targetShotId, 'video', true);
+        // Drop stale terminal statuses from a prior run so regenerate shows running UI immediately.
+        setVideoStatuses((prev) => {
+            if (!Object.prototype.hasOwnProperty.call(prev || {}, targetShotId)) return prev;
+            const next = { ...prev };
+            delete next[targetShotId];
+            return next;
+        });
+        setShotGeneratingState(targetShotId, 'video', true, { forceRestartAt: true });
         onLog?.('Generating Video...', 'info');
         try {
             if (techDirty) {
@@ -10161,7 +10238,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             );
         }
 
-        setShotGeneratingState(targetShotId, 'video', true);
+        setShotGeneratingState(targetShotId, 'video', true, { forceRestartAt: true });
         setVideoStatuses((prev) => ({ ...prev, [targetShotId]: 'upscaling' }));
 
         let createdVideoJobId = '';
@@ -10306,7 +10383,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (!await confirmUiMessage(confirmMsg)) return;
 
         setVideoCleanupMenuOpen(false);
-        setShotGeneratingState(targetShotId, 'video', true);
+        setShotGeneratingState(targetShotId, 'video', true, { forceRestartAt: true });
         setVideoStatuses((prev) => ({
             ...prev,
             [targetShotId]: isSubtitle && isBgm ? 'cleaning_both' : (isSubtitle ? 'cleaning_subtitle' : 'cleaning_bgm'),

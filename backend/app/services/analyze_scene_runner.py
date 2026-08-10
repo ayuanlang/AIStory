@@ -414,6 +414,8 @@ async def execute_analyze_scene(
                         persisted_subject_index_for_prompt = _filter_subject_index_text_by_types(
                             persisted_subject_index_for_prompt,
                             subject_index_allowed_types_for_request,
+                            log_mode=effective_scene_analysis_mode,
+                            log_prompt_file=getattr(request, "prompt_file", None),
                         )
             except Exception as _subject_idx_inject_err:
                 logger.warning("[analyze_scene] failed loading persisted subject index for prompt injection: %s", _subject_idx_inject_err)
@@ -456,6 +458,8 @@ async def execute_analyze_scene(
                     persisted_subject_index_for_prompt = _filter_subject_index_text_by_types(
                         persisted_subject_index_for_prompt,
                         subject_index_allowed_types_for_request,
+                        log_mode=effective_scene_analysis_mode,
+                        log_prompt_file=getattr(request, "prompt_file", None),
                     )
 
         if persisted_subject_index_for_prompt:
@@ -508,6 +512,8 @@ async def execute_analyze_scene(
                 request_text_for_prompt = _filter_subject_index_text_by_types(
                     request_text_for_prompt,
                     subject_index_allowed_types_for_request,
+                    log_mode=effective_scene_analysis_mode,
+                    log_prompt_file=getattr(request, "prompt_file", None),
                 )
             user_content = _build_script_to_analyze_block(request_text_for_prompt)
 
