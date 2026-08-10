@@ -44,10 +44,14 @@ import {
 import {
     isEnvironmentAssetType,
     isReusableMainEnvironmentAsset,
+    isAngleDerivativeEnvironmentName,
+    assetHasAngleDerivativeName,
     extractScriptLocationEnvNames,
     environmentAssetMatchesScriptLocations,
     filterGlobalReuseDropdownAssets,
 } from '../reuseEnvAssets';
+
+const GLOBAL_REUSE_DROPDOWN_BUILD = 'reuse-env-v3';
 
 import { 
     fetchProject, 
@@ -10167,14 +10171,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
     }, [reuseDropdownOpen, activeEpisode?.id, isLoadingSubjectAssets, scriptMatchedReuseEnvIdSet]);
 
-    const filteredSubjectAssets = useMemo(
-        () => filterGlobalReuseDropdownAssets(
+    const filteredSubjectAssets = useMemo(() => {
+        const filtered = filterGlobalReuseDropdownAssets(
             availableSubjectAssets,
             reuseSubjectTypeFilter,
             reuseSubjectKeyword,
-        ),
-        [availableSubjectAssets, reuseSubjectKeyword, reuseSubjectTypeFilter],
-    );
+        );
+        // Defense-in-depth: drop angled names even if helper module is stale in HMR.
+        return filtered.filter((asset) => {
+            const name = String(asset?.name || '').trim();
+            const nameEn = String(asset?.name_en || '').trim();
+            if (/^(?:\d+|[０-９]+)\s*(?:度|°|º|deg)/i.test(name)) return false;
+            if (/^(?:\d+|[０-９]+)\s*(?:度|°|º|deg)/i.test(nameEn)) return false;
+            if (assetHasAngleDerivativeName(asset) || isAngleDerivativeEnvironmentName(name)) return false;
+            return true;
+        });
+    }, [availableSubjectAssets, reuseSubjectKeyword, reuseSubjectTypeFilter]);
+
+    const hiddenAngleDerivativeCount = useMemo(() => {
+        return (availableSubjectAssets || []).filter((asset) => {
+            const typeOk = reuseSubjectTypeFilter === 'all'
+                || String(asset?.type || '').trim() === reuseSubjectTypeFilter
+                || (String(reuseSubjectTypeFilter).toLowerCase() === 'environment' && isEnvironmentAssetType(asset?.type));
+            if (!typeOk) return false;
+            return assetHasAngleDerivativeName(asset)
+                || /^(?:\d+|[０-９]+)\s*(?:度|°|º|deg)/i.test(String(asset?.name || '').trim())
+                || /^(?:\d+|[０-９]+)\s*(?:度|°|º|deg)/i.test(String(asset?.name_en || '').trim());
+        }).length;
+    }, [availableSubjectAssets, reuseSubjectTypeFilter]);
 
     const hasActiveReuseSubjectFilters = useMemo(() => {
         return reuseSubjectTypeFilter !== 'all' || String(reuseSubjectKeyword || '').trim().length > 0;
@@ -24517,10 +24541,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     )}
                                 </button>
                                 {reuseDropdownOpen && (
-                                    <div className="absolute top-12 left-0 z-[100] w-72 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl p-3 flex flex-col gap-3">
+                                    <div className="absolute top-12 left-0 z-[100] w-80 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl p-3 flex flex-col gap-3">
                                         <div className="flex items-center justify-between">
                                             <h4 className="text-xs font-bold text-white/70">{t('选择资产注入', 'Inject Assets')}</h4>
                                             <button onClick={() => setReuseDropdownOpen(false)} className="text-white/50 hover:text-white"><X className="w-4 h-4" /></button>
+                                        </div>
+                                        <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-2 py-1.5 text-[10px] leading-relaxed text-amber-100/90">
+                                            {t('仅显示主环境', 'Main environments only')}
+                                            <span className="text-amber-200/60"> · {GLOBAL_REUSE_DROPDOWN_BUILD}</span>
+                                            {hiddenAngleDerivativeCount > 0 && (
+                                                <span className="block text-amber-100/70">
+                                                    {t(
+                                                        `已隐藏 ${hiddenAngleDerivativeCount} 个角度衍生（如 0度/180度…）`,
+                                                        `Hidden ${hiddenAngleDerivativeCount} angle derivatives (0°/180°…)`,
+                                                    )}
+                                                </span>
+                                            )}
+                                            {scriptLocationEnvNames.length > 0 && (
+                                                <span className="block text-emerald-200/80">
+                                                    {t(
+                                                        `剧本 location 命中 ${scriptLocationEnvNames.length} 个；已自动勾选 ${scriptMatchedReuseEnvIdSet.size} 个主环境`,
+                                                        `Script locations: ${scriptLocationEnvNames.length}; auto-checked mains: ${scriptMatchedReuseEnvIdSet.size}`,
+                                                    )}
+                                                </span>
+                                            )}
                                         </div>
                                         <div className="flex gap-2">
                                             <select
@@ -24533,12 +24577,42 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     <option key={tOption} value={tOption}>{tOption}</option>
                                                 ))}
                                             </select>
+                                            <button
+                                                type="button"
+                                                className="shrink-0 rounded border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-emerald-100 hover:bg-emerald-500/20"
+                                                title={t('按剧本 {location=…} 自动勾选主环境', 'Auto-check mains from script {location=…}')}
+                                                onClick={() => {
+                                                    if (!scriptMatchedReuseEnvIdSet.size) {
+                                                        onLog?.(t('剧本中未找到可匹配的 {location=…} 主环境', 'No matching script {location=…} main ENV found'), 'warning');
+                                                        return;
+                                                    }
+                                                    setSelectedReuseSubjectIds((prev) => {
+                                                        const next = new Set((prev || []).map((id) => String(id)));
+                                                        for (const id of scriptMatchedReuseEnvIdSet) next.add(id);
+                                                        return Array.from(next);
+                                                    });
+                                                    onLog?.(
+                                                        t(
+                                                            `已按剧本自动勾选 ${scriptMatchedReuseEnvIdSet.size} 个主环境`,
+                                                            `Auto-checked ${scriptMatchedReuseEnvIdSet.size} main ENV(s) from script`,
+                                                        ),
+                                                        'success',
+                                                    );
+                                                }}
+                                            >
+                                                {t('按剧本勾选', 'From script')}
+                                            </button>
                                         </div>
                                         <div className="max-h-64 overflow-y-auto custom-scrollbar flex flex-col gap-1 border border-white/5 bg-white/[0.02] p-2 rounded">
                                             {filteredSubjectAssets.length === 0 ? (
                                                 <div className="text-[10px] text-white/30 text-center py-4">{t('暂无可见资产', 'No assets')}</div>
                                             ) : (
-                                                filteredSubjectAssets.map(asset => (
+                                                filteredSubjectAssets.map(asset => {
+                                                    // Final render gate: angled names never render.
+                                                    const displayName = String(asset?.name || '').trim();
+                                                    if (/^(?:\d+|[０-９]+)\s*(?:度|°|º|deg)/i.test(displayName)) return null;
+                                                    if (/^(?:\d+|[０-９]+)\s*(?:度|°|º|deg)/i.test(String(asset?.name_en || '').trim())) return null;
+                                                    return (
                                                     <label key={asset.id} className="flex items-start gap-2 text-xs text-white/80 hover:bg-white/5 p-1.5 rounded cursor-pointer transition-colors">
                                                         <input
                                                             type="checkbox"
@@ -24558,10 +24632,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                             {asset.name_en && (
                                                                 <span className="text-[10px] text-white/45 line-clamp-1">{asset.name_en}</span>
                                                             )}
-                                                            {asset.description && <span className="text-[10px] text-white/50 line-clamp-1">{asset.description}</span>}
                                                         </div>
                                                     </label>
-                                                ))
+                                                    );
+                                                })
                                             )}
                                         </div>
                                     </div>

@@ -143,25 +143,26 @@ export const environmentAssetMatchesScriptLocations = (asset, locations) => {
     return false;
 };
 
+/** Hard ban for any asset whose display name is an angle derivative (type-agnostic). */
+export const assetHasAngleDerivativeName = (asset) => (
+    [asset?.name, asset?.name_en, asset?.name_zh, asset?.subject_name]
+        .some((value) => isAngleDerivativeEnvironmentName(value))
+);
+
 /** Dropdown list filter: keep non-ENV; for ENV keep mains only. */
 export const filterGlobalReuseDropdownAssets = (assets, typeFilter = 'all', keyword = '') => {
     const normalizedKeyword = String(keyword || '').trim().toLowerCase();
     const typeFilterValue = String(typeFilter || 'all').trim();
     return (Array.isArray(assets) ? assets : []).filter((asset) => {
+        // Absolute: never list `0度…` / `180 Deg…` rows in this dropdown.
+        if (assetHasAngleDerivativeName(asset)) return false;
+
         const typeValue = String(asset?.type || '').trim();
         const passType = typeFilterValue === 'all' || typeValue === typeFilterValue
             || (typeFilterValue.toLowerCase() === 'environment' && isEnvironmentAssetType(typeValue));
         if (!passType) return false;
 
         if (isEnvironmentAssetType(typeValue) && !isReusableMainEnvironmentAsset(asset)) {
-            return false;
-        }
-
-        // Extra hard ban: any angled ENV name must never appear.
-        if (
-            isEnvironmentAssetType(typeValue)
-            && [asset?.name, asset?.name_en].some((v) => isAngleDerivativeEnvironmentName(v))
-        ) {
             return false;
         }
 
