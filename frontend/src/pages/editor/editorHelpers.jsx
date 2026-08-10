@@ -1009,13 +1009,63 @@ export const getMainEnvironmentName = (envName) => {
     return getEnvAngleBucketKey(withoutAngle) || withoutAngle;
 };
 
-/** True when ENV name is an angle derivative (`0度…` / `180 Deg …`), not a main baseline. */
+/** True when ENV name is an angle derivative (`0度…` / `0°…` / `180 Deg …`), not a main baseline. */
 export const isAngleDerivativeEnvironmentName = (envName) => {
     const raw = String(envName || '').trim();
     if (!raw) return false;
-    if (/^\d+\s*度/.test(raw) || /(^|[_\s])\d+\s*度/.test(raw)) return true;
-    if (/^\d+\s*deg(?:ree)?s?\b/i.test(raw) || /(^|[_\s])\d+\s*deg(?:ree)?s?\b/i.test(raw)) return true;
+    // ASCII/fullwidth digits + 度 / ° / Deg…
+    if (/^(?:\d+|[０-９]+)\s*(?:度|°|º|deg(?:ree)?s?\b)/i.test(raw)) return true;
+    if (/(?:^|[_\s\-])(?:\d+|[０-９]+)\s*(?:度|°|º|deg(?:ree)?s?\b)/i.test(raw)) return true;
     return false;
+};
+
+const parseDependencyStrategyType = (value) => {
+    let dep = value;
+    if (typeof dep === 'string') {
+        const raw = dep.trim();
+        if (!raw) return '';
+        try {
+            dep = JSON.parse(raw);
+        } catch (_) {
+            return raw;
+        }
+    }
+    if (!dep || typeof dep !== 'object') return '';
+    return String(dep.type || '').trim();
+};
+
+export const isEnvironmentAssetType = (typeValue) => {
+    const typeKey = String(typeValue || '').trim().toLowerCase();
+    if (!typeKey) return false;
+    return (
+        typeKey === 'environment'
+        || typeKey === 'env'
+        || typeKey.includes('environment')
+        || typeKey.includes('环境')
+        || typeKey.includes('场景')
+    );
+};
+
+/**
+ * Global-assets dropdown: only main/baseline ENV rows.
+ * Hides `{N}度…` / `N Deg …` angle derivatives and Type A/B ENV derivatives.
+ */
+export const isReusableMainEnvironmentAsset = (asset) => {
+    if (!asset) return false;
+    if (!isEnvironmentAssetType(asset?.type)) return false;
+
+    const nameCandidates = [asset?.name, asset?.name_en, asset?.name_zh, asset?.subject_name];
+    if (nameCandidates.some((value) => isAngleDerivativeEnvironmentName(value))) {
+        return false;
+    }
+
+    const depType = parseDependencyStrategyType(asset?.dependency_strategy);
+    if (/^baseline\s*definition$/i.test(depType)) return true;
+    // Stage-3 angle/state derivatives are Type A / Type B.
+    if (/^type\s*[ab]$/i.test(depType)) return false;
+
+    // Original / empty strategy: keep only if name is not angled (already checked).
+    return true;
 };
 
 /**

@@ -39,7 +39,7 @@ import { unwrapInjectionSection, wrapInjectionSection } from '../../../lib/promp
 import { collectLlmJsonTextCandidates, sanitizeLlmTextForJsonImport } from '../../../lib/llmJsonExtract';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel,     mergeEntityPoolWithSubjectIndex, getMainEnvironmentName, isAngleDerivativeEnvironmentName, extractScriptLocationEnvNames, environmentAssetMatchesScriptLocations, useTabMediaRefreshEffect
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel,     mergeEntityPoolWithSubjectIndex, getMainEnvironmentName, isEnvironmentAssetType, isReusableMainEnvironmentAsset, extractScriptLocationEnvNames, environmentAssetMatchesScriptLocations, useTabMediaRefreshEffect
 } from '../editorHelpers';
 
 import { 
@@ -10021,18 +10021,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const allowed = new Set(
             (availableSubjectAssets || [])
                 .filter((asset) => {
-                    const typeKey = String(asset?.type || '').trim().toLowerCase();
-                    const isEnvironmentAsset = (
-                        typeKey === 'environment'
-                        || typeKey === 'env'
-                        || typeKey.includes('environment')
-                        || typeKey.includes('环境')
-                        || typeKey.includes('场景')
-                    );
-                    if (isEnvironmentAsset && isAngleDerivativeEnvironmentName(asset?.name)) {
-                        return false;
-                    }
-                    return true;
+                    if (!isEnvironmentAssetType(asset?.type)) return true;
+                    return isReusableMainEnvironmentAsset(asset);
                 })
                 .map((asset) => String(asset?.id))
         );
@@ -10128,15 +10118,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const ids = new Set();
         if (!scriptLocationEnvNames.length) return ids;
         for (const asset of availableSubjectAssets || []) {
-            const typeKey = String(asset?.type || '').trim().toLowerCase();
-            const isEnvironmentAsset = (
-                typeKey === 'environment'
-                || typeKey === 'env'
-                || typeKey.includes('environment')
-                || typeKey.includes('环境')
-                || typeKey.includes('场景')
-            );
-            if (!isEnvironmentAsset || isAngleDerivativeEnvironmentName(asset?.name)) continue;
+            if (!isReusableMainEnvironmentAsset(asset)) continue;
             if (environmentAssetMatchesScriptLocations(asset, scriptLocationEnvNames)) {
                 ids.add(String(asset.id));
             }
@@ -10168,16 +10150,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const passType = reuseSubjectTypeFilter === 'all' || typeValue === reuseSubjectTypeFilter;
             if (!passType) return false;
 
-            // Global Assets dropdown: environments → main baseline only (hide `{N}度…` derivatives).
-            const typeKey = typeValue.toLowerCase();
-            const isEnvironmentAsset = (
-                typeKey === 'environment'
-                || typeKey === 'env'
-                || typeKey.includes('environment')
-                || typeKey.includes('环境')
-                || typeKey.includes('场景')
-            );
-            if (isEnvironmentAsset && isAngleDerivativeEnvironmentName(asset?.name)) {
+            // Global Assets dropdown: ENV → main baseline only (hide `0度…` / `0 Deg…` / Type A·B).
+            if (isEnvironmentAssetType(typeValue) && !isReusableMainEnvironmentAsset(asset)) {
                 return false;
             }
 
@@ -12355,15 +12329,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return availableSubjectAssets
             .filter((asset) => {
                 if (!selected.has(String(asset.id))) return false;
-                const typeKey = String(asset?.type || '').trim().toLowerCase();
-                const isEnvironmentAsset = (
-                    typeKey === 'environment'
-                    || typeKey === 'env'
-                    || typeKey.includes('environment')
-                    || typeKey.includes('环境')
-                    || typeKey.includes('场景')
-                );
-                if (isEnvironmentAsset && isAngleDerivativeEnvironmentName(asset?.name)) {
+                if (isEnvironmentAssetType(asset?.type) && !isReusableMainEnvironmentAsset(asset)) {
                     return false;
                 }
                 return true;
