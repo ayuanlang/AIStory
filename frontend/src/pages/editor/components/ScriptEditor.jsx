@@ -39,8 +39,15 @@ import { unwrapInjectionSection, wrapInjectionSection } from '../../../lib/promp
 import { collectLlmJsonTextCandidates, sanitizeLlmTextForJsonImport } from '../../../lib/llmJsonExtract';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel,     mergeEntityPoolWithSubjectIndex, getMainEnvironmentName, isEnvironmentAssetType, isReusableMainEnvironmentAsset, extractScriptLocationEnvNames, environmentAssetMatchesScriptLocations, useTabMediaRefreshEffect
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel,     mergeEntityPoolWithSubjectIndex, getMainEnvironmentName, useTabMediaRefreshEffect
 } from '../editorHelpers';
+import {
+    isEnvironmentAssetType,
+    isReusableMainEnvironmentAsset,
+    extractScriptLocationEnvNames,
+    environmentAssetMatchesScriptLocations,
+    filterGlobalReuseDropdownAssets,
+} from '../reuseEnvAssets';
 
 import { 
     fetchProject, 
@@ -10143,34 +10150,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
     }, [activeEpisode?.id, isLoadingSubjectAssets, scriptMatchedReuseEnvIdSet]);
 
-    const filteredSubjectAssets = useMemo(() => {
-        const normalizedKeyword = String(reuseSubjectKeyword || '').trim().toLowerCase();
-        return (availableSubjectAssets || []).filter(asset => {
-            const typeValue = String(asset?.type || '').trim();
-            const passType = reuseSubjectTypeFilter === 'all' || typeValue === reuseSubjectTypeFilter;
-            if (!passType) return false;
-
-            // Global Assets dropdown: ENV → main baseline only (hide `0度…` / `0 Deg…` / Type A·B).
-            if (isEnvironmentAssetType(typeValue) && !isReusableMainEnvironmentAsset(asset)) {
-                return false;
+    // Re-apply script location auto-select whenever the Global Assets dropdown opens.
+    useEffect(() => {
+        if (!reuseDropdownOpen || isLoadingSubjectAssets || !activeEpisode?.id) return;
+        if (!scriptMatchedReuseEnvIdSet.size) return;
+        setSelectedReuseSubjectIds((prev) => {
+            const next = new Set((prev || []).map((id) => String(id)));
+            let changed = false;
+            for (const id of scriptMatchedReuseEnvIdSet) {
+                if (!next.has(id)) {
+                    next.add(id);
+                    changed = true;
+                }
             }
-
-            if (!normalizedKeyword) return true;
-
-            const haystack = [
-                asset?.name,
-                asset?.name_en,
-                asset?.description,
-                asset?.narrative_description,
-                asset?.anchor_description,
-                asset?.type,
-            ]
-                .map(v => String(v || '').toLowerCase())
-                .join(' ');
-
-            return haystack.includes(normalizedKeyword);
+            return changed ? Array.from(next) : prev;
         });
-    }, [availableSubjectAssets, reuseSubjectKeyword, reuseSubjectTypeFilter]);
+    }, [reuseDropdownOpen, activeEpisode?.id, isLoadingSubjectAssets, scriptMatchedReuseEnvIdSet]);
+
+    const filteredSubjectAssets = useMemo(
+        () => filterGlobalReuseDropdownAssets(
+            availableSubjectAssets,
+            reuseSubjectTypeFilter,
+            reuseSubjectKeyword,
+        ),
+        [availableSubjectAssets, reuseSubjectKeyword, reuseSubjectTypeFilter],
+    );
 
     const hasActiveReuseSubjectFilters = useMemo(() => {
         return reuseSubjectTypeFilter !== 'all' || String(reuseSubjectKeyword || '').trim().length > 0;
