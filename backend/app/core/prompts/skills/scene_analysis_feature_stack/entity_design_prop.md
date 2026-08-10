@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_prop.md
-# Prompt Updated At: 2026-08-08 16:55:00 +08:00
+# Prompt Updated At: 2026-08-10 23:40:00 +08:00
 
 # Skill 1-3: 资产设计 · 道具专属合同
 
@@ -30,7 +30,7 @@
 - 沿用 common §1.1：16:9 横向、绝对纯白连续画板、同一横排四视图；第一宫特写 35% 纵向居中，正/侧/背共享 65%；禁 2×2、换行、错层。`generation_prompt_en` 固定 `""`；`description_cn` 恒 `""`。
 - `name` / `name_en` / `base_name_en` **逐字符原样透传** Subject Index；**禁止任何形式的修改**。衍生实体名须等于 Index 已登记衍生行全名；`base_entity` 仅供追溯，不得据此改写输出名。
 - Clean Plate：禁手/人影/持握残留（除非上游指定为道具组成部分）。
-- **角色配饰 PROP**：Index 若有 `host_character:`，`purpose`/`dependency_strategy.logic` 可点明归属角色与挂载（规划语境：须回写 Index `wear_side`/`mount_body_part`，如「佩于宿主胸前」）；**生图仍 Clean Plate**——禁画宿主人物/手部佩戴特写（挂载部位由 Character Skill 在角色四视图对齐画出）。角色侧依赖由 Character Skill 据 Index `accessory_props`/`accessory_mount` 挂 `PROP:[…]`；本 Skill **不**反向设计角色。缺 `wear_side`/`mount_body_part` 时在 logic 标上游缺口，禁臆造挂位。
+- **角色配饰 PROP**：Index 若有 `host_character:`，`purpose`/`dependency_strategy.logic` 可点明归属角色与挂载（规划语境：须回写 Index `wear_side`/`mount_body_part`，如「佩于宿主胸前」）；**生图仍 Clean Plate**——禁画宿主人物/手部佩戴特写。角色侧由 Character Skill 据 Index `accessory_props`/`accessory_mount` **仅**挂 `visual_dependencies`=`PROP:[…]`（挂位只进角色 `dependency_strategy.logic`）；**禁止**把本道具写入角色 `generation_prompt_cn`/`clothing`/`【衣着】`——道具形制只在本 Skill 出图。本 Skill **不**反向设计角色。缺 `wear_side`/`mount_body_part` 时在 logic 标上游缺口，禁臆造挂位。
 - **四视图可视性（强制）**：正面/侧面/背面/特写各格只写该视角可读的形制与文字面；铭文/屏幕/破损面落在朝向该格的面板，禁背视格写正面全文（见 common 实体物件可视性核验）。
 
 ### 1.2 语境、细节与文字

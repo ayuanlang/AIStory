@@ -34,6 +34,7 @@ from app.services.scene_subject_helpers import _normalize_subject_entity_type
 from app.services.shot_markdown import (
     _is_provider_moderation_block_response,
     _pick_shot_cell,
+    _validate_shot_rows_for_apply_with_tolerance,
     _validate_shot_rows_or_raise,
     parse_shots_markdown_table,
     sanitize_shots_markdown_table_text,
@@ -114,6 +115,27 @@ def _build_ai_shots_response_validator(
             return False, f"{source_label} returned 0 parsed rows; raw preview: {raw_preview}", None
         if table_line_count >= 4 and len(rows) > 0 and (len(rows) * 2) <= table_line_count:
             return False, f"{source_label} output may have lost rows during markdown parsing", None
+
+        # Require at least one structurally applyable row (Video Content present).
+        # Without this, Logic-only / column-shifted tables pass parse and only fail
+        # later in execute_ai_generate_shots — skipping LLM fallback retries.
+        try:
+            applyable_rows, apply_skipped = _validate_shot_rows_for_apply_with_tolerance(
+                rows,
+                source_label=source_label,
+                status_code=502,
+            )
+        except HTTPException as exc:
+            return False, str(exc.detail or f"{source_label} failed structural validation"), None
+        if apply_skipped:
+            logger.warning(
+                "[%s] draft structural warnings scene_id=%s skipped=%s details=%s",
+                context,
+                scene_id,
+                len(apply_skipped),
+                apply_skipped[:5],
+            )
+        rows = applyable_rows
 
         validated_rows = rows
         if validate_regenerate_markers:

@@ -4120,7 +4120,7 @@ const Editor = ({
                             )}
                             {shouldRenderScriptTab && (
                                 <div className={activeTab === 'script' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'script'}>
-                                    <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}-reuse-env-v5`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} tabMediaRefreshSignal={tabMediaRefreshSignals.script} isTabActive={activeTab === 'script'} onMediaRefreshRequest={() => bumpTabMediaRefresh('script')} />
+                                    <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} tabMediaRefreshSignal={tabMediaRefreshSignals.script} isTabActive={activeTab === 'script'} onMediaRefreshRequest={() => bumpTabMediaRefresh('script')} />
                                 </div>
                             )}
                             {shouldRenderSubjectsTab && (

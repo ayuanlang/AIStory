@@ -127,18 +127,163 @@ def _find_shot_pipe_merge_column_indices(headers: List[str]) -> List[int]:
     return indices
 
 
+_SHOT_DURATION_CELL_RE = re.compile(r"^\d+(\.\d+)?$")
+_SHOT_VIDEO_ANCHOR_RE = re.compile(
+    r"全局动态风格|运镜与动作流|动态连续光影|光线连动弧光|人物面部稳定不变形"
+)
+_SHOT_LOGIC_ANCHOR_RE = re.compile(
+    r"Beat-Shot映射|节奏需求|内容继承核销|镜头逻辑总规划|时间预估|建置角色覆盖|可剪辑合镜核销"
+)
+_SHOT_ENTITY_TOKEN_RE = re.compile(r"(?:CHAR|ENV|PROP)\s*:\s*\[", re.IGNORECASE)
+
+
+def _looks_like_shot_video_prompt(text: Any) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if _SHOT_VIDEO_ANCHOR_RE.search(value):
+        return True
+    # Fallback: long prose video cell with P-segments, not Logic-tag dense.
+    if len(value) >= 80 and re.search(r"\bP\d+\b", value) and (
+        "ENV:" in value or "CHAR:" in value or "PROP:" in value
+    ):
+        if not _SHOT_LOGIC_ANCHOR_RE.search(value[:120]):
+            return True
+    return False
+
+
+def _looks_like_duration_cell(text: Any) -> bool:
+    value = str(text or "").strip()
+    if not _SHOT_DURATION_CELL_RE.match(value):
+        return False
+    try:
+        parsed = float(value)
+    except Exception:
+        return False
+    return 1.0 <= parsed <= 30.0
+
+
+def _looks_like_entities_cell(text: Any) -> bool:
+    value = str(text or "").strip()
+    if not value or len(value) > 800:
+        return False
+    if value.lower() in {"none", "n/a", "null", "无"}:
+        return True
+    if _looks_like_shot_video_prompt(value):
+        return False
+    if _SHOT_LOGIC_ANCHOR_RE.search(value):
+        return False
+    return bool(_SHOT_ENTITY_TOKEN_RE.search(value))
+
+
+def _try_realign_shot_row_by_anchors(vals: List[str], header_count: int) -> Optional[List[str]]:
+    """Rebuild a canonical 14-col shot row from Duration / Video / Entities anchors.
+
+    LLM outputs often embed ASCII ``|`` inside Shot Logic (e.g. ``改机位|景别|运镜``),
+    which splits one cell into many and shifts Video Content (CN) out of column 11.
+    """
+    if header_count < 14 or not vals:
+        return None
+
+    cells = [str(c or "").strip() for c in vals]
+    while len(cells) < 4:
+        cells.append("")
+
+    video_indices = [i for i, cell in enumerate(cells) if _looks_like_shot_video_prompt(cell)]
+    if not video_indices:
+        return None
+
+    video_idx = max(video_indices, key=lambda i: len(cells[i]))
+    duration_indices = [i for i, cell in enumerate(cells) if _looks_like_duration_cell(cell)]
+    duration_idx: Optional[int] = None
+    for idx in reversed(duration_indices):
+        if idx < video_idx:
+            duration_idx = idx
+            break
+    if duration_idx is None and duration_indices:
+        duration_idx = duration_indices[0]
+
+    entity_indices = [i for i, cell in enumerate(cells) if _looks_like_entities_cell(cell)]
+    entities_idx: Optional[int] = None
+    for idx in entity_indices:
+        if idx > video_idx:
+            entities_idx = idx
+            break
+    if entities_idx is None and entity_indices:
+        entities_idx = entity_indices[-1]
+
+    # Skip rebuild when the canonical slots already look correct.
+    if len(cells) == header_count:
+        duration_ok = _looks_like_duration_cell(cells[6])
+        video_cn_ok = _looks_like_shot_video_prompt(cells[10])
+        video_en_ok = _looks_like_shot_video_prompt(cells[5])
+        if duration_ok and (video_cn_ok or video_en_ok) and video_idx in {5, 10}:
+            out = list(cells[:header_count])
+            if video_en_ok and not video_cn_ok:
+                out[10] = out[5]
+                out[5] = ""
+            return out
+
+    logic_end = duration_idx if duration_idx is not None else video_idx
+    if logic_end < 3:
+        return None
+
+    logic = "|".join(cell for cell in cells[3:logic_end] if cell)
+    if not logic and len(cells) > 3:
+        logic = cells[3]
+
+    out = [""] * header_count
+    out[0] = cells[0] if len(cells) > 0 else ""
+    out[1] = cells[1] if len(cells) > 1 else ""
+    out[2] = cells[2] if len(cells) > 2 else ""
+    out[3] = logic
+    out[6] = cells[duration_idx] if duration_idx is not None else ""
+    out[10] = cells[video_idx]
+    out[13] = cells[entities_idx] if entities_idx is not None else ""
+    return out
+
+
 def _reconcile_shot_markdown_row_cells(
     cells: List[str],
     header_count: int,
     merge_column_indices: Optional[List[int]] = None,
 ) -> List[str]:
     """Re-align shot markdown row cells when unescaped pipes inflated the column count."""
-    vals = [str(c or "").strip() for c in (cells or [])]
+    original = [str(c or "").strip() for c in (cells or [])]
     if header_count <= 0:
         return []
+
+    # Prefer anchor rebuild for the standard 14-col schema before pipe-merging.
+    if header_count >= 14:
+        anchored = _try_realign_shot_row_by_anchors(original, header_count)
+        if anchored is not None:
+            return anchored
+
+    vals = list(original)
     if len(vals) <= header_count:
         while len(vals) < header_count:
             vals.append("")
+        if header_count >= 14:
+            # Collapsed empty columns: Video often lands in English Video Content (col 6 / idx 5).
+            if _looks_like_shot_video_prompt(vals[5]) and not _looks_like_shot_video_prompt(vals[10]):
+                vals[10] = vals[5]
+                vals[5] = ""
+            if _looks_like_duration_cell(vals[4]) and not _looks_like_duration_cell(vals[6]):
+                # | Logic | Duration | Video | Entities | → Duration in Start Frame
+                if _looks_like_shot_video_prompt(vals[5]) or _looks_like_shot_video_prompt(vals[10]):
+                    duration_val = vals[4]
+                    video_val = vals[10] or vals[5]
+                    entities_val = vals[13] or vals[6] or vals[5]
+                    if _looks_like_entities_cell(vals[6]) and not _looks_like_shot_video_prompt(vals[6]):
+                        entities_val = vals[6]
+                    elif _looks_like_entities_cell(vals[5]) and not _looks_like_shot_video_prompt(vals[5]):
+                        entities_val = vals[5]
+                    rebuilt = [""] * header_count
+                    rebuilt[0], rebuilt[1], rebuilt[2], rebuilt[3] = vals[0], vals[1], vals[2], vals[3]
+                    rebuilt[6] = duration_val
+                    rebuilt[10] = video_val
+                    rebuilt[13] = entities_val if _looks_like_entities_cell(entities_val) else (vals[13] or "none")
+                    return rebuilt
         return vals[:header_count]
 
     # Common LLM artifact: an extra empty cell (spurious `|`) immediately before
@@ -174,7 +319,19 @@ def _reconcile_shot_markdown_row_cells(
 
     while len(vals) < header_count:
         vals.append("")
-    return vals[:header_count]
+    vals = vals[:header_count]
+
+    # If pipe-merge still left Video empty/mis-slotted, rebuild from the original split cells.
+    if header_count >= 14:
+        video_ok = _looks_like_shot_video_prompt(vals[10]) or _looks_like_shot_video_prompt(vals[5])
+        if not video_ok:
+            anchored = _try_realign_shot_row_by_anchors(original, header_count)
+            if anchored is not None:
+                return anchored
+        elif _looks_like_shot_video_prompt(vals[5]) and not _looks_like_shot_video_prompt(vals[10]):
+            vals[10] = vals[5]
+            vals[5] = ""
+    return vals
 
 
 def _normalize_markdown_table_cells(
@@ -637,15 +794,20 @@ def _pick_shot_cell(row: Dict[str, Any], aliases: List[str], default: str = "") 
 
 
 def _pick_shot_video_prompt_cell(row: Dict[str, Any]) -> str:
-    direct_value = _pick_shot_cell(row, [
+    preferred_aliases = [
         "Video Content (CN)", "video_content_cn", "video_prompt_cn", "视频内容（中文）",
         "中文视频提示词内容", "中文视频提示词", "视频提示词内容", "视频提示词", "中文动态视频提示词",
         "Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词",
         "Video Content", "video_content", "视频内容",
         "prompt_preview_cn",
-    ], "")
-    if direct_value:
+    ]
+    direct_value = _pick_shot_cell(row, preferred_aliases, "")
+    if _looks_like_shot_video_prompt(direct_value):
         return direct_value
+
+    candidates: List[str] = []
+    if direct_value:
+        candidates.append(direct_value)
 
     for source in (row, _shot_row_technical_notes_dict(row)):
         if not isinstance(source, dict):
@@ -656,14 +818,62 @@ def _pick_shot_video_prompt_cell(row: Dict[str, Any]) -> str:
                 continue
             key_text = str(raw_key or "").strip().lower()
             normalized_key = _normalize_shot_markdown_col_key(raw_key)
+            # Never treat Shot Logic as the video prompt source unless it truly
+            # embeds a video-looking payload (mis-merge recovery).
+            if "logic" in key_text or "镜头逻辑" in str(raw_key or ""):
+                if _looks_like_shot_video_prompt(value):
+                    candidates.append(value)
+                continue
             if (
                 ("video" in key_text and "cn" in key_text)
                 or "videopromptcn" in normalized_key
                 or "videocontentcn" in normalized_key
                 or ("视频" in str(raw_key or "") and ("中文" in str(raw_key or "") or "提示词" in str(raw_key or "") or "内容" in str(raw_key or "")))
             ):
-                return value
-    return ""
+                if _looks_like_shot_video_prompt(value) or value:
+                    candidates.append(value)
+                continue
+            if _looks_like_shot_video_prompt(value):
+                candidates.append(value)
+
+    video_like = [c for c in candidates if _looks_like_shot_video_prompt(c)]
+    if video_like:
+        return max(video_like, key=len)
+    # Legacy non-empty CN/EN: accept only when it is not clearly Logic tags or Entities.
+    legacy = str(direct_value or "").strip()
+    if not legacy:
+        return ""
+    if _looks_like_entities_cell(legacy):
+        return ""
+    if _SHOT_LOGIC_ANCHOR_RE.search(legacy[:120] or ""):
+        return ""
+    return legacy
+
+
+def _coerce_shot_row_video_prompt_columns(row: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    """Write recovered video prompt into Video Content (CN) when columns shifted."""
+    if not isinstance(row, dict):
+        return False, None
+    current_cn = _pick_shot_cell(row, [
+        "Video Content (CN)", "video_content_cn", "video_prompt_cn", "视频内容（中文）",
+    ], "")
+    if _looks_like_shot_video_prompt(current_cn):
+        return False, None
+    recovered = _pick_shot_video_prompt_cell(row)
+    if not _looks_like_shot_video_prompt(recovered):
+        return False, None
+    row["Video Content (CN)"] = recovered
+    # Clear English video slot when it only held the shifted CN payload.
+    en_val = _pick_shot_cell(row, ["Video Content", "video_content", "视频内容"], "")
+    if en_val and en_val.strip() == recovered.strip():
+        if "Video Content" in row:
+            row["Video Content"] = ""
+        else:
+            for key in list(row.keys()):
+                if _normalize_shot_markdown_col_key(key) == "videocontent":
+                    row[key] = ""
+                    break
+    return True, "Video Content (CN) recovered from misaligned column"
 
 
 def _collect_missing_shot_required_fields(row: Dict[str, Any]) -> List[str]:
@@ -976,6 +1186,7 @@ def _validate_shot_rows_or_raise(
     for idx, row in enumerate(normalized_rows, start=1):
         _coerce_shot_row_duration_or_default(row)
         _coerce_shot_row_associated_entities_or_default(row)
+        _coerce_shot_row_video_prompt_columns(row)
         missing_fields = _collect_missing_shot_required_fields(row)
 
         if missing_fields:
@@ -1022,6 +1233,9 @@ def _validate_shot_rows_for_apply_with_tolerance(
         _, entities_warning = _coerce_shot_row_associated_entities_or_default(item)
         if entities_warning:
             skipped_errors.append(f"row {idx}: {entities_warning}")
+        _, video_warning = _coerce_shot_row_video_prompt_columns(item)
+        if video_warning:
+            skipped_errors.append(f"row {idx}: {video_warning}")
 
         missing_fields = _collect_missing_shot_required_fields(item)
 

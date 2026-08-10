@@ -52,8 +52,6 @@ import {
     isAssetFromEpisode,
 } from '../reuseEnvAssets';
 
-const GLOBAL_REUSE_DROPDOWN_BUILD = 'reuse-env-v5';
-
 import { 
     fetchProject, 
     updateProject,
@@ -10196,18 +10194,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return true;
         });
     }, [activeEpisode?.id, availableSubjectAssets, reuseSubjectKeyword, reuseSubjectTypeFilter]);
-
-    const hiddenAngleDerivativeCount = useMemo(() => {
-        return (availableSubjectAssets || []).filter((asset) => {
-            const typeOk = reuseSubjectTypeFilter === 'all'
-                || String(asset?.type || '').trim() === reuseSubjectTypeFilter
-                || (String(reuseSubjectTypeFilter).toLowerCase() === 'environment' && isEnvironmentAssetType(asset?.type));
-            if (!typeOk) return false;
-            return assetHasAngleDerivativeName(asset)
-                || /^(?:\d+|[０-９]+)\s*(?:度|°|º|deg)/i.test(String(asset?.name || '').trim())
-                || /^(?:\d+|[０-９]+)\s*(?:度|°|º|deg)/i.test(String(asset?.name_en || '').trim());
-        }).length;
-    }, [availableSubjectAssets, reuseSubjectTypeFilter]);
 
     const hasActiveReuseSubjectFilters = useMemo(() => {
         return reuseSubjectTypeFilter !== 'all' || String(reuseSubjectKeyword || '').trim().length > 0;
@@ -24556,26 +24542,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         <div className="flex items-center justify-between">
                                             <h4 className="text-xs font-bold text-white/70">{t('选择资产注入', 'Inject Assets')}</h4>
                                             <button onClick={() => setReuseDropdownOpen(false)} className="text-white/50 hover:text-white"><X className="w-4 h-4" /></button>
-                                        </div>
-                                        <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-2 py-1.5 text-[10px] leading-relaxed text-amber-100/90">
-                                            {t('仅其他集主环境（不含本集）', 'Other-episode mains only (excludes current)')}
-                                            <span className="text-amber-200/60"> · {GLOBAL_REUSE_DROPDOWN_BUILD}</span>
-                                            {hiddenAngleDerivativeCount > 0 && (
-                                                <span className="block text-amber-100/70">
-                                                    {t(
-                                                        `已隐藏 ${hiddenAngleDerivativeCount} 个角度衍生（如 0度/180度…）`,
-                                                        `Hidden ${hiddenAngleDerivativeCount} angle derivatives (0°/180°…)`,
-                                                    )}
-                                                </span>
-                                            )}
-                                            {scriptLocationEnvNames.length > 0 && (
-                                                <span className="block text-emerald-200/80">
-                                                    {t(
-                                                        `剧本 location 命中 ${scriptLocationEnvNames.length} 个；已自动勾选 ${scriptMatchedReuseEnvIdSet.size} 个主环境`,
-                                                        `Script locations: ${scriptLocationEnvNames.length}; auto-checked mains: ${scriptMatchedReuseEnvIdSet.size}`,
-                                                    )}
-                                                </span>
-                                            )}
                                         </div>
                                         <div className="flex gap-2">
                                             <select
