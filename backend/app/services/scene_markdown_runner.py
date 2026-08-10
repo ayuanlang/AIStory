@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.all_models import Episode, User
 from app.services.db_session_utils import _release_db_connection
+from app.services.soft_delete import _active_episode_clause
 from app.schemas.user_auth import (
     USER_ACTIVE_LEVEL_DEFAULT,
     resolve_user_batch_parallel_limit as _resolve_user_batch_parallel_limit,
@@ -70,7 +71,11 @@ async def _run_scene_markdown_node_per_scene(
 
     episode_adaptation_text = ""
     if node_episode_id > 0:
-        episode_row = db.query(Episode).filter(Episode.id == int(node_episode_id)).first()
+        episode_row = (
+            db.query(Episode)
+            .filter(Episode.id == int(node_episode_id), _active_episode_clause())
+            .first()
+        )
         if episode_row is not None:
             episode_adaptation_text = str(getattr(episode_row, "ai_scene_analysis_adaptation", "") or "").strip()
 
@@ -348,7 +353,11 @@ async def _run_scene_markdown_node_per_scene(
                         )
 
                         if node_episode_id > 0:
-                            episode_row = task_db.query(Episode).filter(Episode.id == int(node_episode_id)).first()
+                            episode_row = (
+                                task_db.query(Episode)
+                                .filter(Episode.id == int(node_episode_id), _active_episode_clause())
+                                .first()
+                            )
                             if episode_row is not None:
                                 patch_episode_scene_markdown_by_scene(
                                     task_db,

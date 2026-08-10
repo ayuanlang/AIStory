@@ -26,7 +26,11 @@ from app.services.generation_runtime.job_store import (
 )
 from app.services.project_episode_utils import _episode_runtime_info_from_episode
 from app.services.scene_no_utils import _sort_scenes_by_scene_no
-from app.services.soft_delete import _active_scene_clause, _active_shot_clause
+from app.services.soft_delete import (
+    _active_episode_clause,
+    _active_scene_clause,
+    _active_shot_clause,
+)
 
 logger = logging.getLogger("api_logger")
 
@@ -133,10 +137,18 @@ def _build_scene_ai_shots_batch_status_response(status_payload: Dict[str, Any]) 
 def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int, function_name: Optional[str] = None, system_api_id: Optional[int] = None) -> Dict[str, Any]:
     item_db = SessionLocal()
     try:
-        scene = item_db.query(Scene).filter(Scene.id == scene_id, Scene.episode_id == episode_id).first()
+        scene = (
+            item_db.query(Scene)
+            .filter(
+                Scene.id == scene_id,
+                Scene.episode_id == episode_id,
+                _active_scene_clause(),
+            )
+            .first()
+        )
         user = item_db.query(User).filter(User.id == user_id).first()
         if not scene or not user:
-            raise RuntimeError("Scene or user not found")
+            raise RuntimeError("Scene or user not found (missing or soft-deleted)")
         user_principal = _snapshot_user_principal(user)
 
         scene_label = str(scene.scene_no or scene.scene_name or f"#{scene_id}")
@@ -215,7 +227,11 @@ def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int,
 def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id: int, batch_max_concurrency: int, function_name: Optional[str] = None, system_api_id: Optional[int] = None) -> None:
     try:
         with SessionLocal() as init_db:
-            episode = init_db.query(Episode).filter(Episode.id == episode_id).first()
+            episode = (
+                init_db.query(Episode)
+                .filter(Episode.id == episode_id, _active_episode_clause())
+                .first()
+            )
             user = init_db.query(User).filter(User.id == user_id).first()
             if not episode or not user:
                 return
@@ -224,7 +240,15 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
             project_id = int(episode.project_id)
             scene_label_map: Dict[int, str] = {}
             for sid in scene_ids:
-                sc = init_db.query(Scene).filter(Scene.id == sid, Scene.episode_id == episode_id).first()
+                sc = (
+                    init_db.query(Scene)
+                    .filter(
+                        Scene.id == sid,
+                        Scene.episode_id == episode_id,
+                        _active_scene_clause(),
+                    )
+                    .first()
+                )
                 if sc:
                     scene_label_map[sid] = str(sc.scene_no or sc.scene_name or f"#{sid}")
 
@@ -240,7 +264,7 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
             return (
                 session.query(Episode)
                 .execution_options(populate_existing=True)
-                .filter(Episode.id == episode_id)
+                .filter(Episode.id == episode_id, _active_episode_clause())
                 .first()
             )
 
@@ -489,6 +513,14 @@ def _start_scene_ai_shots_batch_for_episode(
     system_api_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     episode_id = int(episode.id)
+    active_episode = (
+        db.query(Episode)
+        .filter(Episode.id == episode_id, _active_episode_clause())
+        .first()
+    )
+    if active_episode is None:
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
+    episode = active_episode
     latest_status = _read_scene_ai_shots_batch_status(episode)
     if bool(latest_status.get("running")):
         raise HTTPException(status_code=409, detail="Scene AI shots batch is already running")

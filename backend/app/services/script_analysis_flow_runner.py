@@ -15,6 +15,7 @@ from app.schemas.agent import AnalyzeSceneRequest
 from app.services.endpoint_misc import _build_scene_analysis_blocking_failure_detail
 from app.services.project_access import _require_project_access
 from app.services.scene_ai_shots_batch import _start_scene_ai_shots_batch_for_episode
+from app.services.soft_delete import _active_episode_clause
 from app.services.scene_markdown_orchestration import (
     _extract_analysis_text_from_result,
 )
@@ -84,10 +85,15 @@ async def execute_scene_analysis_flow_node(
         if request.episode_id and not raw_payload.get("episode_id"):
             raw_payload["episode_id"] = request.episode_id
         if raw_payload.get("episode_id"):
-            episode = db.query(Episode).filter(Episode.id == int(raw_payload.get("episode_id"))).first()
+            episode = (
+                db.query(Episode)
+                .filter(
+                    Episode.id == int(raw_payload.get("episode_id")),
+                    _active_episode_clause(),
+                )
+                .first()
+            )
             if not episode:
-                raise HTTPException(status_code=404, detail="Episode not found")
-            if bool(getattr(episode, "is_deleted", False)):
                 raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
             _require_project_access(db, episode.project_id, current_user)
             if raw_payload.get("project_id") and int(raw_payload.get("project_id")) != int(episode.project_id):
@@ -440,10 +446,12 @@ async def execute_scene_analysis_flow_node(
         if episode_id <= 0:
             raise HTTPException(status_code=400, detail="episode_id is required for storyboard_generation")
 
-        episode = db.query(Episode).filter(Episode.id == episode_id).first()
+        episode = (
+            db.query(Episode)
+            .filter(Episode.id == episode_id, _active_episode_clause())
+            .first()
+        )
         if not episode:
-            raise HTTPException(status_code=404, detail="Episode not found")
-        if bool(getattr(episode, "is_deleted", False)):
             raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
         _require_project_access(db, episode.project_id, current_user)
 

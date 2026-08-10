@@ -28,7 +28,7 @@ from app.services.script_progress_helpers import (
     _normalize_scene_marker_id_from_scene,
     _resolve_scene_id_to_db_scene,
 )
-from app.services.soft_delete import _active_scene_clause
+from app.services.soft_delete import _active_episode_clause, _active_scene_clause
 from app.services.task_manager import (
     get_status as _get_task_status,
     submit_async_endpoint as _submit_async,
@@ -43,9 +43,13 @@ async def execute_auto_orchestrate_scene_progress(
 ) -> Dict[str, Any]:
     from app.api.routers.prompts.analyze_scene import analyze_scene  # noqa: WPS433
 
-    episode = db.query(Episode).filter(Episode.id == int(request.episode_id)).first()
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == int(request.episode_id), _active_episode_clause())
+        .first()
+    )
     if not episode:
-        raise HTTPException(status_code=404, detail="Episode not found")
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
     _require_project_access(db, episode.project_id, current_user)
     if int(request.project_id) != int(episode.project_id):
         raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
@@ -259,9 +263,13 @@ async def execute_reconcile_progress_status(
     db: Session,
     current_user: User,
 ) -> Dict[str, Any]:
-    episode = db.query(Episode).filter(Episode.id == int(request.episode_id)).first()
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == int(request.episode_id), _active_episode_clause())
+        .first()
+    )
     if not episode:
-        raise HTTPException(status_code=404, detail="Episode not found")
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
     _require_project_access(db, episode.project_id, current_user)
     if int(request.project_id) != int(episode.project_id):
         raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")

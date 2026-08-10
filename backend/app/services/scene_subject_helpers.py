@@ -19,7 +19,7 @@ from app.services.script_analysis_flow import (
     _reconcile_scene_table_row_cells,
     _split_scene_table_cells,
 )
-from app.services.soft_delete import _active_entity_clause
+from app.services.soft_delete import _active_entity_clause, _active_episode_clause
 
 logger = logging.getLogger("api_logger")
 
@@ -40,7 +40,10 @@ def _build_project_subject_inventory(
         "posters": [],
     }
 
-    entities_query = db.query(Entity).filter(Entity.project_id == int(project_id))
+    entities_query = db.query(Entity).filter(
+        Entity.project_id == int(project_id),
+        _active_entity_clause(),
+    )
     if episode_id is not None:
         entities_query = entities_query.filter(Entity.episode_id == int(episode_id))
     entities = entities_query.order_by(Entity.id.asc()).all()
@@ -274,7 +277,11 @@ def _build_prior_entity_generation_prompts_block(
         return ""
 
     episode_by_id: Dict[int, Episode] = {}
-    episode_row = db.query(Episode).filter(Episode.id == episode_id_int).first()
+    episode_row = (
+        db.query(Episode)
+        .filter(Episode.id == episode_id_int, _active_episode_clause())
+        .first()
+    )
     if episode_row is not None:
         episode_by_id[episode_id_int] = episode_row
 

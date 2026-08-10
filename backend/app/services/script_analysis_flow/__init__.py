@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time_utils import now_bj_iso
 from app.models import all_models as models
+from app.services.soft_delete import _active_episode_clause
 
 logger = logging.getLogger("api_logger")
 from .analyze_scene_stages import (
@@ -325,7 +326,11 @@ def _finalize_scene_units_for_episode(
     episode_row = None
     eid = int(episode_id or 0)
     if eid > 0:
-        episode_row = db.query(models.Episode).filter(models.Episode.id == eid).first()
+        episode_row = (
+            db.query(models.Episode)
+            .filter(models.Episode.id == eid, _active_episode_clause())
+            .first()
+        )
     hint_text = str(script_text or "").strip() or _scene_units_hint_text(units)
     prefix = resolve_episode_scene_id_prefix(
         episode_row,
@@ -2293,7 +2298,11 @@ def patch_episode_scene_markdown_by_scene(
         for attempt in range(1, max_attempts + 1):
             try:
                 if episode_id_int > 0:
-                    fresh_episode = db.query(models.Episode).filter(models.Episode.id == episode_id_int).first()
+                    fresh_episode = (
+                        db.query(models.Episode)
+                        .filter(models.Episode.id == episode_id_int, _active_episode_clause())
+                        .first()
+                    )
                     if fresh_episode is not None:
                         episode = fresh_episode
 

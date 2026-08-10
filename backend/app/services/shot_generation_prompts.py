@@ -38,7 +38,7 @@ from app.services.shot_markdown import (
     parse_shots_markdown_table,
     sanitize_shots_markdown_table_text,
 )
-from app.services.soft_delete import _active_scene_clause
+from app.services.soft_delete import _active_episode_clause, _active_entity_clause, _active_scene_clause
 
 logger = logging.getLogger("api_logger")
 
@@ -550,7 +550,7 @@ def _build_shot_prompts(
     # Scene Info
     project_entities = (
         db.query(Entity)
-        .filter(Entity.project_id == project.id, Entity.is_deleted.is_(False))
+        .filter(Entity.project_id == project.id, _active_entity_clause())
         .order_by(Entity.id.asc())
         .all()
     )
@@ -725,7 +725,11 @@ def _build_shot_prompts(
         (environment / linked characters / key props, plus tagged names in Core Scene Info).
         Never inject the full episode Subject Index.
         """
-        episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+        episode = (
+            db.query(Episode)
+            .filter(Episode.id == scene.episode_id, _active_episode_clause())
+            .first()
+        )
         subject_index_text = sanitize_subject_index_text(
             getattr(episode, "ai_scene_analysis_subject_index", None) if episode else ""
         )

@@ -94,7 +94,7 @@ from app.services.script_analysis_llm_config import (
 )
 from app.services.kb_rag_service import build_kb_rag_injection_for_analyze
 from app.services.shot_generation_prompts import _build_project_prompt_context
-from app.services.soft_delete import _active_entity_clause
+from app.services.soft_delete import _active_entity_clause, _active_episode_clause
 from app.services.subject_index_resolve import (
     _coerce_subject_index_candidate,
     _subject_index_has_usable_content,
@@ -126,10 +126,12 @@ async def execute_analyze_scene(
 
     request_episode = None
     if getattr(request, "episode_id", None):
-        request_episode = db.query(Episode).filter(Episode.id == request.episode_id).first()
+        request_episode = (
+            db.query(Episode)
+            .filter(Episode.id == request.episode_id, _active_episode_clause())
+            .first()
+        )
         if not request_episode:
-            raise HTTPException(status_code=404, detail="Episode not found")
-        if bool(getattr(request_episode, "is_deleted", False)):
             raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
 
     if request_episode:
@@ -284,7 +286,11 @@ async def execute_analyze_scene(
         try:
             ep_id = getattr(request, "episode_id", None)
             if ep_id:
-                episode = db.query(Episode).filter(Episode.id == ep_id).first()
+                episode = (
+                    db.query(Episode)
+                    .filter(Episode.id == ep_id, _active_episode_clause())
+                    .first()
+                )
                 if episode:
                     # Prefer project-level canon (Overview) and merge episode-specific overrides.
                     project_profiles = []
@@ -387,7 +393,11 @@ async def execute_analyze_scene(
         episode_adaptation_for_scene_beats = ""
         if is_subject_index_consumer_stage and getattr(request, "episode_id", None):
             try:
-                _ep_for_subject_index = db.query(Episode).filter(Episode.id == request.episode_id).first()
+                _ep_for_subject_index = (
+                    db.query(Episode)
+                    .filter(Episode.id == request.episode_id, _active_episode_clause())
+                    .first()
+                )
                 if _ep_for_subject_index:
                     episode_adaptation_for_scene_beats = str(
                         getattr(_ep_for_subject_index, "ai_scene_analysis_adaptation", "") or ""
@@ -567,7 +577,8 @@ async def execute_analyze_scene(
                 
                 global_envs = db.query(Entity).filter(
                     Entity.project_id == request.project_id,
-                    Entity.type == "environment"
+                    Entity.type == "environment",
+                    _active_entity_clause(),
                 ).all()
                 
                 # 按格式提取 [ENV_BLOCK_START] 后第一个逗号前的环境名
@@ -938,7 +949,11 @@ async def execute_analyze_scene(
             _scene_episode_id = getattr(request, "episode_id", None)
             if _scene_episode_id:
                 reserve_details["episode_id"] = int(_scene_episode_id)
-                _scene_ep = db.query(Episode).filter(Episode.id == int(_scene_episode_id)).first()
+                _scene_ep = (
+                    db.query(Episode)
+                    .filter(Episode.id == int(_scene_episode_id), _active_episode_clause())
+                    .first()
+                )
                 if _scene_ep and _scene_ep.project_id:
                     reserve_details["project_id"] = int(_scene_ep.project_id)
             reservation_tx = billing_service.reserve_credits(db, current_user_id, "analysis", provider, model, reserve_details)
@@ -1209,7 +1224,11 @@ async def execute_analyze_scene(
 
         ep_id = getattr(request, "episode_id", None)
         if ep_id:
-            ep_cache = db.query(Episode).filter(Episode.id == ep_id).first()
+            ep_cache = (
+                db.query(Episode)
+                .filter(Episode.id == ep_id, _active_episode_clause())
+                .first()
+            )
             if ep_cache and script_hash:
                 exist_res = ep_cache.ai_scene_analysis_result or ""
                 if f"<!-- script_hash: {script_hash} -->" in exist_res:
@@ -1480,14 +1499,18 @@ async def execute_analyze_scene(
         persisted_chars_readback = None
         if getattr(request, "episode_id", None) and not bool(getattr(request, "skip_episode_persist", False)):
             episode_id = request.episode_id
-            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            episode = (
+                db.query(Episode)
+                .filter(Episode.id == episode_id, _active_episode_clause())
+                .first()
+            )
             if episode and not current_user_is_superuser:
                 auth_user = db.query(User).filter(User.id == current_user_id).first()
                 if not auth_user:
                     raise HTTPException(status_code=401, detail="User not found")
                 _require_project_access(db, episode.project_id, auth_user)
             if not episode:
-                raise HTTPException(status_code=404, detail="Episode not found")
+                raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
 
             try:
                 persist_result = persist_analyze_scene_stage_result(
@@ -1714,7 +1737,10 @@ async def execute_analyze_scene(
                                     try:
                                         episode_for_realign = (
                                             db.query(Episode)
-                                            .filter(Episode.id == int(request.episode_id))
+                                            .filter(
+                                                Episode.id == int(request.episode_id),
+                                                _active_episode_clause(),
+                                            )
                                             .first()
                                         )
                                         if episode_for_realign is not None:

@@ -90,9 +90,13 @@ async def sync_scene_units_progress(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    episode = db.query(Episode).filter(Episode.id == int(request.episode_id)).first()
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == int(request.episode_id), _active_episode_clause())
+        .first()
+    )
     if not episode:
-        raise HTTPException(status_code=404, detail="Episode not found")
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
     _require_project_access(db, episode.project_id, current_user)
     if int(request.project_id) != int(episode.project_id):
         raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
@@ -143,9 +147,13 @@ async def reset_scene_orchestration_progress(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    episode = db.query(Episode).filter(Episode.id == int(request.episode_id)).first()
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == int(request.episode_id), _active_episode_clause())
+        .first()
+    )
     if not episode:
-        raise HTTPException(status_code=404, detail="Episode not found")
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
     _require_project_access(db, episode.project_id, current_user)
     if int(request.project_id) != int(episode.project_id):
         raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
@@ -207,9 +215,13 @@ async def get_episode_progress_snapshot(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    episode = db.query(Episode).filter(Episode.id == int(episode_id)).first()
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == int(episode_id), _active_episode_clause())
+        .first()
+    )
     if not episode:
-        raise HTTPException(status_code=404, detail="Episode not found")
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
     _require_project_access(db, episode.project_id, current_user)
 
     scene_units: List[Dict[str, Any]] = []
