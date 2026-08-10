@@ -98,7 +98,15 @@ def _base_node_specs() -> List[Dict[str, Any]]:
             "depends_on": [],
             "outputs": ["adapted_script", "project_visual_backfill", "raw_text"],
             "persist_targets": ["episode.ai_scene_analysis_adaptation", "episode.ai_stage_outputs.stage1"],
-            "injection_chain": ["frontend.stage1_project_context", "backend.analyze_scene.project_metadata", "backend.analyze_scene.attention_notes"],
+            # Project context: FE may bake [项目信息]; BE injects only when absent.
+            # Global assets: FE may bake [可复用Subject资产]; BE injects project-scoped selected IDs when absent.
+            "injection_chain": [
+                "frontend.stage1_project_context",
+                "frontend.reusable_subject_assets",
+                "backend.analyze_scene.project_metadata",
+                "backend.analyze_scene.reuse_subject_assets",
+                "backend.analyze_scene.attention_notes",
+            ],
             "auto_start": True,
             "fan_out": None,
             "status": "planned",

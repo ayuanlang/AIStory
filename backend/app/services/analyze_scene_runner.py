@@ -519,38 +519,51 @@ async def execute_analyze_scene(
 
         
         if request.project_metadata:
-            project_context = _build_project_prompt_context(request.project_metadata)
-            meta_str = str(project_context.get("project_context_section") or "").strip()
-
-            metadata = project_context.get("metadata") if isinstance(project_context.get("metadata"), dict) else {}
-            project_language = str(metadata.get("project_language") or "").strip()
-            extra_rules: List[str] = []
-            if project_language:
-                if any(tag in project_language.lower() for tag in ["zh", "cn", "中文", "chinese"]):
-                    extra_rules.extend([
-                        "Subject Naming Rule: For this project, subject 'name' must be Chinese by default. Use English in 'name' only for explicit proper nouns that are canonically English.",
-                        "Subject Naming Rule (EN): Use spaces between English words in name_en and keep it as a readable Title Case phrase (e.g., 'Demon Slayer Captain', 'Harbor Office Front Mid Night'). Do NOT use snake_case, kebab-case, camelCase, or concatenated forms like 'DemonSlayerCaptain' or 'HarborOffice_Front_Mid_Night'.",
-                        "Subject Prompt Rule: Every subject JSON item must include BOTH generation_prompt_cn and generation_prompt_en, and the two prompts must be semantically aligned.",
-                    ])
-            else:
-                extra_rules.append(
-                    "Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language."
-                )
-
-            if extra_rules:
-                if meta_str:
-                    meta_str = f"{meta_str}\n" + "\n".join(extra_rules)
-                else:
-                    meta_str = "\n".join(extra_rules)
-
-            if meta_str:
-                user_content = f"{meta_str}\n\n{user_content}"
+            # Frontend Stage 1/2.1 may already bake [项目信息…] into request text
+            # (skipMetadata=true). Do not prepend a second copy from DB auto-fill.
+            user_content_has_project_info = (
+                "[项目信息开始]" in str(user_content or "")
+                or "Project Context (prepend and treat as high-priority constraints):" in str(user_content or "")
+                or "# Project Context" in str(user_content or "")
+            )
+            if user_content_has_project_info:
                 logger.info(
-                    "Injected Project Context into Prompt (summary): lines=%s chars=%s tokens_est=%s",
-                    len(meta_str.splitlines()),
-                    len(meta_str),
-                    _estimate_tokens(meta_str),
+                    "[analyze_scene] skipped Project Context injection: already present in user content chars=%s",
+                    len(str(user_content or "")),
                 )
+            else:
+                project_context = _build_project_prompt_context(request.project_metadata)
+                meta_str = str(project_context.get("project_context_section") or "").strip()
+
+                metadata = project_context.get("metadata") if isinstance(project_context.get("metadata"), dict) else {}
+                project_language = str(metadata.get("project_language") or "").strip()
+                extra_rules: List[str] = []
+                if project_language:
+                    if any(tag in project_language.lower() for tag in ["zh", "cn", "中文", "chinese"]):
+                        extra_rules.extend([
+                            "Subject Naming Rule: For this project, subject 'name' must be Chinese by default. Use English in 'name' only for explicit proper nouns that are canonically English.",
+                            "Subject Naming Rule (EN): Use spaces between English words in name_en and keep it as a readable Title Case phrase (e.g., 'Demon Slayer Captain', 'Harbor Office Front Mid Night'). Do NOT use snake_case, kebab-case, camelCase, or concatenated forms like 'DemonSlayerCaptain' or 'HarborOffice_Front_Mid_Night'.",
+                            "Subject Prompt Rule: Every subject JSON item must include BOTH generation_prompt_cn and generation_prompt_en, and the two prompts must be semantically aligned.",
+                        ])
+                else:
+                    extra_rules.append(
+                        "Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language."
+                    )
+
+                if extra_rules:
+                    if meta_str:
+                        meta_str = f"{meta_str}\n" + "\n".join(extra_rules)
+                    else:
+                        meta_str = "\n".join(extra_rules)
+
+                if meta_str:
+                    user_content = f"{meta_str}\n\n{user_content}"
+                    logger.info(
+                        "Injected Project Context into Prompt (summary): lines=%s chars=%s tokens_est=%s",
+                        len(meta_str.splitlines()),
+                        len(meta_str),
+                        _estimate_tokens(meta_str),
+                    )
 
         # Optional platform knowledge-base RAG (reference-only; never mutates Subject Index names).
         if is_script_optimization_stage or is_entity_design_phase:
@@ -672,7 +685,8 @@ async def execute_analyze_scene(
             )
 
         reuse_subject_assets = getattr(request, "reuse_subject_assets", None) or []
-        # Drop cross-episode reuse assets: only entities owned by this episode may be injected.
+        # Global Assets UI is project-wide: keep selected IDs owned by this project
+        # (any episode, including episode_id NULL). Reject cross-project IDs only.
         if isinstance(reuse_subject_assets, list) and reuse_subject_assets:
             request_episode_id_for_reuse = None
             try:
@@ -688,7 +702,12 @@ async def execute_analyze_scene(
                     request_project_id_for_reuse = int(raw_pid)
             except Exception:
                 request_project_id_for_reuse = None
-            if request_episode_id_for_reuse and request_episode_id_for_reuse > 0:
+            if (not request_project_id_for_reuse or request_project_id_for_reuse <= 0) and request_episode is not None:
+                try:
+                    request_project_id_for_reuse = int(getattr(request_episode, "project_id", 0) or 0) or None
+                except Exception:
+                    request_project_id_for_reuse = None
+            if request_project_id_for_reuse and request_project_id_for_reuse > 0:
                 reuse_ids: List[int] = []
                 for item in reuse_subject_assets:
                     if not isinstance(item, dict):
@@ -703,11 +722,9 @@ async def execute_analyze_scene(
                 if reuse_ids:
                     ownership_filters = [
                         Entity.id.in_(list(set(reuse_ids))),
-                        Entity.episode_id == int(request_episode_id_for_reuse),
+                        Entity.project_id == int(request_project_id_for_reuse),
                         _active_entity_clause(),
                     ]
-                    if request_project_id_for_reuse and request_project_id_for_reuse > 0:
-                        ownership_filters.append(Entity.project_id == int(request_project_id_for_reuse))
                     owned_ids = {
                         int(getattr(row, "id", 0) or 0)
                         for row in db.query(Entity.id).filter(*ownership_filters).all()
@@ -727,7 +744,8 @@ async def execute_analyze_scene(
                 reuse_subject_assets = filtered_reuse_assets
                 if before_reuse_count != len(reuse_subject_assets):
                     logger.info(
-                        "[analyze_scene] filtered reuse_subject_assets to current episode episode_id=%s before=%s after=%s",
+                        "[analyze_scene] filtered reuse_subject_assets to current project project_id=%s episode_id=%s before=%s after=%s",
+                        request_project_id_for_reuse,
                         request_episode_id_for_reuse,
                         before_reuse_count,
                         len(reuse_subject_assets),
@@ -735,7 +753,7 @@ async def execute_analyze_scene(
             else:
                 if reuse_subject_assets:
                     logger.info(
-                        "[analyze_scene] cleared reuse_subject_assets: episode_id required for episode-scoped injection"
+                        "[analyze_scene] cleared reuse_subject_assets: project_id required for project-scoped injection"
                     )
                 reuse_subject_assets = []
         if is_subject_index_consumer_stage and persisted_subject_index_for_prompt:
@@ -762,52 +780,59 @@ async def execute_analyze_scene(
                     effective_scene_analysis_mode,
                 )
         if (not is_scene_beats_stage) and isinstance(reuse_subject_assets, list) and len(reuse_subject_assets) > 0:
-            normalized_assets = []
-            for item in reuse_subject_assets:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name") or "").strip()
-                if not name:
-                    continue
-                asset_type = str(item.get("type") or "").strip()
-                normalized_type = _normalize_subject_index_entity_type(asset_type)
-                description = str(item.get("description") or "").strip()
-                anchor_description = str(item.get("anchor_description") or "").strip()
-                normalized_assets.append({
-                    "name": name,
-                    "type": asset_type,
-                    "normalized_type": normalized_type,
-                    "subject_ref": _format_subject_ref(name, normalized_type),
-                    "description": description,
-                    "anchor_description": anchor_description,
-                })
-
-            if normalized_assets:
-                lines = [
-                    "Reusable Subject Assets (High Priority):",
-                    "The following assets are MUST-REUSE subjects for this analysis.",
-                    "Do NOT regenerate or rename them. Keep their identity and anchor traits consistent.",
-                    "When referencing these assets in Scene Subjects / Beats / JSON, use canonical syntax: CHAR:[@Name], PROP:[Name], ENV:[Name].",
-                ]
-                for asset in normalized_assets:
-                    detail_parts = []
-                    if asset.get("type"):
-                        detail_parts.append(f"type={asset['type']}")
-                    if asset.get("description"):
-                        detail_parts.append(f"description={asset['description']}")
-                    if asset.get("anchor_description"):
-                        detail_parts.append(f"anchors={asset['anchor_description']}")
-                    details = " | ".join(detail_parts)
-                    subject_ref = str(asset.get("subject_ref") or "").strip() or f"SUBJECT:[{asset['name']}]"
-                    lines.append(f"- {subject_ref} (name={asset['name']}) {details}".strip())
-
-                reuse_block = wrap_injection_section("可复用Subject资产", "\n".join(lines))
-                user_content = f"{reuse_block}\n\n{user_content}"
+            # Stage 2.1 frontend may already embed [可复用Subject资产…] in user text.
+            if "[可复用Subject资产开始]" in str(user_content or ""):
                 logger.info(
-                    "Injected reusable subject assets into prompt: count=%s tokens_est=%s",
-                    len(normalized_assets),
-                    _estimate_tokens(reuse_block),
+                    "[analyze_scene] skipped reusable subject assets injection: already present in user content request_asset_count=%s",
+                    len(reuse_subject_assets),
                 )
+            else:
+                normalized_assets = []
+                for item in reuse_subject_assets:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name") or "").strip()
+                    if not name:
+                        continue
+                    asset_type = str(item.get("type") or "").strip()
+                    normalized_type = _normalize_subject_index_entity_type(asset_type)
+                    description = str(item.get("description") or "").strip()
+                    anchor_description = str(item.get("anchor_description") or "").strip()
+                    normalized_assets.append({
+                        "name": name,
+                        "type": asset_type,
+                        "normalized_type": normalized_type,
+                        "subject_ref": _format_subject_ref(name, normalized_type),
+                        "description": description,
+                        "anchor_description": anchor_description,
+                    })
+
+                if normalized_assets:
+                    lines = [
+                        "Reusable Subject Assets (High Priority):",
+                        "The following assets are MUST-REUSE subjects for this analysis.",
+                        "Do NOT regenerate or rename them. Keep their identity and anchor traits consistent.",
+                        "When referencing these assets in Scene Subjects / Beats / JSON, use canonical syntax: CHAR:[@Name], PROP:[Name], ENV:[Name].",
+                    ]
+                    for asset in normalized_assets:
+                        detail_parts = []
+                        if asset.get("type"):
+                            detail_parts.append(f"type={asset['type']}")
+                        if asset.get("description"):
+                            detail_parts.append(f"description={asset['description']}")
+                        if asset.get("anchor_description"):
+                            detail_parts.append(f"anchors={asset['anchor_description']}")
+                        details = " | ".join(detail_parts)
+                        subject_ref = str(asset.get("subject_ref") or "").strip() or f"SUBJECT:[{asset['name']}]"
+                        lines.append(f"- {subject_ref} (name={asset['name']}) {details}".strip())
+
+                    reuse_block = wrap_injection_section("可复用Subject资产", "\n".join(lines))
+                    user_content = f"{reuse_block}\n\n{user_content}"
+                    logger.info(
+                        "Injected reusable subject assets into prompt: count=%s tokens_est=%s",
+                        len(normalized_assets),
+                        _estimate_tokens(reuse_block),
+                    )
 
         # Stage 3 entity design: inject prior same-type/same-name generation_prompt_cn
         # from THIS episode's entities only (never other episodes). Poster/cover excluded.

@@ -3515,24 +3515,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             stage2InputParts.push(projectContextSection);
         }
 
-        if (Array.isArray(reuseSubjectAssets) && reuseSubjectAssets.length > 0) {
-            const reuseLines = [
-                '[Reusable Subject Assets - High Priority]',
-                'Reuse these existing subjects whenever they already match the current script. Do not rename them arbitrarily.',
-            ];
-            reuseSubjectAssets.forEach((item) => {
-                if (!item || typeof item !== 'object') return;
-                const name = String(item.name || '').trim();
-                if (!name) return;
-                const detailParts = [`name=${name}`];
-                if (item.type) detailParts.push(`type=${String(item.type).trim()}`);
-                if (item.description) detailParts.push(`description=${String(item.description).trim()}`);
-                if (item.anchor_description) detailParts.push(`anchors=${String(item.anchor_description).trim()}`);
-                reuseLines.push(`- ${detailParts.join(' | ')}`);
-            });
-            if (reuseLines.length > 2) {
-                stage2InputParts.push(wrapInjectionSection('可复用Subject资产', reuseLines.join('\n')));
-            }
+        const reuseSection = buildSelectedReuseSubjectAssetsSection(reuseSubjectAssets);
+        if (reuseSection) {
+            stage2InputParts.push(reuseSection);
         }
 
         if (stage1VisualBackfillJson) {
@@ -5836,16 +5821,55 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return metaParts.length > 1 ? wrapInjectionSection('项目信息', metaParts.join('\n')) : '';
     }
 
-    const ensureStage1ProjectContextInjected = useCallback((inputText) => {
+    function buildSelectedReuseSubjectAssetsSection(reuseSubjectAssets = []) {
+        if (!Array.isArray(reuseSubjectAssets) || reuseSubjectAssets.length === 0) return '';
+        const reuseLines = [
+            '[Reusable Subject Assets - High Priority]',
+            'Reuse these existing subjects whenever they already match the current script. Do not rename them arbitrarily.',
+            'These are MUST-REUSE project global assets: keep identity/anchor traits; do not invent alternate names.',
+        ];
+        reuseSubjectAssets.forEach((item) => {
+            if (!item || typeof item !== 'object') return;
+            const name = String(item.name || '').trim();
+            if (!name) return;
+            const detailParts = [`name=${name}`];
+            if (item.type) detailParts.push(`type=${String(item.type).trim()}`);
+            if (item.description) detailParts.push(`description=${String(item.description).trim()}`);
+            if (item.anchor_description) detailParts.push(`anchors=${String(item.anchor_description).trim()}`);
+            reuseLines.push(`- ${detailParts.join(' | ')}`);
+        });
+        if (reuseLines.length <= 3) return '';
+        return wrapInjectionSection('可复用Subject资产', reuseLines.join('\n'));
+    }
+
+    const ensureStage1ProjectContextInjected = useCallback((inputText, reuseSubjectAssets = []) => {
         const scriptText = String(inputText || '').trim();
         if (!scriptText) return '';
-        if (scriptText.includes('[项目信息开始]') || scriptText.startsWith('Project Context (prepend and treat as high-priority constraints):')) {
-            return scriptText;
+
+        const parts = [];
+        const hasProjectInfo = (
+            scriptText.includes('[项目信息开始]')
+            || scriptText.startsWith('Project Context (prepend and treat as high-priority constraints):')
+        );
+        if (!hasProjectInfo) {
+            const projectContextSection = buildStage1ProjectContextSection();
+            if (projectContextSection) parts.push(projectContextSection);
         }
 
-        const projectContextSection = buildStage1ProjectContextSection();
-        if (!projectContextSection) return scriptText;
-        return `${projectContextSection}\n\n${wrapInjectionSection('待分析剧本', `Script to Analyze:\n\n${scriptText}`)}`;
+        const hasReuseAssets = scriptText.includes('[可复用Subject资产开始]');
+        if (!hasReuseAssets) {
+            const reuseSection = buildSelectedReuseSubjectAssetsSection(
+                Array.isArray(reuseSubjectAssets) ? reuseSubjectAssets : []
+            );
+            if (reuseSection) parts.push(reuseSection);
+        }
+
+        if (parts.length === 0) return scriptText;
+
+        const scriptBody = scriptText.includes('[待分析剧本开始]')
+            ? scriptText
+            : wrapInjectionSection('待分析剧本', `Script to Analyze:\n\n${scriptText}`);
+        return `${parts.join('\n\n')}\n\n${scriptBody}`;
     }, [project?.global_info]);
 
     const runSubjectConsistencyCheck = (rawText = null, options = {}) => {
@@ -17252,7 +17276,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // Hold local in-flight flag through handoff so remount/resume cannot treat prep as stale.
             analysisRunInFlightRef.current = true;
 
-            const stage1Input = ensureStage1ProjectContextInjected(actualContent);
+            const stage1Input = ensureStage1ProjectContextInjected(actualContent, selectedReuseSubjectAssets);
 
             try {
                 const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
@@ -21453,13 +21477,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
-        // Prefer full project.global_info (language/type/style/...). Do NOT pass a sparse
-        // { title, language: project.language } stub — Project has no top-level language field,
-        // and a non-empty stub used to block backend DB auto-fill of real project info.
-        const metadata = (project?.global_info && typeof project.global_info === 'object')
-            ? project.global_info
-            : null;
-        const stage1Input = ensureStage1ProjectContextInjected(content);
+        // Project context + selected global assets are baked into stage1Input below.
+        // Pass null metadata so backend does not prepend a second [项目信息] block.
+        const metadata = null;
+        const stage1Input = ensureStage1ProjectContextInjected(content, selectedReuseSubjectAssets);
 
         let customSystemPrompt = '';
         try {

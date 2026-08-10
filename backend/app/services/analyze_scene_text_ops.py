@@ -161,9 +161,15 @@ def _sanitize_scene_beats_stage_text(raw_text: Any) -> str:
     return text.strip()
 
 def _build_script_to_analyze_block(script_body: Any) -> str:
+    text = str(script_body or "").strip()
+    if not text:
+        return ""
+    # Frontend Stage 1 may already wrap project context + script sections.
+    if "[待分析剧本开始]" in text:
+        return text
     return wrap_injection_section(
         "待分析剧本",
-        f"Script to Analyze:\n\n{str(script_body or '').strip()}",
+        f"Script to Analyze:\n\n{text}",
     )
 
 def _extract_reuse_assets_from_subject_index(subject_index_text: str) -> List[Dict[str, Any]]:
