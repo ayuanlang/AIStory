@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-08-08 16:35:00 +08:00
+# Prompt Updated At: 2026-08-10 14:10:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -227,7 +227,7 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
   | 类型 | 关键字段 | 禁 |
   | :--- | :--- | :--- |
   | **主环境** | `env_role:主环境基准定义`；`referenceable:No`；`generatable:Yes`；**`activity_space:`（继承 Stage 1【活动空间】）**；完整复刻 Stage 1：0°轴、头尾双锚、俯视360（四向+中心，可不写 FG/MG/BG）、固定清单（含垂直上/中/下）；仰视有则写 | 作 Beat 可拍 ENV；某一机位空镜成稿；臆造活动空间 |
-  | **视角衍生**（含已声明 `0度…`） | `env_role:衍生环境`；`referenceable:Yes`；`generatable:Yes`；`reference_env`=当前空镜基准；**`activity_fit:`**；只提 Stage 1 轻量清单：`view_angle_from_main`/触发(OTS·反打两步结论)/`spatial_axis`/`lens_profile`/`axis_crossing`/`empty_view_delta?` | 四向具名/FG·MG·BG 成稿（归 Stage 3）；因「反打」默认角=180（以 Stage 1 的 N 为准）；臆造活动适配 |
+  | **视角衍生**（含已声明 `0度…`） | `env_role:衍生环境`；`referenceable:Yes`；`generatable:Yes`；`reference_env`=当前空镜基准；**`activity_fit:`**；只提 Stage 1 轻量清单：`view_angle_from_main`/触发(OTS·反打两步结论)/`spatial_axis`/`lens_profile`/`axis_crossing`/`empty_view_delta?`；**若所属主环境为上集/既有复用**：`view_angle_from_main` 与 Stage 1 声明角须与既有主环境同角一致（透传，禁改度数） | 四向具名/FG·MG·BG 成稿（归 Stage 3）；因「反打」默认角=180（以 Stage 1 的 N 为准）；臆造活动适配；复用主环境下擅自改 `view_angle_from_main` |
   | **状态衍生** | 仅 Stage 1 已声明且「改写固定结构或跨 Beat 重大氛围 + 至少延续下一 Beat」；`return_or_continue:continue` 直至写明恢复；`empty_view_delta` 具名受影响实体；**`activity_fit:`**（状态对表演区/动线影响有则摘抄） | 瞬时光效；空泛「能量弥漫」；状态确立后仍统一回挂主环境；同基准角度互挂 |
 - **纯空镜**：剥离角色/人称/站位/姿态/视线/对白/持握/应归 PROP 物件/乘员/运动轨迹，以及「给谁用、干什么」的人物用途句。可留：边界、时空字段、**activity_space/activity_fit**（仅空间承载语，禁具名角色）、固定建筑装修、XOR 后固定陈设、出入口、遮挡、360 拓扑、尺度、固定实体前后左右**上下**、`empty_view_delta?`。头尾双锚与固定实体朝向**透传** Stage 1，本阶段不做跨衍生朝向推演。Stage 3 `generation_prompt_cn` 只消费空镜结构，绝不可带人物。
 - **提取纪律**：已声明主/衍生逐条提取、各行独立（禁 OTS/正反并行压缩）；未声明→回流，禁并入主环境。元数据优先抄 Stage 1；缺省：`0度`/建置→`Wide`，OTS/正反→`Standard`。特写/Insert/CU 沿用父观察侧，禁特写专属行。局部未达衍生门槛→并入当前环境属性。固定环境标识/书架书册/贴墙纸笺等→ENV；可移动书/纸/文书——**仅当过道具极严门槛**（不可归 ENV、有可持续关键字迹/翻面态等）才→PROP，否则留 ENV 或 Beat。锚点：非实体写 `main_anchor`；已是提取实体写 `main_anchor_reference`。时序断点不足→`upstream_missing_time_variant_env:…`。

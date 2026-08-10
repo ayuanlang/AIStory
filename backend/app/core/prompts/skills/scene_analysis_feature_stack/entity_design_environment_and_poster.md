@@ -1,5 +1,5 @@
 ﻿# Prompt File: skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md
-# Prompt Updated At: 2026-08-09 15:55:00 +08:00
+# Prompt Updated At: 2026-08-10 14:10:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -23,6 +23,7 @@
 - 可拍空镜须为 `{N}度{主环境名}` 或状态后 `{N}度{主环境名}_{状态}` 衍生行。
 - **`visual_dependencies`**：无状态 → `ENV:[所属主环境名]`；状态确立后视角/再状态 → `ENV:[上一状态衍生名]`（禁止跳回所属主环境）；禁止同基准内角度互挂（如 180°→0°）；禁止闪回主环境衍生挂当下主环境。
 - Stage 1/2.1 对衍生**只提供轻量角度清单**（名、`view_angle_from_main`、触发原因含 OTS/反打两步结论、`spatial_axis`、`lens_profile`、`axis_crossing`、`empty_view_delta` 可选）；**不提供**衍生四向具名实体或前景/中景/背景空镜层次。
+- **复用既有主环境（上集/跨集注入）时**：主环境四向拼图须与既有 `generation_prompt_cn`/Index 基准同核；各衍生截取的观察轴 `N` 与背景半空间须与该基准**同角完全一致**——禁止为「更好看」重映射度数、旋转 0° 轴、或按顺序轮写四向。衍生只按 Index 已声明角与 `activity_fit` 截取所属扇区。
 - **本 Skill 是衍生四向对位与美术设计的唯一执行方**（见 §2.5）；主环境输出**四向拼图** `generation_prompt_cn`；衍生输出可拍机位且 §A 参考其依赖基准图。
 
 ## 执行顺序

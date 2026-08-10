@@ -39,7 +39,7 @@ import { unwrapInjectionSection, wrapInjectionSection } from '../../../lib/promp
 import { collectLlmJsonTextCandidates, sanitizeLlmTextForJsonImport } from '../../../lib/llmJsonExtract';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex, getMainEnvironmentName, useTabMediaRefreshEffect
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel,     mergeEntityPoolWithSubjectIndex, getMainEnvironmentName, isAngleDerivativeEnvironmentName, extractScriptLocationEnvNames, environmentAssetMatchesScriptLocations, useTabMediaRefreshEffect
 } from '../editorHelpers';
 
 import { 
@@ -9991,10 +9991,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [projectId, activeEpisode?.id, analysisUiReport?.importReport, isAnalyzing, isRetryingPhase2]);
 
     useEffect(() => {
-        // Drop selected reuse IDs that are not in the current episode asset list.
+        // Drop selected reuse IDs that are not injectable (missing, or angle-derivative ENV).
         // Wait until the episode-scoped fetch settles to avoid clearing during load.
         if (isLoadingSubjectAssets || !activeEpisode?.id) return;
-        const allowed = new Set((availableSubjectAssets || []).map((asset) => String(asset?.id)));
+        const allowed = new Set(
+            (availableSubjectAssets || [])
+                .filter((asset) => {
+                    const typeKey = String(asset?.type || '').trim().toLowerCase();
+                    const isEnvironmentAsset = (
+                        typeKey === 'environment'
+                        || typeKey === 'env'
+                        || typeKey.includes('environment')
+                        || typeKey.includes('环境')
+                        || typeKey.includes('场景')
+                    );
+                    if (isEnvironmentAsset && isAngleDerivativeEnvironmentName(asset?.name)) {
+                        return false;
+                    }
+                    return true;
+                })
+                .map((asset) => String(asset?.id))
+        );
         setSelectedReuseSubjectIds((prev) => {
             const next = (prev || []).filter((id) => allowed.has(String(id)));
             if (next.length === prev.length && next.every((value, index) => value === prev[index])) {
@@ -10078,6 +10095,48 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return Array.from(types).sort((a, b) => a.localeCompare(b));
     }, [availableSubjectAssets]);
 
+    const scriptLocationEnvNames = useMemo(
+        () => extractScriptLocationEnvNames(rawContent || activeEpisode?.script_content || ''),
+        [rawContent, activeEpisode?.script_content],
+    );
+
+    const scriptMatchedReuseEnvIdSet = useMemo(() => {
+        const ids = new Set();
+        if (!scriptLocationEnvNames.length) return ids;
+        for (const asset of availableSubjectAssets || []) {
+            const typeKey = String(asset?.type || '').trim().toLowerCase();
+            const isEnvironmentAsset = (
+                typeKey === 'environment'
+                || typeKey === 'env'
+                || typeKey.includes('environment')
+                || typeKey.includes('环境')
+                || typeKey.includes('场景')
+            );
+            if (!isEnvironmentAsset || isAngleDerivativeEnvironmentName(asset?.name)) continue;
+            if (environmentAssetMatchesScriptLocations(asset, scriptLocationEnvNames)) {
+                ids.add(String(asset.id));
+            }
+        }
+        return ids;
+    }, [availableSubjectAssets, scriptLocationEnvNames]);
+
+    // Auto-check global ENV assets whose CN/EN names appear in script `{location=…}`; skip if no match.
+    useEffect(() => {
+        if (isLoadingSubjectAssets || !activeEpisode?.id) return;
+        if (!scriptMatchedReuseEnvIdSet.size) return;
+        setSelectedReuseSubjectIds((prev) => {
+            const next = new Set((prev || []).map((id) => String(id)));
+            let changed = false;
+            for (const id of scriptMatchedReuseEnvIdSet) {
+                if (!next.has(id)) {
+                    next.add(id);
+                    changed = true;
+                }
+            }
+            return changed ? Array.from(next) : prev;
+        });
+    }, [activeEpisode?.id, isLoadingSubjectAssets, scriptMatchedReuseEnvIdSet]);
+
     const filteredSubjectAssets = useMemo(() => {
         const normalizedKeyword = String(reuseSubjectKeyword || '').trim().toLowerCase();
         return (availableSubjectAssets || []).filter(asset => {
@@ -10085,10 +10144,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const passType = reuseSubjectTypeFilter === 'all' || typeValue === reuseSubjectTypeFilter;
             if (!passType) return false;
 
+            // Global Assets dropdown: environments → main baseline only (hide `{N}度…` derivatives).
+            const typeKey = typeValue.toLowerCase();
+            const isEnvironmentAsset = (
+                typeKey === 'environment'
+                || typeKey === 'env'
+                || typeKey.includes('environment')
+                || typeKey.includes('环境')
+                || typeKey.includes('场景')
+            );
+            if (isEnvironmentAsset && isAngleDerivativeEnvironmentName(asset?.name)) {
+                return false;
+            }
+
             if (!normalizedKeyword) return true;
 
             const haystack = [
                 asset?.name,
+                asset?.name_en,
                 asset?.description,
                 asset?.narrative_description,
                 asset?.anchor_description,
@@ -12254,11 +12327,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const selectedReuseSubjectAssets = useMemo(() => {
         if (!Array.isArray(availableSubjectAssets) || availableSubjectAssets.length === 0) return [];
-        const currentEpisodeId = String(activeEpisode?.id || '').trim();
         const selected = new Set((selectedReuseSubjectIds || []).map(v => String(v)));
         return availableSubjectAssets
             .filter((asset) => {
-                return selected.has(String(asset.id));
+                if (!selected.has(String(asset.id))) return false;
+                const typeKey = String(asset?.type || '').trim().toLowerCase();
+                const isEnvironmentAsset = (
+                    typeKey === 'environment'
+                    || typeKey === 'env'
+                    || typeKey.includes('environment')
+                    || typeKey.includes('环境')
+                    || typeKey.includes('场景')
+                );
+                if (isEnvironmentAsset && isAngleDerivativeEnvironmentName(asset?.name)) {
+                    return false;
+                }
+                return true;
             })
             .map(asset => ({
                 id: asset.id,
@@ -24471,8 +24555,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                             checked={selectedReuseSubjectIds.includes(String(asset.id))}
                                                             onChange={() => toggleReuseSubject(asset.id)}
                                                         />
-                                                        <div className="flex flex-col">
-                                                            <span className="font-semibold">{asset.name}</span>
+                                                        <div className="flex flex-col min-w-0">
+                                                            <span className="font-semibold flex items-center gap-1.5 flex-wrap">
+                                                                <span className="truncate">{asset.name}</span>
+                                                                {scriptMatchedReuseEnvIdSet.has(String(asset.id)) && (
+                                                                    <span className="shrink-0 text-[9px] font-bold tracking-wide text-emerald-300/90 bg-emerald-500/15 border border-emerald-400/25 px-1 py-0.5 rounded">
+                                                                        {t('剧本', 'Script')}
+                                                                    </span>
+                                                                )}
+                                                            </span>
+                                                            {asset.name_en && (
+                                                                <span className="text-[10px] text-white/45 line-clamp-1">{asset.name_en}</span>
+                                                            )}
                                                             {asset.description && <span className="text-[10px] text-white/50 line-clamp-1">{asset.description}</span>}
                                                         </div>
                                                     </label>

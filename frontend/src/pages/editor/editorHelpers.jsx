@@ -1009,6 +1009,71 @@ export const getMainEnvironmentName = (envName) => {
     return getEnvAngleBucketKey(withoutAngle) || withoutAngle;
 };
 
+/** True when ENV name is an angle derivative (`0度…` / `180 Deg …`), not a main baseline. */
+export const isAngleDerivativeEnvironmentName = (envName) => {
+    const raw = String(envName || '').trim();
+    if (!raw) return false;
+    if (/^\d+\s*度/.test(raw) || /(^|[_\s])\d+\s*度/.test(raw)) return true;
+    if (/^\d+\s*deg(?:ree)?s?\b/i.test(raw) || /(^|[_\s])\d+\s*deg(?:ree)?s?\b/i.test(raw)) return true;
+    return false;
+};
+
+/**
+ * Extract `{location=云渊仙境(Cloud Abyss)}` entries from script text.
+ * Returns unique `{ zh, en, raw }` (either side may be empty; skip empty raw).
+ */
+export const extractScriptLocationEnvNames = (scriptText) => {
+    const text = String(scriptText || '');
+    if (!text) return [];
+    const found = [];
+    const seen = new Set();
+    const locationRe = /\{location\s*=\s*([^}]+)\}/gi;
+    let match;
+    while ((match = locationRe.exec(text)) !== null) {
+        const raw = String(match[1] || '').trim();
+        if (!raw) continue;
+        let zh = '';
+        let en = '';
+        const bilingual = raw.match(/^(.+?)\s*[\(（]\s*([^\)）]+?)\s*[\)）]\s*$/);
+        if (bilingual) {
+            zh = String(bilingual[1] || '').trim();
+            en = String(bilingual[2] || '').trim();
+        } else {
+            // Single token: treat CJK-heavy as zh, otherwise as en.
+            if (/[\u4e00-\u9fff]/.test(raw)) zh = raw;
+            else en = raw;
+        }
+        const key = `${normalizeSubjectKey(zh)}|${normalizeSubjectKey(en)}|${normalizeSubjectKey(raw)}`;
+        if (!key || key === '||' || seen.has(key)) continue;
+        seen.add(key);
+        found.push({ zh, en, raw });
+    }
+    return found;
+};
+
+/** Match a project ENV asset to any script `{location=…}` CN/EN name. */
+export const environmentAssetMatchesScriptLocations = (asset, locations) => {
+    if (!asset || !Array.isArray(locations) || locations.length === 0) return false;
+    const assetKeys = [
+        asset?.name,
+        asset?.name_zh,
+        asset?.name_en,
+        asset?.subject_name_exact,
+        asset?.subject_name,
+    ]
+        .map((value) => normalizeSubjectKey(value))
+        .filter(Boolean);
+    if (!assetKeys.length) return false;
+    const assetKeySet = new Set(assetKeys);
+    for (const loc of locations) {
+        const candidates = [loc?.zh, loc?.en, loc?.raw]
+            .map((value) => normalizeSubjectKey(value))
+            .filter(Boolean);
+        if (candidates.some((key) => assetKeySet.has(key))) return true;
+    }
+    return false;
+};
+
 /**
  * Compare current shot ENV vs previous shot for video continuity UI.
  * status: first | same | angle_or_state | changed | unknown

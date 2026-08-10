@@ -605,7 +605,18 @@ async def execute_analyze_scene(
                 
                 if env_prompts:
                     env_injection = "\n\n".join(env_prompts)
-                    user_content += f"\n\n[已存在的全局主环境约束]\n当前项目已存在以下主环境，你在剧本优化设计（包括但不限于视觉描述、光影、氛围等）相关场景与环境时，请务必严格按以下既有提示词的要求延续和参考，不可与既有提示词产生冲突：\n{env_injection}\n"
+                    user_content += (
+                        "\n\n[已存在的全局主环境约束]\n"
+                        "当前项目已存在以下主环境（含上集/跨集须复用者）。你在剧本优化设计相关场景与环境时，"
+                        "请务必严格按以下既有提示词延续和参考，不可与既有提示词产生冲突：\n"
+                        f"{env_injection}\n\n"
+                        "【复用主环境·衍生角度锁（最高）】\n"
+                        "1. 主环境 0°轴、四向扇区实体归属、头尾双锚、固定清单须与既有提示词同核；禁止重定 0° 或对调四向。\n"
+                        "2. 为本场生成的每一衍生环境（含 `0度…`/`{N}度…`）必须与该既有主环境保持完全一致的角度——"
+                        "`view_angle_from_main=N` 与该角后景半空间须与原来角度一致；禁止重映射度数或旋转坐标系。\n"
+                        "3. Beat 选择可拍衍生环境时，必须根据该环境的设置（四向扇区内容 / 活动适配 / 后景应见何物）匹配对应角度行；"
+                        "绝不能随机选角，也绝不能按 0→90→180→270 顺序轮角。\n"
+                    )
                     logger.info("[analyze_scene] injected %d global environment prompts for script optimization", len(env_prompts))
             except Exception as e:
                 logger.warning("[analyze_scene] failed to inject global environments for script optimization: %s", e)
