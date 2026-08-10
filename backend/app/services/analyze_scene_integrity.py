@@ -2,6 +2,7 @@
 """Output integrity / token helpers for analyze_scene continuation loops."""
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, List, Optional
 
@@ -68,7 +69,14 @@ def _detect_scene_output_sections(output_text: str) -> Dict[str, Any]:
         "structure_incomplete": False,
     }
 
-def _detect_output_integrity(output_text: str, segments: List[Dict[str, Any]], final_finish_reason: Optional[str]) -> Dict[str, Any]:
+def _detect_output_integrity(
+    output_text: str,
+    segments: List[Dict[str, Any]],
+    final_finish_reason: Optional[str],
+    *,
+    is_scene_beats_stage: bool = False,
+    is_subject_index_extraction_stage: bool = False,
+) -> Dict[str, Any]:
     text = (output_text or "").strip()
     segment_list = segments or []
     had_length_finish = any(_is_length_finish_reason(seg.get("finish_reason")) for seg in segment_list)

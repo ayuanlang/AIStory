@@ -572,7 +572,6 @@ async def execute_analyze_scene(
 
         if is_script_optimization_stage and getattr(request, "project_id", None):
             try:
-                from app.models.all_models import Entity
                 from app.api.routers.entities_pkg.analyze import _entity_analysis_is_main_environment
                 
                 global_envs = db.query(Entity).filter(
@@ -1272,7 +1271,13 @@ async def execute_analyze_scene(
         provider_limit_hints = list(set(loop1_res.get("provider_limit_hints", [])))
         llm_fallback_warnings = list(set(loop1_res.get("llm_fallback_warnings", [])))
         usage = usage_total
-        integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
+        integrity_meta = _detect_output_integrity(
+            result_content,
+            segments_meta,
+            finish_reason,
+            is_scene_beats_stage=is_scene_beats_stage,
+            is_subject_index_extraction_stage=is_subject_index_extraction_stage,
+        )
         if integrity_meta.get("json_invalid_suppressed"):
             logger.info(
                 "[analyze_scene] suppressed_json_invalid_warning episode_id=%s mode=%s function=%s prompt_file=%s explicit_json_response=%s json_error=%s",
