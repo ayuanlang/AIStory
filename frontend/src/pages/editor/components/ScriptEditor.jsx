@@ -51,7 +51,7 @@ import {
     filterGlobalReuseDropdownAssets,
 } from '../reuseEnvAssets';
 
-const GLOBAL_REUSE_DROPDOWN_BUILD = 'reuse-env-v3';
+const GLOBAL_REUSE_DROPDOWN_BUILD = 'reuse-env-v4';
 
 import { 
     fetchProject, 
@@ -9967,20 +9967,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisAttentionNotes((prev) => (prev === nextAttentionNotes ? prev : nextAttentionNotes));
         setSubjectConsistencyResultText((prev) => (prev === nextConsistencyText ? prev : nextConsistencyText));
 
+        // Restore persisted reuse IDs. Do NOT parse ids from the cache key string
+        // (old bug: key "123:" was split into ["123:"] and wiped real selections).
         const persistedIds = activeEpisode?.episode_info?.reuse_subject_asset_ids;
-        const reuseIdsKey = `${activeEpisode.id || 0}:${
-            Array.isArray(persistedIds)
-                ? persistedIds.map((item) => String(item)).join(',')
-                : ''
-        }`;
+        const persistedReuseIds = Array.isArray(persistedIds)
+            ? persistedIds.map((item) => String(item || '').trim()).filter(Boolean)
+            : [];
+        const reuseIdsKey = `${activeEpisode.id || 0}:${persistedReuseIds.join(',')}`;
         if (reuseIdsKey !== lastEpisodeReuseSubjectIdsKeyRef.current) {
             lastEpisodeReuseSubjectIdsKeyRef.current = reuseIdsKey;
-            const nextReuseIds = reuseIdsKey ? reuseIdsKey.split(',').filter(Boolean) : [];
             setSelectedReuseSubjectIds((prev) => {
-                if (prev.length === nextReuseIds.length && prev.every((value, index) => value === nextReuseIds[index])) {
+                if (
+                    prev.length === persistedReuseIds.length
+                    && prev.every((value, index) => value === persistedReuseIds[index])
+                ) {
                     return prev;
                 }
-                return nextReuseIds;
+                return persistedReuseIds;
             });
         }
     }, [
@@ -15959,9 +15962,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // On episode change / analysis field update from parent. Do NOT depend on
         // normalizeLlmMarkdownTable — it was recreated every render and stormed GET /episodes/:id.
         const episodeId = activeEpisode?.id ?? null;
-        if (prevAnalysisSyncEpisodeIdRef.current !== episodeId) {
+        const episodeChanged = prevAnalysisSyncEpisodeIdRef.current !== episodeId;
+        if (episodeChanged) {
             prevAnalysisSyncEpisodeIdRef.current = episodeId;
             prevActiveEpisodeAnalysisResultRef.current = undefined;
+            lastEpisodeSegmentsScriptKeyRef.current = '';
+            lastEpisodeSyncScriptKeyRef.current = '';
+            // Do NOT clear lastEpisodeReuseSubjectIdsKeyRef here — restore key already
+            // includes episode id; clearing after restore re-applies [] and wipes auto-check.
         }
         const initial = activeEpisodeAnalysisResult;
         const normalizedInitial = normalizeLlmMarkdownTable(initial);
@@ -15972,9 +15980,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ));
         setAnalysisRuntimeMeta((prev) => (prev === null ? prev : null));
         lastLoadedAnalysisRef.current = initial;
-        lastEpisodeSegmentsScriptKeyRef.current = '';
-        lastEpisodeSyncScriptKeyRef.current = '';
-        lastEpisodeReuseSubjectIdsKeyRef.current = '';
         const prevInitial = prevActiveEpisodeAnalysisResultRef.current;
         prevActiveEpisodeAnalysisResultRef.current = initial;
         // Refresh from DB only on first empty mount/episode switch or when analysis was cleared.
