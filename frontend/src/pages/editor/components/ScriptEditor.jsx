@@ -49,9 +49,10 @@ import {
     extractScriptLocationEnvNames,
     environmentAssetMatchesScriptLocations,
     filterGlobalReuseDropdownAssets,
+    isAssetFromEpisode,
 } from '../reuseEnvAssets';
 
-const GLOBAL_REUSE_DROPDOWN_BUILD = 'reuse-env-v4';
+const GLOBAL_REUSE_DROPDOWN_BUILD = 'reuse-env-v5';
 
 import { 
     fetchProject, 
@@ -10013,10 +10014,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             setIsLoadingSubjectAssets(true);
             try {
-                // Fetch all project entities for global reuse injection
+                // Fetch project entities for global reuse — exclude current episode's own assets.
                 const entities = await fetchEntities(projectId);
                 if (!mounted) return;
-                setAvailableSubjectAssets(Array.isArray(entities) ? entities : []);
+                const episodeId = activeEpisode.id;
+                const rows = (Array.isArray(entities) ? entities : []).filter(
+                    (asset) => !isAssetFromEpisode(asset, episodeId),
+                );
+                setAvailableSubjectAssets(rows);
             } catch (e) {
                 console.error(e);
                 if (mounted) setAvailableSubjectAssets([]);
@@ -10179,6 +10184,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             availableSubjectAssets,
             reuseSubjectTypeFilter,
             reuseSubjectKeyword,
+            activeEpisode?.id,
         );
         // Defense-in-depth: drop angled names even if helper module is stale in HMR.
         return filtered.filter((asset) => {
@@ -10189,7 +10195,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (assetHasAngleDerivativeName(asset) || isAngleDerivativeEnvironmentName(name)) return false;
             return true;
         });
-    }, [availableSubjectAssets, reuseSubjectKeyword, reuseSubjectTypeFilter]);
+    }, [activeEpisode?.id, availableSubjectAssets, reuseSubjectKeyword, reuseSubjectTypeFilter]);
 
     const hiddenAngleDerivativeCount = useMemo(() => {
         return (availableSubjectAssets || []).filter((asset) => {
@@ -24552,7 +24558,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             <button onClick={() => setReuseDropdownOpen(false)} className="text-white/50 hover:text-white"><X className="w-4 h-4" /></button>
                                         </div>
                                         <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-2 py-1.5 text-[10px] leading-relaxed text-amber-100/90">
-                                            {t('仅显示主环境', 'Main environments only')}
+                                            {t('仅其他集主环境（不含本集）', 'Other-episode mains only (excludes current)')}
                                             <span className="text-amber-200/60"> · {GLOBAL_REUSE_DROPDOWN_BUILD}</span>
                                             {hiddenAngleDerivativeCount > 0 && (
                                                 <span className="block text-amber-100/70">
@@ -24868,7 +24874,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
 
                         <div className="flex flex-col items-center gap-2 relative">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${subjectIndexActive ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : (subjectIndexReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : ((scriptOptReady || scriptOptActive) ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${subjectIndexActive ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : (subjectIndexReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : ((scriptOptReady || scriptOptActive) ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'))}`}>
                                 {subjectIndexActive ? <Loader2 className="w-4 h-4 animate-spin" /> : (subjectIndexReady ? <Check className="w-4 h-4" /> : 2)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
@@ -24913,7 +24919,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
 
                         <div className="flex flex-col items-center gap-2 relative">
-                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${sceneMarkdownActive ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : (sceneMarkdownReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : ((subjectIndexReady || subjectIndexActive) ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${sceneMarkdownActive ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : (sceneMarkdownReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : ((subjectIndexReady || subjectIndexActive) ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'))}`}>
                                 {sceneMarkdownActive ? <Loader2 className="w-4 h-4 animate-spin" /> : (sceneMarkdownReady ? <Check className="w-4 h-4" /> : 3)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">

@@ -149,11 +149,30 @@ export const assetHasAngleDerivativeName = (asset) => (
         .some((value) => isAngleDerivativeEnvironmentName(value))
 );
 
-/** Dropdown list filter: keep non-ENV; for ENV keep mains only. */
-export const filterGlobalReuseDropdownAssets = (assets, typeFilter = 'all', keyword = '') => {
+/** True when the asset belongs to the given episode (not reusable as "global"). */
+export const isAssetFromEpisode = (asset, episodeId) => {
+    const wanted = String(episodeId || '').trim();
+    if (!wanted) return false;
+    const assetEpisodeId = String(asset?.episode_id ?? '').trim();
+    return Boolean(assetEpisodeId) && assetEpisodeId === wanted;
+};
+
+/**
+ * Dropdown list filter: keep non-ENV; for ENV keep mains only.
+ * Always hide assets that belong to `excludeEpisodeId` (current episode).
+ */
+export const filterGlobalReuseDropdownAssets = (
+    assets,
+    typeFilter = 'all',
+    keyword = '',
+    excludeEpisodeId = null,
+) => {
     const normalizedKeyword = String(keyword || '').trim().toLowerCase();
     const typeFilterValue = String(typeFilter || 'all').trim();
     return (Array.isArray(assets) ? assets : []).filter((asset) => {
+        // Global Assets = reuse from other episodes / project-level only.
+        if (isAssetFromEpisode(asset, excludeEpisodeId)) return false;
+
         // Absolute: never list `0度…` / `180 Deg…` rows in this dropdown.
         if (assetHasAngleDerivativeName(asset)) return false;
 
