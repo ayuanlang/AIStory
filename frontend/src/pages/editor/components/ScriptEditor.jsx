@@ -10,7 +10,7 @@ import remarkBreaks from 'remark-breaks';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { BookOpen, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Bot, Stethoscope } from 'lucide-react';
+import { BookOpen, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Bot, Stethoscope, Scissors } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -150,6 +150,7 @@ import {
     syncSceneUnitsProgress,
     resetSceneOrchestrationProgress,
     getEpisodeProgressSnapshot,
+    splitEpisodeScript,
 } from '../../../services/api';
 import { entityNameAppearsInText, entityTokenMatchesName, normalizeEntityToken } from '../../../lib/entityToken';
 
@@ -2982,6 +2983,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisTimerStartedAtRef = useRef(0);
     const lastSceneImportSuccessRef = useRef({ episodeId: null, count: 0, at: 0 });
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isSplittingEpisode, setIsSplittingEpisode] = useState(false);
     const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
     const [manualModalOpen, setManualModalOpen] = useState(false);
@@ -14448,6 +14450,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             // Merge results
             let mergedBackendSubjectsJson = { characters: [], environments: [], props: [], posters: [], covers: [] };
+            const isSingleSubjectRerun = Boolean(
+                collectEntityPurgeNameCandidates(
+                    options?.rerunSubject?.name,
+                    options?.rerunSubject?.fields,
+                ).length
+            );
             if (options.targetEntityTypes && Array.isArray(options.targetEntityTypes)) {
                 const existingEntities = getAnalysisEntitiesPayloadFromJsonText(
                     activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || ''
@@ -14455,6 +14463,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ['characters', 'environments', 'props', 'posters', 'covers'].forEach(k => {
                     const isTarget = options.targetEntityTypes.includes(k) || ((k === 'posters' || k === 'covers') && (options.targetEntityTypes.includes('posters') || options.targetEntityTypes.includes('covers')));
                     if (!isTarget && existingEntities[k]) {
+                        mergedBackendSubjectsJson[k] = existingEntities[k];
+                    } else if (isTarget && isSingleSubjectRerun && Array.isArray(existingEntities[k])) {
+                        // Keep siblings; incoming LLM rows upsert by name below.
                         mergedBackendSubjectsJson[k] = existingEntities[k];
                     }
                 });
@@ -14470,29 +14481,44 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                           if (bJson) {
                           // Only replace a category when the subtask returned non-empty rows.
                           // Empty arrays must not wipe previously merged / persisted subjects.
+                          // Single-subject rerun upserts by name so siblings remain.
                           if (r.value.key === 'characters' && Array.isArray(bJson.characters) && bJson.characters.length > 0) {
-                              mergedBackendSubjectsJson.characters = bJson.characters;
+                              mergedBackendSubjectsJson.characters = isSingleSubjectRerun
+                                  ? upsertEntityDesignItemsByName(mergedBackendSubjectsJson.characters, bJson.characters)
+                                  : bJson.characters;
                           }
                           if (r.value.key === 'environments') {
                               if (Array.isArray(bJson.environments) && bJson.environments.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('environments'))) {
-                                  mergedBackendSubjectsJson.environments = bJson.environments;
+                                  mergedBackendSubjectsJson.environments = isSingleSubjectRerun
+                                      ? upsertEntityDesignItemsByName(mergedBackendSubjectsJson.environments, bJson.environments)
+                                      : bJson.environments;
                               }
                               if (Array.isArray(bJson.posters) && bJson.posters.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('posters') || options.targetEntityTypes.includes('covers'))) {
-                                  mergedBackendSubjectsJson.posters = bJson.posters;
+                                  mergedBackendSubjectsJson.posters = isSingleSubjectRerun
+                                      ? upsertEntityDesignItemsByName(mergedBackendSubjectsJson.posters, bJson.posters)
+                                      : bJson.posters;
                               }
                               if (Array.isArray(bJson.covers) && bJson.covers.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('covers') || options.targetEntityTypes.includes('posters'))) {
-                                  mergedBackendSubjectsJson.covers = bJson.covers;
+                                  mergedBackendSubjectsJson.covers = isSingleSubjectRerun
+                                      ? upsertEntityDesignItemsByName(mergedBackendSubjectsJson.covers, bJson.covers)
+                                      : bJson.covers;
                               }
                           }
                           if (r.value.key === 'props' && Array.isArray(bJson.props) && bJson.props.length > 0) {
-                              mergedBackendSubjectsJson.props = bJson.props;
+                              mergedBackendSubjectsJson.props = isSingleSubjectRerun
+                                  ? upsertEntityDesignItemsByName(mergedBackendSubjectsJson.props, bJson.props)
+                                  : bJson.props;
                           }
                         if (r.value.key === 'posters') {
                             if (Array.isArray(bJson.posters) && bJson.posters.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('posters') || options.targetEntityTypes.includes('covers'))) {
-                                mergedBackendSubjectsJson.posters = bJson.posters;
+                                mergedBackendSubjectsJson.posters = isSingleSubjectRerun
+                                    ? upsertEntityDesignItemsByName(mergedBackendSubjectsJson.posters, bJson.posters)
+                                    : bJson.posters;
                             }
                             if (Array.isArray(bJson.covers) && bJson.covers.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('covers') || options.targetEntityTypes.includes('posters'))) {
-                                mergedBackendSubjectsJson.covers = bJson.covers;
+                                mergedBackendSubjectsJson.covers = isSingleSubjectRerun
+                                    ? upsertEntityDesignItemsByName(mergedBackendSubjectsJson.covers, bJson.covers)
+                                    : bJson.covers;
                             }
                         }
                     }
@@ -17085,32 +17111,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             await autoSaveScriptBeforeAnalysis();
 
-            if (actualContent && actualContent.trim().length > 6000) {
-                const ok = await confirmUiMessage(t(
-                    '检测到剧本内容超过6000字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
-                    'Script length exceeds 6000 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
-                ));
-                if (ok) {
-                    if (onLog) onLog("开始调用剧本分隔提示词自动分集...");
-                    setAnalysisFlowStatus({ phase: 'script_opt', message: t('正在为您深度阅读并切分剧本分集，请耐心等待...', 'Deep reading and splitting script episodes, this may take a while...') });
-                    try {
-                        const { splitEpisodeScript } = await import('../../../services/api');
-                        await splitEpisodeScript(projectId, activeEpisode.id, { script_content: actualContent });
-                        if (onLog) onLog("分集保存成功，即将刷新！");
-                        setAnalysisFlowStatus({ phase: 'completed', message: t('剧本分集成功！即将自动刷新以加载新集数...', 'Script split successfully! Reloading to show new episodes...') });
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 2000);
-                    } catch (e) {
-                        console.error("Script split failed", e);
-                        releaseAnalysisClickClaim();
-                        setAnalysisFlowStatus({ phase: 'failed', message: t('剧本分集失败：', 'Split failed: ') + (e.message || e) });
-                        alert(t("分集失败: ", "Split failed: ") + (e.message || e));
-                    }
-                    return;
-                }
-            }
-
             const projectInfo = (project?.global_info && typeof project.global_info === 'object')
                 ? project.global_info
                 : {};
@@ -17287,6 +17287,55 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
+    const handleSplitEpisodeClick = async () => {
+        const actualContent = getAnalysisScriptContent();
+        if (!actualContent || actualContent.trim().length < 10) {
+            alert(t('剧本内容过短，无法进行分集处理。', 'Script content is too short to split into episodes.'));
+            return;
+        }
+        if (!projectId || !activeEpisode?.id) {
+            alert(t('请先选择分集。', 'Please select an episode first.'));
+            return;
+        }
+        if (isAnalyzing || isSplittingEpisode || analysisProgressDisplay?.isLive) {
+            onLog?.(t('当前有任务进行中，请稍后再试分集处理。', 'Another task is running; try episode split later.'));
+            return;
+        }
+
+        const ok = await confirmUiMessage(t(
+            '将根据当前剧本内容进行 AI 分集切分并保存为多个分集。此操作会改写分集结构，是否继续？',
+            'AI will split the current script into multiple episodes and save them. This rewrites episode structure. Continue?'
+        ));
+        if (!ok) return;
+
+        setIsSplittingEpisode(true);
+        setAnalysisFlowStatus({
+            phase: 'script_opt',
+            message: t('正在深度阅读并切分剧本分集，请耐心等待...', 'Deep reading and splitting script episodes, please wait...'),
+        });
+        try {
+            await autoSaveScriptBeforeAnalysis();
+            if (onLog) onLog(t('开始调用剧本分隔提示词进行分集...', 'Starting script-split prompt for episode splitting...'));
+            await splitEpisodeScript(projectId, activeEpisode.id, { script_content: actualContent });
+            if (onLog) onLog(t('分集保存成功，即将刷新！', 'Episodes saved; reloading shortly!'), 'success');
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: t('剧本分集成功！即将自动刷新以加载新集数...', 'Script split successfully! Reloading to show new episodes...'),
+            });
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } catch (e) {
+            console.error('Script split failed', e);
+            setIsSplittingEpisode(false);
+            setAnalysisFlowStatus({
+                phase: 'failed',
+                message: t('剧本分集失败：', 'Split failed: ') + (e.message || e),
+            });
+            alert(t('分集失败: ', 'Split failed: ') + (e.message || e));
+        }
+    };
+
     const autoSaveScriptBeforeAnalysis = async () => {
         if (!activeEpisode?.id || typeof onUpdateScript !== 'function') return;
         
@@ -17418,18 +17467,112 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return [...keys];
     }
 
+    function collectEntityPurgeNameCandidates(rawNames = null, fields = null) {
+        const collected = [];
+        const pushName = (value) => {
+            const text = String(value || '').trim();
+            if (!text) return;
+            collected.push(text);
+            text.split(/\s*\/\s*/).forEach((part) => {
+                const piece = String(part || '').trim();
+                if (piece) collected.push(piece);
+            });
+        };
+        if (Array.isArray(rawNames)) rawNames.forEach(pushName);
+        else pushName(rawNames);
+        if (fields && typeof fields === 'object') {
+            [
+                fields.subject_name_zh,
+                fields.subject_name_exact,
+                fields.subject_name_en,
+                fields.subject_name,
+                fields.name,
+                fields.name_zh,
+                fields.name_en,
+            ].forEach(pushName);
+        }
+        return Array.from(new Set(collected.filter(Boolean)));
+    }
+
+    function entityPayloadMatchesPurgeNames(item, purgeNames = []) {
+        const names = (Array.isArray(purgeNames) ? purgeNames : [])
+            .map((value) => String(value || '').trim())
+            .filter(Boolean);
+        if (!names.length || !item) return false;
+        return names.some((name) => (
+            entityTokenMatchesName(item, name)
+            || collectEntityPayloadNameCandidates(item).some((candidate) => (
+                normalizeEntityToken(candidate) === normalizeEntityToken(name)
+            ))
+        ));
+    }
+
+    function upsertEntityDesignItemsByName(existingItems, incomingItems) {
+        const next = Array.isArray(existingItems) ? [...existingItems] : [];
+        for (const incoming of (Array.isArray(incomingItems) ? incomingItems : [])) {
+            if (!incoming || typeof incoming !== 'object') continue;
+            const incomingNames = collectEntityPayloadNameCandidates(incoming);
+            const idx = next.findIndex((item) => (
+                incomingNames.some((name) => entityPayloadMatchesPurgeNames(item, [name]))
+                || entityPayloadMatchesPurgeNames(incoming, collectEntityPayloadNameCandidates(item))
+            ));
+            if (idx >= 0) next[idx] = incoming;
+            else next.push(incoming);
+        }
+        return next;
+    }
+
     async function purgeEpisodeWorkspaceEntities({
         subjectTypes = null,
+        entityNames = null,
         reason = 'analysis-clear',
     } = {}) {
-        if (!projectId || !activeEpisode?.id || typeof deleteAllEntities !== 'function') {
+        if (!projectId || !activeEpisode?.id) {
             return { deleted_count: 0 };
         }
+        const scopedNames = collectEntityPurgeNameCandidates(entityNames);
         try {
             const types = Array.isArray(subjectTypes) && subjectTypes.length > 0
                 ? subjectTypes
                 : [null];
             let deletedCount = 0;
+
+            // Single-subject / name-scoped purge: delete only matching entities.
+            if (scopedNames.length > 0) {
+                if (typeof fetchEntities !== 'function' || typeof deleteEntity !== 'function') {
+                    return { deleted_count: 0 };
+                }
+                const episodeId = Number(activeEpisode.id) || undefined;
+                const seenIds = new Set();
+                for (const subjectType of types) {
+                    const rows = await fetchEntities(projectId, {
+                        ...(subjectType ? { type: subjectType } : {}),
+                        ...(episodeId ? { episode_id: episodeId } : {}),
+                    }).catch(() => []);
+                    for (const entity of (Array.isArray(rows) ? rows : [])) {
+                        const entityId = Number(entity?.id || 0);
+                        if (!entityId || seenIds.has(entityId)) continue;
+                        if (subjectType && normalizeAssetReportType(entity?.type) !== normalizeAssetReportType(subjectType)) {
+                            continue;
+                        }
+                        if (!entityPayloadMatchesPurgeNames(entity, scopedNames)) continue;
+                        await deleteEntity(entityId);
+                        seenIds.add(entityId);
+                        deletedCount += 1;
+                    }
+                }
+                if (onLog) {
+                    onLog(
+                        `[Entity Purge] source=${reason} scope=names names=${scopedNames.slice(0, 6).join('|')}${scopedNames.length > 6 ? '…' : ''} types=${types.every((x) => !x) ? 'all' : types.filter(Boolean).join(',')} deleted=${deletedCount}`,
+                        deletedCount > 0 ? 'info' : 'process'
+                    );
+                }
+                return { deleted_count: deletedCount };
+            }
+
+            if (typeof deleteAllEntities !== 'function') {
+                return { deleted_count: 0 };
+            }
             for (const subjectType of types) {
                 const result = await deleteAllEntities(projectId, activeEpisode.id, subjectType || null);
                 deletedCount += Number(result?.deleted_count || 0);
@@ -17494,11 +17637,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }
 
-    function filterEntityDesignTextByKeys(rawText, keysToClear = null) {
+    function filterEntityDesignTextByKeys(rawText, keysToClear = null, entityNamesToClear = null) {
         const text = String(rawText || '').trim();
         if (!text) return '';
         const clearAll = !Array.isArray(keysToClear) || keysToClear.length === 0;
-        if (clearAll) return '';
+        if (clearAll && !(Array.isArray(entityNamesToClear) && entityNamesToClear.length > 0)) return '';
         const payload = getAnalysisEntitiesPayloadFromJsonText(text);
         if (!payload) return text;
         const next = {
@@ -17507,12 +17650,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             environments: Array.isArray(payload.environments) ? [...payload.environments] : [],
             posters: Array.isArray(payload.posters) ? [...payload.posters] : [],
         };
-        const keySet = new Set(keysToClear.map((k) => String(k || '').trim().toLowerCase()));
-        if (keySet.has('characters') || keySet.has('character')) next.characters = [];
-        if (keySet.has('props') || keySet.has('prop')) next.props = [];
-        if (keySet.has('environments') || keySet.has('environment')) next.environments = [];
-        if (keySet.has('posters') || keySet.has('poster') || keySet.has('covers') || keySet.has('cover')) {
-            next.posters = [];
+        const keySet = new Set((keysToClear || []).map((k) => String(k || '').trim().toLowerCase()));
+        const scopedNames = collectEntityPurgeNameCandidates(entityNamesToClear);
+        const clearCategory = (items) => {
+            if (!Array.isArray(items) || items.length === 0) return [];
+            if (scopedNames.length > 0) {
+                return items.filter((item) => !entityPayloadMatchesPurgeNames(item, scopedNames));
+            }
+            return [];
+        };
+        if (clearAll || keySet.has('characters') || keySet.has('character')) {
+            next.characters = clearCategory(next.characters);
+        }
+        if (clearAll || keySet.has('props') || keySet.has('prop')) {
+            next.props = clearCategory(next.props);
+        }
+        if (clearAll || keySet.has('environments') || keySet.has('environment')) {
+            next.environments = clearCategory(next.environments);
+        }
+        if (clearAll || keySet.has('posters') || keySet.has('poster') || keySet.has('covers') || keySet.has('cover')) {
+            next.posters = clearCategory(next.posters);
         }
         const remaining = next.characters.length + next.props.length + next.environments.length + next.posters.length;
         if (remaining <= 0) return '';
@@ -17525,6 +17682,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         clearSceneMarkdown = false,
         clearAssetDesign = false,
         assetDesignKeysToClear = null,
+        assetDesignNamesToClear = null,
     } = {}) {
         const base = parseStageOutputsObject(activeEpisode?.ai_stage_outputs)
             || buildStageOutputsObject({
@@ -17577,7 +17735,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || llmAssetRawResultContent
                 || ''
             ).trim();
-            const filtered = filterEntityDesignTextByKeys(currentDesign, assetDesignKeysToClear);
+            const filtered = filterEntityDesignTextByKeys(
+                currentDesign,
+                assetDesignKeysToClear,
+                assetDesignNamesToClear,
+            );
             if (!outputs.asset_design_json || typeof outputs.asset_design_json !== 'object') {
                 outputs.asset_design_json = { key: 'asset_design_json', content: filtered };
             } else {
@@ -17619,6 +17781,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             markerSceneIds = null,
             dbSceneIds = null,
             environmentNamesToPurge = null,
+            entityNamesToPurge = null,
             reason = 'analysis-downstream-clear',
             refreshEpisode = true,
             resetRuntimePanels = true,
@@ -17636,6 +17799,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             && markerSceneIds.length > 0;
 
         const purgeTypes = normalizeEntityPurgeTypes(targetEntityTypes);
+        const scopedEntityNames = collectEntityPurgeNameCandidates(entityNamesToPurge);
         const assetDesignKeys = entityDesignKeysFromPurgeTypes(
             stage === 'assets_gen' ? purgeTypes : null
         );
@@ -17785,6 +17949,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (clearFromAssets || clearAll) {
             await purgeEpisodeWorkspaceEntities({
                 subjectTypes: stage === 'assets_gen' ? purgeTypes : null,
+                // Single-subject rerun/delete: never wipe the whole type.
+                entityNames: stage === 'assets_gen' && scopedEntityNames.length > 0
+                    ? scopedEntityNames
+                    : null,
                 reason: `${reason}-entities`,
             });
         }
@@ -17813,7 +17981,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } else if (stage === 'assets_gen') {
                 const filteredDesign = filterEntityDesignTextByKeys(
                     activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
-                    assetDesignKeys
+                    assetDesignKeys,
+                    scopedEntityNames.length > 0 ? scopedEntityNames : null,
                 );
                 episodePatch.ai_entity_design_result = filteredDesign;
                 // Do not blank episode-level shot_content on scoped ENV clear —
@@ -17830,6 +17999,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     clearSceneMarkdown: clearFromSceneBeats || clearFromExtract,
                     clearAssetDesign: clearFromAssets,
                     assetDesignKeysToClear: stage === 'assets_gen' ? assetDesignKeys : null,
+                    assetDesignNamesToClear: stage === 'assets_gen' && scopedEntityNames.length > 0
+                        ? scopedEntityNames
+                        : null,
                 });
             }
         }
@@ -22417,6 +22589,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             // Clear targeted asset-design temp (+ storyboard only for ENV-linked scenes).
+            const singleRerunNames = collectEntityPurgeNameCandidates(
+                options?.rerunSubject?.name,
+                options?.rerunSubject?.fields,
+            );
             const singleEnvName = String(options?.rerunSubject?.name || '').trim();
             const environmentNamesToPurge = shouldPurgeStoryboard
                 ? (singleEnvName ? [singleEnvName] : null) // null = all scenes linked to any ENV
@@ -22437,11 +22613,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     : t('[资产清理] 保留现有分镜（本次不重跑环境资产设计）', '[Asset clear] Keeping existing storyboards (environment design is not being regenerated)'),
                 'info'
             );
+            if (singleRerunNames.length > 0) {
+                onLog?.(
+                    t(
+                        `[资产清理] 单实体重跑：仅清除「${singleRerunNames[0]}」对应资产，保留同类型其他资产`,
+                        `[Asset clear] Single-subject rerun: purging only "${singleRerunNames[0]}", keeping other assets of the same type`
+                    ),
+                    'info'
+                );
+            }
             await clearAnalysisArtifactsFromStage('assets_gen', {
                 preserveProgressUi: true,
                 targetEntityTypes: retryTargetTypes,
                 purgeStoryboard: shouldPurgeStoryboard,
                 environmentNamesToPurge: shouldPurgeStoryboard ? environmentNamesToPurge : [],
+                entityNamesToPurge: singleRerunNames.length > 0 ? singleRerunNames : null,
                 reason: 'retry-phase2-downstream-clear',
                 refreshEpisode: true,
             });
@@ -23384,7 +23570,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 deletedSubjectKeys: nextDeleted,
                 clearDrafts: true,
             });
-            onLog?.(t('Subject Index 修改已保存。', 'Subject Index changes saved.'), 'success');
+            // Also remove that one workspace asset + design JSON row (never the whole type).
+            const purgeNames = collectEntityPurgeNameCandidates(entry?.name, entry?.fields);
+            const purgeTypes = normalizeEntityPurgeTypes(entry?.targetEntityTypes || []);
+            if (purgeNames.length > 0) {
+                await clearAnalysisArtifactsFromStage('assets_gen', {
+                    preserveProgressUi: true,
+                    targetEntityTypes: entry?.targetEntityTypes || null,
+                    entityNamesToPurge: purgeNames,
+                    purgeStoryboard: Array.isArray(purgeTypes) && purgeTypes.includes('environment'),
+                    environmentNamesToPurge: Array.isArray(purgeTypes) && purgeTypes.includes('environment')
+                        ? purgeNames
+                        : [],
+                    reason: 'phase2-rerun-delete-single-entity',
+                    refreshEpisode: true,
+                });
+            }
+            onLog?.(t('Subject Index 修改已保存，并已删除对应单个资产。', 'Subject Index changes saved; matching single asset removed.'), 'success');
         } catch (error) {
             console.error('Failed to persist Subject Index deletion from asset rerun modal:', error);
             onLog?.(t(`保存 Subject Index 修改失败：${error?.message || error}`, `Failed to save Subject Index changes: ${error?.message || error}`), 'error');
@@ -24624,10 +24826,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 value={selectedScriptAnalysisApiId}
                                 onChange={setSelectedScriptAnalysisApiId}
                             />
+                            <button
+                                type="button"
+                                onClick={handleSplitEpisodeClick}
+                                disabled={analysisProgressDisplay.isLive || isSplittingEpisode}
+                                className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-bold border transition-colors ${
+                                    analysisProgressDisplay.isLive || isSplittingEpisode
+                                        ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed'
+                                        : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-100 border-amber-400/35'
+                                }`}
+                                title={t('手动将当前长剧本切分为多个分集并保存', 'Manually split the current long script into episodes and save')}
+                            >
+                                {isSplittingEpisode ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 animate-spin" /> {t('分集中...', 'Splitting...')}
+                                    </>
+                                ) : (
+                                    <>
+                                        <Scissors className="w-4 h-4" /> {t('分集处理', 'Split Episodes')}
+                                    </>
+                                )}
+                            </button>
                             <button 
                                 onClick={handleAnalysisClick} 
-                                disabled={analysisProgressDisplay.isLive}
-                                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-colors ${analysisProgressDisplay.isLive ? 'bg-purple-900/50 text-purple-200 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-500'}`}
+                                disabled={analysisProgressDisplay.isLive || isSplittingEpisode}
+                                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-colors ${analysisProgressDisplay.isLive || isSplittingEpisode ? 'bg-purple-900/50 text-purple-200 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-500'}`}
                                 title={t('分析原始剧本并生成结构', 'Analyze raw script to generate structure')}
                             >
                                 {analysisProgressDisplay.isLive ? (
