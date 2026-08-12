@@ -393,16 +393,20 @@ async def _run_scene_markdown_node_per_scene(
                                     script_id=script_id,
                                     target_scene_id=unit.scene_id,
                                 )
+                                # Progress-table sync ≠ workspace Scene rows. Keep
+                                # awaiting_workspace_import until the frontend doImportText
+                                # path confirms DB scenes, so the panel never shows
+                                # 「已入库」prematurely.
                                 await _mark_scene_orchestration_status(
                                     task_db,
                                     scene_id=unit.scene_id,
-                                    import_status="success",
+                                    import_status="awaiting_workspace_import",
                                     parse_status="success",
                                     scene_markdown=scene_text,
                                     parse_error_code=None,
                                 )
                                 logger.info(
-                                    "[场景编排] 进度表已同步 | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s",
+                                    "[场景编排] 进度表已同步，等待工作区入库 | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s",
                                     unit.scene_id,
                                     index,
                                     total_scenes,

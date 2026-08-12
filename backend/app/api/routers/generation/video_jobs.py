@@ -454,11 +454,26 @@ def get_generate_video_job_status(
         job = dict(VIDEO_JOB_STORE.get(job_id) or {})
 
     status = str(job.get("status") or "").strip().lower()
-    if not job or status in {"queued", "running", "submit", "storing_asset"}:
+    mem_result_url = _extract_job_result_url(job.get("result")) if job else ""
+    # Also re-sync when memory looks terminal/incomplete but the shared file is ahead
+    # (common with poll-only providers finishing on another worker).
+    should_sync_file = (
+        (not job)
+        or status in {"queued", "running", "submit", "storing_asset", "waiting_callback", "callback_processing"}
+        or (status in {"succeeded", "completed", "done", "success"} and not mem_result_url)
+    )
+    if should_sync_file:
         file_job = _read_video_job_file(job_id)
         if file_job:
             file_status = str(file_job.get("status") or "").strip().lower()
-            if not job or file_status != status or ("result" in file_job and "result" not in job):
+            file_result_url = _extract_job_result_url(file_job.get("result"))
+            file_is_ahead = (
+                (not job)
+                or (file_status != status)
+                or (file_result_url and not mem_result_url)
+                or ("result" in file_job and "result" not in job)
+            )
+            if file_is_ahead:
                 with VIDEO_JOB_LOCK:
                     _prune_video_jobs_locked()
                     VIDEO_JOB_STORE[job_id] = dict(file_job)
@@ -518,14 +533,25 @@ def get_generate_video_job_status(
         pass
 
     result_url = _extract_job_result_url(job.get("result"))
-    if result_url and video_status in {"queued", "running"}:
+    # Provider URL already present — never leave clients stuck on queued/running.
+    if result_url and video_status in {"queued", "running", "submit", "processing", "pending"}:
         logger.warning(
-            "[VideoJob] polling anomaly | job_id=%s status=%s result_url=%s user_id=%s",
+            "[VideoJob] promoting status with existing result_url | job_id=%s prev_status=%s result_url=%s user_id=%s",
             job_id,
             video_status,
             result_url,
             owner_id,
         )
+        _set_video_job(
+            job_id,
+            status="succeeded",
+            error=None,
+            finished_at=job.get("finished_at") or now_bj_iso(),
+            upstream_submit_state=str(job.get("upstream_submit_state") or "").strip() or "completed",
+        )
+        with VIDEO_JOB_LOCK:
+            job = dict(VIDEO_JOB_STORE.get(job_id) or job)
+        video_status = "succeeded"
 
     return {
         "job_id": job.get("job_id"),

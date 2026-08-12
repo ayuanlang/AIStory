@@ -225,6 +225,17 @@ const buildSceneOrchestrationPhaseMessage = (sceneId, phase, { sceneOrder, total
                     `[Scene beats] ${sceneId}${orderLabel} failed: returned Scene ID mismatch (expected ${expectedId}${gotId ? `, got ${gotId}` : ''})`
                 );
             }
+            if (
+                detail === 'import_no_result'
+                || detail === 'workspace_import_failed'
+                || detail.startsWith('import_no_result')
+                || detail.startsWith('workspace_import_failed')
+            ) {
+                return t(
+                    `[场景编排] ${sceneId}${orderLabel} 失败：场景未写入工作区（场景表缺少 Scene No/Scene ID、解析失败或导入服务不可用）`,
+                    `[Scene beats] ${sceneId}${orderLabel} failed: scene was not written to workspace (missing Scene No/Scene ID, parse failure, or import unavailable)`
+                );
+            }
             return t(
                 `[场景编排] ${sceneId}${orderLabel} 失败${detail ? `：${detail}` : ''}`,
                 `[Scene beats] ${sceneId}${orderLabel} failed${detail ? `: ${detail}` : ''}`
@@ -274,8 +285,8 @@ const createSceneOrchestrationPanelReporter = ({ totalScenes = 1, t }) => {
                 );
             case 'failed':
                 return t(
-                    `「${sceneId}」处理失败${orderLabel}`,
-                    `"${sceneId}" failed${orderLabel}`
+                    `「${sceneId}」入库/编排失败${orderLabel}`,
+                    `"${sceneId}" orchestration/import failed${orderLabel}`
                 );
             default:
                 return '';
@@ -2179,6 +2190,8 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
         [/truncated_result_empty_subjects/gi, t('结果被截断且资产为空', 'result truncated with empty assets')],
         [/import produced zero created\/skipped rows/gi, t('导入结果为0条', 'import produced 0 rows')],
         [/import returned non-object result/gi, t('导入未返回有效结果', 'import returned invalid result')],
+        [/\bimport_no_result\b/gi, t('场景未写入工作区（导入未返回有效结果）', 'scene not written to workspace (import returned no result)')],
+        [/\bworkspace_import_failed\b/gi, t('场景未写入工作区（入库失败）', 'scene not written to workspace (import failed)')],
         [/No supported format detected/gi, t('未识别到可导入的资产格式', 'no importable asset format detected')],
         [/\[Asset Import Failure\]/gi, t('[资产入库失败]', '[Asset Import Failure]')],
         [/entities_block_zero_created/gi, t('实体块解析到了但创建0条', 'entities block parsed but created 0')],
@@ -8989,22 +9002,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 sceneOrder,
                 totalScenes: batchTotalScenes,
             });
-            const sceneImportReport = await doImportText(importText, 'scene', {
+            const importPrecheck = validateAutoSceneTableImport(importText);
+            let textForImport = importText;
+            if (importPrecheck?.ok && importPrecheck.tableText) {
+                textForImport = String(importPrecheck.tableText || '').includes('### Part 1')
+                    ? importPrecheck.tableText
+                    : `### Part 1: Scenes Table\n\n${importPrecheck.tableText}`;
+            } else if (!importPrecheck?.ok) {
+                onLog?.(
+                    `[场景导入] ${sceneId} 场景表预检未通过：${importPrecheck?.reason || 'unknown'}`,
+                    'warning'
+                );
+            }
+            const sceneImportReport = await doImportText(textForImport, 'scene', {
                 suppressAlerts: true,
                 autoSupplementSceneSubjects: false,
                 ...options,
             });
-            if (!sceneImportReport) {
+            if (!isSuccessfulSceneImportReport(sceneImportReport)) {
                 publishSceneOrchestrationPanelStatus({
                     sceneId,
                     phase: 'failed',
                     sceneOrder,
                     totalScenes: batchTotalScenes,
-                    errorCode: 'import_no_result',
+                    errorCode: 'workspace_import_failed',
                 });
+                const precheckHint = importPrecheck?.ok ? '' : ` ${importPrecheck?.reason || ''}`.trim();
                 throw new Error(t(
-                    `[场景导入] ${sceneId} 导入失败：未返回有效结果。`,
-                    `[Scene import] ${sceneId} failed: import returned no result.`
+                    `[场景导入] ${sceneId} 导入失败：场景表未写入工作区（缺少 Scene No/Scene ID、解析失败或导入服务不可用）。${precheckHint}`,
+                    `[Scene import] ${sceneId} failed: scene table was not written to workspace (missing Scene No/Scene ID, parse failure, or import unavailable).${precheckHint ? ` ${precheckHint}` : ''}`
                 ));
             }
             sceneReports.push(sceneImportReport);
@@ -9041,7 +9067,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ));
         }
         return mergeSceneImportReports(sceneReports) || lastReport;
-    }, [activeEpisode?.id, beginSceneOrchestrationPanelTracking, doImportText, kickoffStoryboardForImportedScene, onLog, projectId, publishSceneOrchestrationPanelStatus, purgeEpisodeScenes, syncSceneUnitsProgress, t]);
+    }, [activeEpisode?.id, beginSceneOrchestrationPanelTracking, doImportText, kickoffStoryboardForImportedScene, onLog, projectId, publishSceneOrchestrationPanelStatus, purgeEpisodeScenes, syncSceneUnitsProgress, t, validateAutoSceneTableImport]);
 
     const parseSceneMarkdownBySceneMap = useCallback((rawValue) => {
         const text = String(rawValue || '').trim();

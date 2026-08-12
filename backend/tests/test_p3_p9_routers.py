@@ -537,6 +537,7 @@ def test_scene_markdown_orchestration_and_await_sink():
     assert SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC == 2.0
     assert SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS == 1
     assert _derive_scene_orchestration_phase(import_status="success", parse_status="ok") == "imported"
+    assert _derive_scene_orchestration_phase(import_status="awaiting_workspace_import", parse_status="ok") == "llm_returned"
     assert callable(_is_retryable_scene_orchestration_error)
     assert _subject_index_has_usable_content("| S001 | character | a |")
     assert callable(resolve_usable_episode_subject_index)

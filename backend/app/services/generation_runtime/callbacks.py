@@ -1841,6 +1841,10 @@ def _video_callback_result_needs_oss_persist(
     if not current_url:
         return False
     meta = candidate_result.get("metadata") if isinstance(candidate_result.get("metadata"), dict) else {}
+    # Runner already owns background localization after provisional publish (poll-only
+    # providers like NukoAi). Status GET must not block on a second download/OSS race.
+    if meta.get("bg_persist_owned") or meta.get("oss_persist_pending"):
+        return False
     if _is_persisted_media_localization_success(
         current_url,
         source_url=current_url,

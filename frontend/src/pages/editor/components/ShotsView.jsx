@@ -1158,6 +1158,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const recoverShotBatchLastAtRef = useRef(0);
     const activeResumeVideoJobsRef = useRef(new Set());
     const pausedResumeVideoJobsRef = useRef({});
+    const [videoJobResumeNonce, setVideoJobResumeNonce] = useState(0);
+    const kickPendingVideoJobResume = useCallback(() => {
+        setVideoJobResumeNonce((n) => n + 1);
+    }, []);
     const pendingImageJobsRef = useRef({});
     const editingShotRef = useRef(null);
     const jointDiptychApplyInFlightRef = useRef(new Map());
@@ -2806,6 +2810,22 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             releaseIfMissing: false,
         });
 
+        // Job already finished while the client poll was interrupted — clear spinner.
+        // Return false so callers do NOT keepRunningUi (that was leaving「视频生成中」stuck).
+        // Callers with a jobId will re-fetch status and bind the video URL.
+        if (resolved?.state === 'terminal') {
+            if (stableMediaKey === 'video') {
+                releaseShotVideoUi({ shotId: stableShotId, jobId: resolved?.jobId || '' });
+            } else {
+                releaseShotImageUiByShotId(stableShotId, stableMediaKey);
+            }
+            onLog?.(
+                t('后台任务已完成，已刷新界面状态。', 'Background job already finished; UI state refreshed.'),
+                'success'
+            );
+            return false;
+        }
+
         if (resolved?.state !== 'running') return false;
 
         const mediaLabel = stableMediaKey === 'video'
@@ -2820,8 +2840,22 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             'warning'
         );
         showNotification(t('已恢复后台运行任务', 'Recovered background running task'), 'info');
+        // Resume effect only ran on episode mount — kick it again for mid-session timeouts.
+        if (stableMediaKey === 'video' && resolved?.jobId) {
+            setPendingVideoJob(stableShotId, resolved.jobId);
+            kickPendingVideoJobResume();
+        }
         return true;
-    }, [onLog, showNotification, syncShotMediaRuntimeState, t]);
+    }, [
+        kickPendingVideoJobResume,
+        onLog,
+        releaseShotImageUiByShotId,
+        releaseShotVideoUi,
+        setPendingVideoJob,
+        showNotification,
+        syncShotMediaRuntimeState,
+        t,
+    ]);
 
     useEffect(() => {
         pendingImageJobsRef.current = readImageJobStateStorage();
@@ -6478,6 +6512,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         setShotGeneratingState,
         syncShotVideoAfterOssPersist,
         t,
+        videoJobResumeNonce,
         writeVideoJobStateStorage,
     ]);
 
@@ -9588,11 +9623,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             || data?.video_url
                             || ''
                         ).trim();
-                        // Unblock UI as soon as provider URL is published (OSS may still be uploading).
-                        if (earlyUrl || ['succeeded', 'completed', 'done', 'success', 'storing_asset'].includes(nextStatus)) {
+                        const terminalSuccess = ['succeeded', 'completed', 'done', 'success', 'storing_asset'].includes(nextStatus);
+                        // Unblock UI as soon as provider URL is published OR job is already terminal
+                        // (OSS may still be uploading in the background for poll-only providers).
+                        if (earlyUrl || terminalSuccess) {
+                            ignoreAsyncJobCallbacks = true;
+                            releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                             if (earlyUrl) {
-                                ignoreAsyncJobCallbacks = true;
-                                releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                                 const stableTargetShotId = String(targetShotId || '').trim();
                                 const earlyDurable = isDurablePersistedMediaUrl(earlyUrl);
                                 const earlyPatched = mergeShotVideoOssPersistState(
@@ -9615,11 +9652,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 setIsEditingVideoPreviewArmed(true);
                                 if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(earlyUrl);
                                 triggerMediaReload();
-                                setVideoStatuses((prev) => {
-                                    const next = { ...prev };
-                                    delete next[targetShotId];
-                                    return next;
-                                });
                                 // Only PUT durable OSS URLs. Temp/provider/local paths are rejected
                                 // until persist-media / backend bg OSS finishes — keep those local-only.
                                 if (earlyDurable) {
@@ -9628,6 +9660,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     });
                                 }
                             }
+                            setVideoStatuses((prev) => {
+                                const next = { ...prev };
+                                delete next[targetShotId];
+                                return next;
+                            });
                         }
                     },
                 }, keyframeRequestUrls);
@@ -9843,9 +9880,65 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     if (recovered) {
                         keepRunningUi = true;
                     } else if (createdVideoJobId) {
-                        onLog?.('Video job is still running on server; it will auto-resume when you return.', 'warning');
-                        showNotification('Video job continues in background.', 'info');
-                        keepRunningUi = true;
+                        // Re-check job: timeout often happens after NukoAi/poll already finished.
+                        let stillRunning = false;
+                        try {
+                            const status = await getVideoGenerationJobStatus(createdVideoJobId);
+                            const phase = normalizeGenerationPhase(status?.status);
+                            const resultUrl = extractVideoJobResultUrl(status);
+                            if (resultUrl || phase === 'succeeded') {
+                                ignoreAsyncJobCallbacks = true;
+                                if (resultUrl) {
+                                    const durableNow = isDurablePersistedMediaUrl(resultUrl);
+                                    const patchedShot = mergeShotVideoOssPersistState(
+                                        { id: targetShotId, video_url: resultUrl },
+                                        { videoUrl: resultUrl, ossUploaded: durableNow }
+                                    );
+                                    const patch = {
+                                        video_url: resultUrl,
+                                        technical_notes: patchedShot.technical_notes,
+                                    };
+                                    setShots((prev) => prev.map((shot) => (
+                                        String(shot?.id || '') === String(targetShotId) ? { ...shot, ...patch } : shot
+                                    )));
+                                    setEditingShot((prev) => (
+                                        prev && String(prev.id) === String(targetShotId) ? { ...prev, ...patch } : prev
+                                    ));
+                                    setIsEditingVideoPreviewArmed(true);
+                                    if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(resultUrl);
+                                    triggerMediaReload();
+                                    if (durableNow) {
+                                        void onUpdateShot(targetShotId, patch).catch(() => {});
+                                    } else {
+                                        void syncShotVideoAfterOssPersist({
+                                            shotId: targetShotId,
+                                            jobId: createdVideoJobId,
+                                            initialUrl: resultUrl,
+                                        });
+                                    }
+                                }
+                                releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
+                                onLog?.(t('视频任务已完成。', 'Video job already completed.'), 'success');
+                            } else if (phase === 'failed' || phase === 'canceled') {
+                                ignoreAsyncJobCallbacks = true;
+                                releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
+                                const errMsg = String(status?.error || e?.message || 'unknown error');
+                                onLog?.(`Generation failed: ${errMsg}`, phase === 'canceled' ? 'warning' : 'error');
+                                showNotification(`Generation failed: ${errMsg}`, phase === 'canceled' ? 'warning' : 'error');
+                            } else {
+                                stillRunning = true;
+                            }
+                        } catch {
+                            stillRunning = true;
+                        }
+                        if (stillRunning) {
+                            setPendingVideoJob(targetShotId, createdVideoJobId);
+                            setShotGeneratingState(targetShotId, 'video', true);
+                            kickPendingVideoJobResume();
+                            onLog?.('Video job is still running on server; it will auto-resume when you return.', 'warning');
+                            showNotification('Video job continues in background.', 'info');
+                            keepRunningUi = true;
+                        }
                     } else {
                         ignoreAsyncJobCallbacks = true;
                         releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
@@ -9868,9 +9961,64 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                  if (recovered) {
                      keepRunningUi = true;
                  } else if (createdVideoJobId) {
-                     onLog?.('Video job is still running on server; it will auto-resume when you return.', 'warning');
-                     showNotification('Video job continues in background.', 'info');
-                     keepRunningUi = true;
+                     let stillRunning = false;
+                     try {
+                         const status = await getVideoGenerationJobStatus(createdVideoJobId);
+                         const phase = normalizeGenerationPhase(status?.status);
+                         const resultUrl = extractVideoJobResultUrl(status);
+                         if (resultUrl || phase === 'succeeded') {
+                             ignoreAsyncJobCallbacks = true;
+                             if (resultUrl) {
+                                 const durableNow = isDurablePersistedMediaUrl(resultUrl);
+                                 const patchedShot = mergeShotVideoOssPersistState(
+                                     { id: targetShotId, video_url: resultUrl },
+                                     { videoUrl: resultUrl, ossUploaded: durableNow }
+                                 );
+                                 const patch = {
+                                     video_url: resultUrl,
+                                     technical_notes: patchedShot.technical_notes,
+                                 };
+                                 setShots((prev) => prev.map((shot) => (
+                                     String(shot?.id || '') === String(targetShotId) ? { ...shot, ...patch } : shot
+                                 )));
+                                 setEditingShot((prev) => (
+                                     prev && String(prev.id) === String(targetShotId) ? { ...prev, ...patch } : prev
+                                 ));
+                                 setIsEditingVideoPreviewArmed(true);
+                                 if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(resultUrl);
+                                 triggerMediaReload();
+                                 if (durableNow) {
+                                     void onUpdateShot(targetShotId, patch).catch(() => {});
+                                 } else {
+                                     void syncShotVideoAfterOssPersist({
+                                         shotId: targetShotId,
+                                         jobId: createdVideoJobId,
+                                         initialUrl: resultUrl,
+                                     });
+                                 }
+                             }
+                             releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
+                             onLog?.(t('视频任务已完成。', 'Video job already completed.'), 'success');
+                         } else if (phase === 'failed' || phase === 'canceled') {
+                             ignoreAsyncJobCallbacks = true;
+                             releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
+                             const errMsg = String(status?.error || e?.message || 'unknown error');
+                             onLog?.(`Generation failed: ${errMsg}`, phase === 'canceled' ? 'warning' : 'error');
+                             showNotification(`Generation failed: ${errMsg}`, phase === 'canceled' ? 'warning' : 'error');
+                         } else {
+                             stillRunning = true;
+                         }
+                     } catch {
+                         stillRunning = true;
+                     }
+                     if (stillRunning) {
+                         setPendingVideoJob(targetShotId, createdVideoJobId);
+                         setShotGeneratingState(targetShotId, 'video', true);
+                         kickPendingVideoJobResume();
+                         onLog?.('Video job is still running on server; it will auto-resume when you return.', 'warning');
+                         showNotification('Video job continues in background.', 'info');
+                         keepRunningUi = true;
+                     }
                  } else {
                     ignoreAsyncJobCallbacks = true;
                      releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
