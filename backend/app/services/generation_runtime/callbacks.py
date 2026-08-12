@@ -717,7 +717,8 @@ def _normalize_generation_status(value: Any) -> str:
     status = str(value or "").strip().lower()
     if status in {"success", "succeeded", "completed", "done"}:
         return "succeeded"
-    if status in {"failed", "error", "expired"}:
+    # KIE / playground callbacks use "fail" (not "failed"); treat abort/timeout as terminal fail.
+    if status in {"failed", "fail", "failure", "error", "expired", "abort", "aborted", "timeout"}:
         return "failed"
     if status in {"canceled", "cancelled"}:
         return "canceled"
@@ -972,7 +973,25 @@ def _get_generation_callback_payload(ticket: str) -> Dict[str, Any]:
         normalized.setdefault("result_url", callback_result_url)
         if not str(normalized.get("status") or "").strip():
             normalized["status"] = "succeeded"
-                
+
+    # KIE fail callbacks often put the human message in msg/failMsg (root or data),
+    # not error/failure_reason — surface them so job.error and UI can clear.
+    if not str(normalized.get("error") or "").strip() or not str(normalized.get("failure_reason") or "").strip():
+        msg_candidates: List[str] = []
+        for source in (normalized, normalized.get("data") if isinstance(normalized.get("data"), dict) else {}):
+            if not isinstance(source, dict):
+                continue
+            for key in ("failMsg", "fail_msg", "msg", "message", "errorMessage", "failedReason", "error"):
+                text = str(source.get(key) or "").strip()
+                if text:
+                    msg_candidates.append(text)
+        if msg_candidates:
+            primary = msg_candidates[0]
+            if not str(normalized.get("error") or "").strip():
+                normalized["error"] = primary
+            if not str(normalized.get("failure_reason") or "").strip():
+                normalized["failure_reason"] = primary
+
     return normalized
 
 

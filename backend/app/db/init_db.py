@@ -2810,6 +2810,65 @@ def init_system_api_settings(db):
     except Exception as e:
         logger.warning(f"Failed to canonicalize NukoAi provider names: {e}")
 
+    # Seed ShiShiKeJi (虾客漫) video adapter models — poll-only, license_key auth.
+    shishikeji_provider = "shishikeji"
+    shishikeji_base_url = "https://api.shishikeji.com"
+    shishikeji_model_items = [
+        ("ShiShiKeJi 星河 2.0", "xinghe-2.0"),
+        ("ShiShiKeJi 星河 FAST", "xinghe-fast"),
+        ("ShiShiKeJi 星河 2.0 12s", "xinghe-2.0-12s"),
+        ("ShiShiKeJi 加班 2.0", "jiaban-2.0"),
+        ("ShiShiKeJi 星喵 2.5", "xingmiao-2.5"),
+    ]
+    existing_ssk_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.provider == shishikeji_provider,
+        SystemAPISetting.category == "Video",
+    ).all()
+    existing_ssk_models = {
+        str(row.model or "").strip().lower()
+        for row in existing_ssk_rows
+    }
+    ssk_shared_api_key = ""
+    for row in existing_ssk_rows:
+        if (row.api_key or "").strip():
+            ssk_shared_api_key = row.api_key.strip()
+            break
+
+    ssk_added = 0
+    for display_name, model_name in shishikeji_model_items:
+        key = str(model_name or "").strip().lower()
+        if not key or key in existing_ssk_models:
+            continue
+        db.add(SystemAPISetting(
+            name=display_name,
+            category="Video",
+            provider=shishikeji_provider,
+            api_key=ssk_shared_api_key,
+            base_url=shishikeji_base_url,
+            model=model_name,
+            base_model=model_name,
+            modality=migrate_legacy_modality_string("image-to-video"),
+            config={
+                "provider_api_key_strategy": "random",
+                "poll_interval_seconds": 4,
+                "poll_timeout_seconds": 600,
+                "endpoint": f"{shishikeji_base_url}/api/generate-video",
+                "query_endpoint": f"{shishikeji_base_url}/api/task",
+                "poll_only": True,
+                "durations_seconds": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+                "notes": "ShiShiKeJi poll-only. Auth via X-License-Key / license_key. Requires image/video/audio refs.",
+            },
+            is_active=False,
+        ))
+        existing_ssk_models.add(key)
+        ssk_added += 1
+
+    if ssk_added > 0:
+        db.commit()
+        logger.info("Seeded %s shishikeji video models into system_api_settings", ssk_added)
+    else:
+        logger.info("System shishikeji video settings already initialized")
+
 
 def init_initial_data():
     db = SessionLocal()

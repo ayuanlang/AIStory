@@ -57,6 +57,36 @@ def test_normalize_keeps_queued_distinct_from_running():
     assert _normalize_generation_status("pending") == "running"
 
 
+def test_normalize_kie_fail_state_is_terminal_failed():
+    """KIE playground callbacks use state=fail (not failed); must finalize as failed."""
+    from app.services.generation_runtime.callbacks import (
+        _extract_callback_status,
+        _get_generation_callback_payload,
+        _normalize_generation_status,
+        _set_generation_callback_payload_for_ack,
+    )
+
+    assert _normalize_generation_status("fail") == "failed"
+    assert _normalize_generation_status("failure") == "failed"
+
+    payload = {
+        "code": 500,
+        "msg": "generate playground failed, task id is blank",
+        "data": {
+            "state": "fail",
+            "taskId": "231901276a7a14814496b2be8c410fb4",
+            "model": "minimax-h3/image-to-video",
+        },
+    }
+    assert _normalize_generation_status(_extract_callback_status(payload)) == "failed"
+
+    ticket = "video-job-kie-fail-status-test"
+    _set_generation_callback_payload_for_ack(ticket, payload)
+    normalized = _get_generation_callback_payload(ticket)
+    assert normalized.get("status") == "failed"
+    assert "generate playground failed" in str(normalized.get("error") or "")
+
+
 def test_queued_job_not_subject_to_running_timeout():
     from app.services.generation_runtime.job_timeout import _job_is_subject_to_running_timeout
 

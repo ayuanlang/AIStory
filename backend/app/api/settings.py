@@ -1913,6 +1913,16 @@ def _normalize_system_provider_name(provider: Any) -> str:
         "noku ai",
     }:
         return "nukoai"
+    if raw in {
+        "shishikeji",
+        "shi shi ke ji",
+        "时时刻机",
+        "xiakeman",
+        "xia ke man",
+        "虾客漫",
+        "虾客漫sd2",
+    }:
+        return "shishikeji"
     return raw
 
 
@@ -10334,7 +10344,9 @@ def create_provider_key_pool(
 
     record = ProviderKeyPool(
         provider=provider_name,
-        provider_alias=str(payload.provider_alias or "").strip() or ("NukoAi" if provider_name == "nukoai" else None),
+        provider_alias=str(payload.provider_alias or "").strip() or (
+            "NukoAi" if provider_name == "nukoai" else ("ShiShiKeJi" if provider_name == "shishikeji" else None)
+        ),
         api_keys=keys,
         strategy=strategy,
         weights=weights,
@@ -10384,6 +10396,8 @@ def update_provider_key_pool(
             record.provider = new_provider
             if new_provider == "nukoai" and not str(getattr(record, "provider_alias", "") or "").strip():
                 record.provider_alias = "NukoAi"
+            if new_provider == "shishikeji" and not str(getattr(record, "provider_alias", "") or "").strip():
+                record.provider_alias = "ShiShiKeJi"
     if payload.api_keys is not None:
         record.api_keys = _normalize_api_keys(payload.api_keys)
     if payload.provider_alias is not None:

@@ -181,6 +181,14 @@ def _resolve_poll_credentials(job: Dict[str, Any]) -> Tuple[str, str, str, str]:
     if ("nukoai" in provider_l or "nokoai" in provider_l or "nokuai" in provider_l) and not query_endpoint:
         root = base_url or "https://www.nukoai.com/api/ext/v1"
         query_endpoint = f"{root.rstrip('/')}/videos" if not root.rstrip("/").lower().endswith("/videos") else root
+    if (
+        "shishikeji" in provider_l
+        or "xiakeman" in provider_l
+        or "时时刻机" in provider_l
+        or "虾客漫" in provider_l
+    ) and not query_endpoint:
+        root = (base_url or "https://api.shishikeji.com").rstrip("/")
+        query_endpoint = f"{root}/api/task" if not root.lower().endswith("/api/task") else root
 
     return api_key, query_endpoint, provider, base_url
 

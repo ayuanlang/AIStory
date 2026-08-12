@@ -1215,7 +1215,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (['success', 'succeeded', 'completed', 'done'].includes(phase)) return 'succeeded';
         // OSS localization may continue after provider URL is already available.
         if (phase === 'storing_asset') return 'succeeded';
-        if (['failed', 'error'].includes(phase)) return 'failed';
+        // Providers (e.g. KIE) may report "fail" instead of "failed".
+        if (['failed', 'fail', 'failure', 'error', 'abort', 'aborted', 'timeout'].includes(phase)) return 'failed';
         if (['canceled', 'cancelled'].includes(phase)) return 'canceled';
         if (['queued', 'pending', 'running', 'processing', 'generating', 'submitted', 'in_progress', 'in-progress', 'submit'].includes(phase)) return 'running';
         return phase;
@@ -2628,6 +2629,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             || detail.includes('video generation failed')
             || detail.includes('image generation failed')
             || detail.includes('nukoai')
+            || detail.includes('shishikeji')
             || detail.includes('provider')
             || detail.includes('insufficient')
             || detail.includes('submit failed')

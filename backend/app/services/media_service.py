@@ -696,6 +696,16 @@ class MediaGenerationService:
             return "zlhub"
         if normalized in {"nukoai", "nokoai", "nokuai", "nuko", "noko", "noku", "nuko ai", "noko ai", "noku ai"}:
             return "nukoai"
+        if normalized in {
+            "shishikeji",
+            "shi shi ke ji",
+            "时时刻机",
+            "xiakeman",
+            "xia ke man",
+            "虾客漫",
+            "虾客漫sd2",
+        }:
+            return "shishikeji"
         return raw or "unknown"
 
     def _vendor_failed_message(self, provider: Any, reason: Any) -> str:
@@ -2879,6 +2889,7 @@ class MediaGenerationService:
                 "generating",
                 "pending",
                 "submitted",
+                "polling",
                 "in_progress",
                 "in-progress",
             }:
@@ -2943,9 +2954,106 @@ class MediaGenerationService:
             or "nokuai" in provider_l
             or "nukoai.com" in str(endpoint or base or "").lower()
         )
+        is_shishikeji = (
+            "shishikeji" in provider_l
+            or "xiakeman" in provider_l
+            or "时时刻机" in provider_l
+            or "虾客漫" in provider_l
+            or "shishikeji.com" in str(endpoint or base or "").lower()
+        )
 
         try:
             raw_payload: Dict[str, Any] = {}
+
+            if is_shishikeji:
+                root = (base or "https://api.shishikeji.com").rstrip("/")
+                if not endpoint:
+                    endpoint = f"{root}/api/task"
+                elif endpoint.startswith("/"):
+                    endpoint = f"{root}{endpoint}"
+                headers = {
+                    "X-License-Key": stable_key,
+                    "X-Xiakeman-License-Key": stable_key,
+                    "Accept": "application/json",
+                }
+                if endpoint.rstrip("/").lower().endswith("/api/task"):
+                    target_url = f"{endpoint.rstrip('/')}/{urllib.parse.quote(stable_task_id)}"
+                elif "/api/task/" in endpoint.lower():
+                    target_url = endpoint
+                else:
+                    target_url = f"{root}/api/task/{urllib.parse.quote(stable_task_id)}"
+                params = {"license_key": stable_key} if stable_key else None
+
+                def _ssk_get(use_proxy: bool = True):
+                    kwargs = {"headers": headers, "params": params, "timeout": 30, "verify": False}
+                    if not use_proxy:
+                        kwargs["proxies"] = {"http": None, "https": None}
+                    return requests.get(target_url, **kwargs)
+
+                try:
+                    resp = _ssk_get(True)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    resp = _ssk_get(False)
+                if resp is None or getattr(resp, "status_code", None) not in {200, 201}:
+                    return {"error": f"shishikeji_http_{getattr(resp, 'status_code', None)}"}
+                try:
+                    raw_payload = resp.json() if resp.content else {}
+                except Exception:
+                    return {"error": "shishikeji_invalid_json"}
+                if not isinstance(raw_payload, dict):
+                    return {"error": "shishikeji_invalid_payload"}
+                if str(raw_payload.get("status") or "").strip().lower() == "error" or raw_payload.get("error"):
+                    err = raw_payload.get("error") if isinstance(raw_payload.get("error"), dict) else {}
+                    msg = str(
+                        (err.get("message") if isinstance(err, dict) else None)
+                        or raw_payload.get("message")
+                        or "shishikeji_query_failed"
+                    ).strip()
+                    return _pack(raw_payload, status="failed", error=msg)
+
+                status = _normalize_status(
+                    raw_payload.get("status")
+                    or raw_payload.get("state")
+                    or raw_payload.get("status_text")
+                )
+                url = ""
+                for key in ("video_url", "mp4_url", "official_video_url", "url"):
+                    candidate = str(raw_payload.get(key) or "").strip()
+                    if not candidate:
+                        continue
+                    if candidate.startswith(("http://", "https://")):
+                        url = candidate
+                        break
+                    if candidate.startswith("/"):
+                        url = f"{root}{candidate}"
+                        if stable_key and "license_key=" not in url:
+                            sep = "&" if "?" in url else "?"
+                            url = f"{url}{sep}license_key={urllib.parse.quote(stable_key)}"
+                        break
+                if not url and status in {"succeeded", "success", "completed"}:
+                    candidate = str(raw_payload.get("stable_video_url") or "").strip()
+                    if candidate.startswith(("http://", "https://")):
+                        url = candidate
+                    elif candidate.startswith("/"):
+                        url = f"{root}{candidate}"
+                        if stable_key and "license_key=" not in url:
+                            sep = "&" if "?" in url else "?"
+                            url = f"{url}{sep}license_key={urllib.parse.quote(stable_key)}"
+                    else:
+                        url = f"{root}/api/video/{urllib.parse.quote(stable_task_id)}"
+                        if stable_key:
+                            url = f"{url}?license_key={urllib.parse.quote(stable_key)}"
+                if url and status not in {"failed", "canceled"}:
+                    return _pack(raw_payload, status="succeeded", url=url)
+                if status in {"failed", "canceled"}:
+                    err_msg = str(
+                        raw_payload.get("error_message")
+                        or raw_payload.get("errorMessage")
+                        or raw_payload.get("message")
+                        or status
+                    ).strip()
+                    return _pack(raw_payload, status=status, error=err_msg)
+                return _pack(raw_payload, status=status or "running", pending=True)
 
             if is_nukoai:
                 root = base or "https://www.nukoai.com/api/ext/v1"
@@ -5120,6 +5228,13 @@ class MediaGenerationService:
             "nokuai": "nukoai",
             "noku ai": "nukoai",
             "noku": "nukoai",
+            "shishikeji": "shishikeji",
+            "shi shi ke ji": "shishikeji",
+            "时时刻机": "shishikeji",
+            "xiakeman": "shishikeji",
+            "xia ke man": "shishikeji",
+            "虾客漫": "shishikeji",
+            "虾客漫sd2": "shishikeji",
             "ark-seedance": "ark-seedance",
             "ark_seedance": "ark-seedance",
             "ark seedance": "ark-seedance",
@@ -5199,8 +5314,8 @@ class MediaGenerationService:
         elif resolved_category == "Image" and "/v1/images/generations" in endpoint_hint_lower:
             runtime_activation = "image_openai_compatible"
         elif resolved_category == "Video" and ("/v1/videos" in endpoint_hint_lower or "/v1/chat/completions" in endpoint_hint_lower):
-            # NukoAi uses `/api/ext/v1/videos` but is a native poll API, not OpenAI-compatible.
-            if resolved_provider != "nukoai":
+            # NukoAi / ShiShiKeJi use native poll APIs, not OpenAI-compatible.
+            if resolved_provider not in {"nukoai", "shishikeji"}:
                 runtime_activation = "video_openai_compatible"
         elif resolved_category == "Voice" and "voice-clone" in endpoint_hint_lower:
             runtime_activation = "audio_runninghub_compatible"
@@ -5638,6 +5753,17 @@ class MediaGenerationService:
                 aspect_ratio=aspect_ratio,
                 negative_prompt=negative_prompt,
             )
+        if normalized == "shishikeji":
+            return await self._handle_shishikeji_generation(
+                "video",
+                prompt,
+                active_config,
+                reference_image_url,
+                last_frame_url=last_frame_url,
+                duration=duration,
+                aspect_ratio=aspect_ratio,
+                negative_prompt=negative_prompt,
+            )
         # Ark API-Key Seedance path must not fall through to doubao/ark-seedance.
         if normalized == "ark":
             return await self._handle_ark_generation(
@@ -5764,6 +5890,7 @@ class MediaGenerationService:
             "runninghub": {"base_url": "https://www.runninghub.cn", "model": "runninghub-model"},
             "pixelmove": {"base_url": "https://portal.pixelmove.ai", "model": "seedance-2.0"},
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
+            "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
         }
 
         rows = self._system_setting_query(session, category=category).order_by(SystemAPISetting.id.asc()).all()
@@ -6130,6 +6257,17 @@ class MediaGenerationService:
                     )
                 if effective_provider == "nukoai":
                     return await self._handle_nukoai_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        last_frame_url=effective_last_frame_url,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                    )
+                if effective_provider == "shishikeji":
+                    return await self._handle_shishikeji_generation(
                         "video",
                         prompt,
                         active_config,
@@ -6729,6 +6867,7 @@ class MediaGenerationService:
             "happyhorse": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis", "model": "happyhorse-1.0-r2v"},
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
+            "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
         }
 
         try:
@@ -11498,6 +11637,671 @@ class MediaGenerationService:
         )
         return {
             "error": f"NukoAi polling timeout after {poll_timeout_seconds}s",
+            "submit_failed": False,
+            "metadata": {
+                **base_metadata,
+                "task_id": task_id,
+                "provider_task_id": task_id,
+                "taskId": task_id,
+            },
+        }
+
+    async def _handle_shishikeji_generation(
+        self,
+        gen_type,
+        prompt,
+        config,
+        ref_image=None,
+        last_frame_url=None,
+        duration=5,
+        aspect_ratio=None,
+        negative_prompt: Optional[str] = None,
+    ):
+        """ShiShiKeJi (虾客漫) video API: submit then poll only (no upstream webhook)."""
+        if str(gen_type or "").strip().lower() != "video":
+            return {"error": "ShiShiKeJi currently supports video generation only", "submit_failed": True}
+
+        api_key = str(config.get("api_key") or config.get("clientApiKey") or "").strip()
+        if not api_key:
+            return {"error": "No ShiShiKeJi license key", "submit_failed": True}
+
+        tool_conf = config.get("config", {}) or {}
+        # Poll-only provider: ignore pure-callback even when the runner injects it.
+        if tool_conf.get("_pure_callback_mode"):
+            logger.info("ShiShiKeJi ignoring pure_callback_mode | reason=poll_only_provider")
+
+        base_url = str(
+            config.get("base_url")
+            or tool_conf.get("base_url")
+            or "https://api.shishikeji.com"
+        ).strip().rstrip("/")
+        submit_url = str(tool_conf.get("endpoint") or f"{base_url}/api/generate-video").strip()
+        if not submit_url.lower().startswith("http"):
+            submit_url = f"{base_url}/{submit_url.lstrip('/')}"
+        query_endpoint_base = str(
+            tool_conf.get("query_endpoint") or tool_conf.get("poll_endpoint") or f"{base_url}/api/task"
+        ).strip().rstrip("/")
+        if query_endpoint_base.lower().endswith("/api/task"):
+            poll_template = f"{query_endpoint_base}/{{task_id}}"
+        elif "{task" in query_endpoint_base.lower():
+            poll_template = query_endpoint_base
+            query_endpoint_base = query_endpoint_base.split("{")[0].rstrip("/")
+        else:
+            query_endpoint_base = f"{query_endpoint_base.rstrip('/')}/api/task"
+            poll_template = f"{query_endpoint_base}/{{task_id}}"
+
+        model = str(
+            config.get("model")
+            or tool_conf.get("model")
+            or config.get("base_model")
+            or tool_conf.get("base_model")
+            or tool_conf.get("runtime_model")
+            or "xinghe-2.0"
+        ).strip()
+        if not model:
+            return {"error": "ShiShiKeJi model is required", "submit_failed": True}
+
+        prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+        prompt_text = str(prompt_text or "").strip()
+        if not prompt_text:
+            return {"error": "ShiShiKeJi prompt is required", "submit_failed": True}
+
+        allowed_duration_values = self._normalize_duration_enum_values(
+            tool_conf.get("durations_seconds")
+            or tool_conf.get("duration_values")
+            or tool_conf.get("allowed_durations")
+            or tool_conf.get("durations")
+            or [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        )
+        try:
+            duration_in = int(float(duration if duration is not None else (tool_conf.get("duration") or 5)))
+        except Exception:
+            duration_in = 5
+        if duration_in <= 0:
+            duration_in = 5
+        if allowed_duration_values:
+            mapped_duration = self._map_duration_nearest(duration_in, allowed_duration_values, prefer_higher_on_tie=False)
+            if mapped_duration is not None:
+                duration_in = int(mapped_duration)
+        duration_in = max(4, min(15, int(duration_in)))
+
+        allowed_ratios = self._normalize_str_list(
+            tool_conf.get("ratios")
+            or tool_conf.get("allowed_ratios")
+            or tool_conf.get("aspect_ratios")
+            or []
+        )
+        normalized_ratio = self._normalize_aspect_ratio_value(
+            aspect_ratio or tool_conf.get("ratio") or tool_conf.get("aspect_ratio")
+        )
+        if not normalized_ratio or normalized_ratio == "adaptive":
+            normalized_ratio = "16:9"
+        if allowed_ratios and normalized_ratio not in allowed_ratios:
+            for candidate in allowed_ratios:
+                if str(candidate).strip() == normalized_ratio:
+                    normalized_ratio = str(candidate).strip()
+                    break
+
+        resolution = str(
+            tool_conf.get("resolution")
+            or tool_conf.get("quality")
+            or config.get("quality")
+            or "720p"
+        ).strip().lower()
+        if resolution in {"hd", "high", "720"}:
+            resolution = "720p"
+        elif resolution in {"sd", "low", "480"}:
+            resolution = "480p"
+        elif resolution in {"fhd", "fullhd", "1080"}:
+            resolution = "1080p"
+        elif resolution not in {"480p", "720p", "1080p", "4k"}:
+            resolution = "720p"
+
+        def _https_public_only(urls: List[str]) -> List[str]:
+            out: List[str] = []
+            for item in urls:
+                text = str(item or "").strip()
+                if not text.lower().startswith("https://"):
+                    continue
+                if self._is_public_http_url(text) and text not in out:
+                    out.append(text)
+            return out
+
+        image_refs = self._resolve_ref_list_for_api(
+            ref_image,
+            force_data_uri_for_local=True,
+            prefer_public_upload_url=True,
+        )
+        image_refs = _https_public_only([u for u in image_refs if u])
+
+        extra_image_refs = self._resolve_ref_list_for_api(
+            tool_conf.get("image_urls")
+            or tool_conf.get("referenceImageUrls")
+            or tool_conf.get("reference_image_urls")
+            or [],
+            force_data_uri_for_local=True,
+            prefer_public_upload_url=True,
+        )
+        for item in _https_public_only([u for u in extra_image_refs if u]):
+            if item not in image_refs:
+                image_refs.append(item)
+
+        last_frame_resolved = None
+        if last_frame_url:
+            last_frame_resolved = self._resolve_ref_for_api(
+                last_frame_url,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+            )
+            last_https = _https_public_only([last_frame_resolved] if last_frame_resolved else [])
+            last_frame_resolved = last_https[0] if last_https else None
+            if last_frame_resolved and last_frame_resolved not in image_refs:
+                image_refs.append(last_frame_resolved)
+
+        image_refs = image_refs[:9]
+
+        video_refs = _https_public_only(
+            self._normalize_str_list(
+                tool_conf.get("video_urls")
+                or tool_conf.get("referenceVideoUrls")
+                or tool_conf.get("reference_video_urls")
+                or tool_conf.get("video_url")
+                or []
+            )
+        )[:3]
+        audio_refs = _https_public_only(
+            self._normalize_str_list(
+                tool_conf.get("audio_urls")
+                or tool_conf.get("referenceAudioUrls")
+                or tool_conf.get("reference_audio_urls")
+                or []
+            )
+        )[:3]
+
+        if not image_refs and not video_refs and not audio_refs:
+            return {
+                "error": "ShiShiKeJi requires at least one image/video/audio reference",
+                "submit_failed": True,
+            }
+
+        payload: Dict[str, Any] = {
+            "prompt": prompt_text,
+            "model": model,
+            "duration": int(duration_in),
+            "ratio": normalized_ratio,
+            "resolution": resolution,
+        }
+        if image_refs:
+            payload["image_urls"] = image_refs
+        if video_refs:
+            payload["video_urls"] = video_refs
+        if audio_refs:
+            payload["audio_urls"] = audio_refs
+
+        poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        poll_interval_seconds = 4
+        try:
+            if tool_conf.get("poll_timeout_seconds") is not None:
+                poll_timeout_seconds = min(900, max(60, int(tool_conf.get("poll_timeout_seconds"))))
+        except Exception:
+            poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        try:
+            if tool_conf.get("poll_interval_seconds") is not None:
+                poll_interval_seconds = max(3, min(10, int(tool_conf.get("poll_interval_seconds"))))
+        except Exception:
+            poll_interval_seconds = 4
+
+        base_metadata = {
+            "provider": "shishikeji",
+            "model": model,
+            "prompt": prompt_text,
+            "submit_url": submit_url,
+            "query_endpoint": query_endpoint_base,
+            "poll_only": True,
+            "duration": int(duration_in),
+            "ratio": normalized_ratio,
+            "resolution": resolution,
+        }
+
+        headers = {
+            "X-License-Key": api_key,
+            "X-Xiakeman-License-Key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        submit_params = {"license_key": api_key}
+
+        def _extract_error_message(data: Any, fallback: str = "") -> str:
+            if not isinstance(data, dict):
+                return fallback
+            err = data.get("error")
+            if isinstance(err, dict):
+                msg = str(err.get("message") or err.get("msg") or "").strip()
+                code = str(err.get("code") or "").strip()
+                detail = err.get("detail")
+                if isinstance(detail, dict):
+                    detail_msg = str(detail.get("message") or detail.get("detail") or "").strip()
+                    if detail_msg and not msg:
+                        msg = detail_msg
+                if msg and code:
+                    return f"{code}: {msg}"
+                if msg:
+                    return msg
+                if code:
+                    return code
+            if isinstance(err, str) and err.strip():
+                return err.strip()
+            for key in ("error_message", "errorMessage", "message", "msg", "status_text"):
+                text = str(data.get(key) or "").strip()
+                if text:
+                    return text
+            return fallback
+
+        def _extract_task_id(data: Any) -> Optional[str]:
+            if not isinstance(data, dict):
+                return None
+            for key in ("task_id", "taskId", "id"):
+                val = data.get(key)
+                if val:
+                    return str(val).strip()
+            events_url = str(data.get("events_url") or data.get("query_url") or "").strip()
+            if "/api/task/" in events_url:
+                part = events_url.split("/api/task/", 1)[1]
+                tid = part.split("/", 1)[0].strip()
+                if tid:
+                    return tid
+            return None
+
+        def _extract_status(data: Any) -> str:
+            if not isinstance(data, dict):
+                return ""
+            return str(data.get("status") or data.get("state") or "").strip().lower()
+
+        def _absolutize_video_url(candidate: Any, task_id_value: str) -> Optional[str]:
+            text_item = str(candidate or "").strip()
+            if not text_item:
+                return None
+            if text_item.startswith(("http://", "https://")):
+                return text_item
+            if text_item.startswith("/"):
+                url = f"{base_url}{text_item}"
+                if "license_key=" not in url:
+                    sep = "&" if "?" in url else "?"
+                    url = f"{url}{sep}license_key={urllib.parse.quote(api_key)}"
+                return url
+            return None
+
+        def _extract_video_url(data: Any, task_id_value: str) -> Optional[str]:
+            if not isinstance(data, dict):
+                return None
+            status_val = _extract_status(data)
+            # Prefer real result URLs; stable_video_url is present even while polling.
+            for key in ("video_url", "mp4_url", "official_video_url", "url", "result_url"):
+                resolved = _absolutize_video_url(data.get(key), task_id_value)
+                if resolved:
+                    return resolved
+            if status_val in {"success", "succeeded", "completed", "done", "finished"}:
+                resolved = _absolutize_video_url(data.get("stable_video_url"), task_id_value)
+                if resolved:
+                    return resolved
+                return (
+                    f"{base_url}/api/video/{urllib.parse.quote(task_id_value)}"
+                    f"?license_key={urllib.parse.quote(api_key)}"
+                )
+            return None
+
+        submit_timeouts = _media_submit_timeout_pair(
+            connect_timeout=20,
+            io_timeout=max(120, int(tool_conf.get("submit_timeout_seconds") or 120)),
+        )
+        submit_retries = 2
+        try:
+            submit_retries = max(1, min(4, int(tool_conf.get("submit_retries") or 2)))
+        except Exception:
+            submit_retries = 2
+
+        submit_resp = None
+        last_submit_error: Optional[Exception] = None
+        for submit_attempt in range(1, submit_retries + 1):
+            try:
+                submit_resp = await asyncio.to_thread(
+                    requests.post,
+                    submit_url,
+                    params=submit_params,
+                    json=payload,
+                    headers=headers,
+                    timeout=submit_timeouts,
+                    verify=False,
+                )
+                last_submit_error = None
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as submit_exc:
+                last_submit_error = submit_exc
+                logger.warning(
+                    "ShiShiKeJi submit network error | attempt=%s/%s url=%s error=%s",
+                    submit_attempt,
+                    submit_retries,
+                    submit_url,
+                    submit_exc,
+                )
+                if submit_attempt < submit_retries:
+                    await asyncio.sleep(min(8, 2 * submit_attempt))
+                    continue
+            except Exception as submit_exc:
+                logger.exception("ShiShiKeJi submit unexpected error | url=%s", submit_url)
+                return {
+                    "error": f"ShiShiKeJi submit failed: {submit_exc}",
+                    "submit_failed": True,
+                    "details": {"submit_url": submit_url, "model": model},
+                }
+
+        if submit_resp is None:
+            return {
+                "error": f"ShiShiKeJi submit timed out/unreachable after {submit_retries} attempts: {last_submit_error}",
+                "submit_failed": True,
+                "details": {
+                    "submit_url": submit_url,
+                    "model": model,
+                    "timeout": submit_timeouts,
+                },
+            }
+
+        submit_data: Dict[str, Any] = {}
+        if submit_resp.text:
+            try:
+                parsed_submit = submit_resp.json()
+                submit_data = parsed_submit if isinstance(parsed_submit, dict) else {}
+            except Exception:
+                submit_data = {}
+
+        submit_status = str(submit_data.get("status") or "").strip().lower()
+        if submit_resp.status_code not in [200, 201, 202] or submit_status == "error" or submit_data.get("error"):
+            err_msg = _extract_error_message(
+                submit_data,
+                fallback=(submit_resp.text or "")[:500] or f"HTTP {submit_resp.status_code}",
+            )
+            return {
+                "error": f"ShiShiKeJi submit failed: {err_msg}",
+                "submit_failed": True,
+                "details": submit_data or (submit_resp.text or "")[:1000],
+            }
+
+        task_id = _extract_task_id(submit_data)
+        if not task_id:
+            direct_url = _extract_video_url(submit_data, "")
+            if direct_url:
+                return {"url": direct_url, "metadata": {**base_metadata, "raw": submit_data}}
+            return {
+                "error": "ShiShiKeJi submit succeeded but task id missing",
+                "submit_failed": True,
+                "details": submit_data,
+            }
+
+        task_id_callback = tool_conf.get("_provider_task_id_callback")
+        if callable(task_id_callback):
+            try:
+                callback_result = task_id_callback(str(task_id))
+                if asyncio.iscoroutine(callback_result):
+                    await callback_result
+            except Exception as callback_err:
+                logger.warning("ShiShiKeJi task_id_callback_failed | task_id=%s error=%s", task_id, callback_err)
+
+        provider_payload_callback = tool_conf.get("_provider_payload_callback")
+        if callable(provider_payload_callback):
+            try:
+                payload_cb_result = provider_payload_callback(
+                    {
+                        "provider": "shishikeji",
+                        "task_id": str(task_id),
+                        "submit_raw": submit_data,
+                        "query_endpoint": query_endpoint_base,
+                    }
+                )
+                if asyncio.iscoroutine(payload_cb_result):
+                    await payload_cb_result
+            except Exception as payload_cb_err:
+                logger.warning(
+                    "ShiShiKeJi provider_payload_callback_failed | task_id=%s error=%s",
+                    task_id,
+                    payload_cb_err,
+                )
+
+        poll_url = (
+            poll_template.replace("{taskId}", urllib.parse.quote(task_id))
+            .replace("{task_id}", urllib.parse.quote(task_id))
+            .replace("{id}", urllib.parse.quote(task_id))
+        )
+
+        max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+        logger.info(
+            "ShiShiKeJi poll-only generation started | task_id=%s model=%s duration=%s ratio=%s resolution=%s poll_interval=%ss poll_timeout=%ss max_attempts=%s poll_url=%s",
+            task_id,
+            model,
+            duration_in,
+            normalized_ratio,
+            resolution,
+            poll_interval_seconds,
+            poll_timeout_seconds,
+            max_attempts,
+            poll_url,
+        )
+
+        last_logged_status = ""
+        poll_started_at = time.time()
+        for attempt in range(1, max_attempts + 1):
+            await asyncio.sleep(poll_interval_seconds)
+            elapsed_s = int(time.time() - poll_started_at)
+            try:
+                poll_resp = await asyncio.to_thread(
+                    requests.get,
+                    poll_url,
+                    params=submit_params,
+                    headers=headers,
+                    timeout=30,
+                    verify=False,
+                )
+            except requests.exceptions.Timeout:
+                logger.warning(
+                    "ShiShiKeJi poll timeout | task_id=%s attempt=%s/%s elapsed=%ss",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                )
+                continue
+            except Exception as poll_exc:
+                logger.warning(
+                    "ShiShiKeJi poll exception | task_id=%s attempt=%s/%s elapsed=%ss error=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    poll_exc,
+                )
+                if attempt == max_attempts:
+                    return {
+                        "error": "ShiShiKeJi polling exception",
+                        "submit_failed": False,
+                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
+                    }
+                continue
+
+            if poll_resp.status_code == 404:
+                logger.warning(
+                    "ShiShiKeJi poll 404 | task_id=%s attempt=%s/%s elapsed=%ss",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                )
+                continue
+            if poll_resp.status_code not in [200, 201]:
+                logger.warning(
+                    "ShiShiKeJi poll http=%s | task_id=%s attempt=%s/%s elapsed=%ss body=%s",
+                    poll_resp.status_code,
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    (poll_resp.text or "")[:300],
+                )
+                if attempt == max_attempts:
+                    return {
+                        "error": f"ShiShiKeJi polling failed {poll_resp.status_code}",
+                        "submit_failed": False,
+                        "details": (poll_resp.text or "")[:1000],
+                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
+                    }
+                continue
+
+            try:
+                poll_data = poll_resp.json() if poll_resp.text else {}
+            except Exception:
+                poll_data = {}
+                logger.warning(
+                    "ShiShiKeJi poll invalid json | task_id=%s attempt=%s/%s elapsed=%ss body=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    (poll_resp.text or "")[:300],
+                )
+
+            if isinstance(poll_data, dict) and (
+                str(poll_data.get("status") or "").strip().lower() == "error" or poll_data.get("error")
+            ):
+                err_msg = _extract_error_message(poll_data, fallback="ShiShiKeJi task query failed")
+                err_obj = poll_data.get("error") if isinstance(poll_data.get("error"), dict) else {}
+                err_code = str(err_obj.get("code") or "").strip().upper()
+                logger.warning(
+                    "ShiShiKeJi poll business_error | task_id=%s attempt=%s/%s elapsed=%ss code=%s error=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    err_code or None,
+                    err_msg,
+                )
+                if err_code in {"UNAUTHORIZED", "NOT_FOUND", "INSUFFICIENT_CREDITS", "PARAMS_INVALID"} or poll_resp.status_code in {401, 402, 404}:
+                    return {
+                        "error": f"ShiShiKeJi generation failed: {err_msg}",
+                        "submit_failed": False,
+                        "details": poll_data,
+                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id, "raw": poll_data},
+                    }
+                continue
+
+            status_val = _extract_status(poll_data)
+            result_url = _extract_video_url(poll_data, task_id)
+            if status_val != last_logged_status or attempt == 1 or attempt % 5 == 0 or attempt == max_attempts:
+                logger.info(
+                    "ShiShiKeJi poll | task_id=%s attempt=%s/%s elapsed=%ss status=%s progress=%s has_video_url=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    status_val or "unknown",
+                    poll_data.get("progress") if isinstance(poll_data, dict) else None,
+                    bool(result_url),
+                )
+                last_logged_status = status_val
+
+            if status_val in {"success", "succeeded", "completed", "done", "finished"} or (
+                result_url and status_val in {"", "success", "succeeded", "completed", "done", "finished"}
+            ):
+                if result_url:
+                    result_metadata = {
+                        **base_metadata,
+                        "raw": poll_data,
+                        "task_id": task_id,
+                        "provider_task_id": task_id,
+                        "taskId": task_id,
+                        "credits_cost": (
+                            (poll_data or {}).get("price")
+                            or (poll_data or {}).get("required_credits")
+                            or (poll_data or {}).get("agent_customer_price")
+                        )
+                        if isinstance(poll_data, dict)
+                        else None,
+                        "oss_persist_pending": True,
+                    }
+                    logger.info(
+                        "ShiShiKeJi poll completed | task_id=%s attempt=%s/%s elapsed=%ss credits_cost=%s url=%s",
+                        task_id,
+                        attempt,
+                        max_attempts,
+                        elapsed_s,
+                        result_metadata.get("credits_cost"),
+                        str(result_url).split("?", 1)[0],
+                    )
+                    result_callback = tool_conf.get("_provider_result_callback")
+                    if callable(result_callback):
+                        try:
+                            cb_result = result_callback(
+                                {
+                                    "url": result_url,
+                                    "metadata": result_metadata,
+                                    "provider": "shishikeji",
+                                    "task_id": str(task_id),
+                                }
+                            )
+                            if asyncio.iscoroutine(cb_result):
+                                await cb_result
+                        except Exception as result_cb_err:
+                            logger.warning(
+                                "ShiShiKeJi provider_result_callback_failed | task_id=%s error=%s",
+                                task_id,
+                                result_cb_err,
+                            )
+                    return {
+                        "url": result_url,
+                        "metadata": result_metadata,
+                    }
+                logger.error(
+                    "ShiShiKeJi poll completed without video_url | task_id=%s attempt=%s/%s elapsed=%ss raw=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    str(poll_data)[:500],
+                )
+                return {
+                    "error": "ShiShiKeJi generation completed without video_url",
+                    "submit_failed": False,
+                    "details": poll_data,
+                    "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
+                }
+
+            if status_val in {"failed", "error", "cancelled", "canceled", "rejected"}:
+                err_msg = _extract_error_message(poll_data, fallback="ShiShiKeJi generation failed")
+                logger.error(
+                    "ShiShiKeJi poll failed | task_id=%s attempt=%s/%s elapsed=%ss status=%s error=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    status_val,
+                    err_msg,
+                )
+                return {
+                    "error": f"ShiShiKeJi generation failed: {err_msg}",
+                    "submit_failed": False,
+                    "details": poll_data,
+                    "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id, "raw": poll_data},
+                }
+
+            # pending / submitted / polling / running — keep polling
+
+        logger.error(
+            "ShiShiKeJi poll timeout exhausted | task_id=%s attempts=%s elapsed=%ss timeout=%ss last_status=%s",
+            task_id,
+            max_attempts,
+            int(time.time() - poll_started_at),
+            poll_timeout_seconds,
+            last_logged_status or None,
+        )
+        return {
+            "error": f"ShiShiKeJi polling timeout after {poll_timeout_seconds}s",
             "submit_failed": False,
             "metadata": {
                 **base_metadata,
