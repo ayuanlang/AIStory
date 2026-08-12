@@ -25,7 +25,10 @@ from app.services.model_invocation_billing import (
     _reservation_tx_id,
 )
 from app.services.prompt_resolve import _resolve_prompt_text
-from app.services.script_analysis_llm_config import _resolve_story_generator_script_analysis_llm_config
+from app.services.script_analysis_llm_config import (
+    _resolve_story_generator_script_analysis_llm_config,
+    sanitize_script_generation_llm_config_text_only,
+)
 
 logger = logging.getLogger("api_logger")
 
@@ -236,7 +239,11 @@ async def _run_structure_llm_call(
 
     try:
         _release_db_connection(db, f"{llm_context}_llm_call")
-        resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
+        # After reference search / structure fill: text evidence only, no images.
+        text_only_cfg = sanitize_script_generation_llm_config_text_only(llm_config)
+        resp = await llm_service.generate_content_with_fallback(
+            user_prompt, sys_prompt, text_only_cfg, image_urls=None, video_urls=None
+        )
     except Exception as e:
         if reservation_tx:
             billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
@@ -358,7 +365,10 @@ async def _prepare_episode_script_reference_block(
 
         _release_db_connection(ref_db, f"episode_extract_key_elements_ep{episode_number}_llm_call")
         ref_db = None
-        resp = await llm_service.generate_content_with_fallback(extract_user_prompt, extract_sys_prompt, llm_config)
+        text_only_cfg = sanitize_script_generation_llm_config_text_only(llm_config)
+        resp = await llm_service.generate_content_with_fallback(
+            extract_user_prompt, extract_sys_prompt, text_only_cfg, image_urls=None, video_urls=None
+        )
         raw = (resp.get("content") or "").strip()
         if not raw:
             raise RuntimeError("LLM returned empty content for episode key-element extraction")

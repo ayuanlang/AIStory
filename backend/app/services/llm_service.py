@@ -258,6 +258,29 @@ class LLMService:
         provider_lower = str(provider or "").strip().lower()
         category_upper = str(resolved_category or "").strip().upper()
 
+        # Text LLM chat (script gen / analysis) must not leak image-gen reference fields
+        # from SystemAPISetting.config into the completions payload.
+        if category_upper == "LLM":
+            image_leak_keys = {
+                "image",
+                "images",
+                "image_url",
+                "image_urls",
+                "imageUrls",
+                "ref_image_url",
+                "ref_image_urls",
+                "reference_image_url",
+                "reference_image_urls",
+                "referenceImageUrl",
+                "referenceImageUrls",
+                "input_image",
+                "input_images",
+                "last_frame_url",
+                "lastFrameUrl",
+            }
+            if key_text in image_leak_keys:
+                return True
+
         # For Google OpenAI-compatible endpoint, enforce strict payload whitelist
         # to avoid leaking internal routing/runtime fields.
         if provider_lower == "google" and category_upper == "LLM":

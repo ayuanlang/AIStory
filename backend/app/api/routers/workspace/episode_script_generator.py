@@ -34,6 +34,9 @@ from app.services.emergency_recovery_block import (  # noqa: E402,F401
     build_previous_episode_handoff_prompt_block,
     format_emergency_recovery_reject_message,
 )
+from app.services.script_analysis_llm_config import (  # noqa: E402,F401
+    sanitize_script_generation_llm_config_text_only,
+)
 
 def _read_episode_scene_generation_status(episode: Episode) -> Dict[str, Any]:
     try:
@@ -1511,10 +1514,11 @@ async def generate_project_episode_scripts_from_global_framework(
                 f"has_reference_search_block={bool(reference_search_block)} reference_search_block_len={len(reference_search_block or '')}"
             )
             _release_db_connection(db, f"generate_episode_scripts_episode_{ep_id}_llm_call")
+            # After episode reference search completes, submit text-only prompt (no images).
             generated_payload = await generate_markdown_with_retry(
                 user_prompt=user_prompt,
                 sys_prompt=sys_prompt_episode,
-                llm_config=llm_config,
+                llm_config=sanitize_script_generation_llm_config_text_only(llm_config),
                 strict_markdown=(req.strict_markdown is not False),
                 require_h1=True,
                 return_meta=True,

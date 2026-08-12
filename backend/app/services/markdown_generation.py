@@ -160,7 +160,10 @@ async def generate_markdown_with_retry(
         )
 
     async def _call_once(tag: str, up: str, sp: str) -> Tuple[str, str, Dict[str, Any]]:
-        resp = await llm_service.generate_content_with_fallback(up, sp, llm_config)
+        # Script / Story DNA generation is text-only — never attach reference images.
+        resp = await llm_service.generate_content_with_fallback(
+            up, sp, llm_config, image_urls=None, video_urls=None
+        )
         raw = str(resp.get("content") or "")
         cleaned = sanitize_llm_markdown_output(raw)
         finish_reason = str(resp.get("finish_reason") or "")

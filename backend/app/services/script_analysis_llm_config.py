@@ -118,6 +118,46 @@ def _inject_llm_call_log_trace(
     return llm_config
 
 
+_SCRIPT_GEN_IMAGE_CONFIG_KEYS = {
+    "image",
+    "images",
+    "image_url",
+    "image_urls",
+    "imageUrls",
+    "ref_image_url",
+    "ref_image_urls",
+    "reference_image_url",
+    "reference_image_urls",
+    "referenceImageUrl",
+    "referenceImageUrls",
+    "input_image",
+    "input_images",
+    "last_frame_url",
+    "lastFrameUrl",
+}
+
+
+def sanitize_script_generation_llm_config_text_only(
+    llm_config: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Strip image-reference fields so post-search script LLM calls stay text-only."""
+    if not isinstance(llm_config, dict):
+        return llm_config
+    cleaned = dict(llm_config)
+    for key in list(cleaned.keys()):
+        if key in _SCRIPT_GEN_IMAGE_CONFIG_KEYS:
+            cleaned.pop(key, None)
+    cfg = cleaned.get("config") if isinstance(cleaned.get("config"), dict) else {}
+    if cfg:
+        next_cfg = {
+            key: value
+            for key, value in cfg.items()
+            if key not in _SCRIPT_GEN_IMAGE_CONFIG_KEYS
+        }
+        cleaned["config"] = next_cfg
+    return cleaned
+
+
 _ANALYZE_SCENE_ACTION_BY_STAGE = {
     "script_optimization": "剧本优化",
     "assets_extraction": "资产提取",
@@ -278,12 +318,14 @@ def _resolve_story_generator_script_analysis_llm_config(
             project_global_info,
             context=context,
         )
-    return _inject_llm_call_log_trace(
+    llm_config = _inject_llm_call_log_trace(
         llm_config,
         user_id=user_id,
         user_name=user_name,
         project_id=project_id,
         action_name=action_name,
     )
+    # Story/script generation (incl. post-search episode writing) never submits images.
+    return sanitize_script_generation_llm_config_text_only(llm_config)
 
 
