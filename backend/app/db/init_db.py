@@ -2911,12 +2911,32 @@ def init_system_api_settings(db):
                 "query_endpoint": f"{ddimatuo_base_url}/v1/videos",
                 "poll_only": True,
                 "auto_retry_busy": False,
-                "notes": "DdiMatuo poll-only. Bearer sk-...; relative video_url joined to base URL.",
+                "resolution": "1080P",
+                "notes": "DdiMatuo poll-only. Bearer sk-...; default resolution 1080P; relative video_url joined to base URL.",
             },
             is_active=False,
         ))
         existing_ddi_models.add(key)
         ddi_added += 1
+
+    # Keep existing ddimatuo rows on the 1080P default when resolution was never set.
+    try:
+        ddi_resolution_updated = 0
+        for row in existing_ddi_rows:
+            cfg = row.config if isinstance(row.config, dict) else {}
+            if not isinstance(cfg, dict):
+                continue
+            if str(cfg.get("resolution") or "").strip():
+                continue
+            cfg = dict(cfg)
+            cfg["resolution"] = "1080P"
+            row.config = cfg
+            ddi_resolution_updated += 1
+        if ddi_resolution_updated > 0:
+            db.commit()
+            logger.info("Updated %s ddimatuo rows with default resolution=1080P", ddi_resolution_updated)
+    except Exception as ddi_res_err:
+        logger.warning("Failed to backfill ddimatuo default resolution: %s", ddi_res_err)
 
     if ddi_added > 0:
         db.commit()

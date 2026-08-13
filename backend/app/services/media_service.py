@@ -3011,14 +3011,14 @@ class MediaGenerationService:
                     or raw_payload.get("state")
                     or (err.get("code") if err else None)
                 )
-                url = str(raw_payload.get("video_url") or raw_payload.get("videoUrl") or "").strip()
-                if url and not url.startswith(("http://", "https://")):
-                    url = urllib.parse.urljoin(root.rstrip("/") + "/", url.lstrip("/"))
+                url = self._absolutize_ddimatuo_video_url(
+                    raw_payload.get("video_url") or raw_payload.get("videoUrl"),
+                    root,
+                )
                 if not url:
-                    url = _pick_url(raw_payload) or ""
-                    if url and not str(url).startswith(("http://", "https://")):
-                        url = urllib.parse.urljoin(root.rstrip("/") + "/", str(url).lstrip("/"))
-                if url and status not in {"failed", "canceled"}:
+                    url = self._absolutize_ddimatuo_video_url(_pick_url(raw_payload), root)
+                # Only treat as succeeded when provider reports completed (or normalized succeeded).
+                if url and status in {"succeeded", "completed", "success"}:
                     return _pack(raw_payload, status="succeeded", url=url)
                 if status in {"failed", "canceled"} or err:
                     err_msg = str(
@@ -7654,11 +7654,15 @@ class MediaGenerationService:
 
         # Download 
         if not skip_download and result and "url" in result and result["url"]:
+            result_meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
             result["url"] = await asyncio.to_thread(
                 self._download_and_save,
                 result["url"],
                 filename_base,
                 user_id,
+                result_meta,
+                None,
+                str(result_meta.get("provider") or provider or "").strip() or None,
             )
         if result and result.get("error"):
             error_provider = result.get("_attempt_provider") if isinstance(result, dict) else None
@@ -12564,11 +12568,27 @@ class MediaGenerationService:
         else:
             auto_retry_busy = bool(auto_retry_busy)
 
+        def _normalize_ddimatuo_resolution(value: Any) -> Optional[str]:
+            text = str(value or "").strip().lower().replace(" ", "")
+            if not text:
+                return None
+            if text in {"480", "480p", "sd", "low"}:
+                return "480P"
+            if text in {"720", "720p", "hd"}:
+                return "720P"
+            if text in {"1080", "1080p", "fhd", "fullhd", "high"}:
+                return "1080P"
+            return None
+
+        # Default 1080P for ddimatuo. Only honor explicit request quality (ignore project 720/WxH injection).
+        resolution = _normalize_ddimatuo_resolution(tool_conf.get("quality")) or "1080P"
+
         payload: Dict[str, Any] = {
             "prompt": prompt_text,
             "model": model,
             "seconds": int(seconds_in),
             "aspect_ratio": normalized_ratio,
+            "resolution": resolution,
             "auto_retry_busy": auto_retry_busy,
             "reference_image_urls": image_refs,
             "reference_video_urls": video_refs,
@@ -12598,6 +12618,7 @@ class MediaGenerationService:
             "poll_only": True,
             "seconds": int(seconds_in),
             "aspect_ratio": normalized_ratio,
+            "resolution": resolution,
             "auto_retry_busy": auto_retry_busy,
         }
 
@@ -12672,13 +12693,9 @@ class MediaGenerationService:
                 ]
             )
             for item in candidates:
-                text_item = str(item or "").strip()
-                if not text_item:
-                    continue
-                if text_item.startswith(("http://", "https://")):
-                    return text_item
-                # Docs: video_url is relative; join with API base.
-                return urllib.parse.urljoin(root_url.rstrip("/") + "/", text_item.lstrip("/"))
+                resolved = self._absolutize_ddimatuo_video_url(item, root_url)
+                if resolved:
+                    return resolved
             return None
 
         submit_timeouts = _media_submit_timeout_pair(
@@ -12833,11 +12850,12 @@ class MediaGenerationService:
 
         max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
         logger.info(
-            "DdiMatuo poll-only generation started | task_id=%s model=%s seconds=%s aspect_ratio=%s poll_interval=%ss poll_timeout=%ss max_attempts=%s poll_url=%s",
+            "DdiMatuo poll-only generation started | task_id=%s model=%s seconds=%s aspect_ratio=%s resolution=%s poll_interval=%ss poll_timeout=%ss max_attempts=%s poll_url=%s",
             task_id,
             model,
             seconds_in,
             normalized_ratio,
+            resolution,
             poll_interval_seconds,
             poll_timeout_seconds,
             max_attempts,
@@ -12965,6 +12983,8 @@ class MediaGenerationService:
                         "provider_task_id": task_id,
                         "taskId": task_id,
                         "oss_persist_pending": True,
+                        # video_url requires Authorization on download (resolved server-side).
+                        "requires_auth_download": True,
                     }
                     logger.info(
                         "DdiMatuo poll completed | task_id=%s attempt=%s/%s elapsed=%ss url=%s",
@@ -19130,12 +19150,82 @@ class MediaGenerationService:
         return {"error": "Timeout polling KIE task"}
 
     # -- Helpers --
+    def _looks_like_ddimatuo_media_url(self, url: Any) -> bool:
+        text = str(url or "").strip().lower()
+        if not text:
+            return False
+        return "ddimatuo.top" in text
+
+    def _absolutize_ddimatuo_video_url(self, video_url: Any, base_url: Any = None) -> str:
+        """Join relative task.video_url with API base, matching JS `new URL(video_url, BASE)`."""
+        text = str(video_url or "").strip()
+        if not text:
+            return ""
+        if text.lower().startswith(("http://", "https://")):
+            return text
+        root = str(base_url or "https://api.ddimatuo.top").strip() or "https://api.ddimatuo.top"
+        # urljoin mirrors WHATWG URL resolution used by `new URL(relative, base)`.
+        return urllib.parse.urljoin(root if root.endswith("/") else (root + "/"), text)
+
+    def _resolve_ddimatuo_download_api_key(self, preferred_key: Any = None) -> str:
+        preferred = str(preferred_key or "").strip()
+        if preferred:
+            return preferred
+        try:
+            with SessionLocal() as session:
+                rows = (
+                    session.query(SystemAPISetting)
+                    .filter(
+                        self._provider_ci_filter("ddimatuo"),
+                        SystemAPISetting.category == "Video",
+                    )
+                    .order_by(SystemAPISetting.id.asc())
+                    .all()
+                )
+                for row in rows:
+                    key = str(getattr(row, "api_key", "") or "").strip()
+                    if key:
+                        return key
+                pool_key = self._pick_runtime_api_key({}, None, session=session, provider_name="ddimatuo")
+                if pool_key:
+                    return str(pool_key).strip()
+        except Exception as exc:
+            logger.warning("DdiMatuo download api key resolve failed | error=%s", exc)
+        return ""
+
+    def _build_authenticated_download_headers(
+        self,
+        url: Any,
+        *,
+        provider: Any = None,
+        preferred_api_key: Any = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        headers: Dict[str, str] = {"User-Agent": "Mozilla/5.0"}
+        if isinstance(extra_headers, dict):
+            for key, value in extra_headers.items():
+                text_key = str(key or "").strip()
+                text_val = str(value or "").strip()
+                if text_key and text_val:
+                    headers[text_key] = text_val
+
+        provider_l = str(provider or "").strip().lower()
+        needs_ddimatuo_auth = provider_l == "ddimatuo" or self._looks_like_ddimatuo_media_url(url)
+        if needs_ddimatuo_auth and "Authorization" not in headers and "authorization" not in {k.lower() for k in headers}:
+            api_key = self._resolve_ddimatuo_download_api_key(preferred_api_key)
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+                headers["x-api-key"] = api_key
+        return headers
+
     def _download_and_save(
         self,
         url: str,
         filename_base: str = None,
         user_id: int = 1,
         storage_metadata: Optional[Dict[str, Any]] = None,
+        download_headers: Optional[Dict[str, str]] = None,
+        provider: Optional[str] = None,
     ) -> str:
         try:
              if url.startswith("data:"):
@@ -19162,11 +19252,19 @@ class MediaGenerationService:
              if url.startswith("/"): return url
              if "localhost" in url or "127.0.0.1" in url: return url
 
+             meta = storage_metadata if isinstance(storage_metadata, dict) else {}
+             request_headers = self._build_authenticated_download_headers(
+                 url,
+                 provider=provider or meta.get("provider"),
+                 preferred_api_key=meta.get("download_api_key") or meta.get("api_key"),
+                 extra_headers=download_headers,
+             )
+
              def _fetch_remote_media(use_proxy: bool = True):
                  kwargs = {
                      "stream": True,
                      "timeout": 600,
-                     "headers": {"User-Agent": "Mozilla/5.0"},
+                     "headers": request_headers,
                      "verify": False,
                  }
                  if not use_proxy:
@@ -19181,10 +19279,19 @@ class MediaGenerationService:
                  except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as fetch_err:
                      fetch_errors.append(f"proxy={'on' if use_proxy else 'off'} err={fetch_err}")
                      continue
-                 if candidate.status_code == 200:
+                 ct_preview = str(candidate.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                 # Auth-walled provider media often returns JSON error bodies.
+                 if candidate.status_code == 200 and "application/json" not in ct_preview and "text/json" not in ct_preview:
                      response = candidate
                      break
-                 fetch_errors.append(f"proxy={'on' if use_proxy else 'off'} status={candidate.status_code}")
+                 body_preview = ""
+                 try:
+                     body_preview = (candidate.text or "")[:240]
+                 except Exception:
+                     body_preview = ""
+                 fetch_errors.append(
+                     f"proxy={'on' if use_proxy else 'off'} status={candidate.status_code} ct={ct_preview or '-'} body={body_preview}"
+                 )
                  if use_proxy:
                      continue
                  response = candidate
@@ -19194,9 +19301,18 @@ class MediaGenerationService:
                  _debug_log(f"Download failed: {detail} for {url}", "error")
                  raise ValueError(detail)
 
-             if response.status_code != 200:
-                _debug_log(f"Download failed: HTTP {response.status_code} for {url}", "error")
-                raise ValueError(f"HTTP {response.status_code}")
+             response_ct = str(response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+             if response.status_code != 200 or "application/json" in response_ct or "text/json" in response_ct:
+                body_preview = ""
+                try:
+                    body_preview = (response.text or "")[:300]
+                except Exception:
+                    body_preview = ""
+                detail = f"HTTP {response.status_code}"
+                if body_preview:
+                    detail = f"{detail}: {body_preview}"
+                _debug_log(f"Download failed: {detail} for {url}", "error")
+                raise ValueError(detail)
 
              if response.status_code == 200:
                 from urllib.parse import urlparse

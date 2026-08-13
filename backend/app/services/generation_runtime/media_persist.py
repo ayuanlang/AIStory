@@ -704,12 +704,24 @@ def _persist_remote_video_result(
     persisted_url = ""
     last_exc: Optional[Exception] = None
 
+    provider_name = str(updated_metadata.get("provider") or "").strip().lower()
+    download_headers = None
+    if provider_name == "ddimatuo" or media_service._looks_like_ddimatuo_media_url(raw):
+        download_headers = media_service._build_authenticated_download_headers(
+            raw,
+            provider="ddimatuo",
+            preferred_api_key=updated_metadata.get("download_api_key") or updated_metadata.get("api_key"),
+        )
+
     for attempt in range(1, max_attempts + 1):
         try:
             candidate_url = media_service._download_and_save(
                 raw,
                 filename_base=filename_base,
                 user_id=user_id,
+                storage_metadata=updated_metadata,
+                download_headers=download_headers,
+                provider=provider_name or None,
             )
             candidate_url = str(candidate_url or "").strip() or raw
             if candidate_url != source_url or _is_durable_persisted_media_url(candidate_url):
@@ -858,6 +870,8 @@ _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
     re.compile(r"(^|.+\.)tempfile\.aiquickdraw\.com$", re.IGNORECASE),
     # Volcengine Ark / Seedance temporary TOS delivery URLs (must be localized to OSS).
     re.compile(r"(^|.+\.)volces\.com$", re.IGNORECASE),
+    # DdiMatuo media requires Authorization and is not durable for browsers.
+    re.compile(r"(^|.+\.)ddimatuo\.top$", re.IGNORECASE),
 ]
 
 _EPHEMERAL_PROVIDER_MEDIA_QUERY_MARKERS = (
