@@ -2911,7 +2911,7 @@ def init_system_api_settings(db):
                 "query_endpoint": f"{ddimatuo_base_url}/v1/videos",
                 "poll_only": True,
                 "auto_retry_busy": False,
-                "resolution": "1080P",
+                "resolution": "1080p",
                 "aspect_ratios": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
                 "durations_seconds": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
                 "notes": (
@@ -2925,22 +2925,25 @@ def init_system_api_settings(db):
         existing_ddi_models.add(key)
         ddi_added += 1
 
-    # Keep existing ddimatuo rows on the 1080P default when resolution was never set.
+    # Keep existing ddimatuo rows on the 1080p default when resolution was never set.
     try:
         ddi_resolution_updated = 0
         for row in existing_ddi_rows:
             cfg = row.config if isinstance(row.config, dict) else {}
             if not isinstance(cfg, dict):
                 continue
-            if str(cfg.get("resolution") or "").strip():
+            raw_res = str(cfg.get("resolution") or "").strip()
+            if raw_res and raw_res.lower() != "1080p":
+                continue
+            if raw_res == "1080p":
                 continue
             cfg = dict(cfg)
-            cfg["resolution"] = "1080P"
+            cfg["resolution"] = "1080p"
             row.config = cfg
             ddi_resolution_updated += 1
         if ddi_resolution_updated > 0:
             db.commit()
-            logger.info("Updated %s ddimatuo rows with default resolution=1080P", ddi_resolution_updated)
+            logger.info("Updated %s ddimatuo rows with default resolution=1080p", ddi_resolution_updated)
     except Exception as ddi_res_err:
         logger.warning("Failed to backfill ddimatuo default resolution: %s", ddi_res_err)
 

@@ -12729,19 +12729,16 @@ class MediaGenerationService:
             if not text:
                 return None
             if text in {"480", "480p", "sd", "low"}:
-                return "480P"
+                return "480p"
             if text in {"720", "720p", "hd"}:
-                return "720P"
+                return "720p"
             if text in {"1080", "1080p", "fhd", "fullhd", "high"}:
-                return "1080P"
+                return "1080p"
             return None
 
-        # Default resolution 1080P; only honor explicit request quality/resolution.
-        resolution = (
-            _normalize_ddimatuo_resolution(tool_conf.get("quality"))
-            or _normalize_ddimatuo_resolution(tool_conf.get("resolution"))
-            or "1080P"
-        )
+        # Default 1080p. Ignore project/request resolution|video_resolution injection (often 720p).
+        # Only an explicit quality override may change it.
+        resolution = _normalize_ddimatuo_resolution(tool_conf.get("quality")) or "1080p"
 
         # Match official curl: always include reference_*_urls arrays (may be empty).
         payload: Dict[str, Any] = {
