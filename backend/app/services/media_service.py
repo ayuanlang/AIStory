@@ -12689,38 +12689,23 @@ class MediaGenerationService:
                 "submit_failed": True,
             }
 
-        def _normalize_ddimatuo_prompt_tags(text: str) -> str:
-            """DdiMatuo contract uses lowercase @imageN/@videoN/@audioN (not @ImageN)."""
-            out = str(text or "")
-            out = re.sub(r"@Image(\d+)\b", r"@image\1", out, flags=re.IGNORECASE)
-            out = re.sub(r"@Video(\d+)\b", r"@video\1", out, flags=re.IGNORECASE)
-            out = re.sub(r"@Audio(\d+)\b", r"@audio\1", out, flags=re.IGNORECASE)
-            # Drop non-media @tokens (e.g. CHAR:[@雷恩]) — Seedance treats unknown @ as invalid refs.
-            out = re.sub(
-                r"@(?!(?:image|video|audio|图片|视频|音频)\d+\b)",
-                "",
-                out,
-                flags=re.IGNORECASE,
-            )
-            return out
-
         def _ensure_ddimatuo_prompt_refs(text: str, *, images: int, videos: int, audios: int) -> str:
-            """Ensure prompt mentions @imageN / @videoN / @audioN for each material."""
-            out = _normalize_ddimatuo_prompt_tags(str(text or "").strip())
+            """Append missing media tags only; do not rewrite existing prompt text."""
+            out = str(text or "").strip()
             lower = out.lower()
             missing: List[str] = []
             for idx in range(1, max(0, int(images)) + 1):
                 tag = f"@image{idx}"
                 if tag not in lower and f"@图片{idx}" not in out:
-                    missing.append(tag)
+                    missing.append(f"@Image{idx}")
             for idx in range(1, max(0, int(videos)) + 1):
                 tag = f"@video{idx}"
                 if tag not in lower and f"@视频{idx}" not in out:
-                    missing.append(tag)
+                    missing.append(f"@Video{idx}")
             for idx in range(1, max(0, int(audios)) + 1):
                 tag = f"@audio{idx}"
                 if tag not in lower and f"@音频{idx}" not in out:
-                    missing.append(tag)
+                    missing.append(f"@Audio{idx}")
             if missing:
                 out = f"{out} {' '.join(missing)}".strip()
             return out
@@ -12751,8 +12736,7 @@ class MediaGenerationService:
                 return "1080P"
             return None
 
-        # Official create body does not document resolution; keep for local metadata only.
-        # Sending unknown fields can surface as SEEDANCE_INVALID_REQUEST.
+        # Default resolution 1080P; only honor explicit request quality/resolution.
         resolution = (
             _normalize_ddimatuo_resolution(tool_conf.get("quality"))
             or _normalize_ddimatuo_resolution(tool_conf.get("resolution"))
@@ -12765,6 +12749,7 @@ class MediaGenerationService:
             "prompt": prompt_text,
             "aspect_ratio": normalized_ratio,
             "seconds": int(seconds_in),
+            "resolution": resolution,
             "auto_retry_busy": bool(auto_retry_busy),
             "reference_image_urls": image_refs,
             "reference_video_urls": video_refs,
