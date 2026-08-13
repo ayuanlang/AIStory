@@ -5626,6 +5626,7 @@ class MediaGenerationService:
         return text if limit >= 1 else None
 
     _VIDEO_REFERENCE_IMAGE_OPTION_KEYS = (
+        "images",
         "image_urls",
         "imageUrls",
         "reference_image_urls",
@@ -5637,6 +5638,7 @@ class MediaGenerationService:
         "input_urls",
     )
     _VIDEO_REFERENCE_VIDEO_OPTION_KEYS = (
+        "videos",
         "reference_video_urls",
         "ref_video_urls",
         "referenceVideoUrls",
@@ -5957,6 +5959,7 @@ class MediaGenerationService:
                 duration=duration,
                 aspect_ratio=aspect_ratio,
                 negative_prompt=negative_prompt,
+                keyframes=keyframes,
             )
         # Ark API-Key Seedance path must not fall through to doubao/ark-seedance.
         if normalized == "ark":
@@ -6085,7 +6088,7 @@ class MediaGenerationService:
             "pixelmove": {"base_url": "https://portal.pixelmove.ai", "model": "seedance-2.0"},
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
-            "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "sd2-pro"},
+            "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "SD_2.0"},
         }
 
         rows = self._system_setting_query(session, category=category).order_by(SystemAPISetting.id.asc()).all()
@@ -6482,6 +6485,7 @@ class MediaGenerationService:
                         duration=effective_duration,
                         aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
+                        keyframes=effective_keyframes,
                     )
                 if effective_provider == "zlhub":
                     return await self._handle_zlhub_generation(
@@ -7074,7 +7078,7 @@ class MediaGenerationService:
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
-            "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "sd2-pro"},
+            "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "SD_2.0"},
         }
 
         try:
@@ -12541,6 +12545,7 @@ class MediaGenerationService:
         duration=5,
         aspect_ratio=None,
         negative_prompt: Optional[str] = None,
+        keyframes: Optional[List[str]] = None,
     ):
         """DdiMatuo video API: submit then poll only (no upstream webhook)."""
         if str(gen_type or "").strip().lower() != "video":
@@ -12559,83 +12564,111 @@ class MediaGenerationService:
             or tool_conf.get("base_url")
             or "https://api.ddimatuo.top"
         ).strip().rstrip("/")
-        if base_url.lower().endswith("/v1/videos"):
-            root_url = base_url[: -len("/v1/videos")].rstrip("/")
-            submit_url = base_url
-        else:
-            root_url = base_url
-            submit_url = str(tool_conf.get("endpoint") or f"{root_url}/v1/videos").strip() or f"{root_url}/v1/videos"
-        query_root = str(tool_conf.get("query_endpoint") or tool_conf.get("poll_endpoint") or f"{root_url}/v1/videos").strip()
+        # Create: POST /v1/videos/generations ; poll/cancel: /v1/videos/{task_id}[ /cancel ]
+        root_url = base_url
+        for _suffix in ("/v1/videos/generations", "/v1/videos"):
+            if root_url.lower().endswith(_suffix):
+                root_url = root_url[: -len(_suffix)].rstrip("/")
+                break
+        submit_url = str(
+            tool_conf.get("endpoint") or f"{root_url}/v1/videos/generations"
+        ).strip().rstrip("/")
+        if submit_url.lower().endswith("/v1/videos"):
+            submit_url = f"{submit_url}/generations"
+        elif "/v1/videos/generations" not in submit_url.lower():
+            if submit_url.lower().endswith("/v1"):
+                submit_url = f"{submit_url}/videos/generations"
+            else:
+                submit_url = f"{root_url}/v1/videos/generations"
+        query_root = str(
+            tool_conf.get("query_endpoint") or tool_conf.get("poll_endpoint") or f"{root_url}/v1/videos"
+        ).strip()
         if "{task" in query_root.lower():
             poll_template = query_root
             query_endpoint_base = query_root.split("{")[0].rstrip("/")
         else:
             query_endpoint_base = query_root.rstrip("/")
+            if query_endpoint_base.lower().endswith("/generations"):
+                query_endpoint_base = query_endpoint_base[: -len("/generations")].rstrip("/")
             if not query_endpoint_base.lower().endswith("/v1/videos"):
-                query_endpoint_base = f"{query_endpoint_base}/v1/videos"
+                query_endpoint_base = f"{root_url}/v1/videos"
             poll_template = f"{query_endpoint_base}/{{task_id}}"
 
-        # Use model from system API settings (fallback sd2-pro).
-        model = str(
-            config.get("model")
-            or tool_conf.get("model")
-            or config.get("base_model")
-            or tool_conf.get("base_model")
-            or tool_conf.get("runtime_model")
-            or "sd2-pro"
-        ).strip()
-        if not model:
-            return {"error": "DdiMatuo model is required (configure in system API settings)", "submit_failed": True}
+        # Contract: model is fixed as SD_2.0.
+        model = "SD_2.0"
 
         prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
         prompt_text = str(prompt_text or "").strip()
         if not prompt_text:
             return {"error": "DdiMatuo prompt is required", "submit_failed": True}
 
-        # Contract: seconds is required integer in [4, 15]; always send explicitly.
-        ddimatuo_seconds_values = list(range(4, 16))
+        # Contract: duration is required integer in [4, 15].
+        ddimatuo_duration_values = list(range(4, 16))
         allowed_duration_values = self._normalize_duration_enum_values(
             tool_conf.get("durations_seconds")
             or tool_conf.get("duration_values")
             or tool_conf.get("allowed_durations")
             or tool_conf.get("durations")
             or tool_conf.get("seconds_values")
-            or ddimatuo_seconds_values
-        ) or ddimatuo_seconds_values
+            or ddimatuo_duration_values
+        ) or ddimatuo_duration_values
         allowed_duration_values = [
             int(v) for v in allowed_duration_values if 4 <= int(v) <= 15
-        ] or ddimatuo_seconds_values
+        ] or ddimatuo_duration_values
         try:
-            seconds_in = int(
+            duration_in = int(
                 float(
                     duration
                     if duration is not None
-                    else (tool_conf.get("seconds") if tool_conf.get("seconds") is not None else tool_conf.get("duration"))
+                    else (
+                        tool_conf.get("duration")
+                        if tool_conf.get("duration") is not None
+                        else tool_conf.get("seconds")
+                    )
                 )
             )
         except Exception:
-            seconds_in = 5
-        mapped_duration = self._map_duration_nearest(seconds_in, allowed_duration_values, prefer_higher_on_tie=False)
-        seconds_in = int(mapped_duration if mapped_duration is not None else max(4, min(15, seconds_in or 5)))
-        seconds_in = max(4, min(15, seconds_in))
+            duration_in = 5
+        mapped_duration = self._map_duration_nearest(
+            duration_in, allowed_duration_values, prefer_higher_on_tie=False
+        )
+        duration_in = int(
+            mapped_duration if mapped_duration is not None else max(4, min(15, duration_in or 5))
+        )
+        duration_in = max(4, min(15, duration_in))
 
-        # Contract: aspect_ratio optional, default 16:9; closed set.
-        ddimatuo_aspect_ratios = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
+        # Contract: ratio (or aspect) required; closed set.
+        ddimatuo_ratios = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
         allowed_ratios = self._normalize_str_list(
             tool_conf.get("ratios")
             or tool_conf.get("allowed_ratios")
             or tool_conf.get("aspect_ratios")
-            or ddimatuo_aspect_ratios
-        ) or ddimatuo_aspect_ratios
-        allowed_ratios = [r for r in allowed_ratios if str(r).strip() in set(ddimatuo_aspect_ratios)] or ddimatuo_aspect_ratios
-        normalized_ratio = self._normalize_aspect_ratio_value(
-            aspect_ratio or tool_conf.get("aspect_ratio") or tool_conf.get("ratio")
+            or ddimatuo_ratios
+        ) or ddimatuo_ratios
+        allowed_ratios = [r for r in allowed_ratios if str(r).strip() in set(ddimatuo_ratios)] or ddimatuo_ratios
+        ratio_candidate = (
+            aspect_ratio
+            or tool_conf.get("ratio")
+            or tool_conf.get("aspect")
+            or tool_conf.get("aspect_ratio")
         )
+        # If both ratio and aspect appear, they must match — prefer explicit ratio.
+        ratio_raw = tool_conf.get("ratio")
+        aspect_raw = tool_conf.get("aspect")
+        if ratio_raw is not None and aspect_raw is not None:
+            ratio_norm = self._normalize_aspect_ratio_value(ratio_raw)
+            aspect_norm = self._normalize_aspect_ratio_value(aspect_raw)
+            if ratio_norm and aspect_norm and ratio_norm != aspect_norm:
+                return {
+                    "error": f"DdiMatuo ratio/aspect mismatch: ratio={ratio_norm} aspect={aspect_norm}",
+                    "submit_failed": True,
+                }
+        normalized_ratio = self._normalize_aspect_ratio_value(ratio_candidate)
         if not normalized_ratio or normalized_ratio == "adaptive":
             normalized_ratio = "16:9"
         mapped_ratio = self._map_aspect_ratio_to_allowed(normalized_ratio, allowed_ratios)
         normalized_ratio = str(mapped_ratio or "16:9").strip()
-        if normalized_ratio not in set(ddimatuo_aspect_ratios):
+        if normalized_ratio not in set(ddimatuo_ratios):
             normalized_ratio = "16:9"
 
         def _https_public_only(urls: List[str]) -> List[str]:
@@ -12648,55 +12681,132 @@ class MediaGenerationService:
                     out.append(text)
             return out
 
-        # Contract: reference_*_urls must be public HTTPS; need ≥1 image or video.
-        image_refs = self._resolve_ref_list_for_api(
-            self._collect_video_reference_image_urls(
-                ref_image,
-                tool_conf,
-                extra_sources=config,
-                include_last_frame=True,
-                last_frame_url=last_frame_url,
+        def _resolve_https_list(raw_urls: Any, *, limit: int) -> List[str]:
+            resolved = self._resolve_ref_list_for_api(
+                raw_urls,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+            )
+            return _https_public_only([u for u in (resolved or []) if u])[: max(0, int(limit))]
+
+        # Contract: mode is omni_reference | first_last (native_reference = omni alias).
+        raw_mode = str(
+            tool_conf.get("mode")
+            or tool_conf.get("ref_mode")
+            or config.get("mode")
+            or ""
+        ).strip().lower().replace("-", "_").replace(" ", "_")
+        first_last_aliases = {
+            "first_last",
+            "first_last_frame",
+            "firstandlast",
+            "start_end",
+            "startend",
+            "entity_refs_start_end",
+            "flf",
+        }
+        if raw_mode in first_last_aliases:
+            mode = "first_last"
+        else:
+            # native_reference / unset / entity_refs → omni_reference.
+            mode = "omni_reference"
+
+        keyframe_urls = []
+        if isinstance(keyframes, list):
+            keyframe_urls = [str(u).strip() for u in keyframes if str(u or "").strip()]
+        elif isinstance(tool_conf.get("keyframes"), list):
+            keyframe_urls = [
+                str(u).strip() for u in (tool_conf.get("keyframes") or []) if str(u or "").strip()
+            ]
+
+        image_refs: List[str] = []
+        video_refs: List[str] = []
+        audio_refs: List[str] = []
+
+        if mode == "first_last":
+            # Exactly two images: images[0]=first, images[1]=last; no videos/audios.
+            first_candidates = _resolve_https_list(
+                self._collect_video_reference_image_urls(
+                    ref_image,
+                    tool_conf,
+                    extra_sources=config,
+                    include_last_frame=False,
+                    last_frame_url=None,
+                    limit=9,
+                ),
                 limit=9,
-            ),
-            force_data_uri_for_local=True,
-            prefer_public_upload_url=True,
-        )
-        image_refs = _https_public_only([u for u in image_refs if u])[:9]
-
-        video_raw = self._collect_video_reference_video_urls(
-            tool_conf,
-            extra_sources=config,
-            limit=3,
-        )
-        video_refs = _https_public_only(
-            self._resolve_ref_list_for_api(
-                video_raw,
-                force_data_uri_for_local=True,
-                prefer_public_upload_url=True,
             )
-        )[:3]
-
-        audio_raw = (
-            tool_conf.get("reference_audio_urls")
-            or tool_conf.get("audio_urls")
-            or tool_conf.get("referenceAudioUrls")
-            or tool_conf.get("ref_audio_urls")
-            or config.get("reference_audio_urls")
-            or []
-        )
-        audio_refs = _https_public_only(
-            self._resolve_ref_list_for_api(
-                audio_raw,
-                force_data_uri_for_local=True,
-                prefer_public_upload_url=True,
+            if keyframe_urls:
+                kf_resolved = _resolve_https_list(keyframe_urls, limit=2)
+                if len(kf_resolved) >= 2:
+                    first_candidates = [kf_resolved[0]] + [
+                        u for u in first_candidates if u != kf_resolved[0]
+                    ]
+            first_url = first_candidates[0] if first_candidates else ""
+            last_candidates = _resolve_https_list(
+                [last_frame_url] if last_frame_url else [],
+                limit=1,
             )
-        )[:3]
-
-        if not image_refs and not video_refs:
-            return {
-                "error": "DdiMatuo requires at least one public HTTPS reference image or video",
-                "submit_failed": True,
-            }
+            if not last_candidates and len(keyframe_urls) >= 2:
+                last_candidates = _resolve_https_list([keyframe_urls[1]], limit=1)
+            if not last_candidates and len(first_candidates) >= 2:
+                last_candidates = [first_candidates[1]]
+            last_url = last_candidates[0] if last_candidates else ""
+            if not first_url or not last_url:
+                return {
+                    "error": "DdiMatuo first_last mode requires exactly two public HTTPS images (first + last)",
+                    "submit_failed": True,
+                }
+            if first_url == last_url:
+                return {
+                    "error": "DdiMatuo first_last mode requires two distinct first/last images",
+                    "submit_failed": True,
+                }
+            image_refs = [first_url, last_url]
+            video_refs = []
+            audio_refs = []
+        else:
+            # omni_reference: ≥1 image or video; may mix images/videos/audios; audio-only rejected.
+            image_refs = _resolve_https_list(
+                self._collect_video_reference_image_urls(
+                    ref_image,
+                    tool_conf,
+                    extra_sources=config,
+                    include_last_frame=bool(last_frame_url),
+                    last_frame_url=last_frame_url,
+                    limit=9,
+                ),
+                limit=9,
+            )
+            video_refs = _resolve_https_list(
+                self._collect_video_reference_video_urls(
+                    tool_conf,
+                    extra_sources=config,
+                    limit=3,
+                ),
+                limit=3,
+            )
+            audio_raw = (
+                tool_conf.get("audios")
+                or tool_conf.get("reference_audio_urls")
+                or tool_conf.get("audio_urls")
+                or tool_conf.get("referenceAudioUrls")
+                or tool_conf.get("ref_audio_urls")
+                or config.get("audios")
+                or config.get("reference_audio_urls")
+                or []
+            )
+            audio_refs = _resolve_https_list(audio_raw, limit=3)
+            if not image_refs and not video_refs:
+                if audio_refs:
+                    return {
+                        "error": "DdiMatuo omni_reference rejects audio-only input; need ≥1 image or video",
+                        "submit_failed": True,
+                    }
+                return {
+                    "error": "DdiMatuo omni_reference requires at least one public HTTPS image or video",
+                    "submit_failed": True,
+                }
 
         def _ensure_ddimatuo_prompt_refs(text: str, *, images: int, videos: int, audios: int) -> str:
             """Append missing media tags only; do not rewrite existing prompt text."""
@@ -12733,24 +12843,36 @@ class MediaGenerationService:
         else:
             auto_retry_busy = bool(auto_retry_busy)
 
-        # Hard-force 1080p for DdiMatuo. Ignore project/request resolution,
-        # video_resolution, quality, draft, and system-config injection (often 720p).
-        resolution = "1080p"
+        # Contract: resolution is 720P or 1080P (case-insensitive). Default 1080P.
+        # Ignore project/request video_resolution injection; only explicit quality may select 720P.
+        def _normalize_ddimatuo_resolution(value: Any) -> Optional[str]:
+            text = str(value or "").strip().lower().replace(" ", "")
+            if not text:
+                return None
+            if text in {"720", "720p", "hd"}:
+                return "720P"
+            if text in {"1080", "1080p", "fhd", "fullhd", "high"}:
+                return "1080P"
+            return None
+
+        resolution = _normalize_ddimatuo_resolution(tool_conf.get("quality")) or "1080P"
         tool_conf["resolution"] = resolution
         tool_conf.pop("video_resolution", None)
-        tool_conf.pop("quality", None)
 
-        # Match official curl: always include reference_*_urls arrays (may be empty).
+        # Match official curl body (always include images/videos/audios arrays).
         payload: Dict[str, Any] = {
             "model": model,
             "prompt": prompt_text,
-            "aspect_ratio": normalized_ratio,
-            "seconds": int(seconds_in),
+            "mode": mode,
+            "images": list(image_refs),
+            "videos": list(video_refs),
+            "audios": list(audio_refs),
+            "ratio": normalized_ratio,
+            "duration": int(duration_in),
             "resolution": resolution,
+            # watermark: only false allowed (true rejected); curl always sends false.
+            "watermark": False,
             "auto_retry_busy": bool(auto_retry_busy),
-            "reference_image_urls": image_refs,
-            "reference_video_urls": video_refs,
-            "reference_audio_urls": audio_refs,
         }
 
         poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
@@ -12774,13 +12896,14 @@ class MediaGenerationService:
             "submit_url": submit_url,
             "query_endpoint": query_endpoint_base,
             "poll_only": True,
-            "seconds": int(seconds_in),
-            "aspect_ratio": normalized_ratio,
+            "mode": mode,
+            "duration": int(duration_in),
+            "ratio": normalized_ratio,
             "resolution": resolution,
             "auto_retry_busy": bool(auto_retry_busy),
-            "reference_image_count": len(image_refs),
-            "reference_video_count": len(video_refs),
-            "reference_audio_count": len(audio_refs),
+            "image_count": len(image_refs),
+            "video_count": len(video_refs),
+            "audio_count": len(audio_refs),
         }
 
         async def _emit_ddimatuo_combined_payload(**extra: Any) -> None:
@@ -12903,16 +13026,14 @@ class MediaGenerationService:
         except Exception:
             submit_retries = 2
 
-        # Record supplier-shaped body before POST so Combined Payload uses seconds / reference_*_urls.
+        # Record supplier-shaped body before POST so Combined Payload matches outbound JSON.
         await _emit_ddimatuo_combined_payload(final_submit=False)
 
         submit_resp = None
         last_submit_error: Optional[Exception] = None
         for submit_attempt in range(1, submit_retries + 1):
             try:
-                # Fresh idempotency key on network retry of a brand-new attempt only when previous never got a response.
-                if submit_attempt > 1 and last_submit_error is not None:
-                    headers["Idempotency-Key"] = str(uuid.uuid4())
+                # Contract: timeout retries for the same business task must reuse Idempotency-Key.
                 submit_resp = await asyncio.to_thread(
                     requests.post,
                     submit_url,
@@ -12926,10 +13047,11 @@ class MediaGenerationService:
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as submit_exc:
                 last_submit_error = submit_exc
                 logger.warning(
-                    "DdiMatuo submit network error | attempt=%s/%s url=%s error=%s",
+                    "DdiMatuo submit network error | attempt=%s/%s url=%s idempotency_key=%s error=%s",
                     submit_attempt,
                     submit_retries,
                     submit_url,
+                    idempotency_key,
                     submit_exc,
                 )
                 if submit_attempt < submit_retries:
@@ -13002,9 +13124,9 @@ class MediaGenerationService:
                     {
                         **{k: v for k, v in payload.items() if k != "prompt"},
                         "prompt_preview": str(payload.get("prompt") or "")[:240],
-                        "reference_image_count": len(image_refs),
-                        "reference_video_count": len(video_refs),
-                        "reference_audio_count": len(audio_refs),
+                        "image_count": len(image_refs),
+                        "video_count": len(video_refs),
+                        "audio_count": len(audio_refs),
                     }
                 ),
             )

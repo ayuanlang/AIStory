@@ -767,7 +767,7 @@ async def _run_generate_video(
                 str(reserve_provider or req.provider or "").strip().lower() == "ddimatuo"
             )
         if _is_ddimatuo_for_resolution:
-            resolved_video_resolution = "1080p"
+            resolved_video_resolution = "1080P"
             video_quality = None
             ddi_dims = _infer_dims_from_video_resolution_tier(
                 aspect_ratio,
@@ -841,7 +841,7 @@ async def _run_generate_video(
 
         # Billing matrix only knows 480/720 and rewrites 1080 → 720; restore DdiMatuo hard contract.
         if _is_ddimatuo_for_resolution:
-            resolved_video_resolution = "1080p"
+            resolved_video_resolution = "1080P"
             video_quality = None
             ddi_dims = _infer_dims_from_video_resolution_tier(
                 aspect_ratio,
@@ -852,13 +852,13 @@ async def _run_generate_video(
             if ddi_dims:
                 resolved_video_width, resolved_video_height = ddi_dims
             if isinstance(reserve_details, dict):
-                reserve_details["resolution"] = "1080p"
+                reserve_details["resolution"] = "1080P"
                 if resolved_video_width:
                     reserve_details["width"] = int(resolved_video_width)
                 if resolved_video_height:
                     reserve_details["height"] = int(resolved_video_height)
             if isinstance(_billing_meta, dict):
-                _billing_meta["resolution"] = "1080p"
+                _billing_meta["resolution"] = "1080P"
                 if resolved_video_width:
                     _billing_meta["width"] = int(resolved_video_width)
                 if resolved_video_height:
@@ -1424,7 +1424,7 @@ async def _run_generate_video(
         if resolved_video_image_size:
             video_provider_options["image_size"] = resolved_video_image_size
 
-        # DdiMatuo supplier contract: reference_*_urls + seconds + resolution=1080p.
+        # DdiMatuo supplier contract: images/videos/audios + duration + ratio + mode + resolution.
         try:
             from app.services.media_service import media_service as _ddi_media_svc
 
@@ -1435,28 +1435,96 @@ async def _run_generate_video(
             is_ddimatuo_provider = str(resolved_video_provider or "").strip().lower() == "ddimatuo"
         if is_ddimatuo_provider:
             image_urls_for_ddi = video_provider_options.pop("image_urls", None)
+            if not isinstance(image_urls_for_ddi, list) or not image_urls_for_ddi:
+                image_urls_for_ddi = video_provider_options.pop("reference_image_urls", None)
             if isinstance(image_urls_for_ddi, list) and image_urls_for_ddi:
-                video_provider_options["reference_image_urls"] = list(image_urls_for_ddi)
-            ref_videos_for_ddi = video_provider_options.get("reference_video_urls")
+                video_provider_options["images"] = list(image_urls_for_ddi)
+            ref_videos_for_ddi = video_provider_options.get("videos")
+            if not isinstance(ref_videos_for_ddi, list) or not ref_videos_for_ddi:
+                ref_videos_for_ddi = video_provider_options.pop("reference_video_urls", None)
             if not isinstance(ref_videos_for_ddi, list) or not ref_videos_for_ddi:
                 raw_ref_videos = getattr(req, "ref_video_urls", None)
                 if isinstance(raw_ref_videos, list) and raw_ref_videos:
-                    video_provider_options["reference_video_urls"] = [
+                    ref_videos_for_ddi = [
                         str(item).strip() for item in raw_ref_videos if str(item).strip()
                     ]
-            video_provider_options.setdefault("reference_audio_urls", [])
+            if isinstance(ref_videos_for_ddi, list) and ref_videos_for_ddi:
+                video_provider_options["videos"] = list(ref_videos_for_ddi)
+            else:
+                video_provider_options.setdefault("videos", [])
+            if not isinstance(video_provider_options.get("audios"), list):
+                legacy_audios = video_provider_options.pop("reference_audio_urls", None)
+                video_provider_options["audios"] = (
+                    list(legacy_audios) if isinstance(legacy_audios, list) else []
+                )
             try:
-                video_provider_options["seconds"] = int(float(req.duration if req.duration is not None else 5))
+                video_provider_options["duration"] = int(
+                    float(req.duration if req.duration is not None else 5)
+                )
             except Exception:
-                video_provider_options["seconds"] = 5
-            video_provider_options["seconds"] = max(4, min(15, int(video_provider_options["seconds"])))
-            video_provider_options["resolution"] = "1080p"
+                video_provider_options["duration"] = 5
+            video_provider_options["duration"] = max(
+                4, min(15, int(video_provider_options["duration"]))
+            )
+            ratio_text = str(
+                video_provider_options.get("ratio")
+                or video_provider_options.get("aspect")
+                or video_provider_options.get("aspect_ratio")
+                or aspect_ratio
+                or "16:9"
+            ).strip() or "16:9"
+            video_provider_options["ratio"] = ratio_text
+            # Prefer ref_mode; only honor options.mode when it is a DdiMatuo mode token
+            # (ignore unrelated provider modes like kling std/pro).
+            _ddi_mode_candidates = [
+                getattr(req, "ref_mode", None),
+                video_provider_options.get("mode"),
+            ]
+            raw_ddi_mode = ""
+            for _cand in _ddi_mode_candidates:
+                _norm = str(_cand or "").strip().lower().replace("-", "_").replace(" ", "_")
+                if _norm in {
+                    "first_last",
+                    "first_last_frame",
+                    "firstandlast",
+                    "start_end",
+                    "startend",
+                    "entity_refs_start_end",
+                    "flf",
+                    "omni_reference",
+                    "omni",
+                    "native_reference",
+                    "native",
+                    "entity_refs",
+                }:
+                    raw_ddi_mode = _norm
+                    break
+            if raw_ddi_mode in {
+                "first_last",
+                "first_last_frame",
+                "firstandlast",
+                "start_end",
+                "startend",
+                "entity_refs_start_end",
+                "flf",
+            }:
+                video_provider_options["mode"] = "first_last"
+                video_provider_options["videos"] = []
+                video_provider_options["audios"] = []
+            else:
+                video_provider_options["mode"] = "omni_reference"
+            video_provider_options["resolution"] = "1080P"
+            video_provider_options["watermark"] = False
             video_provider_options.pop("width", None)
             video_provider_options.pop("height", None)
             video_provider_options.pop("image_size", None)
             video_provider_options.pop("video_resolution", None)
-            video_provider_options.pop("duration", None)
+            video_provider_options.pop("seconds", None)
+            video_provider_options.pop("aspect_ratio", None)
             video_provider_options.pop("quality", None)
+            video_provider_options.pop("reference_image_urls", None)
+            video_provider_options.pop("reference_video_urls", None)
+            video_provider_options.pop("reference_audio_urls", None)
 
         if "sound" not in video_provider_options and resolved_sound is not None:
             video_provider_options["sound"] = bool(resolved_sound)
@@ -1482,10 +1550,16 @@ async def _run_generate_video(
                 video_provider_options["reference_image_urls"] = _limit_string_list_input(
                     ref_image_urls, image_ref_limit
                 )
+            ddi_images = video_provider_options.get("images")
+            if isinstance(ddi_images, list):
+                video_provider_options["images"] = _limit_string_list_input(ddi_images, image_ref_limit)
         if video_ref_limit is not None:
             ref_video_urls = video_provider_options.get("reference_video_urls")
             if isinstance(ref_video_urls, list):
                 video_provider_options["reference_video_urls"] = _limit_string_list_input(ref_video_urls, video_ref_limit)
+            ddi_videos = video_provider_options.get("videos")
+            if isinstance(ddi_videos, list):
+                video_provider_options["videos"] = _limit_string_list_input(ddi_videos, video_ref_limit)
         if explicit_seed:
             video_provider_options["seed"] = int(explicit_seed)
             video_provider_options["seeds"] = int(explicit_seed)
@@ -1502,30 +1576,32 @@ async def _run_generate_video(
         # Persist supplier-shaped body into Combined Payload *before* media_service,
         # so QueueAdmin never falls back to internal image_urls/duration fields.
         if is_ddimatuo_provider and callable(provider_payload_callback):
-            ddi_ref_images = video_provider_options.get("reference_image_urls") or []
-            ddi_ref_videos = video_provider_options.get("reference_video_urls") or []
-            ddi_ref_audios = video_provider_options.get("reference_audio_urls") or []
+            ddi_ref_images = video_provider_options.get("images") or []
+            ddi_ref_videos = video_provider_options.get("videos") or []
+            ddi_ref_audios = video_provider_options.get("audios") or []
             if not isinstance(ddi_ref_images, list):
                 ddi_ref_images = []
             if not isinstance(ddi_ref_videos, list):
                 ddi_ref_videos = []
             if not isinstance(ddi_ref_audios, list):
                 ddi_ref_audios = []
+            ddi_mode = str(video_provider_options.get("mode") or "omni_reference")
+            if ddi_mode == "first_last":
+                ddi_ref_videos = []
+                ddi_ref_audios = []
             ddi_supplier_body = {
-                "model": str(
-                    (runtime_llm_config or {}).get("model")
-                    or getattr(req, "model", None)
-                    or "sd2-pro"
-                ).strip()
-                or "sd2-pro",
+                "model": "SD_2.0",
                 "prompt": str(prompt_text or "").strip(),
-                "aspect_ratio": str(aspect_ratio or "16:9").strip() or "16:9",
-                "seconds": int(video_provider_options.get("seconds") or 5),
-                "resolution": "1080p",
+                "mode": ddi_mode,
+                "images": list(ddi_ref_images),
+                "videos": list(ddi_ref_videos),
+                "audios": list(ddi_ref_audios),
+                "ratio": str(video_provider_options.get("ratio") or aspect_ratio or "16:9").strip()
+                or "16:9",
+                "duration": int(video_provider_options.get("duration") or 5),
+                "resolution": "1080P",
+                "watermark": False,
                 "auto_retry_busy": bool(video_provider_options.get("auto_retry_busy", False)),
-                "reference_image_urls": list(ddi_ref_images),
-                "reference_video_urls": list(ddi_ref_videos),
-                "reference_audio_urls": list(ddi_ref_audios),
             }
             try:
                 provider_payload_callback(

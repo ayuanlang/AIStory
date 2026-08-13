@@ -1631,8 +1631,13 @@ def _append_video_api_ref_mapping(
     model: str = "",
     preserve_submitted_refs: bool = False,
 ) -> Tuple[str, List[str]]:
-    is_seedance = "seedance" in str(provider or "").lower() or "seedance" in str(model or "").lower()
-    original_use_prev_video = use_prev_video
+    provider_l = str(provider or "").strip().lower()
+    model_l = str(model or "").strip().lower()
+    is_seedance = "seedance" in provider_l or "seedance" in model_l
+    is_ddimatuo = "ddimatuo" in provider_l
+    # Seedance / DdiMatuo bind @VideoN in prompt to videos[] / reference videos.
+    supports_video_ref_prompt = is_seedance or is_ddimatuo
+    original_use_prev_video = bool(use_prev_video)
     if is_seedance:
         use_prev_video = True
 
@@ -1650,28 +1655,31 @@ def _append_video_api_ref_mapping(
         updated_source = str(source_text or "").strip()
         if not updated_source:
             return updated_source
-        if not (reference_video_urls and is_seedance):
-            return updated_source
 
+        # 上镜续写：所有供应商一律注入续写指令（不依赖 provider）。
         if original_use_prev_video:
-            vid_tag_nospace = "@Video1"
             has_continuation_instruction = bool(
                 re.search(r"延长\s*@?Video\s*1", updated_source, flags=re.IGNORECASE)
                 or re.search(r"延长\s*视频\s*@?Video\s*1", updated_source, flags=re.IGNORECASE)
             )
             if not has_continuation_instruction:
-                updated_source = f"延长{vid_tag_nospace}，一镜到底，要参考视频的角色站位建置运镜。\n\n{updated_source.strip()}"
+                updated_source = (
+                    "延长@Video1，一镜到底，要参考视频的角色站位建置运镜。\n\n"
+                    f"{updated_source.strip()}"
+                )
 
-        added_videos = False
-        for idx in range(1, len(reference_video_urls) + 1):
-            vid_tag = f"@Video {idx}"
-            vid_tag_nospace = f"@Video{idx}"
-            if vid_tag not in updated_source and vid_tag_nospace not in updated_source:
-                if not added_videos:
-                    updated_source = f"{updated_source.strip()}，参考视频是 {vid_tag}"
-                    added_videos = True
-                else:
-                    updated_source = f"{updated_source.strip()} {vid_tag}"
+        # Providers that bind @VideoN in prompt also get missing video tags appended.
+        if reference_video_urls and supports_video_ref_prompt:
+            added_videos = False
+            for idx in range(1, len(reference_video_urls) + 1):
+                vid_tag = f"@Video {idx}"
+                vid_tag_nospace = f"@Video{idx}"
+                if vid_tag not in updated_source and vid_tag_nospace not in updated_source:
+                    if not added_videos:
+                        updated_source = f"{updated_source.strip()}，参考视频是 {vid_tag}"
+                        added_videos = True
+                    else:
+                        updated_source = f"{updated_source.strip()} {vid_tag}"
 
         return updated_source
 
@@ -1683,9 +1691,12 @@ def _append_video_api_ref_mapping(
         )
         return original_text, ordered_refs
 
-    if not ordered_refs and not isinstance(reference_video_urls, list):
+    if not ordered_refs and not isinstance(reference_video_urls, list) and not original_use_prev_video:
         logger.info("[_append_video_api_ref_mapping] skip no refs/videos | prompt_len=%s", len(original_text))
         return original_text, ordered_refs
+
+    if not ordered_refs and not isinstance(reference_video_urls, list) and original_use_prev_video:
+        return _append_reference_video_instruction(original_text), ordered_refs
 
     # Frame-only / hybrid prompts may already carry correct @Image role lines.
     # Without an entity lookup, preserve them instead of rewriting to 附加参考N.

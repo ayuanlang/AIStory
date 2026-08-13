@@ -2873,7 +2873,7 @@ def init_system_api_settings(db):
     ddimatuo_provider = "ddimatuo"
     ddimatuo_base_url = "https://api.ddimatuo.top"
     ddimatuo_model_items = [
-        ("DdiMatuo SD2 Pro", "sd2-pro"),
+        ("DdiMatuo SD 2.0", "SD_2.0"),
     ]
     existing_ddi_rows = db.query(SystemAPISetting).filter(
         SystemAPISetting.provider == ddimatuo_provider,
@@ -2888,6 +2888,43 @@ def init_system_api_settings(db):
         if (row.api_key or "").strip():
             ddi_shared_api_key = row.api_key.strip()
             break
+
+    # Migrate legacy sd2-pro rows to SD_2.0 contract.
+    try:
+        ddi_model_migrated = 0
+        for row in existing_ddi_rows:
+            legacy_model = str(row.model or "").strip()
+            if legacy_model.lower() not in {"sd2-pro", "sd2_pro", "sd_2.0"}:
+                continue
+            if legacy_model == "SD_2.0" and str(row.base_model or "").strip() == "SD_2.0":
+                continue
+            row.model = "SD_2.0"
+            row.base_model = "SD_2.0"
+            if not str(row.name or "").strip() or "sd2" in str(row.name or "").lower():
+                row.name = "DdiMatuo SD 2.0"
+            cfg = row.config if isinstance(row.config, dict) else {}
+            if not isinstance(cfg, dict):
+                cfg = {}
+            cfg = dict(cfg)
+            cfg["resolution"] = "1080P"
+            cfg["watermark"] = False
+            cfg["mode"] = str(cfg.get("mode") or "omni_reference")
+            cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos/generations"
+            cfg["query_endpoint"] = f"{ddimatuo_base_url}/v1/videos"
+            cfg["notes"] = (
+                "DdiMatuo poll-only. POST /v1/videos/generations; model=SD_2.0; "
+                "mode=omni_reference|first_last; duration 4-15; ratio; "
+                "images/videos/audios; resolution 720P|1080P; watermark=false; "
+                "Idempotency-Key reuse on timeout."
+            )
+            row.config = cfg
+            ddi_model_migrated += 1
+            existing_ddi_models.add("sd_2.0")
+        if ddi_model_migrated > 0:
+            db.commit()
+            logger.info("Migrated %s ddimatuo rows to model=SD_2.0", ddi_model_migrated)
+    except Exception as ddi_mig_err:
+        logger.warning("Failed to migrate ddimatuo model to SD_2.0: %s", ddi_mig_err)
 
     ddi_added = 0
     for display_name, model_name in ddimatuo_model_items:
@@ -2907,17 +2944,20 @@ def init_system_api_settings(db):
                 "provider_api_key_strategy": "random",
                 "poll_interval_seconds": 5,
                 "poll_timeout_seconds": 600,
-                "endpoint": f"{ddimatuo_base_url}/v1/videos",
+                "endpoint": f"{ddimatuo_base_url}/v1/videos/generations",
                 "query_endpoint": f"{ddimatuo_base_url}/v1/videos",
                 "poll_only": True,
                 "auto_retry_busy": False,
-                "resolution": "1080p",
+                "mode": "omni_reference",
+                "resolution": "1080P",
+                "watermark": False,
                 "aspect_ratios": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
                 "durations_seconds": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
                 "notes": (
-                    "DdiMatuo poll-only. model from system API settings; seconds 4-15; "
-                    "prompt uses @imageN/@videoN/@audioN; reference_*_urls public HTTPS; "
-                    "need ≥1 image or video; auto_retry_busy default false."
+                    "DdiMatuo poll-only. POST /v1/videos/generations; model=SD_2.0; "
+                    "mode=omni_reference|first_last; duration 4-15; ratio; "
+                    "images/videos/audios; resolution 720P|1080P; watermark=false; "
+                    "Idempotency-Key reuse on timeout."
                 ),
             },
             is_active=False,
@@ -2925,25 +2965,41 @@ def init_system_api_settings(db):
         existing_ddi_models.add(key)
         ddi_added += 1
 
-    # Force existing ddimatuo rows to resolution=1080p (hard contract).
+    # Force existing ddimatuo rows onto generations endpoint + 1080P default.
     try:
-        ddi_resolution_updated = 0
+        ddi_cfg_updated = 0
         for row in existing_ddi_rows:
             cfg = row.config if isinstance(row.config, dict) else {}
             if not isinstance(cfg, dict):
                 cfg = {}
-            raw_res = str(cfg.get("resolution") or "").strip()
-            if raw_res == "1080p":
-                continue
             cfg = dict(cfg)
-            cfg["resolution"] = "1080p"
-            row.config = cfg
-            ddi_resolution_updated += 1
-        if ddi_resolution_updated > 0:
+            changed = False
+            endpoint = str(cfg.get("endpoint") or "").strip().rstrip("/")
+            if not endpoint or endpoint.lower().endswith("/v1/videos"):
+                cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos/generations"
+                changed = True
+            elif "/v1/videos/generations" not in endpoint.lower() and "ddimatuo" in endpoint.lower():
+                cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos/generations"
+                changed = True
+            query_ep = str(cfg.get("query_endpoint") or "").strip().rstrip("/")
+            if not query_ep or query_ep.lower().endswith("/generations"):
+                cfg["query_endpoint"] = f"{ddimatuo_base_url}/v1/videos"
+                changed = True
+            raw_res = str(cfg.get("resolution") or "").strip()
+            if raw_res.upper() != "1080P" or raw_res != "1080P":
+                cfg["resolution"] = "1080P"
+                changed = True
+            if cfg.get("watermark") is not False:
+                cfg["watermark"] = False
+                changed = True
+            if changed:
+                row.config = cfg
+                ddi_cfg_updated += 1
+        if ddi_cfg_updated > 0:
             db.commit()
-            logger.info("Forced %s ddimatuo rows to resolution=1080p", ddi_resolution_updated)
+            logger.info("Updated %s ddimatuo rows to generations endpoint / 1080P", ddi_cfg_updated)
     except Exception as ddi_res_err:
-        logger.warning("Failed to backfill ddimatuo default resolution: %s", ddi_res_err)
+        logger.warning("Failed to backfill ddimatuo endpoint/resolution: %s", ddi_res_err)
 
     if ddi_added > 0:
         db.commit()
