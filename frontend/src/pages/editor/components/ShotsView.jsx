@@ -2630,6 +2630,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             || detail.includes('image generation failed')
             || detail.includes('nukoai')
             || detail.includes('shishikeji')
+            || detail.includes('ddimatuo')
             || detail.includes('provider')
             || detail.includes('insufficient')
             || detail.includes('submit failed')

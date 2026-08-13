@@ -189,6 +189,11 @@ def _resolve_poll_credentials(job: Dict[str, Any]) -> Tuple[str, str, str, str]:
     ) and not query_endpoint:
         root = (base_url or "https://api.shishikeji.com").rstrip("/")
         query_endpoint = f"{root}/api/task" if not root.lower().endswith("/api/task") else root
+    if "ddimatuo" in provider_l and not query_endpoint:
+        root = (base_url or "https://api.ddimatuo.top").rstrip("/")
+        query_endpoint = (
+            f"{root}/v1/videos" if not root.lower().endswith("/v1/videos") else root
+        )
 
     return api_key, query_endpoint, provider, base_url
 

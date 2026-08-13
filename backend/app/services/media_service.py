@@ -706,6 +706,8 @@ class MediaGenerationService:
             "虾客漫sd2",
         }:
             return "shishikeji"
+        if normalized in {"ddimatuo", "ddi matuo", "ddimatuo.top"}:
+            return "ddimatuo"
         return raw or "unknown"
 
     def _vendor_failed_message(self, provider: Any, reason: Any) -> str:
@@ -2889,6 +2891,7 @@ class MediaGenerationService:
                 "generating",
                 "pending",
                 "submitted",
+                "submitting",
                 "polling",
                 "in_progress",
                 "in-progress",
@@ -2961,9 +2964,72 @@ class MediaGenerationService:
             or "虾客漫" in provider_l
             or "shishikeji.com" in str(endpoint or base or "").lower()
         )
+        is_ddimatuo = (
+            "ddimatuo" in provider_l
+            or "ddimatuo.top" in str(endpoint or base or "").lower()
+        )
 
         try:
             raw_payload: Dict[str, Any] = {}
+
+            if is_ddimatuo:
+                root = (base or "https://api.ddimatuo.top").rstrip("/")
+                if not endpoint:
+                    endpoint = f"{root}/v1/videos" if not root.rstrip("/").lower().endswith("/v1/videos") else root
+                elif endpoint.startswith("/"):
+                    endpoint = f"{root}{endpoint}"
+                elif "ddimatuo.top" in endpoint.lower() and not endpoint.rstrip("/").lower().endswith("/v1/videos") and "/v1/videos/" not in endpoint.lower():
+                    endpoint = f"{endpoint.rstrip('/')}/v1/videos"
+                headers = {
+                    "Authorization": f"Bearer {stable_key}",
+                    "Accept": "application/json",
+                }
+                target_url = f"{endpoint.rstrip('/')}/{urllib.parse.quote(stable_task_id)}"
+
+                def _ddi_get(use_proxy: bool = True):
+                    kwargs = {"headers": headers, "timeout": 30, "verify": False}
+                    if not use_proxy:
+                        kwargs["proxies"] = {"http": None, "https": None}
+                    return requests.get(target_url, **kwargs)
+
+                try:
+                    resp = _ddi_get(True)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    resp = _ddi_get(False)
+                if resp is None or getattr(resp, "status_code", None) not in {200, 201}:
+                    return {"error": f"ddimatuo_http_{getattr(resp, 'status_code', None)}"}
+                try:
+                    raw_payload = resp.json() if resp.content else {}
+                except Exception:
+                    return {"error": "ddimatuo_invalid_json"}
+                if not isinstance(raw_payload, dict):
+                    return {"error": "ddimatuo_invalid_payload"}
+
+                err = raw_payload.get("error") if isinstance(raw_payload.get("error"), dict) else {}
+                status = _normalize_status(
+                    raw_payload.get("status")
+                    or raw_payload.get("state")
+                    or (err.get("code") if err else None)
+                )
+                url = str(raw_payload.get("video_url") or raw_payload.get("videoUrl") or "").strip()
+                if url and not url.startswith(("http://", "https://")):
+                    url = urllib.parse.urljoin(root.rstrip("/") + "/", url.lstrip("/"))
+                if not url:
+                    url = _pick_url(raw_payload) or ""
+                    if url and not str(url).startswith(("http://", "https://")):
+                        url = urllib.parse.urljoin(root.rstrip("/") + "/", str(url).lstrip("/"))
+                if url and status not in {"failed", "canceled"}:
+                    return _pack(raw_payload, status="succeeded", url=url)
+                if status in {"failed", "canceled"} or err:
+                    err_msg = str(
+                        err.get("message")
+                        or err.get("code")
+                        or raw_payload.get("message")
+                        or status
+                        or "ddimatuo_query_failed"
+                    ).strip()
+                    return _pack(raw_payload, status="failed", error=err_msg)
+                return _pack(raw_payload, status=status or "running", pending=True)
 
             if is_shishikeji:
                 root = (base or "https://api.shishikeji.com").rstrip("/")
@@ -5235,6 +5301,9 @@ class MediaGenerationService:
             "xia ke man": "shishikeji",
             "虾客漫": "shishikeji",
             "虾客漫sd2": "shishikeji",
+            "ddimatuo": "ddimatuo",
+            "ddi matuo": "ddimatuo",
+            "ddimatuo.top": "ddimatuo",
             "ark-seedance": "ark-seedance",
             "ark_seedance": "ark-seedance",
             "ark seedance": "ark-seedance",
@@ -5314,8 +5383,8 @@ class MediaGenerationService:
         elif resolved_category == "Image" and "/v1/images/generations" in endpoint_hint_lower:
             runtime_activation = "image_openai_compatible"
         elif resolved_category == "Video" and ("/v1/videos" in endpoint_hint_lower or "/v1/chat/completions" in endpoint_hint_lower):
-            # NukoAi / ShiShiKeJi use native poll APIs, not OpenAI-compatible.
-            if resolved_provider not in {"nukoai", "shishikeji"}:
+            # NukoAi / ShiShiKeJi / DdiMatuo use native poll APIs, not OpenAI-compatible.
+            if resolved_provider not in {"nukoai", "shishikeji", "ddimatuo"}:
                 runtime_activation = "video_openai_compatible"
         elif resolved_category == "Voice" and "voice-clone" in endpoint_hint_lower:
             runtime_activation = "audio_runninghub_compatible"
@@ -5764,6 +5833,17 @@ class MediaGenerationService:
                 aspect_ratio=aspect_ratio,
                 negative_prompt=negative_prompt,
             )
+        if normalized == "ddimatuo":
+            return await self._handle_ddimatuo_generation(
+                "video",
+                prompt,
+                active_config,
+                reference_image_url,
+                last_frame_url=last_frame_url,
+                duration=duration,
+                aspect_ratio=aspect_ratio,
+                negative_prompt=negative_prompt,
+            )
         # Ark API-Key Seedance path must not fall through to doubao/ark-seedance.
         if normalized == "ark":
             return await self._handle_ark_generation(
@@ -5891,6 +5971,7 @@ class MediaGenerationService:
             "pixelmove": {"base_url": "https://portal.pixelmove.ai", "model": "seedance-2.0"},
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
+            "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "sd2-pro"},
         }
 
         rows = self._system_setting_query(session, category=category).order_by(SystemAPISetting.id.asc()).all()
@@ -6268,6 +6349,17 @@ class MediaGenerationService:
                     )
                 if effective_provider == "shishikeji":
                     return await self._handle_shishikeji_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        last_frame_url=effective_last_frame_url,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                    )
+                if effective_provider == "ddimatuo":
+                    return await self._handle_ddimatuo_generation(
                         "video",
                         prompt,
                         active_config,
@@ -6868,6 +6960,7 @@ class MediaGenerationService:
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
+            "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "sd2-pro"},
         }
 
         try:
@@ -12302,6 +12395,642 @@ class MediaGenerationService:
         )
         return {
             "error": f"ShiShiKeJi polling timeout after {poll_timeout_seconds}s",
+            "submit_failed": False,
+            "metadata": {
+                **base_metadata,
+                "task_id": task_id,
+                "provider_task_id": task_id,
+                "taskId": task_id,
+            },
+        }
+
+    async def _handle_ddimatuo_generation(
+        self,
+        gen_type,
+        prompt,
+        config,
+        ref_image=None,
+        last_frame_url=None,
+        duration=5,
+        aspect_ratio=None,
+        negative_prompt: Optional[str] = None,
+    ):
+        """DdiMatuo video API: submit then poll only (no upstream webhook)."""
+        if str(gen_type or "").strip().lower() != "video":
+            return {"error": "DdiMatuo currently supports video generation only", "submit_failed": True}
+
+        api_key = str(config.get("api_key") or config.get("clientApiKey") or "").strip()
+        if not api_key:
+            return {"error": "No DdiMatuo API Key", "submit_failed": True}
+
+        tool_conf = config.get("config", {}) or {}
+        if tool_conf.get("_pure_callback_mode"):
+            logger.info("DdiMatuo ignoring pure_callback_mode | reason=poll_only_provider")
+
+        base_url = str(
+            config.get("base_url")
+            or tool_conf.get("base_url")
+            or "https://api.ddimatuo.top"
+        ).strip().rstrip("/")
+        if base_url.lower().endswith("/v1/videos"):
+            root_url = base_url[: -len("/v1/videos")].rstrip("/")
+            submit_url = base_url
+        else:
+            root_url = base_url
+            submit_url = str(tool_conf.get("endpoint") or f"{root_url}/v1/videos").strip() or f"{root_url}/v1/videos"
+        query_root = str(tool_conf.get("query_endpoint") or tool_conf.get("poll_endpoint") or f"{root_url}/v1/videos").strip()
+        if "{task" in query_root.lower():
+            poll_template = query_root
+            query_endpoint_base = query_root.split("{")[0].rstrip("/")
+        else:
+            query_endpoint_base = query_root.rstrip("/")
+            if not query_endpoint_base.lower().endswith("/v1/videos"):
+                query_endpoint_base = f"{query_endpoint_base}/v1/videos"
+            poll_template = f"{query_endpoint_base}/{{task_id}}"
+
+        model = str(
+            config.get("model")
+            or tool_conf.get("model")
+            or config.get("base_model")
+            or tool_conf.get("base_model")
+            or tool_conf.get("runtime_model")
+            or "sd2-pro"
+        ).strip()
+        if not model:
+            return {"error": "DdiMatuo model is required", "submit_failed": True}
+
+        prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+        prompt_text = str(prompt_text or "").strip()
+        if not prompt_text:
+            return {"error": "DdiMatuo prompt is required", "submit_failed": True}
+
+        allowed_duration_values = self._normalize_duration_enum_values(
+            tool_conf.get("durations_seconds")
+            or tool_conf.get("duration_values")
+            or tool_conf.get("allowed_durations")
+            or tool_conf.get("durations")
+            or tool_conf.get("seconds_values")
+            or []
+        )
+        try:
+            seconds_in = int(float(duration if duration is not None else (tool_conf.get("seconds") or tool_conf.get("duration") or 5)))
+        except Exception:
+            seconds_in = 5
+        if seconds_in <= 0:
+            seconds_in = 5
+        if allowed_duration_values:
+            mapped_duration = self._map_duration_nearest(seconds_in, allowed_duration_values, prefer_higher_on_tie=False)
+            if mapped_duration is not None:
+                seconds_in = int(mapped_duration)
+
+        allowed_ratios = self._normalize_str_list(
+            tool_conf.get("ratios")
+            or tool_conf.get("allowed_ratios")
+            or tool_conf.get("aspect_ratios")
+            or []
+        )
+        normalized_ratio = self._normalize_aspect_ratio_value(
+            aspect_ratio or tool_conf.get("aspect_ratio") or tool_conf.get("ratio")
+        )
+        if not normalized_ratio or normalized_ratio == "adaptive":
+            normalized_ratio = "16:9"
+        if allowed_ratios and normalized_ratio not in allowed_ratios:
+            for candidate in allowed_ratios:
+                if str(candidate).strip() == normalized_ratio:
+                    normalized_ratio = str(candidate).strip()
+                    break
+
+        def _https_public_only(urls: List[str]) -> List[str]:
+            out: List[str] = []
+            for item in urls:
+                text = str(item or "").strip()
+                if not text.lower().startswith("https://"):
+                    continue
+                if self._is_public_http_url(text) and text not in out:
+                    out.append(text)
+            return out
+
+        image_refs = self._resolve_ref_list_for_api(
+            ref_image,
+            force_data_uri_for_local=True,
+            prefer_public_upload_url=True,
+        )
+        image_refs = _https_public_only([u for u in image_refs if u])
+
+        extra_image_refs = self._resolve_ref_list_for_api(
+            tool_conf.get("reference_image_urls")
+            or tool_conf.get("image_urls")
+            or tool_conf.get("referenceImageUrls")
+            or [],
+            force_data_uri_for_local=True,
+            prefer_public_upload_url=True,
+        )
+        for item in _https_public_only([u for u in extra_image_refs if u]):
+            if item not in image_refs:
+                image_refs.append(item)
+
+        if last_frame_url:
+            last_frame_resolved = self._resolve_ref_for_api(
+                last_frame_url,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+            )
+            last_https = _https_public_only([last_frame_resolved] if last_frame_resolved else [])
+            last_frame_resolved = last_https[0] if last_https else None
+            if last_frame_resolved and last_frame_resolved not in image_refs:
+                image_refs.append(last_frame_resolved)
+
+        image_refs = image_refs[:9]
+        video_refs = _https_public_only(
+            self._normalize_str_list(
+                tool_conf.get("reference_video_urls")
+                or tool_conf.get("video_urls")
+                or tool_conf.get("referenceVideoUrls")
+                or []
+            )
+        )[:3]
+        audio_refs = _https_public_only(
+            self._normalize_str_list(
+                tool_conf.get("reference_audio_urls")
+                or tool_conf.get("audio_urls")
+                or tool_conf.get("referenceAudioUrls")
+                or []
+            )
+        )[:3]
+
+        auto_retry_busy = tool_conf.get("auto_retry_busy")
+        if auto_retry_busy is None:
+            auto_retry_busy = False
+        else:
+            auto_retry_busy = bool(auto_retry_busy)
+
+        payload: Dict[str, Any] = {
+            "prompt": prompt_text,
+            "model": model,
+            "seconds": int(seconds_in),
+            "aspect_ratio": normalized_ratio,
+            "auto_retry_busy": auto_retry_busy,
+            "reference_image_urls": image_refs,
+            "reference_video_urls": video_refs,
+            "reference_audio_urls": audio_refs,
+        }
+
+        poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        # Docs: poll every 5 seconds.
+        poll_interval_seconds = 5
+        try:
+            if tool_conf.get("poll_timeout_seconds") is not None:
+                poll_timeout_seconds = min(900, max(60, int(tool_conf.get("poll_timeout_seconds"))))
+        except Exception:
+            poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        try:
+            if tool_conf.get("poll_interval_seconds") is not None:
+                poll_interval_seconds = max(3, min(10, int(tool_conf.get("poll_interval_seconds"))))
+        except Exception:
+            poll_interval_seconds = 5
+
+        base_metadata = {
+            "provider": "ddimatuo",
+            "model": model,
+            "prompt": prompt_text,
+            "submit_url": submit_url,
+            "query_endpoint": query_endpoint_base,
+            "poll_only": True,
+            "seconds": int(seconds_in),
+            "aspect_ratio": normalized_ratio,
+            "auto_retry_busy": auto_retry_busy,
+        }
+
+        idempotency_key = str(
+            tool_conf.get("idempotency_key")
+            or tool_conf.get("Idempotency-Key")
+            or uuid.uuid4()
+        ).strip()
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Idempotency-Key": idempotency_key,
+        }
+
+        def _extract_error_message(data: Any, fallback: str = "") -> str:
+            if not isinstance(data, dict):
+                return fallback
+            err = data.get("error")
+            if isinstance(err, dict):
+                msg = str(err.get("message") or err.get("msg") or "").strip()
+                code = str(err.get("code") or "").strip()
+                if msg and code:
+                    return f"{code}: {msg}"
+                if msg:
+                    return msg
+                if code:
+                    return code
+            if isinstance(err, str) and err.strip():
+                return err.strip()
+            for key in ("error_message", "errorMessage", "message", "msg", "code"):
+                text = str(data.get(key) or "").strip()
+                if text:
+                    return text
+            return fallback
+
+        def _extract_task_id(data: Any) -> Optional[str]:
+            if not isinstance(data, dict):
+                return None
+            for key in ("id", "task_id", "taskId"):
+                val = data.get(key)
+                if val:
+                    return str(val).strip()
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            for key in ("id", "task_id", "taskId"):
+                val = inner.get(key)
+                if val:
+                    return str(val).strip()
+            return None
+
+        def _extract_status(data: Any) -> str:
+            if not isinstance(data, dict):
+                return ""
+            return str(data.get("status") or data.get("state") or "").strip().lower()
+
+        def _extract_video_url(data: Any) -> Optional[str]:
+            if not isinstance(data, dict):
+                return None
+            candidates = [
+                data.get("video_url"),
+                data.get("videoUrl"),
+                data.get("url"),
+                data.get("result_url"),
+                data.get("resultUrl"),
+            ]
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            candidates.extend(
+                [
+                    inner.get("video_url"),
+                    inner.get("videoUrl"),
+                    inner.get("url"),
+                ]
+            )
+            for item in candidates:
+                text_item = str(item or "").strip()
+                if not text_item:
+                    continue
+                if text_item.startswith(("http://", "https://")):
+                    return text_item
+                # Docs: video_url is relative; join with API base.
+                return urllib.parse.urljoin(root_url.rstrip("/") + "/", text_item.lstrip("/"))
+            return None
+
+        submit_timeouts = _media_submit_timeout_pair(
+            connect_timeout=20,
+            io_timeout=max(120, int(tool_conf.get("submit_timeout_seconds") or 120)),
+        )
+        submit_retries = 2
+        try:
+            submit_retries = max(1, min(4, int(tool_conf.get("submit_retries") or 2)))
+        except Exception:
+            submit_retries = 2
+
+        submit_resp = None
+        last_submit_error: Optional[Exception] = None
+        for submit_attempt in range(1, submit_retries + 1):
+            try:
+                # Fresh idempotency key on network retry of a brand-new attempt only when previous never got a response.
+                if submit_attempt > 1 and last_submit_error is not None:
+                    headers["Idempotency-Key"] = str(uuid.uuid4())
+                submit_resp = await asyncio.to_thread(
+                    requests.post,
+                    submit_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=submit_timeouts,
+                    verify=False,
+                )
+                last_submit_error = None
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as submit_exc:
+                last_submit_error = submit_exc
+                logger.warning(
+                    "DdiMatuo submit network error | attempt=%s/%s url=%s error=%s",
+                    submit_attempt,
+                    submit_retries,
+                    submit_url,
+                    submit_exc,
+                )
+                if submit_attempt < submit_retries:
+                    await asyncio.sleep(min(8, 2 * submit_attempt))
+                    continue
+            except Exception as submit_exc:
+                logger.exception("DdiMatuo submit unexpected error | url=%s", submit_url)
+                return {
+                    "error": f"DdiMatuo submit failed: {submit_exc}",
+                    "submit_failed": True,
+                    "details": {"submit_url": submit_url, "model": model},
+                }
+
+        if submit_resp is None:
+            return {
+                "error": f"DdiMatuo submit timed out/unreachable after {submit_retries} attempts: {last_submit_error}",
+                "submit_failed": True,
+                "details": {
+                    "submit_url": submit_url,
+                    "model": model,
+                    "timeout": submit_timeouts,
+                },
+            }
+
+        submit_data: Dict[str, Any] = {}
+        if submit_resp.text:
+            try:
+                parsed_submit = submit_resp.json()
+                submit_data = parsed_submit if isinstance(parsed_submit, dict) else {}
+            except Exception:
+                submit_data = {}
+
+        if submit_resp.status_code == 409:
+            # Same Idempotency-Key with different body → conflict; regenerate and retry once.
+            err_msg = _extract_error_message(submit_data, fallback="IDEMPOTENCY_CONFLICT")
+            headers["Idempotency-Key"] = str(uuid.uuid4())
+            try:
+                submit_resp = await asyncio.to_thread(
+                    requests.post,
+                    submit_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=submit_timeouts,
+                    verify=False,
+                )
+                submit_data = submit_resp.json() if submit_resp.text else {}
+                if not isinstance(submit_data, dict):
+                    submit_data = {}
+            except Exception as retry_exc:
+                return {
+                    "error": f"DdiMatuo submit failed after idempotency conflict: {retry_exc}",
+                    "submit_failed": True,
+                    "details": {"previous_error": err_msg},
+                }
+
+        if submit_resp.status_code not in [200, 201, 202] or submit_data.get("error"):
+            err_msg = _extract_error_message(
+                submit_data,
+                fallback=(submit_resp.text or "")[:500] or f"HTTP {submit_resp.status_code}",
+            )
+            return {
+                "error": f"DdiMatuo submit failed: {err_msg}",
+                "submit_failed": True,
+                "details": submit_data or (submit_resp.text or "")[:1000],
+            }
+
+        task_id = _extract_task_id(submit_data)
+        if not task_id:
+            direct_url = _extract_video_url(submit_data)
+            if direct_url:
+                return {"url": direct_url, "metadata": {**base_metadata, "raw": submit_data}}
+            return {
+                "error": "DdiMatuo submit succeeded but task id missing",
+                "submit_failed": True,
+                "details": submit_data,
+            }
+
+        task_id_callback = tool_conf.get("_provider_task_id_callback")
+        if callable(task_id_callback):
+            try:
+                callback_result = task_id_callback(str(task_id))
+                if asyncio.iscoroutine(callback_result):
+                    await callback_result
+            except Exception as callback_err:
+                logger.warning("DdiMatuo task_id_callback_failed | task_id=%s error=%s", task_id, callback_err)
+
+        provider_payload_callback = tool_conf.get("_provider_payload_callback")
+        if callable(provider_payload_callback):
+            try:
+                payload_cb_result = provider_payload_callback(
+                    {
+                        "provider": "ddimatuo",
+                        "task_id": str(task_id),
+                        "submit_raw": submit_data,
+                        "query_endpoint": query_endpoint_base,
+                    }
+                )
+                if asyncio.iscoroutine(payload_cb_result):
+                    await payload_cb_result
+            except Exception as payload_cb_err:
+                logger.warning(
+                    "DdiMatuo provider_payload_callback_failed | task_id=%s error=%s",
+                    task_id,
+                    payload_cb_err,
+                )
+
+        poll_url = (
+            poll_template.replace("{taskId}", urllib.parse.quote(task_id))
+            .replace("{task_id}", urllib.parse.quote(task_id))
+            .replace("{id}", urllib.parse.quote(task_id))
+        )
+        poll_headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+        }
+
+        max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+        logger.info(
+            "DdiMatuo poll-only generation started | task_id=%s model=%s seconds=%s aspect_ratio=%s poll_interval=%ss poll_timeout=%ss max_attempts=%s poll_url=%s",
+            task_id,
+            model,
+            seconds_in,
+            normalized_ratio,
+            poll_interval_seconds,
+            poll_timeout_seconds,
+            max_attempts,
+            poll_url,
+        )
+
+        last_logged_status = ""
+        poll_started_at = time.time()
+        for attempt in range(1, max_attempts + 1):
+            await asyncio.sleep(poll_interval_seconds)
+            elapsed_s = int(time.time() - poll_started_at)
+            try:
+                poll_resp = await asyncio.to_thread(
+                    requests.get,
+                    poll_url,
+                    headers=poll_headers,
+                    timeout=30,
+                    verify=False,
+                )
+            except requests.exceptions.Timeout:
+                logger.warning(
+                    "DdiMatuo poll timeout | task_id=%s attempt=%s/%s elapsed=%ss",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                )
+                continue
+            except Exception as poll_exc:
+                logger.warning(
+                    "DdiMatuo poll exception | task_id=%s attempt=%s/%s elapsed=%ss error=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    poll_exc,
+                )
+                if attempt == max_attempts:
+                    return {
+                        "error": "DdiMatuo polling exception",
+                        "submit_failed": False,
+                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
+                    }
+                continue
+
+            if poll_resp.status_code == 404:
+                logger.warning(
+                    "DdiMatuo poll 404 | task_id=%s attempt=%s/%s elapsed=%ss",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                )
+                continue
+            if poll_resp.status_code not in [200, 201]:
+                logger.warning(
+                    "DdiMatuo poll http=%s | task_id=%s attempt=%s/%s elapsed=%ss body=%s",
+                    poll_resp.status_code,
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    (poll_resp.text or "")[:300],
+                )
+                if poll_resp.status_code in {401, 402}:
+                    err_msg = _extract_error_message(
+                        {},
+                        fallback=(poll_resp.text or "")[:300] or f"HTTP {poll_resp.status_code}",
+                    )
+                    try:
+                        err_payload = poll_resp.json() if poll_resp.text else {}
+                        if isinstance(err_payload, dict):
+                            err_msg = _extract_error_message(err_payload, fallback=err_msg)
+                    except Exception:
+                        pass
+                    return {
+                        "error": f"DdiMatuo generation failed: {err_msg}",
+                        "submit_failed": False,
+                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
+                    }
+                if attempt == max_attempts:
+                    return {
+                        "error": f"DdiMatuo polling failed {poll_resp.status_code}",
+                        "submit_failed": False,
+                        "details": (poll_resp.text or "")[:1000],
+                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
+                    }
+                continue
+
+            try:
+                poll_data = poll_resp.json() if poll_resp.text else {}
+            except Exception:
+                poll_data = {}
+                logger.warning(
+                    "DdiMatuo poll invalid json | task_id=%s attempt=%s/%s elapsed=%ss body=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    (poll_resp.text or "")[:300],
+                )
+
+            status_val = _extract_status(poll_data)
+            result_url = _extract_video_url(poll_data)
+            if status_val != last_logged_status or attempt == 1 or attempt % 5 == 0 or attempt == max_attempts:
+                logger.info(
+                    "DdiMatuo poll | task_id=%s attempt=%s/%s elapsed=%ss status=%s has_video_url=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    status_val or "unknown",
+                    bool(result_url),
+                )
+                last_logged_status = status_val
+
+            if status_val in {"completed", "success", "succeeded", "done", "finished"} or (
+                result_url and status_val in {"", "completed", "success", "succeeded", "done", "finished"}
+            ):
+                if result_url:
+                    result_metadata = {
+                        **base_metadata,
+                        "raw": poll_data,
+                        "task_id": task_id,
+                        "provider_task_id": task_id,
+                        "taskId": task_id,
+                        "oss_persist_pending": True,
+                    }
+                    logger.info(
+                        "DdiMatuo poll completed | task_id=%s attempt=%s/%s elapsed=%ss url=%s",
+                        task_id,
+                        attempt,
+                        max_attempts,
+                        elapsed_s,
+                        str(result_url).split("?", 1)[0],
+                    )
+                    result_callback = tool_conf.get("_provider_result_callback")
+                    if callable(result_callback):
+                        try:
+                            cb_result = result_callback(
+                                {
+                                    "url": result_url,
+                                    "metadata": result_metadata,
+                                    "provider": "ddimatuo",
+                                    "task_id": str(task_id),
+                                }
+                            )
+                            if asyncio.iscoroutine(cb_result):
+                                await cb_result
+                        except Exception as result_cb_err:
+                            logger.warning(
+                                "DdiMatuo provider_result_callback_failed | task_id=%s error=%s",
+                                task_id,
+                                result_cb_err,
+                            )
+                    return {"url": result_url, "metadata": result_metadata}
+                return {
+                    "error": "DdiMatuo generation completed without video_url",
+                    "submit_failed": False,
+                    "details": poll_data,
+                    "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
+                }
+
+            if status_val in {"failed", "error", "cancelled", "canceled", "rejected"}:
+                err_msg = _extract_error_message(poll_data, fallback="DdiMatuo generation failed")
+                logger.error(
+                    "DdiMatuo poll failed | task_id=%s attempt=%s/%s elapsed=%ss status=%s error=%s",
+                    task_id,
+                    attempt,
+                    max_attempts,
+                    elapsed_s,
+                    status_val,
+                    err_msg,
+                )
+                return {
+                    "error": f"DdiMatuo generation failed: {err_msg}",
+                    "submit_failed": False,
+                    "details": poll_data,
+                    "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id, "raw": poll_data},
+                }
+
+            # queued / submitting / running — keep polling
+
+        logger.error(
+            "DdiMatuo poll timeout exhausted | task_id=%s attempts=%s elapsed=%ss timeout=%ss last_status=%s",
+            task_id,
+            max_attempts,
+            int(time.time() - poll_started_at),
+            poll_timeout_seconds,
+            last_logged_status or None,
+        )
+        return {
+            "error": f"DdiMatuo polling timeout after {poll_timeout_seconds}s",
             "submit_failed": False,
             "metadata": {
                 **base_metadata,

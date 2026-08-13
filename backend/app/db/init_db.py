@@ -2869,6 +2869,61 @@ def init_system_api_settings(db):
     else:
         logger.info("System shishikeji video settings already initialized")
 
+    # Seed DdiMatuo video adapter models — poll-only Bearer auth.
+    ddimatuo_provider = "ddimatuo"
+    ddimatuo_base_url = "https://api.ddimatuo.top"
+    ddimatuo_model_items = [
+        ("DdiMatuo SD2 Pro", "sd2-pro"),
+    ]
+    existing_ddi_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.provider == ddimatuo_provider,
+        SystemAPISetting.category == "Video",
+    ).all()
+    existing_ddi_models = {
+        str(row.model or "").strip().lower()
+        for row in existing_ddi_rows
+    }
+    ddi_shared_api_key = ""
+    for row in existing_ddi_rows:
+        if (row.api_key or "").strip():
+            ddi_shared_api_key = row.api_key.strip()
+            break
+
+    ddi_added = 0
+    for display_name, model_name in ddimatuo_model_items:
+        key = str(model_name or "").strip().lower()
+        if not key or key in existing_ddi_models:
+            continue
+        db.add(SystemAPISetting(
+            name=display_name,
+            category="Video",
+            provider=ddimatuo_provider,
+            api_key=ddi_shared_api_key,
+            base_url=ddimatuo_base_url,
+            model=model_name,
+            base_model=model_name,
+            modality=migrate_legacy_modality_string("text-to-video,image-to-video"),
+            config={
+                "provider_api_key_strategy": "random",
+                "poll_interval_seconds": 5,
+                "poll_timeout_seconds": 600,
+                "endpoint": f"{ddimatuo_base_url}/v1/videos",
+                "query_endpoint": f"{ddimatuo_base_url}/v1/videos",
+                "poll_only": True,
+                "auto_retry_busy": False,
+                "notes": "DdiMatuo poll-only. Bearer sk-...; relative video_url joined to base URL.",
+            },
+            is_active=False,
+        ))
+        existing_ddi_models.add(key)
+        ddi_added += 1
+
+    if ddi_added > 0:
+        db.commit()
+        logger.info("Seeded %s ddimatuo video models into system_api_settings", ddi_added)
+    else:
+        logger.info("System ddimatuo video settings already initialized")
+
 
 def init_initial_data():
     db = SessionLocal()

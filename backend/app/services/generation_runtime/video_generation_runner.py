@@ -1308,6 +1308,7 @@ async def _run_generate_video(
             if _media_svc._normalize_provider_name(resolved_video_provider, "Video") not in {
                 "nukoai",
                 "shishikeji",
+                "ddimatuo",
             }:
                 video_provider_options["_pure_callback_mode"] = True
         is_kie_kling3_video = bool(
