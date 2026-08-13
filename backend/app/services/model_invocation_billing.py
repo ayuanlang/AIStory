@@ -148,6 +148,17 @@ def _extract_provider_usage_from_metadata(metadata: Any) -> Dict[str, Any]:
                     "credits": amount,
                 }
 
+    # DdiMatuo may persist cost_total_cents on metadata root.
+    if metadata.get("cost_total_cents") not in (None, "") or metadata.get("costTotalCents") not in (None, ""):
+        try:
+            from app.services.media_service import _normalize_provider_task_usage
+
+            normalized = _normalize_provider_task_usage(metadata)
+            if normalized:
+                return normalized
+        except Exception:
+            pass
+
     raw_payload = metadata.get("raw")
     if isinstance(raw_payload, dict):
         try:
@@ -180,6 +191,15 @@ def _extract_provider_usage_from_metadata(metadata: Any) -> Dict[str, Any]:
                                 "kie_credits_consumed": amount,
                                 "credits": amount,
                             }
+                if nested.get("cost_total_cents") not in (None, "") or nested.get("costTotalCents") not in (None, ""):
+                    try:
+                        from app.services.media_service import _normalize_provider_task_usage
+
+                        normalized = _normalize_provider_task_usage(nested)
+                        if normalized:
+                            return normalized
+                    except Exception:
+                        pass
 
     return {}
 

@@ -1150,6 +1150,35 @@ def resolve_provider_kie_credits(usage: Optional[Dict[str, Any]] = None) -> floa
     return 0.0
 
 
+def resolve_provider_cost_total_cents(usage: Optional[Dict[str, Any]] = None) -> float:
+    """Resolve actual supplier CNY cents (e.g. DdiMatuo cost_total_cents). 1 credit = 1 cent."""
+    payload = dict(usage or {})
+
+    def _from(src: Dict[str, Any]) -> float:
+        if not isinstance(src, dict):
+            return 0.0
+        direct = safe_non_negative_float(
+            src.get("cost_total_cents") if src.get("cost_total_cents") not in (None, "") else src.get("costTotalCents"),
+            0.0,
+        )
+        if direct > 0:
+            currency = str(src.get("currency") or "CNY").strip().upper()
+            if currency in {"", "CNY"}:
+                return float(direct)
+        return 0.0
+
+    found = _from(payload)
+    if found > 0:
+        return found
+    for nested_key in ("provider_usage", "usage", "raw"):
+        nested = payload.get(nested_key)
+        if isinstance(nested, dict):
+            found = _from(nested)
+            if found > 0:
+                return found
+    return 0.0
+
+
 def estimate_base_amount_by_unit(config: Dict[str, Any], usage: Optional[Dict[str, Any]] = None) -> float:
     if not config:
         return 0.0
@@ -1164,6 +1193,11 @@ def estimate_base_amount_by_unit(config: Dict[str, Any], usage: Optional[Dict[st
     kie_credits = resolve_provider_kie_credits(payload)
     if kie_credits > 0:
         return float(kie_credits_to_system_credits(kie_credits))
+
+    # Prefer actual supplier CNY cents (DdiMatuo cost_total_cents); 1 credit = 0.01 CNY.
+    cost_total_cents = resolve_provider_cost_total_cents(payload)
+    if cost_total_cents > 0:
+        return float(cost_total_cents)
 
     # KIE Gemini Omni: duration-bucket × resolution flat KIE credits (or flat with video input).
     omni_rates = (

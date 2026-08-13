@@ -261,13 +261,23 @@ def _extract_kie_callback_settle_fields(
         out["cost_time"] = cost_time
         out["taskCostTime"] = cost_time
 
-    # RunningHub usage: platform coins / wallet money / third-party money (audit; not KIE credits).
+    # RunningHub / DdiMatuo usage: coins / money / cost_total_cents (audit; not KIE credits).
     for src in sources:
         if not isinstance(src, dict):
             continue
         if out.get("consumeCoins") in (None, "") and src.get("consumeCoins") not in (None, ""):
             try:
                 out["consumeCoins"] = float(src.get("consumeCoins"))
+            except Exception:
+                pass
+        if out.get("cost_total_cents") in (None, "") and src.get("cost_total_cents") not in (None, ""):
+            try:
+                out["cost_total_cents"] = float(src.get("cost_total_cents"))
+            except Exception:
+                pass
+        elif out.get("cost_total_cents") in (None, "") and src.get("costTotalCents") not in (None, ""):
+            try:
+                out["cost_total_cents"] = float(src.get("costTotalCents"))
             except Exception:
                 pass
         if out.get("consumeMoney") in (None, "") and src.get("consumeMoney") not in (None, ""):
@@ -280,12 +290,23 @@ def _extract_kie_callback_settle_fields(
                 out["thirdPartyConsumeMoney"] = float(src.get("thirdPartyConsumeMoney"))
             except Exception:
                 pass
+        for meta_key in ("currency", "billing_status", "billing_unit"):
+            if out.get(meta_key) in (None, "") and src.get(meta_key) not in (None, ""):
+                out[meta_key] = src.get(meta_key)
         if (
             out.get("consumeCoins") not in (None, "")
             and out.get("consumeMoney") not in (None, "")
             and out.get("thirdPartyConsumeMoney") not in (None, "")
         ):
             break
+    if out.get("cost_total_cents") not in (None, ""):
+        out.setdefault("billing_basis", "provider_cost_total_cents")
+        if out.get("consumeMoney") in (None, ""):
+            try:
+                out["consumeMoney"] = float(out.get("cost_total_cents") or 0) / 100.0
+            except Exception:
+                pass
+        out.setdefault("currency", "CNY")
 
     # Nested KIE param JSON often carries actual duration / aspect / resolution.
     param_obj: Dict[str, Any] = {}

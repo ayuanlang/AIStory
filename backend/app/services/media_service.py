@@ -190,6 +190,15 @@ _RUNNINGHUB_USAGE_KEYS = (
     "task_cost_time",
 )
 
+_PROVIDER_MONEY_USAGE_KEYS = (
+    "cost_total_cents",
+    "costTotalCents",
+    "consumeMoney",
+    "consume_money",
+    "thirdPartyConsumeMoney",
+    "third_party_consume_money",
+)
+
 
 def _extract_scalar_provider_credits(payload: Any) -> Dict[str, Any]:
     """Pull scalar credit fields (e.g. KIE webhook data.creditsConsumed)."""
@@ -219,15 +228,67 @@ def _extract_scalar_provider_credits(payload: Any) -> Dict[str, Any]:
     return {}
 
 
+def _extract_provider_money_usage(payload: Any) -> Dict[str, Any]:
+    """Pull money billing scalars (e.g. DdiMatuo cost_total_cents / RunningHub consumeMoney)."""
+    if not isinstance(payload, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    cents = _optional_usage_non_negative_float(
+        payload.get("cost_total_cents")
+        if payload.get("cost_total_cents") not in (None, "")
+        else payload.get("costTotalCents")
+    )
+    if cents is not None:
+        out["cost_total_cents"] = float(cents)
+        out["costTotalCents"] = float(cents)
+    currency = str(payload.get("currency") or "").strip().upper()
+    if currency:
+        out["currency"] = currency
+    billing_status = str(payload.get("billing_status") or payload.get("billingStatus") or "").strip()
+    if billing_status:
+        out["billing_status"] = billing_status
+    billing_unit = str(payload.get("billing_unit") or payload.get("billingUnit") or "").strip()
+    if billing_unit:
+        out["billing_unit"] = billing_unit
+    consume_money = _optional_usage_non_negative_float(
+        payload.get("consumeMoney") if payload.get("consumeMoney") not in (None, "") else payload.get("consume_money")
+    )
+    if consume_money is not None:
+        out["consumeMoney"] = consume_money
+        out["consume_money"] = consume_money
+    elif cents is not None and (not currency or currency == "CNY"):
+        # 1 system credit = 0.01 CNY; cost_total_cents is already in that unit.
+        out["consumeMoney"] = float(cents) / 100.0
+        out["consume_money"] = float(cents) / 100.0
+        out.setdefault("currency", "CNY")
+    if out.get("cost_total_cents") is not None:
+        out.setdefault("billing_basis", "provider_cost_total_cents")
+    return out if (out.get("cost_total_cents") is not None or out.get("consumeMoney") is not None) else {}
+
+
 def _extract_provider_task_usage(payload: Any, *, _depth: int = 0) -> Dict[str, Any]:
     """Extract usage/credits from provider task-query / webhook payloads (Ark, KIE, ZLHub, RunningHub, etc.)."""
     if not isinstance(payload, dict) or _depth > 4:
         return {}
+    # DdiMatuo returns flat cost_total_cents on the task object (no nested usage block).
+    money = _extract_provider_money_usage(payload)
+    if money.get("cost_total_cents") is not None and not isinstance(payload.get("usage"), dict):
+        scalar = _extract_scalar_provider_credits(payload)
+        for sk, sv in scalar.items():
+            money.setdefault(sk, sv)
+        return money
+
     for key in ("usage", "consume", "consumption", "billing", "cost"):
         value = payload.get(key)
         if isinstance(value, dict) and value:
             # Merge scalar credits on the same object when present (KIE sometimes nests both).
             merged = dict(value)
+            nested_money = _extract_provider_money_usage(value)
+            for mk, mv in nested_money.items():
+                merged.setdefault(mk, mv)
+            # Flat cost_total_cents on parent (DdiMatuo) may sit beside nested usage.
+            for mk, mv in money.items():
+                merged.setdefault(mk, mv)
             scalar = _extract_scalar_provider_credits(payload)
             for sk, sv in scalar.items():
                 merged.setdefault(sk, sv)
@@ -235,7 +296,12 @@ def _extract_provider_task_usage(payload: Any, *, _depth: int = 0) -> Dict[str, 
 
     scalar = _extract_scalar_provider_credits(payload)
     if scalar:
+        if money:
+            for mk, mv in money.items():
+                scalar.setdefault(mk, mv)
         return scalar
+    if money:
+        return money
 
     for nested_key in ("data", "output", "result", "content", "task", "response", "eventData"):
         nested = payload.get(nested_key)
@@ -284,8 +350,41 @@ def _normalize_provider_task_usage(usage: Any) -> Dict[str, Any]:
         normalized["credits_consumed"] = credits
         normalized["kie_credits_consumed"] = credits
 
+    # DdiMatuo: cost_total_cents (CNY fen) → consumeMoney (CNY yuan) for audit.
+    cost_total_cents = _optional_usage_non_negative_float(
+        normalized.get("cost_total_cents")
+        if normalized.get("cost_total_cents") not in (None, "")
+        else normalized.get("costTotalCents")
+    )
+    currency = str(normalized.get("currency") or "").strip().upper()
+    if cost_total_cents is not None:
+        normalized["cost_total_cents"] = float(cost_total_cents)
+        normalized["costTotalCents"] = float(cost_total_cents)
+        if not currency or currency == "CNY":
+            normalized.setdefault("currency", "CNY")
+            if normalized.get("consumeMoney") in (None, "") and normalized.get("consume_money") in (None, ""):
+                normalized["consumeMoney"] = float(cost_total_cents) / 100.0
+                normalized["consume_money"] = float(cost_total_cents) / 100.0
+        normalized.setdefault("billing_basis", "provider_cost_total_cents")
+    else:
+        normalized.pop("cost_total_cents", None)
+        normalized.pop("costTotalCents", None)
+
+    for meta_key in ("billing_status", "billingStatus", "billing_unit", "billingUnit", "currency"):
+        if normalized.get(meta_key) in (None, ""):
+            normalized.pop(meta_key, None)
+        elif meta_key == "currency":
+            normalized["currency"] = str(normalized.get(meta_key) or "").strip().upper()
+        elif meta_key in {"billing_status", "billingStatus"}:
+            normalized["billing_status"] = str(normalized.get(meta_key) or "").strip()
+        elif meta_key in {"billing_unit", "billingUnit"}:
+            normalized["billing_unit"] = str(normalized.get(meta_key) or "").strip()
+
     # RunningHub webhook/query: eventData.usage.{consumeCoins,consumeMoney,thirdPartyConsumeMoney,taskCostTime}
     has_runninghub_usage = any(key in normalized for key in _RUNNINGHUB_USAGE_KEYS)
+    has_money_usage = cost_total_cents is not None or any(
+        key in normalized and normalized.get(key) not in (None, "") for key in _PROVIDER_MONEY_USAGE_KEYS
+    )
     consume_coins = _optional_usage_non_negative_float(
         normalized.get("consumeCoins") if normalized.get("consumeCoins") not in (None, "") else normalized.get("consume_coins")
     )
@@ -327,11 +426,11 @@ def _normalize_provider_task_usage(usage: Any) -> Dict[str, Any]:
         normalized.pop("taskCostTime", None)
         normalized.pop("task_cost_time", None)
 
-    # Keep token/credit payloads, or RunningHub usage blocks (including all-null + taskCostTime=0).
-    if total <= 0 and credits <= 0 and prompt <= 0 and completion <= 0 and not has_runninghub_usage:
+    # Keep token/credit payloads, RunningHub, or money (cost_total_cents) usage blocks.
+    if total <= 0 and credits <= 0 and prompt <= 0 and completion <= 0 and not has_runninghub_usage and not has_money_usage:
         return {}
-    if has_runninghub_usage and total <= 0 and credits <= 0 and prompt <= 0 and completion <= 0:
-        # Drop unrelated empty noise; keep RH audit scalars (+ aliases already set).
+    if (has_runninghub_usage or has_money_usage) and total <= 0 and credits <= 0 and prompt <= 0 and completion <= 0:
+        # Drop unrelated empty noise; keep RH / money audit scalars (+ aliases already set).
         slim: Dict[str, Any] = {}
         for key in (
             "consumeCoins",
@@ -344,6 +443,12 @@ def _normalize_provider_task_usage(usage: Any) -> Dict[str, Any]:
             "task_cost_time",
             "provider_cost_time_seconds",
             "cost_time",
+            "cost_total_cents",
+            "costTotalCents",
+            "currency",
+            "billing_status",
+            "billing_unit",
+            "billing_basis",
         ):
             if normalized.get(key) not in (None, ""):
                 slim[key] = normalized.get(key)
@@ -375,6 +480,9 @@ def _attach_provider_usage_metadata(
         for credit_key in ("creditsConsumed", "credits_consumed", "kie_credits_consumed", "credits"):
             if resolved.get(credit_key) not in (None, "") and meta.get(credit_key) in (None, ""):
                 meta[credit_key] = resolved.get(credit_key)
+        for money_key in ("cost_total_cents", "costTotalCents", "consumeMoney", "consume_money", "currency", "billing_status", "billing_unit", "billing_basis"):
+            if resolved.get(money_key) not in (None, "") and meta.get(money_key) in (None, ""):
+                meta[money_key] = resolved.get(money_key)
     return meta
 
 
@@ -3019,7 +3127,13 @@ class MediaGenerationService:
                     url = self._absolutize_ddimatuo_video_url(_pick_url(raw_payload), root)
                 # Only treat as succeeded when provider reports completed (or normalized succeeded).
                 if url and status in {"succeeded", "completed", "success"}:
-                    return _pack(raw_payload, status="succeeded", url=url)
+                    packed = _pack(raw_payload, status="succeeded", url=url)
+                    packed["metadata"] = _attach_provider_usage_metadata(
+                        packed.get("metadata") if isinstance(packed.get("metadata"), dict) else {},
+                        task_payload=raw_payload,
+                        source="ddimatuo_task_query",
+                    )
+                    return packed
                 if status in {"failed", "canceled"} or err:
                     err_msg = str(
                         err.get("message")
@@ -12452,57 +12566,72 @@ class MediaGenerationService:
                 query_endpoint_base = f"{query_endpoint_base}/v1/videos"
             poll_template = f"{query_endpoint_base}/{{task_id}}"
 
-        model = str(
+        # Contract: model is fixed to sd2-pro.
+        model = "sd2-pro"
+        configured_model = str(
             config.get("model")
             or tool_conf.get("model")
             or config.get("base_model")
             or tool_conf.get("base_model")
             or tool_conf.get("runtime_model")
-            or "sd2-pro"
+            or ""
         ).strip()
-        if not model:
-            return {"error": "DdiMatuo model is required", "submit_failed": True}
+        if configured_model and configured_model.lower() not in {"sd2-pro", "sd2_pro", "sd2pro"}:
+            logger.warning(
+                "DdiMatuo forcing model=sd2-pro | configured_model=%s",
+                configured_model,
+            )
 
         prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
         prompt_text = str(prompt_text or "").strip()
         if not prompt_text:
             return {"error": "DdiMatuo prompt is required", "submit_failed": True}
 
+        # Contract: seconds is required integer in [4, 15]; always send explicitly.
+        ddimatuo_seconds_values = list(range(4, 16))
         allowed_duration_values = self._normalize_duration_enum_values(
             tool_conf.get("durations_seconds")
             or tool_conf.get("duration_values")
             or tool_conf.get("allowed_durations")
             or tool_conf.get("durations")
             or tool_conf.get("seconds_values")
-            or []
-        )
+            or ddimatuo_seconds_values
+        ) or ddimatuo_seconds_values
+        allowed_duration_values = [
+            int(v) for v in allowed_duration_values if 4 <= int(v) <= 15
+        ] or ddimatuo_seconds_values
         try:
-            seconds_in = int(float(duration if duration is not None else (tool_conf.get("seconds") or tool_conf.get("duration") or 5)))
+            seconds_in = int(
+                float(
+                    duration
+                    if duration is not None
+                    else (tool_conf.get("seconds") if tool_conf.get("seconds") is not None else tool_conf.get("duration"))
+                )
+            )
         except Exception:
             seconds_in = 5
-        if seconds_in <= 0:
-            seconds_in = 5
-        if allowed_duration_values:
-            mapped_duration = self._map_duration_nearest(seconds_in, allowed_duration_values, prefer_higher_on_tie=False)
-            if mapped_duration is not None:
-                seconds_in = int(mapped_duration)
+        mapped_duration = self._map_duration_nearest(seconds_in, allowed_duration_values, prefer_higher_on_tie=False)
+        seconds_in = int(mapped_duration if mapped_duration is not None else max(4, min(15, seconds_in or 5)))
+        seconds_in = max(4, min(15, seconds_in))
 
+        # Contract: aspect_ratio optional, default 16:9; closed set.
+        ddimatuo_aspect_ratios = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
         allowed_ratios = self._normalize_str_list(
             tool_conf.get("ratios")
             or tool_conf.get("allowed_ratios")
             or tool_conf.get("aspect_ratios")
-            or []
-        )
+            or ddimatuo_aspect_ratios
+        ) or ddimatuo_aspect_ratios
+        allowed_ratios = [r for r in allowed_ratios if str(r).strip() in set(ddimatuo_aspect_ratios)] or ddimatuo_aspect_ratios
         normalized_ratio = self._normalize_aspect_ratio_value(
             aspect_ratio or tool_conf.get("aspect_ratio") or tool_conf.get("ratio")
         )
         if not normalized_ratio or normalized_ratio == "adaptive":
             normalized_ratio = "16:9"
-        if allowed_ratios and normalized_ratio not in allowed_ratios:
-            for candidate in allowed_ratios:
-                if str(candidate).strip() == normalized_ratio:
-                    normalized_ratio = str(candidate).strip()
-                    break
+        mapped_ratio = self._map_aspect_ratio_to_allowed(normalized_ratio, allowed_ratios)
+        normalized_ratio = str(mapped_ratio or "16:9").strip()
+        if normalized_ratio not in set(ddimatuo_aspect_ratios):
+            normalized_ratio = "16:9"
 
         def _https_public_only(urls: List[str]) -> List[str]:
             out: List[str] = []
@@ -12514,54 +12643,85 @@ class MediaGenerationService:
                     out.append(text)
             return out
 
+        # Contract: reference_*_urls must be public HTTPS; need ≥1 image or video.
         image_refs = self._resolve_ref_list_for_api(
-            ref_image,
+            self._collect_video_reference_image_urls(
+                ref_image,
+                tool_conf,
+                extra_sources=config,
+                include_last_frame=True,
+                last_frame_url=last_frame_url,
+                limit=9,
+            ),
             force_data_uri_for_local=True,
             prefer_public_upload_url=True,
         )
-        image_refs = _https_public_only([u for u in image_refs if u])
+        image_refs = _https_public_only([u for u in image_refs if u])[:9]
 
-        extra_image_refs = self._resolve_ref_list_for_api(
-            tool_conf.get("reference_image_urls")
-            or tool_conf.get("image_urls")
-            or tool_conf.get("referenceImageUrls")
-            or [],
-            force_data_uri_for_local=True,
-            prefer_public_upload_url=True,
+        video_raw = self._collect_video_reference_video_urls(
+            tool_conf,
+            extra_sources=config,
+            limit=3,
         )
-        for item in _https_public_only([u for u in extra_image_refs if u]):
-            if item not in image_refs:
-                image_refs.append(item)
-
-        if last_frame_url:
-            last_frame_resolved = self._resolve_ref_for_api(
-                last_frame_url,
+        video_refs = _https_public_only(
+            self._resolve_ref_list_for_api(
+                video_raw,
                 force_data_uri_for_local=True,
                 prefer_public_upload_url=True,
             )
-            last_https = _https_public_only([last_frame_resolved] if last_frame_resolved else [])
-            last_frame_resolved = last_https[0] if last_https else None
-            if last_frame_resolved and last_frame_resolved not in image_refs:
-                image_refs.append(last_frame_resolved)
-
-        image_refs = image_refs[:9]
-        video_refs = _https_public_only(
-            self._normalize_str_list(
-                tool_conf.get("reference_video_urls")
-                or tool_conf.get("video_urls")
-                or tool_conf.get("referenceVideoUrls")
-                or []
-            )
         )[:3]
+
+        audio_raw = (
+            tool_conf.get("reference_audio_urls")
+            or tool_conf.get("audio_urls")
+            or tool_conf.get("referenceAudioUrls")
+            or tool_conf.get("ref_audio_urls")
+            or config.get("reference_audio_urls")
+            or []
+        )
         audio_refs = _https_public_only(
-            self._normalize_str_list(
-                tool_conf.get("reference_audio_urls")
-                or tool_conf.get("audio_urls")
-                or tool_conf.get("referenceAudioUrls")
-                or []
+            self._resolve_ref_list_for_api(
+                audio_raw,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
             )
         )[:3]
 
+        if not image_refs and not video_refs:
+            return {
+                "error": "DdiMatuo requires at least one public HTTPS reference image or video",
+                "submit_failed": True,
+            }
+
+        def _ensure_ddimatuo_prompt_refs(text: str, *, images: int, videos: int, audios: int) -> str:
+            """Ensure prompt mentions @imageN / @videoN / @audioN for each material."""
+            out = str(text or "").strip()
+            lower = out.lower()
+            missing: List[str] = []
+            for idx in range(1, max(0, int(images)) + 1):
+                tag = f"@image{idx}"
+                if tag not in lower and f"@图片{idx}" not in out:
+                    missing.append(tag)
+            for idx in range(1, max(0, int(videos)) + 1):
+                tag = f"@video{idx}"
+                if tag not in lower and f"@视频{idx}" not in out:
+                    missing.append(tag)
+            for idx in range(1, max(0, int(audios)) + 1):
+                tag = f"@audio{idx}"
+                if tag not in lower and f"@音频{idx}" not in out:
+                    missing.append(tag)
+            if missing:
+                out = f"{out} {' '.join(missing)}".strip()
+            return out
+
+        prompt_text = _ensure_ddimatuo_prompt_refs(
+            prompt_text,
+            images=len(image_refs),
+            videos=len(video_refs),
+            audios=len(audio_refs),
+        )
+
+        # auto_retry_busy default false; only useful for busy code 28023007.
         auto_retry_busy = tool_conf.get("auto_retry_busy")
         if auto_retry_busy is None:
             auto_retry_busy = False
@@ -12580,20 +12740,28 @@ class MediaGenerationService:
                 return "1080P"
             return None
 
-        # Default 1080P for ddimatuo. Only honor explicit request quality (ignore project 720/WxH injection).
-        resolution = _normalize_ddimatuo_resolution(tool_conf.get("quality")) or "1080P"
+        # Optional resolution (not in reference-media table); default 1080P when enabled.
+        resolution = (
+            _normalize_ddimatuo_resolution(tool_conf.get("quality"))
+            or _normalize_ddimatuo_resolution(tool_conf.get("resolution"))
+            or "1080P"
+        )
 
         payload: Dict[str, Any] = {
-            "prompt": prompt_text,
             "model": model,
+            "prompt": prompt_text,
             "seconds": int(seconds_in),
             "aspect_ratio": normalized_ratio,
-            "resolution": resolution,
-            "auto_retry_busy": auto_retry_busy,
-            "reference_image_urls": image_refs,
-            "reference_video_urls": video_refs,
-            "reference_audio_urls": audio_refs,
+            "auto_retry_busy": bool(auto_retry_busy),
         }
+        if resolution:
+            payload["resolution"] = resolution
+        if image_refs:
+            payload["reference_image_urls"] = image_refs
+        if video_refs:
+            payload["reference_video_urls"] = video_refs
+        if audio_refs:
+            payload["reference_audio_urls"] = audio_refs
 
         poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
         # Docs: poll every 5 seconds.
@@ -12619,7 +12787,10 @@ class MediaGenerationService:
             "seconds": int(seconds_in),
             "aspect_ratio": normalized_ratio,
             "resolution": resolution,
-            "auto_retry_busy": auto_retry_busy,
+            "auto_retry_busy": bool(auto_retry_busy),
+            "reference_image_count": len(image_refs),
+            "reference_video_count": len(video_refs),
+            "reference_audio_count": len(audio_refs),
         }
 
         idempotency_key = str(
@@ -12847,6 +13018,67 @@ class MediaGenerationService:
             "Authorization": f"Bearer {api_key}",
             "Accept": "application/json",
         }
+        cancel_url = f"{query_endpoint_base.rstrip('/')}/{urllib.parse.quote(str(task_id))}/cancel"
+
+        async def _cancel_remote_task(reason: str) -> Dict[str, Any]:
+            """Best-effort cancel to release freeze / stop auto-retry on timeout or failure."""
+            cancel_meta: Dict[str, Any] = {
+                "cancel_requested": True,
+                "cancel_reason": str(reason or "")[:300] or None,
+                "cancel_url": cancel_url,
+            }
+            try:
+                cancel_resp = await asyncio.to_thread(
+                    requests.post,
+                    cancel_url,
+                    headers=poll_headers,
+                    timeout=20,
+                    verify=False,
+                )
+                cancel_meta["cancel_http_status"] = getattr(cancel_resp, "status_code", None)
+                body_preview = (getattr(cancel_resp, "text", None) or "")[:300]
+                if body_preview:
+                    cancel_meta["cancel_response"] = body_preview
+                logger.info(
+                    "DdiMatuo cancel sent | task_id=%s reason=%s http=%s body=%s",
+                    task_id,
+                    reason,
+                    cancel_meta.get("cancel_http_status"),
+                    body_preview,
+                )
+            except Exception as cancel_exc:
+                cancel_meta["cancel_error"] = str(cancel_exc)
+                logger.warning(
+                    "DdiMatuo cancel failed | task_id=%s reason=%s error=%s",
+                    task_id,
+                    reason,
+                    cancel_exc,
+                )
+            return cancel_meta
+
+        async def _fail_and_cancel(
+            error: str,
+            *,
+            details: Any = None,
+            extra_meta: Optional[Dict[str, Any]] = None,
+            reason: Optional[str] = None,
+        ) -> Dict[str, Any]:
+            cancel_meta = await _cancel_remote_task(reason or error)
+            out: Dict[str, Any] = {
+                "error": error,
+                "submit_failed": False,
+                "metadata": {
+                    **base_metadata,
+                    "task_id": task_id,
+                    "provider_task_id": task_id,
+                    "taskId": task_id,
+                    **(extra_meta or {}),
+                    **cancel_meta,
+                },
+            }
+            if details is not None:
+                out["details"] = details
+            return out
 
         max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
         logger.info(
@@ -12894,11 +13126,10 @@ class MediaGenerationService:
                     poll_exc,
                 )
                 if attempt == max_attempts:
-                    return {
-                        "error": "DdiMatuo polling exception",
-                        "submit_failed": False,
-                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
-                    }
+                    return await _fail_and_cancel(
+                        "DdiMatuo polling exception",
+                        reason="poll_exception",
+                    )
                 continue
 
             if poll_resp.status_code == 404:
@@ -12931,18 +13162,16 @@ class MediaGenerationService:
                             err_msg = _extract_error_message(err_payload, fallback=err_msg)
                     except Exception:
                         pass
-                    return {
-                        "error": f"DdiMatuo generation failed: {err_msg}",
-                        "submit_failed": False,
-                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
-                    }
+                    return await _fail_and_cancel(
+                        f"DdiMatuo generation failed: {err_msg}",
+                        reason=f"poll_http_{poll_resp.status_code}",
+                    )
                 if attempt == max_attempts:
-                    return {
-                        "error": f"DdiMatuo polling failed {poll_resp.status_code}",
-                        "submit_failed": False,
-                        "details": (poll_resp.text or "")[:1000],
-                        "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
-                    }
+                    return await _fail_and_cancel(
+                        f"DdiMatuo polling failed {poll_resp.status_code}",
+                        details=(poll_resp.text or "")[:1000],
+                        reason=f"poll_http_{poll_resp.status_code}",
+                    )
                 continue
 
             try:
@@ -12976,23 +13205,30 @@ class MediaGenerationService:
                 result_url and status_val in {"", "completed", "success", "succeeded", "done", "finished"}
             ):
                 if result_url:
-                    result_metadata = {
-                        **base_metadata,
-                        "raw": poll_data,
-                        "task_id": task_id,
-                        "provider_task_id": task_id,
-                        "taskId": task_id,
-                        "oss_persist_pending": True,
-                        # video_url requires Authorization on download (resolved server-side).
-                        "requires_auth_download": True,
-                    }
+                    result_metadata = _attach_provider_usage_metadata(
+                        {
+                            **base_metadata,
+                            "raw": poll_data,
+                            "task_id": task_id,
+                            "provider_task_id": task_id,
+                            "taskId": task_id,
+                            "oss_persist_pending": True,
+                            # video_url requires Authorization on download (resolved server-side).
+                            "requires_auth_download": True,
+                        },
+                        task_payload=poll_data,
+                        source="ddimatuo_poll",
+                    )
                     logger.info(
-                        "DdiMatuo poll completed | task_id=%s attempt=%s/%s elapsed=%ss url=%s",
+                        "DdiMatuo poll completed | task_id=%s attempt=%s/%s elapsed=%ss url=%s cost_total_cents=%s",
                         task_id,
                         attempt,
                         max_attempts,
                         elapsed_s,
                         str(result_url).split("?", 1)[0],
+                        (result_metadata.get("provider_usage") or {}).get("cost_total_cents")
+                        if isinstance(result_metadata.get("provider_usage"), dict)
+                        else None,
                     )
                     result_callback = tool_conf.get("_provider_result_callback")
                     if callable(result_callback):
@@ -13014,12 +13250,11 @@ class MediaGenerationService:
                                 result_cb_err,
                             )
                     return {"url": result_url, "metadata": result_metadata}
-                return {
-                    "error": "DdiMatuo generation completed without video_url",
-                    "submit_failed": False,
-                    "details": poll_data,
-                    "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id},
-                }
+                return await _fail_and_cancel(
+                    "DdiMatuo generation completed without video_url",
+                    details=poll_data,
+                    reason="completed_without_video_url",
+                )
 
             if status_val in {"failed", "error", "cancelled", "canceled", "rejected"}:
                 err_msg = _extract_error_message(poll_data, fallback="DdiMatuo generation failed")
@@ -13032,12 +13267,12 @@ class MediaGenerationService:
                     status_val,
                     err_msg,
                 )
-                return {
-                    "error": f"DdiMatuo generation failed: {err_msg}",
-                    "submit_failed": False,
-                    "details": poll_data,
-                    "metadata": {**base_metadata, "task_id": task_id, "provider_task_id": task_id, "raw": poll_data},
-                }
+                return await _fail_and_cancel(
+                    f"DdiMatuo generation failed: {err_msg}",
+                    details=poll_data,
+                    extra_meta={"raw": poll_data},
+                    reason=f"provider_status_{status_val or 'failed'}",
+                )
 
             # queued / submitting / running — keep polling
 
@@ -13049,16 +13284,11 @@ class MediaGenerationService:
             poll_timeout_seconds,
             last_logged_status or None,
         )
-        return {
-            "error": f"DdiMatuo polling timeout after {poll_timeout_seconds}s",
-            "submit_failed": False,
-            "metadata": {
-                **base_metadata,
-                "task_id": task_id,
-                "provider_task_id": task_id,
-                "taskId": task_id,
-            },
-        }
+        return await _fail_and_cancel(
+            f"DdiMatuo polling timeout after {poll_timeout_seconds}s",
+            extra_meta={"last_status": last_logged_status or None},
+            reason="poll_timeout",
+        )
 
     async def _handle_aiclub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "aiclub")

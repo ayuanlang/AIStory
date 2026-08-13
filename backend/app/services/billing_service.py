@@ -1368,6 +1368,18 @@ class BillingService:
         cost_output = max(0, BillingService._to_int(config.get("cost_output", 0), 0))
 
         payload = dict(details or {})
+        try:
+            from app.services.billing_pricing import resolve_provider_cost_total_cents
+
+            cost_total_cents = float(resolve_provider_cost_total_cents(payload) or 0.0)
+        except Exception:
+            cost_total_cents = 0.0
+        if cost_total_cents > 0:
+            if return_float:
+                return float(cost_total_cents)
+            import math
+            return max(0, int(math.ceil(cost_total_cents)))
+
         if unit_type in BillingService.TOKEN_UNIT_TYPES:
             input_tokens = BillingService._to_int(payload.get("input_tokens", payload.get("prompt_tokens", 0)), 0)
             output_tokens = BillingService._to_int(payload.get("output_tokens", payload.get("completion_tokens", 0)), 0)
@@ -1959,9 +1971,44 @@ class BillingService:
             usage_out["credits_consumed"] = float(kie_credits_consumed)
             usage_out["creditsConsumed"] = float(kie_credits_consumed)
             usage_out["billing_basis"] = str(payload.get("billing_basis") or "provider_kie_credits")
+        try:
+            from app.services.billing_pricing import resolve_provider_cost_total_cents
+
+            cost_total_cents = float(resolve_provider_cost_total_cents(payload) or 0.0)
+        except Exception:
+            cost_total_cents = BillingService._safe_non_negative_float(
+                payload.get("cost_total_cents") or payload.get("costTotalCents"),
+                0.0,
+            )
+        if cost_total_cents > 0:
+            usage_out["cost_total_cents"] = float(cost_total_cents)
+            usage_out["costTotalCents"] = float(cost_total_cents)
+            if usage_out.get("consumeMoney") in (None, "") and payload.get("consumeMoney") in (None, ""):
+                usage_out["consumeMoney"] = float(cost_total_cents) / 100.0
+            elif payload.get("consumeMoney") not in (None, ""):
+                usage_out["consumeMoney"] = BillingService._safe_non_negative_float(payload.get("consumeMoney"), 0.0)
+            usage_out.setdefault("currency", str(payload.get("currency") or "CNY").strip().upper() or "CNY")
+            if not usage_out.get("billing_basis"):
+                usage_out["billing_basis"] = str(payload.get("billing_basis") or "provider_cost_total_cents")
         if payload.get("provider_usage") and isinstance(payload.get("provider_usage"), dict):
             usage_out["provider_usage"] = dict(payload.get("provider_usage") or {})
             nested_usage = usage_out["provider_usage"]
+            # Promote money audit scalars (DdiMatuo cost_total_cents / RunningHub consumeMoney).
+            for money_key in (
+                "cost_total_cents",
+                "costTotalCents",
+                "consumeMoney",
+                "consume_money",
+                "thirdPartyConsumeMoney",
+                "consumeCoins",
+                "currency",
+                "billing_status",
+                "billing_unit",
+            ):
+                if usage_out.get(money_key) in (None, "") and nested_usage.get(money_key) not in (None, ""):
+                    usage_out[money_key] = nested_usage.get(money_key)
+            if usage_out.get("cost_total_cents") not in (None, "") and not usage_out.get("billing_basis"):
+                usage_out["billing_basis"] = "provider_cost_total_cents"
             # Promote callback/query tokens (Ark Seedance usage.*) to top-level billable fields.
             nested_total = BillingService._to_int(
                 nested_usage.get("total_tokens")
@@ -2239,7 +2286,7 @@ class BillingService:
                     payload[key] = bool(source.get(key))
                     break
 
-        # RunningHub callback usage (coins / money / task runtime).
+        # RunningHub / DdiMatuo callback usage (coins / money / task runtime / cost_total_cents).
         for key in (
             "consumeCoins",
             "consumeMoney",
@@ -2247,12 +2294,24 @@ class BillingService:
             "taskCostTime",
             "provider_cost_time_seconds",
             "cost_time",
+            "cost_total_cents",
+            "costTotalCents",
+            "currency",
+            "billing_status",
+            "billing_unit",
         ):
             value = _first(key)
             if value not in (None, ""):
                 payload[key] = value
         if payload.get("taskCostTime") not in (None, "") and payload.get("provider_cost_time_seconds") in (None, ""):
             payload["provider_cost_time_seconds"] = payload.get("taskCostTime")
+        if payload.get("cost_total_cents") not in (None, "") and payload.get("consumeMoney") in (None, ""):
+            try:
+                cents = float(payload.get("cost_total_cents") or 0)
+            except Exception:
+                cents = 0.0
+            if cents > 0:
+                payload["consumeMoney"] = cents / 100.0
 
         return payload
 
@@ -3040,6 +3099,8 @@ class BillingService:
                 "output_tokens": usage.get("output_tokens"),
                 "total_tokens": usage.get("total_tokens"),
                 "kie_credits_consumed": usage.get("kie_credits_consumed") or usage.get("creditsConsumed"),
+                "cost_total_cents": usage.get("cost_total_cents") or usage.get("costTotalCents"),
+                "consumeMoney": usage.get("consumeMoney"),
             },
             "new_logic": logic in {
                 "video_second_cny_sparkvideo",
@@ -3585,6 +3646,7 @@ class BillingService:
         "provider_task_id", "task_id", "taskId", "query_endpoint",
         "consumeMoney", "consumeCoins", "thirdPartyConsumeMoney",
         "taskCostTime", "provider_cost_time_seconds", "cost_time",
+        "cost_total_cents", "costTotalCents", "currency", "billing_status", "billing_unit",
     }
 
     @staticmethod
@@ -3604,6 +3666,7 @@ class BillingService:
                 "creditsConsumed", "credits_consumed", "kie_credits_consumed", "credits",
                 "consumeMoney", "consumeCoins", "thirdPartyConsumeMoney",
                 "taskCostTime", "provider_cost_time_seconds", "cost_time",
+                "cost_total_cents", "costTotalCents", "currency", "billing_status", "billing_unit",
                 "provider_task_id", "task_id", "taskId", "query_endpoint",
             ):
                 if out.get(key) in (None, "") and nested.get(key) not in (None, ""):
@@ -4928,6 +4991,11 @@ class BillingService:
             "consumeCoins",
             "consumeMoney",
             "thirdPartyConsumeMoney",
+            "cost_total_cents",
+            "costTotalCents",
+            "currency",
+            "billing_status",
+            "billing_unit",
             "provider_create_time_ms",
             "provider_complete_time_ms",
         ):

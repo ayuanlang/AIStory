@@ -2022,6 +2022,33 @@ async def _run_generate_video(
             if provider_usage:
                 settle_details["provider_usage"] = provider_usage
                 settle_details["usage_source"] = str(final_meta.get("usage_source") or "provider").strip() or "provider"
+                # DdiMatuo / money providers: promote cost_total_cents → audit supplier amount.
+                for money_key in (
+                    "cost_total_cents",
+                    "costTotalCents",
+                    "consumeMoney",
+                    "consume_money",
+                    "currency",
+                    "billing_status",
+                    "billing_unit",
+                ):
+                    if settle_details.get(money_key) in (None, "") and provider_usage.get(money_key) not in (None, ""):
+                        settle_details[money_key] = provider_usage.get(money_key)
+                if settle_details.get("cost_total_cents") not in (None, ""):
+                    settle_details.setdefault("billing_basis", "provider_cost_total_cents")
+                    if settle_details.get("consumeMoney") in (None, ""):
+                        try:
+                            settle_details["consumeMoney"] = float(settle_details.get("cost_total_cents") or 0) / 100.0
+                        except Exception:
+                            pass
+                elif final_meta.get("cost_total_cents") not in (None, ""):
+                    settle_details["cost_total_cents"] = final_meta.get("cost_total_cents")
+                    settle_details.setdefault("billing_basis", "provider_cost_total_cents")
+                    if settle_details.get("consumeMoney") in (None, ""):
+                        try:
+                            settle_details["consumeMoney"] = float(final_meta.get("cost_total_cents") or 0) / 100.0
+                        except Exception:
+                            pass
 
             if final_provider:
                 settle_details["provider"] = final_provider

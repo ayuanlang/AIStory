@@ -68,7 +68,7 @@ def _provider_is_kie(provider: Optional[str]) -> bool:
 
 
 def _has_runninghub_supplier_cost(payload: Dict[str, Any]) -> bool:
-    for key in ("consumeMoney", "consumeCoins", "thirdPartyConsumeMoney"):
+    for key in ("consumeMoney", "consumeCoins", "thirdPartyConsumeMoney", "cost_total_cents", "costTotalCents"):
         if payload.get(key) is not None and str(payload.get(key)).strip() != "":
             return True
     return False
