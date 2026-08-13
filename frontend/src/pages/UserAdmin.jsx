@@ -9086,11 +9086,11 @@ const UserAdmin = () => {
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Endpoint</label>
-                                                    <input value={ossProviderPoolForm.endpoint} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, endpoint: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="https://tos-cn-beijing.volces.com" />
+                                                    <input value={ossProviderPoolForm.endpoint} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, endpoint: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="https://s3.cn-south-1.qiniucs.com 或 https://tos-cn-beijing.volces.com" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Region</label>
-                                                    <input value={ossProviderPoolForm.region} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, region: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="cn-beijing" />
+                                                    <input value={ossProviderPoolForm.region} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, region: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="cn-south-1 / cn-beijing" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Bucket</label>

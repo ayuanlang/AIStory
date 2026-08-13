@@ -115,14 +115,55 @@ class OSSStorageService:
             for field in ("provider", "provider_alias", "endpoint", "public_base_url")
         )
 
-    def _is_qiniu_provider(self, pool) -> bool:
-        haystack = self._pool_identity_text(pool)
-        return any(
-            marker in haystack
-            for marker in ("qiniu", "qiniucs.com", "clouddn.com", ".bkt.")
+    @staticmethod
+    def _is_qiniu_cdn_host(host: str) -> bool:
+        hostname = str(host or "").strip().lower().split(":", 1)[0]
+        if not hostname:
+            return False
+        return (
+            hostname.endswith("clouddn.com")
+            or hostname.endswith("qiniucs.com")
+            or hostname.endswith("qiniu.com")
+            or hostname.endswith("woola.fun")
+            or ".bkt." in hostname
         )
 
+    def _pool_public_host(self, pool) -> str:
+        raw = str(getattr(pool, "public_base_url", "") or "").strip()
+        if not raw:
+            return ""
+        if "://" not in raw:
+            raw = f"https://{raw}"
+        try:
+            return str(urllib.parse.urlparse(raw).hostname or "").strip().lower()
+        except Exception:
+            return ""
+
+    def _is_qiniu_endpoint(self, pool) -> bool:
+        endpoint = str(getattr(pool, "endpoint", "") or "").strip().lower()
+        return "qiniu" in endpoint or "qiniucs.com" in endpoint or "clouddn.com" in endpoint
+
+    def _is_tos_endpoint(self, pool) -> bool:
+        endpoint = str(getattr(pool, "endpoint", "") or "").strip().lower()
+        return "volces.com" in endpoint or "ivolces.com" in endpoint or "tos-s3-" in endpoint
+
+    def _is_qiniu_provider(self, pool) -> bool:
+        haystack = self._pool_identity_text(pool)
+        if any(
+            marker in haystack
+            for marker in ("qiniu", "qiniucs.com", "clouddn.com", "woola.fun", ".bkt.")
+        ):
+            return True
+        return self._is_qiniu_cdn_host(self._pool_public_host(pool))
+
     def _is_tos_provider(self, pool) -> bool:
+        # Qiniu CDN hosts (qn.woola.fun / clouddn / qiniucs) must never be treated as TOS.
+        # A TOS pool that reuses the Qiniu public domain would otherwise emit TOS4
+        # signatures that Qiniu rejects with 401.
+        if self._is_qiniu_cdn_host(self._pool_public_host(pool)):
+            return False
+        if self._is_qiniu_endpoint(pool) and not self._is_tos_endpoint(pool):
+            return False
         provider = str(getattr(pool, "provider", "") or "").strip().lower()
         if provider in {"tos", "volcengine", "volcengine-tos", "volces", "volc-tos"}:
             return True
@@ -499,23 +540,24 @@ class OSSStorageService:
     def _pick_env_pool(self):
         endpoint = _env_first(
             "OSS_ENDPOINT",
+            "QINIU_ENDPOINT",
             "TOS_ENDPOINT",
             "VOLC_TOS_ENDPOINT",
-            "QINIU_ENDPOINT",
             "S3_ENDPOINT",
             "AWS_S3_ENDPOINT",
         )
         bucket = _env_first(
             "OSS_BUCKET",
+            "QINIU_BUCKET",
             "TOS_BUCKET",
             "VOLC_TOS_BUCKET",
-            "QINIU_BUCKET",
             "S3_BUCKET",
             "AWS_STORAGE_BUCKET_NAME",
         )
         if not endpoint or not bucket:
             return None
 
+        explicit_provider = _env_first("OSS_PROVIDER").strip().lower()
         endpoint_lower = endpoint.lower()
         if any(marker in endpoint_lower for marker in ("volces.com", "ivolces.com", "tos-cn-", "tos-s3-")):
             inferred_provider = "tos"
@@ -523,18 +565,24 @@ class OSSStorageService:
             inferred_provider = "qiniu"
         else:
             inferred_provider = "s3"
-        provider = _env_first("OSS_PROVIDER", "TOS_PROVIDER", default=inferred_provider)
+        # A Qiniu endpoint always stays Qiniu so TOS_PROVIDER / TOS_* cannot hijack it.
+        if inferred_provider == "qiniu":
+            provider = "qiniu"
+        elif explicit_provider in {"tos", "qiniu", "s3", "minio", "backblaze"}:
+            provider = explicit_provider
+        else:
+            provider = inferred_provider
         public_base_url = _env_first(
             "OSS_PUBLIC_BASE_URL",
+            "QINIU_PUBLIC_BASE_URL",
             "TOS_PUBLIC_BASE_URL",
             "VOLC_TOS_PUBLIC_BASE_URL",
-            "QINIU_PUBLIC_BASE_URL",
             "S3_PUBLIC_BASE_URL",
         )
         root_prefix = _env_first(
             "OSS_ROOT_PREFIX",
-            "TOS_ROOT_PREFIX",
             "QINIU_ROOT_PREFIX",
+            "TOS_ROOT_PREFIX",
             default="aistory/upload",
         ).strip().strip("/")
         default_region = (
@@ -835,7 +883,11 @@ class OSSStorageService:
     def _build_public_url(self, client, pool, key: str, cred=None) -> str:
         public_base_url = self._normalize_public_base_url(pool)
         if public_base_url:
-            if self._is_qiniu_provider(pool) and _env_bool("OSS_QINIU_SIGNED_URL", "QINIU_SIGNED_URL", default=True):
+            public_host = self._pool_public_host(pool)
+            use_qiniu_sign = (
+                self._is_qiniu_cdn_host(public_host) or self._is_qiniu_provider(pool)
+            ) and not self._is_tos_object_host(public_host)
+            if use_qiniu_sign and _env_bool("OSS_QINIU_SIGNED_URL", "QINIU_SIGNED_URL", default=True):
                 return self._build_qiniu_download_url(pool, key, cred)
             if self._is_tos_provider(pool) and _env_bool("OSS_TOS_SIGNED_URL", "TOS_SIGNED_URL", default=True):
                 return self._build_tos_download_url(pool, key, cred)
@@ -984,6 +1036,21 @@ class OSSStorageService:
         if not candidate_pools:
             _visible_warning("OSS upload skipped | reason=pool_not_configured")
             return None
+
+        # TOS buckets that still publish via qn.woola.fun / clouddn would mix TOS4
+        # signatures onto Qiniu CDN URLs. Prefer a real Qiniu pool when both exist.
+        qiniu_safe_pools = [
+            pool
+            for pool in candidate_pools
+            if not (self._is_tos_endpoint(pool) and self._is_qiniu_cdn_host(self._pool_public_host(pool)))
+        ]
+        if qiniu_safe_pools and len(qiniu_safe_pools) < len(candidate_pools):
+            _visible_warning(
+                "OSS skipped TOS pool bound to Qiniu CDN public_base_url | kept=%s dropped=%s",
+                len(qiniu_safe_pools),
+                len(candidate_pools) - len(qiniu_safe_pools),
+            )
+            candidate_pools = qiniu_safe_pools
 
         random.shuffle(candidate_pools)
         owned_key: Optional[str] = None
@@ -1286,6 +1353,74 @@ class OSSStorageService:
             logger.warning("OSS upload_file failed | path=%s err=%s", target_path, exc)
             return None
 
+    def _extract_key_for_pool(
+        self,
+        pool,
+        *,
+        candidate_raw: str,
+        parsed: urllib.parse.ParseResult,
+        path: str,
+    ) -> Optional[str]:
+        public_base_url = self._normalize_public_base_url(pool)
+        if public_base_url and candidate_raw.startswith(f"{public_base_url}/"):
+            extracted_key = candidate_raw[len(public_base_url) + 1 :].split("?")[0]
+            return urllib.parse.unquote(extracted_key)
+
+        if public_base_url and public_base_url.lower().startswith("https://"):
+            legacy_http_base = f"http://{public_base_url[len('https://') :]}"
+            if candidate_raw.startswith(f"{legacy_http_base}/"):
+                extracted_key = candidate_raw[len(legacy_http_base) + 1 :].split("?")[0]
+                return urllib.parse.unquote(extracted_key)
+
+        host = str(parsed.hostname or parsed.netloc or "").strip().lower().split(":", 1)[0]
+        root_prefix = str(getattr(pool, "root_prefix", "") or "").strip().strip("/")
+        public_host = self._pool_public_host(pool)
+
+        if host and public_host and host == public_host:
+            if not root_prefix or path == root_prefix or path.startswith(f"{root_prefix}/"):
+                return path
+
+        if self._is_qiniu_provider(pool) and self._is_qiniu_cdn_host(host):
+            if not root_prefix or path == root_prefix or path.startswith(f"{root_prefix}/"):
+                return path
+
+        if self._is_tos_provider(pool) and self._is_tos_object_host(host):
+            bucket = str(getattr(pool, "bucket", "") or "").strip().lower()
+            endpoint_host = urllib.parse.urlparse(str(getattr(pool, "endpoint", "") or "")).netloc.lower()
+            host_matches_pool = (
+                (bucket and (host == f"{bucket}.{endpoint_host}" or host.startswith(f"{bucket}.")))
+                or (endpoint_host and host == endpoint_host)
+            )
+            if host_matches_pool and (not root_prefix or path == root_prefix or path.startswith(f"{root_prefix}/")):
+                return path
+
+        endpoint_host = urllib.parse.urlparse(str(getattr(pool, "endpoint", "") or "")).netloc.lower()
+        bucket = str(getattr(pool, "bucket", "") or "").strip()
+        if bucket and path.startswith(f"{bucket}/") and host == endpoint_host:
+            return path[len(bucket) + 1 :]
+        if host == endpoint_host:
+            return path
+        if bucket and host.startswith(f"{bucket}."):
+            return path
+        return None
+
+    def _score_pool_for_url(self, pool, parsed: urllib.parse.ParseResult) -> int:
+        host = str(parsed.hostname or "").strip().lower()
+        score = 0
+        public_host = self._pool_public_host(pool)
+        if host and public_host and host == public_host:
+            score += 100
+        if self._is_qiniu_cdn_host(host):
+            if self._is_qiniu_endpoint(pool):
+                score += 80
+            elif self._is_qiniu_provider(pool):
+                score += 60
+            if self._is_tos_endpoint(pool):
+                score -= 120
+        if self._is_tos_object_host(host) and self._is_tos_provider(pool):
+            score += 80
+        return score
+
     def _extract_managed_target_from_pools(
         self,
         url: str,
@@ -1298,12 +1433,7 @@ class OSSStorageService:
         candidate_raw = raw
         if "://" not in candidate_raw and "/" in candidate_raw:
             host_part = candidate_raw.split("/", 1)[0].strip().lower()
-            if (
-                host_part.endswith("clouddn.com")
-                or host_part.endswith("qiniucs.com")
-                or ".bkt." in host_part
-                or self._is_tos_object_host(host_part)
-            ):
+            if self._is_qiniu_cdn_host(host_part) or self._is_tos_object_host(host_part):
                 candidate_raw = f"https://{candidate_raw}"
 
         try:
@@ -1315,55 +1445,22 @@ class OSSStorageService:
         if not path:
             return None, None
 
+        best: Optional[Tuple[int, SimpleNamespace, str]] = None
         for pool in pools:
-            public_base_url = self._normalize_public_base_url(pool)
-            if public_base_url and candidate_raw.startswith(f"{public_base_url}/"):
-                extracted_key = candidate_raw[len(public_base_url) + 1 :].split("?")[0]
-                return pool, urllib.parse.unquote(extracted_key)
-
-            if (
-                (self._is_qiniu_provider(pool) or self._is_tos_provider(pool))
-                and public_base_url
-                and public_base_url.lower().startswith("https://")
-            ):
-                legacy_http_base = f"http://{public_base_url[len('https://') :]}"
-                if candidate_raw.startswith(f"{legacy_http_base}/"):
-                    extracted_key = candidate_raw[len(legacy_http_base) + 1 :].split("?")[0]
-                    return pool, urllib.parse.unquote(extracted_key)
-
-            host = str(parsed.netloc or "").strip().lower()
-            root_prefix = str(getattr(pool, "root_prefix", "") or "").strip().strip("/")
-            if self._is_qiniu_provider(pool):
-                # Include custom CDN domains (e.g. qn.woola.fun) used by provider-direct OSS writes.
-                if host and (
-                    host.endswith("clouddn.com")
-                    or host.endswith("qiniucs.com")
-                    or host.endswith("woola.fun")
-                    or ".bkt." in host
-                ):
-                    if not root_prefix or path == root_prefix or path.startswith(f"{root_prefix}/"):
-                        return pool, path
-
-            if self._is_tos_provider(pool) and host and self._is_tos_object_host(host):
-                bucket = str(getattr(pool, "bucket", "") or "").strip().lower()
-                endpoint_host = urllib.parse.urlparse(str(getattr(pool, "endpoint", "") or "")).netloc.lower()
-                host_matches_pool = (
-                    (bucket and (host == f"{bucket}.{endpoint_host}" or host.startswith(f"{bucket}.")))
-                    or (endpoint_host and host == endpoint_host)
-                )
-                if host_matches_pool and (not root_prefix or path == root_prefix or path.startswith(f"{root_prefix}/")):
-                    return pool, path
-
-            endpoint_host = urllib.parse.urlparse(str(getattr(pool, "endpoint", "") or "")).netloc.lower()
-            bucket = str(getattr(pool, "bucket", "") or "").strip()
-            if bucket and path.startswith(f"{bucket}/") and parsed.netloc.lower() == endpoint_host:
-                return pool, path[len(bucket) + 1 :]
-            if parsed.netloc.lower() == endpoint_host:
-                return pool, path
-            if bucket and parsed.netloc.lower().startswith(f"{bucket}."):
-                return pool, path
-
-        return None, None
+            extracted_key = self._extract_key_for_pool(
+                pool,
+                candidate_raw=candidate_raw,
+                parsed=parsed,
+                path=path,
+            )
+            if not extracted_key:
+                continue
+            score = self._score_pool_for_url(pool, parsed)
+            if best is None or score > best[0]:
+                best = (score, pool, extracted_key)
+        if best is None:
+            return None, None
+        return best[1], best[2]
 
     def _extract_managed_target(self, url: str) -> Tuple[Optional[SimpleNamespace], Optional[str]]:
         return self._extract_managed_target_from_pools(url, self._get_all_pools(None))
