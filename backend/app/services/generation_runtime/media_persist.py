@@ -573,10 +573,12 @@ def _url_matches_configured_oss(
     db: Optional[Session] = None,
 ) -> bool:
     raw = str(url or "").strip()
-    if not raw or _is_ephemeral_provider_media_url(raw):
+    if not raw:
         return False
     if oss_storage_service.is_active_managed_url(raw, db):
         return True
+    if _is_ephemeral_provider_media_url(raw):
+        return False
 
     meta = metadata if isinstance(metadata, dict) else {}
     oss_meta = meta.get("oss") if isinstance(meta.get("oss"), dict) else {}
@@ -901,14 +903,27 @@ def _is_ephemeral_provider_media_url(value: Any) -> bool:
     if not hostname:
         return False
 
+    looks_ephemeral = False
     for pattern in _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS:
         if pattern.match(hostname):
-            return True
+            looks_ephemeral = True
+            break
 
     query_lower = str(parsed.query or "").strip().lower()
     if query_lower and any(marker in query_lower for marker in _EPHEMERAL_PROVIDER_MEDIA_QUERY_MARKERS):
-        return True
-    return False
+        looks_ephemeral = True
+
+    if not looks_ephemeral:
+        return False
+
+    # Configured Volcengine TOS buckets reuse *.volces.com / TOS4 query params.
+    # Those durable OSS URLs must not be treated as Ark/Seedance delivery links.
+    try:
+        if oss_storage_service.is_managed_url(raw) or oss_storage_service.is_active_managed_url(raw):
+            return False
+    except Exception:
+        pass
+    return True
 
 
 def _job_has_durable_result_url(job: Dict[str, Any]) -> bool:

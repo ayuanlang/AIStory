@@ -4,6 +4,8 @@ import { BASE_URL, ASSET_BASE_URL } from '../../config';
 import { createEntity, regenerateScene, batchSupplementMissingEntities } from '../../services/api';
 import { normalizeEntityToken, entityTokenMatchesName, extractEntityRawNamesFromPrompt } from '../../lib/entityToken';
 
+const TOS_OBJECT_HOST_RE = /(?:^|\.)tos-(?:s3-)?[a-z0-9-]+\.(volces|ivolces)\.com(?:[/:?]|$)/i;
+
 const normalizeExternalMediaUrl = (rawUrl) => {
     const stable = String(rawUrl || '').trim();
     if (!stable) return '';
@@ -12,8 +14,14 @@ const normalizeExternalMediaUrl = (rawUrl) => {
     if (/^[A-Za-z0-9.-]+\.(clouddn\.com|qiniucs\.com)\//i.test(stable)) {
         return `https://${stable}`;
     }
+    if (/^[A-Za-z0-9.-]*tos-[A-Za-z0-9.-]+\.(volces|ivolces)\.com\//i.test(stable)) {
+        return `https://${stable}`;
+    }
 
     if (/^http:\/\//i.test(stable) && /(clouddn\.com|qiniucs\.com)/i.test(stable)) {
+        return stable.replace(/^http:\/\//i, 'https://');
+    }
+    if (/^http:\/\//i.test(stable) && TOS_OBJECT_HOST_RE.test(stable)) {
         return stable.replace(/^http:\/\//i, 'https://');
     }
 
@@ -78,6 +86,7 @@ export const getThumbUrl = (url) => {
         const isAliyun = raw.includes('aliyuncs.com');
         const isTencent = raw.includes('myqcloud.com');
         const isQiniu = raw.includes('clouddn.com') || raw.includes('qiniucs.com');
+        const isTos = TOS_OBJECT_HOST_RE.test(raw);
         
         if (isAliyun && !raw.includes('x-oss-process')) {
             const sep = raw.includes('?') ? '&' : '?';
@@ -90,6 +99,10 @@ export const getThumbUrl = (url) => {
         if (isQiniu && !raw.includes('imageMogr2')) {
             const sep = raw.includes('?') ? '&' : '?';
             return `${raw}${sep}imageMogr2/thumbnail/256x/format/webp/quality/80`;
+        }
+        if (isTos && !raw.includes('x-tos-process') && !/x-tos-algorithm=/i.test(raw)) {
+            const sep = raw.includes('?') ? '&' : '?';
+            return `${raw}${sep}x-tos-process=image/resize,w_256/format,webp/quality,q_80`;
         }
         return raw;
     }
@@ -3192,7 +3205,7 @@ const legacyDurableMediaUrl = (raw) => {
 
 export const urlMatchesConfiguredOss = (url, metadata = null, signatures = null) => {
     const raw = String(url || '').trim();
-    if (!raw || isEphemeralProviderMediaUrl(raw)) return false;
+    if (!raw) return false;
 
     const meta = metadata && typeof metadata === 'object' ? metadata : {};
     const activeSignatures = signatures || ossActiveUrlSignaturesCache;
@@ -3252,7 +3265,18 @@ export const isEphemeralProviderMediaUrl = (url) => {
     if (!raw || raw.startsWith('/') || raw.startsWith('data:')) return false;
     try {
         const parsed = new URL(raw, window.location.origin);
-        const host = String(parsed.hostname || '').trim();
+        const host = String(parsed.hostname || '').trim().toLowerCase();
+        const signatures = ossActiveUrlSignaturesCache;
+        if (signatures?.oss_enabled) {
+            const allowedHosts = new Set(signatures.hostnames || []);
+            if (host && allowedHosts.has(host)) return false;
+            for (const base of signatures.public_base_urls || []) {
+                const normalizedBase = String(base || '').trim().replace(/\/+$/, '');
+                if (normalizedBase && (raw === normalizedBase || raw.startsWith(`${normalizedBase}/`))) {
+                    return false;
+                }
+            }
+        }
         if (EPHEMERAL_PROVIDER_HOST_PATTERNS.some((pattern) => pattern.test(host))) {
             return true;
         }
@@ -3271,6 +3295,10 @@ export const isDurablePersistedMediaUrl = (url, metadata = null) => {
     if (!raw) return false;
     if (isEphemeralProviderMediaUrl(raw)) return false;
     if (urlMatchesConfiguredOss(raw, metadata)) return true;
+    // With OSS enabled, only backend-configured storage URLs are safe to PUT.
+    // Legacy CDN host heuristics can otherwise mark a provider URL as persisted
+    // even though the backend will reject it.
+    if (ossActiveUrlSignaturesCache?.oss_enabled) return false;
     return legacyDurableMediaUrl(raw);
 };
 

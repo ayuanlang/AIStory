@@ -226,7 +226,7 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
   - **衍生行**：体量与基准相同→可复述同句或写 `relative_scale:同基准`；`variant_delta` 改变体量/展开态（翻开的本、展开的伞等）→须写本行新尺度。
   - `script_entity_coverage` 须覆盖尺度关键词（掌/拳/指/头/前臂或上游原尺度词）。
 - **PROP 衍生属性（强制，见「六」）**：凡 `base_entity≠None` 的道具衍生（状态/面/形态）须写 `derivative_kind:`（多为`道具状态`/`设备面`）+ `derivative_trigger` + `activation_evidence` + `variant_delta` + `return_or_continue`；供 Stage 2.2 在点燃/签署/翻面等情节换 `PROP:[…]` 版本名。
-- **设备/亮屏/朝向**：正反面或设备态拆 `{基准}_{状态/面}`；缺朝向→`upstream_missing_prop_orientation:…`；仅明文直播可补支架。亮屏须 `visible_text` 或界面摘要；仅「亮屏」无内容→`upstream_missing_screen_content:…`。
+- **设备/亮屏/朝向**：正反面或设备态拆 `{基准}_{状态/面}`。上游写到手机/平板等发声屏设备时，须能摘抄**现位**（手上/桌上/已收纳）与**正面朝向**；缺位向→`upstream_missing_prop_orientation:…`（兼标缺位置）。仅明文直播可补支架。亮屏须 `visible_text` 或界面摘要；仅「亮屏」无内容→`upstream_missing_screen_content:…`。响铃/外放证据入库时保留声源现位，禁把桌上响写成手上持握默认态。
 - **可见文字**：`visible_text`/`form_field_text`/`text_carrier`/`typography_requirement`/`script_variant`/`marked_text_requirement`/`readability_requirement`。明示逐字透传（**保持原繁简字形，禁擅自繁简互转**）；动作隐含字段须反推；无精确字样→标「原文未明示…必须存在[字段]」或走补字例外。凡可读中文载体（书/纸/牌匾级 PROP）须可检索：`visible_text`（逐字）+ `typography_requirement`（字体/书体）+ `script_variant:`∈`简体|繁体`（有核销混排可写说明）。**文字载体补字**见「规则强约束」唯一例外。
 
 ### 四、环境组（ENV）与空镜

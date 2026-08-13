@@ -9078,19 +9078,19 @@ const UserAdmin = () => {
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Provider</label>
-                                                    <input value={ossProviderPoolForm.provider} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, provider: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono" placeholder="qiniu / s3 / minio" />
+                                                    <input value={ossProviderPoolForm.provider} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, provider: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono" placeholder="qiniu / tos / s3 / minio" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Alias</label>
-                                                    <input value={ossProviderPoolForm.provider_alias} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, provider_alias: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="Qiniu CN South" />
+                                                    <input value={ossProviderPoolForm.provider_alias} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, provider_alias: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="Qiniu CN South / Volcengine TOS" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Endpoint</label>
-                                                    <input value={ossProviderPoolForm.endpoint} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, endpoint: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="https://s3.cn-south-1.qiniucs.com" />
+                                                    <input value={ossProviderPoolForm.endpoint} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, endpoint: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="https://tos-cn-beijing.volces.com" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Region</label>
-                                                    <input value={ossProviderPoolForm.region} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, region: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="cn-south-1" />
+                                                    <input value={ossProviderPoolForm.region} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, region: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="cn-beijing" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Bucket</label>

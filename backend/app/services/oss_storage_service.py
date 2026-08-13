@@ -109,37 +109,87 @@ class OSSStorageService:
     def _urlsafe_b64encode(self, raw: bytes) -> str:
         return base64.urlsafe_b64encode(raw).decode("utf-8")
 
+    def _pool_identity_text(self, pool) -> str:
+        return " ".join(
+            str(getattr(pool, field, "") or "").strip().lower()
+            for field in ("provider", "provider_alias", "endpoint", "public_base_url")
+        )
+
     def _is_qiniu_provider(self, pool) -> bool:
-        provider = str(getattr(pool, "provider", "") or "").strip().lower()
-        provider_alias = str(getattr(pool, "provider_alias", "") or "").strip().lower()
-        endpoint = str(getattr(pool, "endpoint", "") or "").strip().lower()
-        public_base_url = str(getattr(pool, "public_base_url", "") or "").strip().lower()
+        haystack = self._pool_identity_text(pool)
         return any(
-            marker in provider or marker in provider_alias or marker in endpoint or marker in public_base_url
+            marker in haystack
             for marker in ("qiniu", "qiniucs.com", "clouddn.com", ".bkt.")
         )
+
+    def _is_tos_provider(self, pool) -> bool:
+        provider = str(getattr(pool, "provider", "") or "").strip().lower()
+        if provider in {"tos", "volcengine", "volcengine-tos", "volces", "volc-tos"}:
+            return True
+        haystack = self._pool_identity_text(pool)
+        return any(
+            marker in haystack
+            for marker in ("volces.com", "ivolces.com", "volcengine-tos", "tos-cn-", "tos-s3-")
+        )
+
+    def _is_s3_compat_unsigned_payload(self, pool) -> bool:
+        return self._is_qiniu_provider(pool) or self._is_tos_provider(pool)
+
+    @staticmethod
+    def _is_tos_object_host(host: str) -> bool:
+        hostname = str(host or "").strip().lower().split(":", 1)[0]
+        if not hostname or "tos-" not in hostname:
+            return False
+        return hostname.endswith(".volces.com") or hostname.endswith(".ivolces.com")
+
+    @staticmethod
+    def _infer_tos_region(endpoint: str, fallback: str = "cn-beijing") -> str:
+        host = str(urllib.parse.urlparse(str(endpoint or "").strip()).hostname or "").strip().lower()
+        if not host:
+            return fallback
+        for prefix in ("tos-s3-", "tos-"):
+            if host.startswith(prefix) and (host.endswith(".volces.com") or host.endswith(".ivolces.com")):
+                region = host.split(".", 1)[0][len(prefix) :]
+                if region:
+                    return region
+        marker = ".tos-s3-" if ".tos-s3-" in host else ".tos-" if ".tos-" in host else ""
+        if marker:
+            region = host.split(marker, 1)[-1].split(".", 1)[0]
+            if region:
+                return region
+        return fallback
+
+    @staticmethod
+    def _tos_uri_encode(value: str, *, encode_slash: bool = True) -> str:
+        encoded: List[str] = []
+        for char in str(value or ""):
+            if char.isalnum() or char in "-._~" or (char == "/" and not encode_slash):
+                encoded.append(char)
+            else:
+                encoded.append("%{:02X}".format(ord(char)))
+        return "".join(encoded)
 
     def _normalize_public_base_url(self, pool) -> str:
         public_base_url = str(getattr(pool, "public_base_url", "") or "").strip().rstrip("/")
         if not public_base_url:
             return ""
-        
-        is_qiniu = self._is_qiniu_provider(pool)
+
+        force_https = self._is_qiniu_provider(pool) or self._is_tos_provider(pool)
 
         if "://" in public_base_url:
-            if is_qiniu and public_base_url.lower().startswith("http://"):
+            if force_https and public_base_url.lower().startswith("http://"):
                 return f"https://{public_base_url[len('http://') :]}"
             return public_base_url
-            
+
         endpoint = str(getattr(pool, "endpoint", "") or "").strip()
         endpoint_scheme = urllib.parse.urlparse(endpoint).scheme or ""
-        
-        if is_qiniu:
+
+        if force_https:
             return f"https://{public_base_url}"
 
         if endpoint_scheme:
             return f"{endpoint_scheme}://{public_base_url}"
-            
+
         return f"https://{public_base_url}"
 
     def _build_qiniu_download_url(self, pool, key: str, cred) -> str:
@@ -160,6 +210,79 @@ class OSSStorageService:
         digest = hmac.new(secret_key.encode("utf-8"), signed_base.encode("utf-8"), hashlib.sha1).digest()
         token = f"{access_key}:{self._urlsafe_b64encode(digest)}"
         return f"{signed_base}&token={token}"
+
+    def _build_tos_download_url(self, pool, key: str, cred) -> str:
+        public_base_url = self._normalize_public_base_url(pool)
+        if not public_base_url:
+            return ""
+
+        object_path = urllib.parse.quote(str(key or "").lstrip("/"), safe="/~._-")
+        object_url = f"{public_base_url}/{object_path}"
+        access_key = str(getattr(cred, "access_key", "") or "").strip()
+        secret_key = str(getattr(cred, "secret_key", "") or "").strip()
+        if not access_key or not secret_key:
+            return object_url
+
+        parsed = urllib.parse.urlparse(public_base_url)
+        host = str(parsed.netloc or "").strip().lower()
+        if not host:
+            return object_url
+
+        now = datetime.utcnow()
+        amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+        datestamp = now.strftime("%Y%m%d")
+        region = str(getattr(pool, "region_name", "") or "").strip() or self._infer_tos_region(
+            str(getattr(pool, "endpoint", "") or ""),
+            "cn-beijing",
+        )
+        expires = max(300, int(getattr(pool, "presign_expires_seconds", 7 * 24 * 3600) or 7 * 24 * 3600))
+        credential = f"{access_key}/{datestamp}/{region}/tos/request"
+        query_params = {
+            "X-Tos-Algorithm": "TOS4-HMAC-SHA256",
+            "X-Tos-Credential": credential,
+            "X-Tos-Date": amz_date,
+            "X-Tos-Expires": str(expires),
+            "X-Tos-SignedHeaders": "host",
+        }
+        session_token = str(getattr(cred, "session_token", "") or "").strip()
+        if session_token:
+            query_params["X-Tos-Security-Token"] = session_token
+
+        canonical_query = "&".join(
+            f"{self._tos_uri_encode(name)}={self._tos_uri_encode(value)}"
+            for name, value in sorted(query_params.items(), key=lambda item: item[0])
+        )
+        canonical_uri = "/" + self._tos_uri_encode(str(key or "").lstrip("/"), encode_slash=False)
+        canonical_request = "\n".join(
+            [
+                "GET",
+                canonical_uri,
+                canonical_query,
+                f"host:{host}",
+                "",
+                "host",
+                "UNSIGNED-PAYLOAD",
+            ]
+        )
+        credential_scope = f"{datestamp}/{region}/tos/request"
+        string_to_sign = "\n".join(
+            [
+                "TOS4-HMAC-SHA256",
+                amz_date,
+                credential_scope,
+                hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+            ]
+        )
+
+        def _hmac(key: bytes, msg: str) -> bytes:
+            return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+        signing_key = _hmac(
+            _hmac(_hmac(_hmac(("TOS4" + secret_key).encode("utf-8"), datestamp), region), "tos"),
+            "request",
+        )
+        signature = hmac.new(signing_key, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+        return f"{object_url}?{canonical_query}&X-Tos-Signature={signature}"
 
     def _sanitize_metadata(self, metadata: Optional[Dict[str, Any]]) -> Dict[str, str]:
         if not isinstance(metadata, dict) or not metadata:
@@ -312,9 +435,24 @@ class OSSStorageService:
             bucket=bucket,
             public_base_url=str(row.get("public_base_url") or "").strip().rstrip("/"),
             root_prefix=str(row.get("root_prefix") or "").strip().strip("/"),
-            region_name=str(row.get("region") or "us-east-1").strip() or "us-east-1",
+            region_name=(
+                str(row.get("region") or "").strip()
+                or (
+                    self._infer_tos_region(endpoint, "cn-beijing")
+                    if any(marker in endpoint.lower() for marker in ("volces.com", "ivolces.com", "tos-"))
+                    else "us-east-1"
+                )
+            ),
             force_path_style=self._as_bool(row.get("force_path_style"), default=False),
-            presign_expires_seconds=max(300, _env_int("OSS_PRESIGN_EXPIRES_SECONDS", "QINIU_PRESIGN_EXPIRES_SECONDS", default=7 * 24 * 3600)),
+            presign_expires_seconds=max(
+                300,
+                _env_int(
+                    "OSS_PRESIGN_EXPIRES_SECONDS",
+                    "TOS_PRESIGN_EXPIRES_SECONDS",
+                    "QINIU_PRESIGN_EXPIRES_SECONDS",
+                    default=7 * 24 * 3600,
+                ),
+            ),
             strategy=self._normalize_strategy(row.get("strategy")),
             weights=self._normalize_weights(row.get("weights"), len(credentials)),
             credentials=credentials,
@@ -359,19 +497,68 @@ class OSSStorageService:
                 owned_session.close()
 
     def _pick_env_pool(self):
-        endpoint = _env_first("OSS_ENDPOINT", "QINIU_ENDPOINT", "S3_ENDPOINT", "AWS_S3_ENDPOINT")
-        bucket = _env_first("OSS_BUCKET", "QINIU_BUCKET", "S3_BUCKET", "AWS_STORAGE_BUCKET_NAME")
+        endpoint = _env_first(
+            "OSS_ENDPOINT",
+            "TOS_ENDPOINT",
+            "VOLC_TOS_ENDPOINT",
+            "QINIU_ENDPOINT",
+            "S3_ENDPOINT",
+            "AWS_S3_ENDPOINT",
+        )
+        bucket = _env_first(
+            "OSS_BUCKET",
+            "TOS_BUCKET",
+            "VOLC_TOS_BUCKET",
+            "QINIU_BUCKET",
+            "S3_BUCKET",
+            "AWS_STORAGE_BUCKET_NAME",
+        )
         if not endpoint or not bucket:
             return None
 
-        provider = _env_first("OSS_PROVIDER", default=("qiniu" if "qiniu" in endpoint.lower() else "s3"))
-        public_base_url = _env_first("OSS_PUBLIC_BASE_URL", "QINIU_PUBLIC_BASE_URL", "S3_PUBLIC_BASE_URL")
-        root_prefix = _env_first("OSS_ROOT_PREFIX", "QINIU_ROOT_PREFIX", default="aistory/upload").strip().strip("/")
-        region_name = _env_first("OSS_REGION", "AWS_REGION", "AWS_DEFAULT_REGION", default="us-east-1")
+        endpoint_lower = endpoint.lower()
+        if any(marker in endpoint_lower for marker in ("volces.com", "ivolces.com", "tos-cn-", "tos-s3-")):
+            inferred_provider = "tos"
+        elif "qiniu" in endpoint_lower:
+            inferred_provider = "qiniu"
+        else:
+            inferred_provider = "s3"
+        provider = _env_first("OSS_PROVIDER", "TOS_PROVIDER", default=inferred_provider)
+        public_base_url = _env_first(
+            "OSS_PUBLIC_BASE_URL",
+            "TOS_PUBLIC_BASE_URL",
+            "VOLC_TOS_PUBLIC_BASE_URL",
+            "QINIU_PUBLIC_BASE_URL",
+            "S3_PUBLIC_BASE_URL",
+        )
+        root_prefix = _env_first(
+            "OSS_ROOT_PREFIX",
+            "TOS_ROOT_PREFIX",
+            "QINIU_ROOT_PREFIX",
+            default="aistory/upload",
+        ).strip().strip("/")
+        default_region = (
+            self._infer_tos_region(endpoint, "cn-beijing")
+            if inferred_provider == "tos"
+            else "us-east-1"
+        )
+        region_name = _env_first(
+            "OSS_REGION",
+            "TOS_REGION",
+            "VOLC_TOS_REGION",
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+            default=default_region,
+        )
         force_path_style = _env_bool("OSS_FORCE_PATH_STYLE", "S3_FORCE_PATH_STYLE", default=False)
         presign_expires_seconds = max(
             300,
-            _env_int("OSS_PRESIGN_EXPIRES_SECONDS", "QINIU_PRESIGN_EXPIRES_SECONDS", default=7 * 24 * 3600),
+            _env_int(
+                "OSS_PRESIGN_EXPIRES_SECONDS",
+                "TOS_PRESIGN_EXPIRES_SECONDS",
+                "QINIU_PRESIGN_EXPIRES_SECONDS",
+                default=7 * 24 * 3600,
+            ),
         )
 
         return SimpleNamespace(
@@ -454,9 +641,23 @@ class OSSStorageService:
                 label=str(picked.get("label") or "").strip() or None,
             ), None
 
-        access_key = _env_first("OSS_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "QINIU_ACCESS_KEY")
-        secret_key = _env_first("OSS_SECRET_KEY", "AWS_SECRET_ACCESS_KEY", "QINIU_SECRET_KEY")
-        session_token = _env_first("OSS_SESSION_TOKEN", "AWS_SESSION_TOKEN")
+        if self._is_tos_provider(pool):
+            access_key = _env_first(
+                "TOS_ACCESS_KEY",
+                "VOLC_TOS_ACCESS_KEY",
+                "OSS_ACCESS_KEY",
+                "AWS_ACCESS_KEY_ID",
+            )
+            secret_key = _env_first(
+                "TOS_SECRET_KEY",
+                "VOLC_TOS_SECRET_KEY",
+                "OSS_SECRET_KEY",
+                "AWS_SECRET_ACCESS_KEY",
+            )
+        else:
+            access_key = _env_first("OSS_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "QINIU_ACCESS_KEY")
+            secret_key = _env_first("OSS_SECRET_KEY", "AWS_SECRET_ACCESS_KEY", "QINIU_SECRET_KEY")
+        session_token = _env_first("OSS_SESSION_TOKEN", "TOS_SESSION_TOKEN", "AWS_SESSION_TOKEN")
         if not access_key or not secret_key:
             return None, "credential_not_configured"
 
@@ -480,7 +681,7 @@ class OSSStorageService:
         s3_config: Dict[str, Any] = {
             "addressing_style": "path" if getattr(pool, "force_path_style", False) else "virtual"
         }
-        if self._is_qiniu_provider(pool):
+        if self._is_s3_compat_unsigned_payload(pool):
             s3_config["payload_signing_enabled"] = False
 
         # connect_timeout: abort TCP handshake if endpoint unreachable.
@@ -490,13 +691,22 @@ class OSSStorageService:
         # genuine hung connections.
         _connect_timeout = max(5, int(os.getenv("OSS_CONNECT_TIMEOUT", "15")))
         _read_timeout = max(60, int(os.getenv("OSS_READ_TIMEOUT", "600")))
-        config = Config(
-            signature_version="s3v4",
-            s3=s3_config,
-            connect_timeout=_connect_timeout,
-            read_timeout=_read_timeout,
-            retries={"max_attempts": 2, "mode": "standard"},
-        )
+        config_kwargs: Dict[str, Any] = {
+            "signature_version": "s3v4",
+            "s3": s3_config,
+            "connect_timeout": _connect_timeout,
+            "read_timeout": _read_timeout,
+            "retries": {"max_attempts": 2, "mode": "standard"},
+        }
+        if self._is_s3_compat_unsigned_payload(pool):
+            config_kwargs["request_checksum_calculation"] = "when_required"
+            config_kwargs["response_checksum_validation"] = "when_required"
+        try:
+            config = Config(**config_kwargs)
+        except TypeError:
+            config_kwargs.pop("request_checksum_calculation", None)
+            config_kwargs.pop("response_checksum_validation", None)
+            config = Config(**config_kwargs)
         client = boto3.client(
             "s3",
             endpoint_url=pool.endpoint,
@@ -627,9 +837,11 @@ class OSSStorageService:
         if public_base_url:
             if self._is_qiniu_provider(pool) and _env_bool("OSS_QINIU_SIGNED_URL", "QINIU_SIGNED_URL", default=True):
                 return self._build_qiniu_download_url(pool, key, cred)
+            if self._is_tos_provider(pool) and _env_bool("OSS_TOS_SIGNED_URL", "TOS_SIGNED_URL", default=True):
+                return self._build_tos_download_url(pool, key, cred)
             return f"{public_base_url}/{urllib.parse.quote(key, safe='/~._-')}"
 
-        if not _env_bool("OSS_ALLOW_PRESIGNED_URL", "QINIU_ALLOW_PRESIGNED_URL", default=True):
+        if not _env_bool("OSS_ALLOW_PRESIGNED_URL", "TOS_ALLOW_PRESIGNED_URL", "QINIU_ALLOW_PRESIGNED_URL", default=True):
             return ""
 
         try:
@@ -662,8 +874,8 @@ class OSSStorageService:
         if getattr(pool, "default_storage_class", None):
             st_class = str(pool.default_storage_class)
             provider_nm = str(getattr(pool, "provider", "")).lower()
-            if self._is_qiniu_provider(pool):
-                # Qiniu S3-compatible endpoint may reject StorageClass values from AWS semantics.
+            if self._is_qiniu_provider(pool) or self._is_tos_provider(pool):
+                # Qiniu / TOS S3-compatible endpoints may reject AWS StorageClass values.
                 pass
             elif provider_nm == "backblaze" and st_class == "STANDARD_IA":
                 pass
@@ -1086,7 +1298,12 @@ class OSSStorageService:
         candidate_raw = raw
         if "://" not in candidate_raw and "/" in candidate_raw:
             host_part = candidate_raw.split("/", 1)[0].strip().lower()
-            if host_part.endswith("clouddn.com") or host_part.endswith("qiniucs.com") or ".bkt." in host_part:
+            if (
+                host_part.endswith("clouddn.com")
+                or host_part.endswith("qiniucs.com")
+                or ".bkt." in host_part
+                or self._is_tos_object_host(host_part)
+            ):
                 candidate_raw = f"https://{candidate_raw}"
 
         try:
@@ -1105,7 +1322,7 @@ class OSSStorageService:
                 return pool, urllib.parse.unquote(extracted_key)
 
             if (
-                self._is_qiniu_provider(pool)
+                (self._is_qiniu_provider(pool) or self._is_tos_provider(pool))
                 and public_base_url
                 and public_base_url.lower().startswith("https://")
             ):
@@ -1114,9 +1331,9 @@ class OSSStorageService:
                     extracted_key = candidate_raw[len(legacy_http_base) + 1 :].split("?")[0]
                     return pool, urllib.parse.unquote(extracted_key)
 
+            host = str(parsed.netloc or "").strip().lower()
+            root_prefix = str(getattr(pool, "root_prefix", "") or "").strip().strip("/")
             if self._is_qiniu_provider(pool):
-                host = str(parsed.netloc or "").strip().lower()
-                root_prefix = str(getattr(pool, "root_prefix", "") or "").strip().strip("/")
                 # Include custom CDN domains (e.g. qn.woola.fun) used by provider-direct OSS writes.
                 if host and (
                     host.endswith("clouddn.com")
@@ -1126,6 +1343,16 @@ class OSSStorageService:
                 ):
                     if not root_prefix or path == root_prefix or path.startswith(f"{root_prefix}/"):
                         return pool, path
+
+            if self._is_tos_provider(pool) and host and self._is_tos_object_host(host):
+                bucket = str(getattr(pool, "bucket", "") or "").strip().lower()
+                endpoint_host = urllib.parse.urlparse(str(getattr(pool, "endpoint", "") or "")).netloc.lower()
+                host_matches_pool = (
+                    (bucket and (host == f"{bucket}.{endpoint_host}" or host.startswith(f"{bucket}.")))
+                    or (endpoint_host and host == endpoint_host)
+                )
+                if host_matches_pool and (not root_prefix or path == root_prefix or path.startswith(f"{root_prefix}/")):
+                    return pool, path
 
             endpoint_host = urllib.parse.urlparse(str(getattr(pool, "endpoint", "") or "")).netloc.lower()
             bucket = str(getattr(pool, "bucket", "") or "").strip()
@@ -1235,7 +1462,7 @@ class OSSStorageService:
         return bool(key)
 
     def refresh_url(self, url: str) -> str:
-        """Refresh a managed URL if it is a presigned URL or uses Qiniu signed URL, else return it."""
+        """Refresh a managed URL if it is a presigned URL or uses Qiniu/TOS signed URL, else return it."""
         raw = str(url or "").strip()
         if not raw:
             return raw

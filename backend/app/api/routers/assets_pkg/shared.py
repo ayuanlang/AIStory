@@ -715,6 +715,9 @@ async def proxy_asset(url: str, request: Request):
         or host.endswith(".clouddn.com")
         or host.endswith(".qiniucs.com")
         or host.endswith(".qiniu.com")
+        or host.endswith(".volces.com")
+        or host.endswith(".ivolces.com")
+        or oss_storage_service.is_managed_url(fetch_url)
     )
 
     forward_headers: Dict[str, str] = {}

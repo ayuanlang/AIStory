@@ -5608,12 +5608,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         shotId,
         jobId = '',
         initialUrl = '',
+        previousVideoUrl = '',
         maxWaitMs = EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS,
     } = {}) => {
         const stableShotId = String(shotId || '').trim();
         if (!stableShotId) return false;
         if (activeOssVideoSyncRef.current.has(stableShotId)) return false;
         activeOssVideoSyncRef.current.add(stableShotId);
+        const priorVideoUrl = String(previousVideoUrl || '').trim();
 
         try {
         const resolveLocalShot = () => (
@@ -5622,7 +5624,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             || { id: stableShotId }
         );
 
-        const applyPersistedShot = async (shotRecord) => {
+        const applyPersistedShot = async (shotRecord, { acceptPriorUrl = false } = {}) => {
             if (!shotRecord || !isShotVideoOssPersistComplete(shotRecord)) return false;
             const normalized = normalizeShotPromptDefaults(shotRecord);
             const durableUrl = String(normalized.video_url || '').trim();
@@ -5630,6 +5632,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 durableUrl,
                 parseShotTechnicalNotes(normalized.technical_notes)?.video_metadata
             )) {
+                return false;
+            }
+            // A regeneration may begin with a fully persisted old video. Do not treat that
+            // pre-existing row as the new job's completion merely because polling runs first.
+            if (!acceptPriorUrl && priorVideoUrl && durableUrl === priorVideoUrl) {
                 return false;
             }
             const patch = {
@@ -5646,12 +5653,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             triggerMediaReload();
             setMediaPersistGraceRefreshSeq((seq) => seq + 1);
             refreshShotAssetsMeta();
-
-            try {
-                await onUpdateShot(stableShotId, patch);
-            } catch (persistErr) {
-                console.warn('[syncShotVideoAfterOssPersist] shot persist failed:', persistErr);
-            }
 
             await refreshShots();
             return true;
@@ -5679,7 +5680,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             videoUrl: resultUrl,
                             ossUploaded: true,
                         });
-                        if (await applyPersistedShot(merged)) {
+                        if (await applyPersistedShot(merged, { acceptPriorUrl: true })) {
                             releaseShotVideoUi({ shotId: stableShotId, jobId: stableJobId });
                             onLog?.(t('视频已写入 OSS，界面已刷新。', 'Video persisted to OSS; UI refreshed.'), 'success');
                             return true;
@@ -5788,11 +5789,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             String(item?.id) === stableShotId ? { ...item, ...patch } : item
                         )));
                         setMediaPersistGraceRefreshSeq((seq) => seq + 1);
-                        try {
-                            await onUpdateShot(stableShotId, patch);
-                        } catch (updateErr) {
-                            console.warn('[VideoTaskQuery] shot patch after persist failed:', updateErr);
-                        }
                     }
 
                     setVideoTaskQueryModal((prev) => ({
@@ -9719,14 +9715,40 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     } catch (syncErr) {
                         console.warn('Failed to sync latest shot after video completion:', syncErr);
                     }
-                    // Backend may still be writing OSS; keep polling so the edit panel gets a URL.
+                    // Backend may still be writing OSS. Keep the player visibly busy while
+                    // polling, rather than releasing it with neither a preview nor a status.
                     if (createdVideoJobId) {
-                        void syncShotVideoAfterOssPersist({
-                            shotId: targetShotId,
-                            jobId: createdVideoJobId,
+                        const busyKey = `${String(targetShotId || '').trim()}:video`;
+                        setShotMediaOssPersistBusy((prev) => ({ ...prev, [busyKey]: true }));
+                        setVideoStatuses((prev) => ({ ...prev, [targetShotId]: 'persisting_to_oss' }));
+                        void (async () => {
+                            try {
+                                await syncShotVideoAfterOssPersist({
+                                    shotId: targetShotId,
+                                    jobId: createdVideoJobId,
+                                    previousVideoUrl: shotSnapshot.video_url,
+                                });
+                            } finally {
+                                setShotMediaOssPersistBusy((prev) => {
+                                    const next = { ...prev };
+                                    delete next[busyKey];
+                                    return next;
+                                });
+                                setVideoStatuses((prev) => {
+                                    if (String(prev?.[targetShotId] || '') !== 'persisting_to_oss') return prev;
+                                    const next = { ...prev };
+                                    delete next[targetShotId];
+                                    return next;
+                                });
+                            }
+                        })();
+                    } else {
+                        setVideoStatuses((prev) => {
+                            const next = { ...prev };
+                            delete next[targetShotId];
+                            return next;
                         });
                     }
-                    setVideoStatuses(prev => { const n = { ...prev }; delete n[targetShotId]; return n; });
                     triggerMediaReload();
                 } else {
                 ignoreAsyncJobCallbacks = true;
@@ -9843,11 +9865,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         prev && String(prev.id) === stableTargetShotId ? { ...prev, ...durableData } : prev
                                     ));
                                     setIsEditingVideoPreviewArmed(true);
-                                    try {
-                                        await onUpdateShot(stableTargetShotId, durableData);
-                                    } catch (persistUpdateErr) {
-                                        console.warn('[handleGenerateVideo] durable shot patch failed:', persistUpdateErr);
-                                    }
                                     onLog?.(t('视频已写入 OSS，界面已刷新。', 'Video persisted to OSS; UI refreshed.'), 'success');
                                     return;
                                 }
@@ -13215,6 +13232,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2 pointer-events-none">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
                                                     <span className="text-[10px] text-white/70 animate-pulse">{t(
+                                                        videoStatuses[editingShot.id] === 'persisting_to_oss' ? '正在下载并写入 OSS...' :
                                                         videoStatuses[editingShot.id] === 're_downloading' ? '正在处理重下载...' :
                                                         videoStatuses[editingShot.id] === 'querying_task' ? '正在查询任务...' :
                                                         videoStatuses[editingShot.id] === 'upscaling' ? '正在 Topaz 提质...' :
@@ -13225,6 +13243,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? '加载视频中...' :
                                                         (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? '获取视频中...' :
                                                         '正在生成视频...',
+                                                        videoStatuses[editingShot.id] === 'persisting_to_oss' ? 'Downloading and saving to OSS...' :
                                                         videoStatuses[editingShot.id] === 're_downloading' ? 'Processing re-download...' :
                                                         videoStatuses[editingShot.id] === 'querying_task' ? 'Querying task...' :
                                                         videoStatuses[editingShot.id] === 'upscaling' ? 'Topaz upscaling...' :
@@ -14806,6 +14825,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         <div className="absolute inset-0 z-10 bg-black/60 flex items-center justify-center flex-col gap-2">
                                                                             <Loader2 className="w-6 h-6 animate-spin text-primary" />
                                                                             <span className="text-xs text-white/80">{t(
+                                                                                videoStatuses[editingShot.id] === 'persisting_to_oss' ? '正在下载并写入 OSS...' :
                                                                                 videoStatuses[editingShot.id] === 're_downloading' ? '正在处理重下载...' :
                                                                                 videoStatuses[editingShot.id] === 'querying_task' ? '正在查询任务...' :
                                                                                 videoStatuses[editingShot.id] === 'upscaling' ? '正在 Topaz 提质...' :
@@ -14816,6 +14836,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                                 (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? '加载视频中...' :
                                                                                 (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? '获取视频中...' :
                                                                                 '正在生成视频...',
+                                                                                videoStatuses[editingShot.id] === 'persisting_to_oss' ? 'Downloading and saving to OSS...' :
                                                                                 videoStatuses[editingShot.id] === 're_downloading' ? 'Processing re-download...' :
                                                                                 videoStatuses[editingShot.id] === 'querying_task' ? 'Querying task...' :
                                                                                 videoStatuses[editingShot.id] === 'upscaling' ? 'Topaz upscaling...' :

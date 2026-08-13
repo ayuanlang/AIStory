@@ -162,6 +162,8 @@ const writeTempViewProjectIds = (ids) => {
     }
 };
 
+const TOS_OBJECT_HOST_RE = /(?:^|\.)tos-(?:s3-)?[a-z0-9-]+\.(volces|ivolces)\.com(?:[/:?]|$)/i;
+
 const normalizeExternalMediaUrl = (url) => {
     const stable = String(url || '').trim();
     if (!stable) return '';
@@ -169,7 +171,13 @@ const normalizeExternalMediaUrl = (url) => {
     if (/^[A-Za-z0-9.-]+\.(clouddn\.com|qiniucs\.com)\//i.test(stable)) {
         return `https://${stable}`;
     }
+    if (/^[A-Za-z0-9.-]*tos-[A-Za-z0-9.-]+\.(volces|ivolces)\.com\//i.test(stable)) {
+        return `https://${stable}`;
+    }
     if (/^http:\/\//i.test(stable) && /(clouddn\.com|qiniucs\.com)/i.test(stable)) {
+        return stable.replace(/^http:\/\//i, 'https://');
+    }
+    if (/^http:\/\//i.test(stable) && TOS_OBJECT_HOST_RE.test(stable)) {
         return stable.replace(/^http:\/\//i, 'https://');
     }
     return stable;
