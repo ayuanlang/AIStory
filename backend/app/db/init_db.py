@@ -2925,16 +2925,14 @@ def init_system_api_settings(db):
         existing_ddi_models.add(key)
         ddi_added += 1
 
-    # Keep existing ddimatuo rows on the 1080p default when resolution was never set.
+    # Force existing ddimatuo rows to resolution=1080p (hard contract).
     try:
         ddi_resolution_updated = 0
         for row in existing_ddi_rows:
             cfg = row.config if isinstance(row.config, dict) else {}
             if not isinstance(cfg, dict):
-                continue
+                cfg = {}
             raw_res = str(cfg.get("resolution") or "").strip()
-            if raw_res and raw_res.lower() != "1080p":
-                continue
             if raw_res == "1080p":
                 continue
             cfg = dict(cfg)
@@ -2943,7 +2941,7 @@ def init_system_api_settings(db):
             ddi_resolution_updated += 1
         if ddi_resolution_updated > 0:
             db.commit()
-            logger.info("Updated %s ddimatuo rows with default resolution=1080p", ddi_resolution_updated)
+            logger.info("Forced %s ddimatuo rows to resolution=1080p", ddi_resolution_updated)
     except Exception as ddi_res_err:
         logger.warning("Failed to backfill ddimatuo default resolution: %s", ddi_res_err)
 

@@ -754,6 +754,30 @@ async def _run_generate_video(
                 if resolved_video_width and resolved_video_height and not resolved_video_resolution:
                     resolved_video_resolution = f"{int(resolved_video_width)}x{int(resolved_video_height)}"
 
+        # DdiMatuo always submits 1080p — override project/request 720p before billing + options.
+        try:
+            from app.services.media_service import media_service as _ddi_res_svc
+
+            _is_ddimatuo_for_resolution = (
+                _ddi_res_svc._normalize_provider_name(reserve_provider or req.provider, "Video")
+                == "ddimatuo"
+            )
+        except Exception:
+            _is_ddimatuo_for_resolution = (
+                str(reserve_provider or req.provider or "").strip().lower() == "ddimatuo"
+            )
+        if _is_ddimatuo_for_resolution:
+            resolved_video_resolution = "1080p"
+            video_quality = None
+            ddi_dims = _infer_dims_from_video_resolution_tier(
+                aspect_ratio,
+                "1080",
+                provider=reserve_provider,
+                model=reserve_model,
+            )
+            if ddi_dims:
+                resolved_video_width, resolved_video_height = ddi_dims
+
         # Estimate + reserve share one builder (duration/draft/continuation/resolution).
         from app.services.video_billing_details import build_video_generation_billing_details
 
@@ -814,6 +838,31 @@ async def _run_generate_video(
             reserve_model = _billing_meta.get("resolved_model")
         if _billing_meta.get("resolved_system_api_id") is not None:
             reserve_system_api_id = _billing_meta.get("resolved_system_api_id")
+
+        # Billing matrix only knows 480/720 and rewrites 1080 → 720; restore DdiMatuo hard contract.
+        if _is_ddimatuo_for_resolution:
+            resolved_video_resolution = "1080p"
+            video_quality = None
+            ddi_dims = _infer_dims_from_video_resolution_tier(
+                aspect_ratio,
+                "1080",
+                provider=reserve_provider,
+                model=reserve_model,
+            )
+            if ddi_dims:
+                resolved_video_width, resolved_video_height = ddi_dims
+            if isinstance(reserve_details, dict):
+                reserve_details["resolution"] = "1080p"
+                if resolved_video_width:
+                    reserve_details["width"] = int(resolved_video_width)
+                if resolved_video_height:
+                    reserve_details["height"] = int(resolved_video_height)
+            if isinstance(_billing_meta, dict):
+                _billing_meta["resolution"] = "1080p"
+                if resolved_video_width:
+                    _billing_meta["width"] = int(resolved_video_width)
+                if resolved_video_height:
+                    _billing_meta["height"] = int(resolved_video_height)
 
         reserve_provider_arg = reserve_provider or req.provider
         reserve_model_arg = reserve_model or req.model
@@ -1374,6 +1423,41 @@ async def _run_generate_video(
             video_provider_options["resolution"] = resolved_video_resolution
         if resolved_video_image_size:
             video_provider_options["image_size"] = resolved_video_image_size
+
+        # DdiMatuo supplier contract: reference_*_urls + seconds + resolution=1080p.
+        try:
+            from app.services.media_service import media_service as _ddi_media_svc
+
+            is_ddimatuo_provider = (
+                _ddi_media_svc._normalize_provider_name(resolved_video_provider, "Video") == "ddimatuo"
+            )
+        except Exception:
+            is_ddimatuo_provider = str(resolved_video_provider or "").strip().lower() == "ddimatuo"
+        if is_ddimatuo_provider:
+            image_urls_for_ddi = video_provider_options.pop("image_urls", None)
+            if isinstance(image_urls_for_ddi, list) and image_urls_for_ddi:
+                video_provider_options["reference_image_urls"] = list(image_urls_for_ddi)
+            ref_videos_for_ddi = video_provider_options.get("reference_video_urls")
+            if not isinstance(ref_videos_for_ddi, list) or not ref_videos_for_ddi:
+                raw_ref_videos = getattr(req, "ref_video_urls", None)
+                if isinstance(raw_ref_videos, list) and raw_ref_videos:
+                    video_provider_options["reference_video_urls"] = [
+                        str(item).strip() for item in raw_ref_videos if str(item).strip()
+                    ]
+            video_provider_options.setdefault("reference_audio_urls", [])
+            try:
+                video_provider_options["seconds"] = int(float(req.duration if req.duration is not None else 5))
+            except Exception:
+                video_provider_options["seconds"] = 5
+            video_provider_options["seconds"] = max(4, min(15, int(video_provider_options["seconds"])))
+            video_provider_options["resolution"] = "1080p"
+            video_provider_options.pop("width", None)
+            video_provider_options.pop("height", None)
+            video_provider_options.pop("image_size", None)
+            video_provider_options.pop("video_resolution", None)
+            video_provider_options.pop("duration", None)
+            video_provider_options.pop("quality", None)
+
         if "sound" not in video_provider_options and resolved_sound is not None:
             video_provider_options["sound"] = bool(resolved_sound)
         if sound_capability is False:
@@ -1393,6 +1477,11 @@ async def _run_generate_video(
             image_urls = video_provider_options.get("image_urls")
             if isinstance(image_urls, list):
                 video_provider_options["image_urls"] = _limit_string_list_input(image_urls, image_ref_limit)
+            ref_image_urls = video_provider_options.get("reference_image_urls")
+            if isinstance(ref_image_urls, list):
+                video_provider_options["reference_image_urls"] = _limit_string_list_input(
+                    ref_image_urls, image_ref_limit
+                )
         if video_ref_limit is not None:
             ref_video_urls = video_provider_options.get("reference_video_urls")
             if isinstance(ref_video_urls, list):
@@ -1409,6 +1498,52 @@ async def _run_generate_video(
             req.asset_type,
             "video",
         )
+
+        # Persist supplier-shaped body into Combined Payload *before* media_service,
+        # so QueueAdmin never falls back to internal image_urls/duration fields.
+        if is_ddimatuo_provider and callable(provider_payload_callback):
+            ddi_ref_images = video_provider_options.get("reference_image_urls") or []
+            ddi_ref_videos = video_provider_options.get("reference_video_urls") or []
+            ddi_ref_audios = video_provider_options.get("reference_audio_urls") or []
+            if not isinstance(ddi_ref_images, list):
+                ddi_ref_images = []
+            if not isinstance(ddi_ref_videos, list):
+                ddi_ref_videos = []
+            if not isinstance(ddi_ref_audios, list):
+                ddi_ref_audios = []
+            ddi_supplier_body = {
+                "model": str(
+                    (runtime_llm_config or {}).get("model")
+                    or getattr(req, "model", None)
+                    or "sd2-pro"
+                ).strip()
+                or "sd2-pro",
+                "prompt": str(prompt_text or "").strip(),
+                "aspect_ratio": str(aspect_ratio or "16:9").strip() or "16:9",
+                "seconds": int(video_provider_options.get("seconds") or 5),
+                "resolution": "1080p",
+                "auto_retry_busy": bool(video_provider_options.get("auto_retry_busy", False)),
+                "reference_image_urls": list(ddi_ref_images),
+                "reference_video_urls": list(ddi_ref_videos),
+                "reference_audio_urls": list(ddi_ref_audios),
+            }
+            try:
+                provider_payload_callback(
+                    {
+                        **ddi_supplier_body,
+                        "provider": "ddimatuo",
+                        "type": "video",
+                        "method": "POST",
+                        "payload": dict(ddi_supplier_body),
+                        "final_submit": False,
+                        "source": "video_runner_pre_submit",
+                    }
+                )
+            except Exception as ddi_pre_payload_err:
+                logger.warning(
+                    "[GenerateVideo] ddimatuo pre-submit combined_payload failed | error=%s",
+                    ddi_pre_payload_err,
+                )
 
         _release_db_connection(db, "generate_video_upstream_call")
 
@@ -1432,6 +1567,36 @@ async def _run_generate_video(
         )
 
         if isinstance(result, dict):
+            # Promote actual supplier body from media_service even when tool_conf callback was lost.
+            provider_request = (
+                result.get("provider_request")
+                if isinstance(result.get("provider_request"), dict)
+                else None
+            )
+            if (
+                is_ddimatuo_provider
+                and provider_request
+                and callable(provider_payload_callback)
+            ):
+                try:
+                    provider_payload_callback(
+                        {
+                            **provider_request,
+                            "provider": "ddimatuo",
+                            "type": "video",
+                            "method": "POST",
+                            "payload": dict(provider_request),
+                            "final_submit": not bool(result.get("submit_failed") or result.get("error")),
+                            "submit_failed": bool(result.get("submit_failed") or result.get("error")),
+                            "error": result.get("error"),
+                            "source": "video_runner_result",
+                        }
+                    )
+                except Exception as ddi_result_payload_err:
+                    logger.warning(
+                        "[GenerateVideo] ddimatuo result combined_payload failed | error=%s",
+                        ddi_result_payload_err,
+                    )
             stable_meta = result.get("metadata")
             if not isinstance(stable_meta, dict):
                 stable_meta = {}

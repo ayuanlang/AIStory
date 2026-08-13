@@ -7699,6 +7699,15 @@ class MediaGenerationService:
             merged_config.update(provider_options)
             api_config["config"] = merged_config
             api_config["__request_provider_options"] = dict(provider_options)
+            # Keep non-JSON callbacks on the outer config too (tool_conf may be rebuilt).
+            for _cb_key in (
+                "_provider_payload_callback",
+                "_provider_task_id_callback",
+                "_provider_result_callback",
+            ):
+                _cb_val = provider_options.get(_cb_key)
+                if callable(_cb_val):
+                    api_config[_cb_key] = _cb_val
 
         _debug_log(
             "[MediaService][VoiceConfig] requested_provider=%s requested_model=%s resolved_provider=%s resolved_model=%s resolved_source=%s voice=%s language_code=%s"
@@ -12724,21 +12733,12 @@ class MediaGenerationService:
         else:
             auto_retry_busy = bool(auto_retry_busy)
 
-        def _normalize_ddimatuo_resolution(value: Any) -> Optional[str]:
-            text = str(value or "").strip().lower().replace(" ", "")
-            if not text:
-                return None
-            if text in {"480", "480p", "sd", "low"}:
-                return "480p"
-            if text in {"720", "720p", "hd"}:
-                return "720p"
-            if text in {"1080", "1080p", "fhd", "fullhd", "high"}:
-                return "1080p"
-            return None
-
-        # Default 1080p. Ignore project/request resolution|video_resolution injection (often 720p).
-        # Only an explicit quality override may change it.
-        resolution = _normalize_ddimatuo_resolution(tool_conf.get("quality")) or "1080p"
+        # Hard-force 1080p for DdiMatuo. Ignore project/request resolution,
+        # video_resolution, quality, draft, and system-config injection (often 720p).
+        resolution = "1080p"
+        tool_conf["resolution"] = resolution
+        tool_conf.pop("video_resolution", None)
+        tool_conf.pop("quality", None)
 
         # Match official curl: always include reference_*_urls arrays (may be empty).
         payload: Dict[str, Any] = {
@@ -12782,6 +12782,40 @@ class MediaGenerationService:
             "reference_video_count": len(video_refs),
             "reference_audio_count": len(audio_refs),
         }
+
+        async def _emit_ddimatuo_combined_payload(**extra: Any) -> None:
+            """Persist the actual supplier request body for Combined Payload / audit UI."""
+            provider_payload_callback = tool_conf.get("_provider_payload_callback")
+            if not callable(provider_payload_callback):
+                # Fallback: also accept callback parked on outer config (routing may drop tool_conf hooks).
+                provider_payload_callback = config.get("_provider_payload_callback")
+            if not callable(provider_payload_callback):
+                logger.warning(
+                    "DdiMatuo provider_payload_callback missing | cannot persist combined_payload | keys=%s",
+                    sorted(list(payload.keys())),
+                )
+                return
+            snapshot = {
+                **payload,
+                "provider": "ddimatuo",
+                "type": "video",
+                "method": "POST",
+                "url": submit_url,
+                "submit_url": submit_url,
+                "query_endpoint": query_endpoint_base,
+                "payload": dict(payload),
+                **extra,
+            }
+            try:
+                payload_cb_result = provider_payload_callback(snapshot)
+                if asyncio.iscoroutine(payload_cb_result):
+                    await payload_cb_result
+            except Exception as payload_cb_err:
+                logger.warning(
+                    "DdiMatuo provider_payload_callback_failed | extra=%s error=%s",
+                    {k: extra.get(k) for k in ("task_id", "final_submit", "submit_failed") if k in extra},
+                    payload_cb_err,
+                )
 
         idempotency_key = str(
             tool_conf.get("idempotency_key")
@@ -12869,6 +12903,9 @@ class MediaGenerationService:
         except Exception:
             submit_retries = 2
 
+        # Record supplier-shaped body before POST so Combined Payload uses seconds / reference_*_urls.
+        await _emit_ddimatuo_combined_payload(final_submit=False)
+
         submit_resp = None
         last_submit_error: Optional[Exception] = None
         for submit_attempt in range(1, submit_retries + 1):
@@ -12900,16 +12937,20 @@ class MediaGenerationService:
                     continue
             except Exception as submit_exc:
                 logger.exception("DdiMatuo submit unexpected error | url=%s", submit_url)
+                await _emit_ddimatuo_combined_payload(final_submit=False, submit_failed=True)
                 return {
                     "error": f"DdiMatuo submit failed: {submit_exc}",
                     "submit_failed": True,
+                    "provider_request": dict(payload),
                     "details": {"submit_url": submit_url, "model": model},
                 }
 
         if submit_resp is None:
+            await _emit_ddimatuo_combined_payload(final_submit=False, submit_failed=True)
             return {
                 "error": f"DdiMatuo submit timed out/unreachable after {submit_retries} attempts: {last_submit_error}",
                 "submit_failed": True,
+                "provider_request": dict(payload),
                 "details": {
                     "submit_url": submit_url,
                     "model": model,
@@ -12967,9 +13008,16 @@ class MediaGenerationService:
                     }
                 ),
             )
+            await _emit_ddimatuo_combined_payload(
+                final_submit=False,
+                submit_failed=True,
+                submit_raw=submit_data,
+                error=err_msg,
+            )
             return {
                 "error": f"DdiMatuo submit failed: {err_msg}",
                 "submit_failed": True,
+                "provider_request": dict(payload),
                 "details": submit_data or (submit_resp.text or "")[:1000],
             }
 
@@ -12977,10 +13025,21 @@ class MediaGenerationService:
         if not task_id:
             direct_url = _extract_video_url(submit_data)
             if direct_url:
-                return {"url": direct_url, "metadata": {**base_metadata, "raw": submit_data}}
+                await _emit_ddimatuo_combined_payload(final_submit=True, submit_raw=submit_data)
+                return {
+                    "url": direct_url,
+                    "provider_request": dict(payload),
+                    "metadata": {**base_metadata, "raw": submit_data},
+                }
+            await _emit_ddimatuo_combined_payload(
+                final_submit=False,
+                submit_failed=True,
+                submit_raw=submit_data,
+            )
             return {
                 "error": "DdiMatuo submit succeeded but task id missing",
                 "submit_failed": True,
+                "provider_request": dict(payload),
                 "details": submit_data,
             }
 
@@ -12993,25 +13052,12 @@ class MediaGenerationService:
             except Exception as callback_err:
                 logger.warning("DdiMatuo task_id_callback_failed | task_id=%s error=%s", task_id, callback_err)
 
-        provider_payload_callback = tool_conf.get("_provider_payload_callback")
-        if callable(provider_payload_callback):
-            try:
-                payload_cb_result = provider_payload_callback(
-                    {
-                        "provider": "ddimatuo",
-                        "task_id": str(task_id),
-                        "submit_raw": submit_data,
-                        "query_endpoint": query_endpoint_base,
-                    }
-                )
-                if asyncio.iscoroutine(payload_cb_result):
-                    await payload_cb_result
-            except Exception as payload_cb_err:
-                logger.warning(
-                    "DdiMatuo provider_payload_callback_failed | task_id=%s error=%s",
-                    task_id,
-                    payload_cb_err,
-                )
+        await _emit_ddimatuo_combined_payload(
+            final_submit=True,
+            task_id=str(task_id),
+            provider_task_id=str(task_id),
+            submit_raw=submit_data,
+        )
 
         poll_url = (
             poll_template.replace("{taskId}", urllib.parse.quote(task_id))

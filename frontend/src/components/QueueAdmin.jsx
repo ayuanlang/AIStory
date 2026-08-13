@@ -136,8 +136,28 @@ export default function QueueAdmin() {
 
   const getTaskCombinedPayload = (task) => {
     const payload = task?.payload || {};
-    const finalPayload = payload.combined_payload || payload.final_provider_payload;
-    const displayPayload = finalPayload && typeof finalPayload === 'object' ? finalPayload : payload;
+    const finalPayload =
+      payload.combined_payload
+      || payload.final_provider_payload
+      || task?.combined_payload
+      || task?.final_provider_payload;
+    let displayPayload = finalPayload && typeof finalPayload === 'object' ? finalPayload : payload;
+    // Prefer nested supplier body when present (e.g. ddimatuo / kie / runninghub wrappers).
+    if (
+      displayPayload
+      && typeof displayPayload === 'object'
+      && displayPayload.payload
+      && typeof displayPayload.payload === 'object'
+      && !Array.isArray(displayPayload.payload)
+    ) {
+      displayPayload = {
+        ...displayPayload.payload,
+        provider: displayPayload.provider || displayPayload.payload.provider,
+        model: displayPayload.model || displayPayload.payload.model,
+        url: displayPayload.url || displayPayload.submit_url,
+        task_id: displayPayload.task_id || displayPayload.provider_task_id,
+      };
+    }
     return Object.fromEntries(
       Object.entries(displayPayload || {}).filter(([, value]) => value !== null && value !== undefined && value !== '')
     );
