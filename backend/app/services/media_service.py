@@ -13254,10 +13254,10 @@ class MediaGenerationService:
 
         max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
         logger.info(
-            "DdiMatuo poll-only generation started | task_id=%s model=%s seconds=%s aspect_ratio=%s resolution=%s poll_interval=%ss poll_timeout=%ss max_attempts=%s poll_url=%s",
+            "DdiMatuo poll-only generation started | task_id=%s model=%s duration=%s ratio=%s resolution=%s poll_interval=%ss poll_timeout=%ss max_attempts=%s poll_url=%s",
             task_id,
             model,
-            seconds_in,
+            duration_in,
             normalized_ratio,
             resolution,
             poll_interval_seconds,
