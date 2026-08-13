@@ -12566,21 +12566,17 @@ class MediaGenerationService:
                 query_endpoint_base = f"{query_endpoint_base}/v1/videos"
             poll_template = f"{query_endpoint_base}/{{task_id}}"
 
-        # Contract: model is fixed to sd2-pro.
-        model = "sd2-pro"
-        configured_model = str(
+        # Use model from system API settings (fallback sd2-pro).
+        model = str(
             config.get("model")
             or tool_conf.get("model")
             or config.get("base_model")
             or tool_conf.get("base_model")
             or tool_conf.get("runtime_model")
-            or ""
+            or "sd2-pro"
         ).strip()
-        if configured_model and configured_model.lower() not in {"sd2-pro", "sd2_pro", "sd2pro"}:
-            logger.warning(
-                "DdiMatuo forcing model=sd2-pro | configured_model=%s",
-                configured_model,
-            )
+        if not model:
+            return {"error": "DdiMatuo model is required (configure in system API settings)", "submit_failed": True}
 
         prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
         prompt_text = str(prompt_text or "").strip()
@@ -12693,9 +12689,24 @@ class MediaGenerationService:
                 "submit_failed": True,
             }
 
+        def _normalize_ddimatuo_prompt_tags(text: str) -> str:
+            """DdiMatuo contract uses lowercase @imageN/@videoN/@audioN (not @ImageN)."""
+            out = str(text or "")
+            out = re.sub(r"@Image(\d+)\b", r"@image\1", out, flags=re.IGNORECASE)
+            out = re.sub(r"@Video(\d+)\b", r"@video\1", out, flags=re.IGNORECASE)
+            out = re.sub(r"@Audio(\d+)\b", r"@audio\1", out, flags=re.IGNORECASE)
+            # Drop non-media @tokens (e.g. CHAR:[@雷恩]) — Seedance treats unknown @ as invalid refs.
+            out = re.sub(
+                r"@(?!(?:image|video|audio|图片|视频|音频)\d+\b)",
+                "",
+                out,
+                flags=re.IGNORECASE,
+            )
+            return out
+
         def _ensure_ddimatuo_prompt_refs(text: str, *, images: int, videos: int, audios: int) -> str:
             """Ensure prompt mentions @imageN / @videoN / @audioN for each material."""
-            out = str(text or "").strip()
+            out = _normalize_ddimatuo_prompt_tags(str(text or "").strip())
             lower = out.lower()
             missing: List[str] = []
             for idx in range(1, max(0, int(images)) + 1):
@@ -12740,28 +12751,25 @@ class MediaGenerationService:
                 return "1080P"
             return None
 
-        # Optional resolution (not in reference-media table); default 1080P when enabled.
+        # Official create body does not document resolution; keep for local metadata only.
+        # Sending unknown fields can surface as SEEDANCE_INVALID_REQUEST.
         resolution = (
             _normalize_ddimatuo_resolution(tool_conf.get("quality"))
             or _normalize_ddimatuo_resolution(tool_conf.get("resolution"))
             or "1080P"
         )
 
+        # Match official curl: always include reference_*_urls arrays (may be empty).
         payload: Dict[str, Any] = {
             "model": model,
             "prompt": prompt_text,
-            "seconds": int(seconds_in),
             "aspect_ratio": normalized_ratio,
+            "seconds": int(seconds_in),
             "auto_retry_busy": bool(auto_retry_busy),
+            "reference_image_urls": image_refs,
+            "reference_video_urls": video_refs,
+            "reference_audio_urls": audio_refs,
         }
-        if resolution:
-            payload["resolution"] = resolution
-        if image_refs:
-            payload["reference_image_urls"] = image_refs
-        if video_refs:
-            payload["reference_video_urls"] = video_refs
-        if audio_refs:
-            payload["reference_audio_urls"] = audio_refs
 
         poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
         # Docs: poll every 5 seconds.
@@ -12962,6 +12970,20 @@ class MediaGenerationService:
             err_msg = _extract_error_message(
                 submit_data,
                 fallback=(submit_resp.text or "")[:500] or f"HTTP {submit_resp.status_code}",
+            )
+            logger.warning(
+                "DdiMatuo submit rejected | http=%s error=%s payload=%s",
+                getattr(submit_resp, "status_code", None),
+                err_msg,
+                _format_payload_for_log(
+                    {
+                        **{k: v for k, v in payload.items() if k != "prompt"},
+                        "prompt_preview": str(payload.get("prompt") or "")[:240],
+                        "reference_image_count": len(image_refs),
+                        "reference_video_count": len(video_refs),
+                        "reference_audio_count": len(audio_refs),
+                    }
+                ),
             )
             return {
                 "error": f"DdiMatuo submit failed: {err_msg}",

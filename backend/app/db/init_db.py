@@ -2915,7 +2915,7 @@ def init_system_api_settings(db):
                 "aspect_ratios": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
                 "durations_seconds": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
                 "notes": (
-                    "DdiMatuo poll-only. model=sd2-pro; seconds 4-15; "
+                    "DdiMatuo poll-only. model from system API settings; seconds 4-15; "
                     "prompt uses @imageN/@videoN/@audioN; reference_*_urls public HTTPS; "
                     "need ≥1 image or video; auto_retry_busy default false."
                 ),
