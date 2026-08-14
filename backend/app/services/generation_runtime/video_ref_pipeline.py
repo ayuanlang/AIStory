@@ -1635,8 +1635,9 @@ def _append_video_api_ref_mapping(
     model_l = str(model or "").strip().lower()
     is_seedance = "seedance" in provider_l or "seedance" in model_l
     is_ddimatuo = "ddimatuo" in provider_l
-    # Seedance / DdiMatuo bind @VideoN in prompt to videos[] / reference videos.
-    supports_video_ref_prompt = is_seedance or is_ddimatuo
+    is_dubai = "dubai" in provider_l
+    # Seedance / DdiMatuo / Dubai bind @VideoN in prompt to videos[] / reference videos.
+    supports_video_ref_prompt = is_seedance or is_ddimatuo or is_dubai
     original_use_prev_video = bool(use_prev_video)
     if is_seedance:
         use_prev_video = True

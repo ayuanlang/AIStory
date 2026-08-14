@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-08-14 08:50:00 +08:00
+# Prompt Updated At: 2026-08-14 15:55:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -63,7 +63,7 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 
 - **上游接口**：Stage 1 仅自然语言具名，禁 `ENV/PROP/CHAR` 标签；本阶段为**分类唯一入口**。命名与 Stage 1 **逐字一致**；归属据环境块+六环节可核销证据裁定，禁臆造。
 - **中英同义去重（强制；服从项目语言）**：权威源=`project_language` / `Language` / `Project Context.Language`。写入 `entity_attributes` / `script_entity_coverage` / `purpose` / `literary_atmosphere` / `activity_space` / `activity_fit` / `visible_text` 等叙述字段时，若上游同一语义中英并列 → **只保留项目语言侧**，删除另一语种同义重复。未明确项目语言则跟随剧本主语言。❌属性里中英各写一遍同义外观｜✅只留项目语言。例外：①表列固定双语列 `subject_name_zh`+`subject_name_en`（各填各语，非同格堆叠）；②专有名词原文；③剧情有动机异语/`用{语种}说道` 片段中的原文；④多语言项目有动机语码切换。禁在同一单元格内中英同义双语堆叠。
-- **不超出原文创造资产**（原文明示除外）。**唯一例外**：文字载体（牌匾/店招/门牌/路牌/横幅/书架书册/案几纸笺/告示/铭牌等，ENV 固定陈设或 PROP）原文未给逐字文案时，可按「文字载体剧情补字」补 `visible_text`，并同时裁定 `typography_requirement`（字体/书体）与 `script_variant`（`简体`｜`繁体`）；其余仍禁臆造。
+- **不超出原文创造资产**（原文明示除外）。**唯一例外**：文字载体（牌匾/店招/招牌灯/门牌/路牌/横幅/霓虹/灯箱/书架书册/案几纸笺/告示/铭牌等，ENV 固定陈设或 PROP）原文未给逐字文案时，可按「文字载体剧情补字」补 `visible_text`，并同时裁定 `text_layout`（`横排`｜`纵排`）、`typography_requirement`（字体/书体+工艺+**字色+底色**；招牌灯/霓虹/灯箱另写**发光色**）与 `script_variant`（`简体`｜`繁体`）；其余仍禁臆造。
 - **实体命名**：基础版=上游原名；衍生版见「衍生实体命名规范」+ `base_entity` 链。禁同义替换/概括/缩写/无据修饰。
 - **角色名禁止番位词（最高）**：具名叙事角色 `subject_name_*` **必须**为具体姓名；禁「女主/男主/主角/反派/男二/女二/Boss/主人公」等（含「女主_战损版」）。番位**只**进 `plot_role:`。有【角色命名】占位→具名对照→取具名；无对照仅占位→标 `upstream_placeholder_name:需要回流 Stage 1 补具体姓名`。群演簇名不适用。
 - **道具提取极严原则（最高；先于一切升格）**：默认**不**提独立 `PROP`。视频生成大模型可直接消费 Stage 1 Beat 自然语言中的一次性交互/一次性出画；本阶段只为**须独立复用视觉资产 + 可持续关键状态**的物件建 PROP——**全局性道具强制提取除外（下条）**。拟建 PROP 前逐问——**任一为真则禁止提取**（全局性道具不适用本四禁）：
@@ -88,7 +88,7 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
   5. **输出前自检**：逐物件删并归位；确认无「可归 ENV/CHAR / 无状态变化 / 一次性出画」误入 PROP；**全局性道具无漏提**；无消耗品误入 PROP。
 - **全覆盖 XOR**：Stage 1【主环境】清单每一实体恰好落一侧（PROP 或 ENV）或（未达 PROP 门槛时）留 ENV/Beat；禁双写与两侧同时消失。**未过极严门槛且非全局者不得为「全覆盖」硬提 PROP**——应留 ENV（或 CHAR/Beat）。**全局性道具必须进 PROP**。**一次消耗品例外**：可仅留 Beat（或保留 Stage 1 已写 ENV 氛围），不强制进 PROP。
 - **落表序**：先 ENV 后 PROP（PROP = 过极严门槛者 **或** 全局性道具）。
-- **冲突优先级**：`上游硬约束`（含**全局性道具强制提取**） > `ENV/PROP XOR` > `道具提取极严` > `命名完全匹配` > `输出格式边界` > `不重不漏闭环` > `美术建议`。文字载体 `visible_text`/`typography_requirement`/`script_variant` 剧情补字属「不超出原文」的补字例外（见上条），优先于「禁创造」但不得扩及其他臆造。
+- **冲突优先级**：`上游硬约束`（含**全局性道具强制提取**） > `ENV/PROP XOR` > `道具提取极严` > `命名完全匹配` > `输出格式边界` > `不重不漏闭环` > `美术建议`。文字载体 `visible_text`/`text_layout`/`typography_requirement`/`script_variant` 剧情补字属「不超出原文」的补字例外（见上条），优先于「禁创造」但不得扩及其他臆造。
 
 ## 核心任务
 
@@ -227,7 +227,7 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
   - `script_entity_coverage` 须覆盖尺度关键词（掌/拳/指/头/前臂或上游原尺度词）。
 - **PROP 衍生属性（强制，见「六」）**：凡 `base_entity≠None` 的道具衍生（状态/面/形态）须写 `derivative_kind:`（多为`道具状态`/`设备面`）+ `derivative_trigger` + `activation_evidence` + `variant_delta` + `return_or_continue`；供 Stage 2.2 在点燃/签署/翻面等情节换 `PROP:[…]` 版本名。
 - **设备/亮屏/朝向**：正反面或设备态拆 `{基准}_{状态/面}`。上游写到手机/平板等发声屏设备时，须能摘抄**现位**（手上/桌上/已收纳）与**正面朝向**；缺位向→`upstream_missing_prop_orientation:…`（兼标缺位置）。仅明文直播可补支架。亮屏须 `visible_text` 或界面摘要；仅「亮屏」无内容→`upstream_missing_screen_content:…`。响铃/外放证据入库时保留声源现位，禁把桌上响写成手上持握默认态。
-- **可见文字**：`visible_text`/`form_field_text`/`text_carrier`/`typography_requirement`/`script_variant`/`marked_text_requirement`/`readability_requirement`。明示逐字透传（**保持原繁简字形，禁擅自繁简互转**）；动作隐含字段须反推；无精确字样→标「原文未明示…必须存在[字段]」或走补字例外。凡可读中文载体（书/纸/牌匾级 PROP）须可检索：`visible_text`（逐字）+ `typography_requirement`（字体/书体）+ `script_variant:`∈`简体|繁体`（有核销混排可写说明）。**文字载体补字**见「规则强约束」唯一例外。
+- **可见文字**：`visible_text`/`form_field_text`/`text_carrier`/`text_layout`/`typography_requirement`/`script_variant`/`marked_text_requirement`/`readability_requirement`。明示逐字透传（**保持原繁简字形，禁擅自繁简互转**）；动作隐含字段须反推；无精确字样→标「原文未明示…必须存在[字段]」或走补字例外。凡可读中文载体（书/纸/牌匾/招牌灯级 PROP 或 ENV 陈设）须可检索：`visible_text`（逐字）+ `text_layout:`∈`横排|纵排` + `typography_requirement`（字体/书体+工艺+**字色+底色**；招牌灯/霓虹/灯箱另写**发光色**）+ `script_variant:`∈`简体|繁体`（有核销混排可写说明）。**文字载体补字**见「规则强约束」唯一例外。
 
 ### 四、环境组（ENV）与空镜
 
@@ -242,12 +242,12 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 - **分层（字段速查）**：
   | 类型 | 关键字段 | 禁 |
   | :--- | :--- | :--- |
-    | **主环境** | `env_role:主环境基准定义`；`referenceable:No`；`generatable:Yes`；**`activity_space:`（继承 Stage 1【活动空间】）**；完整复刻 Stage 1：0°轴、头尾双锚、俯视360（**0/90/180/270+中心须各区具名实体可辨区分**——有戏配合剧情、无戏不敷衍，原则上不重复或不能完全重复；**各向内容=该向正面面对，四方正交透传，禁改写成偏斜/墙角构图元数据**；**地面与空中/屋顶有则透传**；可不写 FG/MG/BG）、固定清单（含垂直上/中/下）；仰视有则写。五区空洞/四面完全同构/缺地面·上边界→`upstream_missing_sector_entities:需要回流 Stage 1` | 作 Beat 可拍 ENV；某一机位空镜成稿；臆造活动空间；自拟补齐空洞扇区；把输入该向内容写成斜对/偏斜主景 |
+    | **主环境** | `env_role:主环境基准定义`；`referenceable:No`；`generatable:Yes`；**`activity_space:`（继承 Stage 1【活动空间】）**；完整复刻 Stage 1：0°轴、头尾双锚、俯视360（**0/90/180/270+中心须各区具名实体可辨区分**——有戏配合剧情、无戏不敷衍，原则上不重复或不能完全重复；**四向=该向围合立面，中心=沙发/茶几/中央桌等地面家具，禁止把中心家具记入某一向立面**；**各向内容=该向正面面对，四方正交透传，禁改写成偏斜/墙角构图元数据**；**地面与空中/屋顶有则透传**；可不写 FG/MG/BG）、固定清单（含垂直上/中/下）；仰视有则写。五区空洞/四面完全同构/缺地面·上边界/`0度=沙发与矮几` 类中心误入立面→`upstream_missing_sector_entities:需要回流 Stage 1` | 作 Beat 可拍 ENV；某一机位空镜成稿；臆造活动空间；自拟补齐空洞扇区；把输入该向内容写成斜对/偏斜主景；把茶几/矮几写入某一向拓扑导致下游 90/270 蒸发 |
     | **视角衍生**（含已声明 `0度…`） | `env_role:衍生环境`；`referenceable:Yes`；`generatable:Yes`；`reference_env`=当前空镜基准；**`activity_fit:`**；只提 Stage 1 轻量清单：`view_angle_from_main`/触发(OTS·反打两步结论)/`spatial_axis`/`lens_profile`/`axis_crossing`/`empty_view_delta?`；**`view_angle_from_main` 以四方 0/90/180/270 为基准（透传 Stage 1）**；**`activity_fit`/`empty_view_delta` 只写本角可见半空间/可见面线索，禁点名对向或机位后方不可见面**；本角可见内容=该向正面面对；**若所属主环境为上集/既有复用**：`view_angle_from_main` 与 Stage 1 声明角须与既有主环境同角一致（透传，禁改度数） | 四向具名/FG·MG·BG 成稿（归 Stage 3）；因「反打」默认角=180（以 Stage 1 的 N 为准）；臆造活动适配；复用主环境下擅自改 `view_angle_from_main`；自造 45°/非四方偏斜角；把不可见面写入本角 `activity_fit`/`empty_view_delta` |
   | **状态衍生** | 仅 Stage 1 已声明且「改写固定结构或跨 Beat 重大氛围 + 至少延续下一 Beat」；`return_or_continue:continue` 直至写明恢复；`empty_view_delta` 具名受影响实体；**`activity_fit:`**（状态对表演区/动线影响有则摘抄） | 瞬时光效；空泛「能量弥漫」；状态确立后仍统一回挂主环境；同基准角度互挂 |
 - **纯空镜**：剥离角色/人称/站位/姿态/视线/对白/持握/应归 PROP 物件/乘员/运动轨迹，以及「给谁用、干什么」的人物用途句。可留：边界、时空字段、**activity_space/activity_fit**（仅空间承载语，禁具名角色）、固定建筑装修、XOR 后固定陈设、出入口、遮挡、360 拓扑、尺度、固定实体前后左右**上下**、`empty_view_delta?`。头尾双锚与固定实体朝向**透传** Stage 1，本阶段不做跨衍生朝向推演。Stage 3 `generation_prompt_cn` 只消费空镜结构，绝不可带人物。
 - **提取纪律**：已声明主/衍生逐条提取、各行独立（禁 OTS/正反并行压缩）；未声明→回流，禁并入主环境。元数据优先抄 Stage 1；缺省：`0度`/建置→`Wide`，OTS/正反→`Standard`。特写/Insert/CU 沿用父观察侧，禁特写专属行。局部未达衍生门槛→并入当前环境属性。固定环境标识/书架书册/贴墙纸笺等→ENV；可移动书/纸/文书——**仅当过道具极严门槛**（不可归 ENV、有可持续关键字迹/翻面态等）才→PROP，否则留 ENV 或 Beat。锚点：非实体写 `main_anchor`；已是提取实体写 `main_anchor_reference`。时序断点不足→`upstream_missing_time_variant_env:…`。
-- **ENV 载体可见文字（强制）**：主环境 `fixed_architecture_and_finish` / `fixed_furniture_and_set_dressing`（或等价空镜字段）中出现牌匾/匾额/店招/门牌/书册/纸笺/告示/铭牌等文字载体时，`entity_attributes` **必须**可检索：`visible_text:`（逐字文案；原文有则透传并保持繁简；无则补字并标「原文未明示；根据剧情补写」）+ `typography_requirement:`（字体/书体+工艺）+ `script_variant:`∈`简体|繁体`。禁只写载体名无字；禁繁简与文案字形冲突。多载体逐具或按可见主标题分条写清。
+- **ENV 载体可见文字（强制）**：主环境 `fixed_architecture_and_finish` / `fixed_furniture_and_set_dressing`（或等价空镜字段）中出现牌匾/匾额/店招/**招牌灯**/门牌/书册/纸笺/告示/铭牌/霓虹/灯箱等文字载体时，`entity_attributes` **必须**可检索：`visible_text:`（逐字文案；原文有则透传并保持繁简；无则补字并标「原文未明示；根据剧情补写」）+ `text_layout:`∈`横排|纵排` + `typography_requirement:`（字体/书体+工艺+**字色+底色/匾色**；招牌灯/霓虹/灯箱另写**发光色**）+ `script_variant:`∈`简体|繁体`。禁只写载体名无字；禁不标横排或纵排；禁有书体无字色；禁繁简与文案字形冲突。多载体逐具或按可见主标题分条写清。
 
 ### 五、衍生实体命名规范（强制）
 
@@ -299,7 +299,7 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 - **prop 行（强制）**：`entity_attributes` 须含 `purpose:` + **`relative_scale:`**（人体/共现实体相对参照，见「三」）；缺尺度键=失败。角色配饰升格行另须 `host_character:` + `wear_side:` + `mount_body_part:` + **`detachable:否|是`**；仅 `detachable:否` 时与宿主 CHAR `accessory_props`/`accessory_mount` 双向一致、部位对齐。
 - **character 行配饰依赖**：仅 **不可离身**（PROP `detachable:否`）升格配饰写入宿主 CHAR `accessory_props:` + `accessory_mount:{名}@{wear_side}/{mount_body_part}`（多件`|`分隔；名与部位=PROP 逐字）；`clothing:`/`appearance:` 短注与之对齐。可离身升格 PROP **不**写 `accessory_*`。可归 CHAR/无状态/一次性出画不写 `accessory_*`、不提 PROP。
 - **character / prop 衍生行**：`base_entity≠None` 时 `entity_attributes` **必须**含「六」七键：`applicable_scenes`（`EPxx_SCyy`，多场`|`分隔）/`activation_beat?`/`derivative_kind`/`derivative_trigger`/`activation_evidence`/`variant_delta`/`return_or_continue`；场景号须可追溯上游 `[SCENE_START]`；并与该行外观/状态字段一致、可被 Stage 2.2 只读按场换版。
-- **environment 行**：字段与分层见「四」；命名/依赖见「五」。衍生另须可检索：`derivative_base_zh/en`、`derivative_trigger_type`、`return_or_continue`。禁 `auto_completed_derived_env`；缺声明→`upstream_missing_derived_env`+`trigger_evidence`。时序衍生可补：`time_break_type`、`stable_space_delta`、`fixed_*_delta`、`inheritance_reason`（禁 Index 写 `light_sound_*`）。涉可见文字：`visible_text`+`typography_requirement`+`script_variant` 齐全；明示字样与剧本一致且繁简不擅自互转。
+- **environment 行**：字段与分层见「四」；命名/依赖见「五」。衍生另须可检索：`derivative_base_zh/en`、`derivative_trigger_type`、`return_or_continue`。禁 `auto_completed_derived_env`；缺声明→`upstream_missing_derived_env`+`trigger_evidence`。时序衍生可补：`time_break_type`、`stable_space_delta`、`fixed_*_delta`、`inheritance_reason`（禁 Index 写 `light_sound_*`）。涉可见文字：`visible_text`+`text_layout`+`typography_requirement`+`script_variant` 齐全（排向、字色/底色；招牌灯另须发光色）；明示字样与剧本一致且繁简不擅自互转。
 
 ### 输出前终检 checklist（规则见上文；此处仅勾选）
 
@@ -314,7 +314,7 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 | 7 | 服化道三项已消费（**初始态→基础版**）；**换装/多套装束→同名≥2 CHAR 行且各行 `clothing:` 不混装**（缺行即失败）；剧情终态狼藉/战损未回填主环境/CHAR基础版；上游描述已入库；`clothing_req`/`clothing_env` 命中已写 |
 | 8 | **CHAR/PROP 衍生行「六」键齐全**：必有 `applicable_scenes`（合法 `EPxx_SCyy`）+ `derivative_kind`/`derivative_trigger`/`activation_evidence`/`variant_delta`/`return_or_continue`；场景号与上游场次一致；证据可对核；缺场景号或缺键=失败 |
 | 9 | 闪回已具名主体均有行/链；Stage 1 多主环境（闪回/蒙太奇）已逐块提取且各主含 `0度` 衍生；`cover_poster` 唯一置尾；**整篇仅一张 Subject Index（无重复分隔符/标题/表头/整表重贴）** |
-| 10 | 牌匾/书/纸等文字载体：ENV/PROP 均有 `visible_text`+`typography_requirement`+`script_variant`（简体/繁体）；原文繁简未擅自互转；无字样已补字或标回流 |
+| 10 | 牌匾/招牌灯/书/纸等文字载体：ENV/PROP 均有 `visible_text`+`text_layout`（横排/纵排）+`typography_requirement`（字体含字色/底色；招牌灯另须发光色）+`script_variant`（简体/繁体）；原文繁简未擅自互转；无字样已补字或标回流 |
 
 ----------------*****--------------
 
@@ -327,7 +327,7 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 | S001 | character | 角色中文名 | Character English Name | None | None | plot_stage:正常叙事；plot_role:男主；gender:男；age_tier:青年；约28岁；identity:刑侦警探；personality:沉稳克制；style:冷峻机能；clothing:深色机能外套+内衬衬衫（袖管可纳物）；右裤袋口常揣银打火机；clothing_req:须有可纳物袖管（长袖或广袖）；须有可用口袋；has_derivatives:Yes。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等。（银打火机为可离身升格 PROP→不写 accessory_props；若另有不可离身常佩玉牌才写 accessory_props/accessory_mount） | 原名、刑侦警探、沉稳克制、机能外套、藏入袖中、从口袋掏出、银打火机、右裤袋口 |
 | S002 | character | 角色中文名_礼服版 | Character English Name Formal | 角色中文名 | Character English Name | plot_stage:正常叙事；plot_role:男主；gender:男；age_tier:青年；约28岁；identity:刑侦警探；personality:沉稳克制；style:冷峻正装；clothing:黑色修身礼服外套+白衬衫+深色领带（换装后晚宴态）；applicable_scenes:EP01_SC02\|EP01_SC03；activation_beat:3；derivative_kind:换装；derivative_trigger:服化道服饰/换装：便装换礼服；activation_evidence:更衣|换上黑色礼服|晚宴正装现态；variant_delta:机能外套→黑色修身礼服+领带；return_or_continue:continue。 | 原名、刑侦警探、更衣、换上黑色礼服、EP01_SC02、EP01_SC03 |
 | S003 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | plot_stage:正常叙事；plot_role:男主；gender:男；age_tier:青年；约28岁；identity:刑侦警探；personality:沉稳克制；style:冷峻机能；clothing_env:灾难/战损现场态；左颊血痕、右肩衣料撕裂、外套沾灰烬尘土；applicable_scenes:EP01_SC05；activation_beat:1；derivative_kind:战损；derivative_trigger:灾难现场可持续战损外观；activation_evidence:战损|灰烬尘土|衣料撕裂；variant_delta:整装机能外套→战损沾灰撕裂态；return_or_continue:continue。 | 原名、刑侦警探、战损、灾难现场、EP01_SC05 |
-| S004 | environment | 办公室会客区 | Office Reception Area | None | None | plot_stage:正常叙事；purpose:夜间雨夜室内会客空镜基准空间；env_role:主环境基准定义；referenceable:No；generatable:Yes；activity_space:主舞台=会议桌两侧对坐区净空｜动线=门→桌侧可绕行｜站位承载=双人对坐区+必要时桌侧站位区｜出入画口=180度半开内开木门；in_out:内；time_of_day:夜；climate:雨；season:冬；space_boundary:xx；zero_degree_axis:桌长边侧面TwoShot（机位落点+Viewing Direction，仅作衍生映射基准）；spatial_anchor_head:180度半开内开木门；spatial_anchor_tail:0度百叶窗墙段；topology_top_down_360:0度=桌长边/90度=桌头/180度=文件柜与白板墙/270度=桌尾…；topology_bottom_up_360:0度=吊顶与主灯/90度=侧墙高窗/180度=后墙梁架/270度=侧墙…；fixed_architecture_and_finish:百叶窗墙段+雨夜窗外；fixed_furniture_and_set_dressing:会议桌(长边沿0度轴)+两把空转椅(主位深棕皮革转椅桌左+客位浅木靠背椅桌右，椅背均朝桌心)+文件柜贴180度墙；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。 | 主环境名、活动空间、头尾双锚、俯视/仰视360、固定大件家具、夜、内、雨夜 |
+| S004 | environment | 办公室会客区 | Office Reception Area | None | None | plot_stage:正常叙事；purpose:夜间雨夜室内会客空镜基准空间；env_role:主环境基准定义；referenceable:No；generatable:Yes；activity_space:主舞台=会议桌两侧对坐区净空｜动线=门→桌侧可绕行｜站位承载=双人对坐区+必要时桌侧站位区｜出入画口=180度半开内开木门；in_out:内；time_of_day:夜；climate:雨；season:冬；space_boundary:xx；zero_degree_axis:桌长边侧面TwoShot（机位落点+Viewing Direction，仅作衍生映射基准）；spatial_anchor_head:180度半开内开木门；spatial_anchor_tail:0度百叶窗墙段；topology_top_down_360:0度=百叶窗墙段/90度=侧墙/180度=半开木门与文件柜贴墙/270度=白板墙段/中心=会议桌+两把空转椅；topology_bottom_up_360:0度=吊顶与主灯/90度=侧墙高窗/180度=后墙梁架/270度=侧墙…；fixed_architecture_and_finish:百叶窗墙段+雨夜窗外；fixed_furniture_and_set_dressing:会议桌(长边沿0度轴)+两把空转椅(主位深棕皮革转椅桌左+客位浅木靠背椅桌右，椅背均朝桌心)+文件柜贴180度墙；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。 | 主环境名、活动空间、头尾双锚、俯视/仰视360、固定大件家具、夜、内、雨夜 |
 | S005 | environment | 0度办公室会客区 | 0 Deg Office Reception Area | 办公室会客区 | Office Reception Area | plot_stage:正常叙事；purpose:本场 Master Two Shot 建置视角的全景空镜基准；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；activity_fit:对坐区纵深与门—桌动线可读；in_out:内；time_of_day:夜；climate:雨；season:冬；view_angle_from_main:0；derivative_base_zh:办公室会客区；derivative_trigger_type:视角衍生（本场首个全景建置视角，Master Two Shot）；empty_view_delta:Master Two Shot 可见半空间：会议桌与椅区、百叶窗墙；对向半空间不可见（禁点名对向实体）；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Wide；axis_crossing:None；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。 | 0度办公室会客区、活动适配、主环境名、Master Two Shot、夜、内、雨 |
 | S006 | environment | 180度办公室会客区_桌后反打 | 180 Deg Office Reception Area Desk Reverse | 办公室会客区 | Office Reception Area | plot_stage:正常叙事；purpose:桌后反打观察空镜（PlannedReverse 半空间）；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；activity_fit:反打侧保留对坐纵深与桌面操作区、门向可读；in_out:内；time_of_day:夜；climate:雨；season:冬；derivative_base_zh:办公室会客区；view_angle_from_main:180；derivative_trigger_type:视角衍生（正反打；OTS两步确认：①对手可读角0°→②反打ENV=180°）；empty_view_delta:反打后可见半开木门与门外走廊、铁皮文件柜与白板墙；对向半空间不可见（禁点名对向实体）；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Standard；axis_crossing:PlannedReverse；literary_atmosphere:半开木门、门外冷蓝雨夜走廊、桌后反打半空间。 | 0度办公室会客区、180度办公室会客区_桌后反打、活动适配、桌后反打、夜、雨 |
 | S007 | prop | 银打火机 | Silver Lighter | None | None | plot_stage:正常叙事；purpose:角色中文名会谈时把玩以掩饰紧张、映射冷峻对峙氛围的个人随身火机；host_character:角色中文名；wear_side:正面；mount_body_part:右裤袋口(右手可取)；detachable:是；relative_scale:约一掌可握·机身约两指宽三指长（随身打火机体量）；material:银色金属；form:扁长方形机身+按压火轮；style:冷峻克制。 | 银打火机、银色金属、一掌可握、两指宽、右裤袋口、把玩、点燃 |

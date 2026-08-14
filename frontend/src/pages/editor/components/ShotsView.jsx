@@ -2631,6 +2631,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             || detail.includes('nukoai')
             || detail.includes('shishikeji')
             || detail.includes('ddimatuo')
+            || detail.includes('dubai')
             || detail.includes('provider')
             || detail.includes('insufficient')
             || detail.includes('submit failed')

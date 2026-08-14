@@ -1925,6 +1925,8 @@ def _normalize_system_provider_name(provider: Any) -> str:
         return "shishikeji"
     if raw in {"ddimatuo", "ddi matuo", "ddimatuo.top"}:
         return "ddimatuo"
+    if raw in {"dubai", "dubai3000", "dubai3000.xyz", "星耀"}:
+        return "dubai"
     return raw
 
 
@@ -10352,7 +10354,11 @@ def create_provider_key_pool(
             else (
                 "ShiShiKeJi"
                 if provider_name == "shishikeji"
-                else ("DdiMatuo" if provider_name == "ddimatuo" else None)
+                else (
+                    "DdiMatuo"
+                    if provider_name == "ddimatuo"
+                    else ("星耀" if provider_name == "dubai" else None)
+                )
             )
         ),
         api_keys=keys,
@@ -10408,6 +10414,8 @@ def update_provider_key_pool(
                 record.provider_alias = "ShiShiKeJi"
             if new_provider == "ddimatuo" and not str(getattr(record, "provider_alias", "") or "").strip():
                 record.provider_alias = "DdiMatuo"
+            if new_provider == "dubai" and not str(getattr(record, "provider_alias", "") or "").strip():
+                record.provider_alias = "星耀"
     if payload.api_keys is not None:
         record.api_keys = _normalize_api_keys(payload.api_keys)
     if payload.provider_alias is not None:

@@ -816,6 +816,8 @@ class MediaGenerationService:
             return "shishikeji"
         if normalized in {"ddimatuo", "ddi matuo", "ddimatuo.top"}:
             return "ddimatuo"
+        if normalized in {"dubai", "dubai3000", "dubai3000.xyz", "星耀"}:
+            return "dubai"
         return raw or "unknown"
 
     def _vendor_failed_message(self, provider: Any, reason: Any) -> str:
@@ -3076,6 +3078,11 @@ class MediaGenerationService:
             "ddimatuo" in provider_l
             or "ddimatuo.top" in str(endpoint or base or "").lower()
         )
+        is_dubai = (
+            "dubai" in provider_l
+            or "dubai3000.xyz" in str(endpoint or base or "").lower()
+            or "星耀" in str(provider or "")
+        )
 
         try:
             raw_payload: Dict[str, Any] = {}
@@ -3141,6 +3148,86 @@ class MediaGenerationService:
                         or raw_payload.get("message")
                         or status
                         or "ddimatuo_query_failed"
+                    ).strip()
+                    return _pack(raw_payload, status="failed", error=err_msg)
+                return _pack(raw_payload, status=status or "running", pending=True)
+
+            if is_dubai:
+                root = (base or "https://dubai3000.xyz").rstrip("/")
+                for _suffix in ("/v1/videos", "/v1"):
+                    if root.lower().endswith(_suffix):
+                        root = root[: -len(_suffix)].rstrip("/")
+                        break
+                if not endpoint:
+                    endpoint = f"{root}/v1/videos"
+                elif endpoint.startswith("/"):
+                    endpoint = f"{root}{endpoint}"
+                elif "dubai3000.xyz" in endpoint.lower() and not endpoint.rstrip("/").lower().endswith("/v1/videos") and "/v1/videos/" not in endpoint.lower():
+                    endpoint = f"{endpoint.rstrip('/')}/v1/videos"
+                headers = {
+                    "Authorization": f"Bearer {stable_key}",
+                    "Accept": "application/json",
+                }
+                query_root = endpoint.rstrip("/")
+                if query_root.lower().endswith("/content"):
+                    query_root = query_root[: -len("/content")].rstrip("/")
+                    if "/" in query_root and query_root.rsplit("/", 1)[-1] == stable_task_id:
+                        query_root = query_root.rsplit("/", 1)[0]
+                target_url = f"{query_root}/{urllib.parse.quote(stable_task_id)}"
+
+                def _dubai_get(use_proxy: bool = True):
+                    kwargs = {"headers": headers, "timeout": 30, "verify": False}
+                    if not use_proxy:
+                        kwargs["proxies"] = {"http": None, "https": None}
+                    return requests.get(target_url, **kwargs)
+
+                try:
+                    resp = _dubai_get(True)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    resp = _dubai_get(False)
+                if resp is None or getattr(resp, "status_code", None) not in {200, 201}:
+                    return {"error": f"dubai_http_{getattr(resp, 'status_code', None)}"}
+                try:
+                    raw_payload = resp.json() if resp.content else {}
+                except Exception:
+                    return {"error": "dubai_invalid_json"}
+                if not isinstance(raw_payload, dict):
+                    return {"error": "dubai_invalid_payload"}
+
+                err = raw_payload.get("error") if isinstance(raw_payload.get("error"), dict) else {}
+                status = _normalize_status(
+                    raw_payload.get("status")
+                    or raw_payload.get("state")
+                    or (err.get("code") if err else None)
+                )
+                url = str(
+                    raw_payload.get("video_url")
+                    or raw_payload.get("videoUrl")
+                    or raw_payload.get("url")
+                    or ""
+                ).strip()
+                if not url:
+                    inner = raw_payload.get("data") if isinstance(raw_payload.get("data"), dict) else {}
+                    url = str(inner.get("video_url") or inner.get("videoUrl") or inner.get("url") or "").strip()
+                if not url:
+                    url = _pick_url(raw_payload)
+                if status in {"succeeded", "completed", "success"}:
+                    if not url:
+                        url = f"{query_root}/{urllib.parse.quote(stable_task_id)}/content"
+                    packed = _pack(raw_payload, status="succeeded", url=url)
+                    packed_meta = packed.get("metadata") if isinstance(packed.get("metadata"), dict) else {}
+                    packed_meta["download_api_key"] = stable_key
+                    packed_meta["content_url"] = f"{query_root}/{urllib.parse.quote(stable_task_id)}/content"
+                    packed["metadata"] = packed_meta
+                    packed["url"] = packed_meta["content_url"]
+                    return packed
+                if status in {"failed", "canceled"} or err:
+                    err_msg = str(
+                        err.get("message")
+                        or err.get("code")
+                        or raw_payload.get("message")
+                        or status
+                        or "dubai_query_failed"
                     ).strip()
                     return _pack(raw_payload, status="failed", error=err_msg)
                 return _pack(raw_payload, status=status or "running", pending=True)
@@ -5418,6 +5505,10 @@ class MediaGenerationService:
             "ddimatuo": "ddimatuo",
             "ddi matuo": "ddimatuo",
             "ddimatuo.top": "ddimatuo",
+            "dubai": "dubai",
+            "dubai3000": "dubai",
+            "dubai3000.xyz": "dubai",
+            "星耀": "dubai",
             "ark-seedance": "ark-seedance",
             "ark_seedance": "ark-seedance",
             "ark seedance": "ark-seedance",
@@ -5497,8 +5588,8 @@ class MediaGenerationService:
         elif resolved_category == "Image" and "/v1/images/generations" in endpoint_hint_lower:
             runtime_activation = "image_openai_compatible"
         elif resolved_category == "Video" and ("/v1/videos" in endpoint_hint_lower or "/v1/chat/completions" in endpoint_hint_lower):
-            # NukoAi / ShiShiKeJi / DdiMatuo use native poll APIs, not OpenAI-compatible.
-            if resolved_provider not in {"nukoai", "shishikeji", "ddimatuo"}:
+            # NukoAi / ShiShiKeJi / DdiMatuo / Dubai use native poll APIs, not OpenAI-compatible.
+            if resolved_provider not in {"nukoai", "shishikeji", "ddimatuo", "dubai"}:
                 runtime_activation = "video_openai_compatible"
         elif resolved_category == "Voice" and "voice-clone" in endpoint_hint_lower:
             runtime_activation = "audio_runninghub_compatible"
@@ -5629,6 +5720,7 @@ class MediaGenerationService:
         "images",
         "image_urls",
         "imageUrls",
+        "reference_images",
         "reference_image_urls",
         "referenceImageUrls",
         "filesUrl",
@@ -5908,7 +6000,7 @@ class MediaGenerationService:
             return await self._handle_n1n_generation("image", prompt, active_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt, image_size=image_size)
         if runtime_activation == "image_n1n_kling_native":
             return await self._handle_n1n_kling_generation("image", prompt, active_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt, image_size=image_size)
-        if runtime_activation == "image_openai_compatible":
+        if runtime_activation == "image_openai_compatible" or self._normalize_provider_name(provider, "Image") == "dubai":
             return await self._handle_apiyi_generation("image", prompt, active_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt, image_size=image_size)
         return None
 
@@ -5951,6 +6043,18 @@ class MediaGenerationService:
             )
         if normalized == "ddimatuo":
             return await self._handle_ddimatuo_generation(
+                "video",
+                prompt,
+                active_config,
+                reference_image_url,
+                last_frame_url=last_frame_url,
+                duration=duration,
+                aspect_ratio=aspect_ratio,
+                negative_prompt=negative_prompt,
+                keyframes=keyframes,
+            )
+        if normalized == "dubai":
+            return await self._handle_dubai_generation(
                 "video",
                 prompt,
                 active_config,
@@ -6089,6 +6193,7 @@ class MediaGenerationService:
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
             "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "SD_2.0"},
+            "dubai": {"base_url": "https://dubai3000.xyz", "model": "seedance-2.0-fast"},
         }
 
         rows = self._system_setting_query(session, category=category).order_by(SystemAPISetting.id.asc()).all()
@@ -6335,6 +6440,16 @@ class MediaGenerationService:
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
                     )
+                if effective_provider == "dubai":
+                    return await self._handle_apiyi_generation(
+                        "image",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                        image_size=normalized_image_size,
+                    )
                 if effective_provider == "runninghub":
                     return await self._handle_runninghub_generation(
                         "image",
@@ -6477,6 +6592,18 @@ class MediaGenerationService:
                     )
                 if effective_provider == "ddimatuo":
                     return await self._handle_ddimatuo_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        last_frame_url=effective_last_frame_url,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                        keyframes=effective_keyframes,
+                    )
+                if effective_provider == "dubai":
+                    return await self._handle_dubai_generation(
                         "video",
                         prompt,
                         active_config,
@@ -7079,6 +7206,7 @@ class MediaGenerationService:
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
             "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "SD_2.0"},
+            "dubai": {"base_url": "https://dubai3000.xyz", "model": "seedance-2.0-fast"},
         }
 
         try:
@@ -10451,8 +10579,17 @@ class MediaGenerationService:
         model = str(config.get("model") or "").strip()
         
         provider_key = str(provider_name).strip().lower()
+        if provider_key == "dubai":
+            configured_base = str(config.get("base_url") or "").strip().rstrip("/")
+            if not configured_base or "apiyi.com" in configured_base.lower():
+                base_url = "https://dubai3000.xyz"
+            else:
+                for _suffix in ("/v1/videos", "/v1/images/generations", "/v1/chat/completions", "/v1"):
+                    if base_url.lower().endswith(_suffix):
+                        base_url = base_url[: -len(_suffix)].rstrip("/")
+                        break
         if not endpoint:
-            if provider_key == "aiclub":
+            if provider_key in {"aiclub", "dubai"}:
                 if gen_type == "image":
                     endpoint = "/v1/images/generations"
                 elif gen_type == "video":
@@ -13462,6 +13599,293 @@ class MediaGenerationService:
             reason="poll_timeout",
         )
 
+    async def _handle_dubai_generation(
+        self,
+        gen_type,
+        prompt,
+        config,
+        ref_image=None,
+        last_frame_url=None,
+        duration=5,
+        aspect_ratio=None,
+        negative_prompt: Optional[str] = None,
+        keyframes: Optional[List[str]] = None,
+    ):
+        """Dubai / 星耀 video API: POST /v1/videos then poll; download via /content.
+
+        Docs: base URL is the host only (no /v1). Auth is Bearer. Video is async:
+        submit → GET /v1/videos/{id} until status=completed → GET /v1/videos/{id}/content.
+        """
+        if str(gen_type or "").strip().lower() != "video":
+            return {"error": "Dubai currently supports video generation only", "submit_failed": True}
+
+        api_key = str(config.get("api_key") or config.get("clientApiKey") or "").strip()
+        if not api_key:
+            return {"error": "No Dubai API Key", "submit_failed": True}
+
+        tool_conf = config.get("config", {}) or {}
+        if tool_conf.get("_pure_callback_mode"):
+            logger.info("Dubai ignoring pure_callback_mode | reason=poll_only_provider")
+
+        base_url = str(
+            config.get("base_url")
+            or tool_conf.get("base_url")
+            or "https://dubai3000.xyz"
+        ).strip().rstrip("/")
+        root_url = base_url
+        for _suffix in ("/v1/videos", "/v1"):
+            if root_url.lower().endswith(_suffix):
+                root_url = root_url[: -len(_suffix)].rstrip("/")
+                break
+        submit_url = str(tool_conf.get("endpoint") or f"{root_url}/v1/videos").strip().rstrip("/")
+        if submit_url.startswith("/"):
+            submit_url = f"{root_url}{submit_url}"
+        if submit_url.lower().endswith("/v1"):
+            submit_url = f"{submit_url}/videos"
+        elif "/v1/videos" not in submit_url.lower():
+            submit_url = f"{root_url}/v1/videos"
+
+        model = str(
+            config.get("model")
+            or tool_conf.get("model")
+            or config.get("base_model")
+            or tool_conf.get("base_model")
+            or tool_conf.get("runtime_model")
+            or ""
+        ).strip()
+        if not model:
+            return {
+                "error": "Dubai model is required (use a model ID from GET /v1/models)",
+                "submit_failed": True,
+            }
+
+        prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+        prompt_text = str(prompt_text or "").strip()
+        if not prompt_text:
+            return {"error": "Dubai prompt is required", "submit_failed": True}
+
+        dubai_duration_values = list(range(1, 16))
+        allowed_duration_values = self._normalize_duration_enum_values(
+            tool_conf.get("durations_seconds")
+            or tool_conf.get("duration_values")
+            or tool_conf.get("allowed_durations")
+            or tool_conf.get("durations")
+            or dubai_duration_values
+        ) or dubai_duration_values
+        allowed_duration_values = [
+            int(v) for v in allowed_duration_values if 1 <= int(v) <= 15
+        ] or dubai_duration_values
+        try:
+            duration_in = int(
+                float(
+                    duration
+                    if duration is not None
+                    else (tool_conf.get("duration") if tool_conf.get("duration") is not None else tool_conf.get("seconds"))
+                )
+            )
+        except Exception:
+            duration_in = 4
+        mapped_duration = self._map_duration_nearest(
+            duration_in, allowed_duration_values, prefer_higher_on_tie=False
+        )
+        duration_in = int(mapped_duration if mapped_duration is not None else 4)
+        duration_in = max(1, min(15, duration_in or 4))
+
+        dubai_ratios = ["16:9", "9:16", "1:1"]
+        allowed_ratios = self._normalize_str_list(
+            tool_conf.get("ratios")
+            or tool_conf.get("allowed_ratios")
+            or tool_conf.get("aspect_ratios")
+            or dubai_ratios
+        ) or dubai_ratios
+        allowed_ratios = [r for r in allowed_ratios if str(r).strip() in set(dubai_ratios)] or dubai_ratios
+        normalized_ratio = self._normalize_aspect_ratio_value(
+            aspect_ratio or tool_conf.get("aspect_ratio") or tool_conf.get("ratio")
+        )
+        if not normalized_ratio or normalized_ratio == "adaptive":
+            normalized_ratio = "16:9"
+        mapped_ratio = self._map_aspect_ratio_to_allowed(normalized_ratio, allowed_ratios)
+        normalized_ratio = str(mapped_ratio or "16:9").strip()
+        if normalized_ratio not in set(dubai_ratios):
+            if normalized_ratio in {"4:3", "21:9", "3:2"}:
+                normalized_ratio = "16:9"
+            elif normalized_ratio in {"3:4", "2:3"}:
+                normalized_ratio = "9:16"
+            else:
+                normalized_ratio = "16:9"
+
+        def _normalize_dubai_resolution(value: Any) -> Optional[str]:
+            text = str(value or "").strip().lower().replace(" ", "")
+            if not text:
+                return None
+            if text in {"480", "480p", "sd", "draft", "low"}:
+                return "480p"
+            if text in {"720", "720p", "hd", "1080", "1080p", "fhd", "high"}:
+                return "720p"
+            return None
+
+        resolution = (
+            _normalize_dubai_resolution(tool_conf.get("resolution"))
+            or _normalize_dubai_resolution(tool_conf.get("video_resolution"))
+            or _normalize_dubai_resolution(tool_conf.get("quality"))
+            or ("480p" if self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft")) else "720p")
+        )
+
+        def _https_public_only(urls: List[str]) -> List[str]:
+            out: List[str] = []
+            for item in urls:
+                text = str(item or "").strip()
+                if not text.lower().startswith("https://"):
+                    continue
+                if self._is_public_http_url(text) and text not in out:
+                    out.append(text)
+            return out
+
+        def _resolve_https_list(raw_urls: Any, *, limit: int) -> List[str]:
+            resolved = self._resolve_ref_list_for_api(
+                raw_urls,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+            )
+            return _https_public_only([u for u in (resolved or []) if u])[: max(0, int(limit))]
+
+        image_refs = _resolve_https_list(
+            self._collect_video_reference_image_urls(
+                ref_image,
+                tool_conf,
+                extra_sources=config,
+                include_last_frame=bool(last_frame_url),
+                last_frame_url=last_frame_url,
+                limit=9,
+            ),
+            limit=9,
+        )
+        if isinstance(keyframes, list) and keyframes:
+            for item in _resolve_https_list(keyframes, limit=9):
+                if item not in image_refs:
+                    image_refs.append(item)
+            image_refs = image_refs[:9]
+
+        video_refs = _resolve_https_list(
+            self._collect_video_reference_video_urls(
+                tool_conf,
+                extra_sources=config,
+                limit=3,
+            ),
+            limit=3,
+        )
+        audio_raw = (
+            tool_conf.get("reference_audio_urls")
+            or tool_conf.get("audio_urls")
+            or tool_conf.get("referenceAudioUrls")
+            or tool_conf.get("audios")
+            or config.get("reference_audio_urls")
+            or config.get("audios")
+            or []
+        )
+        audio_refs = _resolve_https_list(audio_raw, limit=3)
+
+        def _ensure_dubai_prompt_refs(text: str, *, images: int, videos: int, audios: int) -> str:
+            out = str(text or "").strip()
+            lower = out.lower()
+            missing: List[str] = []
+            for idx in range(1, max(0, int(images)) + 1):
+                tag = f"[@image{idx}]"
+                if tag.lower() not in lower and f"@image{idx}" not in lower:
+                    missing.append(tag)
+            for idx in range(1, max(0, int(videos)) + 1):
+                tag = f"[@video{idx}]"
+                if tag.lower() not in lower and f"@video{idx}" not in lower:
+                    missing.append(tag)
+            for idx in range(1, max(0, int(audios)) + 1):
+                tag = f"[@audio{idx}]"
+                if tag.lower() not in lower and f"@audio{idx}" not in lower:
+                    missing.append(tag)
+            if missing:
+                out = f"{out} {' '.join(missing)}".strip()
+            return out
+
+        prompt_text = _ensure_dubai_prompt_refs(
+            prompt_text,
+            images=len(image_refs),
+            videos=len(video_refs),
+            audios=len(audio_refs),
+        )
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt_text,
+            "duration": int(duration_in),
+            "aspect_ratio": normalized_ratio,
+            "resolution": resolution,
+        }
+        if image_refs:
+            payload["reference_images"] = list(image_refs)
+        if audio_refs:
+            payload["reference_audio_urls"] = list(audio_refs)
+        if video_refs:
+            payload["reference_video_urls"] = list(video_refs)
+
+        poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        poll_interval_seconds = 4
+        try:
+            if tool_conf.get("poll_timeout_seconds") is not None:
+                poll_timeout_seconds = min(900, max(60, int(tool_conf.get("poll_timeout_seconds"))))
+        except Exception:
+            poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        try:
+            if tool_conf.get("poll_interval_seconds") is not None:
+                poll_interval_seconds = max(3, min(10, int(tool_conf.get("poll_interval_seconds"))))
+        except Exception:
+            poll_interval_seconds = 4
+
+        base_metadata = {
+            "provider": "dubai",
+            "model": model,
+            "prompt": prompt_text,
+            "submit_url": submit_url,
+            "query_endpoint": submit_url,
+            "poll_only": True,
+            "duration": int(duration_in),
+            "aspect_ratio": normalized_ratio,
+            "resolution": resolution,
+            "download_api_key": api_key,
+            "image_count": len(image_refs),
+            "video_count": len(video_refs),
+            "audio_count": len(audio_refs),
+        }
+
+        result = await self._submit_and_poll_video(
+            submit_url,
+            payload,
+            api_key,
+            "dubai_video",
+            extra_metadata=base_metadata,
+            poll_timeout_seconds=poll_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            pure_callback_mode=False,
+            callback_enabled=False,
+            provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
+        )
+        if not isinstance(result, dict):
+            return result
+        task_id = str(
+            (result.get("metadata") or {}).get("task_id")
+            or (result.get("metadata") or {}).get("taskId")
+            or result.get("provider_task_id")
+            or ""
+        ).strip()
+        if task_id and not result.get("error"):
+            content_url = f"{submit_url.rstrip('/')}/{task_id}/content"
+            meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+            meta = dict(meta)
+            meta["download_api_key"] = api_key
+            meta["content_url"] = content_url
+            meta["poll_only"] = True
+            result["url"] = content_url
+            result["metadata"] = meta
+        return result
+
     async def _handle_aiclub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "aiclub")
         api_key = str(config.get("api_key") or "").strip()
@@ -15782,16 +16206,39 @@ class MediaGenerationService:
                         # Veo-style: url at top level of poll response
                         if not video_url:
                             video_url = p_data.get("video_url") or p_data.get("url")
-                        # Veo async API: separate /content endpoint
+                        # Veo / OpenAI-compatible async API: separate /content endpoint.
+                        # JSON body may contain a URL; binary video (e.g. Dubai) uses the
+                        # content URL itself as the authenticated download target.
                         if not video_url and task_id:
+                            content_url = f"{url.rstrip('/')}/{task_id}/content"
                             try:
-                                content_url = f"{url}/{task_id}/content"
-                                c_resp = await asyncio.to_thread(lambda: requests.get(content_url, headers=headers, timeout=30, verify=False))
+                                c_resp = await asyncio.to_thread(
+                                    lambda: requests.get(
+                                        content_url,
+                                        headers=headers,
+                                        timeout=30,
+                                        verify=False,
+                                        allow_redirects=True,
+                                    )
+                                )
                                 if c_resp.status_code == 200:
-                                    c_data = c_resp.json()
-                                    video_url = c_data.get("url") or c_data.get("video_url")
+                                    ctype = str(c_resp.headers.get("Content-Type") or "").lower()
+                                    looks_json = "json" in ctype or (
+                                        c_resp.content[:1] in (b"{", b"[") if c_resp.content else False
+                                    )
+                                    if looks_json:
+                                        try:
+                                            c_data = c_resp.json() if c_resp.content else {}
+                                            if isinstance(c_data, dict):
+                                                video_url = c_data.get("url") or c_data.get("video_url")
+                                        except Exception:
+                                            video_url = None
+                                    if not video_url:
+                                        video_url = content_url
                             except Exception:
-                                pass
+                                video_url = content_url
+                        if not video_url and task_id:
+                            video_url = f"{url.rstrip('/')}/{task_id}/content"
                         
                         last_frame_url_res = None
                         if isinstance(content, dict):
@@ -19558,6 +20005,12 @@ class MediaGenerationService:
             return False
         return "ddimatuo.top" in text
 
+    def _looks_like_dubai_media_url(self, url: Any) -> bool:
+        text = str(url or "").strip().lower()
+        if not text:
+            return False
+        return "dubai3000.xyz" in text
+
     def _absolutize_ddimatuo_video_url(self, video_url: Any, base_url: Any = None) -> str:
         """Join relative task.video_url with API base, matching JS `new URL(video_url, BASE)`."""
         text = str(video_url or "").strip()
@@ -19595,6 +20048,32 @@ class MediaGenerationService:
             logger.warning("DdiMatuo download api key resolve failed | error=%s", exc)
         return ""
 
+    def _resolve_dubai_download_api_key(self, preferred_key: Any = None) -> str:
+        preferred = str(preferred_key or "").strip()
+        if preferred:
+            return preferred
+        try:
+            with SessionLocal() as session:
+                rows = (
+                    session.query(SystemAPISetting)
+                    .filter(
+                        self._provider_ci_filter("dubai"),
+                        SystemAPISetting.category == "Video",
+                    )
+                    .order_by(SystemAPISetting.id.asc())
+                    .all()
+                )
+                for row in rows:
+                    key = str(getattr(row, "api_key", "") or "").strip()
+                    if key:
+                        return key
+                pool_key = self._pick_runtime_api_key({}, None, session=session, provider_name="dubai")
+                if pool_key:
+                    return str(pool_key).strip()
+        except Exception as exc:
+            logger.warning("Dubai download api key resolve failed | error=%s", exc)
+        return ""
+
     def _build_authenticated_download_headers(
         self,
         url: Any,
@@ -19613,11 +20092,17 @@ class MediaGenerationService:
 
         provider_l = str(provider or "").strip().lower()
         needs_ddimatuo_auth = provider_l == "ddimatuo" or self._looks_like_ddimatuo_media_url(url)
-        if needs_ddimatuo_auth and "Authorization" not in headers and "authorization" not in {k.lower() for k in headers}:
-            api_key = self._resolve_ddimatuo_download_api_key(preferred_api_key)
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
-                headers["x-api-key"] = api_key
+        needs_dubai_auth = provider_l == "dubai" or self._looks_like_dubai_media_url(url)
+        if "Authorization" not in headers and "authorization" not in {k.lower() for k in headers}:
+            if needs_ddimatuo_auth:
+                api_key = self._resolve_ddimatuo_download_api_key(preferred_api_key)
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                    headers["x-api-key"] = api_key
+            elif needs_dubai_auth:
+                api_key = self._resolve_dubai_download_api_key(preferred_api_key)
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def _download_and_save(

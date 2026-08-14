@@ -1358,6 +1358,7 @@ async def _run_generate_video(
                 "nukoai",
                 "shishikeji",
                 "ddimatuo",
+                "dubai",
             }:
                 video_provider_options["_pure_callback_mode"] = True
         is_kie_kling3_video = bool(
@@ -1526,6 +1527,55 @@ async def _run_generate_video(
             video_provider_options.pop("reference_video_urls", None)
             video_provider_options.pop("reference_audio_urls", None)
 
+        try:
+            from app.services.media_service import media_service as _dubai_media_svc
+
+            is_dubai_provider = (
+                _dubai_media_svc._normalize_provider_name(resolved_video_provider, "Video") == "dubai"
+            )
+        except Exception:
+            is_dubai_provider = str(resolved_video_provider or "").strip().lower() == "dubai"
+        if is_dubai_provider:
+            image_urls_for_dubai = video_provider_options.pop("image_urls", None)
+            if not isinstance(image_urls_for_dubai, list) or not image_urls_for_dubai:
+                image_urls_for_dubai = video_provider_options.pop("reference_image_urls", None)
+            if not isinstance(image_urls_for_dubai, list) or not image_urls_for_dubai:
+                image_urls_for_dubai = video_provider_options.get("reference_images")
+            if isinstance(image_urls_for_dubai, list) and image_urls_for_dubai:
+                video_provider_options["reference_images"] = list(image_urls_for_dubai)
+            if not isinstance(video_provider_options.get("reference_video_urls"), list):
+                raw_ref_videos = getattr(req, "ref_video_urls", None)
+                if isinstance(raw_ref_videos, list) and raw_ref_videos:
+                    video_provider_options["reference_video_urls"] = [
+                        str(item).strip() for item in raw_ref_videos if str(item).strip()
+                    ]
+            if not isinstance(video_provider_options.get("reference_audio_urls"), list):
+                video_provider_options["reference_audio_urls"] = []
+            try:
+                video_provider_options["duration"] = int(
+                    float(req.duration if req.duration is not None else 4)
+                )
+            except Exception:
+                video_provider_options["duration"] = 4
+            video_provider_options["duration"] = max(
+                1, min(15, int(video_provider_options["duration"]))
+            )
+            ratio_text = str(
+                video_provider_options.get("aspect_ratio") or aspect_ratio or "16:9"
+            ).strip() or "16:9"
+            if ratio_text not in {"16:9", "9:16", "1:1"}:
+                ratio_text = "9:16" if ratio_text in {"3:4", "2:3"} else "16:9"
+            video_provider_options["aspect_ratio"] = ratio_text
+            res_text = str(
+                video_provider_options.get("resolution")
+                or video_quality
+                or ""
+            ).strip().lower()
+            if "480" in res_text or bool(req.draft_mode):
+                video_provider_options["resolution"] = "480p"
+            else:
+                video_provider_options["resolution"] = "720p"
+
         if "sound" not in video_provider_options and resolved_sound is not None:
             video_provider_options["sound"] = bool(resolved_sound)
         if sound_capability is False:
@@ -1553,6 +1603,11 @@ async def _run_generate_video(
             ddi_images = video_provider_options.get("images")
             if isinstance(ddi_images, list):
                 video_provider_options["images"] = _limit_string_list_input(ddi_images, image_ref_limit)
+            dubai_images = video_provider_options.get("reference_images")
+            if isinstance(dubai_images, list):
+                video_provider_options["reference_images"] = _limit_string_list_input(
+                    dubai_images, image_ref_limit
+                )
         if video_ref_limit is not None:
             ref_video_urls = video_provider_options.get("reference_video_urls")
             if isinstance(ref_video_urls, list):

@@ -578,9 +578,28 @@ class LLMService:
             return "grsai"
         if "volces" in url:
             return "volcengine"
+        if "dubai3000.xyz" in url:
+            return "dubai"
         if "localhost" in url or "127.0.0.1" in url:
             return "local"
         return "unknown"
+
+    def _ensure_dubai_chat_completions_url(self, url: str) -> str:
+        """Keep /v1 on the request path; never bake /v1 into the SDK base URL."""
+        text = str(url or "").strip().rstrip("/")
+        if not text:
+            return "https://dubai3000.xyz/v1/chat/completions"
+        lower = text.lower()
+        if lower.endswith("/v1/chat/completions"):
+            return text
+        if lower.endswith("/chat/completions"):
+            root = text[: -len("/chat/completions")].rstrip("/")
+            if root.lower().endswith("/v1"):
+                return f"{root}/chat/completions"
+            return f"{root}/v1/chat/completions"
+        if lower.endswith("/v1"):
+            return f"{text}/chat/completions"
+        return f"{text}/v1/chat/completions"
 
     def _is_claude_provider(self, provider: Any) -> bool:
         normalized = str(provider or "").strip().lower()
@@ -2274,7 +2293,7 @@ class LLMService:
 
         with self._llm_log_trace(extra_config):
             try:
-                if str(provider or "").strip().lower() in {"kie", "n1n", "zlhub", "apiyi", "apiyi2", "openai", "deepseek", "grsai", "zimaocloud"}:
+                if str(provider or "").strip().lower() in {"kie", "n1n", "zlhub", "apiyi", "apiyi2", "openai", "deepseek", "grsai", "zimaocloud", "dubai"}:
                     logger.info(
                         "chat_completion routing: provider=%s model=%s mode=stream_aggregate",
                         provider,
@@ -2906,6 +2925,9 @@ class LLMService:
             else:
                 url_source = "config.endpoint"
 
+        if str(provider or "").strip().lower() == "dubai" and resolved_category == "LLM" and not use_claude_api:
+            url = self._ensure_dubai_chat_completions_url(url)
+
         logger.info(
             "LLM route target (full): provider=%s model=%s use_claude_api=%s category=%s url_source=%s url=%s",
             provider,
@@ -3436,6 +3458,9 @@ class LLMService:
                 url_source = "config.endpoint"
             else:
                 url_source = "config.endpoint"
+
+        if str(provider or "").strip().lower() == "dubai" and resolved_category == "LLM" and not use_claude_api:
+            url = self._ensure_dubai_chat_completions_url(url)
 
         logger.info(
             "LLM route target (stream): provider=%s model=%s use_claude_api=%s category=%s url_source=%s url=%s",

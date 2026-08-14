@@ -3011,6 +3011,69 @@ def init_system_api_settings(db):
     else:
         logger.info("System ddimatuo video settings already initialized")
 
+    # Seed Dubai / 星耀 video adapter — poll-only Bearer auth; /v1 stays on the path.
+    dubai_provider = "dubai"
+    dubai_base_url = "https://dubai3000.xyz"
+    dubai_model_items = [
+        ("星耀 Seedance 2.0 Fast", "seedance-2.0-fast"),
+    ]
+    existing_dubai_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.provider == dubai_provider,
+        SystemAPISetting.category == "Video",
+    ).all()
+    existing_dubai_models = {
+        str(row.model or "").strip().lower()
+        for row in existing_dubai_rows
+    }
+    dubai_shared_api_key = ""
+    for row in existing_dubai_rows:
+        if (row.api_key or "").strip():
+            dubai_shared_api_key = row.api_key.strip()
+            break
+
+    dubai_added = 0
+    for display_name, model_name in dubai_model_items:
+        key = str(model_name or "").strip().lower()
+        if not key or key in existing_dubai_models:
+            continue
+        db.add(SystemAPISetting(
+            name=display_name,
+            category="Video",
+            provider=dubai_provider,
+            api_key=dubai_shared_api_key,
+            base_url=dubai_base_url,
+            model=model_name,
+            base_model="seedance-2",
+            modality=migrate_legacy_modality_string("text-to-video,image-to-video"),
+            config={
+                "provider_api_key_strategy": "random",
+                "poll_interval_seconds": 4,
+                "poll_timeout_seconds": 600,
+                "endpoint": f"{dubai_base_url}/v1/videos",
+                "query_endpoint": f"{dubai_base_url}/v1/videos",
+                "poll_only": True,
+                "aspect_ratios": ["16:9", "9:16", "1:1"],
+                "durations_seconds": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+                "resolution": "720p",
+                "notes": (
+                    "Dubai/星耀 poll-only. Base URL is the host only (no /v1). "
+                    "POST /v1/videos; GET /v1/videos/{id}; GET /v1/videos/{id}/content. "
+                    "Auth: Authorization Bearer. Fields: duration 1-15, aspect_ratio 16:9|9:16|1:1, "
+                    "resolution 480p|720p, reference_images / reference_audio_urls / reference_video_urls. "
+                    "Do not invent model IDs; use GET /v1/models."
+                ),
+            },
+            is_active=False,
+        ))
+        existing_dubai_models.add(key)
+        dubai_added += 1
+
+    if dubai_added > 0:
+        db.commit()
+        logger.info("Seeded %s dubai video models into system_api_settings", dubai_added)
+    else:
+        logger.info("System dubai video settings already initialized")
+
 
 def init_initial_data():
     db = SessionLocal()

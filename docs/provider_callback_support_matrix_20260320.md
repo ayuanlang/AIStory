@@ -28,6 +28,7 @@ It separates two different callback layers:
 | Ark | N/A | Yes | New Seedance 2.0 provider via Ark **API Key** (`Bearer`) + `POST /api/v3/contents/generations/tasks`. Same production callback path as other video APIs. Does **not** use AK/SK. |
 | Ark-Seedance | N/A | Yes | Existing native private-asset path (`AK:SK:EP_TOKEN`). Unchanged; separate from provider `ark`. |
 | NukoAi | N/A | No (poll-only) | Submit `POST /videos` then poll `GET /videos/{id}`. Adapter ignores pure-callback mode; no upstream webhook. |
+| Dubai | OpenAI-compatible `/v1/images/generations` | No (poll-only) | 星耀. Video: `POST /v1/videos` → poll `GET /v1/videos/{id}` → download `/content`. Base URL must not include `/v1`. |
 
 ## AIStory Internal Callback Layer
 
@@ -101,6 +102,14 @@ This means the frontend may still observe callback-based completion from AIStory
 - Reference images/audio/video must be public `https` URLs (provider downloads them server-side).
 - Model / duration / ratio are account-specific; configure `SystemAPISetting.model` from the provider `GET /models` list.
 
+### Dubai (星耀)
+
+- Video: **poll-only**. `POST /v1/videos` → `GET /v1/videos/{id}` until `status=completed` → download `GET /v1/videos/{id}/content` with the same Bearer key.
+- SDK `base_url` is the host only (`https://dubai3000.xyz`); `/v1` belongs on the request path.
+- JSON refs: `reference_images`, `reference_audio_urls`, `reference_video_urls`. Duration 1–15; aspect `16:9|9:16|1:1`; resolution `480p|720p`.
+- Image / LLM: OpenAI-compatible (`POST /v1/images/generations`, `POST /v1/chat/completions`) when admin adds those system API rows. Do not invent model IDs; use `GET /v1/models`.
+- Adapter ignores pure-callback mode; no upstream webhook.
+
 ## Practical Rule Of Thumb
 
 When debugging callback behavior, check in this order:
@@ -115,4 +124,5 @@ When debugging callback behavior, check in this order:
 - GRSAI image upstream callback forwarding has been enabled in code.
 - RunningHub standard-model image/video upstream callback forwarding is now enabled through `webhookUrl`, with polling fallback preserved.
 - NukoAi video is integrated as a hard poll-only provider (no upstream callback).
+- Dubai / 星耀 video is integrated as a hard poll-only provider (`/v1/videos` + `/content` download).
 - Failure propagation has been improved so moderation-like upstream errors can surface with richer detail, including `failure_reason` when available.

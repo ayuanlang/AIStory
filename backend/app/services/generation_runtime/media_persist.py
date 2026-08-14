@@ -714,6 +714,12 @@ def _persist_remote_video_result(
             provider="ddimatuo",
             preferred_api_key=updated_metadata.get("download_api_key") or updated_metadata.get("api_key"),
         )
+    elif provider_name == "dubai" or media_service._looks_like_dubai_media_url(raw):
+        download_headers = media_service._build_authenticated_download_headers(
+            raw,
+            provider="dubai",
+            preferred_api_key=updated_metadata.get("download_api_key") or updated_metadata.get("api_key"),
+        )
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -874,6 +880,8 @@ _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
     re.compile(r"(^|.+\.)volces\.com$", re.IGNORECASE),
     # DdiMatuo media requires Authorization and is not durable for browsers.
     re.compile(r"(^|.+\.)ddimatuo\.top$", re.IGNORECASE),
+    # Dubai / 星耀 /content downloads require the same API Key and expire.
+    re.compile(r"(^|.+\.)dubai3000\.xyz$", re.IGNORECASE),
 ]
 
 _EPHEMERAL_PROVIDER_MEDIA_QUERY_MARKERS = (
