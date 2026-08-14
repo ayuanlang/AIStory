@@ -337,11 +337,19 @@ class OSSStorageService:
 
         sanitized: Dict[str, str] = {}
         transformed: List[str] = []
+        skip_keys = {
+            "prompt",
+            "raw",
+            "negative_prompt",
+            "download_api_key",
+            "api_key",
+        }
+        max_value_bytes = 256
         for raw_key, raw_value in metadata.items():
-            if raw_value is None:
+            if raw_value is None or isinstance(raw_value, (dict, list)):
                 continue
             key = str(raw_key or "").strip()
-            if not key:
+            if not key or key.lower() in skip_keys:
                 continue
             try:
                 key.encode("ascii")
@@ -349,11 +357,15 @@ class OSSStorageService:
                 continue
 
             value = str(raw_value)
+            if len(value.encode("utf-8")) > max_value_bytes:
+                continue
             try:
                 value.encode("ascii")
                 sanitized[key] = value
             except UnicodeEncodeError:
                 encoded = urllib.parse.quote(value, safe="-_.~")
+                if len(encoded.encode("ascii")) > max_value_bytes:
+                    continue
                 sanitized[key] = encoded
                 transformed.append(key)
 
@@ -459,6 +471,55 @@ class OSSStorageService:
             )
         OSSStorageService._drop_checksum_params(params)
 
+    @staticmethod
+    def _log_s3_signed_request(request=None, **kwargs) -> None:
+        if request is None:
+            return
+        headers = getattr(request, "headers", None) or {}
+        names = sorted(str(key) for key in headers.keys())
+        total = 0
+        try:
+            for key in headers.keys():
+                total += len(str(key).encode("utf-8")) + len(str(headers.get(key) or "").encode("utf-8"))
+        except Exception:
+            total = -1
+        _visible_info(
+            "[OSSUploadS3Request] url=%s header_bytes=%s headers=%s",
+            str(getattr(request, "url", "") or ""),
+            total,
+            ",".join(names),
+        )
+
+    @staticmethod
+    def _log_s3_http_error(http_response=None, parsed=None, **kwargs) -> None:
+        status = None
+        if http_response is not None:
+            status = getattr(http_response, "status_code", None) or getattr(http_response, "status", None)
+        if parsed is not None and not status:
+            try:
+                status = ((parsed.get("ResponseMetadata") or {}).get("HTTPStatusCode"))
+            except Exception:
+                status = None
+        try:
+            status_i = int(status or 0)
+        except Exception:
+            status_i = 0
+        if status_i < 400:
+            return
+        body = ""
+        if http_response is not None:
+            for attr in ("text", "content", "data"):
+                raw = getattr(http_response, attr, None)
+                if not raw:
+                    continue
+                body = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                break
+        _visible_warning(
+            "[OSSUploadS3HttpError] status=%s body=%s",
+            status_i,
+            str(body or "").replace("\n", " ")[:800] or "-",
+        )
+
     def _attach_s3_compat_request_filters(self, client) -> None:
         events = client.meta.events
         # Parent event names match all S3 operations via botocore's hierarchical emitter.
@@ -471,6 +532,14 @@ class OSSStorageService:
                 events.register(event_name, self._strip_flexible_checksum_headers)
             except Exception:
                 continue
+        try:
+            events.register("before-sign.s3", self._log_s3_signed_request)
+        except Exception:
+            pass
+        try:
+            events.register("after-call.s3", self._log_s3_http_error)
+        except Exception:
+            pass
 
     def _load_json_list(self, value: Any) -> List[Any]:
         if value is None:
@@ -835,7 +904,11 @@ class OSSStorageService:
         # aws-chunked as object Content-Encoding when payload signing is enabled.
         # That can break browser playback (especially over HTTP/2) for video assets.
         s3_config: Dict[str, Any] = {
-            "addressing_style": "path" if getattr(pool, "force_path_style", False) else "virtual"
+            "addressing_style": (
+                "path"
+                if self._is_qiniu_provider(pool) or getattr(pool, "force_path_style", False)
+                else "virtual"
+            )
         }
         if is_s3_compat:
             s3_config["payload_signing_enabled"] = False
@@ -1030,6 +1103,10 @@ class OSSStorageService:
         extra: Dict[str, Any] = {}
         if content_type:
             extra["ContentType"] = content_type
+        # Qiniu rejects oversized/unknown x-amz-meta-* and extra S3 headers with a
+        # generic 400 before the body is read. Keep PutObject headers minimal.
+        if self._is_qiniu_provider(pool):
+            return extra
         if cache_control:
             extra["CacheControl"] = cache_control
         sanitized_metadata = self._sanitize_metadata(metadata)
@@ -1110,6 +1187,29 @@ class OSSStorageService:
                     _do_upload(upload_extra)
                 else:
                     raise
+            return
+
+        if self._is_qiniu_provider(pool):
+            if file_path:
+                with open(file_path, "rb") as handle:
+                    body = handle.read()
+            else:
+                body = body_bytes or b""
+            put_kwargs: Dict[str, Any] = {
+                "Bucket": pool.bucket,
+                "Key": key,
+                "Body": body,
+            }
+            content_type = str(upload_extra.get("ContentType") or "").strip()
+            if content_type:
+                put_kwargs["ContentType"] = content_type
+            _visible_info(
+                "[OSSUploadPutObject] starting | key=%s bytes=%s source=%s mode=qiniu_bytes",
+                key,
+                len(body),
+                "file" if file_path else "bytes",
+            )
+            client.put_object(**put_kwargs)
             return
 
         _visible_info(
