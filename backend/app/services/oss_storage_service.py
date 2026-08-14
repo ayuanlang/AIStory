@@ -1133,6 +1133,95 @@ class OSSStorageService:
                 extra["StorageClass"] = st_class
         return extra
 
+    def _upload_qiniu_native(
+        self,
+        pool,
+        cred,
+        key: str,
+        *,
+        body_bytes: Optional[bytes] = None,
+        file_path: Optional[str] = None,
+        content_size: int,
+        content_type: str,
+    ) -> None:
+        """Upload via official Qiniu SDK (form / resume v2), not S3-compatible boto3."""
+        try:
+            from qiniu import Auth, put_data, put_file_v2
+        except ImportError as exc:
+            raise RuntimeError("qiniu SDK is not installed") from exc
+
+        access_key = str(getattr(cred, "access_key", "") or "").strip()
+        secret_key = str(getattr(cred, "secret_key", "") or "").strip()
+        bucket = str(getattr(pool, "bucket", "") or "").strip()
+        if not access_key or not secret_key or not bucket:
+            raise ValueError("Qiniu credential or bucket missing")
+
+        part_size = max(
+            1024 * 1024,
+            int(os.getenv("OSS_QINIU_MULTIPART_CHUNK_MB", "4") or 4) * 1024 * 1024,
+        )
+        accelerate = _env_bool("OSS_QINIU_ACCELERATE", "QINIU_ACCELERATE_UPLOADING", default=True)
+        token_ttl = max(600, int(os.getenv("OSS_QINIU_UPLOAD_TOKEN_SECONDS", "3600") or 3600))
+        up_token = Auth(access_key, secret_key).upload_token(bucket, key, token_ttl)
+
+        last_logged = {"n": 0}
+
+        def _progress(*args: Any) -> None:
+            uploaded = int(args[0] or 0) if args else 0
+            total = int(args[1] or content_size or 0) if len(args) > 1 else int(content_size or 0)
+            if uploaded - last_logged["n"] < part_size and (not total or uploaded < total):
+                return
+            last_logged["n"] = uploaded
+            _visible_info("[OSSUploadProgress] key=%s sent=%s/%s", key, uploaded, total or content_size)
+
+        _visible_info(
+            "[OSSUploadQiniu] starting | key=%s bytes=%s source=%s mode=native_v2 accelerate=%s chunk=%s",
+            key,
+            content_size,
+            "file" if file_path else "bytes",
+            accelerate,
+            part_size,
+        )
+
+        if file_path:
+            ret, info = put_file_v2(
+                up_token,
+                key,
+                file_path,
+                mime_type=content_type or "application/octet-stream",
+                progress_handler=_progress,
+                part_size=part_size,
+                version="v2",
+                bucket_name=bucket,
+                accelerate_uploading=accelerate,
+            )
+        else:
+            ret, info = put_data(
+                up_token,
+                key,
+                body_bytes or b"",
+                mime_type=content_type or "application/octet-stream",
+                progress_handler=_progress,
+                fname=os.path.basename(key),
+                accelerate_uploading=accelerate,
+            )
+
+        status = getattr(info, "status_code", None) if info is not None else None
+        ok_fn = getattr(info, "ok", None) if info is not None else None
+        ok = bool(ok_fn() if callable(ok_fn) else ok_fn)
+        if info is None or not (ok or 200 <= int(status or 0) < 300):
+            error = getattr(info, "error", None) if info is not None else None
+            body = getattr(info, "text_body", None) if info is not None else None
+            raise RuntimeError(
+                f"Qiniu native upload failed | key={key} status={status} error={error or body or info} ret={ret}"
+            )
+        _visible_info(
+            "[OSSUploadQiniu] success | key=%s status=%s hash=%s",
+            key,
+            status,
+            (ret or {}).get("hash") if isinstance(ret, dict) else None,
+        )
+
     def _put_or_upload_fileobj(
         self,
         client,
@@ -1143,15 +1232,48 @@ class OSSStorageService:
         file_path: Optional[str] = None,
         content_size: int,
         extra_args: Dict[str, Any],
+        cred=None,
     ) -> None:
         """Upload from in-memory bytes or a path. Path path never loads the whole file."""
         upload_extra = dict(extra_args or {})
-        # Qiniu's S3 gateway returns a generic 400 on CreateMultipartUpload when
-        # boto3/s3transfer injects CRC / checksum-type / mp-object-size headers.
-        # Keep TOS on managed multipart; Qiniu uses a single PutObject.
-        use_multipart = (not self._is_qiniu_provider(pool)) and (
+        is_qiniu = self._is_qiniu_provider(pool)
+        use_multipart = (not is_qiniu) and (
             content_size >= _OSS_MULTIPART_THRESHOLD_BYTES or bool(file_path)
         )
+
+        if is_qiniu:
+            self._upload_qiniu_native(
+                pool,
+                cred,
+                key,
+                body_bytes=body_bytes,
+                file_path=file_path,
+                content_size=content_size,
+                content_type=str(upload_extra.get("ContentType") or "").strip() or "application/octet-stream",
+            )
+            return
+
+        def _do_managed_upload(extra: Dict[str, Any], transfer_cfg: TransferConfig, callback=None) -> None:
+            extra_args_kw = extra if extra else None
+            if file_path:
+                with open(file_path, "rb") as handle:
+                    client.upload_fileobj(
+                        handle,
+                        pool.bucket,
+                        key,
+                        ExtraArgs=extra_args_kw,
+                        Config=transfer_cfg,
+                        Callback=callback,
+                    )
+            else:
+                client.upload_fileobj(
+                    io.BytesIO(body_bytes or b""),
+                    pool.bucket,
+                    key,
+                    ExtraArgs=extra_args_kw,
+                    Config=transfer_cfg,
+                    Callback=callback,
+                )
 
         if use_multipart:
             transfer_cfg = TransferConfig(
@@ -1168,58 +1290,14 @@ class OSSStorageService:
                 _OSS_MULTIPART_CHUNK_BYTES,
                 "file" if file_path else "bytes",
             )
-
-            def _do_upload(extra: Dict[str, Any]) -> None:
-                if file_path:
-                    with open(file_path, "rb") as handle:
-                        client.upload_fileobj(
-                            handle,
-                            pool.bucket,
-                            key,
-                            ExtraArgs=extra if extra else None,
-                            Config=transfer_cfg,
-                        )
-                else:
-                    client.upload_fileobj(
-                        io.BytesIO(body_bytes or b""),
-                        pool.bucket,
-                        key,
-                        ExtraArgs=extra if extra else None,
-                        Config=transfer_cfg,
-                    )
-
             try:
-                _do_upload(upload_extra)
+                _do_managed_upload(upload_extra, transfer_cfg)
             except Exception as mp_exc:
                 if upload_extra.get("StorageClass") and self._is_invalid_storage_class_error(mp_exc):
                     upload_extra.pop("StorageClass", None)
-                    _do_upload(upload_extra)
+                    _do_managed_upload(upload_extra, transfer_cfg)
                 else:
                     raise
-            return
-
-        if self._is_qiniu_provider(pool):
-            if file_path:
-                with open(file_path, "rb") as handle:
-                    body = handle.read()
-            else:
-                body = body_bytes or b""
-            put_kwargs: Dict[str, Any] = {
-                "Bucket": pool.bucket,
-                "Key": key,
-                "Body": body,
-                "ContentLength": len(body),
-            }
-            content_type = str(upload_extra.get("ContentType") or "").strip()
-            if content_type:
-                put_kwargs["ContentType"] = content_type
-            _visible_info(
-                "[OSSUploadPutObject] starting | key=%s bytes=%s source=%s mode=qiniu_bytes",
-                key,
-                len(body),
-                "file" if file_path else "bytes",
-            )
-            client.put_object(**put_kwargs)
             return
 
         _visible_info(
@@ -1477,6 +1555,7 @@ class OSSStorageService:
                         client,
                         pool,
                         key,
+                        cred=cred,
                         body_bytes=body_bytes,
                         file_path=file_path,
                         content_size=content_size,
