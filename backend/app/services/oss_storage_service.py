@@ -417,6 +417,7 @@ class OSSStorageService:
                 "x-amz-mp-object-size",
                 "x-amz-trailer",
                 "x-amz-decoded-content-length",
+                "expect",
             }
             or (lower == "content-encoding" and "aws-chunked" in str(value or "").lower())
         )
@@ -527,6 +528,8 @@ class OSSStorageService:
             "before-parameter-build.s3",
             "before-call.s3",
             "before-sign.s3",
+            "before-send",
+            "before-send.s3",
         ):
             try:
                 events.register(event_name, self._strip_flexible_checksum_headers)
@@ -925,7 +928,8 @@ class OSSStorageService:
             "s3": s3_config,
             "connect_timeout": _connect_timeout,
             "read_timeout": _read_timeout,
-            "retries": {"max_attempts": 2, "mode": "standard"},
+            "retries": {"max_attempts": 3, "mode": "standard"},
+            "tcp_keepalive": True,
         }
         # Keep the historical upload_fileobj path, but disable boto3 1.36+
         # flexible CRC headers that Qiniu rejects on CreateMultipartUpload.
@@ -935,9 +939,13 @@ class OSSStorageService:
         try:
             config = Config(**config_kwargs)
         except TypeError:
-            config_kwargs.pop("request_checksum_calculation", None)
-            config_kwargs.pop("response_checksum_validation", None)
-            config = Config(**config_kwargs)
+            config_kwargs.pop("tcp_keepalive", None)
+            try:
+                config = Config(**config_kwargs)
+            except TypeError:
+                config_kwargs.pop("request_checksum_calculation", None)
+                config_kwargs.pop("response_checksum_validation", None)
+                config = Config(**config_kwargs)
         client = boto3.client(
             "s3",
             endpoint_url=pool.endpoint,
@@ -1199,6 +1207,7 @@ class OSSStorageService:
                 "Bucket": pool.bucket,
                 "Key": key,
                 "Body": body,
+                "ContentLength": len(body),
             }
             content_type = str(upload_extra.get("ContentType") or "").strip()
             if content_type:
