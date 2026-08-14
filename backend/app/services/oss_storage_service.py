@@ -393,23 +393,30 @@ class OSSStorageService:
         return str(exc)
 
     @staticmethod
-    def _strip_flexible_checksum_headers(request, **kwargs) -> None:
-        headers = getattr(request, "headers", None)
+    def _is_flexible_checksum_header(name: str, value: str = "") -> bool:
+        lower = str(name or "").lower()
+        return (
+            lower.startswith("x-amz-checksum-")
+            or lower in {
+                "x-amz-sdk-checksum-algorithm",
+                "x-amz-checksum-algorithm",
+                "x-amz-checksum-type",
+                "x-amz-checksum-mode",
+                "x-amz-mp-object-size",
+                "x-amz-trailer",
+                "x-amz-decoded-content-length",
+            }
+            or (lower == "content-encoding" and "aws-chunked" in str(value or "").lower())
+        )
+
+    @staticmethod
+    def _strip_checksum_headers_from_mapping(headers) -> List[str]:
         if headers is None:
-            return
+            return []
         drop_keys = []
         for key in list(headers.keys()):
-            lower = str(key).lower()
             value = str(headers.get(key) or "")
-            if (
-                lower.startswith("x-amz-checksum-")
-                or lower in {
-                    "x-amz-sdk-checksum-algorithm",
-                    "x-amz-trailer",
-                    "x-amz-decoded-content-length",
-                }
-                or (lower == "content-encoding" and "aws-chunked" in value.lower())
-            ):
+            if OSSStorageService._is_flexible_checksum_header(str(key), value):
                 drop_keys.append(key)
         for key in drop_keys:
             try:
@@ -419,40 +426,49 @@ class OSSStorageService:
                     headers.pop(key, None)
                 except Exception:
                     pass
+        return [str(key) for key in drop_keys]
 
     @staticmethod
     def _drop_checksum_params(params, **kwargs) -> None:
         if not isinstance(params, dict):
             return
-        params.pop("ChecksumAlgorithm", None)
-        params.pop("ChecksumType", None)
-        params.pop("ChecksumCRC32", None)
-        params.pop("ChecksumCRC32C", None)
-        params.pop("ChecksumSHA1", None)
-        params.pop("ChecksumSHA256", None)
-        params.pop("ChecksumCRC64NVME", None)
+        for field in (
+            "ChecksumAlgorithm",
+            "ChecksumType",
+            "ChecksumMode",
+            "ChecksumCRC32",
+            "ChecksumCRC32C",
+            "ChecksumSHA1",
+            "ChecksumSHA256",
+            "ChecksumCRC64NVME",
+            "MpuObjectSize",
+        ):
+            params.pop(field, None)
+        headers = params.get("headers")
+        if isinstance(headers, dict):
+            OSSStorageService._strip_checksum_headers_from_mapping(headers)
+
+    @staticmethod
+    def _strip_flexible_checksum_headers(request=None, params=None, **kwargs) -> None:
+        if isinstance(request, dict) and params is None:
+            params = request
+            request = None
+        if request is not None:
+            OSSStorageService._strip_checksum_headers_from_mapping(
+                getattr(request, "headers", None)
+            )
+        OSSStorageService._drop_checksum_params(params)
 
     def _attach_s3_compat_request_filters(self, client) -> None:
-        sign_events = (
-            "before-sign.s3.PutObject",
-            "before-sign.s3.UploadPart",
-            "before-sign.s3.CreateMultipartUpload",
-            "before-sign.s3.CompleteMultipartUpload",
-        )
-        param_events = (
-            "before-parameter-build.s3.PutObject",
-            "before-parameter-build.s3.UploadPart",
-            "before-parameter-build.s3.CreateMultipartUpload",
-            "before-parameter-build.s3.CompleteMultipartUpload",
-        )
-        for event_name in sign_events:
+        events = client.meta.events
+        # Parent event names match all S3 operations via botocore's hierarchical emitter.
+        for event_name in (
+            "before-parameter-build.s3",
+            "before-call.s3",
+            "before-sign.s3",
+        ):
             try:
-                client.meta.events.register(event_name, self._strip_flexible_checksum_headers)
-            except Exception:
-                continue
-        for event_name in param_events:
-            try:
-                client.meta.events.register(event_name, self._drop_checksum_params)
+                events.register(event_name, self._strip_flexible_checksum_headers)
             except Exception:
                 continue
 
@@ -1043,8 +1059,13 @@ class OSSStorageService:
         extra_args: Dict[str, Any],
     ) -> None:
         """Upload from in-memory bytes or a path. Path path never loads the whole file."""
-        use_multipart = content_size >= _OSS_MULTIPART_THRESHOLD_BYTES or bool(file_path)
         upload_extra = dict(extra_args or {})
+        # Qiniu's S3 gateway returns a generic 400 on CreateMultipartUpload when
+        # boto3/s3transfer injects CRC / checksum-type / mp-object-size headers.
+        # Keep TOS on managed multipart; Qiniu uses a single PutObject.
+        use_multipart = (not self._is_qiniu_provider(pool)) and (
+            content_size >= _OSS_MULTIPART_THRESHOLD_BYTES or bool(file_path)
+        )
 
         if use_multipart:
             transfer_cfg = TransferConfig(
@@ -1091,28 +1112,56 @@ class OSSStorageService:
                     raise
             return
 
-        put_kwargs: Dict[str, Any] = {
+        _visible_info(
+            "[OSSUploadPutObject] starting | key=%s bytes=%s source=%s",
+            key,
+            content_size,
+            "file" if file_path else "bytes",
+        )
+
+        def _do_put(kwargs: Dict[str, Any]) -> None:
+            client.put_object(**kwargs)
+
+        def _put_with_storage_retry(kwargs: Dict[str, Any]) -> None:
+            try:
+                _do_put(kwargs)
+            except Exception as first_exc:
+                if kwargs.get("StorageClass") and self._is_invalid_storage_class_error(first_exc):
+                    invalid_storage_class = kwargs.pop("StorageClass", None)
+                    _visible_warning(
+                        "[OSSUploadRetry] provider=%s alias=%s pool_id=%s key=%s reason=invalid_storage_class storage_class=%s",
+                        getattr(pool, "provider", None),
+                        getattr(pool, "provider_alias", None),
+                        getattr(pool, "id", None),
+                        key,
+                        invalid_storage_class,
+                    )
+                    _do_put(kwargs)
+                else:
+                    raise
+
+        if file_path:
+            size = int(content_size or os.path.getsize(file_path))
+            with open(file_path, "rb") as handle:
+                put_kwargs: Dict[str, Any] = {
+                    "Bucket": pool.bucket,
+                    "Key": key,
+                    "Body": handle,
+                    "ContentLength": size,
+                }
+                put_kwargs.update(upload_extra)
+                _put_with_storage_retry(put_kwargs)
+            return
+
+        body = body_bytes or b""
+        put_kwargs = {
             "Bucket": pool.bucket,
             "Key": key,
-            "Body": body_bytes or b"",
+            "Body": body,
+            "ContentLength": len(body),
         }
         put_kwargs.update(upload_extra)
-        try:
-            client.put_object(**put_kwargs)
-        except Exception as first_exc:
-            if put_kwargs.get("StorageClass") and self._is_invalid_storage_class_error(first_exc):
-                invalid_storage_class = put_kwargs.pop("StorageClass", None)
-                _visible_warning(
-                    "[OSSUploadRetry] provider=%s alias=%s pool_id=%s key=%s reason=invalid_storage_class storage_class=%s",
-                    getattr(pool, "provider", None),
-                    getattr(pool, "provider_alias", None),
-                    getattr(pool, "id", None),
-                    key,
-                    invalid_storage_class,
-                )
-                client.put_object(**put_kwargs)
-            else:
-                raise
+        _put_with_storage_retry(put_kwargs)
 
     def _upload_with_pools(
         self,
