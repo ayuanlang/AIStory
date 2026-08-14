@@ -12836,10 +12836,10 @@ class MediaGenerationService:
             audios=len(audio_refs),
         )
 
-        # auto_retry_busy default false; only useful for busy code 28023007.
+        # auto_retry_busy default true; useful for busy code 28023007.
         auto_retry_busy = tool_conf.get("auto_retry_busy")
         if auto_retry_busy is None:
-            auto_retry_busy = False
+            auto_retry_busy = True
         else:
             auto_retry_busy = bool(auto_retry_busy)
 

@@ -1601,7 +1601,7 @@ async def _run_generate_video(
                 "duration": int(video_provider_options.get("duration") or 5),
                 "resolution": "1080P",
                 "watermark": False,
-                "auto_retry_busy": bool(video_provider_options.get("auto_retry_busy", False)),
+                "auto_retry_busy": bool(video_provider_options.get("auto_retry_busy", True)),
             }
             try:
                 provider_payload_callback(

@@ -2908,6 +2908,7 @@ def init_system_api_settings(db):
             cfg = dict(cfg)
             cfg["resolution"] = "1080P"
             cfg["watermark"] = False
+            cfg["auto_retry_busy"] = True
             cfg["mode"] = str(cfg.get("mode") or "omni_reference")
             cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos/generations"
             cfg["query_endpoint"] = f"{ddimatuo_base_url}/v1/videos"
@@ -2947,7 +2948,7 @@ def init_system_api_settings(db):
                 "endpoint": f"{ddimatuo_base_url}/v1/videos/generations",
                 "query_endpoint": f"{ddimatuo_base_url}/v1/videos",
                 "poll_only": True,
-                "auto_retry_busy": False,
+                "auto_retry_busy": True,
                 "mode": "omni_reference",
                 "resolution": "1080P",
                 "watermark": False,
@@ -2991,6 +2992,9 @@ def init_system_api_settings(db):
                 changed = True
             if cfg.get("watermark") is not False:
                 cfg["watermark"] = False
+                changed = True
+            if cfg.get("auto_retry_busy") is not True:
+                cfg["auto_retry_busy"] = True
                 changed = True
             if changed:
                 row.config = cfg

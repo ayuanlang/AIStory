@@ -193,8 +193,9 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
             common
             + "主环境 generation_prompt_cn 格式（强制，四向拼图 2×2 四宫格）：\n"
             "- 首句声明：生成四向拼图基准参考图；16:9 横幅；2×2 四宫格；禁止拉成 1:1；禁止俯拍/鸟瞰。\n"
-            "- 格位固定：左上=0度、右上=90度、左下=180度、右下=270度；各格眼高约 50mm；四格共享材质/光源；Clean Plate。\n"
-            "- 成稿逐格写 [0度格-左上]/[90度格-右上]/[180度格-左下]/[270度格-右下]，每格按「背景→中景→前景/邻向斜切→天花地面→光照」。\n"
+            "- 格位固定：左上=0度、右上=90度、左下=270度、右下=180度；各格眼高约 50mm；四格共享材质/光源；Clean Plate。\n"
+            "- 各格机位正对输入该向内容（该向内容=背景正面面对）；四方正交；禁止偏斜/墙角构图/荷兰角。\n"
+            "- 成稿逐格写 [0度格-左上]/[90度格-右上]/[270度格-左下]/[180度格-右下]，每格按「背景→中景→前景/邻向斜切→天花地面→光照」。\n"
             "- description_cn 必须为 \"\"；俯视 360 + 0 度轴与固定实体清单写入 dependency_strategy.logic；dependency_strategy.type 必须为 BaselineDefinition；visual_dependencies=[]。\n"
             "- 若图片本身已是四宫格，按四格可见内容回写；若图片是单视角，仍须输出完整四向拼图格式（其余格据空间一致性合理补齐，并在 logic 标明推断格）。\n"
             "- 严禁改成单镜头可拍空镜、§A/§B/§C 衍生三段式、或角色/道具白底四视图。"
@@ -203,7 +204,7 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
         common
         + "衍生环境 generation_prompt_cn 格式（强制，§A/§B/§C 单镜）：\n"
         "- §A：参考主环境四向拼图指定格/半空间（或上一状态空镜）。\n"
-        "- §B：与参考图一致的具象清单（地面/家具/门窗/色谱/锚点；前景/中景/背景 + 上中下）。\n"
+        "- §B：与参考图一致的具象清单（地面/家具/门窗/色谱/锚点；前景/中景/背景 + 上中下）。截取后须保持该宫格正对输入该向内容、四方正交；禁止斜向机位/墙角构图/荷兰角。\n"
         "- §C：本镜 Delta（机位、左右重组、背景半空间）；Clean Plate；禁人物。\n"
         "- description_cn 必须为 \"\"；衍生元数据/Delta 写入 dependency_strategy.logic；保留既有 visual_dependencies / dependency_strategy 语义。"
     )
