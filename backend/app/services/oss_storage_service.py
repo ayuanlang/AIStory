@@ -29,11 +29,6 @@ from app.services.oss_upload_dedup import (
     wait_for_oss_upload_peer,
 )
 
-# boto3 1.36+ defaults to flexible CRC checksums. Qiniu's S3 gateway returns
-# 400 Bad Request (or hangs on multipart) when those headers are present.
-os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "WHEN_REQUIRED")
-os.environ.setdefault("AWS_RESPONSE_CHECKSUM_VALIDATION", "WHEN_REQUIRED")
-
 
 logger = logging.getLogger(__name__)
 activity_logger = logging.getLogger("functional_activity")
@@ -391,67 +386,6 @@ class OSSStorageService:
             return " | ".join(parts)
         return str(exc)
 
-    @staticmethod
-    def _is_bad_request_error(exc: Exception) -> bool:
-        if isinstance(exc, ClientError):
-            status = ((exc.response or {}).get("ResponseMetadata") or {}).get("HTTPStatusCode")
-            code = str((((exc.response or {}).get("Error") or {}).get("Code") or "")).strip()
-            if int(status or 0) == 400:
-                return True
-            if code in {
-                "BadRequest",
-                "InvalidRequest",
-                "InvalidArgument",
-                "BadDigest",
-                "XAmzContentSHA256Mismatch",
-                "NotImplemented",
-                "InvalidDigest",
-            }:
-                return True
-        text = str(exc)
-        return "(400)" in text or "Bad Request" in text
-
-    @staticmethod
-    def _strip_flexible_checksum_headers(request, **kwargs) -> None:
-        headers = getattr(request, "headers", None)
-        if headers is None:
-            return
-        drop_keys = []
-        for key in list(headers.keys()):
-            lower = str(key).lower()
-            value = str(headers.get(key) or "")
-            if (
-                lower.startswith("x-amz-checksum-")
-                or lower in {
-                    "x-amz-sdk-checksum-algorithm",
-                    "x-amz-trailer",
-                    "x-amz-decoded-content-length",
-                }
-                or (lower == "content-encoding" and "aws-chunked" in value.lower())
-            ):
-                drop_keys.append(key)
-        for key in drop_keys:
-            try:
-                del headers[key]
-            except Exception:
-                try:
-                    headers.pop(key, None)
-                except Exception:
-                    pass
-
-    def _attach_s3_compat_request_filters(self, client) -> None:
-        events = (
-            "before-sign.s3.PutObject",
-            "before-sign.s3.UploadPart",
-            "before-sign.s3.CreateMultipartUpload",
-            "before-sign.s3.CompleteMultipartUpload",
-        )
-        for event_name in events:
-            try:
-                client.meta.events.register(event_name, self._strip_flexible_checksum_headers)
-            except Exception:
-                continue
-
     def _load_json_list(self, value: Any) -> List[Any]:
         if value is None:
             return []
@@ -803,7 +737,7 @@ class OSSStorageService:
         if not pool or not cred:
             raise ValueError("OSS pool or credential missing")
 
-        cache_key = f"{getattr(pool, 'endpoint', '')}_{getattr(cred, 'access_key', '')}_{int(self._is_tos_provider(pool))}_{int(self._is_qiniu_provider(pool))}"
+        cache_key = f"{getattr(pool, 'endpoint', '')}_{getattr(cred, 'access_key', '')}"
         if cache_key in self._boto3_clients_cache:
             return self._boto3_clients_cache[cache_key]
 
@@ -813,7 +747,7 @@ class OSSStorageService:
         s3_config: Dict[str, Any] = {
             "addressing_style": "path" if getattr(pool, "force_path_style", False) else "virtual"
         }
-        if self._is_s3_compat_unsigned_payload(pool):
+        if self._is_qiniu_provider(pool) or self._is_tos_provider(pool):
             s3_config["payload_signing_enabled"] = False
 
         # connect_timeout: abort TCP handshake if endpoint unreachable.
@@ -823,24 +757,28 @@ class OSSStorageService:
         # genuine hung connections.
         _connect_timeout = max(5, int(os.getenv("OSS_CONNECT_TIMEOUT", "15")))
         _read_timeout = max(60, int(os.getenv("OSS_READ_TIMEOUT", "600")))
-        config_kwargs: Dict[str, Any] = {
-            "signature_version": "s3v4",
-            "s3": s3_config,
-            "connect_timeout": _connect_timeout,
-            "read_timeout": _read_timeout,
-            "retries": {"max_attempts": 2, "mode": "standard"},
-        }
-        if self._is_s3_compat_unsigned_payload(pool):
-            # Disable boto3 1.36+ flexible CRC checksums. Qiniu/TOS gateways
-            # otherwise attach x-amz-checksum-* and managed multipart can stall.
-            config_kwargs["request_checksum_calculation"] = "when_required"
-            config_kwargs["response_checksum_validation"] = "when_required"
-        try:
-            config = Config(**config_kwargs)
-        except TypeError:
-            config_kwargs.pop("request_checksum_calculation", None)
-            config_kwargs.pop("response_checksum_validation", None)
-            config = Config(**config_kwargs)
+        # Qiniu uses the pre-TOS Config (no flexible checksum). TOS-only checksum
+        # opts must not leak onto Qiniu clients.
+        config = Config(
+            signature_version="s3v4",
+            s3=s3_config,
+            connect_timeout=_connect_timeout,
+            read_timeout=_read_timeout,
+            retries={"max_attempts": 2, "mode": "standard"},
+        )
+        if self._is_tos_provider(pool) and not self._is_qiniu_provider(pool):
+            try:
+                config = Config(
+                    signature_version="s3v4",
+                    s3=s3_config,
+                    connect_timeout=_connect_timeout,
+                    read_timeout=_read_timeout,
+                    retries={"max_attempts": 2, "mode": "standard"},
+                    request_checksum_calculation="when_required",
+                    response_checksum_validation="when_required",
+                )
+            except TypeError:
+                pass
         client = boto3.client(
             "s3",
             endpoint_url=pool.endpoint,
@@ -850,8 +788,6 @@ class OSSStorageService:
             aws_session_token=getattr(cred, "session_token", None),
             config=config,
         )
-        if self._is_s3_compat_unsigned_payload(pool):
-            self._attach_s3_compat_request_filters(client)
         self._boto3_clients_cache[cache_key] = client
         return client
 
@@ -1035,32 +971,21 @@ class OSSStorageService:
         extra_args: Dict[str, Any],
     ) -> None:
         """Upload from in-memory bytes or a path. Path path never loads the whole file."""
-        is_qiniu = self._is_qiniu_provider(pool)
-        qiniu_multipart_threshold = max(
-            32 * 1024 * 1024,
-            int(os.getenv("OSS_QINIU_MULTIPART_THRESHOLD_MB", "64") or 64) * 1024 * 1024,
-        )
-        # Qiniu's S3 gateway frequently stalls on boto3 managed multipart
-        # (concurrent parts + CRC trailers). Stream a single put_object instead
-        # unless the object is genuinely large.
-        if is_qiniu:
-            use_multipart = content_size >= qiniu_multipart_threshold
-        else:
-            use_multipart = content_size >= _OSS_MULTIPART_THRESHOLD_BYTES
+        use_multipart = content_size >= _OSS_MULTIPART_THRESHOLD_BYTES or bool(file_path)
         upload_extra = dict(extra_args or {})
 
         if use_multipart:
             transfer_cfg = TransferConfig(
-                multipart_threshold=_OSS_MULTIPART_THRESHOLD_BYTES if not is_qiniu else qiniu_multipart_threshold,
+                multipart_threshold=_OSS_MULTIPART_THRESHOLD_BYTES,
                 multipart_chunksize=_OSS_MULTIPART_CHUNK_BYTES,
-                max_concurrency=1 if is_qiniu else max(1, int(os.getenv("OSS_MULTIPART_CONCURRENCY", "2"))),
-                use_threads=not is_qiniu,
+                max_concurrency=max(1, int(os.getenv("OSS_MULTIPART_CONCURRENCY", "2"))),
+                use_threads=True,
             )
             _visible_info(
                 "[OSSUploadMultipart] starting | key=%s bytes=%s threshold=%s chunk=%s source=%s",
                 key,
                 content_size,
-                _OSS_MULTIPART_THRESHOLD_BYTES if not is_qiniu else qiniu_multipart_threshold,
+                _OSS_MULTIPART_THRESHOLD_BYTES,
                 _OSS_MULTIPART_CHUNK_BYTES,
                 "file" if file_path else "bytes",
             )
@@ -1094,34 +1019,17 @@ class OSSStorageService:
                     raise
             return
 
-        _visible_info(
-            "[OSSUploadPutObject] starting | key=%s bytes=%s source=%s",
-            key,
-            content_size,
-            "file" if file_path else "bytes",
-        )
-
-        def _do_put(extra: Dict[str, Any]) -> None:
-            put_kwargs: Dict[str, Any] = {
-                "Bucket": pool.bucket,
-                "Key": key,
-            }
-            put_kwargs.update(extra)
-            # Do not set ContentLength ourselves: boto3 1.36+ may append a CRC
-            # trailer, and a pre-declared length then makes Qiniu return 400.
-            if file_path:
-                with open(file_path, "rb") as handle:
-                    put_kwargs["Body"] = handle
-                    client.put_object(**put_kwargs)
-                return
-            put_kwargs["Body"] = body_bytes or b""
-            client.put_object(**put_kwargs)
-
+        put_kwargs: Dict[str, Any] = {
+            "Bucket": pool.bucket,
+            "Key": key,
+            "Body": body_bytes or b"",
+        }
+        put_kwargs.update(upload_extra)
         try:
-            _do_put(upload_extra)
+            client.put_object(**put_kwargs)
         except Exception as first_exc:
-            if upload_extra.get("StorageClass") and self._is_invalid_storage_class_error(first_exc):
-                invalid_storage_class = upload_extra.pop("StorageClass", None)
+            if put_kwargs.get("StorageClass") and self._is_invalid_storage_class_error(first_exc):
+                invalid_storage_class = put_kwargs.pop("StorageClass", None)
                 _visible_warning(
                     "[OSSUploadRetry] provider=%s alias=%s pool_id=%s key=%s reason=invalid_storage_class storage_class=%s",
                     getattr(pool, "provider", None),
@@ -1130,20 +1038,7 @@ class OSSStorageService:
                     key,
                     invalid_storage_class,
                 )
-                _do_put(upload_extra)
-            elif is_qiniu and self._is_bad_request_error(first_exc):
-                _visible_warning(
-                    "[OSSUploadRetry] provider=%s alias=%s pool_id=%s key=%s reason=qiniu_put_bad_request err=%s",
-                    getattr(pool, "provider", None),
-                    getattr(pool, "provider_alias", None),
-                    getattr(pool, "id", None),
-                    key,
-                    self._format_oss_error(first_exc),
-                )
-                stripped = {}
-                if upload_extra.get("ContentType"):
-                    stripped["ContentType"] = upload_extra.get("ContentType")
-                _do_put(stripped)
+                client.put_object(**put_kwargs)
             else:
                 raise
 
