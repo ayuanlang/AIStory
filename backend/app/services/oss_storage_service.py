@@ -31,6 +31,7 @@ from app.services.oss_upload_dedup import (
     complete_oss_upload_claim,
     is_oss_cross_process_dedup_enabled,
     release_oss_upload_claim,
+    steal_oss_upload_claim,
     try_claim_oss_upload,
     wait_for_oss_upload_peer,
 )
@@ -505,7 +506,7 @@ class OSSStorageService:
             status_i = int(status or 0)
         except Exception:
             status_i = 0
-        if status_i < 400:
+        if status_i < 400 or status_i == 404:
             return
         body = ""
         if http_response is not None:
@@ -1368,7 +1369,7 @@ class OSSStorageService:
                             owned_key = key
                             break
                         _visible_info("[OSSUploadDedup] waiting for in-flight upload | key=%s", key)
-                        waiter.wait(timeout=700)
+                        waiter.wait(timeout=20)
                         cached = _OSS_UPLOAD_INFLIGHT_RESULTS.get(key)
                         if cached is not None:
                             _visible_info(
@@ -1383,13 +1384,8 @@ class OSSStorageService:
                     if is_oss_cross_process_dedup_enabled():
                         claimed = try_claim_oss_upload(key)
                         if not claimed:
-                            _visible_info("[OSSUploadCrossDedup] waiting for peer | key=%s", key)
-                            peer_result = wait_for_oss_upload_peer(key)
-                            if peer_result:
-                                self._finish_inflight_upload(key, peer_result)
-                                owned_key = None
-                                return peer_result
-                            # Peer released without a reusable result; prefer durable OSS head.
+                            # If the object is already there, reuse it immediately.
+                            # A hung peer (previous 100-continue stall) must not block persist-media.
                             try:
                                 client.head_object(Bucket=pool.bucket, Key=key)
                                 url = self._build_public_url(client, pool, key, cred)
@@ -1409,19 +1405,39 @@ class OSSStorageService:
                             except ClientError as ce:
                                 if ce.response["Error"]["Code"] != "404":
                                     logger.warning("OSS head_object warning | key=%s err=%s", key, ce)
-                            claimed = try_claim_oss_upload(key)
-                            if not claimed:
-                                peer_result = wait_for_oss_upload_peer(key)
-                                if peer_result:
-                                    self._finish_inflight_upload(key, peer_result)
+                            _visible_info("[OSSUploadCrossDedup] waiting for peer | key=%s", key)
+                            peer_result = wait_for_oss_upload_peer(key)
+                            if peer_result:
+                                self._finish_inflight_upload(key, peer_result)
+                                owned_key = None
+                                return peer_result
+                            try:
+                                client.head_object(Bucket=pool.bucket, Key=key)
+                                url = self._build_public_url(client, pool, key, cred)
+                                if url:
+                                    upload_result = {
+                                        "key": key,
+                                        "url": url,
+                                        "provider": getattr(pool, "provider", None),
+                                        "bucket": getattr(pool, "bucket", None),
+                                        "provider_alias": getattr(pool, "provider_alias", None),
+                                        "endpoint": getattr(pool, "endpoint", None),
+                                        "public_base_url": self._normalize_public_base_url(pool) or None,
+                                    }
+                                    self._finish_inflight_upload(key, upload_result)
                                     owned_key = None
-                                    return peer_result
+                                    return upload_result
+                            except ClientError as ce:
+                                if ce.response["Error"]["Code"] != "404":
+                                    logger.warning("OSS head_object warning | key=%s err=%s", key, ce)
+                            claimed = steal_oss_upload_claim(key)
+                            if claimed:
+                                owned_cross_key = key
+                            else:
                                 _visible_warning(
                                     "[OSSUploadCrossDedup] proceeding without claim after wait | key=%s",
                                     key,
                                 )
-                            else:
-                                owned_cross_key = key
                         else:
                             owned_cross_key = key
 

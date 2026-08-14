@@ -30,11 +30,11 @@ _OSS_CROSS_DEDUP_ENABLED = str(os.getenv("OSS_UPLOAD_CROSS_PROCESS_DEDUP", "1") 
 }
 _OSS_CROSS_LOCK_TTL_SECONDS = max(
     60,
-    int(os.getenv("OSS_UPLOAD_CROSS_PROCESS_LOCK_TTL_SECONDS", "720") or 720),
+    int(os.getenv("OSS_UPLOAD_CROSS_PROCESS_LOCK_TTL_SECONDS", "180") or 180),
 )
 _OSS_CROSS_WAIT_SECONDS = max(
     5,
-    int(os.getenv("OSS_UPLOAD_CROSS_PROCESS_WAIT_SECONDS", "700") or 700),
+    int(os.getenv("OSS_UPLOAD_CROSS_PROCESS_WAIT_SECONDS", "20") or 20),
 )
 _OSS_CROSS_POLL_SECONDS = max(
     0.2,
@@ -228,7 +228,7 @@ def try_claim_oss_upload(object_key: str) -> bool:
         db.close()
 
 
-def wait_for_oss_upload_peer(object_key: str) -> Optional[Dict[str, Any]]:
+def wait_for_oss_upload_peer(object_key: str, wait_seconds: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """Wait for another process to finish uploading this key; return its result if any."""
     if not _OSS_CROSS_DEDUP_ENABLED:
         return None
@@ -241,7 +241,8 @@ def wait_for_oss_upload_peer(object_key: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
-    deadline = time.time() + float(_OSS_CROSS_WAIT_SECONDS)
+    timeout = float(_OSS_CROSS_WAIT_SECONDS if wait_seconds is None else wait_seconds)
+    deadline = time.time() + max(1.0, timeout)
     while time.time() < deadline:
         now_ts = time.time()
         db = SessionLocal()
@@ -379,5 +380,63 @@ def release_oss_upload_claim(object_key: str) -> None:
         except Exception:
             pass
         logger.warning("[OSSUploadCrossDedup] release failed | key=%s err=%s", key, exc)
+    finally:
+        db.close()
+
+
+def steal_oss_upload_claim(object_key: str) -> bool:
+    """Take over an uploading claim when the peer looks dead and the object is missing."""
+    if not _OSS_CROSS_DEDUP_ENABLED:
+        return True
+    key = str(object_key or "").strip()
+    if not key:
+        return True
+
+    try:
+        _ensure_table_ready()
+    except Exception as exc:
+        logger.warning("[OSSUploadCrossDedup] table ensure failed; allowing steal | err=%s", exc)
+        return True
+
+    now_ts = time.time()
+    db = SessionLocal()
+    try:
+        db.execute(
+            text(
+                """
+                DELETE FROM oss_upload_inflight
+                WHERE object_key = :object_key
+                  AND status = 'uploading'
+                """
+            ),
+            {"object_key": key},
+        )
+        db.commit()
+        result = db.execute(
+            text(
+                """
+                INSERT INTO oss_upload_inflight (object_key, owner, status, result_json, updated_at)
+                VALUES (:object_key, :owner, 'uploading', NULL, :updated_at)
+                ON CONFLICT(object_key) DO NOTHING
+                """
+            ),
+            {
+                "object_key": key,
+                "owner": _OWNER_ID,
+                "updated_at": now_ts,
+            },
+        )
+        db.commit()
+        claimed = int(result.rowcount or 0) > 0
+        if claimed:
+            logger.info("[OSSUploadCrossDedup] stole claim | key=%s owner=%s", key, _OWNER_ID)
+        return claimed
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning("[OSSUploadCrossDedup] steal failed; allowing upload | key=%s err=%s", key, exc)
+        return True
     finally:
         db.close()
