@@ -1553,28 +1553,38 @@ async def _run_generate_video(
                 video_provider_options["reference_audio_urls"] = []
             try:
                 video_provider_options["duration"] = int(
-                    float(req.duration if req.duration is not None else 4)
+                    float(req.duration if req.duration is not None else 15)
                 )
             except Exception:
-                video_provider_options["duration"] = 4
-            video_provider_options["duration"] = max(
-                1, min(15, int(video_provider_options["duration"]))
-            )
+                video_provider_options["duration"] = 15
             ratio_text = str(
                 video_provider_options.get("aspect_ratio") or aspect_ratio or "16:9"
             ).strip() or "16:9"
-            if ratio_text not in {"16:9", "9:16", "1:1"}:
-                ratio_text = "9:16" if ratio_text in {"3:4", "2:3"} else "16:9"
             video_provider_options["aspect_ratio"] = ratio_text
+            video_provider_options["ratio"] = ratio_text
+            if isinstance(video_provider_options.get("reference_video_urls"), list):
+                video_provider_options["reference_videos"] = list(
+                    video_provider_options.get("reference_video_urls") or []
+                )
             res_text = str(
                 video_provider_options.get("resolution")
                 or video_quality
                 or ""
             ).strip().lower()
-            if "480" in res_text or bool(req.draft_mode):
+            if res_text:
+                if "480" in res_text:
+                    video_provider_options["resolution"] = "480p"
+                elif "1080" in res_text or "2k" in res_text or "4k" in res_text:
+                    if "4k" in res_text:
+                        video_provider_options["resolution"] = "4k"
+                    elif "2k" in res_text:
+                        video_provider_options["resolution"] = "2k"
+                    else:
+                        video_provider_options["resolution"] = "1080p"
+                elif "720" in res_text:
+                    video_provider_options["resolution"] = "720p"
+            elif bool(req.draft_mode):
                 video_provider_options["resolution"] = "480p"
-            else:
-                video_provider_options["resolution"] = "720p"
 
         if "sound" not in video_provider_options and resolved_sound is not None:
             video_provider_options["sound"] = bool(resolved_sound)
@@ -1612,6 +1622,11 @@ async def _run_generate_video(
             ref_video_urls = video_provider_options.get("reference_video_urls")
             if isinstance(ref_video_urls, list):
                 video_provider_options["reference_video_urls"] = _limit_string_list_input(ref_video_urls, video_ref_limit)
+            dubai_videos = video_provider_options.get("reference_videos")
+            if isinstance(dubai_videos, list):
+                video_provider_options["reference_videos"] = _limit_string_list_input(
+                    dubai_videos, video_ref_limit
+                )
             ddi_videos = video_provider_options.get("videos")
             if isinstance(ddi_videos, list):
                 video_provider_options["videos"] = _limit_string_list_input(ddi_videos, video_ref_limit)

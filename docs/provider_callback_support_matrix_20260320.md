@@ -106,8 +106,10 @@ This means the frontend may still observe callback-based completion from AIStory
 
 - Video: **poll-only**. `POST /v1/videos` → `GET /v1/videos/{id}` until `status=completed` → download `GET /v1/videos/{id}/content` with the same Bearer key.
 - SDK `base_url` is the host only (`https://dubai3000.xyz`); `/v1` belongs on the request path.
-- JSON refs: `reference_images`, `reference_audio_urls`, `reference_video_urls`. Duration 1–15; aspect `16:9|9:16|1:1`; resolution `480p|720p`.
-- Image / LLM: OpenAI-compatible (`POST /v1/images/generations`, `POST /v1/chat/completions`) when admin adds those system API rows. Do not invent model IDs; use `GET /v1/models`.
+- Public model names only (`sd-2-fast`, `sd-2.5-480p`/`sd-2.5-720p` 4–30s, `sora2` 4/8/12, `veo-fast` 4/6/8, Happy Horse t2v/i2v/r2v/video-edit, `PL-2.0-720p`, etc.).
+- JSON refs must be public `http/https` URLs (`reference_images` / `reference_videos` / `reference_audio_urls`). Local files use multipart `reference_images` / `reference_audios` / `reference_videos`.
+- Duration / aspect_ratio / resolution are model-specific. `sd-2.5-*` locks resolution from the model name. Video result URLs may use `64-81-112-180.sslip.io`.
+- Image / LLM: OpenAI-compatible (`POST /v1/images/generations`, `POST /v1/chat/completions`) when admin adds those system API rows.
 - Adapter ignores pure-callback mode; no upstream webhook.
 
 ## Practical Rule Of Thumb

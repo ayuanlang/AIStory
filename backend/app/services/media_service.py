@@ -3081,6 +3081,7 @@ class MediaGenerationService:
         is_dubai = (
             "dubai" in provider_l
             or "dubai3000.xyz" in str(endpoint or base or "").lower()
+            or "64-81-112-180.sslip.io" in str(endpoint or base or "").lower()
             or "星耀" in str(provider or "")
         )
 
@@ -3212,14 +3213,18 @@ class MediaGenerationService:
                 if not url:
                     url = _pick_url(raw_payload)
                 if status in {"succeeded", "completed", "success"}:
+                    content_url = f"{query_root}/{urllib.parse.quote(stable_task_id)}/content"
                     if not url:
-                        url = f"{query_root}/{urllib.parse.quote(stable_task_id)}/content"
+                        url = content_url
                     packed = _pack(raw_payload, status="succeeded", url=url)
                     packed_meta = packed.get("metadata") if isinstance(packed.get("metadata"), dict) else {}
                     packed_meta["download_api_key"] = stable_key
-                    packed_meta["content_url"] = f"{query_root}/{urllib.parse.quote(stable_task_id)}/content"
+                    packed_meta["content_url"] = content_url
                     packed["metadata"] = packed_meta
-                    packed["url"] = packed_meta["content_url"]
+                    if url and self._looks_like_dubai_media_url(url):
+                        packed["url"] = url
+                    else:
+                        packed["url"] = content_url
                     return packed
                 if status in {"failed", "canceled"} or err:
                     err_msg = str(
@@ -5721,20 +5726,40 @@ class MediaGenerationService:
         "image_urls",
         "imageUrls",
         "reference_images",
+        "referenceImages",
         "reference_image_urls",
         "referenceImageUrls",
+        "referenceImageURLs",
         "filesUrl",
         "files_url",
         "fileUrl",
         "file_url",
         "input_urls",
+        "first_frame_image",
+        "firstFrameImage",
+        "input_image",
+        "inputImage",
+        "reference_image",
+        "referenceImage",
+        "image_url",
+        "image",
+        "input_reference",
+        "inputReference",
+        "inputReferenceURL",
+        "reference_image_url",
+        "referenceImageUrl",
+        "referenceImageURL",
     )
     _VIDEO_REFERENCE_VIDEO_OPTION_KEYS = (
         "videos",
+        "reference_videos",
+        "referenceVideos",
         "reference_video_urls",
         "ref_video_urls",
         "referenceVideoUrls",
         "refVideoUrls",
+        "input_video",
+        "inputVideo",
     )
 
     def _append_unique_reference_values(self, refs: List[str], seen: set, value: Any) -> None:
@@ -6193,7 +6218,7 @@ class MediaGenerationService:
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
             "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "SD_2.0"},
-            "dubai": {"base_url": "https://dubai3000.xyz", "model": "seedance-2.0-fast"},
+            "dubai": {"base_url": "https://dubai3000.xyz", "model": "sd-2-fast"},
         }
 
         rows = self._system_setting_query(session, category=category).order_by(SystemAPISetting.id.asc()).all()
@@ -7206,7 +7231,7 @@ class MediaGenerationService:
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
             "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "SD_2.0"},
-            "dubai": {"base_url": "https://dubai3000.xyz", "model": "seedance-2.0-fast"},
+            "dubai": {"base_url": "https://dubai3000.xyz", "model": "sd-2-fast"},
         }
 
         try:
@@ -13599,6 +13624,136 @@ class MediaGenerationService:
             reason="poll_timeout",
         )
 
+    def _dubai_model_profile(self, model: Any) -> Dict[str, Any]:
+        """Public-model constraints from 星耀视频 API 下游接入说明."""
+        raw = str(model or "").strip()
+        key = raw.lower()
+        profile: Dict[str, Any] = {
+            "durations": list(range(4, 16)),
+            "default_duration": 15,
+            "ratios": ["16:9", "9:16", "1:1"],
+            "resolution": None,
+            "allowed_resolutions": ["480p", "720p", "1080p"],
+            "max_images": 9,
+            "max_videos": 3,
+            "max_audios": 3,
+            "ref_mode": "omni",
+            "prompt_image_style": "ref_zh",
+            "poll_timeout_seconds": 600,
+        }
+
+        def _lock_res_from_name() -> Optional[str]:
+            if key.endswith("-480p") or "480p" in key:
+                return "480p"
+            if key.endswith("-720p") or key.endswith("720p"):
+                return "720p"
+            if key.endswith("-1080p") or "1080p" in key:
+                return "1080p"
+            if key.endswith("-2k") or key.endswith("2k"):
+                return "2k"
+            if key.endswith("-4k") or key.endswith("4k"):
+                return "4k"
+            return None
+
+        exact = {
+            "xinqi-2.0-fast-v4": {
+                "durations": list(range(5, 16)),
+                "resolution": "720p",
+                "allowed_resolutions": ["720p"],
+            },
+            "xinqi-2.0-fast-v5": {"durations": list(range(10, 16))},
+            "xinqi-2.0-v5": {"durations": list(range(10, 16))},
+            "sora2": {"durations": [4, 8, 12], "default_duration": 12},
+            "veo-fast": {"durations": [4, 6, 8], "default_duration": 8},
+            "sd-2.5-480p": {
+                "durations": list(range(4, 31)),
+                "resolution": "480p",
+                "allowed_resolutions": ["480p"],
+                "poll_timeout_seconds": 900,
+            },
+            "sd-2.5-720p": {
+                "durations": list(range(4, 31)),
+                "resolution": "720p",
+                "allowed_resolutions": ["720p"],
+                "poll_timeout_seconds": 900,
+            },
+            "pl-2.0-720p": {
+                "durations": [5, 10, 15],
+                "resolution": "720p",
+                "allowed_resolutions": ["720p"],
+                "ratios": ["1:1", "16:9", "9:16", "4:3", "3:4"],
+            },
+        }
+        if key in exact:
+            profile.update(exact[key])
+
+        if key.startswith("官-sd-2.0"):
+            profile["durations"] = list(range(4, 16))
+            locked = _lock_res_from_name()
+            if locked:
+                profile["resolution"] = locked
+                profile["allowed_resolutions"] = [locked]
+                if locked in {"2k", "4k"}:
+                    profile["allowed_resolutions"] = [locked]
+
+        if key.startswith("sd-2.5-"):
+            profile["durations"] = list(range(4, 31))
+            profile["poll_timeout_seconds"] = 900
+            locked = _lock_res_from_name() or profile.get("resolution")
+            if locked:
+                profile["resolution"] = locked
+                profile["allowed_resolutions"] = [locked]
+
+        if key.startswith("happyhorse-1.0-t2v"):
+            profile["ref_mode"] = "t2v"
+            profile["max_images"] = 0
+            profile["max_videos"] = 0
+            profile["max_audios"] = 0
+            locked = _lock_res_from_name()
+            if locked:
+                profile["resolution"] = locked
+                profile["allowed_resolutions"] = [locked]
+        elif key.startswith("happyhorse-1.0-i2v"):
+            profile["ref_mode"] = "i2v_first"
+            profile["max_images"] = 1
+            profile["max_videos"] = 0
+            profile["max_audios"] = 0
+            locked = _lock_res_from_name()
+            if locked:
+                profile["resolution"] = locked
+                profile["allowed_resolutions"] = [locked]
+        elif key.startswith("happyhorse-1.0-r2v"):
+            profile["ref_mode"] = "r2v"
+            profile["max_images"] = 9
+            profile["max_videos"] = 0
+            profile["max_audios"] = 0
+            profile["prompt_image_style"] = "image_bracket"
+            locked = _lock_res_from_name()
+            if locked:
+                profile["resolution"] = locked
+                profile["allowed_resolutions"] = [locked]
+        elif "happyhorse" in key and "video-edit" in key:
+            profile["ref_mode"] = "video_edit"
+            profile["max_images"] = 5
+            profile["max_videos"] = 1
+            profile["max_audios"] = 0
+            locked = _lock_res_from_name()
+            if locked:
+                profile["resolution"] = locked
+                profile["allowed_resolutions"] = [locked]
+
+        if key.endswith("-16s") or "-16s" in key:
+            profile["durations"] = [16]
+            profile["default_duration"] = 16
+
+        allowed = [int(v) for v in (profile.get("durations") or []) if int(v) > 0]
+        if allowed:
+            profile["durations"] = allowed
+            default_duration = int(profile.get("default_duration") or 15)
+            if default_duration not in allowed:
+                profile["default_duration"] = min(allowed, key=lambda item: abs(item - default_duration))
+        return profile
+
     async def _handle_dubai_generation(
         self,
         gen_type,
@@ -13664,17 +13819,23 @@ class MediaGenerationService:
         if not prompt_text:
             return {"error": "Dubai prompt is required", "submit_failed": True}
 
-        dubai_duration_values = list(range(1, 16))
+        profile = self._dubai_model_profile(model)
+        ref_mode = str(profile.get("ref_mode") or "omni")
+        max_images = int(profile.get("max_images") or 0)
+        max_videos = int(profile.get("max_videos") or 0)
+        max_audios = int(profile.get("max_audios") or 0)
+
         allowed_duration_values = self._normalize_duration_enum_values(
             tool_conf.get("durations_seconds")
             or tool_conf.get("duration_values")
             or tool_conf.get("allowed_durations")
             or tool_conf.get("durations")
-            or dubai_duration_values
-        ) or dubai_duration_values
-        allowed_duration_values = [
-            int(v) for v in allowed_duration_values if 1 <= int(v) <= 15
-        ] or dubai_duration_values
+            or profile.get("durations")
+        ) or list(profile.get("durations") or [15])
+        allowed_duration_values = [int(v) for v in allowed_duration_values if int(v) > 0] or list(
+            profile.get("durations") or [15]
+        )
+        default_duration = int(profile.get("default_duration") or 15)
         try:
             duration_in = int(
                 float(
@@ -13684,35 +13845,36 @@ class MediaGenerationService:
                 )
             )
         except Exception:
-            duration_in = 4
+            duration_in = default_duration
         mapped_duration = self._map_duration_nearest(
             duration_in, allowed_duration_values, prefer_higher_on_tie=False
         )
-        duration_in = int(mapped_duration if mapped_duration is not None else 4)
-        duration_in = max(1, min(15, duration_in or 4))
+        duration_in = int(mapped_duration if mapped_duration is not None else default_duration)
+        if duration_in not in set(allowed_duration_values):
+            duration_in = min(allowed_duration_values, key=lambda item: abs(item - duration_in))
 
-        dubai_ratios = ["16:9", "9:16", "1:1"]
+        default_ratios = list(profile.get("ratios") or ["16:9", "9:16", "1:1"])
         allowed_ratios = self._normalize_str_list(
             tool_conf.get("ratios")
             or tool_conf.get("allowed_ratios")
             or tool_conf.get("aspect_ratios")
-            or dubai_ratios
-        ) or dubai_ratios
-        allowed_ratios = [r for r in allowed_ratios if str(r).strip() in set(dubai_ratios)] or dubai_ratios
+            or default_ratios
+        ) or default_ratios
+        allowed_ratios = [r for r in allowed_ratios if str(r).strip()] or default_ratios
         normalized_ratio = self._normalize_aspect_ratio_value(
             aspect_ratio or tool_conf.get("aspect_ratio") or tool_conf.get("ratio")
         )
         if not normalized_ratio or normalized_ratio == "adaptive":
             normalized_ratio = "16:9"
         mapped_ratio = self._map_aspect_ratio_to_allowed(normalized_ratio, allowed_ratios)
-        normalized_ratio = str(mapped_ratio or "16:9").strip()
-        if normalized_ratio not in set(dubai_ratios):
-            if normalized_ratio in {"4:3", "21:9", "3:2"}:
+        normalized_ratio = str(mapped_ratio or normalized_ratio or "16:9").strip()
+        if normalized_ratio not in set(allowed_ratios):
+            if normalized_ratio in {"4:3", "21:9", "3:2"} and "16:9" in set(allowed_ratios):
                 normalized_ratio = "16:9"
-            elif normalized_ratio in {"3:4", "2:3"}:
+            elif normalized_ratio in {"3:4", "2:3"} and "9:16" in set(allowed_ratios):
                 normalized_ratio = "9:16"
             else:
-                normalized_ratio = "16:9"
+                normalized_ratio = str(allowed_ratios[0])
 
         def _normalize_dubai_resolution(value: Any) -> Optional[str]:
             text = str(value or "").strip().lower().replace(" ", "")
@@ -13720,96 +13882,207 @@ class MediaGenerationService:
                 return None
             if text in {"480", "480p", "sd", "draft", "low"}:
                 return "480p"
-            if text in {"720", "720p", "hd", "1080", "1080p", "fhd", "high"}:
+            if text in {"720", "720p", "hd"}:
                 return "720p"
+            if text in {"1080", "1080p", "fhd", "fullhd", "high"}:
+                return "1080p"
+            if text in {"2k", "2048", "2560"}:
+                return "2k"
+            if text in {"4k", "2160", "3840", "uhd"}:
+                return "4k"
             return None
 
-        resolution = (
-            _normalize_dubai_resolution(tool_conf.get("resolution"))
-            or _normalize_dubai_resolution(tool_conf.get("video_resolution"))
-            or _normalize_dubai_resolution(tool_conf.get("quality"))
-            or ("480p" if self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft")) else "720p")
-        )
+        locked_resolution = str(profile.get("resolution") or "").strip() or None
+        allowed_resolutions = [
+            str(item).strip().lower()
+            for item in (profile.get("allowed_resolutions") or ["480p", "720p", "1080p"])
+            if str(item).strip()
+        ] or ["480p", "720p", "1080p"]
+        resolution = locked_resolution or _normalize_dubai_resolution(tool_conf.get("resolution"))
+        if not resolution:
+            resolution = _normalize_dubai_resolution(tool_conf.get("video_resolution"))
+        if not resolution:
+            resolution = _normalize_dubai_resolution(tool_conf.get("quality"))
+        if not resolution:
+            resolution = (
+                "480p"
+                if self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
+                else "720p"
+            )
+        if resolution not in set(allowed_resolutions):
+            resolution = locked_resolution or allowed_resolutions[0]
 
-        def _https_public_only(urls: List[str]) -> List[str]:
+        def _public_http_only(urls: List[str]) -> List[str]:
             out: List[str] = []
             for item in urls:
                 text = str(item or "").strip()
-                if not text.lower().startswith("https://"):
+                if text.lower().startswith("data:"):
+                    continue
+                if not text.lower().startswith(("http://", "https://")):
                     continue
                 if self._is_public_http_url(text) and text not in out:
                     out.append(text)
             return out
 
-        def _resolve_https_list(raw_urls: Any, *, limit: int) -> List[str]:
-            resolved = self._resolve_ref_list_for_api(
-                raw_urls,
-                force_data_uri_for_local=True,
-                prefer_public_upload_url=True,
-            )
-            return _https_public_only([u for u in (resolved or []) if u])[: max(0, int(limit))]
+        def _multipart_part(raw: Any, *, fallback_name: str) -> Optional[Tuple[str, bytes, str]]:
+            text = str(raw or "").strip()
+            if not text or text.lower().startswith(("http://", "https://")):
+                return None
+            if text.startswith("data:"):
+                idx = text.find(";base64,")
+                if idx <= 5:
+                    return None
+                mime = text[5:idx].strip().lower() or "application/octet-stream"
+                try:
+                    binary = base64.b64decode(text[idx + len(";base64,"):].strip())
+                except Exception:
+                    return None
+                ext = mimetypes.guess_extension(mime) or ".bin"
+                return (f"{fallback_name}{ext}", binary, mime)
+            if os.path.isfile(text):
+                try:
+                    with open(text, "rb") as handle:
+                        binary = handle.read()
+                except Exception:
+                    return None
+                name = os.path.basename(text) or fallback_name
+                mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+                return (name, binary, mime)
+            return None
 
-        image_refs = _resolve_https_list(
-            self._collect_video_reference_image_urls(
-                ref_image,
-                tool_conf,
-                extra_sources=config,
-                include_last_frame=bool(last_frame_url),
-                last_frame_url=last_frame_url,
-                limit=9,
-            ),
-            limit=9,
+        def _split_public_and_files(raw_urls: Any, *, limit: int, file_prefix: str) -> Tuple[List[str], List[Tuple[str, bytes, str]]]:
+            raw_list: List[str] = []
+            if isinstance(raw_urls, list):
+                raw_list = [str(item).strip() for item in raw_urls if str(item or "").strip()]
+            elif str(raw_urls or "").strip():
+                raw_list = [str(raw_urls).strip()]
+            public: List[str] = []
+            files: List[Tuple[str, bytes, str]] = []
+            for idx, raw_item in enumerate(raw_list[: max(0, int(limit))]):
+                if self._is_public_http_url(raw_item) and not raw_item.lower().startswith("data:"):
+                    if raw_item not in public:
+                        public.append(raw_item)
+                    continue
+                resolved = self._resolve_ref_list_for_api(
+                    raw_item,
+                    force_data_uri_for_local=True,
+                    prefer_public_upload_url=True,
+                )
+                resolved_text = ""
+                if isinstance(resolved, list) and resolved:
+                    resolved_text = str(resolved[0] or "").strip()
+                elif resolved:
+                    resolved_text = str(resolved).strip()
+                if self._is_public_http_url(resolved_text) and not resolved_text.lower().startswith("data:"):
+                    if resolved_text not in public:
+                        public.append(resolved_text)
+                    continue
+                part = _multipart_part(raw_item, fallback_name=f"{file_prefix}-{idx + 1}") or _multipart_part(
+                    resolved_text, fallback_name=f"{file_prefix}-{idx + 1}"
+                )
+                if part:
+                    files.append(part)
+            return public[: max(0, int(limit))], files[: max(0, int(limit))]
+
+        image_raw = self._collect_video_reference_image_urls(
+            ref_image,
+            tool_conf,
+            extra_sources=config,
+            include_last_frame=bool(last_frame_url),
+            last_frame_url=last_frame_url,
+            limit=max(max_images, 9),
         )
         if isinstance(keyframes, list) and keyframes:
-            for item in _resolve_https_list(keyframes, limit=9):
-                if item not in image_refs:
-                    image_refs.append(item)
-            image_refs = image_refs[:9]
+            image_raw = list(image_raw or [])
+            for item in keyframes:
+                text = str(item or "").strip()
+                if text and text not in image_raw:
+                    image_raw.append(text)
+        video_raw = self._collect_video_reference_video_urls(
+            tool_conf,
+            extra_sources=config,
+            limit=max(max_videos, 3),
+        )
+        audio_raw = []
+        for source in (tool_conf, config):
+            if not isinstance(source, dict):
+                continue
+            for key in (
+                "reference_audio_urls",
+                "reference_audios",
+                "referenceAudios",
+                "audio_urls",
+                "audio_url",
+                "audios",
+                "audio",
+                "input_audio",
+                "inputAudio",
+            ):
+                if key in source:
+                    val = source.get(key)
+                    if isinstance(val, list):
+                        audio_raw.extend([str(item).strip() for item in val if str(item or "").strip()])
+                    elif str(val or "").strip():
+                        audio_raw.append(str(val).strip())
 
-        video_refs = _resolve_https_list(
-            self._collect_video_reference_video_urls(
-                tool_conf,
-                extra_sources=config,
-                limit=3,
-            ),
-            limit=3,
-        )
-        audio_raw = (
-            tool_conf.get("reference_audio_urls")
-            or tool_conf.get("audio_urls")
-            or tool_conf.get("referenceAudioUrls")
-            or tool_conf.get("audios")
-            or config.get("reference_audio_urls")
-            or config.get("audios")
-            or []
-        )
-        audio_refs = _resolve_https_list(audio_raw, limit=3)
+        if ref_mode == "t2v":
+            image_raw, video_raw, audio_raw = [], [], []
+        elif ref_mode == "i2v_first":
+            image_raw = (image_raw or [])[:1]
+            video_raw, audio_raw = [], []
+        elif ref_mode == "r2v":
+            video_raw, audio_raw = [], []
+        elif ref_mode == "video_edit":
+            audio_raw = []
+
+        image_refs, image_files = _split_public_and_files(image_raw, limit=max_images, file_prefix="image")
+        video_refs, video_files = _split_public_and_files(video_raw, limit=max_videos, file_prefix="video")
+        audio_refs, audio_files = _split_public_and_files(audio_raw, limit=max_audios, file_prefix="audio")
+
+        if ref_mode == "i2v_first" and not image_refs and not image_files:
+            return {
+                "error": "该模型是首帧图生视频，必须提供 1 张参考图",
+                "submit_failed": True,
+            }
+        if ref_mode == "r2v" and not image_refs and not image_files:
+            return {
+                "error": "Happy Horse 参考生视频需要 1~9 张参考图",
+                "submit_failed": True,
+            }
+        if ref_mode == "video_edit" and not video_refs and not video_files:
+            return {
+                "error": "Happy Horse 视频编辑必须且只能提供 1 个参考视频",
+                "submit_failed": True,
+            }
 
         def _ensure_dubai_prompt_refs(text: str, *, images: int, videos: int, audios: int) -> str:
             out = str(text or "").strip()
+            if str(profile.get("prompt_image_style") or "") == "image_bracket":
+                for idx in range(1, max(0, int(images)) + 1):
+                    tag = f"[Image {idx}]"
+                    if tag.lower() not in out.lower() and f"[image{idx}]" not in out.lower().replace(" ", ""):
+                        out = f"{out} {tag}".strip()
+                return out
             lower = out.lower()
             missing: List[str] = []
             for idx in range(1, max(0, int(images)) + 1):
-                tag = f"[@image{idx}]"
-                if tag.lower() not in lower and f"@image{idx}" not in lower:
-                    missing.append(tag)
+                if f"参考图{idx}" not in out and f"@image{idx}" not in lower and f"[image {idx}]" not in lower:
+                    missing.append(f"参考图{idx}")
             for idx in range(1, max(0, int(videos)) + 1):
-                tag = f"[@video{idx}]"
-                if tag.lower() not in lower and f"@video{idx}" not in lower:
-                    missing.append(tag)
+                if f"参考视频{idx}" not in out and f"@video{idx}" not in lower:
+                    missing.append(f"参考视频{idx}")
             for idx in range(1, max(0, int(audios)) + 1):
-                tag = f"[@audio{idx}]"
-                if tag.lower() not in lower and f"@audio{idx}" not in lower:
-                    missing.append(tag)
+                if f"参考音频{idx}" not in out and f"@audio{idx}" not in lower:
+                    missing.append(f"参考音频{idx}")
             if missing:
                 out = f"{out} {' '.join(missing)}".strip()
             return out
 
         prompt_text = _ensure_dubai_prompt_refs(
             prompt_text,
-            images=len(image_refs),
-            videos=len(video_refs),
-            audios=len(audio_refs),
+            images=len(image_refs) + len(image_files),
+            videos=len(video_refs) + len(video_files),
+            audios=len(audio_refs) + len(audio_files),
         )
 
         payload: Dict[str, Any] = {
@@ -13817,6 +14090,7 @@ class MediaGenerationService:
             "prompt": prompt_text,
             "duration": int(duration_in),
             "aspect_ratio": normalized_ratio,
+            "ratio": normalized_ratio,
             "resolution": resolution,
         }
         if image_refs:
@@ -13824,20 +14098,31 @@ class MediaGenerationService:
         if audio_refs:
             payload["reference_audio_urls"] = list(audio_refs)
         if video_refs:
+            payload["reference_videos"] = list(video_refs)
             payload["reference_video_urls"] = list(video_refs)
 
-        poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        multipart_files: List[Tuple[str, Tuple[str, Any, str]]] = []
+        for name, binary, mime in image_files:
+            multipart_files.append(("reference_images", (name, binary, mime)))
+        for name, binary, mime in audio_files:
+            multipart_files.append(("reference_audios", (name, binary, mime)))
+        for name, binary, mime in video_files:
+            multipart_files.append(("reference_videos", (name, binary, mime)))
+
+        poll_timeout_seconds = int(profile.get("poll_timeout_seconds") or DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS)
         poll_interval_seconds = 4
         try:
             if tool_conf.get("poll_timeout_seconds") is not None:
-                poll_timeout_seconds = min(900, max(60, int(tool_conf.get("poll_timeout_seconds"))))
+                poll_timeout_seconds = min(1200, max(60, int(tool_conf.get("poll_timeout_seconds"))))
         except Exception:
-            poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+            poll_timeout_seconds = int(profile.get("poll_timeout_seconds") or DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS)
         try:
             if tool_conf.get("poll_interval_seconds") is not None:
                 poll_interval_seconds = max(3, min(10, int(tool_conf.get("poll_interval_seconds"))))
         except Exception:
             poll_interval_seconds = 4
+        if duration_in >= 20:
+            poll_timeout_seconds = max(poll_timeout_seconds, 900)
 
         base_metadata = {
             "provider": "dubai",
@@ -13850,9 +14135,10 @@ class MediaGenerationService:
             "aspect_ratio": normalized_ratio,
             "resolution": resolution,
             "download_api_key": api_key,
-            "image_count": len(image_refs),
-            "video_count": len(video_refs),
-            "audio_count": len(audio_refs),
+            "image_count": len(image_refs) + len(image_files),
+            "video_count": len(video_refs) + len(video_files),
+            "audio_count": len(audio_refs) + len(audio_files),
+            "multipart": bool(multipart_files),
         }
 
         result = await self._submit_and_poll_video(
@@ -13866,6 +14152,7 @@ class MediaGenerationService:
             pure_callback_mode=False,
             callback_enabled=False,
             provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
+            multipart_files=multipart_files or None,
         )
         if not isinstance(result, dict):
             return result
@@ -13877,12 +14164,17 @@ class MediaGenerationService:
         ).strip()
         if task_id and not result.get("error"):
             content_url = f"{submit_url.rstrip('/')}/{task_id}/content"
+            existing_url = str(result.get("url") or "").strip()
             meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
             meta = dict(meta)
             meta["download_api_key"] = api_key
             meta["content_url"] = content_url
             meta["poll_only"] = True
-            result["url"] = content_url
+            # Prefer provider delivery URL (independent sslip.io reverse proxy) when present.
+            if existing_url and self._looks_like_dubai_media_url(existing_url):
+                result["url"] = existing_url
+            else:
+                result["url"] = content_url
             result["metadata"] = meta
         return result
 
@@ -16059,8 +16351,12 @@ class MediaGenerationService:
         callback_ticket: Optional[str] = None,
         callback_url: Optional[str] = None,
         provider_payload_callback: Any = None,
+        multipart_files: Optional[List[Tuple[str, Tuple[str, Any, str]]]] = None,
     ):
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        auth_headers = {"Authorization": f"Bearer {api_key}"}
+        headers = dict(auth_headers)
+        if not multipart_files:
+            headers["Content-Type"] = "application/json"
         provider_name = str((extra_metadata or {}).get("provider") or "").strip().lower()
         
         _debug_log(f"[{log_tag}] Submitting to URL: {url} | Payload: {_strip_base64_from_log(payload)}")
@@ -16073,17 +16369,32 @@ class MediaGenerationService:
                 request_headers["Connection"] = "close"
             c_timeout = connect_timeout or submit_timeouts[0]
             kwargs = {
-                "json": payload,
                 "headers": request_headers,
                 "timeout": (c_timeout, submit_timeouts[1]),
                 "verify": False,
             }
+            if multipart_files:
+                form_items: List[Tuple[str, str]] = []
+                for key, value in (payload or {}).items():
+                    if isinstance(value, list):
+                        for item in value:
+                            form_items.append((str(key), str(item)))
+                    elif value is None:
+                        continue
+                    elif isinstance(value, bool):
+                        form_items.append((str(key), "true" if value else "false"))
+                    else:
+                        form_items.append((str(key), str(value)))
+                kwargs["data"] = form_items
+                kwargs["files"] = list(multipart_files)
+            else:
+                kwargs["json"] = payload
             if not use_proxy:
                 kwargs["proxies"] = {"http": None, "https": None}
             return requests.post(url, **kwargs)
 
         def _poll(use_proxy=True, task_id=None):
-            kwargs = {"headers": headers, "timeout": 30, "verify": False}
+            kwargs = {"headers": auth_headers, "timeout": 30, "verify": False}
             if not use_proxy:
                 kwargs["proxies"] = {"http": None, "https": None}
             return requests.get(f"{url}/{task_id}", **kwargs)
@@ -16215,7 +16526,7 @@ class MediaGenerationService:
                                 c_resp = await asyncio.to_thread(
                                     lambda: requests.get(
                                         content_url,
-                                        headers=headers,
+                                        headers=auth_headers,
                                         timeout=30,
                                         verify=False,
                                         allow_redirects=True,
@@ -20009,7 +20320,12 @@ class MediaGenerationService:
         text = str(url or "").strip().lower()
         if not text:
             return False
-        return "dubai3000.xyz" in text
+        if "dubai3000.xyz" in text:
+            return True
+        if "64-81-112-180.sslip.io" in text:
+            return True
+        # Independent video-result reverse proxy (TASK_VIDEO_BASE_URL); only /v1 is proxied.
+        return "sslip.io" in text and "/v1/videos" in text
 
     def _absolutize_ddimatuo_video_url(self, video_url: Any, base_url: Any = None) -> str:
         """Join relative task.video_url with API base, matching JS `new URL(video_url, BASE)`."""

@@ -3012,10 +3012,45 @@ def init_system_api_settings(db):
         logger.info("System ddimatuo video settings already initialized")
 
     # Seed Dubai / 星耀 video adapter — poll-only Bearer auth; /v1 stays on the path.
+    # Public model names only (星耀视频 API 下游接入说明 2026-08-12).
     dubai_provider = "dubai"
     dubai_base_url = "https://dubai3000.xyz"
+    dubai_default_ratios = ["16:9", "9:16", "1:1"]
     dubai_model_items = [
-        ("星耀 Seedance 2.0 Fast", "seedance-2.0-fast"),
+        ("星耀 sd-2-fast", "sd-2-fast", "seedance-2", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 sd-2-c3", "sd-2-c3", "seedance-2", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 sd-2.5 480p", "sd-2.5-480p", "seedance-2.5", "text-to-video,image-to-video", list(range(4, 31)), "480p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 sd-2.5 720p", "sd-2.5-720p", "seedance-2.5", "text-to-video,image-to-video", list(range(4, 31)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 xinqi-2.0-fast-v4", "xinqi-2.0-fast-v4", "xinqi-2", "text-to-video,image-to-video", list(range(5, 16)), "720p", dubai_default_ratios, 9, 0, 0),
+        ("星耀 xinqi-2.0-fast-v5", "xinqi-2.0-fast-v5", "xinqi-2", "text-to-video,image-to-video", list(range(10, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 xinqi-2.0-v5", "xinqi-2.0-v5", "xinqi-2", "text-to-video,image-to-video", list(range(10, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 sora2", "sora2", "sora-2", "text-to-video,image-to-video", [4, 8, 12], "720p", dubai_default_ratios, 9, 0, 0),
+        ("星耀 veo-fast", "veo-fast", "veo", "text-to-video,image-to-video", [4, 6, 8], "720p", dubai_default_ratios, 9, 0, 0),
+        ("星耀 xingyao-2.0", "xingyao-2.0", "xingyao-2", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 xingyao-2.0fast", "xingyao-2.0fast", "xingyao-2", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 xingyao-2.0max", "xingyao-2.0max", "xingyao-2", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 xingyao-2.0S", "xingyao-2.0S", "xingyao-2", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 官-sd-2.0-720p", "官-sd-2.0-720p", "seedance-2", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 官-sd-2.0-1080p", "官-sd-2.0-1080p", "seedance-2", "text-to-video,image-to-video", list(range(4, 16)), "1080p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 官-sd-2.0-2k", "官-sd-2.0-2k", "seedance-2", "text-to-video,image-to-video", list(range(4, 16)), "2k", dubai_default_ratios, 9, 3, 3),
+        ("星耀 官-sd-2.0-4k", "官-sd-2.0-4k", "seedance-2", "text-to-video,image-to-video", list(range(4, 16)), "4k", dubai_default_ratios, 9, 3, 3),
+        ("星耀 官-sd-2.0-fast-720p", "官-sd-2.0-fast-720p", "seedance-2", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 xinghe-2.0", "xinghe-2.0", "xinghe-2", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 xinghe-2.0s", "xinghe-2.0s", "xinghe-2", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 xinghe-2.0vip", "xinghe-2.0vip", "xinghe-2", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 3, 3),
+        ("星耀 grok-imagine-1.0-video-16s", "grok-imagine-1.0-video-16s", "grok-imagine", "text-to-video,image-to-video", [16], "720p", dubai_default_ratios, 9, 0, 0),
+        ("星耀 grok-imagine-video-1.5-fast", "grok-imagine-video-1.5-fast", "grok-imagine", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 0, 0),
+        ("星耀 grok-imagine-video-1.5-fast-16s", "grok-imagine-video-1.5-fast-16s", "grok-imagine", "text-to-video,image-to-video", [16], "720p", dubai_default_ratios, 9, 0, 0),
+        ("星耀 grok-imagine-video-1.5-preview", "grok-imagine-video-1.5-preview", "grok-imagine", "text-to-video,image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 0, 0),
+        ("星耀 happyhorse t2v 720p", "happyhorse-1.0-t2v-720p", "happyhorse-1.0", "text-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 0, 0, 0),
+        ("星耀 happyhorse t2v 1080p", "happyhorse-1.0-t2v-1080p", "happyhorse-1.0", "text-to-video", list(range(4, 16)), "1080p", dubai_default_ratios, 0, 0, 0),
+        ("星耀 happyhorse i2v 720p", "happyhorse-1.0-i2v-720p", "happyhorse-1.0", "image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 1, 0, 0),
+        ("星耀 happyhorse i2v 1080p", "happyhorse-1.0-i2v-1080p", "happyhorse-1.0", "image-to-video", list(range(4, 16)), "1080p", dubai_default_ratios, 1, 0, 0),
+        ("星耀 happyhorse r2v 720p", "happyhorse-1.0-r2v-720p", "happyhorse-1.0", "image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 9, 0, 0),
+        ("星耀 happyhorse r2v 1080p", "happyhorse-1.0-r2v-1080p", "happyhorse-1.0", "image-to-video", list(range(4, 16)), "1080p", dubai_default_ratios, 9, 0, 0),
+        ("星耀 happyhorse video-edit 720p", "happyhorse-1.0-video-edit-720p", "happyhorse-1.0", "image-to-video", list(range(4, 16)), "720p", dubai_default_ratios, 5, 1, 0),
+        ("星耀 happyhorse video-edit 1080p", "happyhorse-1.0-video-edit-1080p", "happyhorse-1.0", "image-to-video", list(range(4, 16)), "1080p", dubai_default_ratios, 5, 1, 0),
+        ("星耀 PL-2.0-720p", "PL-2.0-720p", "PL-2.0", "text-to-video,image-to-video", [5, 10, 15], "720p", ["1:1", "16:9", "9:16", "4:3", "3:4"], 9, 3, 3),
     ]
     existing_dubai_rows = db.query(SystemAPISetting).filter(
         SystemAPISetting.provider == dubai_provider,
@@ -3031,11 +3066,48 @@ def init_system_api_settings(db):
             dubai_shared_api_key = row.api_key.strip()
             break
 
+    # Legacy invented model id from the first adapter drop; map to the public name.
+    try:
+        dubai_migrated = 0
+        for row in existing_dubai_rows:
+            legacy = str(row.model or "").strip().lower()
+            if legacy not in {"seedance-2.0-fast", "seedance-2.0"}:
+                continue
+            row.model = "sd-2-fast"
+            row.base_model = "seedance-2"
+            if not str(row.name or "").strip() or "seedance" in str(row.name or "").lower():
+                row.name = "星耀 sd-2-fast"
+            cfg = dict(row.config) if isinstance(row.config, dict) else {}
+            cfg["durations_seconds"] = list(range(4, 16))
+            cfg["resolution"] = "720p"
+            cfg["aspect_ratios"] = list(dubai_default_ratios)
+            row.config = cfg
+            dubai_migrated += 1
+            existing_dubai_models.discard(legacy)
+            existing_dubai_models.add("sd-2-fast")
+        if dubai_migrated > 0:
+            db.commit()
+            logger.info("Migrated %s dubai rows from seedance-2.0-fast to sd-2-fast", dubai_migrated)
+    except Exception as dubai_mig_err:
+        logger.warning("Failed to migrate dubai seedance-2.0-fast rows: %s", dubai_mig_err)
+
     dubai_added = 0
-    for display_name, model_name in dubai_model_items:
+    for (
+        display_name,
+        model_name,
+        base_model,
+        modality_text,
+        durations,
+        resolution,
+        ratios,
+        max_images,
+        max_videos,
+        max_audios,
+    ) in dubai_model_items:
         key = str(model_name or "").strip().lower()
         if not key or key in existing_dubai_models:
             continue
+        poll_timeout = 900 if str(model_name).startswith("sd-2.5") else 600
         db.add(SystemAPISetting(
             name=display_name,
             category="Video",
@@ -3043,24 +3115,27 @@ def init_system_api_settings(db):
             api_key=dubai_shared_api_key,
             base_url=dubai_base_url,
             model=model_name,
-            base_model="seedance-2",
-            modality=migrate_legacy_modality_string("text-to-video,image-to-video"),
+            base_model=base_model,
+            modality=migrate_legacy_modality_string(modality_text),
             config={
                 "provider_api_key_strategy": "random",
                 "poll_interval_seconds": 4,
-                "poll_timeout_seconds": 600,
+                "poll_timeout_seconds": poll_timeout,
                 "endpoint": f"{dubai_base_url}/v1/videos",
                 "query_endpoint": f"{dubai_base_url}/v1/videos",
                 "poll_only": True,
-                "aspect_ratios": ["16:9", "9:16", "1:1"],
-                "durations_seconds": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-                "resolution": "720p",
+                "aspect_ratios": list(ratios),
+                "durations_seconds": list(durations),
+                "resolution": resolution,
+                "max_reference_images": int(max_images),
+                "max_reference_videos": int(max_videos),
+                "max_reference_audios": int(max_audios),
                 "notes": (
                     "Dubai/星耀 poll-only. Base URL is the host only (no /v1). "
                     "POST /v1/videos; GET /v1/videos/{id}; GET /v1/videos/{id}/content. "
-                    "Auth: Authorization Bearer. Fields: duration 1-15, aspect_ratio 16:9|9:16|1:1, "
-                    "resolution 480p|720p, reference_images / reference_audio_urls / reference_video_urls. "
-                    "Do not invent model IDs; use GET /v1/models."
+                    "JSON refs must be public http/https URLs; local files use multipart "
+                    "reference_images / reference_audios / reference_videos. "
+                    "Use public model names from GET /v1/models only."
                 ),
             },
             is_active=False,

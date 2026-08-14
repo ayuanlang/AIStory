@@ -10149,19 +10149,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 throw new Error(t('补传后仍未获得稳定存储地址，请稍后重试。', 'Persisted URL is still not durable; please retry later.'));
             }
 
-            const patch = apiSlot === 'start'
-                ? { image_url: persistedUrl }
+            const localPatch = apiSlot === 'start'
+                ? { image_url: persistedUrl, technical_notes: mergedShot.technical_notes }
                 : apiSlot === 'end'
                     ? { technical_notes: mergedShot.technical_notes }
-                    : { video_url: persistedUrl };
+                    : { video_url: persistedUrl, technical_notes: mergedShot.technical_notes };
 
-            setEditingShot((prev) => (prev && String(prev.id) === targetShotId ? { ...prev, ...patch } : prev));
+            setEditingShot((prev) => (prev && String(prev.id) === targetShotId ? { ...prev, ...localPatch } : prev));
+            setShots((prev) => prev.map((item) => (
+                String(item?.id) === targetShotId ? { ...item, ...localPatch } : item
+            )));
             setMediaPersistGraceRefreshSeq((seq) => seq + 1);
-            try {
-                await onUpdateShot(targetShotId, patch);
-            } catch (updateErr) {
-                console.warn('[handlePersistShotMediaToOss] shot update failed:', updateErr);
-            }
+            // persist-media already committed the URL + notes. A follow-up PUT
+            // sends video_url without slot metadata and can fail OSS validation.
             refreshShotAssetsMeta();
             Promise.resolve(refreshShots()).catch(() => {});
             onLog?.(t('素材已成功补传到 OSS。', 'Media uploaded to OSS successfully.'), 'success');
@@ -10179,7 +10179,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 return next;
             });
         }
-    }, [editingShot, onLog, onUpdateShot, refreshShotAssetsMeta, refreshShots, showNotification, t]);
+    }, [editingShot, onLog, refreshShotAssetsMeta, refreshShots, showNotification, t]);
 
     const handleTempVideoBadgeClick = useCallback(async (shotLike, event) => {
         if (event) {
