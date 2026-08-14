@@ -14,6 +14,12 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
+# boto3 1.36+ defaults to flexible CRC checksums. Qiniu/TOS S3 gateways
+# reject those headers (CreateMultipartUpload 400) or hang on UploadPart.
+# Env must be set before boto3/botocore clients are constructed.
+os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "WHEN_REQUIRED")
+os.environ.setdefault("AWS_RESPONSE_CHECKSUM_VALIDATION", "WHEN_REQUIRED")
+
 import boto3
 from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
@@ -386,6 +392,70 @@ class OSSStorageService:
             return " | ".join(parts)
         return str(exc)
 
+    @staticmethod
+    def _strip_flexible_checksum_headers(request, **kwargs) -> None:
+        headers = getattr(request, "headers", None)
+        if headers is None:
+            return
+        drop_keys = []
+        for key in list(headers.keys()):
+            lower = str(key).lower()
+            value = str(headers.get(key) or "")
+            if (
+                lower.startswith("x-amz-checksum-")
+                or lower in {
+                    "x-amz-sdk-checksum-algorithm",
+                    "x-amz-trailer",
+                    "x-amz-decoded-content-length",
+                }
+                or (lower == "content-encoding" and "aws-chunked" in value.lower())
+            ):
+                drop_keys.append(key)
+        for key in drop_keys:
+            try:
+                del headers[key]
+            except Exception:
+                try:
+                    headers.pop(key, None)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _drop_checksum_params(params, **kwargs) -> None:
+        if not isinstance(params, dict):
+            return
+        params.pop("ChecksumAlgorithm", None)
+        params.pop("ChecksumType", None)
+        params.pop("ChecksumCRC32", None)
+        params.pop("ChecksumCRC32C", None)
+        params.pop("ChecksumSHA1", None)
+        params.pop("ChecksumSHA256", None)
+        params.pop("ChecksumCRC64NVME", None)
+
+    def _attach_s3_compat_request_filters(self, client) -> None:
+        sign_events = (
+            "before-sign.s3.PutObject",
+            "before-sign.s3.UploadPart",
+            "before-sign.s3.CreateMultipartUpload",
+            "before-sign.s3.CompleteMultipartUpload",
+        )
+        param_events = (
+            "before-parameter-build.s3.PutObject",
+            "before-parameter-build.s3.UploadPart",
+            "before-parameter-build.s3.CreateMultipartUpload",
+            "before-parameter-build.s3.CompleteMultipartUpload",
+        )
+        for event_name in sign_events:
+            try:
+                client.meta.events.register(event_name, self._strip_flexible_checksum_headers)
+            except Exception:
+                continue
+        for event_name in param_events:
+            try:
+                client.meta.events.register(event_name, self._drop_checksum_params)
+            except Exception:
+                continue
+
     def _load_json_list(self, value: Any) -> List[Any]:
         if value is None:
             return []
@@ -737,7 +807,11 @@ class OSSStorageService:
         if not pool or not cred:
             raise ValueError("OSS pool or credential missing")
 
-        cache_key = f"{getattr(pool, 'endpoint', '')}_{getattr(cred, 'access_key', '')}"
+        is_s3_compat = self._is_s3_compat_unsigned_payload(pool)
+        cache_key = (
+            f"{getattr(pool, 'endpoint', '')}_{getattr(cred, 'access_key', '')}"
+            f"_{int(self._is_qiniu_provider(pool))}_{int(self._is_tos_provider(pool))}"
+        )
         if cache_key in self._boto3_clients_cache:
             return self._boto3_clients_cache[cache_key]
 
@@ -747,7 +821,7 @@ class OSSStorageService:
         s3_config: Dict[str, Any] = {
             "addressing_style": "path" if getattr(pool, "force_path_style", False) else "virtual"
         }
-        if self._is_qiniu_provider(pool) or self._is_tos_provider(pool):
+        if is_s3_compat:
             s3_config["payload_signing_enabled"] = False
 
         # connect_timeout: abort TCP handshake if endpoint unreachable.
@@ -757,28 +831,24 @@ class OSSStorageService:
         # genuine hung connections.
         _connect_timeout = max(5, int(os.getenv("OSS_CONNECT_TIMEOUT", "15")))
         _read_timeout = max(60, int(os.getenv("OSS_READ_TIMEOUT", "600")))
-        # Qiniu uses the pre-TOS Config (no flexible checksum). TOS-only checksum
-        # opts must not leak onto Qiniu clients.
-        config = Config(
-            signature_version="s3v4",
-            s3=s3_config,
-            connect_timeout=_connect_timeout,
-            read_timeout=_read_timeout,
-            retries={"max_attempts": 2, "mode": "standard"},
-        )
-        if self._is_tos_provider(pool) and not self._is_qiniu_provider(pool):
-            try:
-                config = Config(
-                    signature_version="s3v4",
-                    s3=s3_config,
-                    connect_timeout=_connect_timeout,
-                    read_timeout=_read_timeout,
-                    retries={"max_attempts": 2, "mode": "standard"},
-                    request_checksum_calculation="when_required",
-                    response_checksum_validation="when_required",
-                )
-            except TypeError:
-                pass
+        config_kwargs: Dict[str, Any] = {
+            "signature_version": "s3v4",
+            "s3": s3_config,
+            "connect_timeout": _connect_timeout,
+            "read_timeout": _read_timeout,
+            "retries": {"max_attempts": 2, "mode": "standard"},
+        }
+        # Keep the historical upload_fileobj path, but disable boto3 1.36+
+        # flexible CRC headers that Qiniu rejects on CreateMultipartUpload.
+        if is_s3_compat:
+            config_kwargs["request_checksum_calculation"] = "when_required"
+            config_kwargs["response_checksum_validation"] = "when_required"
+        try:
+            config = Config(**config_kwargs)
+        except TypeError:
+            config_kwargs.pop("request_checksum_calculation", None)
+            config_kwargs.pop("response_checksum_validation", None)
+            config = Config(**config_kwargs)
         client = boto3.client(
             "s3",
             endpoint_url=pool.endpoint,
@@ -788,6 +858,8 @@ class OSSStorageService:
             aws_session_token=getattr(cred, "session_token", None),
             config=config,
         )
+        if is_s3_compat:
+            self._attach_s3_compat_request_filters(client)
         self._boto3_clients_cache[cache_key] = client
         return client
 
