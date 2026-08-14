@@ -719,7 +719,7 @@ class OSSStorageService:
         if not pool or not cred:
             raise ValueError("OSS pool or credential missing")
 
-        cache_key = f"{getattr(pool, 'endpoint', '')}_{getattr(cred, 'access_key', '')}"
+        cache_key = f"{getattr(pool, 'endpoint', '')}_{getattr(cred, 'access_key', '')}_{int(self._is_tos_provider(pool))}_{int(self._is_qiniu_provider(pool))}"
         if cache_key in self._boto3_clients_cache:
             return self._boto3_clients_cache[cache_key]
 
@@ -747,6 +747,8 @@ class OSSStorageService:
             "retries": {"max_attempts": 2, "mode": "standard"},
         }
         if self._is_s3_compat_unsigned_payload(pool):
+            # Disable boto3 1.36+ flexible CRC checksums. Qiniu/TOS gateways
+            # otherwise attach x-amz-checksum-* and managed multipart can stall.
             config_kwargs["request_checksum_calculation"] = "when_required"
             config_kwargs["response_checksum_validation"] = "when_required"
         try:
@@ -947,21 +949,32 @@ class OSSStorageService:
         extra_args: Dict[str, Any],
     ) -> None:
         """Upload from in-memory bytes or a path. Path path never loads the whole file."""
-        use_multipart = content_size >= _OSS_MULTIPART_THRESHOLD_BYTES or bool(file_path)
+        is_qiniu = self._is_qiniu_provider(pool)
+        qiniu_multipart_threshold = max(
+            32 * 1024 * 1024,
+            int(os.getenv("OSS_QINIU_MULTIPART_THRESHOLD_MB", "64") or 64) * 1024 * 1024,
+        )
+        # Qiniu's S3 gateway frequently stalls on boto3 managed multipart
+        # (concurrent parts + CRC trailers). Stream a single put_object instead
+        # unless the object is genuinely large.
+        if is_qiniu:
+            use_multipart = content_size >= qiniu_multipart_threshold
+        else:
+            use_multipart = content_size >= _OSS_MULTIPART_THRESHOLD_BYTES
         upload_extra = dict(extra_args or {})
 
         if use_multipart:
             transfer_cfg = TransferConfig(
-                multipart_threshold=_OSS_MULTIPART_THRESHOLD_BYTES,
+                multipart_threshold=_OSS_MULTIPART_THRESHOLD_BYTES if not is_qiniu else qiniu_multipart_threshold,
                 multipart_chunksize=_OSS_MULTIPART_CHUNK_BYTES,
-                max_concurrency=max(1, int(os.getenv("OSS_MULTIPART_CONCURRENCY", "2"))),
-                use_threads=True,
+                max_concurrency=1 if is_qiniu else max(1, int(os.getenv("OSS_MULTIPART_CONCURRENCY", "2"))),
+                use_threads=not is_qiniu,
             )
             _visible_info(
                 "[OSSUploadMultipart] starting | key=%s bytes=%s threshold=%s chunk=%s source=%s",
                 key,
                 content_size,
-                _OSS_MULTIPART_THRESHOLD_BYTES,
+                _OSS_MULTIPART_THRESHOLD_BYTES if not is_qiniu else qiniu_multipart_threshold,
                 _OSS_MULTIPART_CHUNK_BYTES,
                 "file" if file_path else "bytes",
             )
@@ -995,17 +1008,33 @@ class OSSStorageService:
                     raise
             return
 
-        put_kwargs: Dict[str, Any] = {
-            "Bucket": pool.bucket,
-            "Key": key,
-            "Body": body_bytes or b"",
-        }
-        put_kwargs.update(upload_extra)
-        try:
+        _visible_info(
+            "[OSSUploadPutObject] starting | key=%s bytes=%s source=%s",
+            key,
+            content_size,
+            "file" if file_path else "bytes",
+        )
+
+        def _do_put(extra: Dict[str, Any]) -> None:
+            put_kwargs: Dict[str, Any] = {
+                "Bucket": pool.bucket,
+                "Key": key,
+                "ContentLength": int(content_size or 0),
+            }
+            put_kwargs.update(extra)
+            if file_path:
+                with open(file_path, "rb") as handle:
+                    put_kwargs["Body"] = handle
+                    client.put_object(**put_kwargs)
+                return
+            put_kwargs["Body"] = body_bytes or b""
             client.put_object(**put_kwargs)
+
+        try:
+            _do_put(upload_extra)
         except Exception as first_exc:
-            if put_kwargs.get("StorageClass") and self._is_invalid_storage_class_error(first_exc):
-                invalid_storage_class = put_kwargs.pop("StorageClass", None)
+            if upload_extra.get("StorageClass") and self._is_invalid_storage_class_error(first_exc):
+                invalid_storage_class = upload_extra.pop("StorageClass", None)
                 _visible_warning(
                     "[OSSUploadRetry] provider=%s alias=%s pool_id=%s key=%s reason=invalid_storage_class storage_class=%s",
                     getattr(pool, "provider", None),
@@ -1014,7 +1043,7 @@ class OSSStorageService:
                     key,
                     invalid_storage_class,
                 )
-                client.put_object(**put_kwargs)
+                _do_put(upload_extra)
             else:
                 raise
 
