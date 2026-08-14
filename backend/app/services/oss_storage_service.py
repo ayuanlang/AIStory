@@ -29,6 +29,11 @@ from app.services.oss_upload_dedup import (
     wait_for_oss_upload_peer,
 )
 
+# boto3 1.36+ defaults to flexible CRC checksums. Qiniu's S3 gateway returns
+# 400 Bad Request (or hangs on multipart) when those headers are present.
+os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "WHEN_REQUIRED")
+os.environ.setdefault("AWS_RESPONSE_CHECKSUM_VALIDATION", "WHEN_REQUIRED")
+
 
 logger = logging.getLogger(__name__)
 activity_logger = logging.getLogger("functional_activity")
@@ -367,6 +372,85 @@ class OSSStorageService:
             except Exception:
                 pass
         return "InvalidStorageClass" in str(exc) or "Backblaze only supports the" in str(exc)
+
+    @staticmethod
+    def _format_oss_error(exc: Exception) -> str:
+        if isinstance(exc, ClientError):
+            response = exc.response or {}
+            error = response.get("Error") or {}
+            status = ((response.get("ResponseMetadata") or {}).get("HTTPStatusCode"))
+            code = str(error.get("Code") or "").strip()
+            message = str(error.get("Message") or "").strip()
+            parts = [str(exc)]
+            if status:
+                parts.append(f"status={status}")
+            if code:
+                parts.append(f"code={code}")
+            if message:
+                parts.append(f"message={message}")
+            return " | ".join(parts)
+        return str(exc)
+
+    @staticmethod
+    def _is_bad_request_error(exc: Exception) -> bool:
+        if isinstance(exc, ClientError):
+            status = ((exc.response or {}).get("ResponseMetadata") or {}).get("HTTPStatusCode")
+            code = str((((exc.response or {}).get("Error") or {}).get("Code") or "")).strip()
+            if int(status or 0) == 400:
+                return True
+            if code in {
+                "BadRequest",
+                "InvalidRequest",
+                "InvalidArgument",
+                "BadDigest",
+                "XAmzContentSHA256Mismatch",
+                "NotImplemented",
+                "InvalidDigest",
+            }:
+                return True
+        text = str(exc)
+        return "(400)" in text or "Bad Request" in text
+
+    @staticmethod
+    def _strip_flexible_checksum_headers(request, **kwargs) -> None:
+        headers = getattr(request, "headers", None)
+        if headers is None:
+            return
+        drop_keys = []
+        for key in list(headers.keys()):
+            lower = str(key).lower()
+            value = str(headers.get(key) or "")
+            if (
+                lower.startswith("x-amz-checksum-")
+                or lower in {
+                    "x-amz-sdk-checksum-algorithm",
+                    "x-amz-trailer",
+                    "x-amz-decoded-content-length",
+                }
+                or (lower == "content-encoding" and "aws-chunked" in value.lower())
+            ):
+                drop_keys.append(key)
+        for key in drop_keys:
+            try:
+                del headers[key]
+            except Exception:
+                try:
+                    headers.pop(key, None)
+                except Exception:
+                    pass
+
+    def _attach_s3_compat_request_filters(self, client) -> None:
+        events = (
+            "before-sign.s3.PutObject",
+            "before-sign.s3.UploadPart",
+            "before-sign.s3.CreateMultipartUpload",
+            "before-sign.s3.CompleteMultipartUpload",
+        )
+        for event_name in events:
+            try:
+                client.meta.events.register(event_name, self._strip_flexible_checksum_headers)
+            except Exception:
+                continue
 
     def _load_json_list(self, value: Any) -> List[Any]:
         if value is None:
@@ -766,6 +850,8 @@ class OSSStorageService:
             aws_session_token=getattr(cred, "session_token", None),
             config=config,
         )
+        if self._is_s3_compat_unsigned_payload(pool):
+            self._attach_s3_compat_request_filters(client)
         self._boto3_clients_cache[cache_key] = client
         return client
 
@@ -1019,9 +1105,10 @@ class OSSStorageService:
             put_kwargs: Dict[str, Any] = {
                 "Bucket": pool.bucket,
                 "Key": key,
-                "ContentLength": int(content_size or 0),
             }
             put_kwargs.update(extra)
+            # Do not set ContentLength ourselves: boto3 1.36+ may append a CRC
+            # trailer, and a pre-declared length then makes Qiniu return 400.
             if file_path:
                 with open(file_path, "rb") as handle:
                     put_kwargs["Body"] = handle
@@ -1044,6 +1131,19 @@ class OSSStorageService:
                     invalid_storage_class,
                 )
                 _do_put(upload_extra)
+            elif is_qiniu and self._is_bad_request_error(first_exc):
+                _visible_warning(
+                    "[OSSUploadRetry] provider=%s alias=%s pool_id=%s key=%s reason=qiniu_put_bad_request err=%s",
+                    getattr(pool, "provider", None),
+                    getattr(pool, "provider_alias", None),
+                    getattr(pool, "id", None),
+                    key,
+                    self._format_oss_error(first_exc),
+                )
+                stripped = {}
+                if upload_extra.get("ContentType"):
+                    stripped["ContentType"] = upload_extra.get("ContentType")
+                _do_put(stripped)
             else:
                 raise
 
@@ -1294,7 +1394,7 @@ class OSSStorageService:
                         getattr(pool, "id", None),
                         getattr(pool, "bucket", None),
                         key,
-                        exc,
+                        self._format_oss_error(exc),
                     )
 
             return None
