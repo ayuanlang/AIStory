@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-08-15 11:35:00 +08:00
+# Prompt Updated At: 2026-08-16 03:45:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -78,8 +78,8 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 - **字段显式回写**：`generation_prompt_cn` 吸收结构字段有效属性为视觉词；`generation_prompt_en=""`；`description_cn=""`。`name` 仅 JSON 原样保留；名称含可见类别信息时只吸收可见语义。
 - **实体物件可视性核验（最高；描述前强制）**：对任一实体写 `generation_prompt_cn` / 角色【衣着】配饰落点时，须先核「该细节在对应视图是否可见」——①道具四视图：正面格只强化正面可读细节，背面格写背面结构，侧面写厚度/侧缘，禁正面铭文出现在背视面板；②角色四视图+配饰：仅**不可离身**升格配饰（CHAR `accessory_props`）与未升格纯装饰按 Index `accessory_mount`/`wear_side` 落位——正面挂件出现在正视/¾，背面挂件出现在背视，侧面挂件在对应侧视可读；可离身升格 PROP 不进角色生图词；③ENV 四向/衍生：**扇区立面**的可见面写入对应 `{N}度…` 衍生的 `anchor_description` 与该宫格成稿；立面不可见面严禁写入该衍生锚点/生图词（禁对向串写立面、禁机位后方冒充可见）；**中区地面家具（茶几/矮几/中央桌/沙发）四格守恒**——可见面仍按格查表，但实体不得因换角从成稿消失（全挡须显式遮挡，禁静默删除；90/270 不得把矮几当成 0° 邻向立面省略）；**保持约 35mm–50mm 适度景深与空间纵深感，正对输入该向主景（四方正交），左右两侧立面与侧向结构在纵深透视中基本可见**；**场内实体按几何投影规则动态变换落位与朝向（F/U 可见面、长短边、楼梯上行方向等），跨视角守恒**；**输入该向内容=该向正面面对的围合立面，四方正交，禁偏斜/墙角主构图**；④遮挡/Clean Plate：不写镜头外、板外、被遮挡才「应存在」的细节当成本视图可见事实。缺挂载/朝向上游证据→标缺口，禁臆造可见面。
 - **Subject Index 全要素零缺失回写（最高）**：每条实体 Index 已写明的**任何要素**须在 `generation_prompt_cn` 逐项体现为可检索视觉描述；不可只写在 `appearance_cn`/`clothing`/`dependency_strategy.logic` 而 prompt 缺项。
-  - **覆盖**：`entity_attributes` 每一键值（材质/结构/光源/气象/`visible_text` 等文字字段/`empty_view_delta`/`fixed_*_delta`/依赖差异/形态状态等）；衍生相对基准的变化；`script_entity_coverage` 中本实体可画面呈现的线索。**§1.5 主冷暖与四层色谱**：Env/Prop 须完整落进 `generation_prompt_cn`；Character 真人定妆服从上方豁免门（色谱落服装；大光比句不进 prompt，rationale 进 logic）。
-  - **Environment 例外（强制优先于本条覆盖）**：含角色名/人称/站姿对白/「谁用何处干什么」的 `purpose`/`activity_*`/`derivative_trigger_*`/`plot_*` 等**不得**写入 `generation_prompt_cn`；只转译为空镜几何与可见陈设（例：座位区净空、门—桌纵深、反打可见半空间）。人物用途句可留在 `dependency_strategy.logic` 的规划备注，且须标明「不成稿」。
+  - **覆盖**：`entity_attributes` 每一键值（材质/结构/光源/气象/`visible_text` 等文字字段/`appearance`/`style`/`social_status`/`literary_atmosphere`/`empty_view_delta`/`fixed_*_delta`/依赖差异/形态状态等）；衍生相对基准的变化；`script_entity_coverage` 中本实体可画面呈现的线索。**外形四维**（外形/风格/地位/作用）中可画面者须进 prompt（地位→完成度/品级；风格→材质气质）；ENV/PROP 的归属与「谁用」仍服从 Environment 例外，只进 logic。**§1.5 主冷暖与四层色谱**：Env/Prop 须完整落进 `generation_prompt_cn`；Character 真人定妆服从上方豁免门（色谱落服装；大光比句不进 prompt，rationale 进 logic）。
+  - **Environment 例外（强制优先于本条覆盖）**：含角色名/人称/站姿对白/「谁用何处干什么」的 `purpose`/`activity_*`/`derivative_trigger_*`/`plot_*`/`basic_positioning` 等**不得**整句写入 `generation_prompt_cn`；只转译为空镜几何与可见陈设（例：座位区净空、门—桌纵深、反打可见半空间）。**`basic_positioning` 分层消费**：番位归属（女主/男主/「谁的住房」）只进 `dependency_strategy.logic` 并标「不成稿」；**体量档+气质/类型**（不大/精致小屋/旧木工业风）须转译为可检索空间尺度与完成度（不大→禁扩成豪宅四向；精致→细节精巧控杂）。人物用途句可留在 `dependency_strategy.logic` 的规划备注，且须标明「不成稿」。
   - **写法**：逐条转译为可见画面词，融入连贯中文短段；禁「同上/延续上游/与描述一致」；禁弱化为「高级/破败/有标识/暖色调/电影感」等抽象词或删项。
   - **终检**：逐 Subject 列 Index 要素 → 在 prompt 逐条检索；任一不可检索或仅在其他 JSON 字段 → 失败重写（Environment 上列人物用途例外字段除外；且 Env prompt 出现人名/人称/用途句 → 失败重写）。`description_cn` 非空 → 失败重写。
 - **光学优先级**：先亮度/可读性/主辅光/色温/空气感，再风格情绪。**Env/Poster 默认 §1.5 大光比**；**Prop 四视图豁免 ≥8:1**（prop §1.3 柔和静物光；色谱仍 §1.5-B）；Character 见豁免门。仅 Genre/定位/tone 明确治愈/广告/儿童明亮向时，Env 可降至轻大光比（仍须光向与纵深微差）。关键信息须可读。

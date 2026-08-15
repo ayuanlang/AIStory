@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
-# Prompt Updated At: 2026-08-14 11:20:00 +08:00
+# Prompt Updated At: 2026-08-16 03:45:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -24,6 +24,8 @@
   - 读取 `Project Context` / `Genre` / `Base Positioning` / `Global_Style`、时代地域；统一角色视觉体系，禁止反向题材化。
   - 有年代/地域/阶层/礼制时，外观须响应身份规范与服饰制度。
   - **身份优先（读 Index `identity:`）**：定妆/择型/服制**先**吃世界身份（`警察`/`皇子`/`公主`/`普通修仙者`/`刑侦警探` 等），再叠 `plot_role`；禁只用男主/女主定服制而丢掉警察制服信号、宫廷品秩、修士层级等。
+  - **基本定位（读 Index `basic_positioning:`）**：一句叙事定位（如`女主，婚前独立生活，精致克制的都市白领`）作选角/阶层/人生阶段视觉边界，与 `identity`/`plot_role` **并存不互代**；处境与气质词须能在相貌或衣着上核销（精致克制→妆造与廓形克制，禁无据落魄）。缺键则 logic 标上游缺口，禁臆造人生阶段。
+  - **外形四维（服化道真源）**：Index `appearance`/`clothing`/`style`/`social_status`/`narrative_function` 凡已写须零缺失转进定妆（阶层品级定服制完成度：小康素净≠王府华贵；风格定廓形材质）。禁只用男主/女主或 `identity` 丢掉地位与风格。
   - **渲染风格**按 `entity_design_common.md` §1.6 三选一（仅接受显式制式词；都市/职场/纪实/电影级写实等题材标签**不得单独**触发真人专属）：三维→§2.5；二维→§2.6；真人/未声明默认→§2.0–§2.3。
   - 题材/气质映射只提供**视觉语言边界**（材质、光气质、制度层级），**不得**替代个体设计；禁武侠/江湖默认落魄游侠或默认侠女；有 `identity:普通修仙者` 等须按该层级落地，禁无据拔高宗师气场。
 - **[Node 2] 选角落地**：反同质化、合理头身比；真人按 §2.0–§2.3 以面目为绝对重心；三维/二维按 §2.5/§2.6。群演簇改 §2.4。先读 `identity:` 再读 `plot_role`。
@@ -108,7 +110,7 @@
 | 高位反派 | 阴鸷压迫 |
 | 信息极少 | 6 槽位 + 最近邻 |
 
-`dependency_strategy.logic` 须含：`世界身份：{identity}`；`剧情地位：{plot_role}`；`相貌组合：{名}；依据：{关键词}`。缺 Index `identity:` 时 logic 注明「上游缺 identity」，可据称呼/服制弱推断并标待补，**禁止**用番位填 `role`。
+`dependency_strategy.logic` 须含：`基本定位：{basic_positioning}`；`世界身份：{identity}`；`社会地位：{social_status}`；`风格：{style}`；`剧情地位：{plot_role}`；`相貌组合：{名}；依据：{关键词}`。缺 Index `identity:` 时 logic 注明「上游缺 identity」，可据称呼/服制弱推断并标待补，**禁止**用番位填 `role`。缺 `basic_positioning:`/`style:`/`social_status:` 时 logic 注明上游缺项。
 
 ### 2.2 Prompt 字段模板
 - `description_cn`：恒为 `""`（禁任何正文）。
