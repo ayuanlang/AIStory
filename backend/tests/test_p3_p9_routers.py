@@ -675,6 +675,9 @@ def test_workspace_story_generator_section():
     assert _canonicalize_scene_no("EP01_SC03") == "3"
     assert _resolve_project_video_sound({}) is True
     assert _ensure_project_generation_defaults({}).get("video_sound") is True
+    assert _ensure_project_generation_defaults({}).get("max_shot_seconds") == 15
+    assert _ensure_project_generation_defaults({"max_shot_seconds": "8"}).get("max_shot_seconds") == 8
+    assert _ensure_project_generation_defaults({"max_shot_seconds": "2"}).get("max_shot_seconds") == 4
     assert callable(_find_active_scene_by_scene_no)
     shared = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "shared.py"
     src = shared.read_text(encoding="utf-8")
@@ -746,7 +749,12 @@ def test_shot_generation_prompts_and_episode_script_section():
     assert callable(esg.generate_episode_scenes_from_story)
     assert callable(esg.generate_project_episode_scripts_from_global_framework)
     assert _map_shared_prompt_mode_to_shot_generation_mode("feature_stack") == "routed"
-    assert isinstance(_build_project_prompt_context({"script_title": "X"}), dict)
+    ctx_default = _build_project_prompt_context({"script_title": "X"})
+    assert isinstance(ctx_default, dict)
+    assert "Max Shot Seconds (分镜最长秒数): 15" in str(ctx_default.get("project_context_section") or "")
+    assert ctx_default.get("metadata", {}).get("max_shot_seconds") == 15
+    ctx_custom = _build_project_prompt_context({"script_title": "X", "max_shot_seconds": "12"})
+    assert "Max Shot Seconds (分镜最长秒数): 12" in str(ctx_custom.get("project_context_section") or "")
     assert shots._build_shot_prompts is _build_shot_prompts
     shots_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "shots.py"
     shot_ai_path = (

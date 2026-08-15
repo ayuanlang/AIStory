@@ -29,6 +29,14 @@ export const PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS = [
     { key: 'safety_broadcast_level', labelZh: '播出安全等级', labelEn: 'Safety / Broadcast Level', options: PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS },
 ];
 
+export const DEFAULT_MAX_SHOT_SECONDS = 15;
+
+export const resolveMaxShotSeconds = (value, fallback = DEFAULT_MAX_SHOT_SECONDS) => {
+    const parsed = Number.parseInt(String(value ?? '').replace(/[^\d.]/g, ''), 10);
+    if (Number.isFinite(parsed) && parsed > 0) return Math.max(4, parsed);
+    return fallback;
+};
+
 export const DEFAULT_CANON_TAG_CATEGORIES = [
     {
         key: 'beauty',

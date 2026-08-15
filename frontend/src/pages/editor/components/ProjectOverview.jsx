@@ -169,7 +169,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 
 // Character Canon (Authoritative) generator (shared)
 
-import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint, resolveProjectVideoSoundEnabled } from '../editorConstants';
+import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint, resolveProjectVideoSoundEnabled, DEFAULT_MAX_SHOT_SECONDS, resolveMaxShotSeconds } from '../editorConstants';
 
 /** Collapse buggy stacked production motifs: 天逆·实拍（真人剧·实拍（真人剧… → 天逆 */
 const stripStackedProductionScriptTitleSuffixes = (title) => {
@@ -236,6 +236,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const [info, setInfo] = useState({
         script_title: "",
         expected_duration: "",
+        max_shot_seconds: String(DEFAULT_MAX_SHOT_SECONDS),
         series_episode: "",
         base_positioning: "现代职场 / Modern Workplace",
         type: "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
@@ -1054,6 +1055,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                      merged.tone = normalizeProjectEpisodeTone(merged.tone);
                      merged.lighting = normalizeProjectEpisodeLighting(merged.lighting);
                      merged.video_sound = resolveProjectVideoSoundEnabled(merged);
+                     merged.max_shot_seconds = String(resolveMaxShotSeconds(merged.max_shot_seconds));
                      merged.generation_seed = resolveProjectSeedFromInfo(merged);
                      merged.project_share_users = normalizeUserListValues(merged.project_share_users);
                      merged.project_reviewer_users = normalizeUserListValues(merged.project_reviewer_users);
@@ -1492,6 +1494,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             const global_info = {
                 ...info,
                 script_title: stripStackedProductionScriptTitleSuffixes(info.script_title),
+                max_shot_seconds: String(resolveMaxShotSeconds(info.max_shot_seconds)),
                 project_share_users: normalizeUserListValues(info.project_share_users),
                 project_reviewer_users: normalizeUserListValues(info.project_reviewer_users),
                 video_sound: resolvedVideoSound,
@@ -2787,6 +2790,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     <div className="grid grid-cols-1 gap-4">
                                         <InputGroup idPrefix={prefix} label={t('剧本标题', 'Script Title')} value={info.script_title} onChange={v => updateField('script_title', v)} placeholder={t('例如：我的科幻史诗', 'e.g. My Sci-Fi Epic')} />
                                         <InputGroup idPrefix={prefix} label={t('预期时长(秒)', 'Expected Duration (s)')} type="number" min="1" value={info.expected_duration || ''} onChange={v => updateField('expected_duration', v)} placeholder="60" />
+                                        <InputGroup idPrefix={prefix} label={t('分镜最长秒数', 'Max Shot Seconds')} type="number" min="4" value={info.max_shot_seconds || String(DEFAULT_MAX_SHOT_SECONDS)} onChange={v => updateField('max_shot_seconds', v)} placeholder={String(DEFAULT_MAX_SHOT_SECONDS)} />
                                     </div>
 
 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

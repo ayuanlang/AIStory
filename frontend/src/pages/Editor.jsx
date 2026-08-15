@@ -168,7 +168,7 @@ import ErrorBoundary from '../components/ErrorBoundary';
 
 // Character Canon (Authoritative) generator (shared)
 
-import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from './editor/editorConstants';
+import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint, resolveMaxShotSeconds } from './editor/editorConstants';
 
 
 import { ImportModal } from './editor/components/ImportModal';
@@ -1212,6 +1212,7 @@ const Editor = ({
             const payloadRaw = {
                 script_title: toText(pickValue(base, ['script_title', 'title', '项目标题'])),
                 expected_duration: toText(pickValue(base, ['expected_duration', '预期时长(秒)', '预期时长'])) || "",
+                max_shot_seconds: String(resolveMaxShotSeconds(pickValue(base, ['max_shot_seconds', '分镜最长秒数', 'maxShotSeconds']))),
                 type: toText(pickValue(base, ['type', 'project_type', '类型'])),
                 language: toText(pickValue(base, ['language', 'lang', '语言'])),
                 base_positioning: toText(pickValue(base, ['base_positioning', 'positioning', '定位'])),

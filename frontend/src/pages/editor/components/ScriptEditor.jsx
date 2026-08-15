@@ -2509,7 +2509,7 @@ import { confirmUiMessage, promptUiMessage, notifyUiMessage } from '../../../lib
 
 // Character Canon (Authoritative) generator (shared)
 
-import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
+import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint, resolveMaxShotSeconds } from '../editorConstants';
 const isDummySubject = (itemName) => {
     if (!itemName) return false;
     const lcName = String(itemName).trim().toLowerCase().replace(/[\s_\-]/g, '');
@@ -5707,6 +5707,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (lighting) basicInfoLines.push(`Lighting: ${lighting}`);
         if (colorSpectrum) basicInfoLines.push(`Color Spectrum: ${colorSpectrum}`);
         if (borrowedFilms.length > 0) basicInfoLines.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
+        basicInfoLines.push(`Max Shot Seconds (分镜最长秒数): ${resolveMaxShotSeconds(getInfoValue([
+            'max_shot_seconds',
+            'max_shot_duration',
+            'shot_max_seconds',
+            'maxShotSeconds',
+            '分镜最长秒数',
+            '拍摄最长时间',
+            '分镜最长时间',
+        ]))}`);
 
         const projectBasicInfoBlock = basicInfoLines.length > 0
             ? `[Project Basic Info]\n${basicInfoLines.join('\n')}`
@@ -5840,6 +5849,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (eraField) metaParts.push(`Era / Period: ${eraField}`);
         if (regionField) metaParts.push(`Region / Country: ${regionField}`);
         if (shotPrefField) metaParts.push(`Shot / Lens Preference: ${shotPrefField}`);
+        metaParts.push(`Max Shot Seconds (分镜最长秒数): ${resolveMaxShotSeconds(getInfoValue([
+            'max_shot_seconds',
+            'max_shot_duration',
+            'shot_max_seconds',
+            'maxShotSeconds',
+            '分镜最长秒数',
+            '拍摄最长时间',
+            '分镜最长时间',
+        ]))}`);
         if (broadcastSafetyField) metaParts.push(`Broadcast Security Level: ${broadcastSafetyField}`);
         metaParts.push('Use this project context as first-class constraints before analyzing the script.');
 

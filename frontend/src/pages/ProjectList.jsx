@@ -114,6 +114,7 @@ import {
     normalizeProjectSceneAnalysisSafety,
     PROJECT_ASPECT_RATIO_OPTIONS,
 } from './editor/projectOptionConfig';
+import { DEFAULT_MAX_SHOT_SECONDS, resolveMaxShotSeconds } from './editor/editorConstants';
 
 const cinematicImages = [
     "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500&q=80", // Movie theater
@@ -651,6 +652,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newType, setNewType] = useState('');
     const [newCountryRegion, setNewCountryRegion] = useState('');
     const [newExpectedDuration, setNewExpectedDuration] = useState('');
+    const [newMaxShotSeconds, setNewMaxShotSeconds] = useState(String(DEFAULT_MAX_SHOT_SECONDS));
     const [newLanguage, setNewLanguage] = useState('');
     const [newBasePositioning, setNewBasePositioning] = useState('');
     const [newAspectRatio, setNewAspectRatio] = useState('');
@@ -1089,6 +1091,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         setNewType('');
         setNewCountryRegion('');
         setNewExpectedDuration('');
+        setNewMaxShotSeconds(String(DEFAULT_MAX_SHOT_SECONDS));
         setNewLanguage('');
         setNewBasePositioning('');
         setNewAspectRatio('');
@@ -1149,6 +1152,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                 type: String(newType || '').trim(),
                 country_region: String(newCountryRegion || '').trim(),
                 expected_duration: String(newExpectedDuration || '').trim(),
+                max_shot_seconds: String(resolveMaxShotSeconds(newMaxShotSeconds)),
                 language: String(newLanguage || '').trim(),
                 base_positioning: String(newBasePositioning || '').trim(),
                 era: String(newEra || '').trim(),
@@ -2426,6 +2430,17 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                     value={newExpectedDuration}
                                                     onChange={(e) => setNewExpectedDuration(e.target.value)}
                                                     placeholder="60"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('分镜最长秒数', 'Max Shot Seconds')}</label>
+                                                <input
+                                                    type="number"
+                                                    min="4"
+                                                    className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                    value={newMaxShotSeconds}
+                                                    onChange={(e) => setNewMaxShotSeconds(e.target.value)}
+                                                    placeholder={String(DEFAULT_MAX_SHOT_SECONDS)}
                                                 />
                                             </div>
                                             <div>

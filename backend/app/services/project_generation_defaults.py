@@ -2,6 +2,7 @@
 """Project-level generation defaults / video-sound normalization."""
 from __future__ import annotations
 
+import re
 from typing import Any, Dict
 
 from app.services.effective_api_setting import _to_bool
@@ -32,6 +33,30 @@ _PROJECT_LEVEL_GENERATION_DEFAULT_KEYS = (
     "n_frames",
     "num_images",
 )
+
+_DEFAULT_MAX_SHOT_SECONDS = 15
+_MIN_SHOT_DURATION_SECONDS = 4
+
+
+def _resolve_project_max_shot_seconds(global_info: Any, *, default: int = _DEFAULT_MAX_SHOT_SECONDS) -> int:
+    gi = global_info if isinstance(global_info, dict) else {}
+    raw = gi.get("max_shot_seconds")
+    if raw is None or str(raw).strip() == "":
+        raw = gi.get("分镜最长秒数")
+    text = str(raw or "").strip()
+    if not text:
+        return default
+    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    if not match:
+        return default
+    try:
+        value = int(round(float(match.group(1))))
+    except (TypeError, ValueError):
+        return default
+    if value <= 0:
+        return default
+    return max(_MIN_SHOT_DURATION_SECONDS, value)
+
 
 def _resolve_project_video_sound(global_info: Any, *, default: bool = True) -> bool:
     gi = global_info if isinstance(global_info, dict) else {}
@@ -157,6 +182,7 @@ def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
     tech_params["visual_standard"] = visual_standard
     gi["tech_params"] = tech_params
     gi["project_generation_defaults"] = defaults
+    gi["max_shot_seconds"] = _resolve_project_max_shot_seconds(gi)
     return gi
 
 

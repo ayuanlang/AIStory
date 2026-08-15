@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CheckCircle, ChevronDown } from 'lucide-react';
 import { getUiLang, tUI } from '../../../lib/uiLang';
 
-const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi = false, strict = false }) => {
+const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi = false, strict = false, type = 'text', min, max }) => {
     const [isOpen, setIsOpen] = useState(false);
     const wrapperRef = useRef(null);
 
@@ -45,6 +45,9 @@ const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi
             <label className="text-xs text-muted-foreground uppercase font-bold">{label}</label>
             <div className="relative">
                 <input
+                    type={list ? 'text' : type}
+                    min={min}
+                    max={max}
                     className={`bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full ${list && strict ? 'cursor-pointer' : ''}`}
                     value={displayValue()}
                     readOnly={!!list && strict}

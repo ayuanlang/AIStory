@@ -43,6 +43,27 @@ from app.services.soft_delete import _active_episode_clause, _active_entity_clau
 
 logger = logging.getLogger("api_logger")
 
+DEFAULT_MAX_SHOT_SECONDS = 15
+MIN_SHOT_DURATION_SECONDS = 4
+
+
+def _parse_max_shot_seconds(raw: Any) -> int:
+    """Resolve 分镜最长秒数; missing/invalid → 15. Floor is 4s (shot minimum)."""
+    text = str(raw or "").strip()
+    if not text:
+        return DEFAULT_MAX_SHOT_SECONDS
+    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    if not match:
+        return DEFAULT_MAX_SHOT_SECONDS
+    try:
+        value = int(round(float(match.group(1))))
+    except Exception:
+        return DEFAULT_MAX_SHOT_SECONDS
+    if value <= 0:
+        return DEFAULT_MAX_SHOT_SECONDS
+    return max(MIN_SHOT_DURATION_SECONDS, value)
+
+
 def _strip_ai_shots_reasoning_prefix_lines(response_content: Any, *, context: str) -> str:
     reasoning_prefix_terms = [
         "i will",
@@ -326,6 +347,15 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     region_culture = get_context_val(["region_culture", "region", "country", "culture", "country_region"])
     era_setting = get_context_val(["era", "era_setting", "period", "time_setting"])
     shot_preference = get_context_val(["shot_preference", "lens_preference", "camera_preference"])
+    max_shot_seconds = _parse_max_shot_seconds(get_context_val([
+        "分镜最长秒数",
+        "max_shot_seconds",
+        "max_shot_duration",
+        "shot_max_seconds",
+        "maxShotSeconds",
+        "拍摄最长时间",
+        "分镜最长时间",
+    ]))
     broadcast_security_level = get_context_val([
         "broadcast_security_level",
         "broadcast_safety_level",
@@ -384,6 +414,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         project_context_lines.append(f"Region / Country (国家地域): {region_culture}")
     if shot_preference:
         project_context_lines.append(f"Shot / Lens Preference (镜头偏好): {shot_preference}")
+    project_context_lines.append(f"Max Shot Seconds (分镜最长秒数): {max_shot_seconds}")
     if broadcast_security_level:
         project_context_lines.append(f"Broadcast Safety Level (播出安全等级): {broadcast_security_level}")
     if borrowed_films:
@@ -446,6 +477,8 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         "shot_generation_mode": prompt_mode,
         "shot_prompt_mode": prompt_mode,
         "prompt_mode": prompt_mode,
+        "max_shot_seconds": max_shot_seconds,
+        "分镜最长秒数": max_shot_seconds,
     }
 
     return {
@@ -534,7 +567,9 @@ def _build_scene_subject_image_prompts_cn_section(
         "(ENV generation_prompt_cn for optical anchoring). "
         "Do NOT expect CHAR/PROP prompts here — character/prop appearance is reference-image bound downstream. "
         "Translate ENV optics into dynamic video language; do not paste static framing/canvas instructions verbatim. "
-        "Entity naming authority remains Scene Subject Index.\n"
+        "Entity naming authority remains Scene Subject Index. "
+        "Same-main-environment matching (shot merge): 所属主环境= / named main-ENV 四向拼图 / 依赖环境为: "
+        "may prove the same main ENV family; any one conclusive match with ENV name or Subject Index is sufficient to merge.\n"
         + "\n".join(prompt_lines)
         + "\n"
     )
@@ -844,7 +879,10 @@ def _build_shot_prompts(
             "Authoritative filtered Subject Index for this scene only "
             "(environment / linked characters / key props). "
             "Use subject_no/subject_type/subject_name fields as the sole entity naming source; "
-            "do not infer subjects outside this list.",
+            "do not infer subjects outside this list. "
+            "Same-main-environment matching (shot merge): for environment rows, "
+            "env_role / reference_env / derivative_base_zh|en / base_name may prove the same main ENV family; "
+            "any one conclusive match with ENV name or generation_prompt_cn is sufficient to merge.",
         ]
         lines.extend(header_lines)
         lines.extend(separator_lines if header_lines else [])
@@ -887,6 +925,18 @@ def _build_shot_prompts(
         system_prompt = _resolve_prompt_text(base_prompt_file)
         if feature_bundle.get("enabled"):
             system_prompt = render_shot_generation_routed_prompt(system_prompt, feature_bundle)
+        max_shot_seconds = _parse_max_shot_seconds(
+            (project_context.get("metadata") or {}).get("max_shot_seconds")
+        )
+        system_prompt = (
+            f"【本场时长上限】MaxShotSeconds={max_shot_seconds}"
+            f"（# Project Context「分镜最长秒数」；未注入则默认 {DEFAULT_MAX_SHOT_SECONDS}）。"
+            f"鼓励合并门槛=MaxShotSeconds-6={max(0, max_shot_seconds - 6)}。"
+            f"符合合并逻辑时须一直累计到基准合镜Duration>门槛才封口；"
+            f"若基准已>MaxShotSeconds，表列Duration强制=MaxShotSeconds，禁止超时拆镜。"
+            f"下文合镜封口、Duration钳制、未继续合并说明一律用该值，禁止回退写死 15（除非本场即默认 15）。\n\n"
+            + system_prompt
+        )
     except Exception as e:
         logger.error(f"Failed to load shot generation prompt stack: {e}")
         import traceback
