@@ -83,6 +83,21 @@ const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", class
         applyValue(val, { persist: true });
     };
 
+    const formatApiOptionLabel = (api) => {
+        const apiName = String(api.system_api_name || api.name || '').trim()
+            || String(api.alias || '').trim()
+            || String(api.system_api_model || api.model || '').trim()
+            || `API ${api.system_api_id}`;
+        const providerPrefix = api.provider_alias ? `[${api.provider_alias}] ` : '';
+        const languages = Array.isArray(api.applicable_languages) && api.applicable_languages.length > 0
+            ? ` (${api.applicable_languages.join(', ')})`
+            : '';
+        const pricing = (!hidePricingDescription && api.pricing_description)
+            ? ` | ${api.pricing_description}`
+            : '';
+        return `${providerPrefix}${apiName}${languages}${pricing}`;
+    };
+
     return (
         <div className={`flex items-center gap-2 ${className}`}>
 
@@ -97,9 +112,7 @@ const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", class
                       <option value="" disabled>{tUI('选择 API...', 'Select API...')}</option>
                 {apiList.map((api, index) => (
                     <option key={`${api.system_api_id}-${index}`} value={api.system_api_id}>
-
-                        {api.provider_alias ? `[${api.provider_alias}] ` : ""}{api.alias || (api.system_api_model || api.system_api_name || "API " + api.system_api_id)}{api.applicable_languages && api.applicable_languages.length > 0 ? " (" + api.applicable_languages.join(", ") + ")" : ""}{(!hidePricingDescription && api.pricing_description) ? " | " + api.pricing_description : ""}
-
+                        {formatApiOptionLabel(api)}
                     </option>
                 ))}
             </select>
