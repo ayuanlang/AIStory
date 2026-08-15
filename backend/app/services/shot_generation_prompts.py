@@ -501,9 +501,12 @@ def _build_scene_subject_image_prompts_cn_section(
     *,
     scene_id: Optional[int] = None,
 ) -> str:
-    """Inject ENV-only generation_prompt_cn for scene-linked environments.
+    """Inject main-ENV prompts for scene-linked environments.
 
-    Storyboard optical anchoring needs environment CN prompts only.
+    A scene may use a view/state derivative, but its optical source is the
+    derivative's main environment.  Inject that main ENV prompt and retain the
+    selected derivative -> main ENV mapping so the storyboard model knows which
+    view/state is actually in use.
     CHAR/PROP image prompts are intentionally excluded from this injection.
     """
     if not subject_match_keys:
@@ -521,37 +524,101 @@ def _build_scene_subject_image_prompts_cn_section(
                 return True
         return False
 
-    matched_entities = [
+    environment_entities = [
         ent for ent in (project_entities or [])
         if not bool(getattr(ent, "is_deleted", False))
         and _normalize_subject_entity_type(getattr(ent, "type", None)) == "environment"
-        and _entity_matches_subject_keys(ent)
-        and str(getattr(ent, "generation_prompt_cn", None) or "").strip()
+    ]
+    matched_entities = [
+        ent for ent in environment_entities
+        if _entity_matches_subject_keys(ent)
     ]
     matched_entities.sort(key=lambda ent: int(getattr(ent, "id", 0) or 0))
+
+    def _entity_name_keys(ent: Any) -> set:
+        keys: set = set()
+        for value in (getattr(ent, "name", None), getattr(ent, "name_en", None)):
+            keys.update(subject_compare_key_variants(value))
+        return keys
+
+    def _dependency_names(value: Any) -> List[str]:
+        """Extract ENV names from stored dependency references without guessing."""
+        names: List[str] = []
+        if isinstance(value, str):
+            cleaned = normalize_entity_token(value)
+            if cleaned:
+                tagged = re.match(r"(?i)^ENV\s*:\s*\[\s*(.+?)\s*\]$", cleaned)
+                names.append((tagged.group(1) if tagged else cleaned).strip())
+        elif isinstance(value, dict):
+            for key in (
+                "name",
+                "name_zh",
+                "name_en",
+                "entity_name",
+                "reference_env",
+                "base_name",
+                "derivative_base_zh",
+                "derivative_base_en",
+            ):
+                if value.get(key):
+                    names.extend(_dependency_names(value[key]))
+        elif isinstance(value, (list, tuple, set)):
+            for item in value:
+                names.extend(_dependency_names(item))
+        return names
+
+    def _find_main_environment(ent: Any) -> Optional[Any]:
+        """Resolve an ENV derivative's declared main ENV from its dependency fields."""
+        candidates = _dependency_names(getattr(ent, "visual_dependencies", None))
+        candidates.extend(_dependency_names(getattr(ent, "base_name_en", None)))
+        strategy = getattr(ent, "dependency_strategy", None)
+        candidates.extend(_dependency_names(strategy))
+        custom_attributes = getattr(ent, "custom_attributes", None)
+        candidates.extend(_dependency_names(custom_attributes))
+        for candidate in candidates:
+            candidate_keys = subject_compare_key_variants(candidate)
+            if not candidate_keys:
+                continue
+            for possible_main in environment_entities:
+                if possible_main is ent:
+                    continue
+                if candidate_keys.intersection(_entity_name_keys(possible_main)):
+                    return possible_main
+        return None
 
     prompt_lines: List[str] = []
     seen_refs: set = set()
     for ent in matched_entities:
-        canonical_name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
-        if not canonical_name:
+        used_env_name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
+        if not used_env_name:
             continue
-        subject_ref = f"ENV:[{canonical_name}]"
-        if subject_ref in seen_refs:
+        used_env_ref = f"ENV:[{used_env_name}]"
+        if used_env_ref in seen_refs:
             continue
-        seen_refs.add(subject_ref)
-        prompt_cn = re.sub(r"\s+", " ", str(getattr(ent, "generation_prompt_cn", None) or "")).strip()
+        seen_refs.add(used_env_ref)
+
+        main_ent = _find_main_environment(ent)
+        main_ent = main_ent or ent
+        main_env_name = str(
+            getattr(main_ent, "name", None) or getattr(main_ent, "name_en", None) or ""
+        ).strip()
+        prompt_cn = re.sub(
+            r"\s+", " ", str(getattr(main_ent, "generation_prompt_cn", None) or "")
+        ).strip()
         if not prompt_cn:
             continue
-            
-        dependency_info = ""
-        visual_deps = getattr(ent, "visual_dependencies", [])
-        if visual_deps and isinstance(visual_deps, list) and len(visual_deps) > 0:
-            dependency_info = f" | 此环境有依赖，依赖环境为: {', '.join(str(d) for d in visual_deps)}"
-        elif getattr(ent, "base_name_en", None):
-            dependency_info = f" | 此环境有依赖，依赖环境为: {getattr(ent, 'base_name_en', '')}"
-            
-        prompt_lines.append(f"- {subject_ref} | generation_prompt_cn={prompt_cn}{dependency_info}")
+
+        if main_ent is ent:
+            prompt_lines.append(
+                f"- 当前场景环境={used_env_ref}（主环境） | "
+                f"主环境 generation_prompt_cn={prompt_cn}"
+            )
+        else:
+            prompt_lines.append(
+                f"- 当前场景使用的衍生环境={used_env_ref} | "
+                f"对应主环境=ENV:[{main_env_name}] | "
+                f"主环境 generation_prompt_cn={prompt_cn}"
+            )
 
     if not prompt_lines:
         logger.info(
@@ -563,13 +630,20 @@ def _build_scene_subject_image_prompts_cn_section(
 
     body = (
         "# Scene Subject Image Prompts (CN)\n"
-        "Authoritative Chinese image-generation prompts for scene-linked ENVIRONMENT assets only "
-        "(ENV generation_prompt_cn for optical anchoring). "
+        "Authoritative Chinese image-generation prompts for the MAIN ENVIRONMENT assets that "
+        "scene-linked ENVIRONMENT assets depend on (main-ENV generation_prompt_cn for optical anchoring). "
+        "Each row explicitly identifies the scene-used ENV derivative and its corresponding main ENV; "
+        "preserve that derivative's declared view/state while using only the mapped main ENV prompt as its visual base. "
+        "For every shot using a derivative ENV, design lighting direction, light color, color palette, and "
+        "background-object micro-motion from that derivative's corresponding directional panel in the mapped "
+        "main ENV four-panel reference, together with the derivative's declared visible-content boundary. "
+        "Do not invent lights, colors, background objects, or background actions outside those two sources; "
+        "background micro-motion must be physically motivated by the visible object's material/state and the "
+        "shot's established environment. "
         "Do NOT expect CHAR/PROP prompts here — character/prop appearance is reference-image bound downstream. "
         "Translate ENV optics into dynamic video language; do not paste static framing/canvas instructions verbatim. "
         "Entity naming authority remains Scene Subject Index. "
-        "Same-main-environment matching (shot merge): 所属主环境= / named main-ENV 四向拼图 / 依赖环境为: "
-        "may prove the same main ENV family; any one conclusive match with ENV name or Subject Index is sufficient to merge.\n"
+        "Do not replace the used derivative with its main ENV name in shot output.\n"
         + "\n".join(prompt_lines)
         + "\n"
     )
