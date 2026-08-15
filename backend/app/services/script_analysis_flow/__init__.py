@@ -79,7 +79,7 @@ ENTITY_PROFILE_END_PATTERN = re.compile(
     re.IGNORECASE,
 )
 LEGACY_ENTITY_PROFILE_HEADER_PATTERN = re.compile(r"【角色设定】")
-LEGACY_BEAT_LINE_PATTERN = re.compile(r"(?m)^\s*-\s*Beat\s+(\d+)\b")
+LEGACY_BEAT_LINE_PATTERN = re.compile(r"(?m)^\s*[-~]\s*Beat\s+(\d+)\b")
 LEGACY_MAIN_ENV_HEADER_PATTERN = re.compile(r"【主环境】")
 LEGACY_ENV_BLOCK_END_PATTERN = re.compile(
     r"(?=\[BEAT_START|"
@@ -95,7 +95,7 @@ SCENE_TRANSITION_BLOCK_END_PATTERN = re.compile(
     r"(?=\[BEAT_START|"
     r"\[SCENE_END|"
     r"【对白拆句|"
-    r"^\s*-\s*Beat\s+\d+\b)",
+    r"^\s*[-~]\s*Beat\s+\d+\b)",
     re.IGNORECASE | re.MULTILINE,
 )
 BLOCK_MARKER_LINE_PATTERN = re.compile(
@@ -1380,7 +1380,7 @@ def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
 
 
 def extract_legacy_beat_sections_from_scene_text(scene_text: str) -> str:
-    """Wrap legacy `- Beat N` sections with BEAT_START/END when markers are absent."""
+    """Wrap legacy `- Beat N` / `~ Beat N` sections with BEAT_START/END when markers are absent."""
     text = str(scene_text or "")
     matches = list(LEGACY_BEAT_LINE_PATTERN.finditer(text))
     if not matches:
@@ -1422,7 +1422,7 @@ def extract_scene_name_value_from_scene_text(scene_text: str) -> str:
 def extract_beat_blocks_from_scene_text(scene_text: str) -> str:
     """
     Extract only `[BEAT_START:…]`…`[BEAT_END:…]` blocks from a Stage 1 scene body.
-    Falls back to legacy `- Beat N` sections when markers are missing.
+    Falls back to legacy `- Beat N` / `~ Beat N` sections when markers are missing.
     """
     text = str(scene_text or "")
     if not text.strip():
@@ -1490,7 +1490,7 @@ def resolve_scene_beats_body_for_stage_2_2(
     """
     Resolve Stage 2.2 Beat body for one scene.
 
-    Prefer `[BEAT_START]/[BEAT_END]` (or legacy `- Beat N`) extraction.
+    Prefer `[BEAT_START]/[BEAT_END]` (or legacy `- Beat N` / `~ Beat N`) extraction.
     Fallback: when split fails / body shorter than `min_chars`, use the entire scene text.
     Returns `(body_text, used_scene_fallback)`.
     Raises SceneBeatsTooShortError only when even the full scene body is too short.

@@ -849,10 +849,10 @@ const parseSceneUnitsFromScriptMarkersText = (scriptText) => {
     return units;
 };
 
-/** Extract legacy `- Beat N` sections and wrap with BEAT_START/END. */
+/** Extract legacy `- Beat N` / `~ Beat N` sections and wrap with BEAT_START/END. */
 const extractLegacyBeatSectionsFromSceneText = (sceneText) => {
     const text = String(sceneText || '');
-    const beatLineRe = /^\s*-\s*Beat\s+(\d+)\b/gm;
+    const beatLineRe = /^\s*[-~]\s*Beat\s+(\d+)\b/gm;
     const matches = [];
     let match;
     while ((match = beatLineRe.exec(text)) !== null) {

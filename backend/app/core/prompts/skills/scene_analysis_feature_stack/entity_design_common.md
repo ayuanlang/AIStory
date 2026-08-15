@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-08-14 15:55:00 +08:00
+# Prompt Updated At: 2026-08-15 11:35:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -74,7 +74,7 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 
 **Character 真人定妆豁免门（先读）**：当 §1.6=真人且实体为单人定妆/选角四视图（非群演簇）时——`generation_prompt_cn` 的光影/大光比/Key:Fill/色温/rim/亮暗分区**全部**以 `entity_design_character.md` §2.0/§2.3 为准（光线 ≤1 句；rationale 只写 `dependency_strategy.logic`）；下文凡标「Env/Poster/Prop」的光学条款**不套用**于该 prompt。三维/二维 Character 见 character §2.5/§2.6。群演簇见 character §2.4。
 
-- **Clean Plate**：生图词只写可见物理实体；去不可见专名、角色名、人称。**Environment 主/衍生 = 纯空镜（最高硬约束）**：`generation_prompt_cn` / `anchor_description` / `negative_prompt_en`**一律无人**——**禁止**具名或匿名人物、人称、群演、人影、手足肩背、站位/姿态/视线/对白/持握/交互痕迹；**亦禁止**「给谁用、干什么」的人物用途句（如「林月审讯区」「陈医生坐诊位」「双人对峙会商」「读某某正面口型」「供主角逃窜」等）。上游 `purpose`/`activity_space`/`activity_fit`/`plot_role`/触发原因里的角色与剧情功能**只作内部规划参考**，成稿只保留可拍的空镜结构（净空区/动线/出入口/座次家具几何），**不得**原样或改写进生图词。规模感优先非人格痕迹（灯火/车流虚影等，且须匹配时地阶层）。**海报**可按依赖整合 CHAR/PROP/ENV 人物。Index 角色不得入 `environments[]`。
+- **Clean Plate**：生图词只写可见物理实体；去不可见专名、角色名、人称。**Environment 主/衍生 = 纯空镜（最高硬约束）**：`generation_prompt_cn` / `anchor_description` / `negative_prompt_en`**一律无人**——**禁止**具名或匿名人物、人称、群演、人影、手足肩背、站位/姿态/视线/对白/持握/交互痕迹；**亦禁止**「给谁用、干什么」的人物用途句（如「林月审讯区」「陈医生坐诊位」「双人对峙会商」「读某某正面口型」「供主角逃窜」等）。上游 `purpose`/`activity_space`/`activity_fit`/`plot_role`/触发原因/建置与位置规划里的角色与剧情功能**只作内部规划参考**（须分析建置以保证预留剧情净空/动线/槽位），成稿只保留可拍的空镜结构（净空区/动线/出入口/座次家具几何），**不得**原样或改写进生图词，**不得出现任何角色名**。规模感优先非人格痕迹（灯火/车流虚影等，且须匹配时地阶层）。**海报**可按依赖整合 CHAR/PROP/ENV 人物。Index 角色不得入 `environments[]`。**Prop 生图词**同禁角色名/手部持握（宿主仅 Index `host_character` 机读，不进 `generation_prompt_cn`）。
 - **字段显式回写**：`generation_prompt_cn` 吸收结构字段有效属性为视觉词；`generation_prompt_en=""`；`description_cn=""`。`name` 仅 JSON 原样保留；名称含可见类别信息时只吸收可见语义。
 - **实体物件可视性核验（最高；描述前强制）**：对任一实体写 `generation_prompt_cn` / 角色【衣着】配饰落点时，须先核「该细节在对应视图是否可见」——①道具四视图：正面格只强化正面可读细节，背面格写背面结构，侧面写厚度/侧缘，禁正面铭文出现在背视面板；②角色四视图+配饰：仅**不可离身**升格配饰（CHAR `accessory_props`）与未升格纯装饰按 Index `accessory_mount`/`wear_side` 落位——正面挂件出现在正视/¾，背面挂件出现在背视，侧面挂件在对应侧视可读；可离身升格 PROP 不进角色生图词；③ENV 四向/衍生：**扇区立面**的可见面写入对应 `{N}度…` 衍生的 `anchor_description` 与该宫格成稿；立面不可见面严禁写入该衍生锚点/生图词（禁对向串写立面、禁机位后方冒充可见）；**中区地面家具（茶几/矮几/中央桌/沙发）四格守恒**——可见面仍按格查表，但实体不得因换角从成稿消失（全挡须显式遮挡，禁静默删除；90/270 不得把矮几当成 0° 邻向立面省略）；**输入该向内容=该向正面面对的围合立面，四方正交，禁偏斜/墙角主构图**；④遮挡/Clean Plate：不写镜头外、板外、被遮挡才「应存在」的细节当成本视图可见事实。缺挂载/朝向上游证据→标缺口，禁臆造可见面。
 - **Subject Index 全要素零缺失回写（最高）**：每条实体 Index 已写明的**任何要素**须在 `generation_prompt_cn` 逐项体现为可检索视觉描述；不可只写在 `appearance_cn`/`clothing`/`dependency_strategy.logic` 而 prompt 缺项。

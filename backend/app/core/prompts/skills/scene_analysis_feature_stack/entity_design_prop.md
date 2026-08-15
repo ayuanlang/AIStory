@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_prop.md
-# Prompt Updated At: 2026-08-14 15:55:00 +08:00
+# Prompt Updated At: 2026-08-15 11:35:00 +08:00
 
 # Skill 1-3: 资产设计 · 道具专属合同
 
@@ -19,7 +19,7 @@
 **最高优先级：`props` 全量覆盖上游 prop Subject；缺漏即废弃重写。**
 
 1. **World Bible**：读 Project Context + Visual Backfill；按 common §1.6 判定渲染风格 → 真人/默认 §4.1｜三维 §4.2｜二维 §4.3。题材标签不得单独触发真人专属条款。
-2. **美术指导**：在 Index 只读前提下补材质/结构/工艺/状态/可见文字/**相对尺度**；转译 `generation_prompt_cn`（尺度须同步进 `generation_prompt_cn` 与 `anchor_description`；`description_cn` 恒 `""`）。
+2. **美术指导**：在 Index 只读前提下补材质/结构/工艺/状态/可见文字/**相对尺度**；转译 `generation_prompt_cn`（尺度须同步进 `generation_prompt_cn` 与 `anchor_description`；`description_cn` 恒 `""`）。**建置剧情分析（强制）**：据 Index `purpose`/`placement`/状态键（及注入中若有的 Stage 1 建置）理解该道具后续签署/翻面/递交/桌面操作等剧情，预留可读面与操作净空语义；成稿只写物件自身形制/朝向面/尺度，**禁止出现角色名或「给某某用」**（空镜/静物逻辑）；宿主只留 `host_character` 于 logic/Index，不进生图词。
 3. **封装 TD**：仅 `prop` → `props[]`；禁止新增/拆分/合并/重命名；缺口标「上游待补（回流 Stage 2）」；错分/遗漏/重复则废弃重算。
 
 ---
