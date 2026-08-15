@@ -21,10 +21,27 @@ services:
     env: python
     region: oregon
     healthCheckPath: /healthz
+    # Dashboard Build Command wins if customized. If logs still show pip 21.2.3,
+    # paste this block into Settings → Build Command (Python 3.10.0 ships that
+    # pip; it does not retry PyPI HTTP 502s on wheel downloads).
     buildCommand: |
       cd backend
-      python -m pip install --upgrade pip
-      pip install --no-cache-dir -r requirements.txt
+      echo "[build] $(python -V 2>&1); $(python -m pip --version 2>&1)"
+      n=0
+      until python -m pip install --upgrade "pip>=24.0"; do
+        n=$((n+1))
+        if [ "$n" -ge 5 ]; then echo "[build] pip upgrade failed after 5 attempts"; exit 1; fi
+        echo "[build] pip upgrade failed (attempt $n), retrying..."
+        sleep $((n * 8))
+      done
+      echo "[build] $(python -m pip --version)"
+      n=0
+      until python -m pip install --retries 10 --timeout 60 --no-cache-dir -r requirements.txt; do
+        n=$((n+1))
+        if [ "$n" -ge 5 ]; then echo "[build] pip install failed after 5 attempts"; exit 1; fi
+        echo "[build] pip install failed (attempt $n), retrying..."
+        sleep $((n * 10))
+      done
     # MUST match Dashboard Start Command exactly (Dashboard wins if customized).
     # BAD (causes queue-in-web + max_requests=0 when env also wrong):
     #   cd backend; exec gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --workers 1 --timeout 600 --keep-alive 15
@@ -35,6 +52,11 @@ services:
         value: 3.10.0
       - key: PYTHONUNBUFFERED
         value: "1"
+      # Transient PyPI 502s (files.pythonhosted.org) during wheel download.
+      - key: PIP_RETRIES
+        value: "10"
+      - key: PIP_DEFAULT_TIMEOUT
+        value: "60"
       # Keep Dashboard-managed; do not regenerate on Blueprint sync (invalidates JWTs).
       - key: SECRET_KEY
         sync: false
@@ -198,8 +220,22 @@ services:
     region: oregon
     buildCommand: |
       cd backend
-      python -m pip install --upgrade pip
-      pip install --no-cache-dir -r requirements.txt
+      echo "[build] $(python -V 2>&1); $(python -m pip --version 2>&1)"
+      n=0
+      until python -m pip install --upgrade "pip>=24.0"; do
+        n=$((n+1))
+        if [ "$n" -ge 5 ]; then echo "[build] pip upgrade failed after 5 attempts"; exit 1; fi
+        echo "[build] pip upgrade failed (attempt $n), retrying..."
+        sleep $((n * 8))
+      done
+      echo "[build] $(python -m pip --version)"
+      n=0
+      until python -m pip install --retries 10 --timeout 60 --no-cache-dir -r requirements.txt; do
+        n=$((n+1))
+        if [ "$n" -ge 5 ]; then echo "[build] pip install failed after 5 attempts"; exit 1; fi
+        echo "[build] pip install failed (attempt $n), retrying..."
+        sleep $((n * 10))
+      done
     startCommand: |
       cd backend
       echo "[boot] generation worker starting"
@@ -211,6 +247,10 @@ services:
         value: 3.10.0
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: PIP_RETRIES
+        value: "10"
+      - key: PIP_DEFAULT_TIMEOUT
+        value: "60"
       - key: WEB_CONCURRENCY
         value: "1"
       - key: RUN_DB_BOOTSTRAP_ON_START
