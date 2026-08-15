@@ -13,6 +13,7 @@ def run():
         ("user_name", "VARCHAR"),
         ("project_id", "INTEGER"),
         ("action", "VARCHAR"),
+        ("charged_amount", "INTEGER"),
     ]
 
     inspector = inspect(engine)

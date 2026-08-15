@@ -474,8 +474,38 @@ class LLMService:
                 error_components.append(f"Summary: {payload['human_summary']}")
                 
             error_msg = " | ".join(error_components) if error_components else None
-                
+
             latency_ms = payload.get("latency_ms")
+            started_ms = None
+            for src in (cfg_raw, trace_ctx, payload):
+                if not isinstance(src, dict):
+                    continue
+                raw_started = src.get("__llm_started_at_ms")
+                if raw_started in (None, ""):
+                    continue
+                try:
+                    started_ms = int(raw_started)
+                    break
+                except Exception:
+                    continue
+            if tag == "LLM_REQUEST" and started_ms is None:
+                started_ms = int(time.time() * 1000)
+                if isinstance(cfg_raw, dict):
+                    cfg_raw["__llm_started_at_ms"] = started_ms
+                if isinstance(trace_ctx, dict):
+                    trace_ctx["__llm_started_at_ms"] = started_ms
+            if latency_ms is None and started_ms is not None and tag != "LLM_REQUEST":
+                try:
+                    latency_ms = max(0, int(time.time() * 1000) - int(started_ms))
+                except Exception:
+                    latency_ms = None
+
+            charged_amount = payload.get("charged_amount")
+            if charged_amount is not None:
+                try:
+                    charged_amount = int(charged_amount)
+                except Exception:
+                    charged_amount = None
             
             # If response is empty but there's a response_text or status_code, build a pseudo-response object
             if not response_json and ("response_text" in payload or "status_code" in payload):
@@ -511,6 +541,19 @@ class LLMService:
                         log_entry.error_msg = str(error_msg)
                     if latency_ms is not None:
                         log_entry.latency_ms = latency_ms
+                    elif log_entry.latency_ms is None and log_entry.timestamp:
+                        try:
+                            from dateutil.parser import isoparse
+                            from app.core.time_utils import BEIJING_TZ, now_bj
+                            start_dt = isoparse(str(log_entry.timestamp))
+                            if start_dt.tzinfo is None:
+                                start_dt = start_dt.replace(tzinfo=BEIJING_TZ)
+                            latency_ms = max(0, int((now_bj() - start_dt).total_seconds() * 1000))
+                            log_entry.latency_ms = latency_ms
+                        except Exception:
+                            pass
+                    if charged_amount is not None:
+                        log_entry.charged_amount = charged_amount
                     if user_id: log_entry.user_id = user_id
                     if user_name: log_entry.user_name = user_name
                     if project_id: log_entry.project_id = project_id
@@ -525,6 +568,7 @@ class LLMService:
                         response_json=response_json,
                         error_msg=str(error_msg) if error_msg else None,
                         latency_ms=latency_ms,
+                        charged_amount=charged_amount,
                         request_id=request_id,
                         user_id=user_id,
                         user_name=user_name,
@@ -2289,6 +2333,10 @@ class LLMService:
 
         extra_config = dict(config.get("config", {}) or {})
         extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
+        extra_config.setdefault("__llm_started_at_ms", int(time.time() * 1000))
+        if not extra_config.get("request_id"):
+            import uuid
+            extra_config["request_id"] = uuid.uuid4().hex[:12]
         provider = extra_config.get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
 
         with self._llm_log_trace(extra_config):
@@ -2329,6 +2377,7 @@ class LLMService:
                     "finish_reason": finish_reason,
                     "token_limit_hints": token_limit_hints,
                     "extraction_diagnostics": extraction_diagnostics,
+                    "request_id": extra_config.get("request_id"),
                 }
             except AmbiguousLLMTransportError:
                 raise
@@ -2583,6 +2632,7 @@ class LLMService:
             extra_config = {}
         if not extra_config.get("request_id"):
             extra_config["request_id"] = uuid.uuid4().hex[:12]
+        extra_config.setdefault("__llm_started_at_ms", int(time.time() * 1000))
 
         with self._llm_log_trace(extra_config):
             try:
@@ -2634,6 +2684,7 @@ class LLMService:
                 "content": content,
                 "usage": usage,
                 "finish_reason": finish_reason,
+                "request_id": extra_config.get("request_id"),
             }
 
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -2674,6 +2725,8 @@ class LLMService:
                 result["plan"] = []
             result["usage"] = usage
             result["finish_reason"] = finish_reason
+            if extra_config and extra_config.get("request_id"):
+                result.setdefault("request_id", extra_config.get("request_id"))
             return result
 
         logger.info("[_call_openai_compatible] no JSON plan found, returning as plain reply | content_len=%d", len(clean_content))
@@ -2683,6 +2736,7 @@ class LLMService:
             "plan": [],
             "usage": usage,
             "finish_reason": finish_reason,
+            "request_id": (extra_config or {}).get("request_id"),
         }
 
     def _try_parse_json_plan(self, text: str) -> Optional[Dict[str, Any]]:
@@ -2840,6 +2894,7 @@ class LLMService:
             extra_config = {}
         if not extra_config.get("request_id"):
             extra_config["request_id"] = uuid.uuid4().hex[:12]
+        extra_config.setdefault("__llm_started_at_ms", int(time.time() * 1000))
         original_base_url = base_url
         if not base_url:
             base_url = "https://api.openai.com/v1"  # Default to OpenAI if not set
@@ -3376,6 +3431,7 @@ class LLMService:
             extra_config = {}
         if not extra_config.get("request_id"):
             extra_config["request_id"] = uuid.uuid4().hex[:12]
+        extra_config.setdefault("__llm_started_at_ms", int(time.time() * 1000))
         original_base_url = base_url
         if not base_url:
             base_url = "https://api.openai.com/v1"

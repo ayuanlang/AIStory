@@ -5058,6 +5058,17 @@ class BillingService:
             },
             context=f"settle:{res_task_type}:delta={delta}",
         )
+        try:
+            from app.services.model_invocation_billing import attach_charged_amount_to_llm_log
+            attach_charged_amount_to_llm_log(
+                db,
+                amount=actual_cost,
+                details={**res_details_dict, **details},
+                user_id=user.id,
+                model=settle_model,
+            )
+        except Exception:
+            pass
 
         db.commit()
         if settlement_tx:
@@ -5296,6 +5307,17 @@ class BillingService:
             },
             context=f"deduct:{task_type}",
         )
+        try:
+            from app.services.model_invocation_billing import attach_charged_amount_to_llm_log
+            attach_charged_amount_to_llm_log(
+                db,
+                amount=final_cost,
+                details=tx_details,
+                user_id=user_id,
+                model=resolved_model,
+            )
+        except Exception:
+            pass
         db.commit()
         db.refresh(transaction)
         return transaction

@@ -220,6 +220,13 @@ def test_model_invocation_billing_service():
     details = _build_standard_billing_details(item="test", usage_payload={"prompt_tokens": 1, "completion_tokens": 2})
     assert details["item"] == "test"
     assert details["total_tokens"] == 3
+    routed = _build_standard_billing_details(
+        item="test",
+        usage_payload={"prompt_tokens": 1, "completion_tokens": 2},
+        routing_payload={"request_id": "abc123", "provider": "grsai", "model": "demo"},
+    )
+    assert routed["request_id"] == "abc123"
+    assert routed["provider"] == "grsai"
 
 
 def test_asset_review_generation_schema_modules():

@@ -224,6 +224,11 @@ def get_llm_logs(
     if tag:
         query = query.filter(LLMCallLog.tag == tag)
     logs = query.offset(offset).limit(limit).all()
+    try:
+        from app.services.model_invocation_billing import enrich_llm_logs_charged_amount
+        enrich_llm_logs_charged_amount(db, logs)
+    except Exception:
+        pass
     return logs
 
 

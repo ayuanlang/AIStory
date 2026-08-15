@@ -4,15 +4,135 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from datetime import timedelta
+from typing import Any, Dict, Iterable, List, Optional
 
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
+from app.core.time_utils import now_bj
 from app.models.all_models import User
 from app.services.billing_service import billing_service
 
 logger = logging.getLogger("api_logger")
+
+
+def attach_charged_amount_to_llm_log(
+    db: Session,
+    *,
+    amount: int,
+    details: Optional[Dict[str, Any]] = None,
+    user_id: Optional[int] = None,
+    model: Optional[str] = None,
+) -> None:
+    """Write settled user credits onto the matching llm_call_logs row."""
+    try:
+        from app.models.all_models import LLMCallLog
+
+        payload = details if isinstance(details, dict) else {}
+        request_id = str(payload.get("request_id") or "").strip() or None
+        project_id = payload.get("project_id")
+        try:
+            amount_int = int(max(0, amount or 0))
+        except Exception:
+            return
+
+        log_entry = None
+        if request_id:
+            log_entry = (
+                db.query(LLMCallLog)
+                .filter(LLMCallLog.request_id == request_id)
+                .order_by(LLMCallLog.id.desc())
+                .first()
+            )
+        if log_entry is None and user_id:
+            query = db.query(LLMCallLog).filter(
+                LLMCallLog.user_id == int(user_id),
+                LLMCallLog.charged_amount.is_(None),
+            )
+            if model:
+                query = query.filter(LLMCallLog.model == str(model))
+            if project_id not in (None, ""):
+                try:
+                    query = query.filter(LLMCallLog.project_id == int(project_id))
+                except Exception:
+                    pass
+            cutoff = (now_bj() - timedelta(minutes=15)).isoformat()
+            query = query.filter(LLMCallLog.timestamp >= cutoff)
+            log_entry = query.order_by(LLMCallLog.id.desc()).first()
+        if log_entry is not None:
+            log_entry.charged_amount = amount_int
+    except Exception as exc:
+        logger.warning("Failed to attach charged_amount to LLMCallLog: %s", exc)
+
+
+def enrich_llm_logs_charged_amount(db: Session, logs: Iterable[Any]) -> List[Any]:
+    """Fill missing charged_amount on admin log rows from recent billing actions."""
+    rows = list(logs or [])
+    missing = [row for row in rows if getattr(row, "charged_amount", None) is None]
+    if not missing:
+        return rows
+    try:
+        from app.models.all_models import TransactionAction
+
+        user_ids = {int(row.user_id) for row in missing if row.user_id}
+        if not user_ids:
+            return rows
+        timestamps = [str(row.timestamp or "") for row in missing if row.timestamp]
+        if not timestamps:
+            return rows
+        min_ts = min(timestamps)
+        max_ts = (now_bj() + timedelta(minutes=1)).isoformat()
+        try:
+            from dateutil.parser import isoparse
+            from app.core.time_utils import BEIJING_TZ
+            latest = isoparse(max(timestamps))
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=BEIJING_TZ)
+            max_ts = (latest + timedelta(minutes=15)).isoformat()
+        except Exception:
+            pass
+        actions = (
+            db.query(TransactionAction)
+            .filter(
+                TransactionAction.user_id.in_(user_ids),
+                TransactionAction.stage.in_(("SETTLED", "DEDUCTED")),
+                TransactionAction.created_at >= min_ts,
+                TransactionAction.created_at <= max_ts,
+            )
+            .order_by(TransactionAction.id.desc())
+            .limit(800)
+            .all()
+        )
+        unused = list(actions)
+        for row in missing:
+            if not row.user_id:
+                continue
+            best = None
+            best_idx = -1
+            for idx, action in enumerate(unused):
+                if int(action.user_id or 0) != int(row.user_id):
+                    continue
+                action_model = str(action.model or "").strip()
+                row_model = str(row.model or "").strip()
+                if action_model and row_model and action_model != row_model:
+                    continue
+                if row.project_id and action.project_id and int(action.project_id) != int(row.project_id):
+                    continue
+                best = action
+                best_idx = idx
+                break
+            if best is None:
+                continue
+            amount = best.actual_cost if best.stage == "SETTLED" else best.charged_amount
+            try:
+                row.charged_amount = int(max(0, amount or 0))
+            except Exception:
+                continue
+            unused.pop(best_idx)
+    except Exception as exc:
+        logger.warning("Failed to enrich LLM logs with charged_amount: %s", exc)
+    return rows
 
 
 def _extract_llm_routing_metadata(payload: Any) -> Dict[str, Any]:
@@ -54,6 +174,13 @@ def _extract_llm_routing_metadata(payload: Any) -> Dict[str, Any]:
         metadata["system_api_id"] = system_api_id
     if smart_meta:
         metadata["smart_routing"] = smart_meta
+    request_id = str(
+        routing_meta.get("request_id")
+        or payload.get("request_id")
+        or ""
+    ).strip()
+    if request_id:
+        metadata["request_id"] = request_id
     return metadata
 
 

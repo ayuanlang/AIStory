@@ -147,6 +147,7 @@ class LLMCallLog(Base):
     response_json = Column(Text, nullable=True)
     error_msg = Column(Text, nullable=True)
     latency_ms = Column(Integer, nullable=True)
+    charged_amount = Column(Integer, nullable=True)
     request_id = Column(String, index=True, nullable=True)
     timestamp = Column(String, default=now_bj_iso)
 

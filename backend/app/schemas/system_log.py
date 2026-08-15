@@ -93,6 +93,12 @@ class LLMCallLogOut(BaseModel):
     response_json: Optional[str]
     error_msg: Optional[str]
     latency_ms: Optional[int]
+    charged_amount: Optional[int] = None
+    user_id: Optional[int] = None
+    user_name: Optional[str] = None
+    project_id: Optional[int] = None
+    action: Optional[str] = None
+    request_id: Optional[str] = None
     timestamp: str
 
     class Config:

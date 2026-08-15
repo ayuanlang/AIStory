@@ -19,7 +19,7 @@
 **最高优先级：`props` 全量覆盖上游 prop Subject；缺漏即废弃重写。**
 
 1. **World Bible**：读 Project Context + Visual Backfill；按 common §1.6 判定渲染风格 → 真人/默认 §4.1｜三维 §4.2｜二维 §4.3。题材标签不得单独触发真人专属条款。
-2. **美术指导**：在 Index 只读前提下补材质/结构/工艺/状态/可见文字/**相对尺度**；转译 `generation_prompt_cn`（尺度须同步进 `generation_prompt_cn` 与 `anchor_description`；`description_cn` 恒 `""`）。**基本定位（读 Index `basic_positioning:`）**：剧情身份/信物属性只进 logic；**文学体量+气质**（掌心/温润精致/冷峻金属）须转译为材质完成度与体量气质，与 `relative_scale` 不矛盾。**外形四维**：`appearance`/`form`/`material`/`style`/`social_status`/`purpose` 凡已写须进生图或 logic（地位定工艺档：传家/御赐≠地摊日用；风格定材质气质；作用只进 logic 的功能句，生图写形制）。**建置剧情分析（强制）**：据 Index `purpose`/`placement`/状态键（及注入中若有的 Stage 1 建置）理解该道具后续签署/翻面/递交/桌面操作等剧情，预留可读面与操作净空语义；成稿只写物件自身形制/朝向面/尺度，**禁止出现角色名或「给某某用」**（空镜/静物逻辑）；宿主只留 `host_character` 于 logic/Index，不进生图词。
+2. **美术指导**：在 Index 只读前提下补材质/结构/工艺/状态/可见文字/**相对尺度**；转译 `generation_prompt_cn`（尺度须同步进 `generation_prompt_cn` 与 `anchor_description`；`description_cn` 恒 `""`）。**基本定位（读 Index `basic_positioning:`）**：剧情身份/信物属性只进 logic；**文学体量+气质**（掌心/温润精致/冷峻金属）须转译为材质完成度与体量气质，与 `relative_scale` 不矛盾。**外形四维**：`appearance`/`form`/`material`/`style`/`social_status`/`purpose` 凡已写须进生图或 logic（地位定工艺档：传家/御赐≠日常随身；风格定材质气质；作用只进 logic 的功能句，生图写形制）。**建置剧情分析（强制）**：据 Index `purpose`/`placement`/状态键（及注入中若有的 Stage 1 建置）理解该道具后续签署/翻面/递交/桌面操作等剧情，预留可读面与操作净空语义；成稿只写物件自身形制/朝向面/尺度，**禁止出现角色名或「给某某用」**（空镜/静物逻辑）；宿主只留 `host_character` 于 logic/Index，不进生图词。
 3. **封装 TD**：仅 `prop` → `props[]`；禁止新增/拆分/合并/重命名；缺口标「上游待补（回流 Stage 2）」；错分/遗漏/重复则废弃重算。
 
 ---
