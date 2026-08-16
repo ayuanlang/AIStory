@@ -2505,7 +2505,7 @@ import {
 // RefineControl moved to components/RefineControl.jsx
 import { processPrompt } from '../../../lib/promptUtils';
 import SettingsPage from '../../Settings';
-import { confirmUiMessage, promptUiMessage, notifyUiMessage } from '../../../lib/uiMessage';
+import { confirmUiMessage } from '../../../lib/uiMessage';
 
 // Character Canon (Authoritative) generator (shared)
 
@@ -2701,6 +2701,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const appendAnalysisDetailLog = useCallback((message, type = 'info') => {
         const text = String(message || '').trim();
         if (!text) return;
+        const last = analysisDetailLogsRef.current[analysisDetailLogsRef.current.length - 1];
+        if (last && String(last.message || '').trim() === text) return;
         const entry = {
             id: `dl-${Date.now()}-${analysisDetailLogsRef.current.length}`,
             at: Date.now(),
@@ -2748,6 +2750,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         parentOnLogRef.current?.(businessMessage, type);
     }, [appendAnalysisDetailLog, t]);
+    const reportAnalysisPanelNotice = useCallback((message, type = 'info') => {
+        const text = String(message || '').trim();
+        if (!text) return;
+        appendAnalysisDetailLog(text, type);
+    }, [appendAnalysisDetailLog]);
     const functionApiConfigs = useFunctionApis('script_analysis');
     const [selectedScriptAnalysisApiId, setSelectedScriptAnalysisApiId] = useState(() => {
         return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
@@ -4034,6 +4041,40 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return new Date(num).toLocaleTimeString([], { hour12: false });
     }, []);
 
+    const analysisUnifiedProgressLog = useMemo(() => {
+        const historyItems = (Array.isArray(analysisFlowStatusHistory) ? analysisFlowStatusHistory : []).map((item, index) => {
+            const message = String(toBusinessHistoryMessage(item?.message) || item?.message || '').trim();
+            return {
+                id: item?.id || `h-${index}`,
+                at: Number(item?.createdAt || 0),
+                kind: 'history',
+                phase: item?.phase,
+                type: '',
+                message,
+                highlightHint: String(item?.highlightHint || '').trim(),
+                createdAt: Number(item?.createdAt || 0),
+                endedAt: hasAnalysisHistoryEndedAt(item) ? Number(item.endedAt) : 0,
+            };
+        });
+        const historyMessages = new Set(historyItems.map((item) => item.message).filter(Boolean));
+        const detailItems = (Array.isArray(analysisDetailLogs) ? analysisDetailLogs : [])
+            .map((item, index) => ({
+                id: item?.id || `d-${index}`,
+                at: Number(item?.at || 0),
+                kind: 'detail',
+                phase: '',
+                type: String(item?.type || 'info'),
+                message: String(item?.message || '').trim(),
+                highlightHint: '',
+                createdAt: Number(item?.at || 0),
+                endedAt: 0,
+            }))
+            .filter((item) => item.message && !historyMessages.has(item.message));
+        return [...historyItems, ...detailItems]
+            .filter((item) => item.message)
+            .sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0));
+    }, [analysisDetailLogs, analysisFlowStatusHistory, toBusinessHistoryMessage]);
+
     const finalizeAnalysisFlowHistoryForPhase = useCallback((phase, finalMessage = '') => {
         const targetPhase = String(phase || '').trim();
         if (!targetPhase) return;
@@ -4473,6 +4514,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return t(
                 '场景编排跳过：输入无 Beat 1，场景不对。请检查 Stage 1 成稿是否包含 Beat 1 / [BEAT_START:1]。',
                 'Scene orchestration skipped: no Beat 1 in input (invalid scene). Ensure Stage 1 output contains Beat 1 / [BEAT_START:1].'
+            );
+        }
+        if (
+            normalized.includes('script_optimization_project_visual_backfill_missing')
+            || (normalized.includes('project_visual_backfill') && normalized.includes('missing'))
+        ) {
+            return t(
+                '剧本统筹返回不完整（缺少全局风格收尾）。系统已自动整场重跑，并会再换备用 API 重跑一次。',
+                'Script coordination returned incomplete output (missing global-style trailer). The system already reran the full stage and will retry once more on a fallback API.'
             );
         }
         if (
@@ -6011,7 +6061,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || getAnalysisEntitiesPayloadFromJsonText(sanitizeLlmTextForJsonImport(sourceText));
         if (!payload) {
             if (onLog) onLog('No entities JSON (characters/props/environments) found.', 'warning');
-            alert(t('未检测到可导入的实体 JSON（characters/props/environments）。', 'No importable entities JSON found (characters/props/environments).'));
+            reportAnalysisPanelNotice(t('未检测到可导入的实体 JSON（characters/props/environments）。', 'No importable entities JSON found (characters/props/environments).'), 'warning');
             return;
         }
 
@@ -6082,10 +6132,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     };
 
     const runPostAnalysisChecksAndPrompt = async (analyzedText = '') => {
-        notifyUiMessage(
+        reportAnalysisPanelNotice(
             t('正在检查角色和场景名称一致性...', 'Checking subject consistency...'),
-            'info',
-            2200
+            'info'
         );
 
         const subjectReport = runSubjectConsistencyCheck(analyzedText || '', { silent: true });
@@ -6097,7 +6146,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 'Subject consistency has warnings; review the progress panel before continuing.'
             );
 
-        // Keep non-blocking state for optional detail UI; do not force a modal.
         setPostAnalysisCheckModal({
             open: false,
             status: 'done',
@@ -6109,7 +6157,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ),
             ],
         });
-        notifyUiMessage(summary, passedSubject ? 'success' : 'warning', 4500);
+        setAnalysisFlowStatus({
+            phase: passedSubject ? 'completed' : 'warning',
+            message: summary,
+        });
 
         if (onLog) {
             onLog(
@@ -6360,7 +6411,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return importResult;
         } catch (e) {
             if (onLog) onLog(`Import failed: ${e.message}`, 'error');
-            alert(t('导入失败：', 'Import failed: ') + (e?.message || e));
+            reportAnalysisPanelNotice(t('导入失败：', 'Import failed: ') + (e?.message || e), 'error');
             return false;
         }
     };
@@ -11065,7 +11116,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (stableKind === 'script_opt') {
             const content = resolveScriptOptBeatsContent();
             if (!content) {
-                notifyUiMessage(t('暂无剧本统筹内容可查看。', 'No script-coordination content available yet.'), 'warning');
+                reportAnalysisPanelNotice(t('暂无剧本统筹内容可查看。', 'No script-coordination content available yet.'), 'warning');
                 return;
             }
             setStageArtifactEditModal({
@@ -11088,7 +11139,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (stableKind === 'subject_index') {
             const content = resolveSubjectIndexEditContent();
             if (!content) {
-                notifyUiMessage(t('暂无资产清单内容可查看。', 'No asset inventory content available yet.'), 'warning');
+                reportAnalysisPanelNotice(t('暂无资产清单内容可查看。', 'No asset inventory content available yet.'), 'warning');
                 return;
             }
             setStageArtifactEditModal({
@@ -11111,7 +11162,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (stableKind === 'scene_beats') {
             const scenes = buildSceneBeatsEditScenes();
             if (!scenes.length) {
-                notifyUiMessage(t('暂无场景编排内容可编辑。', 'No scene orchestration content available to edit.'), 'warning');
+                reportAnalysisPanelNotice(t('暂无场景编排内容可编辑。', 'No scene orchestration content available to edit.'), 'warning');
                 return;
             }
             const first = scenes[0];
@@ -11135,6 +11186,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [
         buildSceneBeatsEditScenes,
         parseSceneBeatsFieldsFromMarkdown,
+        reportAnalysisPanelNotice,
         resolveScriptOptBeatsContent,
         resolveSubjectIndexEditContent,
         t,
@@ -11155,7 +11207,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
             }
             if (!content.trim()) {
-                notifyUiMessage(t('当前场内容为空，无法保存。', 'Current scene content is empty; cannot save.'), 'warning');
+                reportAnalysisPanelNotice(t('当前场内容为空，无法保存。', 'Current scene content is empty; cannot save.'), 'warning');
                 return;
             }
         }
@@ -11203,10 +11255,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ))
                     : (prev.scenes || []),
             }));
-            notifyUiMessage(t('已保存更改。', 'Changes saved.'), 'success', 2500);
+            reportAnalysisPanelNotice(t('已保存更改。', 'Changes saved.'), 'success', 2500);
         } catch (error) {
             setStageArtifactEditModal((prev) => ({ ...prev, saving: false }));
-            notifyUiMessage(t(
+            reportAnalysisPanelNotice(t(
                 `保存失败：${error?.message || error}`,
                 `Save failed: ${error?.message || error}`
             ), 'error', 4200);
@@ -11225,6 +11277,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         stageArtifactEditModal.sceneId,
         stageArtifactEditModal.scenes,
         t,
+        reportAnalysisPanelNotice,
     ]);
 
     const ensurePersistedSubjectIndexForDownstream = useCallback(async (preferredText = '') => {
@@ -11881,35 +11934,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }, [activeEpisode?.id, persistAnalysisSessionSnapshot, setAnalysisDetailLogs, setAnalysisFlowStatus, setAnalysisFlowStatusHistory, setAnalysisUiReport]);
 
-    const terminalAnalysisToastKeyRef = useRef('');
-    // After imports finish: use a self-dismissing toast instead of a blocking modal.
-    useEffect(() => {
-        if (isAnalyzing) return;
-        const phase = String(analysisFlowStatus?.phase || '').trim().toLowerCase();
-        if (!['completed', 'warning', 'failed'].includes(phase)) return;
-        const message = String(analysisFlowStatus?.message || '').trim()
-            || (phase === 'completed'
-                ? t('剧本分析与导入已完成。', 'Analysis and import completed.')
-                : phase === 'warning'
-                    ? t('分析完成，但有告警。', 'Analysis finished with warnings.')
-                    : t('分析失败。', 'Analysis failed.'));
-        const toastKey = `${phase}:${message}:${analysisUiReport?.startedAt || 0}:${analysisUiReport?.durationMs || 0}`;
-        if (terminalAnalysisToastKeyRef.current === toastKey) return;
-        terminalAnalysisToastKeyRef.current = toastKey;
-        notifyUiMessage(
-            message,
-            phase === 'failed' ? 'error' : (phase === 'warning' ? 'warning' : 'success'),
-            phase === 'completed' ? 4500 : 5200
-        );
-    }, [
-        analysisFlowStatus?.message,
-        analysisFlowStatus?.phase,
-        analysisUiReport?.durationMs,
-        analysisUiReport?.startedAt,
-        isAnalyzing,
-        t,
-    ]);
-
     useEffect(() => {
         if (!activeEpisode?.id || analysisProgressDismissedRef.current) return;
         if (!hasPersistableAnalysisProgress(analysisFlowStatus, analysisFlowStatusHistory, analysisUiReport)) return;
@@ -12411,6 +12435,42 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 anchor_description: asset.anchor_description || '',
             }));
     }, [activeEpisode?.id, availableSubjectAssets, selectedReuseSubjectIds]);
+
+    const runScriptOptimizationNode = useCallback(async ({
+        scriptText,
+        systemPrompt,
+        metadata = null,
+        startedAt = Date.now(),
+        baselineText = '',
+        disableEpisodeRecovery = false,
+        onTaskCreated,
+    } = {}) => {
+        return awaitAnalyzeSceneWithRecovery(
+            () => runScriptAnalysisFlowAnalyzeNode(
+                'script_optimization',
+                scriptText,
+                systemPrompt,
+                metadata,
+                activeEpisode?.id || null,
+                analysisAttentionNotes,
+                selectedReuseSubjectAssets,
+                {
+                    onTaskCreated,
+                },
+                projectId,
+                'script_analysis',
+                resolveSelectedScriptAnalysisApiId()
+            ),
+            { startedAt, baselineText, disableEpisodeRecovery }
+        );
+    }, [
+        activeEpisode?.id,
+        analysisAttentionNotes,
+        awaitAnalyzeSceneWithRecovery,
+        projectId,
+        resolveSelectedScriptAnalysisApiId,
+        selectedReuseSubjectAssets,
+    ]);
 
     const runStage2_2WithValidationRetry = useCallback(async ({
         label = 'Stage 2.2',
@@ -17107,12 +17167,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const handleAnalysisClick = async () => {
         const actualContent = getAnalysisScriptContent();
         if (!actualContent || actualContent.trim().length < 10) {
-            alert("Script content is too short for analysis.");
+            reportAnalysisPanelNotice(t('剧本内容过短，无法分析。', 'Script content is too short for analysis.'), 'warning');
             return;
         }
         const episodeId = Number(activeEpisode?.id || 0);
         if (!episodeId) {
-            alert("No active episode selected.");
+            reportAnalysisPanelNotice(t('请先选择分集。', 'No active episode selected.'), 'warning');
             return;
         }
 
@@ -18966,29 +19026,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const baselineAnalysisText = clearedBeforeRun
                 ? ''
                 : String(activeEpisode?.ai_scene_analysis_result || '').trim();
-            const result = await awaitAnalyzeSceneWithRecovery(
-                () => runScriptAnalysisFlowAnalyzeNode(
-                    'script_optimization',
-                    content,
-                    customSystemPrompt,
-                    metadata,
-                    activeEpisode?.id || null,
-                    analysisAttentionNotes,
-                    selectedReuseSubjectAssets,
-                    {
-                        onTaskCreated: (taskId) => {
-                            const stableTaskId = String(taskId || '').trim();
-                            setActiveAnalysisTaskId(stableTaskId);
-                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId: stableTaskId, startedAt, phase: 1 });
-                            updateEpisodeAnalysisRun(episodeId, { taskId: stableTaskId, phase: 1 });
-                        },
-                    },
-                    projectId,
-                    'script_analysis',
-                    resolveSelectedScriptAnalysisApiId()
-                ),
-                { startedAt, baselineText: baselineAnalysisText }
-            );
+            const result = await runScriptOptimizationNode({
+                scriptText: content,
+                systemPrompt: customSystemPrompt,
+                metadata,
+                startedAt,
+                baselineText: baselineAnalysisText,
+                onTaskCreated: (taskId) => {
+                    const stableTaskId = String(taskId || '').trim();
+                    setActiveAnalysisTaskId(stableTaskId);
+                    saveAnalysisTaskMarker(activeEpisode?.id, { taskId: stableTaskId, startedAt, phase: 1 });
+                    updateEpisodeAnalysisRun(episodeId, { taskId: stableTaskId, phase: 1 });
+                },
+            });
             const analyzedText = extractAnalysisTextFromResult(result);
             
             // --- 第一时间保存对应卡片！---
@@ -19012,7 +19062,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             lastLoadedAnalysisRef.current = analyzedText || "";
             if (analyzedText && (analyzedText.includes("PROHIBITED_CONTENT") || analyzedText.toLowerCase().includes("prohibited content"))) {
                 const msg = t('剧本含有敏感信息（如色情或血腥内容，特别是针对少儿），触发了模型拦截。建议您换用 DeepSeek、豆包等模型重试。', 'Script contains sensitive information (like pornographic or violent content, especially involving minors) triggering policy block. We recommend retrying with DeepSeek or Doubao.');
-                alert('⚠️ ' + msg);
+                reportAnalysisPanelNotice(msg, 'error');
                 throw new Error("出现供应商政策不允许内容");
             }
             llmReturned = true;
@@ -19296,7 +19346,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     warning: '',
                     error: friendlyAnalysisError,
                 });
-                alert(`Analysis failed: ${friendlyAnalysisError}`);
             }
         } finally {
             const retainMarker = shouldRetainAnalysisTaskMarker({
@@ -19374,7 +19423,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (isAnalyzing) return;
         const generatedContent = String(llmRawResultContent || llmResultContent || '').trim();
         if (!generatedContent) {
-            alert(t('请先完成第一次 AI 剧本分析，再执行“修正生成结果”。', 'Please finish the first AI Script Analysis before running "Refine Generated Result".'));
+            reportAnalysisPanelNotice(t('请先完成第一次 AI 剧本分析，再执行“修正生成结果”。', 'Please finish the first AI Script Analysis before running "Refine Generated Result".'), 'warning');
             return;
         }
 
@@ -19408,7 +19457,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const executeAdvancedAnalysis = async (userInput, customSystemPrompt, retryCount = 0, skipMetadata = false) => {
         if (!activeEpisode?.id) {
-            alert("No active episode selected.");
+            reportAnalysisPanelNotice(t('请先选择分集。', 'No active episode selected.'), 'warning');
             return;
         }
 
@@ -19552,29 +19601,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ? ''
                 : String(activeEpisode?.ai_scene_analysis_result || '').trim();
             const splitStage1Flow = isSplitStage1Prompt(customSystemPrompt);
-            const result = await awaitAnalyzeSceneWithRecovery(
-                () => runScriptAnalysisFlowAnalyzeNode(
-                    'script_optimization',
-                    userInput,
-                    customSystemPrompt,
-                    metadata,
-                    activeEpisode?.id || null,
-                    analysisAttentionNotes,
-                    selectedReuseSubjectAssets,
-                    {
-                        onTaskCreated: (taskId) => {
-                            const stableTaskId = String(taskId || '').trim();
-                            setActiveAnalysisTaskId(stableTaskId);
-                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId: stableTaskId, startedAt, phase: 1 });
-                            updateEpisodeAnalysisRun(episodeId, { taskId: stableTaskId, phase: 1 });
-                        },
-                    },
-                    projectId,
-                    'script_analysis',
-                    resolveSelectedScriptAnalysisApiId()
-                ),
-                { startedAt, baselineText: baselineAnalysisText }
-            );
+            const result = await runScriptOptimizationNode({
+                scriptText: userInput,
+                systemPrompt: customSystemPrompt,
+                metadata,
+                startedAt,
+                baselineText: baselineAnalysisText,
+                onTaskCreated: (taskId) => {
+                    const stableTaskId = String(taskId || '').trim();
+                    setActiveAnalysisTaskId(stableTaskId);
+                    saveAnalysisTaskMarker(activeEpisode?.id, { taskId: stableTaskId, startedAt, phase: 1 });
+                    updateEpisodeAnalysisRun(episodeId, { taskId: stableTaskId, phase: 1 });
+                },
+            });
             const analyzedText = extractAnalysisTextFromResult(result);
             
             // --- 第一时间保存对应卡片！---
@@ -19598,7 +19637,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!splitStage1Flow) lastLoadedAnalysisRef.current = analyzedText || '';
             if (analyzedText && (analyzedText.includes("PROHIBITED_CONTENT") || analyzedText.toLowerCase().includes("prohibited content"))) {
                 const msg = t('剧本含有敏感信息（如色情或血腥内容，特别是针对少儿），触发了模型拦截。建议您换用 DeepSeek、豆包等模型重试。', 'Script contains sensitive information (like pornographic or violent content, especially involving minors) triggering policy block. We recommend retrying with DeepSeek or Doubao.');
-                alert('⚠️ ' + msg);
+                reportAnalysisPanelNotice(msg, 'error');
                 throw new Error("出现供应商政策不允许内容");
             }
             llmReturned = true;
@@ -20434,7 +20473,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     warning: '',
                     error: friendlyAnalysisError,
                 });
-                alert(`Analysis failed: ${friendlyAnalysisError}`);
             }
         } finally {
             const retainMarker = shouldRetainAnalysisTaskMarker({
@@ -20576,7 +20614,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const stage1SourceText = buildStage1RestartSourceText();
         if (!stage1SourceText) {
-            alert(t('缺少第一阶段产物，无法从第二阶段重跑。', 'Stage 1 outputs are missing, so Stage 2 cannot restart.'));
+            reportAnalysisPanelNotice(t('缺少第一阶段产物，无法从第二阶段重跑。', 'Stage 1 outputs are missing, so Stage 2 cannot restart.'), 'warning');
             return;
         }
 
@@ -20585,7 +20623,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             userInput: stage2UserInput,
         } = buildStage2UserInputFromStage1(stage1SourceText, selectedReuseSubjectAssets);
         if (!String(adaptedScriptText || '').trim()) {
-            alert(t('第一阶段产物里没有可用的改编剧本，无法从第二阶段重跑。', 'No usable adapted script was found in Stage 1 outputs.'));
+            reportAnalysisPanelNotice(t('第一阶段产物里没有可用的改编剧本，无法从第二阶段重跑。', 'No usable adapted script was found in Stage 1 outputs.'), 'warning');
             return;
         }
 
@@ -20915,7 +20953,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: t(`第二阶段重跑失败：${friendlyError}`, `Stage 2 restart failed: ${friendlyError}`),
             });
             onLog?.(`Stage 2 restart failed: ${friendlyError}`, 'error');
-            alert(t(`第二阶段重跑失败：${friendlyError}`, `Stage 2 restart failed: ${friendlyError}`));
         } finally {
             clearAnalysisTaskMarker(activeEpisode?.id);
             setIsAnalyzing(false);
@@ -21000,18 +21037,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const { stage1SourceText, candidates, error: candidateError } = resolveSceneBeatsRerunCandidates();
         if (!stage1SourceText) {
-            alert(t('缺少第一阶段产物，无法仅重排场景。', 'Stage 1 outputs are missing, so scene-beats-only rerun cannot start.'));
+            reportAnalysisPanelNotice(t('缺少第一阶段产物，无法仅重排场景。', 'Stage 1 outputs are missing, so scene-beats-only rerun cannot start.'), 'warning');
             return;
         }
         if (candidateError === 'missing_adapted_script') {
-            alert(t('第一阶段产物里没有可用的改编剧本，无法仅重排场景。', 'No usable adapted script was found in Stage 1 outputs.'));
+            reportAnalysisPanelNotice(t('第一阶段产物里没有可用的改编剧本，无法仅重排场景。', 'No usable adapted script was found in Stage 1 outputs.'), 'warning');
             return;
         }
         if (!candidates.length) {
-            alert(
+            reportAnalysisPanelNotice(
                 candidateError
                     ? t(`无法按场景分隔符切分剧本：${candidateError}`, `Failed to split script by scene markers: ${candidateError}`)
-                    : t('优化后剧本中未找到 [SCENE_START]/[SCENE_END] 场景分隔符，无法按场重排。', 'No [SCENE_START]/[SCENE_END] scene markers found in the optimized script; per-scene rerun is unavailable.')
+                    : t('优化后剧本中未找到 [SCENE_START]/[SCENE_END] 场景分隔符，无法按场重排。', 'No [SCENE_START]/[SCENE_END] scene markers found in the optimized script; per-scene rerun is unavailable.'),
+                'warning'
             );
             return;
         }
@@ -21025,7 +21063,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const stage2_1SubjectIndexText = extractPureSubjectIndexText(healedSubjectIndexText || stage2_1Text).trim()
             || String(healedSubjectIndexText || stage2_1Text || '').trim();
         if (!stage2_1SubjectIndexText || !hasUsableSubjectIndexRows(stage2_1SubjectIndexText)) {
-            alert(t('缺少第二阶段资产清单，无法仅重排场景。请先执行资产提取。', 'Missing Stage 2 subject index. Please run asset extraction first.'));
+            reportAnalysisPanelNotice(t('缺少第二阶段资产清单，无法仅重排场景。请先执行资产提取。', 'Missing Stage 2 subject index. Please run asset extraction first.'), 'warning');
             return;
         }
 
@@ -21046,15 +21084,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 sceneUnitIdsMatch(unit.sceneId, targetSceneId, unit.sceneOrder, episodePrefix)
                 && unit?.unmatchedScriptUnit
             ));
-            alert(
+            reportAnalysisPanelNotice(
                 stage2Only
                     ? t('该场景在第二阶段结果中存在，但第一阶段剧本分隔符中找不到对应场次正文，无法重排。', 'This scene exists in Stage 2 results, but no matching Stage 1 script body was found; rerun cannot start.')
-                    : t('未找到所选场景，无法重排。', 'Selected scene was not found; rerun cannot start.')
+                    : t('未找到所选场景，无法重排。', 'Selected scene was not found; rerun cannot start.'),
+                'warning'
             );
             return;
         }
         if (rerunMode === 'all' && !executableCandidates.length) {
-            alert(t('没有可重排的场景（第二阶段场景无法映射回第一阶段剧本场次）。', 'No rerunnable scenes (Stage 2 scenes could not be mapped back to Stage 1 script units).'));
+            reportAnalysisPanelNotice(t('没有可重排的场景（第二阶段场景无法映射回第一阶段剧本场次）。', 'No rerunnable scenes (Stage 2 scenes could not be mapped back to Stage 1 script units).'), 'warning');
             return;
         }
 
@@ -21489,7 +21528,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 error: friendlyError,
                 runTag: 'scene_beats_only_rerun',
             });
-            alert(t(`场景重排失败：${friendlyError}`, `Scene beats rerun failed: ${friendlyError}`));
         } finally {
             // If scene branch failed before awaiting ENV, keep ENV running but avoid unhandled rejection.
             if (envAssetDesignPromise) {
@@ -21565,6 +21603,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         t,
         validateAutoSceneTableImport,
         validateStage2_2BeatsOutput,
+        reportAnalysisPanelNotice,
     ]);
 
     const sceneBeatsRerunCandidates = useMemo(() => {
@@ -21585,11 +21624,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const { stage1SourceText, candidates, error: candidateError, adaptedScriptSource } = resolveSceneBeatsRerunCandidates();
         if (!stage1SourceText) {
-            alert(t('缺少第一阶段产物，无法仅重排场景。', 'Stage 1 outputs are missing, so scene-beats-only rerun cannot start.'));
+            reportAnalysisPanelNotice(t('缺少第一阶段产物，无法仅重排场景。', 'Stage 1 outputs are missing, so scene-beats-only rerun cannot start.'), 'warning');
             return;
         }
         if (candidateError === 'missing_adapted_script') {
-            alert(t('第一阶段产物里没有可用的改编剧本，无法仅重排场景。', 'No usable adapted script was found in Stage 1 outputs.'));
+            reportAnalysisPanelNotice(t('第一阶段产物里没有可用的改编剧本，无法仅重排场景。', 'No usable adapted script was found in Stage 1 outputs.'), 'warning');
             return;
         }
         if (!candidates.length) {
@@ -21609,14 +21648,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ),
                 'warning'
             );
-            alert(
+            reportAnalysisPanelNotice(
                 candidateError
                     ? t(`无法按场景分隔符切分剧本：${candidateError}`, `Failed to split script by scene markers: ${candidateError}`)
                     : (
                         hasBareMarkers && !hasIdMarkers
                             ? t('优化后剧本里只有裸 [SCENE_START]/[SCENE_END]（无 Scene ID）。请刷新后重试；若仍失败，请重跑第一阶段以生成 [SCENE_START:EPxx_SCyy] 格式。', 'Optimized script only has bare [SCENE_START]/[SCENE_END] markers (no Scene ID). Refresh and retry; if it still fails, rerun Stage 1 to emit [SCENE_START:EPxx_SCyy].')
                             : t('优化后剧本中未找到可用的 [SCENE_START]/[SCENE_END] 场景分隔符，无法按场重排。', 'No usable [SCENE_START]/[SCENE_END] scene markers found in the optimized script; per-scene rerun is unavailable.')
-                    )
+                    ),
+                'warning'
             );
             return;
         }
@@ -21628,7 +21668,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ).trim();
         const stage2_1SubjectIndexText = extractPureSubjectIndexText(stage2_1Text).trim() || stage2_1Text;
         if (!stage2_1SubjectIndexText || !hasUsableSubjectIndexRows(stage2_1SubjectIndexText)) {
-            alert(t('缺少第二阶段资产清单，无法仅重排场景。请先执行资产提取。', 'Missing Stage 2 subject index. Please run asset extraction first.'));
+            reportAnalysisPanelNotice(t('缺少第二阶段资产清单，无法仅重排场景。请先执行资产提取。', 'Missing Stage 2 subject index. Please run asset extraction first.'), 'warning');
             return;
         }
 
@@ -21655,6 +21695,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         onLog,
         resolveSceneBeatsRerunCandidates,
         resolveStage1AdaptedScriptText,
+        reportAnalysisPanelNotice,
         t,
     ]);
 
@@ -21662,18 +21703,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const mode = String(sceneBeatsRerunModal.mode || 'all').trim().toLowerCase() === 'single' ? 'single' : 'all';
         const sceneId = String(sceneBeatsRerunModal.sceneId || '').trim();
         if (mode === 'single' && !sceneId) {
-            alert(t('请先选择要重排的场景。', 'Select a scene to rerun first.'));
+            reportAnalysisPanelNotice(t('请先选择要重排的场景。', 'Select a scene to rerun first.'), 'warning');
             return;
         }
         setSceneBeatsRerunModal((prev) => ({ ...prev, open: false }));
         await executeSceneBeatsRerun({ mode, sceneId });
-    }, [executeSceneBeatsRerun, sceneBeatsRerunModal.mode, sceneBeatsRerunModal.sceneId, t]);
+    }, [executeSceneBeatsRerun, reportAnalysisPanelNotice, sceneBeatsRerunModal.mode, sceneBeatsRerunModal.sceneId, t]);
 
     const handleRerunScriptOptOnly = async () => {
         if (isAnalyzing || !activeEpisode?.id) return;
         const content = String(rawContent || activeEpisode?.script_content || '').trim();
         if (!content) {
-            alert(t('没有可用的剧本内容，无法重跑剧本统筹。', 'No script content available to rerun script coordination.'));
+            reportAnalysisPanelNotice(t('没有可用的剧本内容，无法重跑剧本统筹。', 'No script content available to rerun script coordination.'), 'warning');
             return;
         }
 
@@ -21715,31 +21756,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 refreshEpisode: true,
             });
 
-            const result = await awaitAnalyzeSceneWithRecovery(
-                () => runScriptAnalysisFlowAnalyzeNode(
-                    'script_optimization',
-                    stage1Input,
-                    customSystemPrompt,
-                    metadata,
-                    activeEpisode?.id || null,
-                    analysisAttentionNotes,
-                    selectedReuseSubjectAssets,
-                    {
-                        onTaskCreated: (taskId) => {
-                            const stableTaskId = String(taskId || '').trim();
-                            setActiveAnalysisTaskId(stableTaskId);
-                            saveAnalysisTaskMarker(activeEpisode.id, { taskId: stableTaskId, startedAt, phase: 1 });
-                            if (typeof updateEpisodeAnalysisRun === 'function') {
-                                updateEpisodeAnalysisRun(activeEpisode.id, { taskId: stableTaskId, phase: 1 });
-                            }
-                        },
-                    },
-                    projectId,
-                    'script_analysis',
-                    resolveSelectedScriptAnalysisApiId()
-                ),
-                { startedAt, baselineText: baselineAnalysisText, disableEpisodeRecovery: true }
-            );
+            const result = await runScriptOptimizationNode({
+                scriptText: stage1Input,
+                systemPrompt: customSystemPrompt,
+                metadata,
+                startedAt,
+                baselineText: baselineAnalysisText,
+                disableEpisodeRecovery: true,
+                onTaskCreated: (taskId) => {
+                    const stableTaskId = String(taskId || '').trim();
+                    setActiveAnalysisTaskId(stableTaskId);
+                    saveAnalysisTaskMarker(activeEpisode.id, { taskId: stableTaskId, startedAt, phase: 1 });
+                    if (typeof updateEpisodeAnalysisRun === 'function') {
+                        updateEpisodeAnalysisRun(activeEpisode.id, { taskId: stableTaskId, phase: 1 });
+                    }
+                },
+            });
 
             const analyzedText = extractAnalysisTextFromResult(result);
             if (typeof persistLlmResultContent === 'function') {
@@ -21750,7 +21782,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
             lastLoadedAnalysisRef.current = analyzedText || "";
 
-            notifyUiMessage(t('剧本统筹重跑完成。', 'Script coordination rerun completed.'), 'success');
             setAnalysisUiReport((prev) => ({
                 ...(prev && typeof prev === 'object' ? prev : {}),
                 status: 'completed',
@@ -21796,7 +21827,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     phase: 'failed',
                     message: t(`剧本统筹重跑失败：${friendlyErr}`, `Script coordination rerun failed: ${friendlyErr}`),
                 });
-                alert(t(`剧本统筹重跑失败：${friendlyErr}`, `Script coordination rerun failed: ${friendlyErr}`));
             }
         } finally {
             latestIsAnalyzingRef.current = false;
@@ -21919,7 +21949,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             })
             : list;
         if (!targets.length) {
-            alert(t('没有可重跑的分镜生成场景。', 'No storyboard scenes available to rerun.'));
+            reportAnalysisPanelNotice(t('没有可重跑的分镜生成场景。', 'No storyboard scenes available to rerun.'), 'warning');
             return;
         }
 
@@ -21994,7 +22024,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     '所选场景的关联环境 ENV 尚未完成资产设计，无法重跑分镜。请先完成环境资产设计后再试。',
                     'Linked ENV asset design is incomplete for the selected scene(s). Finish environment asset design before rerunning storyboard.'
                 );
-                alert(msg);
                 setAnalysisFlowStatus({ phase: 'warning', message: msg });
                 setAnalysisUiReport((prev) => ({
                     ...(prev && typeof prev === 'object' ? prev : {}),
@@ -22089,7 +22118,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const candidates = await buildStoryboardRerunCandidates();
             if (!candidates.length) {
                 setStoryboardRerunModal((prev) => ({ ...prev, open: false, loading: false, candidates: [] }));
-                alert(t('当前集没有已入库的场景，无法重跑分镜生成。请先完成场景编排并入库。', 'No imported scenes in this episode. Finish scene orchestration/import before rerunning storyboard.'));
+                reportAnalysisPanelNotice(t('当前集没有已入库的场景，无法重跑分镜生成。请先完成场景编排并入库。', 'No imported scenes in this episode. Finish scene orchestration/import before rerunning storyboard.'), 'warning');
                 return;
             }
             setStoryboardRerunModal({
@@ -22102,12 +22131,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
         } catch (err) {
             setStoryboardRerunModal((prev) => ({ ...prev, open: false, loading: false, candidates: [] }));
-            alert(t(
+            reportAnalysisPanelNotice(t(
                 `加载场景列表失败：${err?.message || err}`,
                 `Failed to load scene list: ${err?.message || err}`
-            ));
+            ), 'error');
         }
-    }, [activeEpisode?.id, buildStoryboardRerunCandidates, isRerunningStoryboard, t]);
+    }, [activeEpisode?.id, buildStoryboardRerunCandidates, isRerunningStoryboard, reportAnalysisPanelNotice, t]);
 
     const confirmStoryboardRerunSelection = useCallback(async () => {
         const mode = String(storyboardRerunModal.mode || 'all').trim().toLowerCase() === 'single' ? 'single' : 'all';
@@ -22115,7 +22144,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const dbSceneId = Number(storyboardRerunModal.dbSceneId || 0) || null;
         const candidates = Array.isArray(storyboardRerunModal.candidates) ? storyboardRerunModal.candidates : [];
         if (mode === 'single' && !sceneId && !dbSceneId) {
-            alert(t('请先选择要重跑镜头的场景。', 'Select a scene to rerun storyboard first.'));
+            reportAnalysisPanelNotice(t('请先选择要重跑镜头的场景。', 'Select a scene to rerun storyboard first.'), 'warning');
             return;
         }
         setStoryboardRerunModal((prev) => ({ ...prev, open: false }));
@@ -22127,6 +22156,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         storyboardRerunModal.mode,
         storyboardRerunModal.sceneId,
         t,
+        reportAnalysisPanelNotice,
     ]);
 
     const handleRerunStoryboardTasks = openStoryboardRerunModal;
@@ -22164,7 +22194,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     || ''
                 ).trim();
                 if (!adapted) {
-                    notifyUiMessage(t('暂无可导入的剧本统筹内容。', 'No script-coordination content available to import.'), 'warning');
+                    reportAnalysisPanelNotice(t('暂无可导入的剧本统筹内容。', 'No script-coordination content available to import.'), 'warning');
                     return;
                 }
                 if (!activeEpisode?.id) return;
@@ -22175,7 +22205,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     await onUpdateScript(activeEpisode.id, adapted);
                 }
                 setRawContent(adapted);
-                notifyUiMessage(
+                reportAnalysisPanelNotice(
                     t('剧本统筹内容已导入。', 'Script-coordination content imported.'),
                     'success',
                     3200
@@ -22192,7 +22222,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (stableKind === 'subject_index') {
                 const content = resolveSubjectIndexEditContent();
                 if (!content) {
-                    notifyUiMessage(t('暂无可导入的资产清单内容。', 'No asset inventory content available to import.'), 'warning');
+                    reportAnalysisPanelNotice(t('暂无可导入的资产清单内容。', 'No asset inventory content available to import.'), 'warning');
                     return;
                 }
                 await handleImportStageArtifact({
@@ -22201,7 +22231,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     label: 'diagnostic subject index',
                     importOptions: { suppressAlerts: true },
                 });
-                notifyUiMessage(t('资产清单已导入。', 'Asset inventory imported.'), 'success', 3200);
+                reportAnalysisPanelNotice(t('资产清单已导入。', 'Asset inventory imported.'), 'success', 3200);
                 return;
             }
             if (stableKind === 'scene_beats') {
@@ -22211,7 +22241,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     || ''
                 ).trim();
                 if (!content) {
-                    notifyUiMessage(t('暂无可导入的场景编排内容。', 'No scene orchestration content available to import.'), 'warning');
+                    reportAnalysisPanelNotice(t('暂无可导入的场景编排内容。', 'No scene orchestration content available to import.'), 'warning');
                     return;
                 }
                 await handleImportStageArtifact({
@@ -22220,13 +22250,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     label: 'diagnostic scene markdown',
                     importOptions: { suppressAlerts: true },
                 });
-                notifyUiMessage(t('场景编排已导入。', 'Scene orchestration imported.'), 'success', 3200);
+                reportAnalysisPanelNotice(t('场景编排已导入。', 'Scene orchestration imported.'), 'success', 3200);
                 return;
             }
             if (stableKind === 'storyboard') {
                 const candidates = await buildStoryboardRerunCandidates();
                 if (!candidates.length) {
-                    notifyUiMessage(t('工作区尚无已入库场景，无法导入镜头。', 'No imported scenes in workspace; cannot import shots.'), 'warning');
+                    reportAnalysisPanelNotice(t('工作区尚无已入库场景，无法导入镜头。', 'No imported scenes in workspace; cannot import shots.'), 'warning');
                     return;
                 }
                 let applied = 0;
@@ -22284,13 +22314,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     storyboardTaskProgress: storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS,
                 }));
                 if (applied <= 0) {
-                    notifyUiMessage(t(
+                    reportAnalysisPanelNotice(t(
                         `未找到可导入的镜头结果（${candidates.length} 场均无最新分镜缓存）。可先点「重跑」生成。`,
                         `No importable shot results found (${candidates.length} scene(s) have no latest storyboard cache). Use Rerun to generate first.`
                     ), 'warning', 4500);
                     return;
                 }
-                notifyUiMessage(
+                reportAnalysisPanelNotice(
                     t(
                         `镜头已导入 ${applied} 场（跳过 ${skipped} 场）`,
                         `Imported shots for ${applied} scene(s) (skipped ${skipped})`
@@ -22310,7 +22340,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (stableKind === 'assets') {
                 const { assetDesignJson, assetDesignPayload } = resolveDiagnosticAssetDesignImport();
                 if (!assetDesignJson) {
-                    notifyUiMessage(t('暂无可导入的资产设计内容。', 'No asset design content available to import.'), 'warning');
+                    reportAnalysisPanelNotice(t('暂无可导入的资产设计内容。', 'No asset design content available to import.'), 'warning');
                     return;
                 }
                 await handleImportStageArtifact({
@@ -22322,10 +22352,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         suppressAlerts: true,
                     },
                 });
-                notifyUiMessage(t('资产设计已导入。', 'Asset design imported.'), 'success', 3200);
+                reportAnalysisPanelNotice(t('资产设计已导入。', 'Asset design imported.'), 'success', 3200);
             }
         } catch (error) {
-            notifyUiMessage(t(
+            reportAnalysisPanelNotice(t(
                 `导入失败：${error?.message || error}`,
                 `Import failed: ${error?.message || error}`
             ), 'error', 4500);
@@ -22342,6 +22372,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         onLog,
         onUpdateScript,
         persistAdaptedScriptEdit,
+        reportAnalysisPanelNotice,
         resolveDiagnosticAssetDesignImport,
         resolveScriptOptBeatsContent,
         resolveStage1AdaptedScriptText,
@@ -22394,7 +22425,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const subjectIndexText = String(subjectIndexFromEpisode || subjectIndexFallback || '').trim();
 
         if (!subjectIndexText) {
-            alert(t('缺少第二阶段资产清单，无法仅重跑失败子任务。请先重新执行第二阶段。', 'Missing Stage 2 subject index. Cannot rerun failed subtask routes only.'));
+            reportAnalysisPanelNotice(t('缺少第二阶段资产清单，无法仅重跑失败子任务。请先重新执行第二阶段。', 'Missing Stage 2 subject index. Cannot rerun failed subtask routes only.'), 'warning');
             return;
         }
 
@@ -22540,7 +22571,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: t(`失败路由重跑失败：${detail}`, `Failed-route rerun failed: ${detail}`),
             });
             onLog?.(`Failed-route rerun failed: ${detail}`, 'error');
-            alert(t(`失败路由重跑失败：${detail}`, `Failed-route rerun failed: ${detail}`));
         } finally {
             clearAnalysisTaskMarker(activeEpisode?.id);
             setIsRetryingPhase2(false);
@@ -22564,6 +22594,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         confirmUiMessage,
         runPostImportSceneSubjectPipeline,
         isTaskCanceledError,
+        reportAnalysisPanelNotice,
     ]);
 
 
@@ -22776,7 +22807,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: t(`重跑资产生成失败：${error.message || String(error)}`, `Retry Stage 3 asset design failed: ${error.message || String(error)}`),
             });
             onLog?.(`Retry Stage 3 asset design failed: ${error.message || String(error)}`, 'error');
-            alert(`Retry Stage 3 asset design failed: ${error.message}`);
         } finally {
             clearAnalysisTaskMarker(activeEpisode?.id);
             setIsRetryingPhase2(false);
@@ -23921,13 +23951,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const confirmPhase2RerunSelection = useCallback(async () => {
         if (phase2RerunModal?.draftNewEntry) {
-            alert(t('请先保存或取消正在新增的 Subject Index 条目。', 'Save or cancel the new Subject Index entry first.'));
+            reportAnalysisPanelNotice(t('请先保存或取消正在新增的 Subject Index 条目。', 'Save or cancel the new Subject Index entry first.'), 'warning');
             return;
         }
         const mode = String(phase2RerunModal.mode || 'all');
         const sourceText = resolveSubjectIndexTextForAssetRerun();
         if (!sourceText) {
-            alert(t('缺少第二阶段资产清单，无法重跑资产生成。', 'Missing Stage 2 subject index. Cannot rerun asset generation.'));
+            reportAnalysisPanelNotice(t('缺少第二阶段资产清单，无法重跑资产生成。', 'Missing Stage 2 subject index. Cannot rerun asset generation.'), 'warning');
             return;
         }
 
@@ -23951,7 +23981,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || filteredPhase2RerunSubjectEntries[0]
                 || phase2RerunDisplayEntries.find((item) => item.key === phase2RerunModal.subjectKey);
             if (!selected?.sourceText) {
-                alert(t('请选择一个资产清单实体后再重跑。', 'Select one subject-index entity before rerunning.'));
+                reportAnalysisPanelNotice(t('请选择一个资产清单实体后再重跑。', 'Select one subject-index entity before rerunning.'), 'warning');
                 return;
             }
             retryOptions = {
@@ -23995,6 +24025,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         phase2RerunModal.subjectEdits,
         phase2RerunModal.subjectKey,
         resolveSubjectIndexTextForAssetRerun,
+        reportAnalysisPanelNotice,
         t,
     ]);
 
@@ -24092,9 +24123,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 key: 'stage1-visual-backfill',
                 eyebrow: t('第一阶段', 'Stage 1'),
                 title: t('全局风格', 'Global Style'),
-                status: visualBackfillJson ? 'completed' : 'idle',
-                badge: visualBackfillJson ? t('可导入', 'Importable') : t('待输出', 'Pending'),
-                summary: t('单独保存第一阶段产出的全局风格，可重新导入项目视觉约束。', 'Stores the Stage 1 global style separately for re-import.'),
+                status: visualBackfillJson ? 'completed' : (beatsPortion ? 'warning' : 'idle'),
+                badge: visualBackfillJson
+                    ? t('可导入', 'Importable')
+                    : (beatsPortion ? t('不完整', 'Incomplete') : t('待输出', 'Pending')),
+                summary: t('全局风格是第一阶段完整性收尾；缺失表示 LLM 输出被截断，需整场重跑剧本统筹。', 'Global style is the Stage 1 completeness trailer; if missing, the LLM output was truncated and script coordination must be fully rerun.'),
                 content: formatArtifactContent(visualBackfillJson, 'json'),
                 actions: [
                     {
@@ -24109,11 +24142,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         disabled: !visualBackfillJson,
                         loading: false,
                     },
+                    {
+                        key: 'regenerate-stage1-visual-backfill',
+                        label: t('整场重跑', 'Rerun full stage'),
+                        icon: 'refresh',
+                        onClick: handleRerunScriptOptOnly,
+                        disabled: isAnalyzing,
+                        loading: isAnalyzing,
+                    },
                 ],
-                placeholder: t('第一阶段尚未产出全局风格。', 'No Stage 1 global style yet.'),
+                placeholder: t('第一阶段尚未产出全局风格。若输出不完整，请整场重跑剧本统筹。', 'No Stage 1 global style yet. If the output is incomplete, rerun full script coordination.'),
             },
         ];
-    }, [formatArtifactContent, getStageOutputContent, handleAnalysisClick, handleImportStageArtifact, handleRestoreAdaptedScript, isAnalyzing, llmRawResultContent, persistAdaptedScriptEdit, resolveScriptOptBeatsContent, t]);
+    }, [formatArtifactContent, getStageOutputContent, handleAnalysisClick, handleImportStageArtifact, handleRestoreAdaptedScript, handleRerunScriptOptOnly, isAnalyzing, llmRawResultContent, persistAdaptedScriptEdit, resolveScriptOptBeatsContent, t]);
 
     const stage2SceneMarkdownByScene = useMemo(() => {
         const rawJson = getStageOutputContent('stage2', 'scene_markdown_by_scene');
@@ -24615,7 +24656,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 suppressAlerts: true,
                             },
                         });
-                        notifyUiMessage(t('资产设计已导入。', 'Asset design imported.'), 'success', 3200);
+                        reportAnalysisPanelNotice(t('资产设计已导入。', 'Asset design imported.'), 'success', 3200);
                     },
                     disabled: !assetDesignJson,
                     loading: false,
@@ -24675,7 +24716,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     suppressAlerts: true,
                                 },
                             });
-                            notifyUiMessage(
+                            reportAnalysisPanelNotice(
                                 t(`${cat.labelZh}已导入。`, `${cat.labelEn} imported.`),
                                 'success',
                                 3200
@@ -24698,7 +24739,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
 
         return cards;
-    }, [activeEpisode?.ai_entity_design_result, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, hasAssetGenerationPrerequisite, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, openPhase2RerunModal, t]);
+    }, [activeEpisode?.ai_entity_design_result, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, hasAssetGenerationPrerequisite, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, openPhase2RerunModal, reportAnalysisPanelNotice, t]);
 
     void stage1StageCards;
     void stage2StageCards;
@@ -25470,145 +25511,153 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
                     </div>
                 )}
-            </div>
 
-            
-
-            {(analysisFlowStatus.phase !== 'idle' || analysisUiReport || analysisFlowStatusHistory.length > 0) && (() => {
-                // Prefer the shared display phase so banner matches CTA / diagnostics live flag.
-                const progressPhase = analysisProgressDisplay.isLive
-                    ? 'running'
-                    : (analysisProgressDisplay.displayPhase || String(analysisFlowStatus?.phase || '').trim().toLowerCase());
-                const analysisLive = analysisProgressDisplay.isLive;
-                const hasLiveBackgroundTask = Boolean(
-                    analysisLive
-                    || String(activeAnalysisTaskId || '').trim()
-                    || loadAnalysisTaskMarker(activeEpisode?.id)?.taskId
-                );
-                const showRetryButton = !hasLiveBackgroundTask
-                    && (progressPhase === 'warning' || progressPhase === 'failed');
-                const startedClock = formatHistoryClock(analysisProgressStartedAt);
-                const currentMessage = String(
-                    toBusinessHistoryMessage(analysisFlowStatus?.message) || analysisFlowStatus?.message || ''
-                ).trim();
-                return (
-                <div className={`mb-4 shrink-0 rounded-2xl border px-4 py-3 text-sm backdrop-blur-sm ${
-                    progressPhase === 'failed'
-                        ? 'border-red-500/30 bg-red-500/10 text-red-100'
+                {(analysisFlowStatus.phase !== 'idle' || analysisUiReport || analysisFlowStatusHistory.length > 0 || analysisDetailLogs.length > 0) && (() => {
+                    const progressPhase = analysisProgressDisplay.isLive
+                        ? 'running'
+                        : (analysisProgressDisplay.displayPhase || String(analysisFlowStatus?.phase || '').trim().toLowerCase());
+                    const analysisLive = analysisProgressDisplay.isLive;
+                    const hasLiveBackgroundTask = Boolean(
+                        analysisLive
+                        || String(activeAnalysisTaskId || '').trim()
+                        || loadAnalysisTaskMarker(activeEpisode?.id)?.taskId
+                    );
+                    const showRetryButton = !hasLiveBackgroundTask
+                        && (progressPhase === 'warning' || progressPhase === 'failed');
+                    const startedClock = formatHistoryClock(analysisProgressStartedAt);
+                    const currentMessage = String(
+                        toBusinessHistoryMessage(analysisFlowStatus?.message) || analysisFlowStatus?.message || ''
+                    ).trim();
+                    const statusTone = progressPhase === 'failed'
+                        ? 'text-red-200'
                         : progressPhase === 'warning'
-                            ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+                            ? 'text-amber-200'
                             : progressPhase === 'completed'
-                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
-                                : 'border-purple-500/30 bg-purple-500/10 text-purple-100'
-                }`}>
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex min-w-0 items-center gap-2.5">
-                            {progressPhase === 'completed' ? <CheckCircle className="w-4 h-4 shrink-0" /> : progressPhase === 'failed' ? <X className="w-4 h-4 shrink-0" /> : progressPhase === 'warning' ? <Info className="w-4 h-4 shrink-0" /> : <Loader2 className="w-4 h-4 shrink-0 animate-spin" />}
-                            <div className="min-w-0">
-                                <div className="font-semibold tracking-wide">
-                                    {progressPhase === 'completed'
-                                        ? t('分析已完成', 'Analysis complete')
-                                        : progressPhase === 'failed'
-                                            ? t('分析失败', 'Analysis failed')
-                                            : progressPhase === 'warning'
-                                                ? t('分析完成（有提示）', 'Analysis finished with notices')
-                                                : t('剧本分析进行中', 'Script analysis in progress')}
-                                </div>
-                                <div className="mt-0.5 text-xs opacity-80 tabular-nums">
-                                    {startedClock
-                                        ? `${t('启动', 'Started')} ${startedClock} · ${t('耗时', 'Elapsed')} ${formatDurationMs(analysisHeartbeatElapsedMs)}`
-                                        : `${t('耗时', 'Elapsed')} ${formatDurationMs(analysisHeartbeatElapsedMs)}`}
-                                    {analysisLive ? (
-                                        <span className="ml-2 opacity-70">{t('复杂剧本通常需要较长时间', 'Complex scripts usually take longer')}</span>
-                                    ) : null}
-                                </div>
-                                {currentMessage ? (
-                                    <div className="mt-0.5 truncate text-xs opacity-80">{currentMessage}</div>
-                                ) : (!analysisLive ? (
-                                    <div className="mt-0.5 truncate text-xs opacity-80">
-                                        {t('可关闭此提示，继续编辑剧本。上滑可查看历史进度。', 'You can dismiss this and keep editing. Scroll up for earlier progress.')}
-                                    </div>
-                                ) : null)}
-                            </div>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2 shrink-0">
-                            {showRetryButton && (
-                                <button
-                                    type="button"
-                                    onClick={handleAnalysisClick}
-                                    className="rounded-xl border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-bold text-white hover:bg-white/20 transition-colors"
-                                >
-                                    {t('重试', 'Retry')}
-                                </button>
-                            )}
-                            {!analysisLive || ['completed', 'warning', 'failed'].includes(progressPhase) ? (
-                                <button
-                                    type="button"
-                                    onClick={dismissAnalysisProgressPanel}
-                                    className="rounded-xl border border-white/10 bg-black/20 px-3 py-1.5 text-xs font-semibold hover:bg-white/10 transition-colors"
-                                >
-                                    {t('关闭', 'Close')}
-                                </button>
-                            ) : null}
-                        </div>
-                    </div>
-                    {String(analysisFlowStatus?.highlightHint || '').trim() && analysisLive && (
-                        <div className="mt-2 text-xs font-medium text-emerald-100/90">
-                            {String(analysisFlowStatus.highlightHint).trim()}
-                        </div>
-                    )}
-                    {analysisFlowStatusHistory.length > 0 && (
-                        <div
-                            ref={analysisProgressLogRef}
-                            onScroll={(event) => {
-                                const el = event.currentTarget;
-                                const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-                                analysisProgressLogStickToBottomRef.current = distanceFromBottom < 48;
-                            }}
-                            className="mt-3 max-h-44 overflow-y-auto overscroll-contain custom-scrollbar space-y-1.5 pr-1"
-                            title={t('上滑查看更早的进度日志', 'Scroll up to see earlier progress logs')}
-                        >
-                            {analysisFlowStatusHistory.map((item, index) => {
-                                const isLatest = index === analysisFlowStatusHistory.length - 1;
-                                const itemStartedAt = Number(item?.createdAt || 0);
-                                const itemEndedAt = hasAnalysisHistoryEndedAt(item) ? Number(item.endedAt) : 0;
-                                const itemDurationMs = Number.isFinite(itemStartedAt) && itemStartedAt > 0
-                                    ? Math.max(0, (itemEndedAt > 0 ? itemEndedAt : Date.now()) - itemStartedAt)
-                                    : 0;
-                                const startedTime = formatHistoryClock(itemStartedAt);
-                                const phaseLabel = getBusinessPhaseLabel(item?.phase);
-                                const displayMessage = toBusinessHistoryMessage(item?.message);
-                                const highlightHint = String(item?.highlightHint || '').trim();
-                                return (
-                                    <div
-                                        key={item.id || `${itemStartedAt}-${index}`}
-                                        className={`text-xs rounded-md px-2.5 py-2 border ${isLatest ? 'border-white/20 bg-black/20 opacity-100' : 'border-white/10 bg-black/10 opacity-90'}`}
-                                    >
-                                        <div className="flex items-start justify-between gap-3">
-                                            <span className="font-semibold tracking-wide text-[10px] opacity-80">{phaseLabel}</span>
-                                            <span className="text-[10px] opacity-60 tabular-nums shrink-0">
-                                                {startedTime
-                                                    ? `${t('启动', 'Started')} ${startedTime} · ${t('耗时', 'Elapsed')} ${formatDurationMs(itemDurationMs)}`
-                                                    : `${t('耗时', 'Elapsed')} ${formatDurationMs(itemDurationMs)}`}
-                                                {` · #${index + 1}`}
+                                ? 'text-emerald-200'
+                                : 'text-purple-200';
+                    return (
+                        <div className={`mt-3 pt-3 border-t border-white/10 ${statusTone}`}>
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div className="flex min-w-0 items-center gap-2.5">
+                                    {progressPhase === 'completed' ? <CheckCircle className="w-4 h-4 shrink-0" /> : progressPhase === 'failed' ? <X className="w-4 h-4 shrink-0" /> : progressPhase === 'warning' ? <Info className="w-4 h-4 shrink-0" /> : analysisLive ? <Loader2 className="w-4 h-4 shrink-0 animate-spin" /> : <Info className="w-4 h-4 shrink-0" />}
+                                    <div className="min-w-0">
+                                        <div className="font-semibold tracking-wide text-sm text-white">
+                                            {t('进度日志', 'Progress log')}
+                                            <span className="ml-2 font-medium text-xs opacity-80">
+                                                {progressPhase === 'completed'
+                                                    ? t('分析已完成', 'Analysis complete')
+                                                    : progressPhase === 'failed'
+                                                        ? t('分析失败', 'Analysis failed')
+                                                        : progressPhase === 'warning'
+                                                            ? t('分析完成（有提示）', 'Analysis finished with notices')
+                                                            : analysisLive
+                                                                ? t('剧本分析进行中', 'Script analysis in progress')
+                                                                : ''}
                                             </span>
                                         </div>
-                                        <div className="mt-1 opacity-95 whitespace-pre-wrap break-words">
-                                            {displayMessage || item.message}
-                                        </div>
-                                        {highlightHint ? (
-                                            <div className={`mt-1.5 rounded-md border px-2 py-1 text-[11px] font-semibold leading-snug ${isLatest ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100' : 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200/90'}`}>
-                                                {highlightHint}
+                                        {(analysisLive || startedClock || analysisHeartbeatElapsedMs > 0) ? (
+                                            <div className="mt-0.5 text-xs opacity-80 tabular-nums">
+                                                {startedClock
+                                                    ? `${t('启动', 'Started')} ${startedClock} · ${t('耗时', 'Elapsed')} ${formatDurationMs(analysisHeartbeatElapsedMs)}`
+                                                    : `${t('耗时', 'Elapsed')} ${formatDurationMs(analysisHeartbeatElapsedMs)}`}
+                                                {analysisLive ? (
+                                                    <span className="ml-2 opacity-70">{t('复杂剧本通常需要较长时间', 'Complex scripts usually take longer')}</span>
+                                                ) : null}
                                             </div>
                                         ) : null}
+                                        {currentMessage ? (
+                                            <div className="mt-0.5 truncate text-xs opacity-80">{currentMessage}</div>
+                                        ) : null}
                                     </div>
-                                );
-                            })}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                    {showRetryButton && (
+                                        <button
+                                            type="button"
+                                            onClick={handleAnalysisClick}
+                                            className="rounded-xl border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-bold text-white hover:bg-white/20 transition-colors"
+                                        >
+                                            {t('重试', 'Retry')}
+                                        </button>
+                                    )}
+                                    {!analysisLive || ['completed', 'warning', 'failed'].includes(progressPhase) ? (
+                                        <button
+                                            type="button"
+                                            onClick={dismissAnalysisProgressPanel}
+                                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-1.5 text-xs font-semibold text-white/80 hover:bg-white/10 transition-colors"
+                                        >
+                                            {t('清除日志', 'Clear log')}
+                                        </button>
+                                    ) : null}
+                                </div>
+                            </div>
+                            {String(analysisFlowStatus?.highlightHint || '').trim() && analysisLive && (
+                                <div className="mt-2 text-xs font-medium text-emerald-100/90">
+                                    {String(analysisFlowStatus.highlightHint).trim()}
+                                </div>
+                            )}
+                            {analysisUnifiedProgressLog.length > 0 && (
+                                <div
+                                    ref={analysisProgressLogRef}
+                                    onScroll={(event) => {
+                                        const el = event.currentTarget;
+                                        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+                                        analysisProgressLogStickToBottomRef.current = distanceFromBottom < 48;
+                                    }}
+                                    className="mt-2 max-h-44 overflow-y-auto overscroll-contain custom-scrollbar pr-1 text-[11px] leading-snug"
+                                    title={t('上滑查看更早的进度日志', 'Scroll up to see earlier progress logs')}
+                                >
+                                    {analysisUnifiedProgressLog.map((item, index) => {
+                                        const itemStartedAt = Number(item?.createdAt || item?.at || 0);
+                                        const itemEndedAt = Number(item?.endedAt || 0);
+                                        const itemDurationMs = Number.isFinite(itemStartedAt) && itemStartedAt > 0 && item.kind === 'history'
+                                            ? Math.max(0, (itemEndedAt > 0 ? itemEndedAt : Date.now()) - itemStartedAt)
+                                            : 0;
+                                        const startedTime = formatHistoryClock(itemStartedAt);
+                                        const phaseLabel = item.kind === 'history' ? getBusinessPhaseLabel(item?.phase) : '';
+                                        const highlightHint = String(item?.highlightHint || '').trim();
+                                        const typeTone = item.type === 'error' || item.type === 'failed'
+                                            ? 'text-red-200'
+                                            : item.type === 'warning'
+                                                ? 'text-amber-200'
+                                                : item.type === 'success'
+                                                    ? 'text-emerald-200'
+                                                    : 'text-white/80';
+                                        return (
+                                            <div
+                                                key={item.id || `${itemStartedAt}-${index}`}
+                                                className={`py-1 ${index > 0 ? 'border-t border-white/5' : ''}`}
+                                            >
+                                                <div className={`flex items-start gap-2 ${typeTone}`}>
+                                                    <span className="tabular-nums text-white/40 shrink-0 w-[4.5rem]">
+                                                        {startedTime || '--:--:--'}
+                                                    </span>
+                                                    {phaseLabel ? (
+                                                        <span className="shrink-0 text-white/45 w-16 truncate">{phaseLabel}</span>
+                                                    ) : null}
+                                                    <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+                                                        {item.message}
+                                                        {itemDurationMs > 0 ? (
+                                                            <span className="ml-2 text-white/35 tabular-nums">
+                                                                {formatDurationMs(itemDurationMs)}
+                                                            </span>
+                                                        ) : null}
+                                                    </span>
+                                                </div>
+                                                {highlightHint ? (
+                                                    <div className="mt-0.5 pl-[4.5rem] text-[10px] text-emerald-200/85">
+                                                        {highlightHint}
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
                         </div>
-                    )}
-                </div>
-                );
-            })()}
+                    );
+                })()}
+            </div>
 
             <div className="relative flex-1 min-h-0 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-b from-black/35 via-black/25 to-black/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] flex flex-col">
                 <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/35 to-transparent" />

@@ -195,7 +195,7 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
             common
             + "主环境 generation_prompt_cn 格式（强制，折中两段式：四面后景+中景 → 四宫格引用+左右缘钉）：\n"
             "- ①全局共享（全文一次，不得少）：整体风格定位 + 开篇拓扑 + 光影体系 + 色彩体系 + 中区共享实体。\n"
-            "- 数量预检先行：固定实体须有明确总数；同质多件须有总数、分组/分边、逐具朝向与顺序，且总数=分项和；门/窗/楼梯总数显式；每扇窗棂须有横×纵格阵与同墙顺序。禁止“若干/数把/多张/一些/成排/散座”等模糊数量词；缺项时 logic 标 upstream_missing_env_inventory_quantification 并保留原 Index 锁，禁止猜数成稿。\n"
+            "- 数量预检先行：固定实体须有明确总数；同质多件须有总数、分组/分边、逐具朝向与顺序，且总数=分项和；门/窗/楼梯总数显式；每扇窗棂须有横×纵格阵与同墙顺序。禁止“若干/数把/多张/一些/成排/散座”等模糊数量词；缺项时 logic 标 upstream_missing_env_inventory_quantification 并保留原 Index 锁，禁止猜数，但 generation_prompt_cn 必须非空（骨架+已锁具名实体）。\n"
             "- ②【四面内容基准】：每向只写【N度方向】后景（背景正对+材质+可见面）+ 中景（舞台净空+中区投影+椅位）；后景+中景合计细节充足；**禁止在四面写左右缘长文**。\n"
             "- ③【四向拼图】：16:9 横幅 2×2（左上=0度、右上=90度、左下=270度、右下=180度）；每格组装为「后景=严格按【N度方向】后景；中景=严格按【N度方向】中景；画面左缘=查表结果钉句；画面右缘=查表结果钉句」；禁止俯拍；各格眼高约 50mm；Clean Plate；各格角度文字标志。\n"
             "- 左右缘必须是查表**结果钉句**（贴边窄条+端锚+可见面+NOT background）；楼梯邻缘另加单跑同核钉；**禁止**写「由邻面旋转/对照得到左右」过程词；**禁止**省略任一侧缘。\n"
@@ -204,19 +204,20 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
             "- 门/窗/楼梯唯一落位：完整门扇或贴墙整跑梯只写在所属扇区那一向的**后景**；邻向只在四宫格左右缘出窄条。\n"
             "- 楼梯须声明上行朝向 U；禁止四面都画成迎面拾级。\n"
             "- 歧义控制：一名一物；一物一位；坐标≠朝向。\n"
-            "- description_cn 必须为 \"\"；dependency_strategy.type 必须为 BaselineDefinition；visual_dependencies=[]。\n"
+            "- description_cn 必须为 \"\"；generation_prompt_cn 必须非空；dependency_strategy.type 必须为 BaselineDefinition；visual_dependencies=[]。\n"
             "- 若图片本身已是四宫格，后景/中景回写进【四面内容基准】，左右缘写入【四向拼图】；若图片是单视角，仍须输出完整折中两段式（其余向据空间一致性合理补齐，logic 标明推断向）。\n"
             "- 构图与纵深是方法，必须在过程中体现：全局写构图倾向+纵深光层/色层；每一向后景/中景写本向三分或压迫落点与近中远受光；四宫格每格用左右缘完成围合纵深。禁止省略。\n"
             "- 严禁跳过【四面内容基准】；严禁指望模型自行旋转邻面生成左右缘；严禁把构图/纵深收成一篇单镜头 16:9 空镜来顶替 2×2；严禁改成角色/道具白底四视图。"
         )
     return (
         common
-        + "衍生环境 generation_prompt_cn 格式（强制，§A/§B/§C 截取放大；禁另起四面）：\n"
-        "- §A（仅 logic + anchor_description）：含全局楼底继承 + 截取宫格（左上0/右上90/左下270/右下180）+ 本镜可见面切片；禁改楼底。\n"
-        "- §B（generation_prompt_cn 核心）：仅写截取放大指令——点名所属主环境「{名}」四向拼图参考图，并写死宫格（N=0→左上0度格，N=90→右上90度格，N=270→左下270度格，N=180→右下180度格）；同 N 后缀行必须截同一格；不要重新描述画面细节，不要重布门窗柜台楼梯，不要另起一间房。\n"
-        "- 同核：visual_dependencies 必须挂主环境（状态后挂上一状态）；主环境四宫格图未就绪不得当无参考文生；禁止角度互挂（180 不得挂 0 度图）。\n"
-        "- §C（可选）：仅叠加本镜可见状态/特效 Delta；禁借 Delta 改楼底；Clean Plate；禁人物。\n"
-        "- description_cn 必须为 \"\"；衍生元数据/Delta 写入 dependency_strategy.logic；保留既有 visual_dependencies / dependency_strategy 语义；generation_prompt_cn 须可检索 所属主环境={主环境名}。"
+        + "衍生环境 generation_prompt_cn 格式（强制，截取放大；第一刀保宫格几何，不写楼底）：\n"
+        "- §A（仅 logic + anchor_description）：所属主环境= + 截取宫格（左上0/右上90/左下270/右下180，与 N 同核）；禁写开篇拓扑/楼底。\n"
+        "- §B 第一刀：所属主环境={名}。angle_key={名}|{N}。请严格要求按对应主环境「{名}」四向拼图参考图，截取并放大其中对应的明确宫格位置（{宫格}），不要重新描述画面细节，直接作为本镜头的最终画面。切割衍生环境时均按16:9固定比例，并保证高分辨率。截取后须保持该宫格原有的正对边界与四方正交——输入该向内容仍为正面面对的背景主景，禁止改成斜向机位、墙角构图或荷兰角；同时保持适度景深与纵深感，使左右两侧立面与侧边内容在透视中自然入画基本可见。\n"
+        "- §B 衍生的衍生：所属主环境={名}。angle_key={名}|{N}。以已切割的同角衍生「{同角已切割衍生名}」参考图为本镜头最终画面。16:9，高分辨率。不要改构图，不要重切宫格，不要描述未改实体。禁止复述陈设/开篇拓扑/坡向。\n"
+        "- 依赖图（最高；对应必须准确）：第一刀视角衍生 visual_dependencies 必须且仅能 [\"ENV:[所属主环境名]\"]。衍生的衍生必须且仅能 [\"ENV:[同角已切割衍生名]\"]（如 ENV:[0度港口办公室]），N 必须与本行相同；禁止挂他角切割图；禁止在已有同角切割时回挂主环境四向拼图；禁止 CHAR/PROP/海报/他主。对应参考图未就绪不得当无参考文生。\n"
+        "- §C（衍生的衍生）：只写相对同角切割图真正变化的项。禁止描述未改实体（未改实体名及其描述一句都不出现）。变化实体名必须与原清单/主环境已写名逐字符相同，不得重新取名、润色、缩写或同义替换。可写光色/氛围短增量，或该已锁名实体的形状短差值。禁止另起一间房；不改依赖图；Clean Plate；禁人物。\n"
+        "- description_cn 必须为 \"\"；generation_prompt_cn 必须非空且可检索 所属主环境={主环境名}；衍生元数据/Delta 写入 dependency_strategy.logic。"
     )
 
 
@@ -322,7 +323,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
     deps_rule = (
         "visual_dependencies must be []."
         if is_main_env
-        else "visual_dependencies must preserve CURRENT.visual_dependencies (do not clear ENV references)."
+        else "visual_dependencies: first-cut angle derivatives must be [\"ENV:[所属主环境名]\"] (four-panel). Derivatives-of-derivatives must be [\"ENV:[同角已切割衍生名]\"] with the same N as this row. Do not hang a different angle, and do not hang the main four-panel when the same-angle crop already exists."
     )
     return f"""
 {format_contract}

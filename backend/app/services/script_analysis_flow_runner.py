@@ -26,6 +26,10 @@ from app.services.script_analysis_flow import (
     import_analyze_scene_stage_result,
     upsert_pipeline_node_status,
 )
+from app.services.script_analysis_llm_config import (
+    _resolve_script_analysis_dropdown_order,
+    _select_script_analysis_api_order,
+)
 from app.services.subject_index_resolve import (
     _script_optimization_has_project_visual_backfill,
     _subject_index_has_cover_poster,
@@ -34,6 +38,21 @@ from app.services.subject_index_resolve import (
 )
 
 logger = logging.getLogger("api_logger")
+
+
+def _coerce_system_api_id(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def _next_script_analysis_fallback_api_id(db: Session, function_name: Any, system_api_id: Any) -> int:
+    ordered_ids = _resolve_script_analysis_dropdown_order(db, function_name)
+    _, fallback_ids = _select_script_analysis_api_order(ordered_ids, system_api_id)
+    if not fallback_ids:
+        return 0
+    return _coerce_system_api_id(fallback_ids[0])
 
 
 async def execute_scene_analysis_flow_node(
@@ -210,25 +229,70 @@ async def execute_scene_analysis_flow_node(
                     )
                     db.commit()
             elif node_key == "script_optimization":
-                max_attempts = 2
+                # Visual backfill JSON is a completeness gate, not a standalone artifact.
+                # Incomplete output => full Stage 1 rerun (same API x2, then one switched API).
+                original_api_id = _coerce_system_api_id(raw_payload.get("system_api_id"))
+                fallback_api_id = 0
+                try:
+                    fallback_api_id = _next_script_analysis_fallback_api_id(
+                        db,
+                        raw_payload.get("function_name") or "script_analysis",
+                        original_api_id or raw_payload.get("system_api_id"),
+                    )
+                except Exception as fallback_exc:
+                    logger.warning(
+                        "[剧本分析流程] 节点 %s 无法解析备用 API | err=%s",
+                        node_key,
+                        fallback_exc,
+                    )
+                api_attempts = [original_api_id, original_api_id]
+                if fallback_api_id > 0 and fallback_api_id != original_api_id:
+                    api_attempts.append(fallback_api_id)
+                else:
+                    api_attempts.append(original_api_id)
+                    logger.warning(
+                        "[剧本分析流程] 节点 %s 无可用备用 API，第三次仍使用当前 API | system_api_id=%s",
+                        node_key,
+                        original_api_id or None,
+                    )
                 result = None
-                for attempt in range(1, max_attempts + 1):
-                    result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
+                max_attempts = len(api_attempts)
+                for attempt, api_id in enumerate(api_attempts, start=1):
+                    payload = dict(raw_payload)
+                    if api_id > 0:
+                        payload["system_api_id"] = api_id
+                    switched = api_id > 0 and api_id != original_api_id
+                    if switched:
+                        logger.info(
+                            "[剧本分析流程] 节点 %s 换 API 整段重跑 | attempt=%s/%s from=%s to=%s",
+                            node_key,
+                            attempt,
+                            max_attempts,
+                            original_api_id,
+                            api_id,
+                        )
+                    result = await analyze_scene(
+                        AnalyzeSceneRequest(**payload),
+                        current_user=current_user,
+                        db=db,
+                        async_mode="0",
+                    )
                     result_text = _extract_analysis_text_from_result(result)
-                    has_visual_backfill = _script_optimization_has_project_visual_backfill(result_text)
-                    if has_visual_backfill:
+                    if _script_optimization_has_project_visual_backfill(result_text):
                         if attempt > 1:
                             logger.info(
-                                "[剧本分析流程] 节点 %s 在重试后通过 Project Visual Backfill 校验 | attempt=%s",
+                                "[剧本分析流程] 节点 %s 整段重跑后通过完整性校验 | attempt=%s switched_api=%s",
                                 node_key,
                                 attempt,
+                                switched,
                             )
                         break
                     logger.warning(
-                        "[剧本分析流程] 节点 %s 缺少 Project Visual Backfill | attempt=%s/%s",
+                        "[剧本分析流程] 节点 %s 缺少 Project Visual Backfill（输出不完整） | attempt=%s/%s switched_api=%s",
                         node_key,
                         attempt,
                         max_attempts,
+                        switched,
                     )
                     if attempt >= max_attempts:
                         raise HTTPException(
@@ -244,7 +308,11 @@ async def execute_scene_analysis_flow_node(
                         status="running",
                         progress_percent=15.0,
                         error_code="SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING",
-                        error_message="project_visual_backfill missing, auto-retrying once",
+                        error_message=(
+                            "incomplete Stage 1 output, switching API and rerunning"
+                            if (attempt + 1) == max_attempts and fallback_api_id > 0 and fallback_api_id != original_api_id
+                            else "incomplete Stage 1 output, auto-retrying full script_optimization"
+                        ),
                     )
                     db.commit()
             elif node_key == "scene_markdown":

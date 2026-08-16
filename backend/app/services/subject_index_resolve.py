@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, List, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from app.services.llm_markdown_sanitize import sanitize_subject_index_text
 
@@ -215,43 +215,130 @@ def _subject_index_has_cover_poster(subject_index_text: Any) -> bool:
     return False
 
 
-def _script_optimization_has_project_visual_backfill(result_text: Any) -> bool:
-    text = str(result_text or "").strip()
-    if not text:
-        return False
+_VISUAL_BACKFILL_ROOT_KEYS = (
+    "project_visual_backfill",
+    "Project_Visual_Backfill",
+    "projectVisualBackfill",
+)
+_VISUAL_BACKFILL_CONTENT_KEYS = (
+    "Global_Style",
+    "global_style",
+    "borrowed_films",
+    "tone",
+    "color_spectrum",
+    "plot_summary",
+    "music_recommendation",
+)
 
-    if re.search(r"(?i)\bproject_visual_backfill\b", text):
-        return True
-    if re.search(r"(?im)^\s*(?:#{1,6}\s*)?Project\s*Visual\s*Backfill\b", text):
-        return True
 
+def _coerce_project_visual_backfill_obj(parsed: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(parsed, dict):
+        return None
+    for key in _VISUAL_BACKFILL_ROOT_KEYS:
+        inner = parsed.get(key)
+        if isinstance(inner, dict) and inner:
+            return inner
+    if any(key in parsed for key in _VISUAL_BACKFILL_CONTENT_KEYS):
+        return parsed
+    return None
+
+
+def _iter_json_object_candidates(text: str) -> Iterator[str]:
     fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
     for match in fence_re.finditer(text):
         candidate = str(match.group(1) or "").strip()
-        if not candidate:
+        if candidate:
+            yield candidate
+
+    stripped = str(text or "").strip()
+    if stripped:
+        yield stripped
+
+    brace_depth = 0
+    start_index = -1
+    in_string = False
+    escape = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
             continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            if brace_depth == 0:
+                start_index = index
+            brace_depth += 1
+        elif char == "}":
+            if brace_depth <= 0:
+                continue
+            brace_depth -= 1
+            if brace_depth == 0 and start_index >= 0:
+                yield text[start_index : index + 1]
+                start_index = -1
+
+
+def extract_project_visual_backfill_object(result_text: Any) -> Optional[Dict[str, Any]]:
+    """Return a parseable project_visual_backfill object, or None if missing/truncated."""
+    text = str(result_text or "").strip()
+    if not text:
+        return None
+
+    for candidate in _iter_json_object_candidates(text):
         try:
-            obj = json.loads(candidate)
-            if isinstance(obj, dict) and (
-                "project_visual_backfill" in obj
-                or "Project_Visual_Backfill" in obj
-                or "projectVisualBackfill" in obj
-            ):
-                return True
+            parsed = json.loads(candidate)
         except Exception:
             continue
+        coerced = _coerce_project_visual_backfill_obj(parsed)
+        if coerced:
+            return coerced
+    return None
 
-    try:
-        maybe_obj = json.loads(text)
-        if isinstance(maybe_obj, dict) and (
-            "project_visual_backfill" in maybe_obj
-            or "Project_Visual_Backfill" in maybe_obj
-            or "projectVisualBackfill" in maybe_obj
-        ):
-            return True
-    except Exception:
-        pass
 
-    return False
+def _script_optimization_has_project_visual_backfill(result_text: Any) -> bool:
+    """True only when a parseable project_visual_backfill object is present."""
+    return extract_project_visual_backfill_object(result_text) is not None
+
+
+def strip_trailing_project_visual_backfill_section(result_text: Any) -> str:
+    text = str(result_text or "").replace("\r\n", "\n").rstrip()
+    if not text:
+        return ""
+
+    marker_re = re.compile(
+        r"(?im)^(?:#{1,6}\s*)?(?:第三部分[:：]?\s*)?Project\s*Visual\s*Backfill\b"
+        r"|^第三部分[:：]?\s*Project\s*Visual\s*Backfill\b"
+        r"|^\{\s*\"project_visual_backfill\"\s*:",
+    )
+    last_idx = -1
+    for match in marker_re.finditer(text):
+        last_idx = match.start()
+    if last_idx >= 0 and last_idx >= int(len(text) * 0.4):
+        return text[:last_idx].rstrip()
+    return text
+
+
+def merge_project_visual_backfill_into_result_text(result_text: Any, backfill_obj: Any) -> str:
+    payload_obj = _coerce_project_visual_backfill_obj(backfill_obj) or (
+        backfill_obj if isinstance(backfill_obj, dict) else None
+    )
+    if not payload_obj:
+        return str(result_text or "")
+    payload = {"project_visual_backfill": payload_obj}
+    block = (
+        "### 第三部分：Project Visual Backfill\n"
+        "```json\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
+        "```"
+    )
+    text = strip_trailing_project_visual_backfill_section(result_text)
+    if not text:
+        return block
+    return f"{text}\n\n{block}"
 
 

@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-08-16 13:55:00 +08:00
+# Prompt Updated At: 2026-08-16 22:25:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -52,6 +52,7 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 - **语言总契约**：自然语言默认跟随剧本原语；`Project Context.Language` / `project_language` 明确时覆盖。仅 ID、固定键名、约定标签可保留既定格式；其余禁中英混杂。**同义中英重复**：叙述字段只保留项目语言侧（`_cn`/`_en` 固定双语列各填各语除外，禁同格堆叠同义双语）。
 - **双语字段**：`_cn` 中文；`_en` 英文；`anchor_description` 英文短语（3–5 个高密度短语定位同一实体；Character 优先身份/相貌轮廓/区分服饰）。例外：`generation_prompt_en` 恒为 `""`；完整生图词只写 `generation_prompt_cn`。
 - **`description_cn` 禁输出正文（最高；全实体）**：JSON 键可保留，但值**必须**为 `""`。禁止写入择型/选角/光学 rationale/美学参考/拓扑/Delta/规划备注等任何正文；此类不成稿内容只进 `dependency_strategy.logic`。界面展示以 `generation_prompt_cn` 替代描述。若 `description_cn` 非空 = 失败重写。
+- **`generation_prompt_cn` 禁空（最高；全实体）**：完整生图词必须非空。`""` 只属于 `description_cn` / `generation_prompt_en`。禁止因自检失败、上游缺口、「停止成稿」「废弃重写」把 `generation_prompt_cn` 写成空串——缺口进 `dependency_strategy.logic`，prompt 仍须按分型合同成稿。同一主环境族主+衍生皆空 = 失败。
 - **可见/可听文本**：对白、字幕、屏幕字、招牌口号、牌匾题字、书册封面/内页、纸笺文书等须为目标项目语言后写入中文提示词；禁无依据翻译剧本原有非英语可见元素。
 - **载体可见文字（强制；ENV 陈设与 PROP 共用）**：凡画内可辨识文字的载体——牌匾/匾额/店招/**招牌灯**/门牌/路牌/横幅/霓虹/灯箱/电子屏、书册/卷轴/册页、纸笺/文书/告示/符箓/菜单/铭牌等——`generation_prompt_cn` **必须写清四项**（缺任一=失败重写）：
   1. **文字内容**：逐字可读文案（上游 `visible_text` 有原文→逐字透传；标注「原文未明示；根据剧情补写」或仅载体无字→本阶段据剧情/场域/机构/时代/项目语言**补写具体可读字**；禁「某店招牌/一本古书/一叠纸」无字占位；禁乱码、模糊「看不清的字」冒充实文案——除非上游明文要求不可读/污损遮挡，且须写明遮挡原因与仍可见残字）。
@@ -99,7 +100,7 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 - 默认器材：仅剧情明确要求时才把 camera/lens/operator 写成画面实体。
 - **真人 Character 拍摄载体例外**：§1.6=真人且单人定妆时，`generation_prompt_cn` **须**含精简拍摄载体短语（机身+镜头+ISO+RAW+未修图；见 character §2.3 层5）；完整 Key/Fill/Rim 只写 `dependency_strategy.logic`（`description_cn` 恒 `""`）。不适用道具/环境/群演簇；禁把摄影师写成画面内实体。
 - **单状态只读**：同一 Subject 只呈现一个物理状态（以 Index 为准）；需多状态而上游仅一条 → Node 4 回流。
-- **变体与继承链**：允许的 `dependency_strategy.type`：`Original`（角色/道具基准）｜`BaselineDefinition`（主环境基准，`visual_dependencies=[]`）｜`Type A` / `Type B`（派生）。派生指向剧情时序**紧邻上一完整形象**。同 Scene 视角衍生→主环境/基础版；状态/破坏链→前一完整状态，禁跳链。破坏态被依赖→新衍生须逐项回补破损可见细节；修复态写恢复细节，禁跳跃抹除。提示词写清不变锚点与当前变化。`visual_dependencies` 禁 `subject_no`；实体名与 Index 逐字符一致。
+- **变体与继承链**：允许的 `dependency_strategy.type`：`Original`（角色/道具基准）｜`BaselineDefinition`（主环境基准，`visual_dependencies=[]`）｜`Type A` / `Type B`（派生）。派生指向剧情时序**紧邻上一完整形象**。同 Scene 视角衍生→主环境/基础版；状态/破坏链→前一完整状态，禁跳链。破坏态被依赖→新衍生须逐项回补破损可见细节；修复态写恢复细节，禁跳跃抹除。提示词写清不变锚点与当前变化。`visual_dependencies` 禁 `subject_no`；实体名与 Index 逐字符一致。**环境生图依赖（对应必须准确）**：第一刀视角衍生 `visual_dependencies=["ENV:[所属主环境名]"]`（四向拼图）。衍生的衍生必须挂**同角已切割**衍生（`ENV:[{N}度{主}]` 或该角上一状态）；N 必须与本行相同；禁止挂他角、禁止在已有同角切割时回挂主环境四向拼图。衍生的衍生 §C 可写已有具名实体的形状变化，但**禁止描述未改实体**；变化实体名须与原名逐字符相同，不得重新取名。CHAR/PROP 仍按族谱挂上一完整形象。
 - 每实体专属 `negative_prompt_en`（短而自适应）：真人滤假人感/平滑/CGI；道具环境滤塑料/微缩；及其他时代错置/多余肢体等。
 - 四视图资产页可用分屏相关词。
 - **合规**：`description`/`appearance`/`generation_prompt_cn`/锚点须安全可播出；禁血腥、断肢、内脏、严重伤痕、肉体变异、强不适污物、涉暴/涉黄/猎奇。战损→轻微擦痕/破衣/灰尘/疲态；禁伤口形态或流血量。优先于写实需求。
