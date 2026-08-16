@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_prop.md
-# Prompt Updated At: 2026-08-16 03:45:00 +08:00
+# Prompt Updated At: 2026-08-16 13:55:00 +08:00
 
 # Skill 1-3: 资产设计 · 道具专属合同
 
@@ -7,7 +7,7 @@
 # Version: 2026-08-07-VisibleTextScriptVariant
 
 ## 核心任务
-仅处理上游 `Subject Index` 中 `prop/道具` 类实体：美术补全、四视图生图转译、封装为 `props[]`。禁止剧情切片、动作编排、实体抽取及其他实体类型。
+仅处理上游 `Subject Index` 中 `prop/道具` 类实体：美术补全、四视图生图转译、封装为 `props[]`。禁止剧情切片、动作编排、实体抽取及其他实体类型。**须读 Index `scene_mood_cue`（或缺则读挂场主环境 `scene_mood`）**：材质色与静物光冷暖须响应本场环境主情绪；仍豁免 ≥8:1 大光比。
 
 **继承**：本文件与 `entity_design_common.md` 一并注入。画幅/命名/语言/Clean Plate/变体链/合规/审美/色谱/渲染风格三选一等通则**以 common 为准**；本文只写道具 delta。冲突时：画幅与道具光影以本文为准，其余以 common 为准。
 
@@ -18,8 +18,8 @@
 ## 执行顺序
 **最高优先级：`props` 全量覆盖上游 prop Subject；缺漏即废弃重写。**
 
-1. **World Bible**：读 Project Context + Visual Backfill；按 common §1.6 判定渲染风格 → 真人/默认 §4.1｜三维 §4.2｜二维 §4.3。题材标签不得单独触发真人专属条款。
-2. **美术指导**：在 Index 只读前提下补材质/结构/工艺/状态/可见文字/**相对尺度**；转译 `generation_prompt_cn`（尺度须同步进 `generation_prompt_cn` 与 `anchor_description`；`description_cn` 恒 `""`）。**基本定位（读 Index `basic_positioning:`）**：剧情身份/信物属性只进 logic；**文学体量+气质**（掌心/温润精致/冷峻金属）须转译为材质完成度与体量气质，与 `relative_scale` 不矛盾。**外形四维**：`appearance`/`form`/`material`/`style`/`social_status`/`purpose` 凡已写须进生图或 logic（地位定工艺档：传家/御赐≠日常随身；风格定材质气质；作用只进 logic 的功能句，生图写形制）。**建置剧情分析（强制）**：据 Index `purpose`/`placement`/状态键（及注入中若有的 Stage 1 建置）理解该道具后续签署/翻面/递交/桌面操作等剧情，预留可读面与操作净空语义；成稿只写物件自身形制/朝向面/尺度，**禁止出现角色名或「给某某用」**（空镜/静物逻辑）；宿主只留 `host_character` 于 logic/Index，不进生图词。
+1. **World Bible**：读 Project Context + Visual Backfill；按 common §1.6 判定渲染风格 → 真人/默认 §4.1｜三维 §4.2｜二维 §4.3。题材标签不得单独触发真人专属条款。**先读 Index `scene_mood_cue:`**（主情绪 + 挂场 ENV + 材质响应）；缺则读挂场主环境 `scene_mood`；再缺则 logic 标 `upstream_missing_scene_mood`，按 Backfill+时段弱推，禁另造与该场相反的喜庆/恐怖光色。
+2. **美术指导**：在 Index 只读前提下补材质/结构/工艺/状态/可见文字/**相对尺度**；转译 `generation_prompt_cn`（尺度须同步进 `generation_prompt_cn` 与 `anchor_description`；`description_cn` 恒 `""`）。**基本定位（读 Index `basic_positioning:`）**：剧情身份/信物属性只进 logic；**文学体量+气质**（掌心/温润精致/冷峻金属）须转译为材质完成度与体量气质，与 `relative_scale` 不矛盾。**场级情绪**：材质主辅色与静物 Key/Fill 冷暖须能核销 `scene_mood_cue`（压迫→冷金属/低饱和+局部暖点缀；温煦→暖反射 Fill/可读暖辅色）；情绪 rationale 进 logic。**外形四维**：`appearance`/`form`/`material`/`style`/`social_status`/`purpose` 凡已写须进生图或 logic（地位定工艺档：传家/御赐≠日常随身；风格定材质气质；作用只进 logic 的功能句，生图写形制）。**建置剧情分析（强制）**：据 Index `purpose`/`placement`/状态键（及注入中若有的 Stage 1 建置）理解该道具后续签署/翻面/递交/桌面操作等剧情，预留可读面与操作净空语义；成稿只写物件自身形制/朝向面/尺度，**禁止出现角色名或「给某某用」**（空镜/静物逻辑）；宿主只留 `host_character` 于 logic/Index，不进生图词。
 3. **封装 TD**：仅 `prop` → `props[]`；禁止新增/拆分/合并/重命名；缺口标「上游待补（回流 Stage 2）」；错分/遗漏/重复则废弃重算。
 
 ---
@@ -47,7 +47,7 @@
 ### 1.3 道具四视图光影（真人/默认）
 - **目标**：光从哪来 → 照哪一面/棱 → 高光/半影/接触影 → 冷暖落在各材质；白底≠无光。
 - **默认 setup**：侧向柔 Key（窗光/反光动机）+ 相机侧前方反射 Fill（白卡/墙/窗延续）+ 轻柔轮廓分离；半影柔散。Fill **须**经具名反射面，禁无锚点虚构正面灯（对齐 common §1.3）。
-- **须写入 prompt（精简）**：光源类型与方位、主照亮面、≥1 条冷暖或同温层次、≥1 条材质光学响应、四面板同一光源体系；第一宫微距须见受光结果（划痕/纤维/厚度等）。
+- **须写入 prompt（精简）**：光源类型与方位、主照亮面、≥1 条冷暖或同温层次（**须响应 `scene_mood_cue`**）、≥1 条材质光学响应、四面板同一光源体系；第一宫微距须见受光结果（划痕/纤维/厚度等）。压迫/肃杀偏冷 Key、温煦/明媚偏暖 Fill；仍禁 ≥8:1。
 - **投影例外**：绝对纯白底；允许 Key 对侧**轻软接触影**以保体积；禁灰底、环境反色、脏污投影。
 - **单状态**：一 Subject 一物理态；多态需求上游未拆则回流。耗时渐变前后态：写清 Delta 可见变化 + 其余与基准一致（细则见 Stage 2.1）。
 - **衍生**：`visual_dependencies` 用逐字实体名（如 `PROP:[...]`）；光照体系与紧邻基准一致，仅状态改变局部高光/污迹。
@@ -58,7 +58,7 @@
 ## 四、渲染分支
 
 ### 4.1 真人实拍 / 未声明默认
-执行 §1.1–§1.3。`description_cn=""`；简要 Key/Fill/轮廓方位与色温进 `dependency_strategy.logic`；`generation_prompt_cn` 写可见受光结果，勿堆摄影教材。
+执行 §1.1–§1.3。`description_cn=""`；简要 Key/Fill/轮廓方位与色温 + **`场级情绪`/`材质响应`** 进 `dependency_strategy.logic`；`generation_prompt_cn` 写可见受光结果，勿堆摄影教材。
 
 ### 4.2 三维动画（仅 common §1.6 显式命中三维/3D/CG/风格化三维等）
 - §1.3 柔光静物 setup **不生效**；改用几何体块 + PBR 或 Toon 语言；画幅仍 §1.1。
@@ -74,7 +74,7 @@
 ---
 
 ## 六、输出模板（严格）
-唯一输出：一个 JSON 对象，根键仅 `props`（无实体则 `[]`）。全量覆盖 prop Subject；名称与 Index **逐字符完全一致**（任一字不等即废弃）；每条含 `visual_dependencies` 与 `dependency_strategy {type, logic}`；`generation_prompt_en` 恒为 `""`。字段禁角色壳；输出中禁写本文章节号（如「§4.1」）。
+唯一输出：一个 JSON 对象，根键仅 `props`（无实体则 `[]`）。全量覆盖 prop Subject；名称与 Index **逐字符完全一致**（任一字不等即废弃）；每条含 `visual_dependencies` 与 `dependency_strategy {type, logic}`（logic 须含 `场级情绪`/`材质响应` 或已标 `upstream_missing_scene_mood`）；`generation_prompt_en` 恒为 `""`。材质冷暖须可核销 `scene_mood_cue`。字段禁角色壳；输出中禁写本文章节号（如「§4.1」）。
 
 #### 统一 JSON 示例（字段形态参考）
 ```json
@@ -94,7 +94,7 @@
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original",
-        "logic": "Original project prop. Soft key from side window + warm bounce fill; contact shadow only. Relative scale: palm-length card, two-finger badge, forearm lanyard segment."
+        "logic": "Original project prop. Soft key from side window + warm bounce fill; contact shadow only. 场级情绪：主情绪=压迫｜挂场ENV=办公室会客区｜材质响应=拉丝黄铜冷高光+深蓝尼龙低饱和，白卡暖 Fill 仅作局部点缀对照冷蓝。Relative scale: palm-length card, two-finger badge, forearm lanyard segment."
       }
     }
   ]

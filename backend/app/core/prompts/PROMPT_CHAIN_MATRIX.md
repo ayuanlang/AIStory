@@ -62,7 +62,7 @@ Goal: keep `Episode -> Scene -> Shot` hierarchical continuity deterministic and 
 - Beats must be time-ordered and action-causal.
 - Beats must be spatially activated in scene space (no vacuum performance).
 - Beats must carry observer POV (`镜头位置`, `镜头朝向`, `角色-镜头关系`) and at least one framing parameter (`景别` or `镜高/俯仰`).
-- Beat single-line minimum template (copy-ready): `1. {镜头:机位在{ }旁/朝向{ }/轴线{左侧|右侧}} + {空间:CHAR:[@角色A]在ENV:[场景锚点]内相对{Stage}位于{ }} + {角色-镜头关系:CHAR:[@角色A]处于{前景|中景|后景}偏{左|右}、{正对|侧对|背对}镜头、景别{远景|全景|中景|近景|特写}、镜高/俯仰{平视|俯拍|仰拍}} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}}`.
+- Beat single-line minimum template (copy-ready): `1. {镜头:机位在{ }旁/朝向{ }/轴线{左侧|右侧}} + {空间:CHAR:[@角色A]在ENV:[场景锚点]内相对{Stage}位于{ }} + {角色-镜头关系:CHAR:[@角色A]处于{前景|中景|后景}偏{左|右}、{正对|侧对|背对}镜头、景别{远景|全景|中景|近景|特写}、镜高/俯仰{平视|俯拍|仰拍|主观视角}} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}}`.
 - Hard validation: if any required slot in the minimum template is missing, empty, or replaced by abstract summary text, the Beat is invalid and must be rewritten with all slots filled.
 - Beats should use explicit entity references in `[]` where required by prompt rules.
 - Include enhancement constraints when instructed (e.g.,角色高光, 视觉转场).

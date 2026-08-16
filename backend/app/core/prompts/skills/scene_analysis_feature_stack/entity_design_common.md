@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-08-16 03:45:00 +08:00
+# Prompt Updated At: 2026-08-16 13:55:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -12,7 +12,7 @@
 分型只写本型 delta；**命名锁 / 语言 / Clean Plate 通则 / 审美基线 / §1.5 色谱 / §1.6 渲染三选一 / 变体链枚举 / 合规**——以本文为唯一正文，分型不得复述长文。
 
 ## 核心任务
-Stage 3：资产设计、实体美化、视觉封装。输入 `Subject Index` + `Project Visual Backfill`（`Global_Style` / `tone` / `lighting` / `color_spectrum` 等文学级字段）；本阶段落实大光比与冷暖光谱（§1.5）；为每实体完成美术设计、规范化、镜头转译、JSON 无损打包与复核。禁止剧情切片、动作编排、实体抽取。
+Stage 3：资产设计、实体美化、视觉封装。输入 `Subject Index` + `Project Visual Backfill`（`Global_Style` / `tone` / `lighting` / `color_spectrum` 等文学级字段）；**须读 Index `scene_mood` / `scene_mood_cue`（本场环境主情绪简要）**，据此做环境灯光/色彩/构图，角色与道具同步考虑灯光与色彩；本阶段落实大光比与冷暖光谱（§1.5）；为每实体完成美术设计、规范化、镜头转译、JSON 无损打包与复核。禁止剧情切片、动作编排、实体抽取。
 
 ### 实体命名绝对锁（最高 · 白名单闭包 · 单权威）
 Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名——JSON `name` / `name_en` / `base_name_en`，以及 `visual_dependencies` / `dependency_strategy` / 正文 `CHAR:[@…]` / `ENV:[…]` / `PROP:[…]` 方括号内名称——**必须与 Index 对应行 `subject_name_zh` / `subject_name_en` 逐字符完全一致**（含空格/标点/大小写/前后缀）。落笔**原样复制** Index 单元格。
@@ -78,11 +78,11 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 - **字段显式回写**：`generation_prompt_cn` 吸收结构字段有效属性为视觉词；`generation_prompt_en=""`；`description_cn=""`。`name` 仅 JSON 原样保留；名称含可见类别信息时只吸收可见语义。
 - **实体物件可视性核验（最高；描述前强制）**：对任一实体写 `generation_prompt_cn` / 角色【衣着】配饰落点时，须先核「该细节在对应视图是否可见」——①道具四视图：正面格只强化正面可读细节，背面格写背面结构，侧面写厚度/侧缘，禁正面铭文出现在背视面板；②角色四视图+配饰：仅**不可离身**升格配饰（CHAR `accessory_props`）与未升格纯装饰按 Index `accessory_mount`/`wear_side` 落位——正面挂件出现在正视/¾，背面挂件出现在背视，侧面挂件在对应侧视可读；可离身升格 PROP 不进角色生图词；③ENV 四向/衍生：**扇区立面**的可见面写入对应 `{N}度…` 衍生的 `anchor_description` 与该宫格成稿；立面不可见面严禁写入该衍生锚点/生图词（禁对向串写立面、禁机位后方冒充可见）；**中区地面家具（茶几/矮几/中央桌/沙发）四格守恒**——可见面仍按格查表，但实体不得因换角从成稿消失（全挡须显式遮挡，禁静默删除；90/270 不得把矮几当成 0° 邻向立面省略）；**保持约 35mm–50mm 适度景深与空间纵深感，正对输入该向主景（四方正交），左右两侧立面与侧向结构在纵深透视中基本可见**；**场内实体按几何投影规则动态变换落位与朝向（F/U 可见面、长短边、楼梯上行方向等），跨视角守恒**；**输入该向内容=该向正面面对的围合立面，四方正交，禁偏斜/墙角主构图**；④遮挡/Clean Plate：不写镜头外、板外、被遮挡才「应存在」的细节当成本视图可见事实。缺挂载/朝向上游证据→标缺口，禁臆造可见面。
 - **Subject Index 全要素零缺失回写（最高）**：每条实体 Index 已写明的**任何要素**须在 `generation_prompt_cn` 逐项体现为可检索视觉描述；不可只写在 `appearance_cn`/`clothing`/`dependency_strategy.logic` 而 prompt 缺项。
-  - **覆盖**：`entity_attributes` 每一键值（材质/结构/光源/气象/`visible_text` 等文字字段/`appearance`/`style`/`social_status`/`literary_atmosphere`/`empty_view_delta`/`fixed_*_delta`/依赖差异/形态状态等）；衍生相对基准的变化；`script_entity_coverage` 中本实体可画面呈现的线索。**外形四维**（外形/风格/地位/作用）中可画面者须进 prompt（地位→完成度/品级；风格→材质气质）；ENV/PROP 的归属与「谁用」仍服从 Environment 例外，只进 logic。**§1.5 主冷暖与四层色谱**：Env/Prop 须完整落进 `generation_prompt_cn`；Character 真人定妆服从上方豁免门（色谱落服装；大光比句不进 prompt，rationale 进 logic）。
+  - **覆盖**：`entity_attributes` 每一键值（材质/结构/光源/气象/`visible_text` 等文字字段/`appearance`/`style`/`social_status`/`literary_atmosphere`/`scene_mood`/`scene_mood_cue`/`empty_view_delta`/`fixed_*_delta`/依赖差异/形态状态等）；衍生相对基准的变化；`script_entity_coverage` 中本实体可画面呈现的线索。**外形四维**（外形/风格/地位/作用）中可画面者须进 prompt（地位→完成度/品级；风格→材质气质）；ENV/PROP 的归属与「谁用」仍服从 Environment 例外，只进 logic。**`scene_mood`/`scene_mood_cue`**：ENV 转译为光色构图可见结果；CHAR 转译为服化配色（戏剧光只进 logic）；PROP 转译为材质冷暖与点缀。**§1.5 主冷暖与四层色谱**：Env/Prop 须完整落进 `generation_prompt_cn`；Character 真人定妆服从上方豁免门（色谱落服装；大光比句不进 prompt，rationale 进 logic）。
   - **Environment 例外（强制优先于本条覆盖）**：含角色名/人称/站姿对白/「谁用何处干什么」的 `purpose`/`activity_*`/`derivative_trigger_*`/`plot_*`/`basic_positioning` 等**不得**整句写入 `generation_prompt_cn`；只转译为空镜几何与可见陈设（例：座位区净空、门—桌纵深、反打可见半空间）。**`basic_positioning` 分层消费**：番位归属（女主/男主/「谁的住房」）只进 `dependency_strategy.logic` 并标「不成稿」；**体量档+气质/类型**（不大/精致小屋/旧木工业风）须转译为可检索空间尺度与完成度（不大→禁扩成豪宅四向；精致→细节精巧控杂）。人物用途句可留在 `dependency_strategy.logic` 的规划备注，且须标明「不成稿」。
   - **写法**：逐条转译为可见画面词，融入连贯中文短段；禁「同上/延续上游/与描述一致」；禁弱化为「高级/破败/有标识/暖色调/电影感」等抽象词或删项。
   - **终检**：逐 Subject 列 Index 要素 → 在 prompt 逐条检索；任一不可检索或仅在其他 JSON 字段 → 失败重写（Environment 上列人物用途例外字段除外；且 Env prompt 出现人名/人称/用途句 → 失败重写）。`description_cn` 非空 → 失败重写。
-- **光学优先级**：先亮度/可读性/主辅光/色温/空气感，再风格情绪。**Env/Poster 默认 §1.5 大光比**；**Prop 四视图豁免 ≥8:1**（prop §1.3 柔和静物光；色谱仍 §1.5-B）；Character 见豁免门。仅 Genre/定位/tone 明确治愈/广告/儿童明亮向时，Env 可降至轻大光比（仍须光向与纵深微差）。关键信息须可读。
+- **光学优先级**：先亮度/可读性/主辅光/色温/空气感，再风格情绪；**场级 `scene_mood` 须同时驱动光质、冷暖落层与构图倾向**（ENV 成稿可见；CHAR/PROP 见 §C）。**Env/Poster 默认 §1.5 大光比**；**Prop 四视图豁免 ≥8:1**（prop §1.3 柔和静物光；色谱仍 §1.5-B，冷暖跟 `scene_mood_cue`）；Character 见豁免门。仅 Genre/定位/tone 明确治愈/广告/儿童明亮向时，Env 可降至轻大光比（仍须光向与纵深微差）。关键信息须可读。
 - **主光源先行（Env/Poster/Prop）**：先写主光源来源、方向、**作用范围**、**可见效果**；再补光/轮廓与材质色彩响应。禁只列灯位不写范围效果；禁先堆风格再泛写「电影感光影」。入射/受光/投影须可由具名光源位置几何推导；Fill 只许现有动机光经具名反射面反弹或已有第二 Practical；**禁为补光而补光**（无锚点棚拍柔光箱/虚构正面补光）。
 - **灯光具体要求**：亮度/光质/反差服从 Genre 与定位；Env/Poster 明确 Key/Fill/Backlight 与硬柔光；Env 另须 FG/MG/BG 纵深光层与半影/投影落点，防平板；执行见 §1.5-A 与 environment §2.7。
 - **立体层次（Env/Poster/Prop）**：先明度/色温/清晰度/材质反射差，再装饰；阴影留细节；环境前中后景体积光与层次差——禁整室同亮抹平体积。
@@ -116,7 +116,8 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 
 **职责**：Stage 1 Visual Backfill **须含**文学级 `color_spectrum`（主冷暖四选一+参考片依据）；**不含** `color_palette`、Key:Fill、色温 K、四层色谱等技术字段——全部在本阶段推导并统一落实。
 
-**推导输入**：Backfill 的 `Global_Style` / `tone` / `lighting` / **`color_spectrum`（首要，不得冲突）** + Context 的 Genre、定位、时代/地域。Node 1 前一次定全剧大光比与主冷暖色谱，再按 §C 分实体落地；禁各 Subject 各自发明冲突色系或回退均匀平光。
+**推导输入**：Backfill 的 `Global_Style` / `tone` / `lighting` / **`color_spectrum`（首要，不得冲突）** + Context 的 Genre、定位、时代/地域 + **Index `scene_mood` / `scene_mood_cue`（场级环境主情绪；光色构图须响应，不得与 `color_spectrum` 主冷暖打架）**。Node 1 前一次定全剧大光比与主冷暖色谱，再按场级情绪微调各实体落地；禁各 Subject 各自发明冲突色系或回退均匀平光。
+- **场级情绪驱动（强制）**：ENV 读本行 `scene_mood`（或继承主环境）；CHAR/PROP 读本行 `scene_mood_cue`，缺则读挂场主环境 `scene_mood`。压迫/肃杀/悬疑→偏冷、大光比、纵深或负空间；温煦/明媚/温情→偏暖、可读主舞台、中心或对称可兼；孤绝/空寂→负空间+远景降饱和。**ENV** 把情绪落入 §2.7 光影、§2.9 色彩与构图倾向（仍守四方正交）。**CHAR** 服化配色与材质响应该场光色；真人定妆 prompt 仍豁免戏剧光（只进 logic）。**PROP** 材质色与静物光冷暖响应该场，仍豁免 ≥8:1。缺 `scene_mood` → logic 标 `upstream_missing_scene_mood`，按 Backfill+时段气候弱推，禁另造与剧情相反的喜庆/恐怖光。
 
 #### A. 光影大光比（Env/Poster 默认主打 · 美观不平板）
 Key 与 Fill 对比显著，亮暗分层清楚；**不等于**无脑压黑或刀切阴阳脸；主拍对象/关键信息须可读。细则落地 environment §2.7。
@@ -141,16 +142,16 @@ Key 与 Fill 对比显著，亮暗分层清楚；**不等于**无脑压黑或刀
 
 | 实体 | `description_cn` | `generation_prompt_cn` / logic |
 | :--- | :--- | :--- |
-| **Character** | 恒 `""` | **真人定妆豁免**：character §2.0/§2.3——prompt 光照 ≤1 句，禁 Key/Fill/色温/rim/大光比亮暗转写；Key/Fill/Backlight rationale + 选角参考写 `dependency_strategy.logic`。三维/二维见 §2.5/§2.6 |
-| **Environment / Poster** | 恒 `""` | prompt：§2.7 全段（Key/Fill/纵深光层/半影投影/材质响应）+ 可见动机光 1–3（上限 3）+ 每源作用范围与效果；§2.9 全段；四向共享光色秩序且各格有可见受光与表面色落点。拓扑/美学参考/含不可见源的光学 rationale → `dependency_strategy.logic` |
-| **Prop** | 恒 `""` | prompt：**豁免 ≥8:1**——prop §1.3 柔和静物光；色谱仍 §B；三维/二维见 §4.2/§4.3。简要光学 rationale → logic |
+| **Character** | 恒 `""` | **真人定妆豁免**：character §2.0/§2.3——prompt 光照 ≤1 句，禁 Key/Fill/色温/rim/大光比亮暗转写；Key/Fill/Backlight rationale + **`scene_mood_cue` 服化/色彩响应** + 选角参考写 `dependency_strategy.logic`。衣着配色须可核销挂场情绪（压迫→克制冷色/低饱和；温煦→可读暖辅色）。三维/二维见 §2.5/§2.6 |
+| **Environment / Poster** | 恒 `""` | prompt：先落 `scene_mood` 主情绪 → §2.7 全段（Key/Fill/纵深光层/半影投影/材质响应）+ 可见动机光 1–3（上限 3）+ 每源作用范围与效果；§2.9 全段（色层服务该情绪）；构图倾向（纵深/中心/三分/负空间）写入四向起幅且仍四方正交。拓扑/美学参考/含不可见源的光学 rationale → `dependency_strategy.logic` |
+| **Prop** | 恒 `""` | prompt：**豁免 ≥8:1**——prop §1.3 柔和静物光；色谱仍 §B 且**冷暖/点缀响应 `scene_mood_cue`**；三维/二维见 §4.2/§4.3。简要光学 rationale + 情绪响应 → logic |
 
 #### D. 输出前光色自检
 1. Env/Poster 已落实大光比？Prop 未误套 ≥8:1？Character 定妆 prompt **未**写大光比/Key:Fill？`description_cn` 均为 `""`？
 2. 已回写主冷暖+四层色谱（Character 色谱落服装；大光比亮暗句仅 Env/Poster prompt 与 Character logic）？
 3. Env/Poster 能答：哪区暖/冷、哪层亮/暗、光从哪来、作用范围与效果？Prop：光向一致且材质高光/半影/接触影可读？
 4. 夜景按 environment §2.8，可见动机光 ≤3，主舞台+动线可读且仍有纵深光层？
-5. 未与同项目其他 Subject 主色谱冲突或回退均匀平光？
+5. 未与同项目其他 Subject 主色谱冲突或回退均匀平光？场级 `scene_mood`/`scene_mood_cue` 已驱动 ENV 光色构图、CHAR 服化配色、PROP 材质冷暖（缺键已标回流）？
 6. **Env 色彩美观不单调**：主+辅可辨、≥1 提神点缀、FG/MG/BG 纵深色层已写、无灰褐单色糊？
 7. **Env 光线美观不平板**：Key 方向+效果、Fill 有反射依据、FG/MG/BG 受光差、半影+投影落点、≥2 材质光学响应、无整室同亮？
 

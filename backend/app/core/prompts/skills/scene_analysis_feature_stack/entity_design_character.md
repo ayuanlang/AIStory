@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
-# Prompt Updated At: 2026-08-16 03:45:00 +08:00
+# Prompt Updated At: 2026-08-16 13:55:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -7,7 +7,7 @@
 # Version: 2026-08-01-Conflict-Align-v6
 
 ## 核心任务
-角色类实体设计。仅处理上游 `Subject Index` 中 `character/角色` 类实体，完成美术设计、规范化、镜头转译，并无损封装为 `characters` 数组。禁止处理剧情切片、动作编排、实体抽取或其他实体类型。
+角色类实体设计。仅处理上游 `Subject Index` 中 `character/角色` 类实体，完成美术设计、规范化、镜头转译，并无损封装为 `characters` 数组。禁止处理剧情切片、动作编排、实体抽取或其他实体类型。**须读 Index `scene_mood_cue`（或缺则读挂场主环境 `scene_mood`）**：服化配色与材质须响应本场环境主情绪的光色；真人定妆 prompt 仍豁免戏剧光（只进 logic）。
 
 **继承**：与 `entity_design_common.md` 一并注入。命名/语言/Clean Plate 通则/审美/§1.5 色谱/§1.6 渲染/合规等**以 common 为准**；本文只写角色 delta。冲突时：定妆光影（§2.0）与四视图画幅以本文为准，其余以 common 为准。
 
@@ -25,6 +25,7 @@
   - 有年代/地域/阶层/礼制时，外观须响应身份规范与服饰制度。
   - **身份优先（读 Index `identity:`）**：定妆/择型/服制**先**吃世界身份（`警察`/`皇子`/`公主`/`普通修仙者`/`刑侦警探` 等），再叠 `plot_role`；禁只用男主/女主定服制而丢掉警察制服信号、宫廷品秩、修士层级等。
   - **基本定位（读 Index `basic_positioning:`）**：一句叙事定位（如`女主，婚前独立生活，精致克制的都市白领`）作选角/阶层/人生阶段视觉边界，与 `identity`/`plot_role` **并存不互代**；处境与气质词须能在相貌或衣着上核销（精致克制→妆造与廓形克制，禁无据落魄）。缺键则 logic 标上游缺口，禁臆造人生阶段。
+  - **场级环境主情绪（读 Index `scene_mood_cue:`）**：主情绪 + 挂场 ENV + 服化/材质响应。缺则读挂场主环境 `scene_mood`；再缺则 logic 标 `upstream_missing_scene_mood`，按 Backfill+身份弱推，禁另造与该场相反的喜庆/恐怖配色。衣着主辅色须能核销该情绪（压迫/肃杀/悬疑→克制冷色或低饱和；温煦/明媚/温情→可读暖辅色或同温层次；孤绝/空寂→降饱和+留灰）。**真人定妆【光线】仍只写 §2.0 柔和 1 句**——情绪光色 rationale 只进 `dependency_strategy.logic`，禁把 Key/Fill/色温/大光比写进 prompt。
   - **外形四维（服化道真源）**：Index `appearance`/`clothing`/`style`/`social_status`/`narrative_function` 凡已写须零缺失转进定妆（阶层品级定服制完成度：小康素净≠王府华贵；风格定廓形材质）。禁只用男主/女主或 `identity` 丢掉地位与风格。
   - **渲染风格**按 `entity_design_common.md` §1.6 三选一（仅接受显式制式词；都市/职场/纪实/电影级写实等题材标签**不得单独**触发真人专属）：三维→§2.5；二维→§2.6；真人/未声明默认→§2.0–§2.3。
   - 题材/气质映射只提供**视觉语言边界**（材质、光气质、制度层级），**不得**替代个体设计；禁武侠/江湖默认落魄游侠或默认侠女；有 `identity:普通修仙者` 等须按该层级落地，禁无据拔高宗师气场。
@@ -50,7 +51,7 @@
 
 - **细节下限**：面目段 ≥8 锚点；`appearance_cn` ≥6；`clothing` ≥7 且 >3 色；三字段合计 >8。
 - 默认宏大美观 + 色调柔和；仅上游明文落魄/战损等才切换。`anchor_description`：3–5 英文短语（禁数组）。
-- **服装**：`clothing` 首句「播出安全等级：成人|非成人。」；须匹配时地/身份的具体款式/材质（禁「某某朝服饰」空壳）；含潮流关键词 + 版型/材质/配色/鞋履，并回写 prompt。**阶段变体（回忆/闪回等）与换装衍生服饰须明显差异，禁简单复制基准装；Index 有几条装束行就出几条独立设计。**基础版服装锁定 Index/服化道**入场初装**——禁把剧情战损/湿透/血污终态画进基础版；此类只出在对应装束/状态衍生行。**不可离身升格配饰**（`accessory_props`）：`clothing`/【衣着】须含 Index `accessory_mount` 部位短注（如`胸前佩戴玉牌`），与 `PROP:[…]` 依赖形制一致、部位不漂移。**可离身升格 PROP**：不进 `clothing`/【衣着】、不挂角色依赖。
+- **服装**：`clothing` 首句「播出安全等级：成人|非成人。」；须匹配时地/身份的具体款式/材质（禁「某某朝服饰」空壳）；含潮流关键词 + 版型/材质/配色/鞋履，并回写 prompt。**配色须响应 `scene_mood_cue`**（与身份/礼制不冲突时优先跟场级光色；制服主色仍跟制度，用辅色/材质光泽响应情绪）。**阶段变体（回忆/闪回等）与换装衍生服饰须明显差异，禁简单复制基准装；Index 有几条装束行就出几条独立设计。**基础版服装锁定 Index/服化道**入场初装**——禁把剧情战损/湿透/血污终态画进基础版；此类只出在对应装束/状态衍生行。**不可离身升格配饰**（`accessory_props`）：`clothing`/【衣着】须含 Index `accessory_mount` 部位短注（如`胸前佩戴玉牌`），与 `PROP:[…]` 依赖形制一致、部位不漂移。**可离身升格 PROP**：不进 `clothing`/【衣着】、不挂角色依赖。
 - **成人向年轻女性着装（强制；仅成人播出）**：当 `clothing` 首句为「播出安全等级：成人」或 Project Context 为成人向/大尺度/擦边/`adult_non_explicit` 时，人态**年轻成年女性**（`gender=F`；约 18–35，默认 23 岁落入此档；非幼童/儿童/少年、非未成年、非中老年层次）的 `clothing` 与 `generation_prompt_cn`【衣着】**必须多用**下列可检索剪裁词，至少 **≥2**、当代便装优先 **≥3**：`露肩`、`深V领`、`开叉`、`短裙`、`短裤`、`短靴`、`露背`。不改 Index 换装身份与已具名单品，在同一套装内用上述剪裁做定妆（如衬衫→深V领露肩；裙装→短裙或侧开叉；靴履→短靴；背视须能核销露背或露肩后背）。四视图仍须衣着覆盖；禁裸体/内衣特写/露骨性化。换装衍生各套仍须命中 ≥2 词且彼此可目视区分。群演簇中可读年轻女性个体优先落这些词，仍服从 §2.4 个体差异。**豁免（须在 logic 注明原因）**：非成人/青少年向播出；`clothing_req` 袖袋怀腰下摆依存；制服/甲胄/礼制闭锁露肤；古装/高礼制无等价剪裁。豁免时仍须尽量叠入不冲突词（如短靴、制度允许的领襟微敞或裙衩）。**禁止**对未成年或年龄不明角色套用本条。
 - **`clothing_req` / `clothing_env`**：见 common §1.2；命中时【衣着】须可检索形制词，潮流/露肤/吊带/成人向剪裁词**不得覆盖**袖袋怀腰下摆依存；湿污场合写可见衣态。
 
@@ -74,7 +75,7 @@
 **显式豁免 common §1.3「禁虚构正面补光」（定妆专用）**：定妆白底四视图允许棚拍式「正面大面积均匀补光」；与 common「Character 真人定妆豁免门」一致。该豁免**仅**适用于 character 真人定妆，不适用于 Environment/Poster/Prop。
 
 1. 光线存在感极低；禁可识别鼻影/颊影/rim 条/阴阳脸/强冷暖戏剧光。
-2. 色调低饱和、柔和统一；`generation_prompt_cn` 写「色调柔和统一」即可（项目「冷暖对比」气质若有，只进 `dependency_strategy.logic`，**不成图可见色光对冲**）。
+2. 色调低饱和、柔和统一；`generation_prompt_cn` 写「色调柔和统一」即可（项目「冷暖对比」气质与 **`scene_mood_cue` 光色**若有，只进 `dependency_strategy.logic`，**不成图可见色光对冲**；情绪落在【衣着】配色，不落戏剧光）。
 3. 面目段篇幅 ≥ 光线段 3 倍；光线 **≤1 句**。
 4. 面部大面积均匀受光；禁鼻梁/颧骨/额头独立 spotlight。例外：双眼自然 catchlight；鼻尖/耳廓极轻次表面透光（非皮肤发光）。
 5. 全脸哑光；禁水光肌/glowing/美颜光晕。
@@ -110,11 +111,11 @@
 | 高位反派 | 阴鸷压迫 |
 | 信息极少 | 6 槽位 + 最近邻 |
 
-`dependency_strategy.logic` 须含：`基本定位：{basic_positioning}`；`世界身份：{identity}`；`社会地位：{social_status}`；`风格：{style}`；`剧情地位：{plot_role}`；`相貌组合：{名}；依据：{关键词}`。缺 Index `identity:` 时 logic 注明「上游缺 identity」，可据称呼/服制弱推断并标待补，**禁止**用番位填 `role`。缺 `basic_positioning:`/`style:`/`social_status:` 时 logic 注明上游缺项。
+`dependency_strategy.logic` 须含：`基本定位：{basic_positioning}`；`世界身份：{identity}`；`社会地位：{social_status}`；`风格：{style}`；`剧情地位：{plot_role}`；`相貌组合：{名}；依据：{关键词}`；`场级情绪：{scene_mood_cue 或挂场 scene_mood}｜服化响应={衣色/材质如何跟该场光色}`。缺 Index `identity:` 时 logic 注明「上游缺 identity」，可据称呼/服制弱推断并标待补，**禁止**用番位填 `role`。缺 `basic_positioning:`/`style:`/`social_status:`/`scene_mood_cue:` 时 logic 注明上游缺项。
 
 ### 2.2 Prompt 字段模板
 - `description_cn`：恒为 `""`（禁任何正文）。
-- `dependency_strategy.logic`：身份/叙事功能、择型依据、内部光学 rationale、变体 Delta；主要角色含「选角参考：」。
+- `dependency_strategy.logic`：身份/叙事功能、择型依据、内部光学 rationale、**`scene_mood_cue` 服化/色彩响应**、变体 Delta；主要角色含「选角参考：」。
 - `appearance_cn` / `clothing`：结构化可见数据；真人须覆盖 §2.3 七必锚；须完整转写进 `generation_prompt_cn`。
 - `archetype`：上游 Action Characteristics 原文；只保留静态姿态语义转入 prompt。
 - **`role`（强制继承 Index 身份）**：=职业/社会/品秩身份。**权威源**=Index `entity_attributes.identity:`（如`警察`/`皇子`/`公主`/`普通修仙者`/`刑侦警探`）；写入 JSON `role`（可英译或保留项目语言专名，语义须等价）。**禁止**用 `plot_role`（男主/女主等）填 `role`；**禁止** `role` 与 `plot_role` 混写。`clothing`/【衣着】与时地礼制须能核销该身份（制服/冠服/修士层级等）。Index 缺 `identity:` → `role` 可据称呼/服制弱推断并在 logic 标「上游缺 identity」，禁臆造细职衔。
@@ -169,7 +170,7 @@
 - 全量覆盖、类型路由正确；`name/name_en/base_name_en` 与 Index **逐字符完全一致**（任一字不等即废弃重写）。
 - **换装核销**：输出前对照 Index 全部 character 行；凡 `base_entity≠None` 的装束/状态衍生均须有独立条目且 `clothing`/`【衣着】` 与基准可区分；缺行或混装=废弃重写。
 - 每实体须有 `visual_dependencies` 与 `dependency_strategy {type, logic}`。Index `accessory_props`（不可离身）→ 必挂对应 `PROP:[…]` **且** `clothing`/【衣着】可检索该件名+挂位（见 Node 3/3b）；缺挂或【衣着】漏件=废弃。**可离身 PROP** 出现在角色 `visual_dependencies` 或角色生图词=废弃。
-- 真人：`description_cn=""`；`dependency_strategy.logic` 含内部光学 rationale + 选角参考；`generation_prompt_cn` 含分段标签 + 七必锚 + 五层可检索 + 光线 1 句；细节面目≥8。
+- 真人：`description_cn=""`；`dependency_strategy.logic` 含内部光学 rationale + **`场级情绪`/`服化响应`** + 选角参考；`generation_prompt_cn` 含分段标签 + 七必锚 + 五层可检索 + 光线 1 句；【衣着】配色可核销 `scene_mood_cue`；细节面目≥8。
 - 三维/二维：按 §2.5/§2.6；仍须分段标签；不适用七必锚与选角参考；`description_cn=""`。
 - 衍生：`description_cn=""`；logic 含 Delta（换装写清旧装→新装可见差异）；`generation_prompt_cn` 含参考图声明与 §B/§C；§C 衣着 Delta 不得空泛「换装」。
 - 群演：按 §2.4（**非四宫格**；人数/队形跟上游群体建置；普通=服饰+相貌差；制式=服饰统一+相貌/外形差；非人集群=特征差，装具制式时本体仍差）。
@@ -199,7 +200,7 @@
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original",
-        "logic": "Original。世界身份：调查记者（Index identity）。剧情地位：女主。相貌组合：冷艳骨相型（女主/调查记者）。真人感七必锚 0–6、五层增强 1–5 已覆盖；光学 rationale（仅推导）：内部柔和侧逆光+正面大面积 Fill；Key/Fill 色温差不转写入生图词，成图须无感。选角参考：K-pop 女团冷感骨相与层次齐肩发的上镜完成度；《龙纹身的女孩》冷感 investigative 气质；《社交网络》机能极简叠穿。本例 Index 无 accessory_props（腕表/耳环等纯装饰只进 clothing）；若有不可离身升格配饰则 visual_dependencies 挂 PROP:[…] 且【衣着】须提及挂位；可离身升格 PROP 不挂依赖、不进角色生图词。"
+        "logic": "Original。世界身份：调查记者（Index identity）。剧情地位：女主。相貌组合：冷艳骨相型（女主/调查记者）。场级情绪：主情绪=压迫｜挂场ENV=办公室会客区｜服化响应=深海军蓝/黑/钛灰低饱和跟冷蓝雨夜，禁无据暖喜庆。真人感七必锚 0–6、五层增强 1–5 已覆盖；光学 rationale（仅推导）：内部柔和侧逆光+正面大面积 Fill；Key/Fill 色温差与 scene_mood 冷蓝不转写入生图词，成图须无感。选角参考：K-pop 女团冷感骨相与层次齐肩发的上镜完成度；《龙纹身的女孩》冷感 investigative 气质；《社交网络》机能极简叠穿。本例 Index 无 accessory_props（腕表/耳环等纯装饰只进 clothing）；若有不可离身升格配饰则 visual_dependencies 挂 PROP:[…] 且【衣着】须提及挂位；可离身升格 PROP 不挂依赖、不进角色生图词。"
       }
     }
   ]
