@@ -94,7 +94,7 @@ def _entity_analysis_is_main_environment(entity: Any) -> bool:
     dep_raw = _entity_analysis_parse_jsonish(getattr(entity, "dependency_strategy", None))
     dep = dep_raw if isinstance(dep_raw, dict) else {}
     dep_type = str(dep.get("type") or "").strip()
-    if dep_type == "BaselineDefinition":
+    if dep_type in ("BaselineDefinition", "StyleReference"):
         return True
 
     name = str(getattr(entity, "name", "") or "").strip()
@@ -132,10 +132,10 @@ def _entity_analysis_is_main_environment(entity: Any) -> bool:
         or str(item or "").strip().startswith("ENV:[")
         for item in deps
     )
-    if has_env_dep:
+    if has_env_dep and dep_type != "StyleReference":
         return False
     # No ENV dependency and no derivative markers → treat as main/baseline.
-    return dep_type in ("", "Original", "BaselineDefinition")
+    return dep_type in ("", "Original", "BaselineDefinition", "StyleReference")
 
 
 def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
@@ -196,7 +196,7 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
             + "主环境 generation_prompt_cn 格式（强制，折中两段式：四面后景+中景 → 四宫格引用+左右缘钉）：\n"
             "- ①全局共享（全文一次，不得少）：整体风格定位 + 开篇拓扑 + 光影体系 + 色彩体系 + 中区共享实体。\n"
             "- 数量预检先行：固定实体须有明确总数；同质多件须有总数、分组/分边、逐具朝向与顺序，且总数=分项和；门/窗/楼梯总数显式；每扇窗棂须有横×纵格阵与同墙顺序。禁止“若干/数把/多张/一些/成排/散座”等模糊数量词；缺项时 logic 标 upstream_missing_env_inventory_quantification 并保留原 Index 锁，禁止猜数，但 generation_prompt_cn 必须非空（骨架+已锁具名实体）。\n"
-            "- 通高两层仅当须共享外形（大堂+回廊可互望）：开篇拓扑须分列下层与上层具名实体；禁止“二楼同楼下/上层继承一层”；跨层同类件须标所属楼层。二层内部（客房/账房等不共享外形）是独立主环境，禁止画进一层当上层。\n"
+            "- 通高两层仅当须共享外形（大堂+回廊可互望）：开篇拓扑须分列下层与上层具名实体；禁止“二楼同楼下/上层继承一层”；跨层同类件须标所属楼层。二层内部（客房/账房等不共享外形）是独立主环境，禁止画进一层当上层；可 StyleReference 挂一层主环境作风格参考，仍须独立写满本块四向。\n"
             "- ②【四面内容基准】：每向只写【N度方向】后景（背景正对+材质+可见面）+ 中景（舞台净空+中区投影+椅位）；后景+中景合计细节充足；**禁止在四面写左右缘长文**。\n"
             "- ③【四向拼图】：16:9 横幅 2×2（左上=0度、右上=90度、左下=270度、右下=180度）；每格组装为「后景=严格按【N度方向】后景；中景=严格按【N度方向】中景；画面左缘=查表结果钉句；画面右缘=查表结果钉句」；禁止俯拍；各格眼高约 50mm；Clean Plate；各格角度文字标志。\n"
             "- 左右缘必须是查表**结果钉句**（贴边窄条+端锚+可见面+NOT background）；楼梯邻缘另加单跑同核钉；**禁止**写「由邻面旋转/对照得到左右」过程词；**禁止**省略任一侧缘。\n"
@@ -205,7 +205,7 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
             "- 门/窗/楼梯唯一落位：完整门扇或贴墙整跑梯只写在所属扇区那一向的**后景**；邻向只在四宫格左右缘出窄条。\n"
             "- 楼梯须声明上行朝向 U；禁止四面都画成迎面拾级。\n"
             "- 歧义控制：一名一物；一物一位；坐标≠朝向。\n"
-            "- description_cn 必须为 \"\"；generation_prompt_cn 必须非空；dependency_strategy.type 必须为 BaselineDefinition；visual_dependencies=[]。\n"
+            "- description_cn 必须为 \"\"；generation_prompt_cn 必须非空。默认 dependency_strategy.type=BaselineDefinition 且 visual_dependencies=[]。若 CURRENT/Index 为楼层切分后的风格依赖主环境：type=StyleReference，visual_dependencies=[\"ENV:[风格父主环境名]\"]（仅另一块主环境，禁挂角度衍生）；generation_prompt_cn 仍须独立写满四向，只对齐材质/年代/色系/工艺，禁抄父环境家具与拓扑。\n"
             "- 若图片本身已是四宫格，后景/中景回写进【四面内容基准】，左右缘写入【四向拼图】；若图片是单视角，仍须输出完整折中两段式（其余向据空间一致性合理补齐，logic 标明推断向）。\n"
             "- 构图与纵深是方法，必须在过程中体现：全局写构图倾向+纵深光层/色层；每一向后景/中景写本向三分或压迫落点与近中远受光；四宫格每格用左右缘完成围合纵深。禁止省略。\n"
             "- 严禁跳过【四面内容基准】；严禁指望模型自行旋转邻面生成左右缘；严禁把构图/纵深收成一篇单镜头 16:9 空镜来顶替 2×2；严禁改成角色/道具白底四视图。"
@@ -322,7 +322,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         else "按上方衍生环境 §B 截取放大句式写（点名所属主环境四向拼图对应宫格；禁重写细节）"
     )
     deps_rule = (
-        "visual_dependencies must be []."
+        "visual_dependencies must be [] and type=BaselineDefinition, unless this is a floor-split style-dependent main environment: then type=StyleReference and visual_dependencies=[\"ENV:[风格父主环境名]\"] (another main ENV only; still write a full independent four-direction prompt)."
         if is_main_env
         else "visual_dependencies: first-cut angle derivatives must be [\"ENV:[所属主环境名]\"] (four-panel). Derivatives-of-derivatives must be [\"ENV:[同角已切割衍生名]\"] with the same N as this row. Do not hang a different angle, and do not hang the main four-panel when the same-angle crop already exists."
     )
