@@ -141,8 +141,8 @@ export default function LlmLogViewer({ log, onClose }) {
 
         <div className="text-gray-400 text-[13px] border-b border-gray-700 pb-3 mb-4 flex items-center flex-wrap gap-x-6 gap-y-2 flex-shrink-0">
           <span><strong className="text-gray-200">Model:</strong> {log.model}</span>
-          <span><strong className="text-gray-200">{t('运行时间', 'Runtime')}:</strong> {log.latency_ms != null && log.latency_ms !== '' ? (Number(log.latency_ms) >= 1000 ? `${(Number(log.latency_ms) / 1000).toFixed(Number(log.latency_ms) >= 10000 ? 1 : 2)}s` : `${Math.round(Number(log.latency_ms))}ms`) : '-'}</span>
-          <span><strong className="text-gray-200">{t('扣费金额', 'Charged')}:</strong> {log.charged_amount == null || log.charged_amount === '' ? '-' : String(log.charged_amount)}</span>
+          <span><strong className="text-gray-200">{t('运行时间', 'Runtime')}:</strong> {log.latency_ms != null && log.latency_ms !== '' && Number.isFinite(Number(log.latency_ms)) ? t(`${(Number(log.latency_ms) / 1000).toFixed(Number(log.latency_ms) >= 10000 ? 1 : 2)}秒`, `${(Number(log.latency_ms) / 1000).toFixed(Number(log.latency_ms) >= 10000 ? 1 : 2)}s`) : '-'}</span>
+          <span><strong className="text-gray-200">{t('扣费金额', 'Charged')}:</strong> {log.charged_amount == null || log.charged_amount === '' ? '-' : t(`${log.charged_amount} 积分`, `${log.charged_amount} credits`)}</span>
           <span><strong className="text-gray-200">Date:</strong> {new Date(log.timestamp || log.created_at).toLocaleString()}</span>
         </div>
 

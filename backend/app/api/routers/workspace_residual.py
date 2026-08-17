@@ -224,12 +224,15 @@ def get_llm_logs(
     if tag:
         query = query.filter(LLMCallLog.tag == tag)
     logs = query.offset(offset).limit(limit).all()
+    from app.services.model_invocation_billing import (
+        enrich_llm_logs_charged_amount,
+        serialize_llm_call_log,
+    )
     try:
-        from app.services.model_invocation_billing import enrich_llm_logs_charged_amount
         enrich_llm_logs_charged_amount(db, logs)
-    except Exception:
-        pass
-    return logs
+    except Exception as exc:
+        logger.warning("Failed to enrich LLM logs with charged_amount: %s", exc)
+    return [serialize_llm_call_log(log) for log in logs]
 
 
 @router.delete("/admin/llm_logs/clean")

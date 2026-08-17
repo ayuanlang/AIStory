@@ -2162,14 +2162,21 @@ const getAnalysisStageLabel = (stepKey, tFn) => {
     return typeof tFn === 'function' ? tFn(meta.zh, meta.en) : meta.zh;
 };
 
+/** Internal pipeline lines: keep in system logs, never in the progress UI. */
+const SYSTEM_ONLY_ANALYSIS_LOG_RE = /^\[(?:Analysis Writeback|Stage2\.2 Debug|Stage 3 Debug|Asset Gen Tracking|Scene Purge|Entity Purge|Shot Purge|Analysis Clear)\]/i;
+
+const isSystemOnlyAnalysisLogMessage = (rawMessage) => (
+    SYSTEM_ONLY_ANALYSIS_LOG_RE.test(String(rawMessage || '').trim())
+);
+
 /** Soften technical pipeline logs for the system log / progress history. */
 const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
     let text = String(rawMessage || '').trim();
     if (!text) return '';
     const t = typeof tFn === 'function' ? tFn : (zh) => zh;
 
-    // Drop ultra-noisy internal writeback / debug lines from the user-facing stream.
-    if (/^\[(?:Analysis Writeback|Stage2\.2 Debug|Stage 3 Debug|Asset Gen Tracking)\]/i.test(text)) {
+    // Drop ultra-noisy internal writeback / debug / purge lines from the user-facing stream.
+    if (isSystemOnlyAnalysisLogMessage(text)) {
         return '';
     }
 
@@ -2743,12 +2750,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [publishLiveAnalysisProgressSnapshot]);
 
     const onLog = useCallback((message, type = 'info') => {
-        const businessMessage = toBusinessAnalysisLogMessage(message, t);
-        if (!businessMessage) return;
-        if (captureAnalysisLogRef.current()) {
-            appendAnalysisDetailLog(businessMessage, type);
+        const rawMessage = String(message || '').trim();
+        if (!rawMessage) return;
+        const businessMessage = toBusinessAnalysisLogMessage(rawMessage, t);
+        if (businessMessage) {
+            if (captureAnalysisLogRef.current()) {
+                appendAnalysisDetailLog(businessMessage, type);
+            }
+            parentOnLogRef.current?.(businessMessage, type);
+            return;
         }
-        parentOnLogRef.current?.(businessMessage, type);
+        // Technical/internal lines stay in the system log only.
+        parentOnLogRef.current?.(rawMessage, type);
     }, [appendAnalysisDetailLog, t]);
     const reportAnalysisPanelNotice = useCallback((message, type = 'info') => {
         const text = String(message || '').trim();
@@ -4043,7 +4056,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const analysisUnifiedProgressLog = useMemo(() => {
         const historyItems = (Array.isArray(analysisFlowStatusHistory) ? analysisFlowStatusHistory : []).map((item, index) => {
-            const message = String(toBusinessHistoryMessage(item?.message) || item?.message || '').trim();
+            const rawMessage = String(item?.message || '').trim();
+            const businessMessage = String(toBusinessHistoryMessage(rawMessage) || '').trim();
+            const message = businessMessage || (isSystemOnlyAnalysisLogMessage(rawMessage) ? '' : rawMessage);
             return {
                 id: item?.id || `h-${index}`,
                 at: Number(item?.createdAt || 0),
@@ -4058,17 +4073,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
         const historyMessages = new Set(historyItems.map((item) => item.message).filter(Boolean));
         const detailItems = (Array.isArray(analysisDetailLogs) ? analysisDetailLogs : [])
-            .map((item, index) => ({
-                id: item?.id || `d-${index}`,
-                at: Number(item?.at || 0),
-                kind: 'detail',
-                phase: '',
-                type: String(item?.type || 'info'),
-                message: String(item?.message || '').trim(),
-                highlightHint: '',
-                createdAt: Number(item?.at || 0),
-                endedAt: 0,
-            }))
+            .map((item, index) => {
+                const rawMessage = String(item?.message || '').trim();
+                const businessMessage = String(toBusinessHistoryMessage(rawMessage) || '').trim();
+                const message = businessMessage || (isSystemOnlyAnalysisLogMessage(rawMessage) ? '' : rawMessage);
+                return {
+                    id: item?.id || `d-${index}`,
+                    at: Number(item?.at || 0),
+                    kind: 'detail',
+                    phase: '',
+                    type: String(item?.type || 'info'),
+                    message,
+                    highlightHint: '',
+                    createdAt: Number(item?.at || 0),
+                    endedAt: 0,
+                };
+            })
             .filter((item) => item.message && !historyMessages.has(item.message));
         return [...historyItems, ...detailItems]
             .filter((item) => item.message)
@@ -25525,9 +25545,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const showRetryButton = !hasLiveBackgroundTask
                         && (progressPhase === 'warning' || progressPhase === 'failed');
                     const startedClock = formatHistoryClock(analysisProgressStartedAt);
-                    const currentMessage = String(
-                        toBusinessHistoryMessage(analysisFlowStatus?.message) || analysisFlowStatus?.message || ''
-                    ).trim();
+                    const currentRawMessage = String(analysisFlowStatus?.message || '').trim();
+                    const currentBusinessMessage = String(toBusinessHistoryMessage(currentRawMessage) || '').trim();
+                    const currentMessage = currentBusinessMessage
+                        || (isSystemOnlyAnalysisLogMessage(currentRawMessage) ? '' : currentRawMessage);
                     const statusTone = progressPhase === 'failed'
                         ? 'text-red-200'
                         : progressPhase === 'warning'

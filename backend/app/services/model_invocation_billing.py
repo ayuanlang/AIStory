@@ -17,6 +17,65 @@ from app.services.billing_service import billing_service
 logger = logging.getLogger("api_logger")
 
 
+def _parse_llm_log_timestamp(value: Any):
+    if value in (None, ""):
+        return None
+    try:
+        from dateutil.parser import isoparse
+        from app.core.time_utils import BEIJING_TZ
+        parsed = isoparse(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=BEIJING_TZ)
+        return parsed
+    except Exception:
+        return None
+
+
+def _safe_charge_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(value)
+    except Exception:
+        try:
+            parsed = int(float(value))
+        except Exception:
+            return None
+    return abs(parsed)
+
+
+def _transaction_user_charge(row: Any, action: Any = None) -> Optional[int]:
+    details = row.details if isinstance(getattr(row, "details", None), dict) else {}
+    status = str(details.get("status") or "").strip().upper()
+    if details.get("hide_in_history") or details.get("ledger_role") == "settlement_adjustment":
+        return None
+    if status in {"FAILED", "CANCELED", "CANCELLED", "REFUND"}:
+        return None
+    program = details.get("pricing_program") if isinstance(details.get("pricing_program"), dict) else {}
+    amount_raw = getattr(row, "amount", None)
+    amount_abs = None
+    try:
+        if amount_raw not in (None, "") and int(amount_raw) < 0:
+            amount_abs = abs(int(amount_raw))
+    except Exception:
+        amount_abs = None
+    for candidate in (
+        getattr(action, "actual_cost", None) if action is not None else None,
+        details.get("actual_cost"),
+        program.get("user_cost"),
+        getattr(action, "charged_amount", None) if action is not None else None,
+        amount_abs,
+        details.get("reserved_cost") if status in {"SETTLED", "DEDUCTED", "RESERVED"} else None,
+    ):
+        parsed = _safe_charge_int(candidate)
+        if parsed is not None and parsed > 0:
+            return parsed
+    parsed_zero = _safe_charge_int(
+        getattr(action, "actual_cost", None) if action is not None else details.get("actual_cost")
+    )
+    return parsed_zero if parsed_zero == 0 else None
+
+
 def attach_charged_amount_to_llm_log(
     db: Session,
     *,
@@ -32,9 +91,8 @@ def attach_charged_amount_to_llm_log(
         payload = details if isinstance(details, dict) else {}
         request_id = str(payload.get("request_id") or "").strip() or None
         project_id = payload.get("project_id")
-        try:
-            amount_int = int(max(0, amount or 0))
-        except Exception:
+        amount_int = _safe_charge_int(amount)
+        if amount_int is None:
             return
 
         log_entry = None
@@ -45,11 +103,10 @@ def attach_charged_amount_to_llm_log(
                 .order_by(LLMCallLog.id.desc())
                 .first()
             )
-        if log_entry is None and user_id:
-            query = db.query(LLMCallLog).filter(
-                LLMCallLog.user_id == int(user_id),
-                LLMCallLog.charged_amount.is_(None),
-            )
+        if log_entry is None:
+            query = db.query(LLMCallLog)
+            if user_id:
+                query = query.filter(LLMCallLog.user_id == int(user_id))
             if model:
                 query = query.filter(LLMCallLog.model == str(model))
             if project_id not in (None, ""):
@@ -57,8 +114,12 @@ def attach_charged_amount_to_llm_log(
                     query = query.filter(LLMCallLog.project_id == int(project_id))
                 except Exception:
                     pass
-            cutoff = (now_bj() - timedelta(minutes=15)).isoformat()
+            cutoff = (now_bj() - timedelta(minutes=30)).isoformat()
             query = query.filter(LLMCallLog.timestamp >= cutoff)
+            try:
+                query = query.filter(LLMCallLog.charged_amount.is_(None))
+            except Exception:
+                pass
             log_entry = query.order_by(LLMCallLog.id.desc()).first()
         if log_entry is not None:
             log_entry.charged_amount = amount_int
@@ -67,72 +128,140 @@ def attach_charged_amount_to_llm_log(
 
 
 def enrich_llm_logs_charged_amount(db: Session, logs: Iterable[Any]) -> List[Any]:
-    """Fill missing charged_amount on admin log rows from recent billing actions."""
+    """Fill missing charged_amount on admin log rows from nearby billing records."""
     rows = list(logs or [])
-    missing = [row for row in rows if getattr(row, "charged_amount", None) is None]
+    missing = [
+        row for row in rows
+        if _safe_charge_int(getattr(row, "charged_amount", None)) is None
+    ]
     if not missing:
         return rows
     try:
-        from app.models.all_models import TransactionAction
+        from sqlalchemy.orm import joinedload
 
-        user_ids = {int(row.user_id) for row in missing if row.user_id}
-        if not user_ids:
+        from app.models.all_models import TransactionHistory
+
+        valid_times = [
+            dt for dt in (_parse_llm_log_timestamp(row.timestamp) for row in missing) if dt is not None
+        ]
+        if not valid_times:
             return rows
-        timestamps = [str(row.timestamp or "") for row in missing if row.timestamp]
-        if not timestamps:
-            return rows
-        min_ts = min(timestamps)
-        max_ts = (now_bj() + timedelta(minutes=1)).isoformat()
-        try:
-            from dateutil.parser import isoparse
-            from app.core.time_utils import BEIJING_TZ
-            latest = isoparse(max(timestamps))
-            if latest.tzinfo is None:
-                latest = latest.replace(tzinfo=BEIJING_TZ)
-            max_ts = (latest + timedelta(minutes=15)).isoformat()
-        except Exception:
-            pass
-        actions = (
-            db.query(TransactionAction)
-            .filter(
-                TransactionAction.user_id.in_(user_ids),
-                TransactionAction.stage.in_(("SETTLED", "DEDUCTED")),
-                TransactionAction.created_at >= min_ts,
-                TransactionAction.created_at <= max_ts,
-            )
-            .order_by(TransactionAction.id.desc())
-            .limit(800)
+        transactions = (
+            db.query(TransactionHistory)
+            .options(joinedload(TransactionHistory.action_audit))
+            .order_by(TransactionHistory.id.desc())
+            .limit(1500)
             .all()
         )
-        unused = list(actions)
-        for row in missing:
-            if not row.user_id:
+        window_start_dt = min(valid_times) - timedelta(minutes=30)
+        window_end_dt = max(valid_times) + timedelta(minutes=30)
+        unused: List[Dict[str, Any]] = []
+        for tx in transactions:
+            action = getattr(tx, "action_audit", None)
+            charge = _transaction_user_charge(tx, action)
+            if charge is None:
                 continue
+            tx_dt = _parse_llm_log_timestamp(getattr(tx, "created_at", None))
+            if tx_dt is None or tx_dt < window_start_dt or tx_dt > window_end_dt:
+                continue
+            details = tx.details if isinstance(getattr(tx, "details", None), dict) else {}
+            unused.append({
+                "charge": charge,
+                "dt": tx_dt,
+                "user_id": getattr(action, "user_id", None) or getattr(tx, "user_id", None),
+                "project_id": getattr(action, "project_id", None) or getattr(tx, "project_id", None),
+                "model": str(getattr(action, "model", None) or details.get("model") or "").strip().lower(),
+                "provider": str(getattr(action, "provider", None) or details.get("provider") or "").strip().lower(),
+                "request_id": str(details.get("request_id") or "").strip(),
+            })
+
+        for row in missing:
+            row_dt = _parse_llm_log_timestamp(row.timestamp)
+            if row_dt is None:
+                continue
+            row_model = str(row.model or "").strip().lower()
+            row_provider = str(row.provider or "").strip().lower()
+            row_request_id = str(getattr(row, "request_id", None) or "").strip()
             best = None
             best_idx = -1
-            for idx, action in enumerate(unused):
-                if int(action.user_id or 0) != int(row.user_id):
+            best_score = None
+            best_delta = None
+            for idx, cand in enumerate(unused):
+                delta_sec = abs((cand["dt"] - row_dt).total_seconds())
+                if delta_sec > 30 * 60:
                     continue
-                action_model = str(action.model or "").strip()
-                row_model = str(row.model or "").strip()
-                if action_model and row_model and action_model != row_model:
+                if row_request_id and cand["request_id"] and row_request_id != cand["request_id"]:
                     continue
-                if row.project_id and action.project_id and int(action.project_id) != int(row.project_id):
+                if row.user_id and cand["user_id"] and int(row.user_id) != int(cand["user_id"]):
                     continue
-                best = action
-                best_idx = idx
-                break
-            if best is None:
+                if row.project_id and cand["project_id"] and int(row.project_id) != int(cand["project_id"]):
+                    continue
+                score = -delta_sec
+                model_match = bool(
+                    row_model and cand["model"] and (
+                        row_model == cand["model"] or row_model in cand["model"] or cand["model"] in row_model
+                    )
+                )
+                if row_request_id and cand["request_id"] and row_request_id == cand["request_id"]:
+                    score += 100000
+                if row.user_id and cand["user_id"] and int(row.user_id) == int(cand["user_id"]):
+                    score += 5000
+                if model_match:
+                    score += 2000
+                elif row_model and cand["model"]:
+                    score -= 1500
+                if row_provider and cand["provider"] and row_provider == cand["provider"]:
+                    score += 400
+                if best_score is None or score > best_score:
+                    best = cand
+                    best_idx = idx
+                    best_score = score
+                    best_delta = delta_sec
+            if best is None or best_score is None:
                 continue
-            amount = best.actual_cost if best.stage == "SETTLED" else best.charged_amount
-            try:
-                row.charged_amount = int(max(0, amount or 0))
-            except Exception:
+            identity_match = bool(
+                (row_request_id and best["request_id"] and row_request_id == best["request_id"])
+                or (row.user_id and best["user_id"] and int(row.user_id) == int(best["user_id"]))
+                or (
+                    row_model and best["model"] and (
+                        row_model == best["model"] or row_model in best["model"] or best["model"] in row_model
+                    )
+                )
+            )
+            if not identity_match and (best_delta is None or best_delta > 120):
                 continue
+            row.charged_amount = int(best["charge"])
             unused.pop(best_idx)
     except Exception as exc:
         logger.warning("Failed to enrich LLM logs with charged_amount: %s", exc)
     return rows
+
+
+def serialize_llm_call_log(log: Any) -> Dict[str, Any]:
+    """Admin payload with runtime/charge fields always present."""
+    latency_ms = getattr(log, "latency_ms", None)
+    try:
+        latency_ms = int(latency_ms) if latency_ms not in (None, "") else None
+    except Exception:
+        latency_ms = None
+    return {
+        "id": getattr(log, "id", None),
+        "tag": getattr(log, "tag", None),
+        "provider": getattr(log, "provider", None),
+        "model": getattr(log, "model", None),
+        "api_url": getattr(log, "api_url", None),
+        "payload_json": getattr(log, "payload_json", None),
+        "response_json": getattr(log, "response_json", None),
+        "error_msg": getattr(log, "error_msg", None),
+        "latency_ms": latency_ms,
+        "charged_amount": _safe_charge_int(getattr(log, "charged_amount", None)),
+        "user_id": getattr(log, "user_id", None),
+        "user_name": getattr(log, "user_name", None),
+        "project_id": getattr(log, "project_id", None),
+        "action": getattr(log, "action", None),
+        "request_id": getattr(log, "request_id", None),
+        "timestamp": getattr(log, "timestamp", None),
+    }
 
 
 def _extract_llm_routing_metadata(payload: Any) -> Dict[str, Any]:

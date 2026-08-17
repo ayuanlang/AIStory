@@ -4849,16 +4849,16 @@ const UserAdmin = () => {
         if (ms === null || ms === undefined || ms === '') return '-';
         const n = Number(ms);
         if (!Number.isFinite(n) || n < 0) return '-';
-        if (n >= 10000) return `${(n / 1000).toFixed(1)}s`;
-        if (n >= 1000) return `${(n / 1000).toFixed(2)}s`;
-        return `${Math.round(n)}ms`;
+        const seconds = n / 1000;
+        const digits = seconds >= 10 ? 1 : 2;
+        return t(`${seconds.toFixed(digits)}秒`, `${seconds.toFixed(digits)}s`);
     };
 
     const formatLlmCharge = (amount) => {
         if (amount === null || amount === undefined || amount === '') return '-';
         const n = Number(amount);
         if (!Number.isFinite(n)) return '-';
-        return String(n);
+        return t(`${n} 积分`, `${n} credits`);
     };
 
     const formatLedgerAmount = (amount) => {

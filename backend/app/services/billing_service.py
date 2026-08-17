@@ -5312,7 +5312,7 @@ class BillingService:
             attach_charged_amount_to_llm_log(
                 db,
                 amount=final_cost,
-                details=tx_details,
+                details={**(details or {}), **tx_details},
                 user_id=user_id,
                 model=resolved_model,
             )
