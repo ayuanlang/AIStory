@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
-# Prompt Updated At: 2026-08-17 00:22:00 +08:00
+# Prompt Updated At: 2026-08-17 10:40:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -27,6 +27,7 @@
   - **基本定位（读 Index `basic_positioning:`）**：一句叙事定位（如`女主，婚前独立生活，精致克制的都市白领`）作选角/阶层/人生阶段视觉边界，与 `identity`/`plot_role` **并存不互代**；处境与气质词须能在相貌或衣着上核销（精致克制→妆造与廓形克制，禁无据落魄）。缺键则 logic 标上游缺口，禁臆造人生阶段。
   - **场级环境主情绪（读 Index `scene_mood_cue:`）**：主情绪 + 挂场 ENV + 服化/材质响应。缺则读挂场主环境 `scene_mood`；再缺则 logic 标 `upstream_missing_scene_mood`，按 Backfill+身份弱推，禁另造与该场相反的喜庆/恐怖配色。衣着主辅色须能核销该情绪（压迫/肃杀/悬疑→克制冷色或低饱和；温煦/明媚/温情→可读暖辅色或同温层次；孤绝/空寂→降饱和+留灰）。**真人定妆【光线】仍只写 §2.0 柔和 1 句**——情绪光色 rationale 只进 `dependency_strategy.logic`，禁把 Key/Fill/色温/大光比写进 prompt。
   - **外形四维（服化道真源）**：Index `appearance`/`clothing`/`style`/`social_status`/`narrative_function` 凡已写须零缺失转进定妆（阶层品级定服制完成度：小康素净≠王府华贵；风格定廓形材质）。禁只用男主/女主或 `identity` 丢掉地位与风格。
+  - **软性外形决定因素（读 Index；最高）**：`identity`/`social_status`/`narrative_function`/`appearance_cues` 凡已写须驱动定妆——身份定服制信号；地位定完成度；特殊用途定外形档（晚宴诱饵≠日常便装）；**`appearance_cues` 原词**（高贵/精致/漂亮/性感/绝美等）须在【相貌】或【衣着】可核销：`漂亮/俊美`→骨相完成度；`高贵/雍容`→妆造与材质品级；`精致`→细节控杂；`性感/绝美`→在播出安全与 Index 装束内兑现剪裁/身形可读，禁丢掉「性感」只画保守职业装、禁丢掉「高贵」画市井便装（除非 Index 另有换装行）。无 `appearance_cues` **禁臆造**性感化。评价词不得弱化为「好看」。
   - **渲染风格**按 `entity_design_common.md` §1.6 三选一（仅接受显式制式词；都市/职场/纪实/电影级写实等题材标签**不得单独**触发真人专属）：三维→§2.5；二维→§2.6；真人/未声明默认→§2.0–§2.3。
   - 题材/气质映射只提供**视觉语言边界**（材质、光气质、制度层级），**不得**替代个体设计；禁武侠/江湖默认落魄游侠或默认侠女；有 `identity:普通修仙者` 等须按该层级落地，禁无据拔高宗师气场。
 - **[Node 2] 选角落地**：反同质化、合理头身比；真人按 §2.0–§2.3 以面目为绝对重心；三维/二维按 §2.5/§2.6。群演簇改 §2.4。先读 `identity:` 再读 `plot_role`。

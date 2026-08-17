@@ -83,6 +83,7 @@ API: `runScriptAnalysisFlowAnalyzeNode` -> `POST /prompts/scene-analysis/flow/ru
 7. Manual storyboard rerun (`force` kickoff) must still verify each scene's linked ENV exists in the entity library with `generation_prompt_cn`; block/skip scenes that fail this check.
 8. Changing scene-marker parse rules requires updating Stage 1/2.1/2.2 prompts in the same change (ban bare markers; require `EPxx_SCyy` pairs).
 9. Before Stage 2.1 / 2.2 inject optimized script: strip paired `────【Beat切换说明】────`…`────【Beat切换说明结束】────` only (`strip_beat_transition_notes_from_script` / FE twin). Never greedy-strip without end marker. Stage 1 must emit both markers; 2.1/2.2 must not require or restore that block.
+10. **软性外形决定因素**：Stage 1 须原词保真身份、特殊用途、地位及剧本明确写出的外形评价词（高贵/精致/漂亮/性感/绝美等）；Stage 2.1 完整写入 `entity_attributes`（`identity`/`purpose`/`social_status`/`appearance_cues`，评价词禁改成「好看」）；Stage 3 转译进定妆/空镜/道具生图。无原文评价词禁臆造。
 
 ## Scene orchestration asset annotation (prompt contract)
 
