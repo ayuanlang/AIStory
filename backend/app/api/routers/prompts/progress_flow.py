@@ -185,7 +185,7 @@ async def reset_scene_orchestration_progress(
             scene_id=scene_id,
             import_status="queued",
             parse_status="success",
-            scene_markdown=None,
+            scene_markdown="",
             parse_error_code=None,
         )
         reset_scene_ids.append(scene_id)
