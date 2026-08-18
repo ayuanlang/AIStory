@@ -4143,7 +4143,23 @@ const Editor = ({
                             )}
                             {shouldRenderScriptTab && (
                                 <div className={activeTab === 'script' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'script'}>
-                                    <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} tabMediaRefreshSignal={tabMediaRefreshSignals.script} isTabActive={activeTab === 'script'} onMediaRefreshRequest={() => bumpTabMediaRefresh('script')} />
+                                    <ErrorBoundary
+                                        fallbackRender={({ resetErrorBoundary }) => (
+                                            <div className="flex flex-col items-center justify-center h-[50vh] gap-3 p-6 text-center">
+                                                <AlertTriangle className="h-8 w-8 text-yellow-400" />
+                                                <div className="text-sm text-white/80">{t('剧本页加载失败', 'Failed to load Script tab')}</div>
+                                                <button
+                                                    type="button"
+                                                    className="px-3 py-1.5 rounded-lg bg-white/10 text-sm hover:bg-white/20"
+                                                    onClick={resetErrorBoundary}
+                                                >
+                                                    {t('重试', 'Retry')}
+                                                </button>
+                                            </div>
+                                        )}
+                                    >
+                                        <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} tabMediaRefreshSignal={tabMediaRefreshSignals.script} isTabActive={activeTab === 'script'} onMediaRefreshRequest={() => bumpTabMediaRefresh('script')} />
+                                    </ErrorBoundary>
                                 </div>
                             )}
                             {shouldRenderSubjectsTab && (

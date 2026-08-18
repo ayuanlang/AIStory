@@ -2,6 +2,7 @@
 """Assets library routes (P8)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -26,6 +27,13 @@ from app.models.all_models import *
 
 logger = logging.getLogger("api_logger")
 router = APIRouter(tags=["assets"])
+
+# Cap concurrent upstream fetches so a dying CDN cannot exhaust the default thread pool
+# and starve episode/script API calls (which presents as a black script page).
+_ASSET_PROXY_GATE = asyncio.Semaphore(6)
+_ASSET_PROXY_CONNECT_TIMEOUT_SEC = 5
+_ASSET_PROXY_READ_TIMEOUT_SEC = 12
+_ASSET_PROXY_MAX_ATTEMPTS = 2
 
 
 def _bind_endpoint_helpers(*, include_routers: bool = True) -> None:
@@ -728,7 +736,7 @@ async def proxy_asset(url: str, request: Request):
     forward_headers.setdefault("User-Agent", "Mozilla/5.0")
     forward_headers.setdefault("Connection", "close")
 
-    timeout = (10, 90)
+    timeout = (_ASSET_PROXY_CONNECT_TIMEOUT_SEC, _ASSET_PROXY_READ_TIMEOUT_SEC)
     last_error: Optional[Exception] = None
     last_upstream_status: Optional[int] = None
 
@@ -755,56 +763,61 @@ async def proxy_asset(url: str, request: Request):
         finally:
             session.close()
 
-    for attempt in range(1, 4):
-        try:
-            upstream = await asyncio.to_thread(_fetch_upstream, fetch_url)
+    async with _ASSET_PROXY_GATE:
+        for attempt in range(1, _ASSET_PROXY_MAX_ATTEMPTS + 1):
+            try:
+                upstream = await asyncio.to_thread(_fetch_upstream, fetch_url)
 
-            status_code = int(upstream.status_code or 502)
-            last_upstream_status = status_code
-            if status_code >= 400:
-                # One retry with a freshly signed URL when private OSS auth fails.
-                if status_code in {401, 403} and attempt < 3:
-                    try:
-                        retried = str(oss_storage_service.refresh_url(url) or "").strip()
-                        if retried and retried != fetch_url:
-                            fetch_url = retried
-                            continue
-                    except Exception:
-                        pass
-                logger.warning(
-                    "[AssetProxy] upstream error | attempt=%s status=%s host=%s url=%s",
-                    attempt,
-                    status_code,
-                    host,
-                    fetch_url.split("?", 1)[0],
-                )
-                raise HTTPException(status_code=502, detail=f"Upstream returned status {status_code}")
+                status_code = int(upstream.status_code or 502)
+                last_upstream_status = status_code
+                if status_code >= 400:
+                    # One retry with a freshly signed URL when private OSS auth fails.
+                    if status_code in {401, 403} and attempt < _ASSET_PROXY_MAX_ATTEMPTS:
+                        try:
+                            retried = str(oss_storage_service.refresh_url(url) or "").strip()
+                            if retried and retried != fetch_url:
+                                fetch_url = retried
+                                continue
+                        except Exception:
+                            pass
+                    logger.warning(
+                        "[AssetProxy] upstream error | attempt=%s status=%s host=%s url=%s",
+                        attempt,
+                        status_code,
+                        host,
+                        fetch_url.split("?", 1)[0],
+                    )
+                    # Missing objects should fail fast (404) so the UI can mark them broken
+                    # instead of occupying workers and returning a generic 502.
+                    if status_code in {404, 410}:
+                        raise HTTPException(status_code=status_code, detail=f"Upstream returned status {status_code}")
+                    raise HTTPException(status_code=502, detail=f"Upstream returned status {status_code}")
 
-            passthrough_headers: Dict[str, str] = {}
-            for header_name in (
-                "content-type",
-                "content-length",
-                "content-range",
-                "accept-ranges",
-                "cache-control",
-                "etag",
-                "last-modified",
-            ):
-                header_value = upstream.headers.get(header_name)
-                if header_value:
-                    # Keep canonical header casing for response output.
-                    passthrough_headers["-".join(part.capitalize() for part in header_name.split("-"))] = header_value
+                passthrough_headers: Dict[str, str] = {}
+                for header_name in (
+                    "content-type",
+                    "content-length",
+                    "content-range",
+                    "accept-ranges",
+                    "cache-control",
+                    "etag",
+                    "last-modified",
+                ):
+                    header_value = upstream.headers.get(header_name)
+                    if header_value:
+                        # Keep canonical header casing for response output.
+                        passthrough_headers["-".join(part.capitalize() for part in header_name.split("-"))] = header_value
 
-            if "Cache-Control" not in passthrough_headers:
-                passthrough_headers["Cache-Control"] = "private, max-age=120, stale-while-revalidate=60"
+                if "Cache-Control" not in passthrough_headers:
+                    passthrough_headers["Cache-Control"] = "private, max-age=120, stale-while-revalidate=60"
 
-            return Response(content=upstream.content, status_code=status_code, headers=passthrough_headers)
-        except HTTPException:
-            raise
-        except Exception as e:
-            last_error = e
-            if attempt < 3:
-                continue
+                return Response(content=upstream.content, status_code=status_code, headers=passthrough_headers)
+            except HTTPException:
+                raise
+            except Exception as e:
+                last_error = e
+                if attempt < _ASSET_PROXY_MAX_ATTEMPTS:
+                    continue
 
     logger.error(
         "Failed to proxy asset %s after retries: %s (last_upstream_status=%s)",

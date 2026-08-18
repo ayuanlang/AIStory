@@ -604,6 +604,14 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                         if (typeof userOnError === 'function') userOnError();
                         return;
                     }
+                    // Direct + proxy both failed. Do not keep hammering a dead CDN unless this
+                    // is a freshly generated asset that may still be propagating.
+                    if (useProxy && !retryOnError) {
+                        rememberBrokenMediaUrl(rawSrc);
+                        setFailed(true);
+                        if (typeof userOnError === 'function') userOnError();
+                        return;
+                    }
                     if (!retryStartedAtRef.current) {
                         retryStartedAtRef.current = Date.now();
                     }
