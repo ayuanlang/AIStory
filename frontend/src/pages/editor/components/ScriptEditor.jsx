@@ -9641,18 +9641,39 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, []);
 
     const currentStageOutputs = useMemo(() => {
-        const persisted = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
-        if (persisted?.stages?.stage1?.outputs?.adapted_script) {
-            const isSceneMarkdownTableText = (candidateText) => {
-                const candidate = String(candidateText || '');
-                if (!candidate.trim()) return false;
-                return /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(candidate)
-                    || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(candidate);
+        const ensureOutputSlot = (outputs, key, extra = {}) => {
+            if (!outputs || typeof outputs !== 'object') return { key, content: '', ...extra };
+            const current = outputs[key];
+            if (current && typeof current === 'object' && !Array.isArray(current)) {
+                if (typeof current.content !== 'string') {
+                    current.content = current.content == null ? '' : String(current.content);
+                }
+                return current;
+            }
+            const slot = {
+                key,
+                content: typeof current === 'string' ? current : '',
+                ...extra,
             };
-            const adaptedOutput = persisted.stages.stage1.outputs.adapted_script;
+            outputs[key] = slot;
+            return slot;
+        };
+        const isSceneMarkdownTableText = (candidateText) => {
+            const candidate = String(candidateText || '');
+            if (!candidate.trim()) return false;
+            return /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(candidate)
+                || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(candidate);
+        };
+        try {
+        const persisted = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
+        if (persisted?.stages?.stage1?.outputs) {
+            const adaptedOutput = ensureOutputSlot(persisted.stages.stage1.outputs, 'adapted_script', {
+                kind: 'markdown',
+                title: '优化后剧本',
+            });
             const adaptedContent = String(adaptedOutput.content || '').trim();
             if (isSceneMarkdownTableText(adaptedContent)) {
-                const stage1RawText = String(persisted.stages.stage1.outputs.raw_text?.content || '').trim();
+                const stage1RawText = String(ensureOutputSlot(persisted.stages.stage1.outputs, 'raw_text').content || '').trim();
                 const persistedAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
                 const recoveredAdaptedScript = stage1RawText && !isSceneMarkdownTableText(stage1RawText)
                     ? String(extractStage1AdaptedScriptBody(stage1RawText) || '').trim()
@@ -9660,44 +9681,37 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 adaptedOutput.content = recoveredAdaptedScript;
             }
         }
-        if (persisted && persisted?.stages?.stage2?.outputs?.subject_index) {
-             let subjOutput = persisted.stages.stage2.outputs.subject_index.content || '';
-             if (!hasSubjectIndexStructure(subjOutput)) {
-                 persisted.stages.stage2.outputs.subject_index.content = '';
-             } else {
-             let sceneOutput = persisted.stages.stage2.outputs.scene_markdown.content || '';
-             
-             const match = subjOutput.match(/(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index|资产清单|实体清单|设计清单|Subject Extract|剧本实体分析|主要提取实体|实体|Entities|Subjects|Assets|资产|人物列表|提取实体|\[Reusable Subject Assets)/i);
-             if (match && match.index > 0) {
-                 const arrangement = subjOutput.slice(0, match.index).trim();
-                 persisted.stages.stage2.outputs.subject_index.content = subjOutput.slice(match.index).trim();
-                 
-                 if (sceneOutput && !sceneOutput.includes(arrangement)) {
-                     persisted.stages.stage2.outputs.scene_markdown.content = `${arrangement}\n\n${sceneOutput}`;
-                 } else if (!sceneOutput) {
-                     persisted.stages.stage2.outputs.scene_markdown.content = arrangement;
-                 }
-             }
-             }
-        }
-        // Persisted ai_stage_outputs may omit scene_markdown while the episode field still has it.
         if (persisted?.stages?.stage2?.outputs) {
-            const sceneMarkdownSlot = persisted.stages.stage2.outputs.scene_markdown
-                || (persisted.stages.stage2.outputs.scene_markdown = { key: 'scene_markdown', content: '' });
-            if (!String(sceneMarkdownSlot?.content || '').trim()) {
+            const stage2Outputs = persisted.stages.stage2.outputs;
+            const subjectSlot = ensureOutputSlot(stage2Outputs, 'subject_index');
+            const sceneMarkdownSlot = ensureOutputSlot(stage2Outputs, 'scene_markdown');
+            const bySceneSlot = ensureOutputSlot(stage2Outputs, 'scene_markdown_by_scene', {
+                kind: 'json',
+                title: '场景分析结果（分场景）',
+            });
+            const subjOutput = String(subjectSlot.content || '');
+            if (!hasSubjectIndexStructure(subjOutput)) {
+                subjectSlot.content = '';
+            } else {
+                const sceneOutput = String(sceneMarkdownSlot.content || '');
+                const match = subjOutput.match(/(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index|资产清单|实体清单|设计清单|Subject Extract|剧本实体分析|主要提取实体|实体|Entities|Subjects|Assets|资产|人物列表|提取实体|\[Reusable Subject Assets)/i);
+                if (match && match.index > 0) {
+                    const arrangement = subjOutput.slice(0, match.index).trim();
+                    subjectSlot.content = subjOutput.slice(match.index).trim();
+                    if (sceneOutput && !sceneOutput.includes(arrangement)) {
+                        sceneMarkdownSlot.content = `${arrangement}\n\n${sceneOutput}`;
+                    } else if (!sceneOutput) {
+                        sceneMarkdownSlot.content = arrangement;
+                    }
+                }
+            }
+            if (!String(sceneMarkdownSlot.content || '').trim()) {
                 const episodeSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
                 if (episodeSceneMarkdown) {
                     sceneMarkdownSlot.content = episodeSceneMarkdown;
                 }
             }
-            if (liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object') {
-                const bySceneSlot = persisted.stages.stage2.outputs.scene_markdown_by_scene
-                    || (persisted.stages.stage2.outputs.scene_markdown_by_scene = {
-                        key: 'scene_markdown_by_scene',
-                        kind: 'json',
-                        title: '场景分析结果（分场景）',
-                        content: '{}',
-                    });
+            if (liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object' && !Array.isArray(liveSceneMarkdownByScene)) {
                 try {
                     bySceneSlot.content = JSON.stringify(liveSceneMarkdownByScene);
                 } catch (_) {
@@ -9706,11 +9720,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const orderedLiveMarkdown = Object.values(liveSceneMarkdownByScene)
                     .map((entry) => String(entry?.markdown || '').trim())
                     .filter(Boolean);
-                if (orderedLiveMarkdown.length > 0) {
-                    sceneMarkdownSlot.content = orderedLiveMarkdown[orderedLiveMarkdown.length - 1];
-                } else {
-                    sceneMarkdownSlot.content = '';
-                }
+                sceneMarkdownSlot.content = orderedLiveMarkdown.length > 0
+                    ? orderedLiveMarkdown[orderedLiveMarkdown.length - 1]
+                    : '';
             }
         }
         if (persisted) {
@@ -9725,21 +9737,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ? stage1.outputs
                     : (stage1.outputs = {});
                 if (liveAdapted) {
-                    const adaptedSlot = outputs.adapted_script && typeof outputs.adapted_script === 'object'
-                        ? outputs.adapted_script
-                        : (outputs.adapted_script = { key: 'adapted_script', kind: 'markdown', title: '优化后剧本', content: '' });
-                    adaptedSlot.content = liveAdapted;
+                    ensureOutputSlot(outputs, 'adapted_script', { kind: 'markdown', title: '优化后剧本' }).content = liveAdapted;
                 }
                 if (liveRaw) {
-                    const rawSlot = outputs.raw_text && typeof outputs.raw_text === 'object'
-                        ? outputs.raw_text
-                        : (outputs.raw_text = { key: 'raw_text', kind: 'text', title: '第一阶段完整结果', content: '' });
-                    rawSlot.content = liveRaw;
+                    ensureOutputSlot(outputs, 'raw_text', { kind: 'text', title: '第一阶段完整结果' }).content = liveRaw;
                 }
             }
             return persisted;
         }
-        const liveBySceneReady = liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object';
+        const liveBySceneReady = liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object' && !Array.isArray(liveSceneMarkdownByScene);
         const liveBySceneMarkdown = liveBySceneReady
             ? Object.values(liveSceneMarkdownByScene)
                 .map((entry) => String(entry?.markdown || '').trim())
@@ -9755,6 +9761,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             sceneMarkdownByScene: liveBySceneReady ? liveSceneMarkdownByScene : null,
             replaceSceneMarkdownByScene: liveBySceneReady,
         });
+        } catch (error) {
+            console.error('[ScriptEditor] failed to assemble stage outputs', error);
+            return buildStageOutputsObject({
+                analysisRawText: '',
+                assetRawText: llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '',
+                stage1RawText: latestStage1RawTextRef.current || adaptationText || activeEpisode?.ai_scene_analysis_adaptation || '',
+                stage2RawText: activeEpisode?.ai_scene_analysis_scene_markdown || '',
+                stage2_1Text: activeEpisode?.ai_scene_analysis_subject_index || '',
+            });
+        }
     }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, liveSceneMarkdownByScene, llmAssetRawResultContent, parseStageOutputsObject]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
@@ -24477,6 +24493,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const workflowCompletenessStats = useMemo(() => {
+        try {
         const importReport = resolveWorkflowImportReport(analysisUiReport, activeEpisode?.id);
         const scenePostReport = importReport?.sceneSubjectPostImportReport || {};
         // Completeness is episode-scoped: count entities imported for the active episode.
@@ -24679,6 +24696,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             failedCategories,
             hasFailedSubtask,
         };
+        } catch (error) {
+            console.error('[ScriptEditor] workflow completeness stats failed', error);
+            return {
+                summaryItems: [],
+                hasAnyData: false,
+                hasIncomplete: false,
+                failedCategories: [],
+                hasFailedSubtask: false,
+            };
+        }
     }, [
         activeEpisode?.ai_entity_design_result,
         activeEpisode?.ai_scene_analysis_adaptation,
@@ -25347,7 +25374,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const sceneMarkdownActive = isAnalysisLiveStepActive(livePhase, 'scene_beats', { isLive: analysisLive, stepReady: sceneMarkdownReady });
                         const assetDesignActive = isAnalysisLiveStepActive(livePhase, 'assets_gen', { isLive: analysisLive, stepReady: assetDesignReady })
                             || Boolean(isRetryingPhase2);
-                        const showAssetFailure = workflowCompletenessStats.hasFailedSubtask && (
+                        const showAssetFailure = Boolean(workflowCompletenessStats?.hasFailedSubtask) && (
                             !analysisLive || assetDesignReady
                         );
                         const storyboardCanStart = Boolean(sceneMarkdownReady || hasSceneMarkdownArtifact);

@@ -4144,6 +4144,10 @@ const Editor = ({
                             {shouldRenderScriptTab && (
                                 <div className={activeTab === 'script' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'script'}>
                                     <ErrorBoundary
+                                        onError={(error, errorInfo) => {
+                                            console.error('ScriptEditor crashed', error, errorInfo);
+                                            addLog?.(`剧本页渲染失败：${error?.message || error}`, 'error');
+                                        }}
                                         fallbackRender={({ resetErrorBoundary }) => (
                                             <div className="flex flex-col items-center justify-center h-[50vh] gap-3 p-6 text-center">
                                                 <AlertTriangle className="h-8 w-8 text-yellow-400" />
