@@ -327,13 +327,18 @@ def _resolve_scene_beats_adapted_script_text(
     raw_text: Any,
     episode_adaptation_fallback: str = "",
 ) -> str:
-    from app.services.script_analysis_flow import extract_adapted_script_from_beats_user_input
-
-    adapted = extract_adapted_script_from_beats_user_input(
-        _sanitize_scene_beats_stage_text(raw_text)
+    from app.services.script_analysis_flow import (
+        SCENES_BLOCK_START_TOKEN,
+        extract_adapted_script_from_beats_user_input,
     )
+
+    sanitized = _sanitize_scene_beats_stage_text(raw_text)
+    adapted = extract_adapted_script_from_beats_user_input(sanitized)
     if adapted:
         return adapted
+    # Request already has scene markers: do not silently replace with a stale episode adaptation.
+    if SCENES_BLOCK_START_TOKEN in sanitized or "[SCENE_START" in sanitized:
+        return sanitized
     if episode_adaptation_fallback:
         return str(episode_adaptation_fallback)
     return ""

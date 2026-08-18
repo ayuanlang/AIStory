@@ -97,8 +97,8 @@ def resolve_usable_episode_subject_index(
     """Resolve a usable Subject Index for downstream gates/injection.
 
     Prefer explicit client-provided Subject Index (what the Stage 2 UI shows), then
-    episode.ai_scene_analysis_subject_index, then stage_outputs, then request-embedded
-    text. Optionally heal a contaminated/empty episode field.
+    stage_outputs, then episode.ai_scene_analysis_subject_index, then request-embedded
+    text. Optionally heal a stale/empty episode field to the chosen source.
     """
     explicit_raw = _coerce_subject_index_candidate(explicit_subject_index)
     episode_field_raw = _coerce_subject_index_candidate(
@@ -138,7 +138,7 @@ def resolve_usable_episode_subject_index(
         and resolved_text
         and episode is not None
         and resolved_source in {"explicit", "stage_outputs", "request_text"}
-        and not _subject_index_has_usable_content(episode_field_raw)
+        and str(episode_field_raw or "").strip() != str(resolved_text or "").strip()
     ):
         try:
             episode.ai_scene_analysis_subject_index = resolved_text

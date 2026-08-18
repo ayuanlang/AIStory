@@ -546,25 +546,36 @@ def resolve_scene_units_for_markdown_orchestration(
     episode_adaptation_text: str = "",
 ) -> tuple[List[ParsedSceneUnit], str]:
     parse_errors: List[str] = []
-    candidate_sources = [
-        ("adapted_script", adapted_script_text),
-        ("episode_adaptation", episode_adaptation_text),
-    ]
-    for source_name, source_text in candidate_sources:
-        text = str(source_text or "").strip()
-        if not text:
-            continue
+    adapted = str(adapted_script_text or "").strip()
+    if adapted:
         try:
-            units = parse_scene_units_from_markers(text)
+            units = parse_scene_units_from_markers(adapted)
             if units:
                 return _finalize_scene_units_for_episode(
                     db,
                     units,
                     episode_id,
-                    script_text=text,
-                ), source_name
+                    script_text=adapted,
+                ), "adapted_script"
         except SceneMarkerParseError as exc:
-            parse_errors.append(f"{source_name}:{exc.code}")
+            parse_errors.append(f"adapted_script:{exc.code}")
+        # Request already carried an adapted script. Do not silently fall back to a
+        # stale episode adaptation / progress_db scene_text from a previous run.
+        return [], "|".join(parse_errors) if parse_errors else "adapted_script_unparsed"
+
+    episode_adaptation = str(episode_adaptation_text or "").strip()
+    if episode_adaptation:
+        try:
+            units = parse_scene_units_from_markers(episode_adaptation)
+            if units:
+                return _finalize_scene_units_for_episode(
+                    db,
+                    units,
+                    episode_id,
+                    script_text=episode_adaptation,
+                ), "episode_adaptation"
+        except SceneMarkerParseError as exc:
+            parse_errors.append(f"episode_adaptation:{exc.code}")
 
     if int(project_id) > 0 and int(episode_id) > 0:
         units = load_scene_units_from_progress_rows(
@@ -577,7 +588,7 @@ def resolve_scene_units_for_markdown_orchestration(
                 db,
                 units,
                 episode_id,
-                script_text=adapted_script_text or episode_adaptation_text,
+                script_text=adapted or episode_adaptation,
             ), "progress_db"
 
     return [], "|".join(parse_errors) if parse_errors else "no_scene_units"

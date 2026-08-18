@@ -10385,6 +10385,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const adaptationValue = canExtractStage1Adaptation
                         ? String(extractStage1AdaptedScriptBody(effectiveStage1RawText) || '').trim()
                         : '';
+                    if (adaptationValue) {
+                        setAdaptationText(adaptationValue);
+                    }
                     const stageOutputsPayload = {
                         analysisRawText: '',
                         assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
@@ -10488,6 +10491,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } else if (resultField === 'ai_scene_analysis_subject_index') {
                 const normalizedSubjectIndexValue = extractPureSubjectIndexText(nextContent);
                 latestStage2_1TextRef.current = normalizedSubjectIndexValue;
+                if (normalizedSubjectIndexValue) {
+                    setSubjectIndexText(normalizedSubjectIndexValue);
+                }
                 updatePayload[resultField] = normalizedSubjectIndexValue;
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
                     analysisRawText: '',
@@ -11301,26 +11307,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const ensurePersistedSubjectIndexForDownstream = useCallback(async (preferredText = '') => {
-        const stageSi = String(
+        const liveSi = String(
             preferredText
+            || latestStage2_1TextRef.current
+            || subjectIndexText
             || currentStageOutputs?.stages?.stage2?.outputs?.subject_index?.content
             || ''
         ).trim();
         const episodeSi = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
-        const resolvedStage = extractPureSubjectIndexText(stageSi).trim() || stageSi;
+        const resolvedLive = extractPureSubjectIndexText(liveSi).trim() || liveSi;
         const resolvedEpisode = extractPureSubjectIndexText(episodeSi).trim() || episodeSi;
 
-        if (hasUsableSubjectIndexRows(resolvedEpisode)) {
+        // Prefer the latest live/index text (session persist, Stage 2.1 edit, stage_outputs).
+        // Do not keep a usable-but-stale episode field when a newer inventory is available.
+        const canonical = hasUsableSubjectIndexRows(resolvedLive)
+            ? resolvedLive
+            : (hasUsableSubjectIndexRows(resolvedEpisode) ? resolvedEpisode : (resolvedLive || resolvedEpisode || ''));
+        if (!hasUsableSubjectIndexRows(canonical)) {
+            return canonical;
+        }
+        if (canonical === resolvedEpisode) {
             return resolvedEpisode;
         }
-        if (!hasUsableSubjectIndexRows(resolvedStage)) {
-            return resolvedStage || resolvedEpisode || '';
-        }
 
-        // UI may show stage_outputs Subject Index while episode field is empty/contaminated.
-        // Heal the canonical episode field before scene orchestration / asset design.
         try {
-            await persistSubjectIndexEdit(resolvedStage);
+            await persistSubjectIndexEdit(canonical);
             onLog?.(
                 t(
                     '已将资产清单同步到本集，便于继续场景重排。',
@@ -11337,7 +11348,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 'warning'
             );
         }
-        return resolvedStage;
+        return canonical;
     }, [
         activeEpisode?.ai_scene_analysis_subject_index,
         currentStageOutputs?.stages?.stage2?.outputs?.subject_index?.content,
@@ -11345,6 +11356,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         hasUsableSubjectIndexRows,
         onLog,
         persistSubjectIndexEdit,
+        subjectIndexText,
         t,
     ]);
 
@@ -12524,7 +12536,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 'Missing adapted script for scene beats orchestration. Complete Stage 1 script optimization first.'
             ));
         }
-        const subjectIndexForStage2_2 = String(stage2_1SubjectIndexText || '').trim();
+        const subjectIndexForStage2_2 = String(
+            extractPureSubjectIndexText(latestStage2_1TextRef.current || stage2_1SubjectIndexText || '')
+            || latestStage2_1TextRef.current
+            || stage2_1SubjectIndexText
+            || ''
+        ).trim();
         if (!subjectIndexForStage2_2 || !hasSubjectIndexStructure(subjectIndexForStage2_2)) {
             throw new Error(t(
                 '缺少资产清单，无法执行场景编排。请先完成资产清单后再重试。',
@@ -12553,6 +12570,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         );
         sceneUnits = applyCanonicalSceneIdsToUnits(sceneUnits, episodePrefix);
 
+        const subjectIndexSection = buildStage2_2SubjectIndexSection(subjectIndexForStage2_2);
+        const attachSubjectIndex = (text) => {
+            const body = String(text || '');
+            if (!subjectIndexSection) return body;
+            if (!body) return subjectIndexSection;
+            if (body.includes('[Subject Index开始]') || /\[Stage\s*2[\-_]\s*1\s+Subject\s*Index/i.test(body)) {
+                return body;
+            }
+            return `${subjectIndexSection}\n\n${body}`;
+        };
+
         const runSingleStage2_2Attempt = async ({
             attemptLabel,
             attemptUserInputBody,
@@ -12560,17 +12588,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             fallbackAttempt = 0,
             disableEpisodeRecovery = false,
         }) => {
+            const attachedUserInputBody = attachSubjectIndex(attemptUserInputBody);
+            const attachedFinalUserInput = attachSubjectIndex(attemptFinalUserInput);
             logStage2_2Diagnostics({
                 phase: `${logPhasePrefix}-stage2_2-submit`,
-                subjectIndexText: stage2_1SubjectIndexText,
-                sceneInputText: attemptUserInputBody,
-                finalInputText: attemptFinalUserInput,
+                subjectIndexText: subjectIndexForStage2_2,
+                sceneInputText: attachedUserInputBody,
+                finalInputText: attachedFinalUserInput,
             });
 
             const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
                 () => runScriptAnalysisFlowAnalyzeNode(
                     'scene_markdown',
-                    attemptFinalUserInput,
+                    attachedFinalUserInput,
                     finalStage2_2Prompt,
                     null,
                     activeEpisode?.id || null,
@@ -12638,9 +12668,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const stage2_2Check = validateStage2_2BeatsOutput(text2_2, validationLabel);
             logStage2_2Diagnostics({
                 phase: `${logPhasePrefix}-stage2_2-result`,
-                subjectIndexText: stage2_1SubjectIndexText,
-                sceneInputText: attemptUserInputBody,
-                finalInputText: attemptFinalUserInput,
+                subjectIndexText: subjectIndexForStage2_2,
+                sceneInputText: attachedUserInputBody,
+                finalInputText: attachedFinalUserInput,
                 rawOutputText: text2_2,
                 normalizedText: stage2_2Check?.normalizedText || '',
             });
@@ -13301,12 +13331,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         awaitAnalyzeSceneWithRecovery,
         beginSceneOrchestrationPanelTracking,
         buildSceneMarkdownPatchFromPerSceneOutputs,
+        buildStage2_2SubjectIndexSection,
         buildStage2_2UserInputFromStage1,
         clearSceneMarkdownPatchForScenes,
         ensureOrchestrationScenesInWorkspace,
         extractAdaptedScriptFromStage2_2UserInputBody,
         extractAnalysisTextFromResult,
         extractPerSceneOutputsFromResult,
+        extractPureSubjectIndexText,
         extractStage1AdaptedScriptBody,
         fetchPrompt,
         fetchScenes,
@@ -17876,6 +17908,50 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 outputs.raw_text.content = filtered;
             }
         }
+
+        // Keep the newest Stage 1 / Subject Index when clearing later stages.
+        // Episode React state can lag behind session persist refs after a just-finished save.
+        if (!clearStage1) {
+            const liveStage1Raw = String(latestStage1RawTextRef.current || '').trim();
+            const liveAdapted = String(
+                extractStage1AdaptedScriptBody(liveStage1Raw)
+                || adaptationText
+                || ''
+            ).trim();
+            if (liveStage1Raw || liveAdapted) {
+                const outputs = ensureOutputs('stage1');
+                if (liveStage1Raw) {
+                    if (!outputs.raw_text || typeof outputs.raw_text !== 'object') {
+                        outputs.raw_text = { key: 'raw_text', content: liveStage1Raw };
+                    } else {
+                        outputs.raw_text.content = liveStage1Raw;
+                    }
+                }
+                if (liveAdapted) {
+                    if (!outputs.adapted_script || typeof outputs.adapted_script !== 'object') {
+                        outputs.adapted_script = { key: 'adapted_script', content: liveAdapted };
+                    } else {
+                        outputs.adapted_script.content = liveAdapted;
+                    }
+                }
+            }
+        }
+        if (!clearSubjectIndex) {
+            const liveSi = String(
+                extractPureSubjectIndexText(latestStage2_1TextRef.current || subjectIndexText || '')
+                || latestStage2_1TextRef.current
+                || subjectIndexText
+                || ''
+            ).trim();
+            if (liveSi) {
+                const outputs = ensureOutputs('stage2');
+                if (!outputs.subject_index || typeof outputs.subject_index !== 'object') {
+                    outputs.subject_index = { key: 'subject_index', content: liveSi };
+                } else {
+                    outputs.subject_index.content = liveSi;
+                }
+            }
+        }
         try {
             return JSON.stringify(base, null, 2);
         } catch (_) {
@@ -20565,34 +20641,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(candidate)
                 || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(candidate);
         };
-
-        const fromStageOutput = String(getStageOutputContent('stage1', 'adapted_script') || '').trim();
-        if (fromStageOutput && !isSceneMarkdownTableText(fromStageOutput)) {
-            return { text: fromStageOutput, source: 'stage1.adapted_script' };
-        }
-
-        const fromEpisodeField = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
-        if (fromEpisodeField && !isSceneMarkdownTableText(fromEpisodeField)) {
+        const pickAdapted = (candidateText, source) => {
+            const candidate = String(candidateText || '').trim();
+            if (!candidate || isSceneMarkdownTableText(candidate)) return null;
             const extracted = String(extractStage1AdaptedScriptBody(
-                /(?:###?\s*)?(?:第二部分[:：]?\s*修改后的剧本|Second\s*Part[:：]?\s*Adapted\s*Script)/i.test(fromEpisodeField)
-                    ? fromEpisodeField
-                    : `### 第二部分：修改后的剧本\n${fromEpisodeField}`
-            ) || '').trim() || fromEpisodeField;
-            if (extracted && !isSceneMarkdownTableText(extracted)) {
-                return { text: extracted, source: 'ai_scene_analysis_adaptation' };
-            }
-        }
+                /(?:###?\s*)?(?:第二部分[:：]?\s*修改后的剧本|Second\s*Part[:：]?\s*Adapted\s*Script)/i.test(candidate)
+                    ? candidate
+                    : `### 第二部分：修改后的剧本\n${candidate}`
+            ) || '').trim() || candidate;
+            if (!extracted || isSceneMarkdownTableText(extracted)) return null;
+            return { text: extracted, source };
+        };
 
-        const stage1RawText = String(getStageOutputContent('stage1', 'raw_text') || '').trim();
-        if (stage1RawText) {
-            const extracted = String(extractStage1AdaptedScriptBody(stage1RawText) || '').trim();
-            if (extracted && !isSceneMarkdownTableText(extracted)) {
-                return { text: extracted, source: 'stage1.raw_text' };
-            }
-        }
+        // Session persist refs beat React episode state: parent setState may lag after Stage 1 save.
+        const fromLiveRef = pickAdapted(latestStage1RawTextRef.current, 'latestStage1RawTextRef');
+        if (fromLiveRef) return fromLiveRef;
+        const fromLiveState = pickAdapted(adaptationText, 'adaptationText');
+        if (fromLiveState) return fromLiveState;
+
+        const fromStageOutput = pickAdapted(getStageOutputContent('stage1', 'adapted_script'), 'stage1.adapted_script');
+        if (fromStageOutput) return fromStageOutput;
+
+        const fromEpisodeField = pickAdapted(activeEpisode?.ai_scene_analysis_adaptation, 'ai_scene_analysis_adaptation');
+        if (fromEpisodeField) return fromEpisodeField;
+
+        const fromStage1Raw = pickAdapted(getStageOutputContent('stage1', 'raw_text'), 'stage1.raw_text');
+        if (fromStage1Raw) return fromStage1Raw;
 
         return { text: '', source: '' };
-    }, [activeEpisode?.ai_scene_analysis_adaptation, extractStage1AdaptedScriptBody, getStageOutputContent]);
+    }, [activeEpisode?.ai_scene_analysis_adaptation, adaptationText, extractStage1AdaptedScriptBody, getStageOutputContent]);
 
     const buildStage1RestartSourceText = useCallback(() => {
         const { text: adaptedScript } = resolveStage1AdaptedScriptText();
@@ -21075,7 +21152,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         const stage2_1Text = String(
-            getStageOutputContent('stage2', 'subject_index')
+            latestStage2_1TextRef.current
+            || subjectIndexText
+            || getStageOutputContent('stage2', 'subject_index')
             || activeEpisode?.ai_scene_analysis_subject_index
             || ''
         ).trim();
@@ -21223,8 +21302,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
             }
 
-            const adaptedScriptForRerun = String(resolveStage1AdaptedScriptText().text || '').trim()
+            const adaptedResolved = resolveStage1AdaptedScriptText();
+            const adaptedScriptForRerun = String(adaptedResolved.text || '').trim()
                 || extractStage1AdaptedScriptBody(stage1SourceText);
+            onLog?.(
+                t(
+                    `场景重排输入：优化剧本来源=${adaptedResolved.source || 'stage1SourceText'}（${String(adaptedScriptForRerun || '').length} 字），资产清单 ${String(stage2_1SubjectIndexText || '').length} 字。`,
+                    `Scene-beats rerun inputs: adapted script source=${adaptedResolved.source || 'stage1SourceText'} (${String(adaptedScriptForRerun || '').length} chars), subject index ${String(stage2_1SubjectIndexText || '').length} chars.`
+                ),
+                'info'
+            );
             const stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText, adaptedScriptForRerun);
             const finalStage2_2UserInput = stage2_2UserInputBody;
 
@@ -21620,6 +21707,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setIsAnalyzing,
         setLlmRawResultContent,
         setLlmResultContent,
+        subjectIndexText,
         t,
         validateAutoSceneTableImport,
         validateStage2_2BeatsOutput,
@@ -21682,7 +21770,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         const stage2_1Text = String(
-            getStageOutputContent('stage2', 'subject_index')
+            latestStage2_1TextRef.current
+            || subjectIndexText
+            || getStageOutputContent('stage2', 'subject_index')
             || activeEpisode?.ai_scene_analysis_subject_index
             || ''
         ).trim();
@@ -21716,6 +21806,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         resolveSceneBeatsRerunCandidates,
         resolveStage1AdaptedScriptText,
         reportAnalysisPanelNotice,
+        subjectIndexText,
         t,
     ]);
 
