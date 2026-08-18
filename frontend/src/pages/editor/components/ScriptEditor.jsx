@@ -3676,7 +3676,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
         const persistedAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
-        const extractedSubjectIndex = extractPureSubjectIndexText(persistedSubjectIndexText);
+        const extractedFromEpisode = extractPureSubjectIndexText(persistedSubjectIndexText);
         const llmRaw = String(llmRawResultContent || '').trim();
         const llmLooksLikeStage1Script = /\[SCENES_BLOCK_START\]/i.test(llmRaw)
             || /\[SCENE_START:[^\s\]]+\]/i.test(llmRaw)
@@ -3687,7 +3687,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ? String(extractStage1AdaptedScriptBody(llmRaw) || llmRaw || '').trim()
             : '';
         const fromLiveRef = String(extractStage1AdaptedScriptBody(latestStage1RawTextRef.current) || '').trim();
-        const extractedAdaptationText = fromLiveRef || fromLiveLlm || persistedAdaptationText;
+        const trustLiveDownstreamOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current);
+        const liveSubjectIndex = String(
+            extractPureSubjectIndexText(latestStage2_1TextRef.current || '') || latestStage2_1TextRef.current || ''
+        ).trim();
+        const extractedSubjectIndex = liveSubjectIndex
+            || (trustLiveDownstreamOnly ? '' : extractedFromEpisode);
+        const extractedAdaptationText = fromLiveRef || fromLiveLlm || (trustLiveDownstreamOnly ? '' : persistedAdaptationText);
 
         setSubjectIndexText((prev) => (extractedSubjectIndex !== prev ? extractedSubjectIndex : prev));
         setAdaptationText((prev) => (extractedAdaptationText !== prev ? extractedAdaptationText : prev));
@@ -9474,10 +9480,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ? String(extractStage1AdaptedScriptBody(stage1AdaptedSource) || '').trim()
             : '';
         // New Stage 1 source must replace the previous adaptation; never keep the old episode copy.
+        // After a full restart, live-only mode must not resurrect pre-restart 剧本统筹.
+        const trustLiveDownstreamOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current);
         const stage1AdaptedScript = String(
             extractedFromSource
             || (resolvedStage1RawText ? extractedFromSource || resolvedStage1RawText : '')
-            || (!resolvedStage1RawText ? safePersistedAdaptationText : '')
+            || (!resolvedStage1RawText && !trustLiveDownstreamOnly ? safePersistedAdaptationText : '')
             || ''
         ).trim();
         const stage1VisualBackfillJson = String(
@@ -9486,9 +9494,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const explicitSubjectIndex = String(stage2_1Text || '').trim();
         const persistedSubjectIndex = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
-        // replace=true: empty live SI after a restart must not resurrect the episode copy.
+        // replace=true or restart live-only: empty live SI must not resurrect the episode copy.
         const rawStage2_1Text = extractPureSubjectIndexText(
-            replaceSubjectIndex
+            replaceSubjectIndex || trustLiveDownstreamOnly
                 ? explicitSubjectIndex
                 : (explicitSubjectIndex || persistedSubjectIndex || '')
         );
@@ -9804,9 +9812,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (persisted) {
             const liveAdapted = String(adaptationText || '').trim();
             const liveRaw = String(latestStage1RawTextRef.current || '').trim();
-            const liveSubjectIndex = String(latestStage2_1TextRef.current || subjectIndexText || '').trim();
             const liveAssets = String(latestAssetRawTextRef.current || llmAssetRawResultContent || '').trim();
             const trustLiveDownstreamOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current);
+            const liveSubjectIndex = String(
+                latestStage2_1TextRef.current
+                || (trustLiveDownstreamOnly ? '' : subjectIndexText)
+                || ''
+            ).trim();
             if (liveAdapted || liveRaw) {
                 const stages = persisted.stages && typeof persisted.stages === 'object' ? persisted.stages : (persisted.stages = {});
                 const stage1 = stages.stage1 && typeof stages.stage1 === 'object'
@@ -9821,6 +9833,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (liveRaw) {
                     ensureOutputSlot(outputs, 'raw_text', { kind: 'text', title: '第一阶段完整结果' }).content = liveRaw;
                 }
+            } else if (trustLiveDownstreamOnly && persisted.stages?.stage1?.outputs) {
+                const outputs = persisted.stages.stage1.outputs;
+                ensureOutputSlot(outputs, 'adapted_script', { kind: 'markdown', title: '优化后剧本' }).content = '';
+                ensureOutputSlot(outputs, 'raw_text', { kind: 'text', title: '第一阶段完整结果' }).content = '';
+                ensureOutputSlot(outputs, 'project_visual_backfill', { kind: 'json', title: '全局风格' }).content = '';
             }
             if (persisted.stages?.stage2?.outputs) {
                 if (liveSubjectIndex) {
@@ -9848,7 +9865,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .slice(-1)[0] || ''
             : '';
         const trustLiveDownstreamOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current);
-        const liveSubjectIndex = String(latestStage2_1TextRef.current || subjectIndexText || '').trim();
+        const liveSubjectIndex = String(
+            latestStage2_1TextRef.current
+            || (trustLiveDownstreamOnly ? '' : subjectIndexText)
+            || ''
+        ).trim();
         const liveAssets = String(latestAssetRawTextRef.current || llmAssetRawResultContent || '').trim();
         return buildStageOutputsObject({
             analysisRawText: '',
@@ -9868,7 +9889,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     assetRawText: String(latestAssetRawTextRef.current || llmAssetRawResultContent || '').trim(),
                     stage1RawText: latestStage1RawTextRef.current || adaptationText || '',
                     stage2RawText: '',
-                    stage2_1Text: String(latestStage2_1TextRef.current || subjectIndexText || '').trim(),
+                    stage2_1Text: String(
+                        latestStage2_1TextRef.current
+                        || (analysisTrustLiveDownstreamOnlyRef.current ? '' : subjectIndexText)
+                        || ''
+                    ).trim(),
                     sceneMarkdownByScene: {},
                     replaceSceneMarkdownByScene: true,
                     replaceSubjectIndex: true,
@@ -10218,7 +10243,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         );
         const skipSceneMarkdownSync = skipAiArtifactSync || liveSceneMarkdownByScene != null;
         if (!skipAiArtifactSync) {
-            const nextSubjectIndexText = extractPureSubjectIndexText(String(activeEpisode?.ai_scene_analysis_subject_index || ''));
+            const liveSi = String(
+                extractPureSubjectIndexText(latestStage2_1TextRef.current || '') || latestStage2_1TextRef.current || ''
+            ).trim();
+            const trustLiveDownstreamOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current);
+            const nextSubjectIndexText = liveSi
+                || (trustLiveDownstreamOnly
+                    ? ''
+                    : extractPureSubjectIndexText(String(activeEpisode?.ai_scene_analysis_subject_index || '')));
             const nextAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '');
             const nextAssetRaw = String(activeEpisode?.ai_entity_design_result || '');
             const persistedBySceneRaw = String(
@@ -11154,6 +11186,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ? sceneMarkdownByScene
                         : null,
                     replaceSceneMarkdownByScene: false,
+                    replaceSubjectIndex: true,
                 }), null, 2),
             });
             onLog?.(`[Stage 2 Asset Index] Saved manual edit (len=${normalizedValue.length})`, 'success');
@@ -11219,8 +11252,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const persistedStage2RawText = String(persistedStageOutputs?.stages?.stage2?.outputs?.raw_text?.content || '').trim();
         const persistedStage2_1Text = String(
             latestStage2_1TextRef.current
-            || persistedStageOutputs?.stages?.stage2?.outputs?.subject_index?.content
-            || activeEpisode?.ai_scene_analysis_subject_index
+            || (analysisTrustLiveDownstreamOnlyRef.current
+                ? ''
+                : (
+                    persistedStageOutputs?.stages?.stage2?.outputs?.subject_index?.content
+                    || activeEpisode?.ai_scene_analysis_subject_index
+                    || ''
+                ))
             || ''
         ).trim();
         const existingSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
@@ -11251,11 +11289,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
                     stage1RawText: syntheticStage1Raw,
                     stage2RawText: persistedStage2RawText || existingSceneMarkdown,
-                    stage2_1Text: extractPureSubjectIndexText(persistedStage2_1Text) || persistedStage2_1Text,
+                    stage2_1Text: extractPureSubjectIndexText(
+                        latestStage2_1TextRef.current || persistedStage2_1Text || ''
+                    ) || persistedStage2_1Text,
                     sceneMarkdownByScene: sceneMarkdownByScene && Object.keys(sceneMarkdownByScene).length > 0
                         ? sceneMarkdownByScene
                         : null,
                     replaceSceneMarkdownByScene: false,
+                    replaceSubjectIndex: true,
                 }), null, 2),
             });
             onLog?.(`[Stage 1 Adapted Script] Saved manual beats edit (len=${normalizedValue.length})`, 'success');
@@ -13835,6 +13876,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         const episodeIdForPhase2 = Number(activeEpisode?.id || 0) || 0;
+        const liveTrackedAnalysis = Boolean(
+            episodeIdForPhase2 > 0 && (
+                getEpisodeAnalysisRun(episodeIdForPhase2)?.promise
+                || isEpisodeAnalysisClaimed(episodeIdForPhase2)
+            )
+        );
+        const thisRunHasSubjectIndex = Boolean(String(latestStage2_1TextRef.current || '').trim());
+        // Stage 1 completion / remount resume can still see a leftover episode Subject Index.
+        // Asset design must wait for THIS run's Stage 2.1 output — never fan out in parallel with
+        // an in-flight script_optimization / assets_extraction owner.
+        if (
+            liveTrackedAnalysis
+            && !thisRunHasSubjectIndex
+            && !options?.isRetryPhase2
+            && !options?.forceAssetDesign
+        ) {
+            onLog?.(
+                '[Stage 3 Asset Design] Blocked: live analysis pipeline has not finished asset extraction yet; refusing leftover Subject Index.',
+                'warning'
+            );
+            return emptyReport;
+        }
+
         const allowRepeatAutoStage3 = Boolean(options?.isRetryPhase2 || options?.forceAssetDesign);
         if (
             !allowRepeatAutoStage3
@@ -16277,9 +16341,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             'warning'
                         );
                         const continueFn = resumeIncompleteAnalysisPipelineRef.current;
-                        if (typeof continueFn === 'function' && (hasSubjectIndex || hasAdaptation)) {
+                        const fromStage1 = markerPhaseKey === '1' || markerPhase === 1;
+                        // A leftover Subject Index from a previous run must not skip Stage 2.1
+                        // just because Stage 1's backend task succeeded.
+                        const canSkipToExistingIndex = hasSubjectIndex && !fromStage1;
+                        if (typeof continueFn === 'function' && (canSkipToExistingIndex || hasAdaptation)) {
                             setAnalysisFlowStatus({
-                                phase: hasSubjectIndex ? 'scene_beats' : 'extract_assets',
+                                phase: canSkipToExistingIndex ? 'scene_beats' : 'extract_assets',
                                 message: t(
                                     '检测到上一阶段已完成但后续未跑完，正在自动继续分析…',
                                     'Previous stage finished but later stages did not; auto-continuing analysis...'
@@ -16289,8 +16357,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 await continueFn({
                                     reason: `stale-terminal-${terminalStatus}`,
                                     markerPhase: markerPhaseKey,
-                                    hasSubjectIndex,
+                                    hasSubjectIndex: canSkipToExistingIndex,
                                     hasAdaptation,
+                                    continueFromStage1: fromStage1,
                                 });
                             } catch (continueErr) {
                                 setIsAnalyzing(false);
@@ -19008,6 +19077,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return false;
         }
 
+        const liveTrackedAnalysis = Boolean(
+            getEpisodeAnalysisRun(activeEpisode.id)?.promise
+            || isEpisodeAnalysisClaimed(activeEpisode.id)
+        );
+        const thisRunHasSubjectIndex = Boolean(String(latestStage2_1TextRef.current || '').trim());
+        if (liveTrackedAnalysis && !thisRunHasSubjectIndex) {
+            onLog?.(
+                '[Analysis Resume] Skip artifact resume; live pipeline has not finished asset extraction yet.',
+                'warning'
+            );
+            return true;
+        }
+
         const resolvedSubjectIndexText = String(resumeState?.resolvedSubjectIndexText || '').trim();
         const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
         if (resolvedSubjectIndexText && resolvedSubjectIndexText !== persistedSubjectIndexText) {
@@ -20353,6 +20435,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 // Local state so the Stage-2.1 Edit control unlocks immediately during live analysis
                 // (episode→subjectIndexText sync is skipped while isAnalyzing).
                 if (stage2_1SubjectIndexText) {
+                    latestStage2_1TextRef.current = extractPureSubjectIndexText(stage2_1SubjectIndexText) || stage2_1SubjectIndexText;
                     setSubjectIndexText(extractPureSubjectIndexText(stage2_1SubjectIndexText) || stage2_1SubjectIndexText);
                 }
                 
@@ -20689,6 +20772,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ai_stage_outputs: JSON.stringify(buildStageOutputsObject({
                                 analysisRawText: finalAnalysisText || analyzedText || '',
                                 assetRawText: activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
+                                stage1RawText: latestStage1RawTextRef.current || '',
+                                stage2_1Text: latestStage2_1TextRef.current || globalStage2_1Text || '',
+                                replaceSubjectIndex: true,
+                                replaceSceneMarkdownByScene: true,
                             }), null, 2),
                         });
                     }
@@ -21257,6 +21344,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             const stage2_1SubjectIndexText = String(stage2_1Validation.subjectIndexText || '').trim() || extractPureSubjectIndexText(stage2_1Text).trim() || String(stage2_1Text || '').trim();
             let globalStage2_1Text = stage2_1SubjectIndexText;
+            if (stage2_1SubjectIndexText) {
+                latestStage2_1TextRef.current = extractPureSubjectIndexText(stage2_1SubjectIndexText) || stage2_1SubjectIndexText;
+            }
             if (onLog) onLog('资产清单完成（重跑场景），开始并发执行：场景编排 + 资产设计。', 'info');
 
             setAnalysisFlowStatus({
@@ -21537,9 +21627,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     // Bound after Stage-2 resume helpers exist so tryResumePendingAnalysis can auto-continue
     // when a completed Stage-1 node task is mistaken for a finished pipeline.
-    resumeIncompleteAnalysisPipelineRef.current = async ({ hasSubjectIndex = false } = {}) => {
+    resumeIncompleteAnalysisPipelineRef.current = async ({
+        hasSubjectIndex = false,
+        markerPhase = '',
+        continueFromStage1 = false,
+    } = {}) => {
+        const episodeId = activeEpisode?.id;
+        const liveTrackedAnalysis = Boolean(
+            analysisRunInFlightRef.current
+            || getEpisodeAnalysisRun(episodeId)?.promise
+            || isEpisodeAnalysisClaimed(episodeId)
+        );
+        if (liveTrackedAnalysis) {
+            onLog?.(
+                '[Analysis Resume] Skip auto-continue; live analysis pipeline still owns this episode.',
+                'info'
+            );
+            return;
+        }
         analysisRunInFlightRef.current = false;
         analysisResumeInFlightRef.current = false;
+        const fromStage1 = Boolean(continueFromStage1) || String(markerPhase || '').trim() === '1';
+        // Stage 1 node success is not a usable Subject Index. Always extract assets first.
+        if (fromStage1) {
+            await handleRestartStage2({ allowWhileAnalyzing: true });
+            return;
+        }
         if (hasSubjectIndex) {
             const resumeState = await prepareSceneAnalysisResumeState();
             if (resumeState?.decision === 'completed' || resumeState?.decision === 'phase2') {
