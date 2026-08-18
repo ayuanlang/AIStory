@@ -211,8 +211,8 @@ const buildSceneOrchestrationPhaseMessage = (sceneId, phase, { sceneOrder, total
             let detail = String(errorCode || '').trim();
             if (detail.startsWith('SCENE_MARKDOWN_MISSING_BEAT_1')) {
                 return t(
-                    `[场景编排] ${sceneId}${orderLabel} 跳过：输入无 Beat 1，场景不对`,
-                    `[Scene beats] ${sceneId}${orderLabel} skipped: no Beat 1 in input (invalid scene)`
+                    `[场景编排] ${sceneId}${orderLabel} 跳过：输入无 Beat 标记，场景不对`,
+                    `[Scene beats] ${sceneId}${orderLabel} skipped: no Beat marker in input (invalid scene)`
                 );
             }
             if (detail.startsWith('SCENE_MARKDOWN_SCENE_ID_MISMATCH')) {
@@ -615,91 +615,6 @@ const sceneUnitIdsMatch = (leftId, rightId, sceneOrder, episodePrefix) => (
     === canonicalizeSceneUnitId(rightId, sceneOrder, episodePrefix)
 );
 
-/** Align script-marker units with Stage 2 scene_markdown display (id / order / name). */
-const alignSceneBeatsCandidatesWithStage2 = (scriptCandidates, stage2ByScene, episodePrefix) => {
-    const units = Array.isArray(scriptCandidates) ? scriptCandidates : [];
-    const byScene = stage2ByScene && typeof stage2ByScene === 'object' ? stage2ByScene : {};
-    const stage2Entries = Object.entries(byScene)
-        .map(([rawId, entry]) => {
-            const sceneId = String(entry?.scene_id || rawId || '').trim();
-            if (!sceneId) return null;
-            const sceneOrder = Number(entry?.scene_order) || deriveSceneOrderFromSceneId(sceneId) || 0;
-            const sceneName = String(entry?.scene_name || '').trim();
-            return { sceneId, sceneOrder, sceneName };
-        })
-        .filter(Boolean)
-        .sort((left, right) => {
-            if ((left.sceneOrder || 0) !== (right.sceneOrder || 0)) {
-                return (left.sceneOrder || 0) - (right.sceneOrder || 0);
-            }
-            return String(left.sceneId).localeCompare(String(right.sceneId));
-        });
-
-    if (!stage2Entries.length || !units.length) {
-        return units;
-    }
-
-    const used = new Set();
-    const takeMatch = (predicate) => {
-        const index = units.findIndex((unit, idx) => !used.has(idx) && predicate(unit, idx));
-        if (index < 0) return null;
-        used.add(index);
-        return units[index];
-    };
-
-    const aligned = stage2Entries.map((entry) => {
-        let match = takeMatch((unit) => sceneUnitIdsMatch(
-            unit?.sceneId,
-            entry.sceneId,
-            entry.sceneOrder || unit?.sceneOrder,
-            episodePrefix
-        ));
-        if (!match && entry.sceneOrder > 0) {
-            match = takeMatch((unit) => Number(unit?.sceneOrder) === Number(entry.sceneOrder));
-        }
-        const displayLabel = entry.sceneName
-            ? `${entry.sceneId} · ${entry.sceneName}`
-            : (match?.displayLabel || entry.sceneId);
-        if (match) {
-            return {
-                ...match,
-                sceneId: entry.sceneId,
-                sceneOrder: entry.sceneOrder || match.sceneOrder,
-                displayLabel,
-                stage2Aligned: true,
-            };
-        }
-        return {
-            sceneId: entry.sceneId,
-            sceneOrder: entry.sceneOrder || 0,
-            sceneText: '',
-            displayLabel,
-            markerStartToken: `[SCENE_START:${entry.sceneId}]`,
-            markerEndToken: `[SCENE_END:${entry.sceneId}]`,
-            stage2Aligned: true,
-            unmatchedScriptUnit: true,
-        };
-    });
-
-    // Keep Stage 1 units missing from Stage 2 so incomplete orchestration remains recoverable.
-    units.forEach((unit, idx) => {
-        if (used.has(idx)) return;
-        aligned.push({
-            ...unit,
-            stage2Aligned: false,
-            missingFromStage2: true,
-            displayLabel: unit?.displayLabel || unit?.sceneId,
-        });
-    });
-
-    return aligned.sort((left, right) => {
-        if ((left.sceneOrder || 0) !== (right.sceneOrder || 0)) {
-            return (left.sceneOrder || 0) - (right.sceneOrder || 0);
-        }
-        return String(left.sceneId || '').localeCompare(String(right.sceneId || ''));
-    });
-};
-
 const collectOrchestrationResetSceneIds = (units, episodePrefix) => {
     const ids = new Set();
     (Array.isArray(units) ? units : []).forEach((unit, idx) => {
@@ -907,10 +822,36 @@ const extractBeatBlocksFromSceneText = (sceneText) => {
 
 const MIN_SCENE_BEATS_CHARS = 20;
 
-/** Literal "Beat 1" or structured [BEAT_START:1] — required for Stage 2.2 orchestration input. */
-const sceneTextHasBeat1 = (text) => (
-    /(?:\[\s*BEAT_START\s*:\s*1\s*\])|(?:\bBeat\s+1\b)/i.test(String(text || ''))
+/** Any Beat marker — Stage 2.2 accepts continued numbering (Beat 11 in SC03). */
+const sceneTextHasAnyBeat = (text) => (
+    /(?:\[\s*BEAT_START(?:\s*:\s*[^\s\]]+)?\s*\])|(?:^[ \t]*[-~]?[ \t]*Beat[ \t]+\d+\b)/im.test(String(text || ''))
 );
+
+/** @deprecated alias: any Beat marker, not specifically Beat 1. */
+const sceneTextHasBeat1 = sceneTextHasAnyBeat;
+
+const sceneFirstBeatNumber = (text) => {
+    const source = String(text || '');
+    const startMatch = /`?\[BEAT_START(?::([^\s\]]+))?\]`?/i.exec(source);
+    const legacyMatch = /^\s*[-~]\s*Beat\s+(\d+)\b/m.exec(source);
+    let best = null;
+    if (startMatch) {
+        best = { index: startMatch.index, id: String(startMatch[1] || '').trim() };
+    }
+    if (legacyMatch && (best == null || legacyMatch.index < best.index)) {
+        best = { index: legacyMatch.index, id: String(legacyMatch[1] || '').trim() };
+    }
+    if (best?.id) return best.id;
+    const bareMatch = /^\s*Beat\s+(\d+)\b/m.exec(source);
+    return bareMatch ? String(bareMatch[1] || '').trim() : '';
+};
+
+const isCanonicalFirstBeatNumber = (beatId) => {
+    const raw = String(beatId || '').trim();
+    if (!raw) return false;
+    const asInt = Number.parseInt(raw, 10);
+    return Number.isFinite(asInt) && asInt === 1;
+};
 
 /** Strip BEAT_START/END markers so length reflects Beat body content. */
 const stripBeatBoundaryMarkers = (beatsText) => String(beatsText || '')
@@ -945,7 +886,7 @@ const stripBeatTransitionNotesFromScript = (scriptText) => {
 const resolveSceneBeatsBodyForStage22 = (sceneText, sceneId = '') => {
     const source = String(sceneText || '').trim();
     const id = String(sceneId || 'unknown').trim() || 'unknown';
-    if (!sceneTextHasBeat1(source)) {
+    if (!sceneTextHasAnyBeat(source)) {
         throw new Error(`SCENE_MARKDOWN_MISSING_BEAT_1:${id}`);
     }
     const beatsOnly = extractBeatBlocksFromSceneText(source).trim();
@@ -1210,9 +1151,22 @@ const resolveCompletenessStatus = (analysisCount, importedCount) => {
     const actual = Number(importedCount || 0);
     if (expected <= 0 && actual <= 0) return 'none';
     if (expected <= 0 && actual > 0) return 'extra';
-    if (actual >= expected) return 'ok';
+    if (actual > expected) return 'extra';
+    if (actual === expected) return 'ok';
     if (actual > 0) return 'partial';
     return 'missing';
+};
+
+const countSceneUnitsFromAdaptedScriptText = (scriptText) => {
+    const adaptedScript = String(scriptText || '').trim();
+    if (!adaptedScript) return 0;
+    try {
+        const units = parseSceneUnitsFromScriptMarkersText(adaptedScript);
+        return Array.isArray(units) ? units.length : 0;
+    } catch (_) {
+        const markers = adaptedScript.match(/\[SCENE_START:[^\s\]]+\]/gi);
+        return Array.isArray(markers) ? markers.length : 0;
+    }
 };
 
 const syncScenePostImportCheckedCount = (importReport, postImportSceneSubjectReport) => {
@@ -2840,12 +2794,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [rawContent, setRawContent] = useState('');
     const [llmResultContent, setLlmResultContent] = useState('');
     const [llmRawResultContent, setLlmRawResultContent] = useState('');
+    // Session overlay for Stage 2.2 by_scene. null = use persisted episode JSON;
+    // {} = this run cleared 2.2 (do not show stale editor rows); object = live writes.
+    const [liveSceneMarkdownByScene, setLiveSceneMarkdownByScene] = useState(null);
     const [llmAssetRawResultContent, setLlmAssetRawResultContent] = useState('');
     const [analysisRuntimeMeta, setAnalysisRuntimeMeta] = useState(null);
     const [isRawMode, setIsRawMode] = useState(false);
     const [analysisAttentionNotes, setAnalysisAttentionNotes] = useState('');
     const [isSavingAnalysisAttentionNotes, setIsSavingAnalysisAttentionNotes] = useState(false);
     const [availableSubjectAssets, setAvailableSubjectAssets] = useState([]);
+    const [episodeOwnedEntities, setEpisodeOwnedEntities] = useState([]);
     const [diagnosticsEpisodeSceneCount, setDiagnosticsEpisodeSceneCount] = useState(0);
     const [diagnosticsEpisodeShotStats, setDiagnosticsEpisodeShotStats] = useState({
         shotCount: 0,
@@ -3696,6 +3654,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [extractPureSubjectIndexText]);
 
     useEffect(() => {
+        setLiveSceneMarkdownByScene(null);
+    }, [activeEpisode?.id]);
+
+    useEffect(() => {
         isSuperuserRef.current = isSuperuser;
     }, [isSuperuser]);
 
@@ -3705,12 +3667,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
         const persistedAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
         const extractedSubjectIndex = extractPureSubjectIndexText(persistedSubjectIndexText);
-        const authoritativeAdaptationText = llmRawResultContent || llmResultContent || activeEpisode.ai_scene_analysis_result || '';
-        const extractedAdaptationText = persistedAdaptationText || (
-            /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeAdaptationText)
-                ? String(extractStage1AdaptedScriptBody(authoritativeAdaptationText) || '').trim()
-                : ''
-        );
+        const llmRaw = String(llmRawResultContent || '').trim();
+        const llmLooksLikeStage1Script = /\[SCENES_BLOCK_START\]/i.test(llmRaw)
+            || /\[SCENE_START:[^\s\]]+\]/i.test(llmRaw)
+            || /(?:###?\s*)?(?:第二部分[:：]?\s*修改后的剧本|Second\s*Part[:：]?\s*Adapted\s*Script)/i.test(llmRaw);
+        const llmLooksLikeSceneTable = /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(llmRaw)
+            || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(llmRaw);
+        const fromLiveLlm = (llmLooksLikeStage1Script && !llmLooksLikeSceneTable)
+            ? String(extractStage1AdaptedScriptBody(llmRaw) || llmRaw || '').trim()
+            : '';
+        const fromLiveRef = String(extractStage1AdaptedScriptBody(latestStage1RawTextRef.current) || '').trim();
+        const extractedAdaptationText = fromLiveRef || fromLiveLlm || persistedAdaptationText;
 
         setSubjectIndexText((prev) => (extractedSubjectIndex !== prev ? extractedSubjectIndex : prev));
         setAdaptationText((prev) => (extractedAdaptationText !== prev ? extractedAdaptationText : prev));
@@ -4532,8 +4499,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || normalized.includes('missing_beat_1')
         ) {
             return t(
-                '场景编排跳过：输入无 Beat 1，场景不对。请检查 Stage 1 成稿是否包含 Beat 1 / [BEAT_START:1]。',
-                'Scene orchestration skipped: no Beat 1 in input (invalid scene). Ensure Stage 1 output contains Beat 1 / [BEAT_START:1].'
+                '场景编排跳过：输入无 Beat 标记，场景不对。请检查 Stage 1 成稿是否包含 [BEAT_START:n] / - Beat n。',
+                'Scene orchestration skipped: no Beat marker in input (invalid scene). Ensure Stage 1 output contains [BEAT_START:n] / - Beat n.'
             );
         }
         if (
@@ -9454,8 +9421,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const persistedAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
         const safePersistedAdaptationText = isSceneMarkdownTableText(persistedAdaptationText) ? '' : persistedAdaptationText;
 
+        const extractedFromSource = stage1AdaptedSource
+            ? String(extractStage1AdaptedScriptBody(stage1AdaptedSource) || '').trim()
+            : '';
+        // New Stage 1 source must replace the previous adaptation; never keep the old episode copy.
         const stage1AdaptedScript = String(
-            (stage1AdaptedSource ? extractStage1AdaptedScriptBody(stage1AdaptedSource) : '') || safePersistedAdaptationText || ''
+            extractedFromSource
+            || (resolvedStage1RawText ? extractedFromSource || resolvedStage1RawText : '')
+            || (!resolvedStage1RawText ? safePersistedAdaptationText : '')
+            || ''
         ).trim();
         const stage1VisualBackfillJson = String(
             extractProjectVisualBackfillJsonText(resolvedStage1RawText || resolvedAnalysisRawText) || ''
@@ -9716,16 +9690,72 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     sceneMarkdownSlot.content = episodeSceneMarkdown;
                 }
             }
+            if (liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object') {
+                const bySceneSlot = persisted.stages.stage2.outputs.scene_markdown_by_scene
+                    || (persisted.stages.stage2.outputs.scene_markdown_by_scene = {
+                        key: 'scene_markdown_by_scene',
+                        kind: 'json',
+                        title: '场景分析结果（分场景）',
+                        content: '{}',
+                    });
+                try {
+                    bySceneSlot.content = JSON.stringify(liveSceneMarkdownByScene);
+                } catch (_) {
+                    bySceneSlot.content = '{}';
+                }
+                const orderedLiveMarkdown = Object.values(liveSceneMarkdownByScene)
+                    .map((entry) => String(entry?.markdown || '').trim())
+                    .filter(Boolean);
+                if (orderedLiveMarkdown.length > 0) {
+                    sceneMarkdownSlot.content = orderedLiveMarkdown[orderedLiveMarkdown.length - 1];
+                } else {
+                    sceneMarkdownSlot.content = '';
+                }
+            }
         }
-        if (persisted) return persisted;
+        if (persisted) {
+            const liveAdapted = String(adaptationText || '').trim();
+            const liveRaw = String(latestStage1RawTextRef.current || '').trim();
+            if (liveAdapted || liveRaw) {
+                const stages = persisted.stages && typeof persisted.stages === 'object' ? persisted.stages : (persisted.stages = {});
+                const stage1 = stages.stage1 && typeof stages.stage1 === 'object'
+                    ? stages.stage1
+                    : (stages.stage1 = { key: 'stage1', outputs: {} });
+                const outputs = stage1.outputs && typeof stage1.outputs === 'object'
+                    ? stage1.outputs
+                    : (stage1.outputs = {});
+                if (liveAdapted) {
+                    const adaptedSlot = outputs.adapted_script && typeof outputs.adapted_script === 'object'
+                        ? outputs.adapted_script
+                        : (outputs.adapted_script = { key: 'adapted_script', kind: 'markdown', title: '优化后剧本', content: '' });
+                    adaptedSlot.content = liveAdapted;
+                }
+                if (liveRaw) {
+                    const rawSlot = outputs.raw_text && typeof outputs.raw_text === 'object'
+                        ? outputs.raw_text
+                        : (outputs.raw_text = { key: 'raw_text', kind: 'text', title: '第一阶段完整结果', content: '' });
+                    rawSlot.content = liveRaw;
+                }
+            }
+            return persisted;
+        }
+        const liveBySceneReady = liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object';
+        const liveBySceneMarkdown = liveBySceneReady
+            ? Object.values(liveSceneMarkdownByScene)
+                .map((entry) => String(entry?.markdown || '').trim())
+                .filter(Boolean)
+                .slice(-1)[0] || ''
+            : '';
         return buildStageOutputsObject({
             analysisRawText: '',
             assetRawText: llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '',
-            stage1RawText: activeEpisode?.ai_scene_analysis_adaptation || '',
-            stage2RawText: activeEpisode?.ai_scene_analysis_scene_markdown || '',
+            stage1RawText: latestStage1RawTextRef.current || adaptationText || activeEpisode?.ai_scene_analysis_adaptation || '',
+            stage2RawText: liveBySceneReady ? liveBySceneMarkdown : (activeEpisode?.ai_scene_analysis_scene_markdown || ''),
             stage2_1Text: activeEpisode?.ai_scene_analysis_subject_index || '',
+            sceneMarkdownByScene: liveBySceneReady ? liveSceneMarkdownByScene : null,
+            replaceSceneMarkdownByScene: liveBySceneReady,
         });
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, buildStageOutputsObject, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, llmAssetRawResultContent, parseStageOutputsObject]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, liveSceneMarkdownByScene, llmAssetRawResultContent, parseStageOutputsObject]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -10063,6 +10093,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || isAnalyzing
             || isRetryingPhase2
         );
+        const skipSceneMarkdownSync = skipAiArtifactSync || liveSceneMarkdownByScene != null;
         if (!skipAiArtifactSync) {
             const nextSubjectIndexText = extractPureSubjectIndexText(String(activeEpisode?.ai_scene_analysis_subject_index || ''));
             const nextAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '');
@@ -10072,10 +10103,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const nextLlmResultContent = normalizeLlmMarkdownTable(storedText);
 
             setSubjectIndexText((prev) => (prev === nextSubjectIndexText ? prev : nextSubjectIndexText));
-            setAdaptationText((prev) => (prev === nextAdaptationText ? prev : nextAdaptationText));
+            const liveAdapted = String(
+                extractStage1AdaptedScriptBody(latestStage1RawTextRef.current) || ''
+            ).trim();
+            if (liveAdapted) {
+                setAdaptationText((prev) => (prev === liveAdapted ? prev : liveAdapted));
+            } else {
+                setAdaptationText((prev) => (prev === nextAdaptationText ? prev : nextAdaptationText));
+            }
             setLlmAssetRawResultContent((prev) => (prev === nextAssetRaw ? prev : nextAssetRaw));
-            setLlmRawResultContent((prev) => (prev === storedText ? prev : storedText));
-            setLlmResultContent((prev) => (prev === nextLlmResultContent ? prev : nextLlmResultContent));
+            if (!skipSceneMarkdownSync) {
+                setLlmRawResultContent((prev) => (prev === storedText ? prev : storedText));
+                setLlmResultContent((prev) => (prev === nextLlmResultContent ? prev : nextLlmResultContent));
+            }
         }
 
         const nextAttentionNotes = String(activeEpisode?.episode_info?.analysis_attention_notes || '');
@@ -10117,6 +10157,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         isAnalyzing,
         isRetryingPhase2,
         extractPureSubjectIndexText,
+        extractStage1AdaptedScriptBody,
+        liveSceneMarkdownByScene,
         normalizeLlmMarkdownTable,
     ]);
 
@@ -10124,22 +10166,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let mounted = true;
         const loadAssets = async () => {
             if (!projectId || !activeEpisode?.id) {
-                if (mounted) setAvailableSubjectAssets([]);
+                if (mounted) {
+                    setAvailableSubjectAssets([]);
+                    setEpisodeOwnedEntities([]);
+                }
                 return;
             }
             setIsLoadingSubjectAssets(true);
             try {
-                // Fetch project entities for global reuse — exclude current episode's own assets.
-                const entities = await fetchEntities(projectId);
-                if (!mounted) return;
+                // Reuse picker = project entities excluding this episode.
+                // 齐套 已齐 = this episode's imported entities (episode_id filter).
                 const episodeId = activeEpisode.id;
-                const rows = (Array.isArray(entities) ? entities : []).filter(
-                    (asset) => !isAssetFromEpisode(asset, episodeId),
-                );
-                setAvailableSubjectAssets(rows);
+                const [allEntities, ownedEntities] = await Promise.all([
+                    fetchEntities(projectId),
+                    fetchEntities(projectId, { episode_id: Number(episodeId) || undefined }),
+                ]);
+                if (!mounted) return;
+                const all = Array.isArray(allEntities) ? allEntities : [];
+                const owned = Array.isArray(ownedEntities) ? ownedEntities : [];
+                setAvailableSubjectAssets(all.filter((asset) => !isAssetFromEpisode(asset, episodeId)));
+                setEpisodeOwnedEntities(owned);
             } catch (e) {
                 console.error(e);
-                if (mounted) setAvailableSubjectAssets([]);
+                if (mounted) {
+                    setAvailableSubjectAssets([]);
+                    setEpisodeOwnedEntities([]);
+                }
             } finally {
                 if (mounted) setIsLoadingSubjectAssets(false);
             }
@@ -10371,7 +10423,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
 
             if (resultField === 'ai_scene_analysis_result') {
-                const isStage1ResultWrite = /stage1/i.test(logSource) && !/stage2|split-combined/i.test(logSource);
+                const looksLikeStage1ScriptText = (candidate) => {
+                    const text = String(candidate || '');
+                    return /\[SCENES_BLOCK_START\]/i.test(text)
+                        || /\[SCENE_START:[^\s\]]+\]/i.test(text)
+                        || /(?:###?\s*)?(?:第二部分[:：]?\s*修改后的剧本|Second\s*Part[:：]?\s*Adapted\s*Script)/i.test(text);
+                };
+                const looksLikeSceneMarkdownTableText = (candidate) => {
+                    const text = String(candidate || '');
+                    return /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(text)
+                        || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(text);
+                };
+                const nextLooksLikeStage1 = looksLikeStage1ScriptText(nextContent) && !looksLikeSceneMarkdownTableText(nextContent);
+                const isDedicatedStage1Source = /stage1/i.test(logSource) && !/stage2|split-combined/i.test(logSource);
+                const isImmediateStage1Source = /(?:standard-analysis-immediate|resume-analysis-immediate)$/i.test(logSource);
+                const isStage1ResultWrite = (isDedicatedStage1Source || isImmediateStage1Source) && nextLooksLikeStage1;
 
                 if (isStage1ResultWrite) {
                     const effectiveStage1RawText = String(options?.stage1RawText || nextContent || '').trim();
@@ -10382,9 +10448,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const looksLikeSceneMarkdownTable = /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(effectiveStage1RawText)
                         || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(effectiveStage1RawText);
                     const canExtractStage1Adaptation = hasExplicitAdaptedScriptSection || (Boolean(effectiveStage1RawText) && !looksLikeSceneMarkdownTable);
-                    const adaptationValue = canExtractStage1Adaptation
+                    const extractedAdaptation = canExtractStage1Adaptation
                         ? String(extractStage1AdaptedScriptBody(effectiveStage1RawText) || '').trim()
                         : '';
+                    const adaptationValue = extractedAdaptation
+                        || (looksLikeSceneMarkdownTable ? '' : effectiveStage1RawText);
                     if (adaptationValue) {
                         setAdaptationText(adaptationValue);
                     }
@@ -10410,7 +10478,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 const explicitStage2RawText = String(options?.stage2RawText || '').trim();
                 const effectiveStage2RawText = explicitStage2RawText || nextContent;
-                const effectiveStage1RawText = String(options?.stage1RawText || '').trim();
+                const nextLooksLikeStage1Script = looksLikeStage1ScriptText(nextContent) && !looksLikeSceneMarkdownTableText(nextContent);
+                const effectiveStage1RawText = String(options?.stage1RawText || '').trim()
+                    || (nextLooksLikeStage1Script ? nextContent : '');
                 if (effectiveStage1RawText) {
                     latestStage1RawTextRef.current = effectiveStage1RawText;
                 }
@@ -10423,18 +10493,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 const adaptationSourceText = effectiveStage1RawText || nextContent;
                 const hasExplicitAdaptedScriptSection = /(?:###?\s*)?(?:第二部分[:：]?\s*修改后的剧本|Second\s*Part[:：]?\s*Adapted\s*Script|Adapted\s*Script\s*[-(（])/i.test(adaptationSourceText);
-                const looksLikeSceneMarkdownTable = /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(adaptationSourceText)
-                    || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(adaptationSourceText);
-                const canExtractStage1Adaptation = hasExplicitAdaptedScriptSection || (Boolean(effectiveStage1RawText) && !looksLikeSceneMarkdownTable);
+                const looksLikeSceneMarkdownTable = looksLikeSceneMarkdownTableText(adaptationSourceText);
+                const canExtractStage1Adaptation = hasExplicitAdaptedScriptSection
+                    || (Boolean(effectiveStage1RawText) && !looksLikeSceneMarkdownTable)
+                    || nextLooksLikeStage1Script;
                 const extractedAdaptationValue = canExtractStage1Adaptation
                     ? String(extractStage1AdaptedScriptBody(adaptationSourceText) || '').trim()
                     : '';
                 const persistedAdaptationValue = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
-                const persistedAdaptationLooksLikeSceneTable = /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(persistedAdaptationValue)
-                    || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(persistedAdaptationValue);
-                const adaptationValue = extractedAdaptationValue || (persistedAdaptationLooksLikeSceneTable ? '' : persistedAdaptationValue);
+                const persistedAdaptationLooksLikeSceneTable = looksLikeSceneMarkdownTableText(persistedAdaptationValue);
+                // A new Stage 1 payload must replace the previous episode copy; never keep stale adaptation.
+                const adaptationValue = extractedAdaptationValue
+                    || (nextLooksLikeStage1Script ? String(adaptationSourceText || '').trim() : '')
+                    || (looksLikeSceneMarkdownTable || persistedAdaptationLooksLikeSceneTable ? '' : persistedAdaptationValue);
 
                 const normalizedSubjectIndexValue = extractPureSubjectIndexText(subjectIndexValue);
+                if (adaptationValue) {
+                    setAdaptationText(adaptationValue);
+                }
                 updatePayload.ai_scene_analysis_subject_index = normalizedSubjectIndexValue;
                 updatePayload.ai_scene_analysis_adaptation = adaptationValue;
                 if (/stage2_2|scene_beats|scene_markdown/i.test(logSource)) {
@@ -10541,6 +10617,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             await onUpdateEpisodeInfo(activeEpisode.id, updatePayload);
             lastPersistPayloadSignatureRef.current[resultField] = payloadSignature;
+            if (options?.sceneMarkdownByScene && typeof options.sceneMarkdownByScene === 'object') {
+                setLiveSceneMarkdownByScene((prev) => (
+                    replaceSceneMarkdownByScene
+                        ? options.sceneMarkdownByScene
+                        : {
+                            ...(prev && typeof prev === 'object' ? prev : {}),
+                            ...options.sceneMarkdownByScene,
+                        }
+                ));
+            }
         } catch (e) {
             console.error("Failed to persist LLM result", e);
             if (onLog) onLog(`Failed to save LLM result: ${e.message}`);
@@ -10583,10 +10669,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const persistedBySceneRaw = String(
                 persistedStageOutputs?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || ''
             ).trim();
-            const persistedBySceneMap = mergeSceneMarkdownBySceneMaps(
-                parseSceneMarkdownBySceneMap(persistedBySceneRaw),
-                orchestrationPersistedSceneMarkdownRef.current
+            const inFlightSceneBeats = Boolean(
+                analysisRunInFlightRef.current
+                || sceneBeatsOnlyRerunInFlightRef.current
+                || liveSceneMarkdownByScene != null
             );
+            const sessionBySceneMap = (
+                liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object'
+                    ? liveSceneMarkdownByScene
+                    : orchestrationPersistedSceneMarkdownRef.current
+            );
+            const persistedBySceneMap = inFlightSceneBeats
+                ? (sessionBySceneMap && typeof sessionBySceneMap === 'object' ? sessionBySceneMap : {})
+                : mergeSceneMarkdownBySceneMaps(
+                    parseSceneMarkdownBySceneMap(persistedBySceneRaw),
+                    sessionBySceneMap
+                );
             const mergedBySceneMap = options?.replaceSceneMarkdownByScene === true
                 ? patchMap
                 : mergeSceneMarkdownBySceneMaps(persistedBySceneMap, patchMap);
@@ -10616,6 +10714,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             await onUpdateEpisodeInfo(activeEpisode.id, updatePayload);
             orchestrationPersistedSceneMarkdownRef.current = mergedBySceneMap;
+            setLiveSceneMarkdownByScene(mergedBySceneMap);
             onLog?.(`[Analysis Writeback] field=scene_markdown_by_scene source=${logSource} scenes=${sceneIds.join(',')}`, 'info');
         } catch (error) {
             console.error('Failed to persist per-scene scene markdown patch', error);
@@ -10630,6 +10729,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.id,
         buildStageOutputsObject,
         extractPureSubjectIndexText,
+        liveSceneMarkdownByScene,
         llmAssetRawResultContent,
         mergeSceneMarkdownBySceneMaps,
         onLog,
@@ -10696,13 +10796,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     replaceSceneMarkdownByScene: false,
                 }
             );
-            if (typeof onRefreshEpisodes === 'function') {
-                try {
-                    await onRefreshEpisodes();
-                } catch (_) {
-                    // best-effort refresh so subsequent merges see latest episode fields
-                }
-            }
 
             const importPrecheck = validateAutoSceneTableImport(patchEntry.markdown);
             let textForImport = patchEntry.markdown;
@@ -10876,17 +10969,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const resolveScriptOptBeatsContent = useCallback(() => {
-        // Editor/import shows the full Stage 1 adapted script per scene
-        // (场景头、主环境/未落环境实体清单/衍生环境、观察视角与空间建置、Beats 等)。
-        const adapted = String(
-            currentStageOutputs?.stages?.stage1?.outputs?.adapted_script?.content
-            || adaptationText
-            || activeEpisode?.ai_scene_analysis_adaptation
+        // Same source as scene-beats rerun: latest optimized script, not Stage 2 Scenes Table.
+        const pickAdapted = (candidateText) => {
+            const candidate = String(candidateText || '').trim();
+            if (!candidate) return '';
+            const extracted = String(extractStage1AdaptedScriptBody(
+                /(?:###?\s*)?(?:第二部分[:：]?\s*修改后的剧本|Second\s*Part[:：]?\s*Adapted\s*Script)/i.test(candidate)
+                    ? candidate
+                    : `### 第二部分：修改后的剧本\n${candidate}`
+            ) || '').trim();
+            return extracted || candidate;
+        };
+        return (
+            pickAdapted(latestStage1RawTextRef.current)
+            || pickAdapted(adaptationText)
+            || pickAdapted(currentStageOutputs?.stages?.stage1?.outputs?.adapted_script?.content)
+            || pickAdapted(activeEpisode?.ai_scene_analysis_adaptation)
+            || pickAdapted(currentStageOutputs?.stages?.stage1?.outputs?.raw_text?.content)
             || ''
-        ).trim();
-        if (!adapted) return '';
-        const body = String(extractStage1AdaptedScriptBody(adapted) || '').trim();
-        return body || adapted;
+        );
     }, [
         activeEpisode?.ai_scene_analysis_adaptation,
         adaptationText,
@@ -11099,17 +11200,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [t]);
 
     const buildSceneBeatsEditScenes = useCallback(() => {
-        const rawJson = String(
-            currentStageOutputs?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || ''
-        ).trim();
-        let byScene = parseSceneMarkdownBySceneMap(rawJson);
-        if (!byScene || Object.keys(byScene).length <= 0) {
-            const merged = String(
-                currentStageOutputs?.stages?.stage2?.outputs?.scene_markdown?.content
-                || activeEpisode?.ai_scene_analysis_scene_markdown
-                || ''
+        let byScene = {};
+        if (liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object') {
+            byScene = liveSceneMarkdownByScene;
+        } else {
+            const rawJson = String(
+                currentStageOutputs?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || ''
             ).trim();
-            byScene = merged ? splitSceneMarkdownTableBySceneId(merged) : {};
+            byScene = parseSceneMarkdownBySceneMap(rawJson);
+            if (!byScene || Object.keys(byScene).length <= 0) {
+                const merged = String(
+                    currentStageOutputs?.stages?.stage2?.outputs?.scene_markdown?.content
+                    || activeEpisode?.ai_scene_analysis_scene_markdown
+                    || ''
+                ).trim();
+                byScene = merged ? splitSceneMarkdownTableBySceneId(merged) : {};
+            }
         }
         return Object.entries(byScene || {})
             .map(([rawId, entry]) => {
@@ -11133,6 +11239,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [
         activeEpisode?.ai_scene_analysis_scene_markdown,
         currentStageOutputs,
+        liveSceneMarkdownByScene,
         parseSceneMarkdownBySceneMap,
         splitSceneMarkdownTableBySceneId,
     ]);
@@ -11216,6 +11323,41 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         resolveScriptOptBeatsContent,
         resolveSubjectIndexEditContent,
         t,
+    ]);
+
+    useEffect(() => {
+        if (!stageArtifactEditModal.open || stageArtifactEditModal.kind !== 'scene_beats') return;
+        const scenes = buildSceneBeatsEditScenes();
+        setStageArtifactEditModal((prev) => {
+            if (!prev.open || prev.kind !== 'scene_beats' || prev.editing || prev.saving) return prev;
+            const currentId = String(prev.sceneId || '').trim();
+            const nextScene = scenes.find((item) => String(item?.sceneId || '').trim() === currentId) || scenes[0] || null;
+            const nextMarkdown = String(nextScene?.markdown || '');
+            const prevScenes = Array.isArray(prev.scenes) ? prev.scenes : [];
+            const sameScenes = prevScenes.length === scenes.length
+                && scenes.every((item, index) => {
+                    const previous = prevScenes[index];
+                    return previous
+                        && String(previous.sceneId || '') === String(item.sceneId || '')
+                        && String(previous.markdown || '') === String(item.markdown || '');
+                });
+            if (sameScenes && String(prev.content || '') === nextMarkdown) return prev;
+            const parsed = parseSceneBeatsFieldsFromMarkdown(nextMarkdown);
+            return {
+                ...prev,
+                scenes,
+                sceneId: nextScene?.sceneId || '',
+                content: nextMarkdown,
+                headers: parsed.headers,
+                fields: parsed.fields,
+            };
+        });
+    }, [
+        buildSceneBeatsEditScenes,
+        liveSceneMarkdownByScene,
+        parseSceneBeatsFieldsFromMarkdown,
+        stageArtifactEditModal.kind,
+        stageArtifactEditModal.open,
     ]);
 
     const saveStageArtifactEditModal = useCallback(async () => {
@@ -11374,8 +11516,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const persistedStage2_1Text = String(persistedStageOutputs?.stages?.stage2?.outputs?.subject_index?.content || '').trim();
             const existingSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
             const rawJson = String(persistedStageOutputs?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || '').trim();
-            const currentMap = parseSceneMarkdownBySceneMap(rawJson);
-            const nextMap = { ...(currentMap && typeof currentMap === 'object' ? currentMap : {}) };
+            const sessionMap = (
+                liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object'
+                    ? liveSceneMarkdownByScene
+                    : parseSceneMarkdownBySceneMap(rawJson)
+            );
+            const nextMap = { ...(sessionMap && typeof sessionMap === 'object' ? sessionMap : {}) };
             targetIds.forEach((sceneId) => {
                 delete nextMap[sceneId];
             });
@@ -11390,8 +11536,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ? extractPureSubjectIndexText(options.stage2_1Text)
                         : extractPureSubjectIndexText(latestStage2_1TextRef.current || persistedStage2_1Text || activeEpisode?.ai_scene_analysis_subject_index || ''),
                     sceneMarkdownByScene: nextMap,
+                    replaceSceneMarkdownByScene: true,
                 }), null, 2),
             });
+            orchestrationPersistedSceneMarkdownRef.current = nextMap;
+            setLiveSceneMarkdownByScene(nextMap);
             onLog?.(`[Analysis Writeback] cleared scene_markdown_by_scene source=${logSource} scenes=${targetIds.join(',')}`, 'info');
         } catch (error) {
             console.error('Failed to clear per-scene scene markdown', error);
@@ -11406,6 +11555,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.id,
         buildStageOutputsObject,
         extractPureSubjectIndexText,
+        liveSceneMarkdownByScene,
         llmAssetRawResultContent,
         onLog,
         onUpdateEpisodeInfo,
@@ -12791,23 +12941,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
         }
 
-        // Preflight: no "Beat 1" → skip scene (invalid); then resolve Beats length.
+        // Preflight: no Beat marker → skip scene (invalid); continued numbering (Beat 11+) still runs.
         const missingBeat1Units = [];
         const beatsTooShortErrors = [];
         const unitsAfterBeat1Gate = [];
         for (const unit of unitsToProcess) {
             const sceneId = String(unit?.sceneId || '').trim() || 'unknown';
             const sceneText = stripBlockLevelMarkersFromSceneText(unit?.sceneText || unit?.sceneMarkdown || '');
-            if (!sceneTextHasBeat1(sceneText)) {
+            if (!sceneTextHasAnyBeat(sceneText)) {
                 missingBeat1Units.push(unit);
                 onLog?.(
                     t(
-                        `[${label}] 场景 ${sceneId} 输入无 Beat 1，跳过场景编排（场景不对）`,
-                        `[${label}] Scene ${sceneId} has no Beat 1 in input; skipping orchestration (invalid scene)`
+                        `[${label}] 场景 ${sceneId} 输入无 Beat 标记，跳过场景编排（场景不对）`,
+                        `[${label}] Scene ${sceneId} has no Beat marker in input; skipping orchestration (invalid scene)`
                     ),
                     'error'
                 );
                 continue;
+            }
+            const firstBeat = sceneFirstBeatNumber(sceneText);
+            if (firstBeat && !isCanonicalFirstBeatNumber(firstBeat)) {
+                onLog?.(
+                    t(
+                        `[${label}] 场景 ${sceneId} 首拍为 Beat ${firstBeat}（跨场连编兼容），继续编排`,
+                        `[${label}] Scene ${sceneId} starts at Beat ${firstBeat} (cross-scene numbering tolerated); continuing orchestration`
+                    ),
+                    'warning'
+                );
             }
             try {
                 const resolved = resolveSceneBeatsBodyForStage22(sceneText, sceneId);
@@ -12827,8 +12987,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     missingBeat1Units.push(unit);
                     onLog?.(
                         t(
-                            `[${label}] 场景 ${sceneId} 输入无 Beat 1，跳过场景编排（场景不对）`,
-                            `[${label}] Scene ${sceneId} has no Beat 1 in input; skipping orchestration (invalid scene)`
+                            `[${label}] 场景 ${sceneId} 输入无 Beat 标记，跳过场景编排（场景不对）`,
+                            `[${label}] Scene ${sceneId} has no Beat marker in input; skipping orchestration (invalid scene)`
                         ),
                         'error'
                     );
@@ -12875,8 +13035,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             publishMissingBeat1Failures(missingBeat1Units.length);
             throw new Error(
                 t(
-                    `场景编排跳过：全部 ${missingBeat1Units.length} 场输入均无 Beat 1，场景不对。`,
-                    `Scene orchestration skipped: all ${missingBeat1Units.length} scene(s) lack Beat 1 (invalid scene).`
+                    `场景编排跳过：全部 ${missingBeat1Units.length} 场输入均无 Beat 标记，场景不对。`,
+                    `Scene orchestration skipped: all ${missingBeat1Units.length} scene(s) lack Beat markers (invalid scene).`
                 )
             );
         }
@@ -12978,6 +13138,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ...preservedLiveImported,
             ]);
             orchestrationPersistedSceneMarkdownRef.current = {};
+            setLiveSceneMarkdownByScene({});
             // Do not resetStoryboardKickoffTracking here: skipExisting may already have
             // claimed markers / started generateSceneShots on existing workspace scenes.
             onLog?.(`[${label}] backend scene orchestration enabled: ${orchestrationSceneCount} scene(s).`, 'info');
@@ -15253,7 +15414,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (true || !savedByBackend) {
                 phaseMarks.persistStartedAt = Date.now();
                 try {
-                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'resume-analysis-immediate' });
+                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', {
+                        source: 'resume-analysis-immediate',
+                        stage1RawText: analyzedText || '',
+                    });
                     rawResultPersistedEarly = true;
                 } catch (persistErr) {
                     onLog?.(`Resume immediate raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
@@ -15333,7 +15497,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             try {
                 if (true || !savedByBackend && !rawResultPersistedEarly) {
                     phaseMarks.persistStartedAt = Date.now();
-                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'resume-analysis' });
+                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', {
+                        source: 'resume-analysis',
+                        stage1RawText: analyzedText || '',
+                    });
                 } else {
                     if (savedByBackend) {
                         phaseMarks.persistStartedAt = phaseMarks.persistStartedAt || Date.now();
@@ -18026,6 +18193,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 orchestrationCanonicalSceneIdsRef.current = new Set();
                 if (!sceneBeatsPartial) {
                     orchestrationPersistedSceneMarkdownRef.current = {};
+                    setLiveSceneMarkdownByScene({});
                 }
                 endSceneOrchestrationPanelTracking();
             }
@@ -18245,9 +18413,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         if (refreshEpisode && typeof onRefreshEpisodes === 'function') {
             try {
-                await onRefreshEpisodes({
-                    invalidateEpisodeIds: [Number(activeEpisode.id)],
-                });
+                // Scene-beats-only clear already applied via PUT. Do not invalidate analysis
+                // cache — that blanks Stage 1 and triggers a lazy GET that can resurrect old 2.2.
+                const shouldInvalidateAnalysisCache = !(clearSceneBeatsStage && !clearFromExtract);
+                await onRefreshEpisodes(shouldInvalidateAnalysisCache
+                    ? { invalidateEpisodeIds: [Number(activeEpisode.id)] }
+                    : {});
             } catch (refreshErr) {
                 if (onLog) onLog(`[Analysis Clear] episode refresh warning: ${refreshErr?.message || refreshErr}`, 'warning');
             }
@@ -19136,6 +19307,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 },
             });
             const analyzedText = extractAnalysisTextFromResult(result);
+            const stage1Raw = String(analyzedText || '').trim();
+            if (stage1Raw) {
+                latestStage1RawTextRef.current = stage1Raw;
+                const adaptedNow = String(extractStage1AdaptedScriptBody(stage1Raw) || stage1Raw).trim();
+                if (adaptedNow) setAdaptationText(adaptedNow);
+            }
             
             // --- 第一时间保存对应卡片！---
             const savedByBackend = !!(result?.meta?.saved_to_episode);
@@ -19143,7 +19320,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phaseMarks.persistStartedAt = Date.now();
                 try {
                     if (onLog) onLog('Persisting raw LLM output immediately after return...', 'process');
-                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'standard-analysis-immediate' });
+                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', {
+                        source: 'standard-analysis-immediate',
+                        stage1RawText: analyzedText || '',
+                    });
                     rawResultPersistedEarly = true;
                 } catch (persistErr) {
                     if (onLog) onLog(`Immediate raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
@@ -19229,7 +19409,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (true || !savedByBackend && !rawResultPersistedEarly) {
                     phaseMarks.persistStartedAt = Date.now();
                     if (onLog) onLog('Saving raw LLM output to episode analysis field...', 'process');
-                    await persistLlmResultContent(analyzedText, 'ai_scene_analysis_result', { source: 'standard-analysis' });
+                    await persistLlmResultContent(analyzedText, 'ai_scene_analysis_result', {
+                        source: 'standard-analysis',
+                        stage1RawText: analyzedText || '',
+                    });
                 } else {
                     if (savedByBackend) {
                         phaseMarks.persistStartedAt = phaseMarks.persistStartedAt || Date.now();
@@ -19711,6 +19894,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 },
             });
             const analyzedText = extractAnalysisTextFromResult(result);
+            const stage1Raw = String(analyzedText || '').trim();
+            if (stage1Raw) {
+                latestStage1RawTextRef.current = stage1Raw;
+                const adaptedNow = String(extractStage1AdaptedScriptBody(stage1Raw) || stage1Raw).trim();
+                if (adaptedNow) setAdaptationText(adaptedNow);
+            }
             
             // --- 第一时间保存对应卡片！---
             const savedByBackend = !!(result?.meta?.saved_to_episode);
@@ -19718,7 +19907,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phaseMarks.persistStartedAt = Date.now();
                 try {
                     if (onLog) onLog('Persisting advanced raw LLM output immediately after Stage 1 return...', 'process');
-                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'advanced-analysis-stage1-immediate' });
+                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', {
+                        source: 'advanced-analysis-stage1-immediate',
+                        stage1RawText: analyzedText || '',
+                    });
                     finalRawResultPersistedEarly = true;
                 } catch (persistErr) {
                     if (onLog) onLog(`Immediate advanced raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
@@ -21075,65 +21267,59 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     };
 
     const resolveSceneBeatsRerunCandidates = useCallback(() => {
-        const { text: adaptedScriptText, source: adaptedScriptSource } = resolveStage1AdaptedScriptText();
+        const { text: resolvedAdaptedText, source: adaptedScriptSource } = resolveStage1AdaptedScriptText();
+        // 剧本统筹 panel and scene rerun must split the same optimized-script body.
+        const adaptedScriptText = String(resolvedAdaptedText || resolveScriptOptBeatsContent() || '').trim();
         const stage1SourceText = buildStage1RestartSourceText();
-        if (!String(adaptedScriptText || '').trim()) {
-            return { stage1SourceText, candidates: [], error: 'missing_adapted_script', adaptedScriptSource };
+        if (!adaptedScriptText) {
+            return {
+                stage1SourceText,
+                candidates: [],
+                error: 'missing_adapted_script',
+                adaptedScriptSource,
+                adaptedScriptText: '',
+            };
         }
-
-        const resolveStage2BySceneMap = () => {
-            const rawJson = getStageOutputContent('stage2', 'scene_markdown_by_scene');
-            const parsed = parseSceneMarkdownBySceneMap(rawJson);
-            if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
-                return parsed;
-            }
-            const merged = String(
-                getStageOutputContent('stage2', 'scene_markdown')
-                || activeEpisode?.ai_scene_analysis_scene_markdown
-                || ''
-            ).trim();
-            return merged ? splitSceneMarkdownTableBySceneId(merged) : {};
-        };
 
         try {
             const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode, adaptedScriptText);
-            let candidates = applyCanonicalSceneIdsToUnits(
+            const candidates = applyCanonicalSceneIdsToUnits(
                 parseSceneUnitsFromScriptMarkers(adaptedScriptText).map((unit) => ({
                     ...unit,
                     displayLabel: extractSceneDisplayLabel(unit),
                 })),
                 episodePrefix
             );
-            candidates = alignSceneBeatsCandidatesWithStage2(
+            return {
+                stage1SourceText,
                 candidates,
-                resolveStage2BySceneMap(),
-                episodePrefix
-            );
-            return { stage1SourceText, candidates, error: '', adaptedScriptSource };
+                error: '',
+                adaptedScriptSource: adaptedScriptSource || 'script_opt',
+                adaptedScriptText,
+            };
         } catch (error) {
             return {
                 stage1SourceText,
                 candidates: [],
                 error: error?.message || String(error || 'scene_marker_parse_error'),
-                adaptedScriptSource,
+                adaptedScriptSource: adaptedScriptSource || 'script_opt',
+                adaptedScriptText,
             };
         }
     }, [
         activeEpisode,
         buildStage1RestartSourceText,
         extractSceneDisplayLabel,
-        getStageOutputContent,
-        parseSceneMarkdownBySceneMap,
         parseSceneUnitsFromScriptMarkers,
+        resolveScriptOptBeatsContent,
         resolveStage1AdaptedScriptText,
-        splitSceneMarkdownTableBySceneId,
     ]);
 
     const executeSceneBeatsRerun = useCallback(async ({ mode = 'all', sceneId = '' } = {}) => {
         if (!activeEpisode?.id || isAnalyzing) return;
 
-        const { stage1SourceText, candidates, error: candidateError } = resolveSceneBeatsRerunCandidates();
-        if (!stage1SourceText) {
+        const { stage1SourceText, candidates, error: candidateError, adaptedScriptText } = resolveSceneBeatsRerunCandidates();
+        if (!adaptedScriptText && !stage1SourceText) {
             reportAnalysisPanelNotice(t('缺少第一阶段产物，无法仅重排场景。', 'Stage 1 outputs are missing, so scene-beats-only rerun cannot start.'), 'warning');
             return;
         }
@@ -21170,7 +21356,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const targetSceneId = String(sceneId || '').trim();
         const episodePrefix = resolveEpisodeSceneIdPrefix(
             activeEpisode,
-            extractStage1AdaptedScriptBody(stage1SourceText)
+            adaptedScriptText || extractStage1AdaptedScriptBody(stage1SourceText)
         );
         const executableCandidates = candidates.filter((unit) => (
             String(unit?.sceneText || '').trim() && !unit?.unmatchedScriptUnit
@@ -21179,20 +21365,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ? executableCandidates.filter((unit) => sceneUnitIdsMatch(unit.sceneId, targetSceneId, unit.sceneOrder, episodePrefix))
             : null;
         if (rerunMode === 'single' && !targetSceneUnits?.length) {
-            const stage2Only = candidates.some((unit) => (
-                sceneUnitIdsMatch(unit.sceneId, targetSceneId, unit.sceneOrder, episodePrefix)
-                && unit?.unmatchedScriptUnit
-            ));
             reportAnalysisPanelNotice(
-                stage2Only
-                    ? t('该场景在第二阶段结果中存在，但第一阶段剧本分隔符中找不到对应场次正文，无法重排。', 'This scene exists in Stage 2 results, but no matching Stage 1 script body was found; rerun cannot start.')
-                    : t('未找到所选场景，无法重排。', 'Selected scene was not found; rerun cannot start.'),
+                t('未找到所选场景，无法重排。', 'Selected scene was not found; rerun cannot start.'),
                 'warning'
             );
             return;
         }
         if (rerunMode === 'all' && !executableCandidates.length) {
-            reportAnalysisPanelNotice(t('没有可重排的场景（第二阶段场景无法映射回第一阶段剧本场次）。', 'No rerunnable scenes (Stage 2 scenes could not be mapped back to Stage 1 script units).'), 'warning');
+            reportAnalysisPanelNotice(t('没有可重排的场景。请确认剧本统筹中含有 [SCENE_START:ID]/[SCENE_END:ID] 配对。', 'No rerunnable scenes. Confirm Script Coordination contains paired [SCENE_START:ID]/[SCENE_END:ID] markers.'), 'warning');
             return;
         }
 
@@ -21302,13 +21482,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
             }
 
-            const adaptedResolved = resolveStage1AdaptedScriptText();
-            const adaptedScriptForRerun = String(adaptedResolved.text || '').trim()
+            const adaptedScriptForRerun = String(adaptedScriptText || '').trim()
                 || extractStage1AdaptedScriptBody(stage1SourceText);
+            const rerunScenePreview = (unitsForRerun || [])
+                .slice(0, 4)
+                .map((unit) => String(unit?.displayLabel || unit?.sceneId || '').trim())
+                .filter(Boolean)
+                .join('、');
             onLog?.(
                 t(
-                    `场景重排输入：优化剧本来源=${adaptedResolved.source || 'stage1SourceText'}（${String(adaptedScriptForRerun || '').length} 字），资产清单 ${String(stage2_1SubjectIndexText || '').length} 字。`,
-                    `Scene-beats rerun inputs: adapted script source=${adaptedResolved.source || 'stage1SourceText'} (${String(adaptedScriptForRerun || '').length} chars), subject index ${String(stage2_1SubjectIndexText || '').length} chars.`
+                    `场景重排输入：优化剧本来源=剧本统筹（${String(adaptedScriptForRerun || '').length} 字），资产清单 ${String(stage2_1SubjectIndexText || '').length} 字，共 ${orchestrationSceneCount} 场${rerunScenePreview ? `：${rerunScenePreview}` : ''}。`,
+                    `Scene-beats rerun inputs: optimized script from Script Coordination (${String(adaptedScriptForRerun || '').length} chars), subject index ${String(stage2_1SubjectIndexText || '').length} chars, ${orchestrationSceneCount} scene(s)${rerunScenePreview ? `: ${rerunScenePreview}` : ''}.`
                 ),
                 'info'
             );
@@ -21692,7 +21876,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         projectId,
         publishSceneOrchestrationPanelStatus,
         resolveSceneBeatsRerunCandidates,
-        resolveStage1AdaptedScriptText,
         resetSceneOrchestrationProgress,
         resetStoryboardKickoffTracking,
         runAutoImportAndSwitchToScenes,
@@ -21721,8 +21904,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         resolveSceneBeatsRerunCandidates,
         activeEpisode?.id,
         activeEpisode?.ai_scene_analysis_adaptation,
-        activeEpisode?.ai_scene_analysis_scene_markdown,
         activeEpisode?.ai_stage_outputs,
+        adaptationText,
     ]);
 
     const openSceneBeatsRerunModal = useCallback(() => {
@@ -21730,8 +21913,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // asset design / storyboard branches are still running in the main pipeline.
         if (!activeEpisode?.id || sceneBeatsOnlyRerunInFlightRef.current) return;
 
-        const { stage1SourceText, candidates, error: candidateError, adaptedScriptSource } = resolveSceneBeatsRerunCandidates();
-        if (!stage1SourceText) {
+        const { stage1SourceText, candidates, error: candidateError, adaptedScriptSource, adaptedScriptText } = resolveSceneBeatsRerunCandidates();
+        if (!adaptedScriptText && !stage1SourceText) {
             reportAnalysisPanelNotice(t('缺少第一阶段产物，无法仅重排场景。', 'Stage 1 outputs are missing, so scene-beats-only rerun cannot start.'), 'warning');
             return;
         }
@@ -21740,7 +21923,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         if (!candidates.length) {
-            const adaptedProbe = String(resolveStage1AdaptedScriptText().text || '');
+            const adaptedProbe = String(adaptedScriptText || resolveStage1AdaptedScriptText().text || '');
             const hasBareMarkers = /\[SCENE_START\]/i.test(adaptedProbe) || /\[SCENE_END\]/i.test(adaptedProbe);
             const hasIdMarkers = /\[SCENE_START:[^\]]+\]/i.test(adaptedProbe);
             const originalScript = String(activeEpisode?.script_content || '').trim();
@@ -21885,8 +22068,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
 
             const analyzedText = extractAnalysisTextFromResult(result);
+            const stage1Raw = String(analyzedText || '').trim();
+            if (stage1Raw) {
+                latestStage1RawTextRef.current = stage1Raw;
+                const adaptedNow = String(extractStage1AdaptedScriptBody(stage1Raw) || stage1Raw).trim();
+                if (adaptedNow) setAdaptationText(adaptedNow);
+            }
             if (typeof persistLlmResultContent === 'function') {
-                await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'rerun-stage1' });
+                await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', {
+                    source: 'rerun-stage1',
+                    stage1RawText: analyzedText || '',
+                });
             }
             
             setLlmRawResultContent(analyzedText || "");
@@ -24287,14 +24479,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const workflowCompletenessStats = useMemo(() => {
         const importReport = resolveWorkflowImportReport(analysisUiReport, activeEpisode?.id);
         const scenePostReport = importReport?.sceneSubjectPostImportReport || {};
-        // Completeness is episode-scoped: only count entities belonging to the active episode.
-        const activeEpisodeId = String(activeEpisode?.id || '').trim();
-        const dbEntities = (Array.isArray(availableSubjectAssets) ? availableSubjectAssets : []).filter(
-            (entity) => {
-                if (!activeEpisodeId) return false;
-                return String(entity?.episode_id || '').trim() === activeEpisodeId;
-            }
-        );
+        // Completeness is episode-scoped: count entities imported for the active episode.
+        // Do NOT use availableSubjectAssets — that list is the reuse picker and excludes this episode.
+        const dbEntities = Array.isArray(episodeOwnedEntities) ? episodeOwnedEntities : [];
 
         const sceneMarkdownMerged = String(
             getStageOutputContent('stage2', 'scene_markdown')
@@ -24312,11 +24499,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const text = String(splitSceneMap[sceneId] || '').trim();
             return Boolean(text);
         });
-        let analysisSceneCount = Math.max(bySceneIds.length, splitSceneIds.length);
-        if (!analysisSceneCount && sceneMarkdownMerged) {
+        let stage2SceneCount = Math.max(bySceneIds.length, splitSceneIds.length);
+        if (!stage2SceneCount && sceneMarkdownMerged) {
             const parsed = parseMarkdownTable(normalizeLlmMarkdownTable(sceneMarkdownMerged));
-            analysisSceneCount = Array.isArray(parsed?.rows) ? parsed.rows.length : 0;
+            stage2SceneCount = Array.isArray(parsed?.rows) ? parsed.rows.length : 0;
         }
+        // 场景 应有 = Stage 1 scene units (upstream). Do not let a leftover 1-row 2.2 persist win.
+        const stage1SceneCount = firstPositiveFiniteNumber(
+            countSceneUnitsFromAdaptedScriptText(resolveStage1AdaptedScriptText?.().text),
+            countSceneUnitsFromAdaptedScriptText(getStageOutputContent('stage1', 'adapted_script')),
+            countSceneUnitsFromAdaptedScriptText(activeEpisode?.ai_scene_analysis_adaptation),
+        );
+        const analysisSceneCount = firstPositiveFiniteNumber(stage1SceneCount, stage2SceneCount);
 
         // Scenes: prefer live episode workspace count over cumulative import-report tallies.
         const importedSceneCount = firstPositiveFiniteNumber(
@@ -24365,17 +24559,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         const hasAssetDesignPayload = Object.values(assetDesignCounts).some((count) => count > 0);
 
-        // Episode unit: expected = this episode's Subject Index; covered = name-match in this episode's DB.
-        // Do NOT Math.max cumulative import-report created+skipped (re-runs inflate 9→18 style).
-        const resolveImportedAssetCount = (type, categoryEntries, designItems) => {
-            if (Array.isArray(categoryEntries) && categoryEntries.length > 0) {
-                return countSubjectIndexEntriesCoveredInDb(categoryEntries, type, dbEntities);
-            }
-            if (Array.isArray(designItems) && designItems.length > 0) {
-                return countEntityPayloadItemsCoveredInDb(designItems, type, dbEntities);
-            }
-            return countDbEntitiesByType(type, dbEntities);
-        };
+        // 已齐 = this episode's actual persisted entity count by type (not name-match coverage).
+        const resolveImportedAssetCount = (type) => countDbEntitiesByType(type, dbEntities);
 
         // Sub-asset subtask health: characters/props/environments are generated by three
         // independent Stage 3 subtasks (posters/covers ride along with the environment subtask).
@@ -24405,16 +24590,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const requireNonZeroAssetKeys = new Set(['character', 'prop', 'environment', 'poster']);
         const pipelineExpectsAssets = Boolean(subjectIndexText) || hasAssetDesignPayload || subtaskReports.length > 0;
 
-        const buildAssetRow = (key, labelZh, labelEn, categoryKey) => {
+        const buildAssetRow = (key, labelZh, labelEn) => {
             const subjectIndexCount = subjectIndexCounts[key] || 0;
             const designCount = assetDesignCounts[key] || 0;
             // Left side = this episode's inventory contract (Subject Index first).
             const analysisCount = subjectIndexCount > 0 ? subjectIndexCount : designCount;
-            const importedCount = resolveImportedAssetCount(
-                key,
-                subjectEntriesByCategory[categoryKey] || [],
-                assetDesignItems[key] || [],
-            );
+            const importedCount = resolveImportedAssetCount(key);
             const subtaskInfo = subtaskInfoBySubjectCategory[subtaskCategoryByAssetKey[key]];
             let status = resolveCompletenessStatus(analysisCount, importedCount);
             let failed = false;
@@ -24456,10 +24637,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 failed: false,
                 errorMessage: '',
             },
-            buildAssetRow('character', '角色', 'Characters', 'characters'),
-            buildAssetRow('prop', '道具', 'Props', 'props'),
-            buildAssetRow('environment', '环境', 'Environments', 'environments'),
-            buildAssetRow('poster', '封面', 'Poster', 'posters'),
+            buildAssetRow('character', '角色', 'Characters'),
+            buildAssetRow('prop', '道具', 'Props'),
+            buildAssetRow('environment', '环境', 'Environments'),
+            buildAssetRow('poster', '封面', 'Poster'),
             {
                 key: 'storyboards',
                 labelZh: '分镜',
@@ -24500,10 +24681,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
     }, [
         activeEpisode?.ai_entity_design_result,
+        activeEpisode?.ai_scene_analysis_adaptation,
         activeEpisode?.ai_scene_analysis_scene_markdown,
         activeEpisode?.id,
+        adaptationText,
         analysisUiReport,
-        availableSubjectAssets,
+        episodeOwnedEntities,
         diagnosticsEpisodeSceneCount,
         diagnosticsEpisodeShotStats?.sceneCountWithShots,
         getAnalysisEntitiesPayloadFromJsonText,
@@ -24511,6 +24694,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         llmAssetRawResultContent,
         normalizeLlmMarkdownTable,
         parseSubjectIndexEntriesForAssetRerun,
+        resolveStage1AdaptedScriptText,
         resolveSubjectIndexTextForAssetRerun,
         splitSceneMarkdownTableBySceneId,
         stage2SceneMarkdownByScene,
@@ -24544,7 +24728,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             `产物有无：剧本统筹=${scriptOptPresent ? '有' : '无'}；资产清单=${subjectPreview ? '有' : '无'}；场景编排=${scenePreview ? '有' : '无'}；资产设计=${assetDesignPresent ? '有' : '无'}`,
             `工作区场景数：${diagnosticsEpisodeSceneCount || 0}`,
             `工作区镜头：总数=${diagnosticsEpisodeShotStats?.shotCount || 0}，有分镜的场数=${diagnosticsEpisodeShotStats?.sceneCountWithShots || 0}`,
-            `本集实体数（工作区）：角色=${(availableSubjectAssets || []).filter((e) => String(e?.type || '').toLowerCase().includes('char')).length}，道具=${(availableSubjectAssets || []).filter((e) => String(e?.type || '').toLowerCase().includes('prop')).length}，环境/其他=${(availableSubjectAssets || []).length}`,
+            `本集实体数（工作区）：角色=${(episodeOwnedEntities || []).filter((e) => String(e?.type || '').toLowerCase().includes('char')).length}，道具=${(episodeOwnedEntities || []).filter((e) => String(e?.type || '').toLowerCase().includes('prop')).length}，环境/其他=${(episodeOwnedEntities || []).length}`,
             '',
             '本集齐套：',
             ...(completenessLines.length ? completenessLines : ['（暂无）']),
@@ -24565,7 +24749,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.title,
         analysisFlowStatus?.message,
         analysisFlowStatus?.phase,
-        availableSubjectAssets,
+        episodeOwnedEntities,
         diagnosticsEpisodeSceneCount,
         diagnosticsEpisodeShotStats?.sceneCountWithShots,
         diagnosticsEpisodeShotStats?.shotCount,
@@ -26369,10 +26553,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         <div className="p-4 overflow-y-auto custom-scrollbar space-y-4 text-sm">
                             <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-white/80">
                                 <div className="font-semibold text-white">
-                                    {t(`基于优化后剧本，与第二阶段场景分析结果对齐，共 ${sceneBeatsRerunCandidates.length} 个场景`, `${sceneBeatsRerunCandidates.length} scene(s) from optimized script, aligned with Stage 2 scene analysis`)}
+                                    {t(`基于剧本统筹「优化后剧本」切分，共 ${sceneBeatsRerunCandidates.length} 个场景`, `${sceneBeatsRerunCandidates.length} scene(s) split from Script Coordination optimized script`)}
                                 </div>
                                 <div className="mt-1 text-xs text-white/55">
-                                    {t('正文取自第一阶段「优化后剧本」（不会使用原始剧本）；列表按第二阶段 Scenes Table 的场次 ID / 名称展示。', 'Body comes from Stage 1 optimized script (original script is never used); list labels follow Stage 2 Scenes Table id/name.')}
+                                    {t('场次 ID、名称与正文均取自最新优化剧本，不使用旧的场景编排表。', 'Scene IDs, names, and bodies come from the latest optimized script; the old scene-orchestration table is not used.')}
                                 </div>
                             </div>
 

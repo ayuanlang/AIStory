@@ -281,6 +281,9 @@ const Editor = ({
     // Prevent lazy full-episode fetch storms when `episodes` identity churns every render.
     const episodeFullLoadInflightRef = useRef('');
     const episodeFullLoadFailedRef = useRef('');
+    // Ignore in-flight GET /episodes/:id after a newer PUT/invalidate so stale snapshots
+    // cannot resurrect pre-rerun Stage 1 / scene-markdown fields.
+    const episodeFullLoadGenRef = useRef(0);
 
     const persistProjectReturnSnapshot = useCallback(() => {
         try {
@@ -414,10 +417,25 @@ const Editor = ({
             const merged = { ...previous, ...ep };
             if (invalidateSet.has(String(ep.id))) {
                 delete merged._fullLoaded;
+                episodeFullLoadGenRef.current += 1;
                 // List endpoint omits deferred analysis fields; drop stale analysis cache
                 // so a post-clear refresh cannot resurrect pre-restart stage outputs.
                 // Keep script_content / character_profiles from the prior full load.
+                // preserveAnalysisFields: Stage 1/2.1 must survive a scene-beats-only clear.
+                const preserveAnalysisFields = new Set(
+                    (Array.isArray(options.preserveAnalysisFields) ? options.preserveAnalysisFields : [])
+                        .map((field) => String(field || '').trim())
+                        .filter(Boolean)
+                );
                 for (const field of ANALYSIS_DEFERRED_EPISODE_FIELDS) {
+                    if (preserveAnalysisFields.has(field)) {
+                        const incomingValue = ep[field];
+                        const cachedValue = previous[field];
+                        if ((incomingValue === undefined || incomingValue === null) && cachedValue != null) {
+                            merged[field] = cachedValue;
+                        }
+                        continue;
+                    }
                     if (ep[field] === undefined || ep[field] === null) {
                         merged[field] = '';
                     }
@@ -817,10 +835,12 @@ const Editor = ({
     const handleUpdateEpisodeInfo = async (epId, data) => {
         try {
             const updatedEp = await updateEpisode(epId, data);
+            episodeFullLoadGenRef.current += 1;
             setEpisodes(prev => sortEpisodesForEditor(prev.map((e) => {
                 if (e.id !== epId) return e;
-                // Preserve client-only full-load marker so lazy-load effect does not refetch forever.
-                return { ...e, ...updatedEp, _fullLoaded: Boolean(e._fullLoaded) };
+                // PUT returns EpisodeOut (full analysis fields). Mark loaded and bump
+                // the fetch generation so an older lazy GET cannot overwrite this write.
+                return { ...e, ...updatedEp, _fullLoaded: true };
             })));
             return updatedEp;
         } catch (e) {
@@ -3665,12 +3685,14 @@ const Editor = ({
         if (episodeFullLoadInflightRef.current === key) return;
         if (episodeFullLoadFailedRef.current === key) return;
         episodeFullLoadInflightRef.current = key;
+        const loadGen = episodeFullLoadGenRef.current;
         let cancelled = false;
         fetchEpisode(activeEpisodeId).then((fullEp) => {
             if (episodeFullLoadInflightRef.current === key) {
                 episodeFullLoadInflightRef.current = '';
             }
             if (cancelled) return;
+            if (loadGen !== episodeFullLoadGenRef.current) return;
             episodeFullLoadFailedRef.current = '';
             setEpisodes((prev) => sortEpisodesForEditor(
                 prev.map((e) => String(e.id) === key ? { ...e, ...fullEp, _fullLoaded: true } : e)

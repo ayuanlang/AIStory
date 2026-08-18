@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session
 
-from app.core.prompt_injection import unwrap_injection_section, wrap_injection_section
+from app.core.prompt_injection import END, START, unwrap_injection_section, wrap_injection_section
 from app.services.script_analysis_flow import (
     SCENES_BLOCK_START_TOKEN,
     SceneBeatsTooShortError,
@@ -48,11 +48,15 @@ def _replace_adapted_script_in_beats_user_input(user_text: str, adapted_script_t
         return adapted
     wrapped_adapted = unwrap_injection_section(source, "优化后剧本")
     if wrapped_adapted is not None:
-        return source.replace(
-            wrap_injection_section("优化后剧本", wrapped_adapted),
+        pattern = rf"\[优化后剧本{re.escape(START)}\]\s*.*?\s*\[优化后剧本{re.escape(END)}\]"
+        replaced = re.sub(
+            pattern,
             wrap_injection_section("优化后剧本", adapted),
-            1,
-        ).strip()
+            source,
+            count=1,
+            flags=re.DOTALL,
+        )
+        return replaced.strip()
     marker_match = re.search(r"(\[优化后剧本[^\]]*\]\s*\n)([\s\S]*)$", source)
     if marker_match:
         return f"{source[:marker_match.start(2)]}{adapted}".strip()

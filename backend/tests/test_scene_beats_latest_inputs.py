@@ -60,6 +60,32 @@ def test_scene_beats_adapted_script_keeps_request_markers_instead_of_episode_fal
     assert "旧剧本正文" not in resolved
 
 
+def test_scene_beats_adapted_script_unwraps_injection_wrapper():
+    from app.core.prompt_injection import wrap_injection_section
+    from app.services.script_analysis_flow import extract_adapted_script_from_beats_user_input
+    from app.services.scene_markdown_orchestration import _replace_adapted_script_in_beats_user_input
+
+    wrapped = wrap_injection_section(
+        "优化后剧本",
+        f"[优化后剧本 - Stage 2.2权威输入]\n{NEW_SCRIPT}",
+    )
+    extracted = extract_adapted_script_from_beats_user_input(wrapped)
+    assert "新剧本正文" in extracted
+    assert "[优化后剧本结束]" not in extracted
+
+    resolved = _resolve_scene_beats_adapted_script_text(
+        f"【单场处理模式】\n\n{wrapped}",
+        OLD_SCRIPT,
+    )
+    assert "新剧本正文" in resolved
+    assert "旧剧本正文" not in resolved
+
+    replaced = _replace_adapted_script_in_beats_user_input(wrapped, NEW_SCRIPT.replace("新剧本正文", "单场新正文"))
+    assert "单场新正文" in replaced
+    assert "新剧本正文" not in replaced
+    assert "旧剧本正文" not in replaced
+
+
 def test_scene_units_do_not_fall_back_to_stale_episode_adaptation():
     units, source = resolve_scene_units_for_markdown_orchestration(
         db=None,

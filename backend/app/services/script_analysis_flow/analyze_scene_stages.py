@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -223,7 +224,46 @@ def extract_stage1_adapted_script_body(stage1_text: str) -> str:
         extracted = _trim_stage1_adapted_script_body(match.group(1) or "")
         if extracted:
             return extracted
-    return ""
+    return _trim_stage1_adapted_script_body(text)
+
+
+def _patch_episode_stage1_outputs(episode: Episode, *, raw_text: str, adapted_script: str) -> None:
+    raw = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
+    try:
+        obj = json.loads(raw) if raw else {"version": 1, "stages": {}}
+        if not isinstance(obj, dict):
+            obj = {"version": 1, "stages": {}}
+    except Exception:
+        obj = {"version": 1, "stages": {}}
+    stages = obj.setdefault("stages", {})
+    if not isinstance(stages, dict):
+        stages = {}
+        obj["stages"] = stages
+    stage1 = stages.setdefault("stage1", {"key": "stage1", "outputs": {}})
+    if not isinstance(stage1, dict):
+        stage1 = {"key": "stage1", "outputs": {}}
+        stages["stage1"] = stage1
+    outputs = stage1.setdefault("outputs", {})
+    if not isinstance(outputs, dict):
+        outputs = {}
+        stage1["outputs"] = outputs
+    raw_slot = outputs.get("raw_text") if isinstance(outputs.get("raw_text"), dict) else {}
+    outputs["raw_text"] = {
+        **raw_slot,
+        "key": "raw_text",
+        "kind": raw_slot.get("kind") or "text",
+        "title": raw_slot.get("title") or "第一阶段完整结果",
+        "content": str(raw_text or ""),
+    }
+    adapted_slot = outputs.get("adapted_script") if isinstance(outputs.get("adapted_script"), dict) else {}
+    outputs["adapted_script"] = {
+        **adapted_slot,
+        "key": "adapted_script",
+        "kind": adapted_slot.get("kind") or "markdown",
+        "title": adapted_slot.get("title") or "优化后剧本",
+        "content": str(adapted_script or ""),
+    }
+    episode.ai_stage_outputs = json.dumps(obj, ensure_ascii=False, indent=2)
 
 
 def persist_script_optimization_stage(
@@ -232,9 +272,11 @@ def persist_script_optimization_stage(
     episode: Episode,
     result_content: str,
 ) -> Dict[str, Any]:
-    adapted_script = extract_stage1_adapted_script_body(result_content)
-    if adapted_script:
-        episode.ai_scene_analysis_adaptation = adapted_script
+    raw_text = str(result_content or "").strip()
+    adapted_script = extract_stage1_adapted_script_body(raw_text) or raw_text
+    # Always overwrite prior Stage 1 artifacts so a successful rerun cannot keep a stale copy.
+    episode.ai_scene_analysis_adaptation = adapted_script
+    _patch_episode_stage1_outputs(episode, raw_text=raw_text, adapted_script=adapted_script)
     db.commit()
     try:
         db.refresh(episode)

@@ -31,7 +31,6 @@ from app.services.script_analysis_flow import (
     SceneBeatsTooShortError,
     SceneMarkerParseError,
     SceneMissingBeat1Error,
-    extract_adapted_script_from_beats_user_input,
     extract_scene_markdown_text_from_analyze_result,
     extract_scene_name_value_from_scene_text,
     extract_scenes_table_markdown_block,
@@ -39,7 +38,9 @@ from app.services.script_analysis_flow import (
     patch_single_scene_markdown_for_orchestration,
     resolve_scene_units_for_markdown_orchestration,
     sanitize_scene_markdown_llm_output,
-    scene_text_has_beat_1,
+    scene_text_has_beat,
+    scene_first_beat_number,
+    is_canonical_first_beat_number,
     sync_scene_units_from_markers,
     update_scene_unit_orchestration_status,
     upsert_pipeline_node_status,
@@ -66,8 +67,9 @@ async def _run_scene_markdown_node_per_scene(
         AnalyzeSceneRequest,
         analyze_scene,
     )
+    from app.services.analyze_scene_text_ops import _resolve_scene_beats_adapted_script_text
+
     user_text = str(raw_payload.get("text") or "")
-    adapted_script_text = extract_adapted_script_from_beats_user_input(user_text)
 
     episode_adaptation_text = ""
     if node_episode_id > 0:
@@ -78,6 +80,8 @@ async def _run_scene_markdown_node_per_scene(
         )
         if episode_row is not None:
             episode_adaptation_text = str(getattr(episode_row, "ai_scene_analysis_adaptation", "") or "").strip()
+
+    adapted_script_text = _resolve_scene_beats_adapted_script_text(user_text, episode_adaptation_text)
 
     scene_units, scene_units_source = resolve_scene_units_for_markdown_orchestration(
         db,
@@ -100,7 +104,7 @@ async def _run_scene_markdown_node_per_scene(
             single_scene_block = wrap_scene_unit_as_script_block(unit)
         except SceneMissingBeat1Error as missing_exc:
             logger.error(
-                "[scene_markdown] missing Beat 1 | scene_id=%s — skip orchestration (invalid scene)",
+                "[scene_markdown] missing Beat marker | scene_id=%s — skip orchestration (invalid scene)",
                 missing_exc.scene_id,
             )
             raise HTTPException(status_code=422, detail=missing_exc.detail) from missing_exc
@@ -258,7 +262,7 @@ async def _run_scene_markdown_node_per_scene(
                             single_scene_block = wrap_scene_unit_as_script_block(unit)
                         except SceneMissingBeat1Error as missing_exc:
                             logger.error(
-                                "[scene_markdown] missing Beat 1 | scene_id=%s — skip orchestration (invalid scene)",
+                                "[scene_markdown] missing Beat marker | scene_id=%s — skip orchestration (invalid scene)",
                                 missing_exc.scene_id,
                             )
                             raise HTTPException(status_code=422, detail=missing_exc.detail) from missing_exc
@@ -545,19 +549,27 @@ async def _run_scene_markdown_node_per_scene(
     scene_failure_codes: Dict[str, str] = {}
     pending_units: List[Tuple[int, Any]] = []
 
-    # Preflight: no "Beat 1" / [BEAT_START:1] → skip LLM, mark scene invalid (do not batch-retry).
+    # Preflight: no Beat marker at all → skip LLM, mark scene invalid (do not batch-retry).
+    # Cross-scene continued numbering (Beat 11 in SC03) is valid and must still run.
     for index, unit in indexed_scene_units:
         scene_source = (
             str(getattr(unit, "scene_text", "") or "").strip()
             or str(getattr(unit, "scene_markdown", "") or "").strip()
         )
-        if scene_text_has_beat_1(scene_source):
+        if scene_text_has_beat(scene_source):
+            first_beat = scene_first_beat_number(scene_source)
+            if first_beat and not is_canonical_first_beat_number(first_beat):
+                logger.warning(
+                    "[scene_markdown] cross-scene beat numbering | scene_id=%s first_beat=%s — continue orchestration",
+                    unit.scene_id,
+                    first_beat,
+                )
             pending_units.append((index, unit))
             continue
         failure_code = f"SCENE_MARKDOWN_MISSING_BEAT_1:{unit.scene_id}"
         scene_failure_codes[str(unit.scene_id)] = failure_code
         logger.error(
-            "[scene_markdown] missing Beat 1 | scene_id=%s scene_order=%s/%s — skip orchestration (invalid scene)",
+            "[scene_markdown] missing Beat marker | scene_id=%s scene_order=%s/%s — skip orchestration (invalid scene)",
             unit.scene_id,
             index,
             total_scenes,
@@ -601,7 +613,7 @@ async def _run_scene_markdown_node_per_scene(
             break
         batch_concurrency = max_concurrency if batch_round == 0 else 1
         if batch_round > 0:
-            # Do not re-queue Stage 1 quality failures (missing Beat 1 / beats too short).
+            # Do not re-queue Stage 1 quality failures (missing Beat marker / beats too short).
             pending_units = [
                 (index, unit)
                 for index, unit in pending_units
@@ -698,7 +710,7 @@ async def _run_scene_markdown_node_per_scene(
             },
         )
 
-    # Missing Beat 1 scenes are intentionally skipped (not hard failures). Merge only
+    # Missing Beat-marker scenes are intentionally skipped (not hard failures). Merge only
     # orchestrated successes — never assume every indexed unit is in success_by_index.
     if not success_by_index:
         raise HTTPException(

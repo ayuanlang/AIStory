@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, replace
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -142,7 +142,12 @@ class SceneBeatsTooShortError(ValueError):
 
 
 class SceneMissingBeat1Error(ValueError):
-    """Raised when Stage 2.2 input has no Beat 1 marker — scene is not valid for orchestration."""
+    """Raised when Stage 2.2 input has no Beat marker at all — scene is not valid for orchestration.
+
+    Legacy code name: historically required literal Beat 1. Downstream still matches
+    SCENE_MARKDOWN_MISSING_BEAT_1, but the gate now accepts any Beat number
+    (cross-scene continued numbering such as Beat 11 in SC03).
+    """
 
     def __init__(self, scene_id: str):
         self.scene_id = str(scene_id or "unknown").strip() or "unknown"
@@ -157,16 +162,53 @@ class SceneMissingBeat1Error(ValueError):
         return f"SCENE_MARKDOWN_MISSING_BEAT_1:{self.scene_id}"
 
 
-# Literal "Beat 1" or structured [BEAT_START:1] — either marks a valid Stage 1 scene body.
-_BEAT_1_KEYWORD_RE = re.compile(
-    r"(?:\[\s*BEAT_START\s*:\s*1\s*\])|(?:\bBeat\s+1\b)",
-    re.IGNORECASE,
+# Any Beat marker: [BEAT_START:n], [BEAT_START], "- Beat n" / "~ Beat n", or a line-start "Beat n".
+# Do not require n==1 — LLMs sometimes continue numbering across scenes.
+_BEAT_MARKER_RE = re.compile(
+    r"(?:\[\s*BEAT_START(?:\s*:\s*[^\s\]]+)?\s*\])"
+    r"|(?:^[ \t]*[-~]?[ \t]*Beat[ \t]+\d+\b)",
+    re.IGNORECASE | re.MULTILINE,
 )
+_BARE_BEAT_LINE_RE = re.compile(r"(?m)^[ \t]*Beat[ \t]+(\d+)\b", re.IGNORECASE)
+
+
+def scene_text_has_beat(text: str) -> bool:
+    """Return True when scene orchestration input contains any Beat marker."""
+    return bool(_BEAT_MARKER_RE.search(str(text or "")))
 
 
 def scene_text_has_beat_1(text: str) -> bool:
-    """Return True when scene orchestration input contains a Beat 1 keyword."""
-    return bool(_BEAT_1_KEYWORD_RE.search(str(text or "")))
+    """Compatibility alias: any Beat marker (not specifically Beat 1)."""
+    return scene_text_has_beat(text)
+
+
+def scene_first_beat_number(text: str) -> str:
+    """Return the first Beat id in scene text, or empty string if none."""
+    source = str(text or "")
+    candidates: List[Tuple[int, str]] = []
+    start_match = BEAT_START_PATTERN.search(source)
+    if start_match:
+        candidates.append((start_match.start(), str(start_match.group(1) or "").strip()))
+    legacy_match = LEGACY_BEAT_LINE_PATTERN.search(source)
+    if legacy_match:
+        candidates.append((legacy_match.start(), str(legacy_match.group(1) or "").strip()))
+    if candidates:
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
+    bare_match = _BARE_BEAT_LINE_RE.search(source)
+    if bare_match:
+        return str(bare_match.group(1) or "").strip()
+    return ""
+
+
+def is_canonical_first_beat_number(beat_id: str) -> bool:
+    raw = str(beat_id or "").strip()
+    if not raw:
+        return False
+    try:
+        return int(raw) == 1
+    except (TypeError, ValueError):
+        return raw in {"1", "01"}
 
 
 @dataclass
@@ -1552,7 +1594,7 @@ def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
     """
     Wrap one scene for Stage 2.2 LLM input: Scene markers + 【场景名称】 + Beat blocks.
     Prefer extracted Beats; on split failure / too-short Beats, fall back to full scene body.
-    Raises SceneMissingBeat1Error when input has no Beat 1 keyword (invalid scene).
+    Raises SceneMissingBeat1Error when input has no Beat marker at all (invalid scene).
     Raises SceneBeatsTooShortError only when the final body is still shorter than MIN_SCENE_BEATS_CHARS.
     """
     scene_text = _strip_block_level_markers_from_scene_text(getattr(unit, "scene_text", "") or "")
@@ -1571,7 +1613,7 @@ def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
         scene_markdown = str(getattr(unit, "scene_markdown", "") or "").strip()
         if scene_markdown:
             scene_text = scene_markdown
-    if not scene_text_has_beat_1(scene_text):
+    if not scene_text_has_beat(scene_text):
         raise SceneMissingBeat1Error(scene_id or "unknown")
     body_text, used_fallback = resolve_scene_beats_body_for_stage_2_2(scene_text, scene_id)
     body_text = strip_beat_transition_notes_from_script(body_text)
@@ -1595,7 +1637,14 @@ def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
 
 
 def extract_adapted_script_from_beats_user_input(user_text: str) -> str:
+    from app.core.prompt_injection import unwrap_injection_section
+
     text = str(user_text or "")
+    wrapped = unwrap_injection_section(text, "优化后剧本")
+    if wrapped:
+        inner = re.sub(r"^\[优化后剧本[^\]]*\]\s*\n?", "", str(wrapped).strip()).strip()
+        if inner:
+            return inner
     match = re.search(r"\[优化后剧本[^\]]*\]\s*\n([\s\S]*)$", text)
     if match:
         return str(match.group(1) or "").strip()
@@ -2414,7 +2463,10 @@ __all__ = [
     "SceneMissingBeat1Error",
     "MIN_SCENE_BEATS_CHARS",
     "measure_scene_beats_char_count",
+    "scene_text_has_beat",
     "scene_text_has_beat_1",
+    "scene_first_beat_number",
+    "is_canonical_first_beat_number",
     "resolve_scene_beats_body_for_stage_2_2",
     "validate_scene_beats_min_length",
     "build_script_analysis_flow_plan",
