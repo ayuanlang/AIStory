@@ -3887,6 +3887,18 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
     if (subjectIndexText) {
         analyze_payload.subject_index_text = subjectIndexText;
     }
+    const targetSceneIds = Array.isArray(runtimeHooks?.targetSceneIds)
+        ? runtimeHooks.targetSceneIds
+        : (Array.isArray(runtimeHooks?.target_scene_ids) ? runtimeHooks.target_scene_ids : []);
+    const targetSceneId = String(runtimeHooks?.targetSceneId || runtimeHooks?.target_scene_id || '').trim();
+    const normalizedTargetSceneIds = [
+        ...targetSceneIds.map((sceneId) => String(sceneId || '').trim()).filter(Boolean),
+        ...(targetSceneId ? [targetSceneId] : []),
+    ].filter((sceneId, index, all) => all.findIndex((item) => item.toLowerCase() === sceneId.toLowerCase()) === index);
+    if (normalizedTargetSceneIds.length > 0) {
+        analyze_payload.target_scene_ids = normalizedTargetSceneIds;
+        analyze_payload.target_scene_id = normalizedTargetSceneIds[0];
+    }
     if (runtimeHooks?.skipEpisodePersist === true || runtimeHooks?.skip_episode_persist === true) {
         // Concurrent Stage 3 category calls share one episode field; frontend merges then persists.
         analyze_payload.skip_episode_persist = true;

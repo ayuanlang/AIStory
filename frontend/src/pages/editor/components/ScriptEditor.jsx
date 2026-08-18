@@ -687,8 +687,9 @@ const normalizeSceneMarkerScriptText = (scriptText) => {
 };
 
 /**
- * Strict SCENE_START:ID / SCENE_END:ID pair walker (original split path).
- * Uses first SCENES_BLOCK_END after START. Throws on pair mismatch / duplicate IDs.
+ * SCENE_START:ID / SCENE_END:ID pair walker (original split path).
+ * Uses first SCENES_BLOCK_END after START. Throws on missing END / duplicate START IDs.
+ * START/END id mismatch is tolerated: Scene ID comes from START.
  */
 const parseSceneUnitsFromScriptMarkersText = (scriptText) => {
     const text = normalizeSceneMarkerScriptText(scriptText);
@@ -737,11 +738,6 @@ const parseSceneUnitsFromScriptMarkersText = (scriptText) => {
         if (!endUnitMatch) {
             throw new Error(`Scene marker parse error: missing SCENE_END for ${sceneId}`);
         }
-        const endSceneId = String(endUnitMatch[1] || '').trim();
-        if (endSceneId !== sceneId) {
-            throw new Error(`Scene marker parse error: SCENE_START/END mismatch (${sceneId} vs ${endSceneId})`);
-        }
-
         const sceneBody = afterStartMarker.slice(0, endUnitMatch.index).trim();
         units.push({
             sceneId,
@@ -2612,6 +2608,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     parentOnLogRef.current = parentOnLog;
     const analysisDetailLogsRef = useRef([]);
     const [analysisDetailLogs, setAnalysisDetailLogsState] = useState([]);
+    // After an explicit artifact clear, persist/UI must treat empty live refs as authoritative.
+    // The click handler's activeEpisode closure can still hold pre-clear SI / 2.2 / assets.
+    const analysisTrustLiveDownstreamOnlyRef = useRef(false);
     const analysisProgressDismissedRef = useRef(false);
     const analysisProgressLogRef = useRef(null);
     const analysisProgressLogStickToBottomRef = useRef(true);
@@ -3665,6 +3664,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     useEffect(() => {
         setLiveSceneMarkdownByScene(null);
+        analysisTrustLiveDownstreamOnlyRef.current = false;
     }, [activeEpisode?.id]);
 
     useEffect(() => {
@@ -9437,7 +9437,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return rows.length;
     }, [llmMarkdownTable]);
 
-    const buildStageOutputsObject = useCallback(({ analysisRawText = '', assetRawText = '', stage1RawText = '', stage2RawText = '', stage2_1Text = '', sceneMarkdownByScene = null, replaceSceneMarkdownByScene = false } = {}) => {
+    const buildStageOutputsObject = useCallback(({ analysisRawText = '', assetRawText = '', stage1RawText = '', stage2RawText = '', stage2_1Text = '', sceneMarkdownByScene = null, replaceSceneMarkdownByScene = false, replaceSubjectIndex = false } = {}) => {
         const resolvedAnalysisRawText = String(analysisRawText || '').trim();
         const resolvedAssetRawText = String(assetRawText || '').trim();
         const resolvedStage1RawText = String(stage1RawText || '').trim();
@@ -9486,7 +9486,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const explicitSubjectIndex = String(stage2_1Text || '').trim();
         const persistedSubjectIndex = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
-        const rawStage2_1Text = extractPureSubjectIndexText(explicitSubjectIndex || persistedSubjectIndex || '');
+        // replace=true: empty live SI after a restart must not resurrect the episode copy.
+        const rawStage2_1Text = extractPureSubjectIndexText(
+            replaceSubjectIndex
+                ? explicitSubjectIndex
+                : (explicitSubjectIndex || persistedSubjectIndex || '')
+        );
 
         let parsedSubjectIndexText = rawStage2_1Text;
         let parsedSceneArrangementText = '';
@@ -9799,6 +9804,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (persisted) {
             const liveAdapted = String(adaptationText || '').trim();
             const liveRaw = String(latestStage1RawTextRef.current || '').trim();
+            const liveSubjectIndex = String(latestStage2_1TextRef.current || subjectIndexText || '').trim();
+            const liveAssets = String(latestAssetRawTextRef.current || llmAssetRawResultContent || '').trim();
+            const trustLiveDownstreamOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current);
             if (liveAdapted || liveRaw) {
                 const stages = persisted.stages && typeof persisted.stages === 'object' ? persisted.stages : (persisted.stages = {});
                 const stage1 = stages.stage1 && typeof stages.stage1 === 'object'
@@ -9814,6 +9822,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ensureOutputSlot(outputs, 'raw_text', { kind: 'text', title: '第一阶段完整结果' }).content = liveRaw;
                 }
             }
+            if (persisted.stages?.stage2?.outputs) {
+                if (liveSubjectIndex) {
+                    ensureOutputSlot(persisted.stages.stage2.outputs, 'subject_index').content = liveSubjectIndex;
+                } else if (trustLiveDownstreamOnly) {
+                    ensureOutputSlot(persisted.stages.stage2.outputs, 'subject_index').content = '';
+                }
+            }
+            if (persisted.stages?.stage3?.outputs) {
+                if (liveAssets) {
+                    ensureOutputSlot(persisted.stages.stage3.outputs, 'raw_text').content = liveAssets;
+                    ensureOutputSlot(persisted.stages.stage3.outputs, 'asset_design_json').content = liveAssets;
+                } else if (trustLiveDownstreamOnly) {
+                    ensureOutputSlot(persisted.stages.stage3.outputs, 'raw_text').content = '';
+                    ensureOutputSlot(persisted.stages.stage3.outputs, 'asset_design_json').content = '';
+                }
+            }
             return persisted;
         }
         const liveBySceneReady = liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object' && !Array.isArray(liveSceneMarkdownByScene);
@@ -9823,33 +9847,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .filter(Boolean)
                 .slice(-1)[0] || ''
             : '';
+        const trustLiveDownstreamOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current);
+        const liveSubjectIndex = String(latestStage2_1TextRef.current || subjectIndexText || '').trim();
+        const liveAssets = String(latestAssetRawTextRef.current || llmAssetRawResultContent || '').trim();
         return buildStageOutputsObject({
             analysisRawText: '',
-            assetRawText: llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '',
-            stage1RawText: latestStage1RawTextRef.current || adaptationText || activeEpisode?.ai_scene_analysis_adaptation || '',
-            stage2RawText: liveBySceneReady ? liveBySceneMarkdown : (activeEpisode?.ai_scene_analysis_scene_markdown || ''),
-            stage2_1Text: activeEpisode?.ai_scene_analysis_subject_index || '',
-            sceneMarkdownByScene: liveBySceneReady ? liveSceneMarkdownByScene : null,
-            replaceSceneMarkdownByScene: liveBySceneReady,
+            assetRawText: liveAssets || (trustLiveDownstreamOnly ? '' : (activeEpisode?.ai_entity_design_result || '')),
+            stage1RawText: latestStage1RawTextRef.current || adaptationText || (trustLiveDownstreamOnly ? '' : (activeEpisode?.ai_scene_analysis_adaptation || '')),
+            stage2RawText: liveBySceneReady ? liveBySceneMarkdown : (trustLiveDownstreamOnly ? '' : (activeEpisode?.ai_scene_analysis_scene_markdown || '')),
+            stage2_1Text: liveSubjectIndex || (trustLiveDownstreamOnly ? '' : (activeEpisode?.ai_scene_analysis_subject_index || '')),
+            sceneMarkdownByScene: liveBySceneReady ? liveSceneMarkdownByScene : (trustLiveDownstreamOnly ? {} : null),
+            replaceSceneMarkdownByScene: liveBySceneReady || trustLiveDownstreamOnly,
+            replaceSubjectIndex: Boolean(liveSubjectIndex) || trustLiveDownstreamOnly,
         });
         } catch (error) {
             console.error('[ScriptEditor] failed to assemble stage outputs', error);
             try {
                 return buildStageOutputsObject({
                     analysisRawText: '',
-                    assetRawText: llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '',
-                    stage1RawText: latestStage1RawTextRef.current || adaptationText || activeEpisode?.ai_scene_analysis_adaptation || '',
+                    assetRawText: String(latestAssetRawTextRef.current || llmAssetRawResultContent || '').trim(),
+                    stage1RawText: latestStage1RawTextRef.current || adaptationText || '',
                     stage2RawText: '',
-                    stage2_1Text: activeEpisode?.ai_scene_analysis_subject_index || '',
+                    stage2_1Text: String(latestStage2_1TextRef.current || subjectIndexText || '').trim(),
                     sceneMarkdownByScene: {},
                     replaceSceneMarkdownByScene: true,
+                    replaceSubjectIndex: true,
                 });
             } catch (fallbackError) {
                 console.error('[ScriptEditor] stage outputs fallback failed', fallbackError);
                 return { version: 1, stages: {} };
             }
         }
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, subjectIndexText]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -10514,6 +10543,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const persistedStage1RawText = String(persistedStageOutputs?.stages?.stage1?.outputs?.raw_text?.content || '').trim();
             const persistedStage2RawText = String(persistedStageOutputs?.stages?.stage2?.outputs?.raw_text?.content || '').trim();
             const persistedStage2_1Text = String(persistedStageOutputs?.stages?.stage2?.outputs?.subject_index?.content || '').trim();
+            const trustLiveDownstreamOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current);
+            const pickLiveDownstreamText = (liveValue, persistedValue = '') => {
+                const live = String(liveValue || '').trim();
+                if (live) return live;
+                if (trustLiveDownstreamOnly) return '';
+                return String(persistedValue || '').trim();
+            };
+            const liveBySceneMap = (
+                orchestrationPersistedSceneMarkdownRef.current
+                && typeof orchestrationPersistedSceneMarkdownRef.current === 'object'
+                && !Array.isArray(orchestrationPersistedSceneMarkdownRef.current)
+            ) ? orchestrationPersistedSceneMarkdownRef.current : {};
+            const hasLiveByScene = Object.keys(liveBySceneMap).length > 0;
+            const liveSubjectIndexText = pickLiveDownstreamText(
+                latestStage2_1TextRef.current,
+                persistedStage2_1Text || activeEpisode?.ai_scene_analysis_subject_index
+            );
+            const liveAssetDesignText = pickLiveDownstreamText(
+                latestAssetRawTextRef.current,
+                activeEpisode?.ai_entity_design_result || llmAssetRawResultContent
+            );
+            const liveStage1RawText = pickLiveDownstreamText(
+                latestStage1RawTextRef.current,
+                persistedStage1RawText
+            );
+            const liveSceneMarkdownText = pickLiveDownstreamText(
+                latestAnalysisRawTextRef.current,
+                persistedStage2RawText || activeEpisode?.ai_scene_analysis_scene_markdown
+            );
             const replaceSceneMarkdownByScene = options?.replaceSceneMarkdownByScene === true
                 || (
                     options?.replaceSceneMarkdownByScene !== false
@@ -10523,6 +10581,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         || Boolean(options?.sceneMarkdownByScene)
                     )
                 );
+            const resolvedSceneMarkdownByScene = options?.sceneMarkdownByScene
+                || (hasLiveByScene ? liveBySceneMap : (trustLiveDownstreamOnly ? {} : null));
 
             if (resultField === 'ai_scene_analysis_result') {
                 const looksLikeStage1ScriptText = (candidate) => {
@@ -10560,17 +10620,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                     const stageOutputsPayload = {
                         analysisRawText: '',
-                        assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
+                        assetRawText: liveAssetDesignText,
                         stage1RawText: effectiveStage1RawText,
-                        stage2RawText: persistedStage2RawText || '',
-                        stage2_1Text: latestStage2_1TextRef.current || persistedStage2_1Text || undefined,
-                        sceneMarkdownByScene: options?.sceneMarkdownByScene || null,
+                        stage2RawText: liveSceneMarkdownText,
+                        stage2_1Text: liveSubjectIndexText,
+                        sceneMarkdownByScene: resolvedSceneMarkdownByScene,
                         replaceSceneMarkdownByScene: true,
+                        replaceSubjectIndex: true,
                     };
                     Object.assign(updatePayload, {
                         ai_scene_analysis_adaptation: adaptationValue,
                         ai_stage_outputs: JSON.stringify(buildStageOutputsObject(stageOutputsPayload), null, 2),
                     });
+                    if (trustLiveDownstreamOnly) {
+                        updatePayload.ai_scene_analysis_subject_index = liveSubjectIndexText;
+                        updatePayload.ai_scene_analysis_scene_markdown = liveSceneMarkdownText;
+                        updatePayload.ai_entity_design_result = liveAssetDesignText;
+                    }
                     delete updatePayload.ai_scene_analysis_result;
                     onLog?.(`[Analysis Writeback] field=stage1 source=${logSource} raw_len=${nextContent.length} adaptation_len=${adaptationValue.length}`, 'info');
                 } else {
@@ -10607,9 +10673,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 // A new Stage 1 payload must replace the previous episode copy; never keep stale adaptation.
                 const adaptationValue = extractedAdaptationValue
                     || (nextLooksLikeStage1Script ? String(adaptationSourceText || '').trim() : '')
-                    || (looksLikeSceneMarkdownTable || persistedAdaptationLooksLikeSceneTable ? '' : persistedAdaptationValue);
+                    || (looksLikeSceneMarkdownTable || persistedAdaptationLooksLikeSceneTable || trustLiveDownstreamOnly
+                        ? ''
+                        : persistedAdaptationValue);
 
-                const normalizedSubjectIndexValue = extractPureSubjectIndexText(subjectIndexValue);
+                const normalizedSubjectIndexValue = extractPureSubjectIndexText(
+                    subjectIndexValue || liveSubjectIndexText
+                );
                 if (adaptationValue) {
                     setAdaptationText(adaptationValue);
                 }
@@ -10620,12 +10690,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
                     analysisRawText: nextContent,
-                    assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
-                    stage1RawText: effectiveStage1RawText,
+                    assetRawText: liveAssetDesignText,
+                    stage1RawText: effectiveStage1RawText || liveStage1RawText,
                     stage2RawText: effectiveStage2RawText,
-                    stage2_1Text: options?.stage2_1Text !== undefined ? extractPureSubjectIndexText(options.stage2_1Text) : extractPureSubjectIndexText(latestStage2_1TextRef.current || normalizedSubjectIndexValue),
-                    sceneMarkdownByScene: options?.sceneMarkdownByScene || null,
+                    stage2_1Text: options?.stage2_1Text !== undefined
+                        ? extractPureSubjectIndexText(options.stage2_1Text)
+                        : normalizedSubjectIndexValue,
+                    sceneMarkdownByScene: resolvedSceneMarkdownByScene,
                     replaceSceneMarkdownByScene,
+                    replaceSubjectIndex: true,
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length} subject_index_len=${normalizedSubjectIndexValue.length} adaptation_len=${adaptationValue.length}`, 'info');
@@ -10635,12 +10708,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 updatePayload.ai_scene_analysis_scene_markdown = nextContent;
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
                     analysisRawText: '',
-                    assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
-                    stage1RawText: latestStage1RawTextRef.current || persistedStage1RawText || '',
+                    assetRawText: liveAssetDesignText,
+                    stage1RawText: liveStage1RawText,
                     stage2RawText: options?.stage2RawText || nextContent,
-                    stage2_1Text: latestStage2_1TextRef.current || persistedStage2_1Text || undefined,
-                    sceneMarkdownByScene: options?.sceneMarkdownByScene || null,
+                    stage2_1Text: liveSubjectIndexText,
+                    sceneMarkdownByScene: resolvedSceneMarkdownByScene,
                     replaceSceneMarkdownByScene,
+                    replaceSubjectIndex: true,
                 }), null, 2);
                 onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length}`, 'info');
 
@@ -10660,9 +10734,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
                     analysisRawText: '',
                     assetRawText: nextContent,
-                    stage1RawText: latestStage1RawTextRef.current || persistedStage1RawText || '',
-                    stage2RawText: options?.stage2RawText || persistedStage2RawText || '',
-                    stage2_1Text: latestStage2_1TextRef.current || persistedStage2_1Text || undefined
+                    stage1RawText: liveStage1RawText,
+                    stage2RawText: options?.stage2RawText || liveSceneMarkdownText,
+                    stage2_1Text: liveSubjectIndexText,
+                    sceneMarkdownByScene: resolvedSceneMarkdownByScene,
+                    replaceSceneMarkdownByScene: trustLiveDownstreamOnly || hasLiveByScene,
+                    replaceSubjectIndex: true,
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=ai_stage_outputs source=${logSource} bundle_len=${String(updatePayload.ai_stage_outputs || '').length}`, 'info');
@@ -10675,10 +10752,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 updatePayload[resultField] = normalizedSubjectIndexValue;
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
                     analysisRawText: '',
-                    assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
-                    stage1RawText: latestStage1RawTextRef.current || persistedStage1RawText || '',
-                    stage2RawText: options?.stage2RawText || '',
+                    assetRawText: liveAssetDesignText,
+                    stage1RawText: liveStage1RawText,
+                    stage2RawText: options?.stage2RawText || liveSceneMarkdownText,
                     stage2_1Text: normalizedSubjectIndexValue,
+                    sceneMarkdownByScene: resolvedSceneMarkdownByScene,
+                    replaceSceneMarkdownByScene: trustLiveDownstreamOnly || hasLiveByScene,
+                    replaceSubjectIndex: true,
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=ai_stage_outputs source=${logSource} bundle_len=${String(updatePayload.ai_stage_outputs || '').length}`, 'info');
@@ -10804,25 +10884,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ) ? orchestrationPersistedSceneMarkdownRef.current : patchMap;
             const persistedStageOutputs = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
             const persistedStage1RawText = String(persistedStageOutputs?.stages?.stage1?.outputs?.raw_text?.content || '').trim();
-            const persistedStage2RawText = String(persistedStageOutputs?.stages?.stage2?.outputs?.raw_text?.content || '').trim();
             const persistedStage2_1Text = String(persistedStageOutputs?.stages?.stage2?.outputs?.subject_index?.content || '').trim();
             const orderedEntries = Object.values(mergedBySceneMap)
                 .sort((left, right) => (Number(left?.scene_order) || 0) - (Number(right?.scene_order) || 0));
             const presenceMarkdown = String(
                 orderedEntries[orderedEntries.length - 1]?.markdown || ''
             ).trim();
+            const trustLiveDownstreamOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current);
+            const liveAssetDesignText = String(latestAssetRawTextRef.current || '').trim()
+                || (trustLiveDownstreamOnly ? '' : String(activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '').trim());
+            const liveStage1RawText = String(options?.stage1RawText || latestStage1RawTextRef.current || '').trim()
+                || (trustLiveDownstreamOnly ? '' : persistedStage1RawText);
+            const liveSubjectIndexText = options?.stage2_1Text !== undefined
+                ? extractPureSubjectIndexText(options.stage2_1Text)
+                : extractPureSubjectIndexText(
+                    String(latestStage2_1TextRef.current || '').trim()
+                    || (trustLiveDownstreamOnly ? '' : (persistedStage2_1Text || activeEpisode?.ai_scene_analysis_subject_index || ''))
+                );
             const updatePayload = {
                 ai_scene_analysis_scene_markdown: presenceMarkdown,
                 ai_stage_outputs: JSON.stringify(buildStageOutputsObject({
                     analysisRawText: presenceMarkdown,
-                    assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
-                    stage1RawText: options?.stage1RawText || latestStage1RawTextRef.current || persistedStage1RawText || '',
-                    stage2RawText: presenceMarkdown || persistedStage2RawText || '',
-                    stage2_1Text: options?.stage2_1Text !== undefined
-                        ? extractPureSubjectIndexText(options.stage2_1Text)
-                        : extractPureSubjectIndexText(latestStage2_1TextRef.current || persistedStage2_1Text || activeEpisode?.ai_scene_analysis_subject_index || ''),
+                    assetRawText: liveAssetDesignText,
+                    stage1RawText: liveStage1RawText,
+                    stage2RawText: presenceMarkdown,
+                    stage2_1Text: liveSubjectIndexText,
                     sceneMarkdownByScene: mergedBySceneMap,
                     replaceSceneMarkdownByScene: true,
+                    replaceSubjectIndex: true,
                 }), null, 2),
             };
             await onUpdateEpisodeInfo(activeEpisode.id, updatePayload);
@@ -11661,18 +11750,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .filter(Boolean)
                 .slice(-1)[0] || '';
             const logSource = String(options?.source || 'scene-markdown-clear').trim() || 'scene-markdown-clear';
+            const trustLiveDownstreamOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current);
+            const liveAssetDesignText = String(latestAssetRawTextRef.current || '').trim()
+                || (trustLiveDownstreamOnly ? '' : String(activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '').trim());
+            const liveStage1RawText = String(options?.stage1RawText || latestStage1RawTextRef.current || '').trim()
+                || (trustLiveDownstreamOnly ? '' : persistedStage1RawText);
+            const liveSubjectIndexText = options?.stage2_1Text !== undefined
+                ? extractPureSubjectIndexText(options.stage2_1Text)
+                : extractPureSubjectIndexText(
+                    String(latestStage2_1TextRef.current || '').trim()
+                    || (trustLiveDownstreamOnly ? '' : (persistedStage2_1Text || activeEpisode?.ai_scene_analysis_subject_index || ''))
+                );
             await onUpdateEpisodeInfo(activeEpisode.id, {
                 ai_scene_analysis_scene_markdown: remainingMarkdown,
                 ai_stage_outputs: JSON.stringify(buildStageOutputsObject({
                     analysisRawText: remainingMarkdown,
-                    assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
-                    stage1RawText: options?.stage1RawText || latestStage1RawTextRef.current || persistedStage1RawText || '',
+                    assetRawText: liveAssetDesignText,
+                    stage1RawText: liveStage1RawText,
                     stage2RawText: remainingMarkdown,
-                    stage2_1Text: options?.stage2_1Text !== undefined
-                        ? extractPureSubjectIndexText(options.stage2_1Text)
-                        : extractPureSubjectIndexText(latestStage2_1TextRef.current || persistedStage2_1Text || activeEpisode?.ai_scene_analysis_subject_index || ''),
+                    stage2_1Text: liveSubjectIndexText,
                     sceneMarkdownByScene: nextMap,
                     replaceSceneMarkdownByScene: true,
+                    replaceSubjectIndex: true,
                 }), null, 2),
             });
             orchestrationPersistedSceneMarkdownRef.current = nextMap;
@@ -12872,9 +12971,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             attemptFinalUserInput,
             fallbackAttempt = 0,
             disableEpisodeRecovery = false,
+            targetSceneIds = null,
         }) => {
             const attachedUserInputBody = attachSubjectIndex(attemptUserInputBody);
             const attachedFinalUserInput = attachSubjectIndex(attemptFinalUserInput);
+            const normalizedTargetSceneIds = (
+                Array.isArray(targetSceneIds) ? targetSceneIds : []
+            )
+                .map((sceneId) => String(sceneId || '').trim())
+                .filter(Boolean);
             logStage2_2Diagnostics({
                 phase: `${logPhasePrefix}-stage2_2-submit`,
                 subjectIndexText: subjectIndexForStage2_2,
@@ -12893,6 +12998,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     selectedReuseSubjectAssets,
                     {
                         subjectIndexText: subjectIndexForStage2_2,
+                        targetSceneIds: normalizedTargetSceneIds,
                         onTaskCreated: (taskId) => {
                             const stableTaskId = String(taskId || '').trim();
                             if (stableTaskId) {
@@ -12989,8 +13095,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Must not reset again after skipExisting kickoffs (would orphan in-flight LLM and allow purge).
         // Preserve env gate: scene orchestration runs in parallel with asset design, which may
         // already have marked environment/poster ready for this run.
-        orchestrationLiveImportedScenesRef.current = new Set();
-        resetStoryboardKickoffTracking({ preserveEnvGate: true });
+        // Single/subset rerun must not wipe other scenes' live-import or storyboard claims.
+        if (explicitSceneUnits.length > 0 && explicitSceneUnits.length < sceneUnits.length) {
+            const targetMarkerSet = new Set(
+                explicitSceneUnits
+                    .map((unit) => String(unit?.sceneId || '').trim())
+                    .filter(Boolean)
+            );
+            const nextLiveImported = new Set();
+            for (const sceneId of (orchestrationLiveImportedScenesRef.current || [])) {
+                const stableId = String(sceneId || '').trim();
+                if (stableId && !targetMarkerSet.has(stableId)) nextLiveImported.add(stableId);
+            }
+            orchestrationLiveImportedScenesRef.current = nextLiveImported;
+            clearStoryboardTrackingForScenes([...targetMarkerSet]);
+        } else {
+            orchestrationLiveImportedScenesRef.current = new Set();
+            resetStoryboardKickoffTracking({ preserveEnvGate: true });
+        }
 
         // Full-pipeline precheck: do not re-orchestrate scenes already in the workspace DB.
         const shouldSkipExistingScenes = Boolean(skipExistingScenes)
@@ -13232,6 +13354,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     attemptFinalUserInput: singleFinalInput,
                     fallbackAttempt,
                     disableEpisodeRecovery: shouldDisableEpisodeRecovery,
+                    targetSceneIds: [String(unit.sceneId || '').trim()].filter(Boolean),
                 });
                 if (attempt.stage2_2Check?.ok) {
                     onLog?.(
@@ -13373,6 +13496,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             attemptFinalUserInput: singleSceneBody,
                             fallbackAttempt,
                             disableEpisodeRecovery: shouldDisableEpisodeRecovery,
+                            targetSceneIds: [sceneId],
                         });
                         if (attempt.stage2_2Check?.ok) {
                             sceneAttempt = attempt;
@@ -13509,6 +13633,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         attemptFinalUserInput: finalStage2_2UserInput,
                         fallbackAttempt,
                         disableEpisodeRecovery: true,
+                        targetSceneIds: orchestrationSceneLabels,
                     });
                 } catch (orchErr) {
                     parallelOrchestrationFailed = true;
@@ -13651,6 +13776,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         buildStage2_2SubjectIndexSection,
         buildStage2_2UserInputFromStage1,
         clearSceneMarkdownPatchForScenes,
+        clearStoryboardTrackingForScenes,
         ensureOrchestrationScenesInWorkspace,
         extractAdaptedScriptFromStage2_2UserInputBody,
         extractAnalysisTextFromResult,
@@ -17859,6 +17985,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         latestStage1RawTextRef.current = '';
         latestStage2_1TextRef.current = '';
         lastPersistPayloadSignatureRef.current = {};
+        analysisTrustLiveDownstreamOnlyRef.current = true;
 
         if (!deferWorkspaceUiReset) {
             setLlmRawResultContent('');
@@ -18342,6 +18469,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 'process'
             );
         }
+        analysisTrustLiveDownstreamOnlyRef.current = true;
 
         if (resetRuntimePanels) {
             orchestrationLiveImportedScenesRef.current = new Set();

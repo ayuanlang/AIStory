@@ -31,9 +31,11 @@ from app.services.script_analysis_flow import (
     SceneBeatsTooShortError,
     SceneMarkerParseError,
     SceneMissingBeat1Error,
+    coerce_target_scene_ids_for_orchestration,
     extract_scene_markdown_text_from_analyze_result,
     extract_scene_name_value_from_scene_text,
     extract_scenes_table_markdown_block,
+    filter_scene_units_by_target_ids,
     patch_episode_scene_markdown_by_scene,
     patch_single_scene_markdown_for_orchestration,
     resolve_scene_units_for_markdown_orchestration,
@@ -97,6 +99,32 @@ async def _run_scene_markdown_node_per_scene(
             status_code=422,
             detail=f"SCENE_MARKDOWN_UNITS_UNAVAILABLE:{scene_units_source}",
         )
+
+    target_scene_ids = coerce_target_scene_ids_for_orchestration(raw_payload, user_text)
+    if target_scene_ids:
+        episode_prefix = "EP01"
+        if scene_units:
+            episode_prefix = str(getattr(scene_units[0], "scene_id", "") or "EP01").split("_SC", 1)[0] or "EP01"
+        filtered_units = filter_scene_units_by_target_ids(
+            scene_units,
+            target_scene_ids,
+            episode_prefix=episode_prefix,
+        )
+        if not filtered_units:
+            raise HTTPException(
+                status_code=422,
+                detail=f"SCENE_MARKDOWN_TARGET_SCENE_NOT_FOUND:{','.join(target_scene_ids)}",
+            )
+        logger.info(
+            "[scene_markdown] target scene filter applied requested=%s matched=%s/%s source=%s project_id=%s episode_id=%s",
+            target_scene_ids,
+            [unit.scene_id for unit in filtered_units],
+            len(scene_units),
+            scene_units_source,
+            node_project_id,
+            node_episode_id,
+        )
+        scene_units = filtered_units
 
     if len(scene_units) == 1:
         unit = scene_units[0]

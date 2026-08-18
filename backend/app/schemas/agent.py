@@ -42,3 +42,6 @@ class AnalyzeSceneRequest(BaseModel):
     skip_episode_persist: Optional[bool] = False
     # Client-provided Subject Index for downstream gates when episode field is empty/contaminated.
     subject_index_text: Optional[str] = None
+    # Marker IDs (EPxx_SCyy) for single/subset scene-beats orchestration.
+    target_scene_id: Optional[str] = None
+    target_scene_ids: Optional[List[str]] = None

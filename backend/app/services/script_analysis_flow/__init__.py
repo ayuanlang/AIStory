@@ -329,6 +329,83 @@ def canonicalize_scene_unit_id(scene_id: str, scene_order: int, episode_prefix: 
     return sid or f"{prefix}_SC{order:02d}"
 
 
+_SINGLE_SCENE_MODE_ID_RE = re.compile(
+    r"本次仅处理\s*Scene\s*ID\s*[`'\"]\s*([A-Za-z0-9_]+)\s*[`'\"]",
+    re.IGNORECASE,
+)
+
+
+def coerce_target_scene_ids_for_orchestration(
+    raw_payload: Optional[Dict[str, Any]] = None,
+    user_text: str = "",
+) -> List[str]:
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    collected: List[str] = []
+    raw_list = payload.get("target_scene_ids")
+    if isinstance(raw_list, str):
+        collected.append(raw_list)
+    elif isinstance(raw_list, (list, tuple, set)):
+        collected.extend(str(item) for item in raw_list)
+    single = str(payload.get("target_scene_id") or "").strip()
+    if single:
+        collected.append(single)
+    if not collected:
+        match = _SINGLE_SCENE_MODE_ID_RE.search(str(user_text or ""))
+        if match:
+            collected.append(str(match.group(1) or "").strip())
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for raw in collected:
+        sid = str(raw or "").strip()
+        if not sid:
+            continue
+        key = sid.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(sid)
+    return ordered
+
+
+def filter_scene_units_by_target_ids(
+    units: List[ParsedSceneUnit],
+    target_ids: List[str],
+    *,
+    episode_prefix: str = "EP01",
+) -> List[ParsedSceneUnit]:
+    requested = [str(item or "").strip() for item in (target_ids or []) if str(item or "").strip()]
+    if not requested:
+        return list(units or [])
+    prefix = str(episode_prefix or "EP01").strip().upper() or "EP01"
+    matched: List[ParsedSceneUnit] = []
+    seen: Set[str] = set()
+    for unit in units or []:
+        unit_id = str(getattr(unit, "scene_id", "") or "").strip()
+        if not unit_id:
+            continue
+        order = int(getattr(unit, "scene_order", 0) or 0)
+        canonical_unit = canonicalize_scene_unit_id(unit_id, order, prefix)
+        hit = False
+        for raw in requested:
+            canonical_target = canonicalize_scene_unit_id(raw, order, prefix)
+            if (
+                unit_id == raw
+                or canonical_unit == raw
+                or canonical_unit == canonical_target
+                or unit_id.upper() == raw.upper()
+            ):
+                hit = True
+                break
+        if not hit:
+            continue
+        key = canonical_unit.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        matched.append(unit)
+    return matched
+
+
 def apply_canonical_scene_ids_to_units(
     units: List[ParsedSceneUnit],
     episode_prefix: str,
@@ -467,7 +544,10 @@ def _find_scenes_block_span(text: str) -> tuple[int, int, int, int]:
 
 
 def parse_scene_units_from_markers(script_text: str) -> List[ParsedSceneUnit]:
-    """Strict SCENE_START:ID / SCENE_END:ID pair walker (original split path)."""
+    """SCENE_START:ID / SCENE_END pair walker (original split path).
+
+    START id is required. END must exist; if END id differs from START, Scene ID = START.
+    """
     text = _normalize_scene_marker_script_text(script_text)
     if not text.strip():
         raise SceneMarkerParseError("SCENE_MARKER_BLOCK_MISSING", "script text is empty")
@@ -505,12 +585,7 @@ def parse_scene_units_from_markers(script_text: str) -> List[ParsedSceneUnit]:
                 "SCENE_MARKER_PAIR_MISMATCH",
                 f"missing scene end marker for {scene_id}",
             )
-        end_scene_id = str(end_match.group(1) or "").strip()
-        if end_scene_id != scene_id:
-            raise SceneMarkerParseError(
-                "SCENE_MARKER_PAIR_MISMATCH",
-                f"scene marker mismatch: start={scene_id}, end={end_scene_id}",
-            )
+        # END id may differ from START; Scene ID stays the START token.
 
         scene_text = block_text[start_match.end() : end_match.start()].strip()
         parsed.append(
@@ -2477,6 +2552,8 @@ __all__ = [
     "load_scene_units_from_progress_rows",
     "merge_scenes_table_markdown_outputs",
     "canonicalize_scene_unit_id",
+    "coerce_target_scene_ids_for_orchestration",
+    "filter_scene_units_by_target_ids",
     "resolve_episode_scene_id_prefix",
     "apply_canonical_scene_ids_to_units",
     "parse_scene_units_from_markers",
