@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-08-18 18:20:00 +08:00
+# Prompt Updated At: 2026-08-19 00:25:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -282,7 +282,7 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
   - **视角/状态衍生**：须写入 `activity_fit:`，摘抄该行 Stage 1 `活动适配=…`（服务反打纵深/出门动线等）；缺则 `upstream_missing_activity_space:需要回流 Stage 1 补活动适配`。可与 `purpose:` 并存，**不得**用 `purpose` 顶替漏写的活动空间。
   - **纯空镜边界**：活动空间描述的是**空间承载能力与动线/出入口**（空镜可核销结构），**禁止**把角色名/站姿/对白写进 ENV；人数分区用「双人对峙区+随从跪地区」等空间语，不写入具名角色。**建置→空间转译**：位置规划/建置中的「谁在桌哪一头/床头」只抽出**槽位与净空**（主位端椅、床头侧可达、客位端桌面操作区），人名一律删除。**活动区净空继承（中间按剧情需要；靠边常用配置允许）**：`activity_space` 标明的主舞台/表演区/动线须保持可表演净空语义；靠边沙发/屏风不得堵死动线中央（挤占走位中央→回流 Stage 1）。**禁止**本阶段为填空而向**表演中央**固定清单加无上游实体；四面件与靠边常用配置按 Stage 1 已声明提取。
   - **交通工具内舱座向继承（最高；独立主环境 + 按载具惯例）**：汽车内/客舱/**任何驾驶舱或操纵舱**（飞机驾驶舱、轮船驾驶台/舰桥、列车司机室、工程机械/航天器驾驶舱等）/轿子/马车厢/船舱/火车车厢等**须为独立主环境行**（`env_role:主环境基准定义`），**禁止**并进舱外环境行当衍生。**出入封闭舱同场多主**：仓外与仓内须**各提一行主环境**；禁把仓内并进仓外行。`activity_space`/`homogeneous_layout`/`fixed_furniture_and_set_dressing` 须透传上游座向/操纵位惯例及逐具朝向 F。**前向驾驶舱强制透传**：`0°主要驾驶观察向`、`前窗/驾驶台/仪表主视面`、`前向操纵位`、可选`后方观察员/机组槽位`，并可检索世界序 `后窗/后舱壁→后方槽位→前向操纵位→前窗/驾驶台主视面`；看操纵员后脑时禁把其身后槽位提成操纵员远处。汽车驾驶座须在前排；飞机飞行员位/轮船舵手或操纵员位/列车司机位须在各自前向操纵区。开放式舰桥或多控制台布局只按上游真实槽位透传，**禁止**擅自改成汽车排座或全员同向。无上游座向/操纵位惯例 → `upstream_missing_vehicle_cabin_orientation:需要回流 Stage 1 补载具座向或操纵位惯例`；舱内被并进舱外主环境 → `upstream_should_split_vehicle_cabin_main_env:舱内须独立主环境`。仍守纯空镜：不写谁坐哪。
-  - **封闭空间槽位与视角许可（强制）**：封闭/紧凑空间的主环境行须提取`relative_position_slots`，每个座位/操纵位写完整结构：`slot_id=第N排-左起第K/M位-功能名｜row_from_front=N（0°前向端为第1排）｜row_total=…｜position_from_left=K｜positions_in_row=M｜lateral_alias=靠左|居中|靠右|靠窗|靠过道｜relative_to={槽位/人}:左后|正后|右后+相隔N排｜facing=…`。横位左→右以面朝0°时的舱体左右为准，非画面左右；强制K≤M、同排K不重复、总位数闭合。无排式舰桥改用`control_zone/control_console_id/position_from_left`，禁伪造排号。各 `{N}度…` 衍生另提取`visible_slots`、`invisible_slots`、`slot_visible_faces`。驾驶舱0°贴操纵员后脑时后方槽位进`invisible_slots`；180°拍后方槽位时前向操纵位进`invisible_slots`。Stage 1 若裸写“后排右座”而无N/K/M，标`upstream_missing_enclosed_slot_coordinates`回流。
+  - **封闭空间槽位与视角许可（强制）**：封闭/紧凑空间的主环境行须提取`relative_position_slots`，每个座位/操纵位写完整结构：`slot_id=第N排-左起第K/M位-功能名｜row_from_front=N（0°前向端为第1排）｜row_total=…｜position_from_left=K｜positions_in_row=M｜lateral_alias=靠左|居中|靠右|靠窗|靠过道｜relative_to={槽位/人}:左后|正后|右后+相隔N排｜facing=…`。横位左→右以面朝0°时的舱体左右为准，非画面左右；强制K≤M、同排K不重复、总位数闭合。无排式舰桥改用`control_zone/control_console_id/position_from_left`，禁伪造排号。各 `{N}度…` 衍生另提取`visible_slots`、`invisible_slots`、`slot_visible_faces`。驾驶舱0°贴操纵员后脑时后方槽位进`invisible_slots`；180°拍后方槽位时前向操纵位进`invisible_slots`。**90/270：`visible_slots`须含全部座位**，近镜头侧座椅/门框不得整排进`invisible_slots`（禁半舱）。Stage 1 若裸写“后排右座”而无N/K/M，标`upstream_missing_enclosed_slot_coordinates`回流。
 - **ENV 固定实体数量闭合（最高；Stage 3 不得猜数）**：主环境须从 Stage 1 固定实体清单逐字提取并在 `entity_attributes` 可检索：
   - `fixed_entity_inventory:`：每类固定实体的**明确总数**；禁 `若干|数把|多张|一些|成排|散座` 等模糊数量词。中区桌须透传 `形制=正方形八仙桌｜长方桌/条案`；长方桌另透传长轴+两端锚+长宽比。禁止把「八仙桌」与「沿0↔180短边/长边」同时下传。
   - `homogeneous_layout:`：同质多件（椅/凳/桌/灯笼等）写 `总数={N}｜分组/分桌/分边={各项}｜逐具朝向F={…}｜同侧顺序={…}`；强制 `总数=所有分项之和`。
