@@ -30,6 +30,7 @@
 - 沿用 common §1.1：16:9 横向、绝对纯白连续画板、同一横排四视图；第一宫特写 35% 纵向居中，正/侧/背共享 65%；禁 2×2、换行、错层。`generation_prompt_en` 固定 `""`；`description_cn` 恒 `""`。
 - `name` / `name_en` / `base_name_en` **逐字符原样透传** Subject Index；**禁止任何形式的修改**。衍生实体名须等于 Index 已登记衍生行全名；`base_entity` 仅供追溯，不得据此改写输出名。
 - Clean Plate：禁手/人影/持握残留（除非上游指定为道具组成部分）。
+- **载具/机甲外部本体（最高；与舱内ENV绑定）**：Index 含`interior_env_refs`或`exterior_asset_scope:完整外轮廓`时，必须按**整车/整机/整甲完整本体**设计，禁止只画方向盘、驾驶舱、局部装甲或把内部空间当道具。四视图须保持同一车型/机型/甲型、整体比例、轴距/翼展/舰体或肢体结构、舱门窗位、轮/履带/推进器/关节、外壳主色材质与标识守恒；相对尺度以人/标准车位/机库门等文字尺度锚说明，但 Clean Plate 禁画人物。须读取绑定的`interior_env_refs`文字约束，确保舱门窗数量位置、驾驶端/机头/舰艏方向与舱内0°轴一致；只做内外一致性，不描画舱内座椅/仪表细节。原文无品牌型号时只做泛型，禁自造商标型号。
 - **角色配饰 PROP**：Index 若有 `host_character:`，`purpose`/`dependency_strategy.logic` 可点明归属角色与挂载（规划语境：须回写 Index `wear_side`/`mount_body_part`/`detachable`，如「佩于宿主胸前；不可离身」）；**生图仍 Clean Plate**——禁画宿主人物/手部佩戴特写。**角色侧闸门**：仅 `detachable:否`（不可离身）且已写入宿主 CHAR `accessory_props` 时，Character Skill 才挂 `visual_dependencies`=`PROP:[…]` **并**在角色【衣着】按挂位提及；`detachable:是`（可离身）→ 角色侧不挂依赖、不定妆画出，形制只在本 Skill 出图。本 Skill **不**反向设计角色。缺 `wear_side`/`mount_body_part`/`detachable` 时在 logic 标上游缺口，禁臆造挂位或离身性。
 - **四视图可视性（强制）**：正面/侧面/背面/特写各格只写该视角可读的形制与文字面；铭文/屏幕/破损面落在朝向该格的面板，禁背视格写正面全文（见 common 实体物件可视性核验）。
 
