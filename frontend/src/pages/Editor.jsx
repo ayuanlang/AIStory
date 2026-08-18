@@ -836,11 +836,14 @@ const Editor = ({
         try {
             const updatedEp = await updateEpisode(epId, data);
             episodeFullLoadGenRef.current += 1;
+            const requestPatch = data && typeof data === 'object' ? data : {};
             setEpisodes(prev => sortEpisodesForEditor(prev.map((e) => {
-                if (e.id !== epId) return e;
+                if (String(e.id) !== String(epId)) return e;
                 // PUT returns EpisodeOut (full analysis fields). Mark loaded and bump
                 // the fetch generation so an older lazy GET cannot overwrite this write.
-                return { ...e, ...updatedEp, _fullLoaded: true };
+                // Re-apply the request patch last so explicit clears (empty 2.2 markdown)
+                // cannot be dropped when the response omits deferred analysis fields.
+                return { ...e, ...updatedEp, ...requestPatch, _fullLoaded: true };
             })));
             return updatedEp;
         } catch (e) {
@@ -4144,6 +4147,7 @@ const Editor = ({
                             {shouldRenderScriptTab && (
                                 <div className={activeTab === 'script' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'script'}>
                                     <ErrorBoundary
+                                        key={`script-boundary-${activeEpisode?.id || 'none'}-${tabResetKey}`}
                                         onError={(error, errorInfo) => {
                                             console.error('ScriptEditor crashed', error, errorInfo);
                                             addLog?.(`剧本页渲染失败：${error?.message || error}`, 'error');

@@ -3360,6 +3360,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, []);
 
     const extractStage1AdaptedScriptBody = useCallback((stage1Text) => {
+        try {
         const text = String(stage1Text || '').replace(/\r\n/g, '\n').trim();
         if (!text) return '';
 
@@ -3449,6 +3450,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (strictBlockFromFullText) return strictBlockFromFullText;
 
         return '';
+        } catch (error) {
+            console.error('[ScriptEditor] extractStage1AdaptedScriptBody failed', error);
+            return String(stage1Text || '').trim();
+        }
     }, [extractAnalysisSections]);
 
     const extractProjectVisualBackfillJsonText = useCallback((rawText) => {
@@ -6965,7 +6970,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }
 
     const buildMarkdownTable = (headers, rows) => {
-        const esc = (val) => (val || '')
+        const esc = (val) => String(val ?? '')
             .replace(/\|/g, '\\|')
             .replace(/\n/g, '<br>');
 
@@ -7272,6 +7277,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [buildMarkdownTable, extractScenesTableBlock, parseMarkdownTable]);
 
     const splitSceneMarkdownTableBySceneId = useCallback((tableText) => {
+        try {
         const sceneTableText = extractScenesTableBlock(tableText);
         const parsed = parseMarkdownTable(sceneTableText);
         if (!parsed?.headers?.length || !Array.isArray(parsed.rows) || parsed.rows.length === 0) {
@@ -7313,6 +7319,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
         });
         return byScene;
+        } catch (error) {
+            console.error('[ScriptEditor] splitSceneMarkdownTableBySceneId failed', error);
+            return {};
+        }
     }, [buildMarkdownTable, extractScenesTableBlock, parseMarkdownTable]);
 
     const extractPerSceneOutputsFromResult = useCallback((result) => {
@@ -9130,7 +9140,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!text) return {};
         try {
             const parsed = JSON.parse(text);
-            return parsed && typeof parsed === 'object' ? parsed : {};
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+            return parsed;
         } catch (_) {
             return {};
         }
@@ -9385,8 +9396,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return { result, text, validation };
     }, [extractAnalysisTextFromResult, onLog, t, validateStage2_1SubjectIndexOutput]);
 
-    const llmMarkdownTableText = useMemo(() => normalizeLlmMarkdownTable(llmResultContent), [llmResultContent, normalizeLlmMarkdownTable]);
-    const llmMarkdownTable = useMemo(() => parseMarkdownTable(llmMarkdownTableText), [llmMarkdownTableText]);
+    const llmMarkdownTableText = useMemo(() => {
+        try {
+            return normalizeLlmMarkdownTable(llmResultContent);
+        } catch (error) {
+            console.error('[ScriptEditor] failed to normalize LLM markdown table', error);
+            return String(llmResultContent || '');
+        }
+    }, [llmResultContent, normalizeLlmMarkdownTable]);
+    const llmMarkdownTable = useMemo(() => {
+        try {
+            return parseMarkdownTable(llmMarkdownTableText);
+        } catch (error) {
+            console.error('[ScriptEditor] failed to parse LLM markdown table', error);
+            return null;
+        }
+    }, [llmMarkdownTableText]);
     const llmSceneCount = useMemo(() => {
         const rows = Array.isArray(llmMarkdownTable?.rows) ? llmMarkdownTable.rows : [];
         return rows.length;
@@ -9396,8 +9421,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const resolvedAnalysisRawText = String(analysisRawText || '').trim();
         const resolvedAssetRawText = String(assetRawText || '').trim();
         const resolvedStage1RawText = String(stage1RawText || '').trim();
+        // replace=true means the caller already decided the 2.2 payload, including empty.
+        // Never resurrect leftover episode.ai_scene_analysis_scene_markdown in that case.
         const resolvedStage2RawText = String(
-            stage2RawText || activeEpisode?.ai_scene_analysis_scene_markdown || ''
+            replaceSceneMarkdownByScene
+                ? (stage2RawText || '')
+                : (stage2RawText || activeEpisode?.ai_scene_analysis_scene_markdown || '')
         ).trim();
         const stage1ScriptInput = String(activeEpisode?.script_content || rawContent || '').trim();
         const projectContextJson = (() => {
@@ -9573,7 +9602,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             key: 'scene_markdown_by_scene',
                             kind: 'json',
                             title: '场景分析结果（分场景可导入表）',
-                            content: JSON.stringify(resolvedSceneMarkdownByScene, null, 2),
+                            content: (() => {
+                                try {
+                                    return JSON.stringify(resolvedSceneMarkdownByScene, null, 2);
+                                } catch (_) {
+                                    return '{}';
+                                }
+                            })(),
                         },
                         subject_index: {
                             key: 'subject_index',
@@ -9627,8 +9662,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, activeEpisode?.script_content, extractAnalysisSections, extractProjectVisualBackfillJsonText, extractPureSubjectIndexText, extractStage1AdaptedScriptBody, getAnalysisEntitiesPayloadFromJsonText, mergeSceneMarkdownBySceneMaps, normalizeLlmMarkdownTable, parseSceneMarkdownBySceneMap, project?.global_info, rawContent, splitSceneMarkdownTableBySceneId]);
 
     const parseStageOutputsObject = useCallback((rawValue) => {
+        if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue) && rawValue.stages && typeof rawValue.stages === 'object') {
+            return rawValue;
+        }
         const text = String(rawValue || '').trim();
-        if (!text) return null;
+        if (!text || text === '[object Object]') return null;
         try {
             const parsed = JSON.parse(text);
             if (parsed && typeof parsed === 'object' && parsed.stages && typeof parsed.stages === 'object') {
@@ -9705,7 +9743,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                 }
             }
-            if (!String(sceneMarkdownSlot.content || '').trim()) {
+            const bySceneRaw = String(bySceneSlot.content || '').trim();
+            const bySceneExplicitlyCleared = bySceneRaw === '{}' || bySceneRaw === '[]';
+            if (!bySceneExplicitlyCleared && !String(sceneMarkdownSlot.content || '').trim()) {
                 const episodeSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
                 if (episodeSceneMarkdown) {
                     sceneMarkdownSlot.content = episodeSceneMarkdown;
@@ -9763,13 +9803,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
         } catch (error) {
             console.error('[ScriptEditor] failed to assemble stage outputs', error);
-            return buildStageOutputsObject({
-                analysisRawText: '',
-                assetRawText: llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '',
-                stage1RawText: latestStage1RawTextRef.current || adaptationText || activeEpisode?.ai_scene_analysis_adaptation || '',
-                stage2RawText: activeEpisode?.ai_scene_analysis_scene_markdown || '',
-                stage2_1Text: activeEpisode?.ai_scene_analysis_subject_index || '',
-            });
+            try {
+                return buildStageOutputsObject({
+                    analysisRawText: '',
+                    assetRawText: llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '',
+                    stage1RawText: latestStage1RawTextRef.current || adaptationText || activeEpisode?.ai_scene_analysis_adaptation || '',
+                    stage2RawText: '',
+                    stage2_1Text: activeEpisode?.ai_scene_analysis_subject_index || '',
+                    sceneMarkdownByScene: {},
+                    replaceSceneMarkdownByScene: true,
+                });
+            } catch (fallbackError) {
+                console.error('[ScriptEditor] stage outputs fallback failed', fallbackError);
+                return { version: 1, stages: {} };
+            }
         }
     }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, liveSceneMarkdownByScene, llmAssetRawResultContent, parseStageOutputsObject]);
 
@@ -10114,7 +10161,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const nextSubjectIndexText = extractPureSubjectIndexText(String(activeEpisode?.ai_scene_analysis_subject_index || ''));
             const nextAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '');
             const nextAssetRaw = String(activeEpisode?.ai_entity_design_result || '');
-            const stored = activeEpisode?.ai_scene_analysis_scene_markdown || activeEpisode?.ai_scene_analysis_result;
+            const persistedBySceneRaw = String(
+                parseStageOutputsObject(activeEpisode?.ai_stage_outputs)?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || ''
+            ).trim();
+            const sceneMarkdownExplicitlyCleared = persistedBySceneRaw === '{}' || persistedBySceneRaw === '[]';
+            const stored = sceneMarkdownExplicitlyCleared
+                ? ''
+                : (activeEpisode?.ai_scene_analysis_scene_markdown || activeEpisode?.ai_scene_analysis_result);
             const storedText = typeof stored === 'string' ? stored : '';
             const nextLlmResultContent = normalizeLlmMarkdownTable(storedText);
 
@@ -10176,6 +10229,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         extractStage1AdaptedScriptBody,
         liveSceneMarkdownByScene,
         normalizeLlmMarkdownTable,
+        parseStageOutputsObject,
+        activeEpisode?.ai_stage_outputs,
     ]);
 
     useEffect(() => {
@@ -10709,8 +10764,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .sort((left, right) => (Number(left?.scene_order) || 0) - (Number(right?.scene_order) || 0));
             const presenceMarkdown = String(
                 orderedEntries[orderedEntries.length - 1]?.markdown
-                || activeEpisode?.ai_scene_analysis_scene_markdown
-                || ''
+                || (inFlightSceneBeats ? '' : (activeEpisode?.ai_scene_analysis_scene_markdown || ''))
             ).trim();
 
             const updatePayload = {
@@ -11132,18 +11186,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ), []);
 
     const parseSceneBeatsFieldsFromMarkdown = useCallback((markdown) => {
-        const sceneTableText = extractScenesTableBlock(markdown) || String(markdown || '');
-        const parsed = parseMarkdownTable(sceneTableText);
-        if (!parsed?.headers?.length || !Array.isArray(parsed.rows) || parsed.rows.length <= 0) {
+        try {
+            const sceneTableText = extractScenesTableBlock(markdown) || String(markdown || '');
+            const parsed = parseMarkdownTable(sceneTableText);
+            if (!parsed?.headers?.length || !Array.isArray(parsed.rows) || parsed.rows.length <= 0) {
+                return { headers: [], fields: {} };
+            }
+            const headers = parsed.headers.map((header) => String(header || '').trim()).filter(Boolean);
+            const row = parsed.rows[0] || [];
+            const fields = {};
+            headers.forEach((header, index) => {
+                fields[header] = decodeSceneTableCellForEdit(row[index] || '');
+            });
+            return { headers, fields };
+        } catch (error) {
+            console.error('[ScriptEditor] failed to parse scene beats fields', error);
             return { headers: [], fields: {} };
         }
-        const headers = parsed.headers.map((header) => String(header || '').trim()).filter(Boolean);
-        const row = parsed.rows[0] || [];
-        const fields = {};
-        headers.forEach((header, index) => {
-            fields[header] = decodeSceneTableCellForEdit(row[index] || '');
-        });
-        return { headers, fields };
     }, [decodeSceneTableCellForEdit, extractScenesTableBlock, parseMarkdownTable]);
 
     const buildSceneBeatsMarkdownFromFields = useCallback((headers, fields, { displayLabel = '' } = {}) => {
@@ -11217,14 +11276,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const buildSceneBeatsEditScenes = useCallback(() => {
         let byScene = {};
-        if (liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object') {
+        if (liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object' && !Array.isArray(liveSceneMarkdownByScene)) {
             byScene = liveSceneMarkdownByScene;
         } else {
             const rawJson = String(
                 currentStageOutputs?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || ''
             ).trim();
             byScene = parseSceneMarkdownBySceneMap(rawJson);
-            if (!byScene || Object.keys(byScene).length <= 0) {
+            if ((!byScene || Object.keys(byScene).length <= 0) && rawJson !== '{}' && rawJson !== '[]') {
                 const merged = String(
                     currentStageOutputs?.stages?.stage2?.outputs?.scene_markdown?.content
                     || activeEpisode?.ai_scene_analysis_scene_markdown
@@ -11528,9 +11587,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             const persistedStageOutputs = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
             const persistedStage1RawText = String(persistedStageOutputs?.stages?.stage1?.outputs?.raw_text?.content || '').trim();
-            const persistedStage2RawText = String(persistedStageOutputs?.stages?.stage2?.outputs?.raw_text?.content || '').trim();
             const persistedStage2_1Text = String(persistedStageOutputs?.stages?.stage2?.outputs?.subject_index?.content || '').trim();
-            const existingSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
             const rawJson = String(persistedStageOutputs?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || '').trim();
             const sessionMap = (
                 liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object'
@@ -11541,13 +11598,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             targetIds.forEach((sceneId) => {
                 delete nextMap[sceneId];
             });
+            const remainingMarkdown = Object.values(nextMap)
+                .map((entry) => String(entry?.markdown || '').trim())
+                .filter(Boolean)
+                .slice(-1)[0] || '';
             const logSource = String(options?.source || 'scene-markdown-clear').trim() || 'scene-markdown-clear';
             await onUpdateEpisodeInfo(activeEpisode.id, {
+                ai_scene_analysis_scene_markdown: remainingMarkdown,
                 ai_stage_outputs: JSON.stringify(buildStageOutputsObject({
-                    analysisRawText: existingSceneMarkdown,
+                    analysisRawText: remainingMarkdown,
                     assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
                     stage1RawText: options?.stage1RawText || latestStage1RawTextRef.current || persistedStage1RawText || '',
-                    stage2RawText: persistedStage2RawText || existingSceneMarkdown,
+                    stage2RawText: remainingMarkdown,
                     stage2_1Text: options?.stage2_1Text !== undefined
                         ? extractPureSubjectIndexText(options.stage2_1Text)
                         : extractPureSubjectIndexText(latestStage2_1TextRef.current || persistedStage2_1Text || activeEpisode?.ai_scene_analysis_subject_index || ''),
@@ -11565,7 +11627,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }, [
         activeEpisode?.ai_entity_design_result,
-        activeEpisode?.ai_scene_analysis_scene_markdown,
         activeEpisode?.ai_scene_analysis_subject_index,
         activeEpisode?.ai_stage_outputs,
         activeEpisode?.id,
@@ -24476,18 +24537,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [formatArtifactContent, getStageOutputContent, handleAnalysisClick, handleImportStageArtifact, handleRestoreAdaptedScript, handleRerunScriptOptOnly, isAnalyzing, llmRawResultContent, persistAdaptedScriptEdit, resolveScriptOptBeatsContent, t]);
 
     const stage2SceneMarkdownByScene = useMemo(() => {
-        const rawJson = getStageOutputContent('stage2', 'scene_markdown_by_scene');
-        const parsed = parseSceneMarkdownBySceneMap(rawJson);
-        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
-            return parsed;
+        try {
+            const liveMap = liveSceneMarkdownByScene;
+            if (liveMap && typeof liveMap === 'object' && !Array.isArray(liveMap)) {
+                return liveMap;
+            }
+            const rawJson = getStageOutputContent('stage2', 'scene_markdown_by_scene');
+            const parsed = parseSceneMarkdownBySceneMap(rawJson);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length > 0) {
+                return parsed;
+            }
+            const bySceneRaw = String(rawJson || '').trim();
+            // Explicit empty by_scene after a 2.2 clear must not resurrect leftover episode markdown.
+            if (bySceneRaw === '{}' || bySceneRaw === '[]') {
+                return {};
+            }
+            const merged = getStageOutputContent('stage2', 'scene_markdown')
+                || String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
+            return splitSceneMarkdownTableBySceneId(merged);
+        } catch (error) {
+            console.error('[ScriptEditor] failed to parse scene markdown by scene', error);
+            return {};
         }
-        const merged = getStageOutputContent('stage2', 'scene_markdown')
-            || String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
-        return splitSceneMarkdownTableBySceneId(merged);
     }, [
         activeEpisode?.ai_scene_analysis_scene_markdown,
         currentStageOutputs,
         getStageOutputContent,
+        liveSceneMarkdownByScene,
         parseSceneMarkdownBySceneMap,
         splitSceneMarkdownTableBySceneId,
     ]);
@@ -24501,9 +24577,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const dbEntities = Array.isArray(episodeOwnedEntities) ? episodeOwnedEntities : [];
 
         const sceneMarkdownMerged = String(
-            getStageOutputContent('stage2', 'scene_markdown')
-            || activeEpisode?.ai_scene_analysis_scene_markdown
-            || ''
+            getStageOutputContent('stage2', 'scene_markdown') || ''
         ).trim();
         const byScene = stage2SceneMarkdownByScene || {};
         const bySceneIds = Object.keys(byScene).filter((sceneId) => {
@@ -25311,6 +25385,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         {t('进度诊断面板', 'Workflow Diagnostics')}
                     </div>
                     {(() => {
+                        try {
                         const progress = pickRicherStoryboardTaskProgress(
                             storyboardTaskProgress,
                             storyboardTaskProgressRef.current,
@@ -25355,10 +25430,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             || String(subjectIndexText || '').trim()
                             || resolveSubjectIndexEditContent()
                         );
-                        const episodeSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
                         const hasSceneMarkdownArtifact = Boolean(
                             getStageOutputContent('stage2', 'scene_markdown')
-                            || episodeSceneMarkdown
+                            || Object.values(stage2SceneMarkdownByScene || {}).some((entry) => String(entry?.markdown || '').trim())
                             || workspaceSceneCount > 0
                             || workspaceStoryboardPresent
                         );
@@ -25389,11 +25463,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const canEditSubjectIndex = Boolean(subjectIndexReady && hasSubjectIndexArtifact && !subjectIndexActive);
                         const canEditSceneBeats = Boolean(sceneMarkdownReady && !sceneMarkdownActive);
                         const canImportSubjectIndex = Boolean(resolveSubjectIndexEditContent()) && !subjectIndexActive;
-                        const canImportSceneBeats = Boolean(String(
+                        const canImportSceneBeats = Boolean(
                             getStageOutputContent('stage2', 'scene_markdown')
-                            || activeEpisode?.ai_scene_analysis_scene_markdown
-                            || ''
-                        ).trim()) && !sceneMarkdownActive;
+                            || Object.values(stage2SceneMarkdownByScene || {}).some((entry) => String(entry?.markdown || '').trim())
+                        ) && !sceneMarkdownActive;
                         const canImportStoryboard = Boolean(storyboardCanStart || storyboardStartedCount > 0);
                         const canImportAssets = Boolean(resolveDiagnosticAssetDesignImport().assetDesignJson) && !assetDesignActive;
                         // Per-stage actions unlock when that stage (or its prerequisite) is ready,
@@ -25717,6 +25790,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                     </div>
                         );
+                        } catch (error) {
+                            console.error('[ScriptEditor] diagnostic panel failed', error);
+                            return (
+                                <div className="flex-1 w-full text-[11px] text-white/50 px-4">
+                                    {t('进度诊断暂时无法显示', 'Workflow diagnostics are temporarily unavailable')}
+                                </div>
+                            );
+                        }
                     })()}
                 </div>
 
