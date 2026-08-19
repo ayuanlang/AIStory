@@ -3461,6 +3461,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [extractAnalysisSections]);
 
     const extractProjectVisualBackfillJsonText = useCallback((rawText) => {
+        const coerceVisualBackfillJson = (parsed) => {
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '';
+            const rootKeys = ['project_visual_backfill', 'Project_Visual_Backfill', 'projectVisualBackfill'];
+            for (const key of rootKeys) {
+                const inner = parsed[key];
+                if (inner && typeof inner === 'object' && !Array.isArray(inner) && Object.keys(inner).length > 0) {
+                    return JSON.stringify({ project_visual_backfill: inner }, null, 2);
+                }
+            }
+            const contentKeys = ['Global_Style', 'global_style', 'borrowed_films', 'tone', 'color_spectrum', 'plot_summary', 'music_recommendation'];
+            if (contentKeys.some((key) => Object.prototype.hasOwnProperty.call(parsed, key))) {
+                return JSON.stringify({ project_visual_backfill: parsed }, null, 2);
+            }
+            return '';
+        };
         const text = String(rawText || '').trim();
         if (!text) return '';
 
@@ -3470,10 +3485,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const candidate = String(match[1] || '').trim();
             if (!candidate) continue;
             try {
-                const parsed = JSON.parse(candidate);
-                if (parsed && typeof parsed === 'object' && parsed.project_visual_backfill && typeof parsed.project_visual_backfill === 'object') {
-                    return JSON.stringify(parsed, null, 2);
-                }
+                const coerced = coerceVisualBackfillJson(JSON.parse(candidate));
+                if (coerced) return coerced;
             } catch {
                 // ignore invalid fenced JSON
             }
@@ -3498,10 +3511,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const candidate = text.slice(startIndex, i + 1).trim();
                     startIndex = -1;
                     try {
-                        const parsed = JSON.parse(candidate);
-                        if (parsed && typeof parsed === 'object' && parsed.project_visual_backfill && typeof parsed.project_visual_backfill === 'object') {
-                            return JSON.stringify(parsed, null, 2);
-                        }
+                        const coerced = coerceVisualBackfillJson(JSON.parse(candidate));
+                        if (coerced) return coerced;
                     } catch {
                         // ignore invalid object candidate
                     }
@@ -3511,6 +3522,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         return '';
     }, []);
+
+    const assertStage1VisualBackfillJson = useCallback((stage1Text, { logPrefix = '[Stage 1]' } = {}) => {
+        const jsonText = extractProjectVisualBackfillJsonText(stage1Text);
+        if (jsonText) {
+            onLog?.(`${logPrefix} ${t('已检测到全局风格 JSON。', 'Detected global-style JSON.')}`, 'success');
+            return jsonText;
+        }
+        onLog?.(`${logPrefix} ${t('未检测到可解析的全局风格 JSON。', 'No parseable global-style JSON detected.')}`, 'warning');
+        throw new Error('SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING');
+    }, [extractProjectVisualBackfillJsonText, onLog, t]);
 
     const buildStage2UserInputFromStage1 = useCallback((stage1Text, reuseSubjectAssets = []) => {
         // Stage 2.1: inject Stage 1 script with paired 【Beat切换说明】…【Beat切换说明结束】 stripped.
@@ -9832,6 +9853,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 if (liveRaw) {
                     ensureOutputSlot(outputs, 'raw_text', { kind: 'text', title: '第一阶段完整结果' }).content = liveRaw;
+                    const liveVisualBackfill = extractProjectVisualBackfillJsonText(liveRaw);
+                    ensureOutputSlot(outputs, 'project_visual_backfill', { kind: 'json', title: '全局风格' }).content = liveVisualBackfill;
                 }
             } else if (trustLiveDownstreamOnly && persisted.stages?.stage1?.outputs) {
                 const outputs = persisted.stages.stage1.outputs;
@@ -9903,7 +9926,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return { version: 1, stages: {} };
             }
         }
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, subjectIndexText]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, subjectIndexText]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -19762,6 +19785,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             const analysisSections = extractAnalysisSections(analyzedText || '');
+            if (isSplitStage1Prompt(customSystemPrompt)) {
+                assertStage1VisualBackfillJson(analyzedText || '');
+            }
             if (!analysisSections.hasStructuredSubjectIndex) {
                 if (onLog) onLog('Missing asset index after Stage 2 output validation. Skipping auto-import and triggering cleanup retry.', 'warning');
                 throw new Error(SUBJECT_INDEX_PARSE_ERROR);
@@ -20361,6 +20387,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (!String(adaptedScriptText || '').trim()) {
                     throw new Error('第一阶段未提取到“修改后的剧本”正文，请确认返回结果包含第二部分剧本正文后重试。');
                 }
+                assertStage1VisualBackfillJson(analyzedText || '');
 
                 setAdaptationText(adaptedScriptText);
 
@@ -22442,6 +22469,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const adaptedNow = String(extractStage1AdaptedScriptBody(stage1Raw) || stage1Raw).trim();
                 if (adaptedNow) setAdaptationText(adaptedNow);
             }
+            assertStage1VisualBackfillJson(analyzedText || '', { logPrefix: t('[剧本统筹重跑]', '[Script coordination rerun]') });
             if (typeof persistLlmResultContent === 'function') {
                 await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', {
                     source: 'rerun-stage1',

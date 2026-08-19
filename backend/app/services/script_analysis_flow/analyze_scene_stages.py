@@ -227,7 +227,22 @@ def extract_stage1_adapted_script_body(stage1_text: str) -> str:
     return _trim_stage1_adapted_script_body(text)
 
 
-def _patch_episode_stage1_outputs(episode: Episode, *, raw_text: str, adapted_script: str) -> None:
+def _format_project_visual_backfill_json(raw_text: str) -> str:
+    from app.services.subject_index_resolve import extract_project_visual_backfill_object
+
+    obj = extract_project_visual_backfill_object(raw_text)
+    if not obj:
+        return ""
+    return json.dumps({"project_visual_backfill": obj}, ensure_ascii=False, indent=2)
+
+
+def _patch_episode_stage1_outputs(
+    episode: Episode,
+    *,
+    raw_text: str,
+    adapted_script: str,
+    visual_backfill_json: str = "",
+) -> None:
     raw = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
     try:
         obj = json.loads(raw) if raw else {"version": 1, "stages": {}}
@@ -263,6 +278,14 @@ def _patch_episode_stage1_outputs(episode: Episode, *, raw_text: str, adapted_sc
         "title": adapted_slot.get("title") or "优化后剧本",
         "content": str(adapted_script or ""),
     }
+    visual_slot = outputs.get("project_visual_backfill") if isinstance(outputs.get("project_visual_backfill"), dict) else {}
+    outputs["project_visual_backfill"] = {
+        **visual_slot,
+        "key": "project_visual_backfill",
+        "kind": visual_slot.get("kind") or "json",
+        "title": visual_slot.get("title") or "全局风格",
+        "content": str(visual_backfill_json or ""),
+    }
     episode.ai_stage_outputs = json.dumps(obj, ensure_ascii=False, indent=2)
 
 
@@ -274,25 +297,33 @@ def persist_script_optimization_stage(
 ) -> Dict[str, Any]:
     raw_text = str(result_content or "").strip()
     adapted_script = extract_stage1_adapted_script_body(raw_text) or raw_text
+    visual_backfill_json = _format_project_visual_backfill_json(raw_text)
     # Always overwrite prior Stage 1 artifacts so a successful rerun cannot keep a stale copy.
     episode.ai_scene_analysis_adaptation = adapted_script
-    _patch_episode_stage1_outputs(episode, raw_text=raw_text, adapted_script=adapted_script)
+    _patch_episode_stage1_outputs(
+        episode,
+        raw_text=raw_text,
+        adapted_script=adapted_script,
+        visual_backfill_json=visual_backfill_json,
+    )
     db.commit()
     try:
         db.refresh(episode)
     except Exception:
         pass
     logger.info(
-        "[analyze_scene.persist] stage=%s episode_id=%s field=ai_scene_analysis_adaptation chars=%s raw_chars=%s",
+        "[analyze_scene.persist] stage=%s episode_id=%s field=ai_scene_analysis_adaptation chars=%s raw_chars=%s visual_backfill_chars=%s",
         STAGE_SCRIPT_OPTIMIZATION,
         getattr(episode, "id", None),
         len(adapted_script or ""),
         len(result_content or ""),
+        len(visual_backfill_json or ""),
     )
     return {
         "stage_key": STAGE_SCRIPT_OPTIMIZATION,
         "saved_field": "ai_scene_analysis_adaptation",
         "saved_chars_readback": _read_persisted_chars(episode, "ai_scene_analysis_adaptation"),
+        "saved_visual_backfill_chars": len(visual_backfill_json or ""),
     }
 
 
