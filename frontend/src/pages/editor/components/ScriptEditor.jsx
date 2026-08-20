@@ -10538,15 +10538,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         const previousMap = diagnosticsNodeLogStateRef.current || {};
         const nextMap = { ...previousMap };
+        const failedSceneSubskillNodes = (diagnosticsPipelineNodes || []).filter((node) => (
+            String(node?.node_name || '').trim() === 'scene_subskill_scene'
+            && ['failed', 'blocked'].includes(String(node?.status || '').trim().toLowerCase())
+        ));
         (diagnosticsPipelineNodes || []).forEach((node) => {
             const nodeName = String(node?.node_name || '').trim();
-            const label = labelMap[nodeName];
+            const sceneId = String(node?.scene_id || '').trim();
+            const isSceneSubskillNode = nodeName === 'scene_subskill_scene' && Boolean(sceneId);
+            const label = isSceneSubskillNode
+                ? t(`场景 ${sceneId} 逐场优化`, `Scene ${sceneId} refinement`)
+                : labelMap[nodeName];
             if (!label) return;
             const status = String(node?.status || '').trim().toLowerCase();
             const retryCount = Number(node?.retry_count || 0);
             const fingerprint = `${status}|${retryCount}|${String(node?.updated_at || '')}`;
-            const previous = previousMap[nodeName];
-            nextMap[nodeName] = { status, retryCount, fingerprint };
+            const stateKey = [nodeName, sceneId, String(node?.asset_type || '').trim()].filter(Boolean).join(':');
+            const previous = previousMap[stateKey];
+            nextMap[stateKey] = { status, retryCount, fingerprint };
             if (previous?.fingerprint === fingerprint) return;
             // Initial snapshot establishes a baseline; only an active run should announce it.
             if (!previous && !isAnalyzing && !isRetryingPhase2) return;
@@ -10564,7 +10573,37 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } else if (['success', 'warning'].includes(status) && !['success', 'warning'].includes(previous?.status)) {
                 onLog?.(t(`${label}已完成。`, `${label} completed.`), 'success');
             } else if (['failed', 'blocked'].includes(status) && !['failed', 'blocked'].includes(previous?.status)) {
-                onLog?.(t(`${label}未完成，请查看业务提示后重跑。`, `${label} did not complete; review the message and rerun.`), 'error');
+                const rawFailure = String(node?.last_error_message || '').trim();
+                const reason = businessReason || (
+                    rawFailure.includes('COMPLETION_MARKER_MISSING')
+                        ? t('子技能自动重试后仍未完整返回', 'the subskill remained incomplete after automatic retry')
+                        : rawFailure.includes('OUTPUT_PARSE_FAILED')
+                            ? t('返回的场景结构无法解析', 'the returned scene structure could not be parsed')
+                            : rawFailure.includes('OUTPUT_SCENE_MISMATCH')
+                                ? t('返回的场景编号不匹配', 'the returned scene ID did not match')
+                                : ''
+                );
+                if (nodeName === 'scene_subskill_pipeline' && failedSceneSubskillNodes.length > 0) {
+                    const failedIds = failedSceneSubskillNodes
+                        .map((item) => String(item?.scene_id || '').trim())
+                        .filter(Boolean)
+                        .join('、');
+                    onLog?.(
+                        t(
+                            `${label}未完成：${failedIds || failedSceneSubskillNodes.length} 场处理失败，具体原因见逐场日志。`,
+                            `${label} did not complete: ${failedIds || failedSceneSubskillNodes.length} scene(s) failed; see per-scene logs.`
+                        ),
+                        'error'
+                    );
+                } else {
+                    onLog?.(
+                        t(
+                            `${label}未完成${reason ? `：${reason}` : '，请重跑该节点'}。`,
+                            `${label} did not complete${reason ? `: ${reason}` : '; rerun this node'}.`
+                        ),
+                        'error'
+                    );
+                }
             } else if (status === 'queued' && previous && previous.status !== 'queued') {
                 onLog?.(t(`${label}等待上游完成后重新执行。`, `${label} is waiting for its upstream step.`), 'info');
             }

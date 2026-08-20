@@ -274,6 +274,7 @@ async def get_episode_progress_snapshot(
                 "retry_limit": row.retry_limit,
                 "runtime_meta": row.runtime_meta if isinstance(row.runtime_meta, dict) else {},
                 "last_error_code": row.last_error_code,
+                "last_error_message": row.last_error_message,
                 "updated_at": row.updated_at,
             }
             for row in rows

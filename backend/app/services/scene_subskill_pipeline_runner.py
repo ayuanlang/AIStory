@@ -51,6 +51,21 @@ _SUBSKILL_COMPLETION_MARKERS = {
 }
 
 
+def _scene_subskill_failure_reason(exc: Exception) -> str:
+    text = str(exc or "")
+    if "COMPLETION_MARKER_MISSING" in text:
+        return "子技能输出不完整，自动重试后仍缺少结束标签"
+    if "OUTPUT_PARSE_FAILED" in text:
+        return "子技能返回的场景结构无法解析"
+    if "OUTPUT_SCENE_MISMATCH" in text:
+        return "子技能返回了错误的场景编号"
+    if "ROUTING_MISSING" in text:
+        return "场景缺少特殊情景路由信息"
+    if "NO_SCENES" in text:
+        return "未解析到可执行的场景"
+    return "逐场子技能执行失败"
+
+
 def _strip_subskill_completion_marker(text: str, prompt_file: str) -> str:
     marker = _SUBSKILL_COMPLETION_MARKERS[prompt_file]
     source = str(text or "").strip()
@@ -313,7 +328,10 @@ async def run_scene_subskill_pipeline(
                         scene_id=scene_id,
                         status="failed",
                         progress_percent=100.0,
-                        runtime_meta={"business_event": "failed"},
+                        runtime_meta={
+                            "business_event": "failed",
+                            "business_reason": _scene_subskill_failure_reason(exc),
+                        },
                         error_code="SCENE_SUBSKILL_SCENE_FAILED",
                         error_message=str(exc),
                     )
