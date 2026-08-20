@@ -276,9 +276,15 @@ async def execute_scene_analysis_flow_node(
         raw_payload["prompt_file"] = raw_payload.get("prompt_file") or node.get("prompt_file")
         raw_payload["function_name"] = raw_payload.get("function_name") or request.function_name or "script_analysis"
         raw_payload["system_api_id"] = raw_payload.get("system_api_id") or request.system_api_id
+        target_scene_id = str(raw_payload.get("target_scene_id") or "").strip()
+        scoped_action_name = (
+            f"场景编排 · {target_scene_id}"
+            if node_key == "scene_markdown" and target_scene_id
+            else _FLOW_NODE_ACTION_LABELS.get(node_key)
+        )
         raw_payload["action_name"] = (
             str(raw_payload.get("action_name") or "").strip()
-            or _FLOW_NODE_ACTION_LABELS.get(node_key)
+            or scoped_action_name
         )
         if node_key in {"scene_split", "environment_plan"}:
             # Scene split returns the authoritative full script. Environment planning returns

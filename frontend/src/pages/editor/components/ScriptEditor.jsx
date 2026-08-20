@@ -13252,6 +13252,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Full pipeline: skip LLM for scenes already present in workspace.
         // Manual scene-beats rerun must pass false.
         skipExistingScenes = true,
+        maxValidationRetries = MAX_ANALYSIS_FALLBACK_ATTEMPTS,
         onTaskCreated,
     }) => {
         const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
@@ -13261,6 +13262,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             onLog?.(`[${label}] 使用剧本分析 API 选择：system_api_id=${scriptAnalysisApiId}`, 'info');
         }
         let lastError = '';
+        const validationRetryLimit = Math.max(
+            0,
+            Math.min(MAX_ANALYSIS_FALLBACK_ATTEMPTS, Number(maxValidationRetries) || 0)
+        );
 
         const adaptedScriptForSplit = extractAdaptedScriptFromStage2_2UserInputBody(stage2_2UserInputBody || finalStage2_2UserInput);
         if (!String(adaptedScriptForSplit || '').trim()) {
@@ -13686,10 +13691,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ].join('\n\n');
             const singleFinalInput = singleSceneBody;
 
-            for (let fallbackAttempt = 0; fallbackAttempt <= MAX_ANALYSIS_FALLBACK_ATTEMPTS; fallbackAttempt += 1) {
+            for (let fallbackAttempt = 0; fallbackAttempt <= validationRetryLimit; fallbackAttempt += 1) {
                 if (fallbackAttempt > 0) {
                     onLog?.(
-                        `[${sceneLabel}] validation failed, auto retry ${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS}...`,
+                        `[${sceneLabel}] validation failed, auto retry ${fallbackAttempt}/${validationRetryLimit}...`,
                         'warning'
                     );
                 }
@@ -13721,7 +13726,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     `${sceneLabel} did not return a valid Scenes Table.`
                 );
             }
-            throw new Error(lastError || `${sceneLabel} failed after ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} automatic retries.`);
+            throw new Error(lastError || `${sceneLabel} failed after ${validationRetryLimit} automatic retries.`);
         }
 
         if (useBackendSceneOrchestration) {
@@ -13826,10 +13831,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ].join('\n\n');
                     let sceneAttempt = null;
                     let sceneLastError = '';
-                    for (let fallbackAttempt = 0; fallbackAttempt <= MAX_ANALYSIS_FALLBACK_ATTEMPTS; fallbackAttempt += 1) {
+                    for (let fallbackAttempt = 0; fallbackAttempt <= validationRetryLimit; fallbackAttempt += 1) {
                         if (fallbackAttempt > 0) {
                             onLog?.(
-                                `[${sceneLabel}] validation failed, auto retry ${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS}...`,
+                                `[${sceneLabel}] validation failed, auto retry ${fallbackAttempt}/${validationRetryLimit}...`,
                                 'warning'
                             );
                         }
@@ -13943,17 +13948,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .map((unit) => String(unit?.sceneId || '').trim())
                 .filter(Boolean);
             try {
-            for (let fallbackAttempt = 0; fallbackAttempt <= MAX_ANALYSIS_FALLBACK_ATTEMPTS; fallbackAttempt += 1) {
+            for (let fallbackAttempt = 0; fallbackAttempt <= validationRetryLimit; fallbackAttempt += 1) {
                 if (fallbackAttempt > 0) {
                     onLog?.(
-                        `[${label}] validation failed, auto retry ${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS}...`,
+                        `[${label}] validation failed, auto retry ${fallbackAttempt}/${validationRetryLimit}...`,
                         'warning'
                     );
                     setAnalysisFlowStatus({
                         phase: 'scene_beats',
                         message: t(
-                            `场景编排校验失败，正在自动重试 (${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS})...`,
-                            `Scene beats validation failed. Auto-retrying (${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS})...`
+                            `场景编排校验失败，正在自动重试 (${fallbackAttempt}/${validationRetryLimit})...`,
+                            `Scene beats validation failed. Auto-retrying (${fallbackAttempt}/${validationRetryLimit})...`
                         ),
                     });
                 }
@@ -14059,17 +14064,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
         }
 
-        for (let fallbackAttempt = 0; fallbackAttempt <= MAX_ANALYSIS_FALLBACK_ATTEMPTS; fallbackAttempt += 1) {
+        for (let fallbackAttempt = 0; fallbackAttempt <= validationRetryLimit; fallbackAttempt += 1) {
             if (fallbackAttempt > 0) {
                 onLog?.(
-                    `[${label}] validation failed, auto retry ${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS}...`,
+                    `[${label}] validation failed, auto retry ${fallbackAttempt}/${validationRetryLimit}...`,
                     'warning'
                 );
                 setAnalysisFlowStatus({
                     phase: 'scene_beats',
                     message: t(
-                        `场景编排校验失败，正在自动重试 (${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS})...`,
-                        `Scene beats validation failed. Auto-retrying (${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS})...`
+                        `场景编排校验失败，正在自动重试 (${fallbackAttempt}/${validationRetryLimit})...`,
+                        `Scene beats validation failed. Auto-retrying (${fallbackAttempt}/${validationRetryLimit})...`
                     ),
                 });
             }
@@ -14114,7 +14119,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             lastError = attempt.stage2_2Check?.reason || t(`${label} 镜头节拍生成失败：未检测到有效的场景编排表。`, `${label} did not return a valid Scenes Table.`);
         }
 
-        throw new Error(lastError || `${label} failed after ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} automatic retries.`);
+        throw new Error(lastError || `${label} failed after ${validationRetryLimit} automatic retries.`);
     }, [
         activeEpisode?.ai_stage_outputs,
         activeEpisode?.id,
@@ -20950,7 +20955,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const launchedSceneIds = new Set();
                     const sceneTasks = new Map();
                     const scenePatchMaps = [];
-                    const deadlineAt = Date.now() + (30 * 60 * 1000);
+                    const deadlineAt = Date.now() + ANALYSIS_PIPELINE_MAX_MS;
 
                     const launchScene = (sceneId, sceneBlock) => {
                         launchedSceneIds.add(sceneId);
@@ -20959,6 +20964,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             `Scene ${sceneId} finished refinement and is starting orchestration immediately.`
                         ), 'info');
                         const singleSceneStage1 = `[SCENES_BLOCK_START]\n${String(sceneBlock || '').trim()}\n[SCENES_BLOCK_END]`;
+                        const singleTargetSceneUnits = parseSceneUnitsFromScriptMarkers(singleSceneStage1);
                         const stage2_2UserInputBody = buildStage2_2UserInputFromStage1(singleSceneStage1);
                         const task = runStage2_2WithValidationRetry({
                             label: `Stage 2.2 ${sceneId}`,
@@ -20970,6 +20976,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             startedAt: phaseMarks.llmReturnedAt || startedAt,
                             baselineText: baselineAnalysisText,
                             skipExistingScenes: !forceRegenerate,
+                            targetSceneUnits: singleTargetSceneUnits,
+                            // Streaming orchestration is already isolated per scene. Do not
+                            // multiply paid calls here; an invalid result fails only this scene.
+                            maxValidationRetries: 0,
                             onTaskCreated: (taskId) => {
                                 const stableTaskId = String(taskId || '').trim();
                                 setActiveAnalysisTaskId(stableTaskId);
@@ -20977,7 +20987,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 updateEpisodeAnalysisRun(episodeId, { taskId: stableTaskId, phase: 'scene_beats' });
                             },
                         }).then((result) => {
-                            const patchMap = result?.sceneMarkdownPatchMap;
+                            const patchMap = result?.sceneMarkdownPatchMap
+                                || splitSceneMarkdownTableBySceneId(result?.stage2_2Text || '');
                             if (!patchMap || Object.keys(patchMap).length <= 0) {
                                 throw new Error(t(
                                     `场景 ${sceneId} 编排未返回逐场结果。`,
