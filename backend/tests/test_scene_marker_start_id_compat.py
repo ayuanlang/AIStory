@@ -3,6 +3,7 @@ from app.services.script_analysis_flow import (
     build_scene_subskill_task_payloads,
     parse_scene_units_from_markers,
 )
+from app.services.scene_subskill_pipeline_runner import _extract_single_scene_block
 
 
 def test_start_end_id_mismatch_uses_start_scene_id():
@@ -79,3 +80,32 @@ scene body
     assert tasks[0]["call_vfx"] is True
     assert tasks[0]["call_xian"] is False
     assert tasks[0]["special_analysis"].startswith("[SPECIAL_SCENE_ANALYSIS_START:EP01_SC01]")
+
+
+def test_subskill_duplicate_readonly_metadata_is_replaced_by_authoritative_block():
+    authoritative_special = """[SPECIAL_SCENE_ANALYSIS_START:EP01_SC03]
+[VFX] 命中=否｜类型=无｜证据=无
+[XIAN] 命中=否｜类型=无｜证据=无
+[SPECIAL_SCENE_ANALYSIS_END:EP01_SC03]"""
+    duplicated_output = f"""
+[SCENES_BLOCK_START]
+[COMPREHENSIVE_INFO_START]
+first copy
+[COMPREHENSIVE_INFO_END]
+{authoritative_special}
+{authoritative_special}
+[SCENE_START:EP01_SC03]
+optimized scene body
+[SCENE_END:EP01_SC03]
+[SCENES_BLOCK_END]
+"""
+
+    extracted = _extract_single_scene_block(
+        duplicated_output,
+        "EP01_SC03",
+        authoritative_special,
+    )
+
+    assert extracted.count("[SPECIAL_SCENE_ANALYSIS_START:EP01_SC03]") == 1
+    assert "[COMPREHENSIVE_INFO_START]" not in extracted
+    assert "optimized scene body" in extracted

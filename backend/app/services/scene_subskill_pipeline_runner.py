@@ -20,8 +20,10 @@ from app.schemas.user_auth import (
 from app.services.db_session_utils import _release_db_connection, _snapshot_user_principal
 from app.services.scene_markdown_orchestration import _extract_analysis_text_from_result
 from app.services.script_analysis_flow import (
+    COMPREHENSIVE_INFO_PATTERN,
     SCENES_BLOCK_END_TOKEN,
     SCENES_BLOCK_START_TOKEN,
+    SPECIAL_SCENE_ANALYSIS_PATTERN,
     SceneMarkerParseError,
     build_scene_subskill_task_payloads,
     parse_scene_units_from_markers,
@@ -97,8 +99,14 @@ def _wrap_single_scene_input(scene_block: str, comprehensive_info: str, project_
 
 def _extract_single_scene_block(result_text: str, scene_id: str, fallback_special: str) -> str:
     text = str(result_text or "").strip()
+    # SPECIAL_SCENE_ANALYSIS and COMPREHENSIVE_INFO are authoritative upstream
+    # metadata. Subskills occasionally echo or duplicate these read-only blocks;
+    # remove every returned copy before parsing, then reattach the original routing
+    # block exactly once below.
+    sanitized_text = SPECIAL_SCENE_ANALYSIS_PATTERN.sub("", text)
+    sanitized_text = COMPREHENSIVE_INFO_PATTERN.sub("", sanitized_text)
     try:
-        units = parse_scene_units_from_markers(text)
+        units = parse_scene_units_from_markers(sanitized_text)
     except SceneMarkerParseError as exc:
         raise HTTPException(
             status_code=422,
@@ -111,7 +119,7 @@ def _extract_single_scene_block(result_text: str, scene_id: str, fallback_specia
             detail=f"SCENE_SUBSKILL_OUTPUT_SCENE_MISMATCH:{scene_id}",
         )
     unit = matches[0]
-    special = str(unit.special_analysis_text or fallback_special or "").strip()
+    special = str(fallback_special or "").strip()
     return "\n".join(
         part
         for part in (
