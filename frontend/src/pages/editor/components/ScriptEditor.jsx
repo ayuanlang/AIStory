@@ -13069,7 +13069,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const deadline = Date.now() + 60 * 60 * 1000;
         while (!settled && Date.now() < deadline) {
             throwIfAnalysisStopped();
-            await new Promise((resolve) => setTimeout(resolve, ANALYSIS_EPISODE_RECOVERY_PROBE_MS));
+            // Wake immediately when the request settles. The recovery timer is only a
+            // fallback probe interval; it must not add up to 30 seconds between DAG nodes.
+            await Promise.race([
+                analyzePromise,
+                new Promise((resolve) => setTimeout(resolve, ANALYSIS_EPISODE_RECOVERY_PROBE_MS)),
+            ]);
             if (settled) break;
             const recoveredText = await waitForEpisodeAnalysisResultUpdate({
                 baselineText,
@@ -19823,16 +19828,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         try {
-        // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
-        if (activeAnalysisTaskId) {
-            try {
-                const { stopAsyncTask } = await import('../../../services/api');
-                await stopAsyncTask(activeAnalysisTaskId);
-                if (onLog) onLog(`Stopped existing analysis task ${activeAnalysisTaskId} before starting new one.`, 'info');
-            } catch (e) {
-                console.warn('Silent failure trying to stop previous task', e);
-            }
-        }
+        // Do not cancel activeAnalysisTaskId here. The run/claim guards above are the
+        // authority for duplicate prevention; backend cancellation is reserved for the
+        // explicit Stop action. Auto-canceling a stale React task id can terminate the
+        // currently running node during resume/remount races.
 
         const clearedBeforeRun = await ensureStageAnalysisFieldsClearedBeforeRun({
             forceRegenerate,
@@ -20404,16 +20403,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         try {
-        // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
-        if (activeAnalysisTaskId) {
-            try {
-                const { stopAsyncTask } = await import('../../../services/api');
-                await stopAsyncTask(activeAnalysisTaskId);
-                if (onLog) onLog(`Stopped existing advanced analysis task ${activeAnalysisTaskId} before starting new one.`, 'info');
-            } catch (e) {
-                console.warn('Silent failure trying to stop previous task', e);
-            }
-        }
+        // Do not cancel activeAnalysisTaskId here. Duplicate starts are already blocked
+        // by the tracked run/claim guards. Only the explicit Stop action may cancel a
+        // backend analysis task; otherwise resume/remount races can kill a live node.
 
         const clearedBeforeRun = await ensureStageAnalysisFieldsClearedBeforeRun({
             forceRegenerate,
@@ -21491,7 +21483,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             
             analysisError = e;
             analysisCanceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
-            const timedOut = Boolean(e?.isPipelineTimeout) || analysisStopReasonRef.current === 'timeout';
+            const pipelineControl = getEpisodeAnalysisPipelineControl(episodeId);
+            const stopReason = String(
+                analysisStopReasonRef.current || pipelineControl?.stopReason || ''
+            ).trim();
+            const timedOut = Boolean(e?.isPipelineTimeout) || stopReason === 'timeout';
+            const explicitlyStoppedByUser = Boolean(
+                (analysisStopRequestedRef.current || pipelineControl?.stopRequested)
+                && stopReason === 'user'
+            );
             if (!scriptEditorMountedRef.current) {
                 // Remount must observe rejection via the tracked registry promise; do not swallow.
                 throw e;
@@ -21510,7 +21510,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     onLog(
                         timedOut
                             ? 'Advanced analysis stopped by 30-minute pipeline timeout.'
-                            : 'Advanced analysis task canceled by user.',
+                            : (
+                                explicitlyStoppedByUser
+                                    ? 'Advanced analysis task canceled by user.'
+                                    : 'Advanced analysis task was interrupted without a user stop request.'
+                            ),
                         'warning'
                     );
                 }
@@ -21523,12 +21527,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         '剧本分析已超过 30 分钟全流程时限，任务已自动停止。',
                         'Script analysis exceeded the 30-minute pipeline limit and was stopped automatically.'
                     )
-                    : t('分析任务已由用户停止。', 'Analysis task was stopped by user.');
+                    : (
+                        explicitlyStoppedByUser
+                            ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.')
+                            : t(
+                                '分析任务连接意外中断，未检测到人工停止请求。开发环境热更新或网络断开可能导致此情况。',
+                                'The analysis task was interrupted without a user stop request. A development hot reload or network disconnect may cause this.'
+                            )
+                    );
                 setAnalysisFlowStatus({
                     phase: 'warning',
                     message: timedOut
                         ? t('分析任务因超时已停止。', 'Analysis task was stopped due to timeout.')
-                        : t('分析任务已停止。', 'Analysis task was stopped.'),
+                        : (
+                            explicitlyStoppedByUser
+                                ? t('分析任务已停止。', 'Analysis task was stopped.')
+                                : t('分析连接意外中断。', 'Analysis connection was interrupted.')
+                        ),
                 });
                 setAnalysisUiReport({
                     status: 'warning',
