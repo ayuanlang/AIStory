@@ -16,6 +16,8 @@ import traceback
 import uuid
 import json
 import os
+import base64
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional
 
@@ -23,9 +25,14 @@ logger = logging.getLogger(__name__)
 
 # How long (seconds) completed/failed results stay in memory before eviction.
 _RESULT_TTL = max(60, int(os.getenv("ASYNC_TASK_RESULT_TTL_SECONDS", "300") or 300))
-_RUNNING_TASK_MAX_AGE_SECONDS = max(300, int(os.getenv("ASYNC_TASK_MAX_AGE_SECONDS", "1200")))
+_RUNNING_TASK_MAX_AGE_SECONDS = max(300, int(os.getenv("ASYNC_TASK_MAX_AGE_SECONDS", "3600")))
 _RESULT_MAX_BYTES = max(16 * 1024, int(os.getenv("ASYNC_TASK_RESULT_MAX_BYTES", str(256 * 1024)) or (256 * 1024)))
 _RESULT_PREVIEW_MAX_CHARS = max(512, int(os.getenv("ASYNC_TASK_RESULT_PREVIEW_MAX_CHARS", "4096") or 4096))
+_RESULT_COMPRESS_MIN_BYTES = max(
+    16 * 1024,
+    int(os.getenv("ASYNC_TASK_RESULT_COMPRESS_MIN_BYTES", str(64 * 1024)) or (64 * 1024)),
+)
+_COMPRESSED_RESULT_PREFIX = "__zlib_base64__:"
 _ASYNC_ENDPOINT_TASK_TIMEOUT_SECONDS = max(
     60,
     int(os.getenv("ASYNC_ENDPOINT_TASK_TIMEOUT_SECONDS", str(_RUNNING_TASK_MAX_AGE_SECONDS)) or _RUNNING_TASK_MAX_AGE_SECONDS),
@@ -86,9 +93,24 @@ def _ensure_db_table_ready() -> None:
 
 def _serialize_for_db(value: Any) -> Optional[str]:
     try:
-        return json.dumps(value, ensure_ascii=False, default=str)
+        serialized = json.dumps(value, ensure_ascii=False, default=str)
+        raw = serialized.encode("utf-8")
+        if len(raw) >= _RESULT_COMPRESS_MIN_BYTES:
+            compressed = zlib.compress(raw, level=6)
+            if len(compressed) < len(raw):
+                return _COMPRESSED_RESULT_PREFIX + base64.b64encode(compressed).decode("ascii")
+        return serialized
     except Exception:
         return json.dumps(str(value), ensure_ascii=False)
+
+
+def _deserialize_from_db(value: Any) -> Any:
+    raw_value = str(value or "")
+    if raw_value.startswith(_COMPRESSED_RESULT_PREFIX):
+        payload = raw_value[len(_COMPRESSED_RESULT_PREFIX):]
+        decoded = zlib.decompress(base64.b64decode(payload.encode("ascii"))).decode("utf-8")
+        return json.loads(decoded)
+    return json.loads(raw_value)
 
 
 def _estimate_json_bytes(value: Any) -> int:
@@ -192,6 +214,7 @@ def _compact_task_result(value: Any) -> Any:
 
 
 def _save_task_to_db(rec: "_TaskRecord", *, result_override: Any = None) -> None:
+    save_started = time.perf_counter()
     try:
         _ensure_db_table_ready()
         if not _DB_TABLE_READY:
@@ -239,6 +262,16 @@ def _save_task_to_db(rec: "_TaskRecord", *, result_override: Any = None) -> None
             db.close()
     except Exception as exc:
         logger.warning("async task DB save failed task_id=%s: %s", rec.task_id, exc)
+    finally:
+        elapsed_ms = int((time.perf_counter() - save_started) * 1000)
+        if elapsed_ms >= 1000:
+            logger.warning(
+                "async task DB save slow | task_id=%s kind=%s status=%s elapsed_ms=%s",
+                rec.task_id,
+                rec.kind,
+                rec.status,
+                elapsed_ms,
+            )
 
 
 def _load_task_from_db(task_id: str) -> Optional["_TaskRecord"]:
@@ -269,7 +302,7 @@ def _load_task_from_db(task_id: str) -> Optional["_TaskRecord"]:
             raw_result = row["result_json"]
             if raw_result:
                 try:
-                    rec.result = json.loads(raw_result)
+                    rec.result = _deserialize_from_db(raw_result)
                 except Exception:
                     rec.result = raw_result
             rec.error = row["error"]

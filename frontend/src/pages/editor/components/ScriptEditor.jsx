@@ -1012,7 +1012,7 @@ const MAX_ANALYSIS_FALLBACK_ATTEMPTS = 2;
 /** Stage-3 per-category persistence retries after the first LLM+import attempt. */
 const MAX_ASSET_PERSIST_RETRY_ROUNDS = 2;
 /** Full script-analysis pipeline wall-clock budget (user stop / completion can end earlier). */
-const ANALYSIS_PIPELINE_MAX_MS = 30 * 60 * 1000;
+const ANALYSIS_PIPELINE_MAX_MS = 60 * 60 * 1000;
 const ANALYSIS_PIPELINE_RETRY_BASE_DELAY_MS = 2000;
 const ANALYSIS_PIPELINE_RETRY_MAX_DELAY_MS = 8000;
 
@@ -12240,8 +12240,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const text = String(error?.message || error?.response?.data?.detail || '').toLowerCase();
         if (text.includes('cancel') || text.includes('取消')) return true;
         // Only treat the full-pipeline wall-clock stop as a soft cancel (not generic LLM timeouts).
-        return text.includes('30-minute pipeline')
-            || text.includes('30 分钟全流程')
+        return text.includes('60-minute pipeline')
+            || text.includes('60 分钟全流程')
             || text.includes('pipeline limit');
     }, []);
 
@@ -12254,8 +12254,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const createAnalysisPipelineTimeoutError = useCallback(() => {
         const error = new Error(t(
-            '剧本分析已超过 30 分钟全流程时限，任务已自动停止。',
-            'Script analysis exceeded the 30-minute pipeline limit and was stopped automatically.'
+            '剧本分析已超过 60 分钟全流程时限，任务已自动停止。',
+            'Script analysis exceeded the 60-minute pipeline limit and was stopped automatically.'
         ));
         error.isCanceled = true;
         error.isPipelineTimeout = true;
@@ -15635,9 +15635,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             console.error("Stage 3 asset design step failed:", error);
             // Keep pending=true on failure so concurrent/residual kickoffs cannot use stale env JSON.
             if (isTaskCanceledError(error) || analysisStopRequestedRef.current) {
-                onLog?.('Stage 3 asset design stopped by user.', 'warning');
                 environmentAssetDesignPendingRef.current = false;
-                throw createAnalysisCanceledError();
+                const timedOut = Boolean(error?.isPipelineTimeout)
+                    || analysisStopReasonRef.current === 'timeout';
+                if (timedOut) {
+                    onLog?.('Stage 3 asset design stopped by 60-minute pipeline timeout.', 'warning');
+                    throw createAnalysisPipelineTimeoutError();
+                }
+                const episodeId = Number(activeEpisode?.id || latestActiveEpisodeIdRef.current || 0);
+                const control = episodeId ? getEpisodeAnalysisPipelineControl(episodeId) : null;
+                const explicitlyStoppedByUser = Boolean(
+                    (analysisStopRequestedRef.current || control?.stopRequested)
+                    && String(analysisStopReasonRef.current || control?.stopReason || '') === 'user'
+                );
+                if (explicitlyStoppedByUser) {
+                    onLog?.('Stage 3 asset design stopped by user.', 'warning');
+                    throw createAnalysisCanceledError();
+                }
+                onLog?.('Stage 3 asset design was interrupted without a user stop request.', 'warning');
+                throw error;
             }
             onLog?.(`Stage 3 asset design failed: ${error.message}`);
             throw error;
@@ -15663,6 +15679,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         hasSubjectIndexStructure, hasPersistedEnvironmentAssetDesign, markEnvironmentAssetDesignReady,
         failWaitingStoryboardKickoffsForEnvAbort,
         throwIfAnalysisStopped, registerActiveAnalysisTask, isTaskCanceledError, createAnalysisCanceledError,
+        createAnalysisPipelineTimeoutError,
         buildStage2_2UserInputFromStage1, clearAnalysisTaskMarker, finalizeAnalysisFlowHistoryForPhase,
         saveAnalysisTaskMarker, updateEpisodeAnalysisRun, resolveSelectedScriptAnalysisApiId,
     ]);
@@ -19739,8 +19756,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     runtimeMeta: null,
                     warning: timedOut
                         ? t(
-                            '剧本分析已超过 30 分钟全流程时限，任务已自动停止。',
-                            'Script analysis exceeded the 30-minute pipeline limit and was stopped automatically.'
+                            '剧本分析已超过 60 分钟全流程时限，任务已自动停止。',
+                            'Script analysis exceeded the 60-minute pipeline limit and was stopped automatically.'
                         )
                         : t('分析任务已由用户停止。', 'Analysis task was stopped by user.'),
                     error: '',
@@ -19944,8 +19961,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             
             // --- 第一时间保存对应卡片！---
-            const savedByBackend = !!(result?.meta?.saved_to_episode);
-            if (true || !savedByBackend) {
+            const savedByBackend = Boolean(
+                result?.meta?.saved_to_episode
+                || result?.result?.meta?.saved_to_episode
+                || result?.result?.result?.meta?.saved_to_episode
+            );
+            if (!savedByBackend) {
                 phaseMarks.persistStartedAt = Date.now();
                 try {
                     if (onLog) onLog('Persisting raw LLM output immediately after return...', 'process');
@@ -20529,8 +20550,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             
             // --- 第一时间保存对应卡片！---
-            const savedByBackend = !!(result?.meta?.saved_to_episode);
-            if (true || !savedByBackend) {
+            const savedByBackend = Boolean(
+                result?.meta?.saved_to_episode
+                || result?.result?.meta?.saved_to_episode
+                || result?.result?.result?.meta?.saved_to_episode
+            );
+            if (!savedByBackend) {
                 phaseMarks.persistStartedAt = Date.now();
                 try {
                     if (onLog) onLog('Persisting advanced raw LLM output immediately after environment_plan return...', 'process');
@@ -21509,7 +21534,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (onLog) {
                     onLog(
                         timedOut
-                            ? 'Advanced analysis stopped by 30-minute pipeline timeout.'
+                            ? 'Advanced analysis stopped by 60-minute pipeline timeout.'
                             : (
                                 explicitlyStoppedByUser
                                     ? 'Advanced analysis task canceled by user.'
@@ -21524,8 +21549,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (analysisCanceled) {
                 const stopWarning = timedOut
                     ? t(
-                        '剧本分析已超过 30 分钟全流程时限，任务已自动停止。',
-                        'Script analysis exceeded the 30-minute pipeline limit and was stopped automatically.'
+                        '剧本分析已超过 60 分钟全流程时限，任务已自动停止。',
+                        'Script analysis exceeded the 60-minute pipeline limit and was stopped automatically.'
                     )
                     : (
                         explicitlyStoppedByUser

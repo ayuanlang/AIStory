@@ -35,12 +35,12 @@ export function getEpisodeAnalysisPipelineControl(episodeId) {
 
 export function armEpisodeAnalysisPipelineControl(episodeId, {
     startedAt = Date.now(),
-    maxMs = 30 * 60 * 1000,
+    maxMs = 60 * 60 * 1000,
 } = {}) {
     const id = toEpisodeId(episodeId);
     if (!id) return null;
     const start = Number(startedAt || Date.now());
-    const budget = Math.max(60 * 1000, Number(maxMs || 0) || (30 * 60 * 1000));
+    const budget = Math.max(60 * 1000, Number(maxMs || 0) || (60 * 60 * 1000));
     const next = {
         stopRequested: false,
         stopReason: '',
