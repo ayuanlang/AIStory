@@ -31,7 +31,7 @@ from app.core.logging import (
     flush_request_traffic_stats,
     log_request_traffic_startup,
 )
-from app.db.init_db import check_and_migrate_tables, create_default_superuser, init_initial_data
+from app.db.init_db import create_default_superuser, init_initial_data
 from app.api.deps import warm_user_auth_cache_from_db
 from app.services.system_api_runtime_cache import warm_system_api_cache
 from fastapi import Request
@@ -165,8 +165,6 @@ _PROCESS_STARTED_UNIX_TS = time.time()
 def _run_critical_db_bootstrap_steps() -> None:
     logger.info("DB bootstrap: create_all start")
     Base.metadata.create_all(bind=engine)
-    logger.info("DB bootstrap: critical schema migration start")
-    check_and_migrate_tables(critical_only=True)
     readiness_issue = _get_minimum_schema_readiness_issue()
     if readiness_issue:
         raise RuntimeError(f"Critical DB schema bootstrap finished but readiness probe still failed: {readiness_issue}")
@@ -198,6 +196,30 @@ def _get_minimum_schema_readiness_issue() -> str | None:
             share_cols = {col["name"] for col in inspector.get_columns("project_shares")}
             if "role" not in share_cols or "permissions" not in share_cols:
                 return "project_shares.role or project_shares.permissions missing"
+
+        if not inspector.has_table("llm_call_logs"):
+            return "llm_call_logs table missing"
+        llm_log_cols = {col["name"] for col in inspector.get_columns("llm_call_logs")}
+        required_llm_log_cols = {
+            "user_id",
+            "user_name",
+            "project_id",
+            "action",
+            "tag",
+            "provider",
+            "model",
+            "api_url",
+            "payload_json",
+            "response_json",
+            "error_msg",
+            "latency_ms",
+            "charged_amount",
+            "request_id",
+            "timestamp",
+        }
+        missing_llm_log_cols = sorted(required_llm_log_cols - llm_log_cols)
+        if missing_llm_log_cols:
+            return f"llm_call_logs columns missing: {','.join(missing_llm_log_cols)}"
 
         required_review_tables = (
             "project_asset_review_threads",
@@ -343,16 +365,25 @@ def _release_postgres_bootstrap_lock(conn) -> None:
 
 
 def _bootstrap_db_schema() -> tuple[bool, bool]:
-    """Run blocking schema/bootstrap work before serving requests."""
+    """Create missing tables and the default superuser before serving requests.
+
+    Historical column/data migrations are no longer run on deploy; production
+    schema is already aligned. New model tables still come from create_all.
+    """
     if _is_minimum_schema_ready():
-        logger.info("DB bootstrap: minimum schema already ready; skipping critical steps")
-        return True, False
+        logger.info("DB bootstrap: minimum schema already ready; ensuring missing tables")
+        try:
+            Base.metadata.create_all(bind=engine)
+            create_default_superuser()
+        except Exception as exc:
+            logger.warning("DB bootstrap: create_all/superuser on ready schema failed: %s", exc)
+        return True, True
 
     is_postgres = engine.dialect.name == "postgresql"
     if is_postgres and not _is_bootstrap_run_candidate():
         if _wait_until_schema_ready("follower worker"):
-            logger.info("DB bootstrap: follower observed ready schema; skipping critical steps")
-            return True, False
+            logger.info("DB bootstrap: follower observed ready schema; skipping create_all")
+            return True, True
         logger.warning(
             "DB bootstrap: follower wait timed out; contending for advisory lock as fallback"
         )
@@ -363,7 +394,7 @@ def _bootstrap_db_schema() -> tuple[bool, bool]:
             if is_postgres:
                 mode, bootstrap_lock_conn = _wait_for_postgres_bootstrap_slot()
                 if mode == "ready":
-                    return True, False
+                    return True, True
                 if mode == "timeout":
                     raise TimeoutError(
                         f"timed out waiting {_DB_BOOT_LOCK_WAIT_TIMEOUT}s for DB bootstrap advisory lock"
@@ -388,14 +419,7 @@ def _bootstrap_db_schema() -> tuple[bool, bool]:
 
 
 def _bootstrap_db_post_init() -> None:
-    """Run non-critical seed/cache work after schema is ready."""
-    try:
-        logger.info("Post-init bootstrap: full schema migration start")
-        check_and_migrate_tables()
-        logger.info("Post-init bootstrap: full schema migration complete")
-    except Exception as exc:
-        logger.warning("Post-init full schema migration failed: %s", exc)
-
+    """Run non-critical seed/cache work after tables exist."""
     try:
         init_initial_data()
     except Exception as exc:

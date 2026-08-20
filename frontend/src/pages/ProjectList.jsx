@@ -50,7 +50,6 @@ import {
     LogOut, 
     Search,
     User,
-    Cpu,
     MessageSquare,
     Save,
     RotateCcw,

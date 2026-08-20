@@ -1,5 +1,5 @@
 ---
-description: Script analysis flow - parallel fan-out after asset index
+description: Script analysis flow - Stage 1 subskills and per-scene parallel fan-out
 globs: frontend/src/pages/editor/components/ScriptEditor.jsx,backend/app/services/script_analysis_flow/**,backend/app/api/endpoints.py
 alwaysApply: false
 ---
@@ -12,22 +12,31 @@ alwaysApply: false
 
 ## Core topology
 
-`assets_extraction` 完成并持久化 Subject Index 后，同时启动：
+Stage 1 先全局串行执行：
 
-1. `scene_markdown`
-2. `asset_design_character`
-3. `asset_design_prop`
-4. `asset_design_environment`
+1. `scene_split`
+2. `environment_plan`：LLM 只返回按 `scene_id` 包裹的逐场环境补丁；后端程序将补丁拼入 `scene_split` 对应 Scene，禁止模型重写/透传整份分场结果。
 
-两条主分支并行；三个资产类别也并行（`Promise.allSettled`）。不得先等待 `scene_markdown` 完成再启动资产设计。
+`environment_plan` 完成后立即并行启动：
+
+1. `assets_extraction`
+2. `scene_subskill_pipeline`：程序切分 `COMPREHENSIVE_INFO`、特殊路由和 Scene；Scene 之间并发，单 Scene 内依次执行 drama → VFX? → XIAN? → staging。
+
+Subject Index 与逐场子技能都完成后运行 `scene_markdown`；资产三类别并行。Scene 导入且关联 ENV 资产就绪后启动分镜。
 
 ```text
-script_optimization
-  → assets_extraction + persist Subject Index
-    ├─ scene_markdown → per-scene workspace import
-    └─ asset_design_character
+scene_split → environment_plan
+  ├─ assets_extraction + persist Subject Index
+  │  └─ asset_design_character
        asset_design_prop
        asset_design_environment
+  └─ scene_subskill_pipeline
+       ├─ SC01: drama → VFX? → XIAN? → staging
+       ├─ SC02: drama → VFX? → XIAN? → staging
+       └─ ...
+
+assets_extraction + scene_subskill_pipeline
+  → scene_markdown → per-scene workspace import
 
 per-scene import + linked ENV visual assets ready
   → storyboard_generation for that scene
@@ -39,19 +48,23 @@ Storyboard 只等待当前 Scene 的 `scene_markdown` 与 `asset_design_environm
 
 文件：`backend/app/services/script_analysis_flow/registry.py`
 
-- `assets_extraction.fan_out`：`scene_markdown`、`asset_design_character`、`asset_design_prop`、`asset_design_environment`
+- `environment_plan.fan_out`：`assets_extraction`、`scene_subskill_pipeline`
+- `environment_plan.fan_out_mode`：`parallel_after_complete`
+- `assets_extraction.fan_out`：`asset_design_character`、`asset_design_prop`、`asset_design_environment`
 - `assets_extraction.fan_out_mode`：`parallel_after_complete`
+- `scene_markdown.depends_on`：`scene_subskill_pipeline`、`assets_extraction`
 - `storyboard_generation.depends_on`：`scene_markdown`、`asset_design_environment`
 - `stage3_auto_start`：分别控制三类资产和 storyboard 自动启动
 
 ## Frontend and backend
 
-- `executeAdvancedAnalysis`：2.1 后并行 scene 与 asset branches。
+- `executeAdvancedAnalysis`：scene_split → environment_plan 环境补丁按 Scene 程序回填；随后资产提取与逐场子技能并行；两者完成后场景编排。
+- 进度诊断拓扑：分场 → 环境逐场回填 →（资产清单 ∥ 逐场优化）→（场景编排 ∥ 资产设计）→ 分镜。
 - `runPostImportSceneSubjectPipeline`：三类资产并发；ENV 成功后 flush storyboard queue。
 - `handleRestartStage2`：与主路径保持同样并发。
 - `tryResumeAnalysisFromExistingArtifacts`：缺 scenes 时 scene+assets 并行；仅 subjects JSON 不完整时只补 assets。
 - Scene 导入成功：queue/kick `kickoffStoryboardForImportedScene`，并更新 `storyboardTaskProgress`。
-- `run_scene_analysis_flow_node`：只运行单节点，不在后端自动 fan-out。
+- `run_scene_analysis_flow_node`：单节点执行；`scene_subskill_pipeline` 节点内部负责按场并发及场内串行。
 - `scene_markdown`：`_run_scene_markdown_node_per_scene`，允许逐 Scene 并行编排和导入。
 - API：`POST /prompts/scene-analysis/flow/run-node`。
 
@@ -65,7 +78,7 @@ Storyboard 只等待当前 Scene 的 `scene_markdown` 与 `asset_design_environm
 6. character/prop 完成不得打开 ENV gate；流水线末尾只 residual-kick 尚未启动且 ENV gate 已开的 Scene。
 7. Storyboard 注入 `# Scene Subject Image Prompts (CN)` 仅含当前 Scene 关联 ENV 的 `generation_prompt_cn`；Subject Index 可继续列 CHAR/PROP/ENV 供命名。
 8. 手动 force storyboard 仍须验证关联 ENV 已在实体库且 `generation_prompt_cn` 非空。
-9. Scene marker parser 与 Stage 1/2.1/2.2 同步：仅接受成对 `[SCENE_START:EPxx_SCyy]` / `[SCENE_END:EPxx_SCyy]`；无裸 marker；START/END 不同以 START 为 Scene ID。
+9. Scene marker parser 与 Stage 1/2.1/2.2 同步：接受成对 `[SCENE_START:EPxx_SCyy]` / `[SCENE_END:EPxx_SCyy]`；解析 Scene 前同 ID 的 `SPECIAL_SCENE_ANALYSIS`，并把唯一 `COMPREHENSIVE_INFO` 作为所有场景任务的只读全局上下文。
 10. 注入 Stage 2.1/2.2 前只剥离成对 `────【Beat切换说明】────`…`────【Beat切换说明结束】────`；禁止无结束标记的贪婪剥离。
 
 ## Prompt interface invariants
@@ -79,7 +92,8 @@ Storyboard 只等待当前 Scene 的 `scene_markdown` 与 `asset_design_environm
 
 ## Canonical prompt map
 
-- Stage 1 成稿/ENV/建置/投影：`scene_planning_1_script_optimization.md`
+- Stage 1 只读基线：`scene_planning_1_script_optimization.md`
+- Stage 1 子技能链：`scene_planning_1_subskill_cut_transition.md` → `scene_planning_1_subskill_environment.md` → per-scene `drama_standardization` → `vfx?` → `xian_attack?` → `staging_env`
 - Stage 2.1 Subject Index/XOR/衍生字段：`scene_planning_2_1_assets_extraction.md`
 - Stage 2.2 Beat 落表：`scene_planning_2_2_beats_generation.md`
 - Stage 3 共通：`entity_design_common.md`

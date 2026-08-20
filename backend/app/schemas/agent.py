@@ -38,6 +38,8 @@ class AnalyzeSceneRequest(BaseModel):
     include_negative_prompt: Optional[bool] = True
     function_name: Optional[str] = None
     system_api_id: Optional[int] = None
+    # Explicit user-facing label for llm_call_logs (flow node/subskill name).
+    action_name: Optional[str] = None
     analysis_trace_id: Optional[str] = None
     skip_episode_persist: Optional[bool] = False
     # Client-provided Subject Index for downstream gates when episode field is empty/contaminated.

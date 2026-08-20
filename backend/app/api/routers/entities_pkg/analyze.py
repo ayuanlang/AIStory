@@ -208,7 +208,7 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
             "- description_cn 必须为 \"\"；generation_prompt_cn 必须非空。默认 dependency_strategy.type=BaselineDefinition 且 visual_dependencies=[]。若 CURRENT/Index 为楼层切分后的风格依赖主环境：type=StyleReference，visual_dependencies=[\"ENV:[风格父主环境名]\"]（仅另一块主环境，禁挂角度衍生）；generation_prompt_cn 仍须独立写满四向，只对齐材质/年代/色系/工艺，禁抄父环境家具与拓扑。\n"
             "- 若图片本身已是四宫格，后景/中景回写进【四面内容基准】，左右缘写入【四向拼图】；若图片是单视角，仍须输出完整折中两段式（其余向据空间一致性合理补齐，logic 标明推断向）。\n"
             "- 构图与纵深是方法，必须在过程中体现：全局写构图倾向+纵深光层/色层；每一向后景/中景写本向三分或压迫落点与近中远受光；四宫格每格用左右缘完成围合纵深。禁止省略。\n"
-            "- 严禁跳过【四面内容基准】；严禁指望模型自行旋转邻面生成左右缘；严禁把构图/纵深收成一篇单镜头 16:9 空镜来顶替 2×2；严禁改成角色/道具白底四视图。"
+            "- 严禁跳过【四面内容基准】；严禁指望模型自行旋转邻面生成左右缘；严禁把构图/纵深收成一篇单镜头 16:9 空镜来顶替 2×2；严禁改成角色/道具浅灰底四视图。"
         )
     return (
         common

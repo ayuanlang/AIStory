@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Dict
 
@@ -20,10 +21,13 @@ from app.services.scene_markdown_orchestration import (
     _extract_analysis_text_from_result,
 )
 from app.services.scene_markdown_runner import _run_scene_markdown_node_per_scene
+from app.services.scene_subskill_pipeline_runner import run_scene_subskill_pipeline
 from app.services.script_analysis_flow import (
     STAGE_SCENE_MARKDOWN,
     get_script_analysis_flow_registry,
     import_analyze_scene_stage_result,
+    parse_scene_units_from_markers,
+    persist_script_optimization_stage,
     upsert_pipeline_node_status,
 )
 from app.services.script_analysis_llm_config import (
@@ -38,6 +42,187 @@ from app.services.subject_index_resolve import (
 )
 
 logger = logging.getLogger("api_logger")
+
+_FLOW_NODE_ACTION_LABELS = {
+    "script_optimization": "剧本优化（旧版）",
+    "scene_split": "场景拆分",
+    "environment_plan": "环境规划",
+    "assets_extraction": "资产清单提取",
+    "scene_markdown": "场景编排",
+    "asset_design_character": "角色资产设计",
+    "asset_design_prop": "道具资产设计",
+    "asset_design_environment": "环境资产设计",
+}
+_FLOW_DOWNSTREAM_NODES = {
+    "scene_split": [
+        "environment_plan",
+        "scene_subskill_pipeline",
+        "assets_extraction",
+        "scene_markdown",
+        "asset_design_character",
+        "asset_design_prop",
+        "asset_design_environment",
+        "storyboard_generation",
+    ],
+    "environment_plan": [
+        "scene_subskill_pipeline",
+        "assets_extraction",
+        "scene_markdown",
+        "asset_design_character",
+        "asset_design_prop",
+        "asset_design_environment",
+        "storyboard_generation",
+    ],
+    "scene_subskill_pipeline": ["scene_markdown", "storyboard_generation"],
+}
+
+_ENV_SCENE_PATCH_PATTERN = re.compile(
+    r"`?\[ENV_SCENE_PATCH_START:([^\s\]]+)\]`?"
+    r"(.*?)"
+    r"`?\[ENV_SCENE_PATCH_END:([^\s\]]+)\]`?",
+    re.IGNORECASE | re.DOTALL,
+)
+_ENVIRONMENT_COMPLETION_MARKER = "[ENVIRONMENT_PLAN_OUTPUT_END]"
+_ENV_BLOCK_WITH_COVERAGE_PATTERN = re.compile(
+    r"\s*`?\[ENV_BLOCK_START(?:\:[^\]]+)?\]`?.*?"
+    r"`?\[ENV_BLOCK_END(?:\:[^\]]+)?\]`?"
+    r"(?:\s*【Beat→衍生ENV剧情覆盖矩阵】.*?【ENV覆盖综合】[^\r\n]*)?",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _extract_environment_patches(environment_output: str) -> Dict[str, str]:
+    """Return scene-id keyed environment-only payloads from patch or legacy full output."""
+    source = str(environment_output or "").strip()
+    patches: Dict[str, str] = {}
+    for match in _ENV_SCENE_PATCH_PATTERN.finditer(source):
+        start_id = str(match.group(1) or "").strip()
+        end_id = str(match.group(3) or "").strip()
+        if not start_id or start_id.lower() != end_id.lower():
+            raise HTTPException(status_code=422, detail=f"ENV_SCENE_PATCH_ID_MISMATCH:{start_id}:{end_id}")
+        if start_id in patches:
+            raise HTTPException(status_code=422, detail=f"ENV_SCENE_PATCH_DUPLICATE:{start_id}")
+        body = str(match.group(2) or "").strip()
+        if not body or "[ENV_BLOCK_START" not in body.upper() or "[ENV_BLOCK_END" not in body.upper():
+            raise HTTPException(status_code=422, detail=f"ENV_SCENE_PATCH_BLOCK_MISSING:{start_id}")
+        patches[start_id] = body
+    if patches:
+        return patches
+
+    # Compatibility: extract only ENV material if an older prompt returns full scenes.
+    try:
+        units = parse_scene_units_from_markers(source)
+    except Exception:
+        units = []
+    for unit in units:
+        block_match = _ENV_BLOCK_WITH_COVERAGE_PATTERN.search(str(unit.scene_text or ""))
+        if block_match:
+            patches[str(unit.scene_id)] = str(block_match.group(0) or "").strip()
+    return patches
+
+
+def _strip_required_completion_marker(text: str, marker: str) -> str:
+    source = str(text or "").strip()
+    if not source or source.count(marker) != 1:
+        return ""
+    lines = source.splitlines()
+    if not lines or lines[-1].strip() != marker:
+        return ""
+    return source[: source.rfind(marker)].rstrip()
+
+
+def _merge_environment_patches(scene_split_text: str, environment_output: str) -> str:
+    """Programmatically insert each environment patch into its authoritative split Scene."""
+    source = str(scene_split_text or "").strip()
+    units = parse_scene_units_from_markers(source)
+    expected_ids = [str(unit.scene_id) for unit in units]
+    patches = _extract_environment_patches(environment_output)
+    patch_by_lower = {scene_id.lower(): body for scene_id, body in patches.items()}
+    missing = [scene_id for scene_id in expected_ids if scene_id.lower() not in patch_by_lower]
+    extras = [scene_id for scene_id in patches if scene_id.lower() not in {item.lower() for item in expected_ids}]
+    if missing or extras:
+        raise HTTPException(
+            status_code=422,
+            detail=f"ENV_SCENE_PATCH_COVERAGE_MISMATCH:missing={','.join(missing) or '-'};extra={','.join(extras) or '-'}",
+        )
+
+    merged = source
+    for scene_id in expected_ids:
+        scene_pattern = re.compile(
+            rf"(`?\[SCENE_START:{re.escape(scene_id)}\]`?)(.*?)(`?\[SCENE_END:[^\s\]]+\]`?)",
+            re.IGNORECASE | re.DOTALL,
+        )
+        scene_match = scene_pattern.search(merged)
+        if not scene_match:
+            raise HTTPException(status_code=422, detail=f"ENV_SCENE_TARGET_MISSING:{scene_id}")
+        scene_body = str(scene_match.group(2) or "")
+        scene_body = _ENV_BLOCK_WITH_COVERAGE_PATTERN.sub("", scene_body, count=1)
+        content_marker = re.search(
+            rf"`?\[SCENE_CONTENT_START:{re.escape(scene_id)}\]`?",
+            scene_body,
+            flags=re.IGNORECASE,
+        )
+        if not content_marker:
+            raise HTTPException(status_code=422, detail=f"ENV_SCENE_CONTENT_MARKER_MISSING:{scene_id}")
+        patch = patch_by_lower[scene_id.lower()].strip()
+        scene_body = (
+            f"{scene_body[:content_marker.start()].rstrip()}\n"
+            f"{patch}\n"
+            f"{scene_body[content_marker.start():].lstrip()}"
+        )
+        merged = f"{merged[:scene_match.start()]}{scene_match.group(1)}{scene_body}{scene_match.group(3)}{merged[scene_match.end():]}"
+    return merged.strip()
+
+
+_FALSE_EPISODE_PERSIST_WARNING = (
+    "No episode_id was provided; raw LLM output was returned but not persisted to episode fields."
+)
+_FALSE_EPISODE_PERSIST_CODE = "ANALYSIS_EPISODE_ID_MISSING_NOT_PERSISTED"
+
+
+def _mark_analysis_result_persisted(result: Any, episode_id: int) -> Any:
+    """Flow nodes often skip analyze_scene persist, then write episode fields themselves."""
+    if not isinstance(result, dict):
+        return result
+    updated = dict(result)
+    meta = dict(updated.get("meta") or {})
+    meta["saved_to_episode"] = True
+    meta["saved_episode_id"] = int(episode_id)
+    meta["request_episode_id"] = meta.get("request_episode_id") or int(episode_id)
+    updated["meta"] = meta
+    warnings = [
+        item
+        for item in list(updated.get("warnings") or [])
+        if _FALSE_EPISODE_PERSIST_WARNING not in str(item)
+    ]
+    codes = [
+        item
+        for item in list(updated.get("warning_codes") or [])
+        if str(item) != _FALSE_EPISODE_PERSIST_CODE
+    ]
+    if "warnings" in updated or warnings:
+        updated["warnings"] = warnings
+    if "warning_codes" in updated or codes:
+        updated["warning_codes"] = codes
+    return updated
+
+
+def _replace_analysis_result_text(result: Any, merged_text: str) -> Any:
+    if isinstance(result, str):
+        return merged_text
+    if not isinstance(result, dict):
+        return {"content": merged_text, "adapted_script": merged_text}
+    updated = dict(result)
+    for key in ("result", "content", "adapted_script"):
+        if key in updated or key in {"content", "adapted_script"}:
+            updated[key] = merged_text
+    if isinstance(updated.get("data"), dict):
+        data = dict(updated["data"])
+        for key in ("result", "content", "adapted_script"):
+            if key in data:
+                data[key] = merged_text
+        updated["data"] = data
+    return updated
 
 
 def _coerce_system_api_id(value: Any) -> int:
@@ -75,6 +260,9 @@ async def execute_scene_analysis_flow_node(
 
     analyze_node_keys = {
         "script_optimization",
+        "scene_split",
+        "environment_plan",
+        "scene_subskill_pipeline",
         "assets_extraction",
         "scene_markdown",
         "asset_design_character",
@@ -88,6 +276,15 @@ async def execute_scene_analysis_flow_node(
         raw_payload["prompt_file"] = raw_payload.get("prompt_file") or node.get("prompt_file")
         raw_payload["function_name"] = raw_payload.get("function_name") or request.function_name or "script_analysis"
         raw_payload["system_api_id"] = raw_payload.get("system_api_id") or request.system_api_id
+        raw_payload["action_name"] = (
+            str(raw_payload.get("action_name") or "").strip()
+            or _FLOW_NODE_ACTION_LABELS.get(node_key)
+        )
+        if node_key in {"scene_split", "environment_plan"}:
+            # Scene split returns the authoritative full script. Environment planning returns
+            # per-scene patches that this runner merges back into that script.
+            raw_payload["scene_analysis_mode"] = "stage1"
+            raw_payload["skip_episode_persist"] = node_key == "environment_plan"
         
         logger.info(
             "[剧本分析流程] 准备执行节点 %s | prompt=%s | function=%s | system_api_id=%s | project_id=%s | episode_id=%s",
@@ -103,6 +300,7 @@ async def execute_scene_analysis_flow_node(
             raw_payload["project_id"] = request.project_id
         if request.episode_id and not raw_payload.get("episode_id"):
             raw_payload["episode_id"] = request.episode_id
+        episode = None
         if raw_payload.get("episode_id"):
             episode = (
                 db.query(Episode)
@@ -166,7 +364,19 @@ async def execute_scene_analysis_flow_node(
                 node_name=node_key,
                 status="running",
                 progress_percent=5.0,
+                retry_count=0,
+                runtime_meta={"business_event": "started"},
             )
+            for downstream_node in _FLOW_DOWNSTREAM_NODES.get(node_key, []):
+                upsert_pipeline_node_status(
+                    db,
+                    project_id=node_project_id,
+                    episode_id=node_episode_id,
+                    script_id=f"episode:{node_episode_id}",
+                    node_name=downstream_node,
+                    status="queued",
+                    progress_percent=0.0,
+                )
             db.commit()
 
         llm_started_perf = time.perf_counter()
@@ -211,6 +421,8 @@ async def execute_scene_analysis_flow_node(
                         node_name=node_key,
                         status="running",
                         progress_percent=15.0,
+                        retry_count=attempt,
+                        runtime_meta={"business_event": "retry", "business_reason": "资产清单缺少封面项"},
                         error_code="ASSETS_EXTRACTION_COVER_POSTER_MISSING",
                         error_message="cover_poster/poster missing, auto-retrying once",
                     )
@@ -228,7 +440,7 @@ async def execute_scene_analysis_flow_node(
                         error_message="cover_poster/poster missing after retries; continued as non-blocking warning",
                     )
                     db.commit()
-            elif node_key == "script_optimization":
+            elif node_key in {"script_optimization", "scene_split"}:
                 # Visual backfill JSON is a completeness gate, not a standalone artifact.
                 # Incomplete output => full Stage 1 rerun (same API x2, then one switched API).
                 original_api_id = _coerce_system_api_id(raw_payload.get("system_api_id"))
@@ -307,6 +519,8 @@ async def execute_scene_analysis_flow_node(
                         node_name=node_key,
                         status="running",
                         progress_percent=15.0,
+                        retry_count=attempt,
+                        runtime_meta={"business_event": "retry", "business_reason": "场景拆分结果不完整"},
                         error_code="SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING",
                         error_message=(
                             "incomplete Stage 1 output, switching API and rerunning"
@@ -315,6 +529,82 @@ async def execute_scene_analysis_flow_node(
                         ),
                     )
                     db.commit()
+            elif node_key == "environment_plan":
+                scene_split_text = str(raw_payload.get("text") or "").strip()
+                patch_result = None
+                patch_text = ""
+                for attempt in range(1, 3):
+                    patch_result = await analyze_scene(
+                        AnalyzeSceneRequest(**raw_payload),
+                        current_user=current_user,
+                        db=db,
+                        async_mode="0",
+                    )
+                    raw_patch_text = _extract_analysis_text_from_result(patch_result)
+                    patch_text = _strip_required_completion_marker(
+                        raw_patch_text,
+                        _ENVIRONMENT_COMPLETION_MARKER,
+                    )
+                    if patch_text:
+                        break
+                    logger.warning(
+                        "[剧本分析流程] 环境规划输出缺少结束标签，整段重试 | attempt=%s/2 expected_marker=%s",
+                        attempt,
+                        _ENVIRONMENT_COMPLETION_MARKER,
+                    )
+                    if node_project_id > 0 and node_episode_id > 0 and attempt < 2:
+                        upsert_pipeline_node_status(
+                            db,
+                            project_id=node_project_id,
+                            episode_id=node_episode_id,
+                            script_id=f"episode:{node_episode_id}",
+                            node_name=node_key,
+                            status="running",
+                            progress_percent=15.0,
+                            retry_count=attempt,
+                            runtime_meta={"business_event": "retry", "business_reason": "环境规划返回不完整"},
+                            error_code="ENVIRONMENT_PLAN_COMPLETION_MARKER_MISSING",
+                            error_message="completion marker missing; retrying environment plan",
+                        )
+                        db.commit()
+                if not patch_text:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"ENVIRONMENT_PLAN_COMPLETION_MARKER_MISSING:{_ENVIRONMENT_COMPLETION_MARKER}",
+                    )
+                merged_text = _merge_environment_patches(scene_split_text, patch_text)
+                result = _replace_analysis_result_text(patch_result, merged_text)
+                # analyze_scene may release/expire ORM instances while the long LLM call
+                # is running. Re-query the Episode before Stage-1 persistence so deferred
+                # attributes such as ai_stage_outputs remain session-bound.
+                persist_episode = None
+                if node_episode_id > 0:
+                    persist_episode = (
+                        db.query(Episode)
+                        .filter(
+                            Episode.id == int(node_episode_id),
+                            _active_episode_clause(),
+                        )
+                        .populate_existing()
+                        .first()
+                    )
+                if persist_episode is not None:
+                    persist_script_optimization_stage(
+                        db=db,
+                        episode=persist_episode,
+                        result_content=merged_text,
+                        node_output_key="environment_plan",
+                    )
+                    result = _mark_analysis_result_persisted(result, int(node_episode_id))
+            elif node_key == "scene_subskill_pipeline":
+                result = await run_scene_subskill_pipeline(
+                    raw_payload=raw_payload,
+                    current_user=current_user,
+                    db=db,
+                    node_episode_id=node_episode_id,
+                )
+                if node_episode_id > 0:
+                    result = _mark_analysis_result_persisted(result, int(node_episode_id))
             elif node_key == "scene_markdown":
                 result = await _run_scene_markdown_node_per_scene(
                     raw_payload=raw_payload,
@@ -353,6 +643,23 @@ async def execute_scene_analysis_flow_node(
             raise
         llm_elapsed_ms = int((time.perf_counter() - llm_started_perf) * 1000)
         logger.info("[剧本分析流程] 节点 %s 执行完成 | llm_elapsed_ms=%s", node_key, llm_elapsed_ms)
+
+        if node_key == "scene_split" and node_episode_id > 0:
+            scene_split_episode = (
+                db.query(Episode)
+                .filter(Episode.id == int(node_episode_id), _active_episode_clause())
+                .populate_existing()
+                .first()
+            )
+            scene_split_text = _extract_analysis_text_from_result(result)
+            if scene_split_episode is not None and scene_split_text.strip():
+                persist_script_optimization_stage(
+                    db=db,
+                    episode=scene_split_episode,
+                    result_content=scene_split_text,
+                    node_output_key="scene_split",
+                )
+                result = _mark_analysis_result_persisted(result, int(node_episode_id))
 
         if node_project_id > 0 and node_episode_id > 0:
             if node_key != "scene_markdown":

@@ -15,7 +15,7 @@ PROMPT_TEMPLATE_SYNTAX_RULES = {
 			"Side",
 			"Back",
 			"full-body",
-			"Background: white",
+			"Background: light gray",
 		],
 		"cn_required": [
 			"四视图",
@@ -25,7 +25,7 @@ PROMPT_TEMPLATE_SYNTAX_RULES = {
 			"反面",
 			"全身",
 			"背景",
-			"纯白",
+			"浅灰",
 		],
 	},
 	"props": {
@@ -38,7 +38,7 @@ PROMPT_TEMPLATE_SYNTAX_RULES = {
 			"Front",
 			"Side",
 			"Back",
-			"Background: white",
+			"Background: light gray",
 			"Strictly Object Only",
 		],
 		"cn_required": [
@@ -50,7 +50,7 @@ PROMPT_TEMPLATE_SYNTAX_RULES = {
 			"反面",
 			"仅物体",
 			"背景",
-			"纯白",
+			"浅灰",
 		],
 	},
 	"environments": {
@@ -69,10 +69,10 @@ PROMPT_TEMPLATE_SYNTAX_RULES = {
 CHARACTER_PROMPT_TEMPLATE = """
 [Global Style], 4-view character sheet — all four views must show the same character, outfit, proportions, and anchors consistently, in the strict order: Close-up, Full-body Front, Full-body Side, Full-body Back.
 
-1. Close-up: facial close-up with Neutral/Standard expression (Mandatory for reference), clear eyes, lips, makeup, and skin detail.
-2. Full-body Front: strict head-to-toe front standing pose, including footwear, face visible, key facial features.
-3. Full-body Side: strict head-to-toe true side standing pose, including footwear, ear, hairline, shoulder slope, and body profile.
-4. Full-body Back: strict head-to-toe rear standing pose, showing clothing seams, skirt hem, shoes, collar, and overall back silhouette.
+1. Close-up: facial close-up with Neutral/Standard expression (Mandatory for reference), clear eyes, lips, makeup, and skin detail. This is the ONLY panel that may render a face.
+2. Full-body Front: strict head-to-toe front standing pose, including footwear; do NOT generate the face — fill the facial region (hairline to chin, including eyes/nose/mouth) with the same light gray background color so the figure is faceless; keep hair silhouette, neck, clothing, and body.
+3. Full-body Side: strict head-to-toe true side standing pose, including footwear, ear, hairline, shoulder slope, and body profile; cover the visible profile face with the same light gray background color; no facial features.
+4. Full-body Back: strict head-to-toe rear standing pose, showing clothing seams, skirt hem, shoes, collar, and overall back silhouette; keep the back of the head and hair; no face; if any facial features leak, cover them with the light gray background.
 
 Height: 【cm】; head-to-body ratio: 【ratio】. For named major adult roles, both fields are mandatory and must be explicit; if the script does not lock a different body type, default to a tall, camera-friendly silhouette at about 1:9.
 Golden-ratio body balance rule (mandatory): for named major adult roles, default to a near golden-section body read with visibly longer legs than torso, a waist/hip break above the total-height midpoint, and a clear non-1:1 upper/lower-body split unless canon explicitly requires the opposite.
@@ -85,21 +85,21 @@ Anchor compactness rule (mandatory): keep anchor_description concise and informa
 Shared-wardrobe avoidance rule (mandatory): when multiple interacting characters plausibly wear the same wardrobe class, such as suits, uniforms, school uniforms, lab coats, or other group clothing, do not waste anchor slots on generic phrases like black suit or standard uniform. Shift anchor_description toward more discriminative cues first, such as face shape, hairstyle silhouette, body outline, signature accessory, shoe profile, wearing method, or uniquely readable garment construction details. Only keep wardrobe language when the garment itself has a clearly distinctive cut/detail.
 Expression usage boundary: expressions in view instructions are display-only for shot variety and must never be treated as identity anchors.
 Action traits: poised, controlled movements.
-Lighting design: key light 【source position + quality (soft/hard) + intensity + color temperature】, fill light 【ratio/intensity】, rim/back light 【direction】; keep face readable and silhouette separated. For protagonist shaping, prioritize beauty-lighting setups (e.g., butterfly/paramount light, clamshell fill, soft frontal diffusion, controlled catchlights) to enhance facial attractiveness while preserving realism.
+Lighting design: key light 【source position + quality (soft/hard) + intensity + color temperature】, fill light 【ratio/intensity】, rim/back light 【direction】; keep the close-up face readable and silhouette separated. For protagonist shaping, prioritize beauty-lighting setups (e.g., butterfly/paramount light, clamshell fill, soft frontal diffusion, controlled catchlights) to enhance facial attractiveness while preserving realism.
 Lens & focus: 【focal length / equivalent lens, e.g. 35mm / 50mm / 85mm】 + 【focus strategy, e.g. deep focus / shallow DOF】.
 Texture/noise: 【film grain level, e.g. clean digital / fine film grain / medium grain】, skin texture retention 【level】, avoid over-smoothing.
 Style adaptation by script type: if [Global Style] indicates live-action / realistic drama, enforce photoreal human anatomy, natural pores and micro-texture, realistic eye specular highlights, physically plausible subsurface skin response, and avoid CGI/plastic look. In this mode, protagonist close/medium shots should default to refined beauty-lighting first, then adjust contrast by genre mood.
-Background: white.
+Background: light gray.
 anchor_description：【concise identity + appearance + wardrobe retrieval anchors】.
 Style: follow [Global Style].
 Canvas rule: treat the character sheet as a 16:9 horizontal asset canvas aligned to the system subject asset ratio; do not introduce any conflicting portrait or square sheet ratio.
 Layout rule: asymmetrical 4-panel sheet. The Close-up must sit in the FIRST panel on the LEFT as a large full-height panel occupying about 40% of the total canvas width. The remaining 60% on the RIGHT must be split into three equal stacked panels in the strict order Full-body Front, Full-body Side, Full-body Back. All four views must stay fully inside their own panels with complete silhouettes and zero cropping.
 Minor-safety rule: if the character is a minor, child, kid, preteen, teen, toddler, baby, or infant, the layout requirement does NOT change. Still render the exact same 4-view character sheet with Close-up, Full-body Front, Full-body Side, and Full-body Back; do not downgrade to a single portrait, a single full-body concept image, a looser child-only composition, or any instruction implying no 4-panel layout. The only age-specific adaptation is safety: keep wardrobe, pose, camera intent, and wording fully age-appropriate, non-sexualized, non-fetishized, and strictly non-NSFW.
-Close-up crop rule: in the FIRST LEFT close-up panel, the face must sit on the vertical centerline and remain vertically centered in the panel, not drifting to the top, bottom, or side. The head should occupy about 78% to 88% of the panel height so the close-up reads clearly larger than the other three views, while the full hair silhouette, chin line, and neck transition remain complete. Keep background margin tight and balanced on all sides rather than leaving empty white space.
-Right-panel framing rule: the three RIGHT full-body panels must use the same framing scale and the same padding logic. Make them slightly smaller than the close-up in visual dominance, but keep top margin and foot margin uniformly minimal while reducing left-right padding further so each figure reads larger without cropping. Each figure should occupy about 84% to 89% of each panel height, with head, feet, footwear, hems, and outer silhouette fully visible and never cropped.
+Close-up crop rule: in the FIRST LEFT close-up panel, the face must sit on the vertical centerline and remain vertically centered in the panel, not drifting to the top, bottom, or side. The head should occupy about 78% to 88% of the panel height so the close-up reads clearly larger than the other three views, while the full hair silhouette, chin line, and neck transition remain complete. Keep background margin tight and balanced on all sides rather than leaving empty space.
+Right-panel framing rule: the three RIGHT full-body panels must use the same framing scale and the same padding logic. Make them slightly smaller than the close-up in visual dominance, but keep top margin and foot margin uniformly minimal while reducing left-right padding further so each figure reads larger without cropping. Each figure should occupy about 84% to 89% of each panel height, with head, feet, footwear, hems, and outer silhouette fully visible and never cropped. Full-body face-cover rule (mandatory): on Full-body Front, Side, and Back, do not generate a face; paint the facial region with the canvas light gray so those three panels are faceless. Keep hair silhouette. Do not use mosaic, black bars, blur, or a semi-transparent face.
 Structure: 4-view layout (First panel = larger centered Close-up on the left; right column = Full-body Front, Full-body Side, Full-body Back).
 Panel finish rule: zero gutter, zero blank spacing, no collage seam, no divider line, no white border, no black border, no framing bar; the panel boundaries may exist compositionally but must not render as visible lines.
-Output: deliver a 16:9 4-panel composite asset sheet, or four source renders assembled to the same 16:9 sheet; include a simple scale marker; no labels, no captions, no watermark; End note: white background, high quality, large files, no text.
+Output: deliver a 16:9 4-panel composite asset sheet, or four source renders assembled to the same 16:9 sheet; include a simple scale marker; no labels, no captions, no watermark; End note: light gray background, high quality, large files, no text.
 """
 
 PROP_PROMPT_TEMPLATE = """
@@ -120,7 +120,7 @@ Lens & focus: 【focal length / equivalent lens + DOF strategy】.
 Grain/noise strategy: 【clean digital / fine film grain / medium grain】 with readable texture in shadows.
 Style adaptation by script type: live-action/realistic drama must enforce physically plausible material response (metal specular, fabric fibers, roughness variation), true-to-scale wear, and avoid toy-like/plastic CGI look.
 anchor_description：【thumbnail_readability】.
-Background: white.
+Background: light gray.
 Narrative-isolation rule: render the prop as a pure object asset only. Do not include any character interaction, holding, wearing, touching, carrying, using, or story-action context; do not imply hands, arms, faces, bodies, human reflections, or any other body-part involvement.
 Canvas rule: treat the prop sheet as a 16:9 horizontal asset canvas aligned to the system subject asset ratio; do not introduce any conflicting portrait or square sheet ratio.
 Layout rule: asymmetrical 4-panel sheet. The Close-up must sit in the FIRST panel on the LEFT as a large full-height panel occupying about 40% of the total canvas width. The remaining 60% on the RIGHT must be split into three equal stacked panels in the strict order Front, Side, Back. All four views must stay fully inside their own panels with complete silhouettes and zero cropping.
@@ -128,7 +128,7 @@ Close-up crop rule: in the FIRST LEFT close-up panel, the key detail area should
 Right-panel framing rule: the three RIGHT panels must use the same framing scale and the same padding logic so the object reads as one unified sheet rather than three mismatched crops. Keep top and bottom whitespace as small and as uniform as possible, and keep side whitespace tighter as well, while preserving the full object contour in every panel.
 Panel finish rule: zero gutter, zero blank spacing, no collage seam, no divider line, no white border, no black border, no framing bar; the panel boundaries may exist compositionally but must not render as visible lines.
 **Strictly Object Only: No characters, no hands, no body parts visible, no wearing/holding/using context, and no story-action residue.**
-Output: deliver a 16:9 4-panel composite asset sheet, or four source renders assembled to the same 16:9 sheet; include a simple, unobtrusive scale marker (no numbers/text); no labels, no captions, no watermark; End note: white background, high quality, large files, no text.
+Output: deliver a 16:9 4-panel composite asset sheet, or four source renders assembled to the same 16:9 sheet; include a simple, unobtrusive scale marker (no numbers/text); no labels, no captions, no watermark; End note: light gray background, high quality, large files, no text.
 """
 
 ENVIRONMENT_PROMPT_TEMPLATE = """

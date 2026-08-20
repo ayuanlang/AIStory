@@ -242,6 +242,7 @@ def _patch_episode_stage1_outputs(
     raw_text: str,
     adapted_script: str,
     visual_backfill_json: str = "",
+    node_output_key: str = "",
 ) -> None:
     raw = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
     try:
@@ -286,6 +287,16 @@ def _patch_episode_stage1_outputs(
         "title": visual_slot.get("title") or "全局风格",
         "content": str(visual_backfill_json or ""),
     }
+    stable_node_key = str(node_output_key or "").strip()
+    if stable_node_key:
+        node_slot = outputs.get(stable_node_key) if isinstance(outputs.get(stable_node_key), dict) else {}
+        outputs[stable_node_key] = {
+            **node_slot,
+            "key": stable_node_key,
+            "kind": node_slot.get("kind") or "markdown",
+            "title": node_slot.get("title") or stable_node_key,
+            "content": str(raw_text or ""),
+        }
     episode.ai_stage_outputs = json.dumps(obj, ensure_ascii=False, indent=2)
 
 
@@ -294,6 +305,7 @@ def persist_script_optimization_stage(
     db: Session,
     episode: Episode,
     result_content: str,
+    node_output_key: str = "",
 ) -> Dict[str, Any]:
     raw_text = str(result_content or "").strip()
     adapted_script = extract_stage1_adapted_script_body(raw_text) or raw_text
@@ -305,6 +317,7 @@ def persist_script_optimization_stage(
         raw_text=raw_text,
         adapted_script=adapted_script,
         visual_backfill_json=visual_backfill_json,
+        node_output_key=node_output_key,
     )
     db.commit()
     try:

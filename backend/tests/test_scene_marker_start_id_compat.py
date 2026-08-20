@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-from app.services.script_analysis_flow import parse_scene_units_from_markers
+from app.services.script_analysis_flow import (
+    build_scene_subskill_task_payloads,
+    parse_scene_units_from_markers,
+)
 
 
 def test_start_end_id_mismatch_uses_start_scene_id():
@@ -30,3 +33,49 @@ one
     units = parse_scene_units_from_markers(script)
     assert len(units) == 1
     assert units[0].scene_id == "EP01_SC01"
+
+
+def test_missing_outer_start_is_recovered_when_scene_pairs_and_end_exist():
+    script = """
+[COMPREHENSIVE_INFO_START]
+overall plot
+[COMPREHENSIVE_INFO_END]
+[SCENE_START:EP01_SC01]
+one
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+"""
+    units = parse_scene_units_from_markers(script)
+    assert len(units) == 1
+    assert units[0].scene_id == "EP01_SC01"
+    assert units[0].scene_text == "one"
+
+
+def test_special_routing_and_comprehensive_info_are_attached_to_scene_tasks():
+    script = """
+[SCENES_BLOCK_START]
+[COMPREHENSIVE_INFO_START]
+[INFO_ITEM_START:PLOT:1]
+overall plot
+[INFO_ITEM_END:PLOT:1]
+[COMPREHENSIVE_INFO_END]
+[SPECIAL_SCENE_ANALYSIS_START:EP01_SC01]
+[VFX] 命中=是｜类型=近身打斗｜证据=原文：“挥拳”
+[XIAN] 命中=否｜类型=无｜证据=无
+[SPECIAL_SCENE_ANALYSIS_END:EP01_SC01]
+[SCENE_START:EP01_SC01]
+scene body
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+{"project_visual_backfill": {"tone": "tense"}}
+"""
+    units = parse_scene_units_from_markers(script)
+    assert units[0].special_routing["VFX"]["hit"] is True
+    assert units[0].special_routing["XIAN"]["hit"] is False
+    assert "[COMPREHENSIVE_INFO_START]" in units[0].comprehensive_info
+
+    tasks = build_scene_subskill_task_payloads(script)
+    assert len(tasks) == 1
+    assert tasks[0]["call_vfx"] is True
+    assert tasks[0]["call_xian"] is False
+    assert tasks[0]["special_analysis"].startswith("[SPECIAL_SCENE_ANALYSIS_START:EP01_SC01]")

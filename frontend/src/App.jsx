@@ -138,8 +138,8 @@ function App() {
         const isReload = pEntries.length > 0 ? pEntries[0].type === "reload" : window.performance?.navigation?.type === 1;
         
         if (isReload) {
-          // If we reloaded while authenticated, redirect to /projects (project cards page)
-          if (window.location.pathname !== '/projects' || window.location.search) {
+          const reloadSafePaths = new Set(['/projects', '/settings']);
+          if (!reloadSafePaths.has(window.location.pathname) || (window.location.pathname === '/projects' && window.location.search)) {
              window.location.href = '/projects';
           }
         }

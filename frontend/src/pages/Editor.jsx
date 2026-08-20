@@ -7,7 +7,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, FolderOpen, Maximize2, Info, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, ArrowUp, Sparkles, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, LayoutList, Copy, Image as ImageIcon, FolderOpen, Maximize2, Info, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, ArrowUp, Sparkles, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -183,7 +183,11 @@ const ShotsView = React.lazy(() => import('./editor/components/ShotsView').then(
 
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
 const EPISODE_REQUIRED_TABS = new Set(['script', 'subjects', 'scenes', 'shots']);
-const normalizeEditorTab = (tab) => (tab === 'montage' ? 'shots' : tab);
+const normalizeEditorTab = (tab) => {
+    if (tab === 'montage') return 'shots';
+    if (tab === 'script_management') return 'overview';
+    return tab;
+};
 const EPISODE_FULL_LOAD_TABS = new Set(['script', 'overview', 'generator']);
 
 const buildProjectReturnSnapshot = ({

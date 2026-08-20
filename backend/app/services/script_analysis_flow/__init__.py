@@ -64,6 +64,22 @@ SCENES_BLOCK_START_PATTERN = re.compile(r"`?\[SCENES_BLOCK_START\]`?", re.IGNORE
 SCENES_BLOCK_END_PATTERN = re.compile(r"`?\[SCENES_BLOCK_END\]`?", re.IGNORECASE)
 SCENE_START_PATTERN = re.compile(r"`?\[SCENE_START:([^\s\]]+)\]`?", re.IGNORECASE)
 SCENE_END_PATTERN = re.compile(r"`?\[SCENE_END:([^\s\]]+)\]`?", re.IGNORECASE)
+COMPREHENSIVE_INFO_PATTERN = re.compile(
+    r"`?\[COMPREHENSIVE_INFO_START\]`?(.*?)`?\[COMPREHENSIVE_INFO_END\]`?",
+    re.IGNORECASE | re.DOTALL,
+)
+SPECIAL_SCENE_ANALYSIS_PATTERN = re.compile(
+    r"`?\[SPECIAL_SCENE_ANALYSIS_START:([^\s\]]+)\]`?"
+    r"(.*?)"
+    r"`?\[SPECIAL_SCENE_ANALYSIS_END:([^\s\]]+)\]`?",
+    re.IGNORECASE | re.DOTALL,
+)
+SPECIAL_ROUTE_LINE_PATTERN = re.compile(
+    r"^\s*\[(VFX|XIAN)\]\s*命中\s*=\s*(是|否)"
+    r"(?:\s*[｜|]\s*类型\s*=\s*([^｜|\r\n]+))?"
+    r"(?:\s*[｜|]\s*证据\s*=\s*([^\r\n]+))?",
+    re.IGNORECASE | re.MULTILINE,
+)
 BEAT_START_PATTERN = re.compile(r"`?\[BEAT_START(?::([^\s\]]+))?\]`?", re.IGNORECASE)
 BEAT_END_PATTERN = re.compile(r"`?\[BEAT_END(?::([^\s\]]+))?\]`?", re.IGNORECASE)
 ENV_BLOCK_START_PATTERN = re.compile(r"`?\[ENV_BLOCK_START(?::([^\s\]]+))?\]`?", re.IGNORECASE)
@@ -219,6 +235,9 @@ class ParsedSceneUnit:
     marker_start_token: str
     marker_end_token: str
     scene_markdown: str = ""
+    special_analysis_text: str = ""
+    special_routing: Optional[Dict[str, Dict[str, Any]]] = None
+    comprehensive_info: str = ""
 
 
 def _parse_episode_info_dict(episode: Any) -> Dict[str, Any]:
@@ -504,6 +523,12 @@ def _normalize_scene_marker_script_text(script_text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    if (
+        not SCENES_BLOCK_START_PATTERN.search(text)
+        and SCENE_START_PATTERN.search(text)
+        and SCENES_BLOCK_END_PATTERN.search(text)
+    ):
+        text = f"{SCENES_BLOCK_START_TOKEN}\n{text}"
     return text
 
 
@@ -543,6 +568,92 @@ def _find_scenes_block_span(text: str) -> tuple[int, int, int, int]:
     return start_match.start(), start_match.end(), block_end, start_match.end() + end_match.end()
 
 
+def extract_comprehensive_info_block(script_text: str) -> str:
+    """Return the single top-level comprehensive-information block, including markers."""
+    text = _normalize_scene_marker_script_text(script_text)
+    matches = list(COMPREHENSIVE_INFO_PATTERN.finditer(text))
+    if len(matches) > 1:
+        raise SceneMarkerParseError(
+            "COMPREHENSIVE_INFO_DUPLICATE",
+            "multiple comprehensive information blocks found",
+        )
+    if not matches:
+        return ""
+    match = matches[0]
+    return match.group(0).strip()
+
+
+def parse_special_scene_analysis_blocks(script_text: str) -> Dict[str, Dict[str, Any]]:
+    """Parse per-scene VFX/XIAN routing blocks emitted immediately before SCENE_START."""
+    text = _normalize_scene_marker_script_text(script_text)
+    parsed: Dict[str, Dict[str, Any]] = {}
+    for match in SPECIAL_SCENE_ANALYSIS_PATTERN.finditer(text):
+        start_id = str(match.group(1) or "").strip()
+        end_id = str(match.group(3) or "").strip()
+        if not start_id or start_id != end_id:
+            raise SceneMarkerParseError(
+                "SPECIAL_SCENE_ANALYSIS_ID_MISMATCH",
+                f"special scene analysis id mismatch: {start_id or '?'} != {end_id or '?'}",
+            )
+        if start_id in parsed:
+            raise SceneMarkerParseError(
+                "SPECIAL_SCENE_ANALYSIS_DUPLICATE",
+                f"duplicate special scene analysis block: {start_id}",
+            )
+        routes: Dict[str, Dict[str, Any]] = {
+            "VFX": {"hit": False, "type": "", "evidence": ""},
+            "XIAN": {"hit": False, "type": "", "evidence": ""},
+        }
+        body = str(match.group(2) or "")
+        for route_match in SPECIAL_ROUTE_LINE_PATTERN.finditer(body):
+            route_key = str(route_match.group(1) or "").strip().upper()
+            routes[route_key] = {
+                "hit": str(route_match.group(2) or "").strip() == "是",
+                "type": str(route_match.group(3) or "").strip(),
+                "evidence": str(route_match.group(4) or "").strip(),
+            }
+        parsed[start_id] = {
+            "scene_id": start_id,
+            "block_text": match.group(0).strip(),
+            "routes": routes,
+        }
+    return parsed
+
+
+def build_scene_subskill_task_payloads(script_text: str) -> List[Dict[str, Any]]:
+    """Programmatically split Stage-1 output into independent per-scene task payloads."""
+    comprehensive_info = extract_comprehensive_info_block(script_text)
+    units = parse_scene_units_from_markers(script_text)
+    tasks: List[Dict[str, Any]] = []
+    for unit in units:
+        routing = dict(getattr(unit, "special_routing", None) or {})
+        special_text = str(getattr(unit, "special_analysis_text", "") or "").strip()
+        scene_block = "\n".join(
+            part
+            for part in (
+                special_text,
+                str(unit.marker_start_token or f"[SCENE_START:{unit.scene_id}]"),
+                str(unit.scene_text or "").strip(),
+                str(unit.marker_end_token or f"[SCENE_END:{unit.scene_id}]"),
+            )
+            if part
+        )
+        tasks.append(
+            {
+                "scene_id": unit.scene_id,
+                "scene_order": unit.scene_order,
+                "scene_text": unit.scene_text,
+                "scene_block": scene_block,
+                "comprehensive_info": comprehensive_info,
+                "special_analysis": special_text,
+                "routes": routing,
+                "call_vfx": bool((routing.get("VFX") or {}).get("hit")),
+                "call_xian": bool((routing.get("XIAN") or {}).get("hit")),
+            }
+        )
+    return tasks
+
+
 def parse_scene_units_from_markers(script_text: str) -> List[ParsedSceneUnit]:
     """SCENE_START:ID / SCENE_END pair walker (original split path).
 
@@ -558,6 +669,8 @@ def parse_scene_units_from_markers(script_text: str) -> List[ParsedSceneUnit]:
         raise SceneMarkerParseError("SCENE_MARKER_EMPTY_BLOCK", "scene block is empty")
 
     cursor = 0
+    comprehensive_info = extract_comprehensive_info_block(text)
+    special_blocks = parse_special_scene_analysis_blocks(text)
     seen_scene_ids: Set[str] = set()
     parsed: List[ParsedSceneUnit] = []
 
@@ -588,6 +701,7 @@ def parse_scene_units_from_markers(script_text: str) -> List[ParsedSceneUnit]:
         # END id may differ from START; Scene ID stays the START token.
 
         scene_text = block_text[start_match.end() : end_match.start()].strip()
+        special = special_blocks.get(scene_id) or {}
         parsed.append(
             ParsedSceneUnit(
                 scene_id=scene_id,
@@ -595,6 +709,9 @@ def parse_scene_units_from_markers(script_text: str) -> List[ParsedSceneUnit]:
                 scene_text=scene_text,
                 marker_start_token=start_match.group(0),
                 marker_end_token=end_match.group(0),
+                special_analysis_text=str(special.get("block_text") or ""),
+                special_routing=dict(special.get("routes") or {}),
+                comprehensive_info=comprehensive_info,
             )
         )
         cursor = end_match.end()
@@ -2074,6 +2191,7 @@ def upsert_pipeline_node_status(
     progress_percent: Optional[float] = None,
     depends_on: Optional[List[str]] = None,
     runtime_meta: Optional[Dict[str, object]] = None,
+    retry_count: Optional[int] = None,
     error_code: Optional[str] = None,
     error_message: Optional[str] = None,
 ) -> ScriptProgressPipelineNode:
@@ -2112,6 +2230,7 @@ def upsert_pipeline_node_status(
             ended_at=now_iso if normalized_status in {"success", "warning", "failed", "blocked", "skipped"} else None,
             depends_on=list(depends_on or []),
             runtime_meta=dict(runtime_meta or {}),
+            retry_count=max(0, int(retry_count or 0)),
             last_error_code=error_code,
             last_error_message=error_message,
             created_at=now_iso,
@@ -2137,6 +2256,8 @@ def upsert_pipeline_node_status(
         row.depends_on = list(depends_on)
     if runtime_meta is not None:
         row.runtime_meta = dict(runtime_meta or {})
+    if retry_count is not None:
+        row.retry_count = max(0, int(retry_count))
     if normalized_status == "running" and not previous_started_at:
         row.started_at = now_iso
     if normalized_status in {"success", "warning", "failed", "blocked", "skipped"}:

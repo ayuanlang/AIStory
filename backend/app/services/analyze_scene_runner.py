@@ -932,10 +932,13 @@ async def execute_analyze_scene(
             user_id=current_user_id,
             user_name=getattr(current_user_snapshot, "username", None),
             project_id=_trace_project_id,
-            action_name=_script_analysis_action_label(
-                stage_key=getattr(stage_ctx, "stage_key", None),
-                context="analyze_scene",
-                function_name=getattr(request, "function_name", None),
+            action_name=(
+                str(getattr(request, "action_name", None) or "").strip()
+                or _script_analysis_action_label(
+                    stage_key=getattr(stage_ctx, "stage_key", None),
+                    context="analyze_scene",
+                    function_name=getattr(request, "function_name", None),
+                )
             ),
         )
         logger.info(
@@ -1542,9 +1545,10 @@ async def execute_analyze_scene(
 
         # Step 3: persist staging fields only (no scenes/entities/shots import).
         saved_to_episode = False
+        persist_skipped = bool(getattr(request, "skip_episode_persist", False))
         persisted_field_name = None
         persisted_chars_readback = None
-        if getattr(request, "episode_id", None) and not bool(getattr(request, "skip_episode_persist", False)):
+        if getattr(request, "episode_id", None) and not persist_skipped:
             episode_id = request.episode_id
             episode = (
                 db.query(Episode)
@@ -1591,18 +1595,29 @@ async def execute_analyze_scene(
                 )
         else:
             debug_meta["saved_to_episode"] = False
+            debug_meta["persist_skipped"] = persist_skipped
             debug_meta["saved_field"] = None
             debug_meta["saved_chars_readback"] = 0
             debug_meta["stage_key"] = stage_ctx.stage_key
-            logger.warning(
-                "[analyze_scene] no_episode_id_skip_persist provider=%s model=%s output_chars=%s raw_total_chars=%s dedup_total_chars=%s stage_key=%s",
-                (config or {}).get("provider"),
-                (config or {}).get("model"),
-                len(result_content or ""),
-                raw_total_chars,
-                dedup_total_chars,
-                stage_ctx.stage_key,
-            )
+            if persist_skipped:
+                logger.info(
+                    "[analyze_scene] skip_episode_persist episode_id=%s provider=%s model=%s output_chars=%s stage_key=%s",
+                    getattr(request, "episode_id", None),
+                    (config or {}).get("provider"),
+                    (config or {}).get("model"),
+                    len(result_content or ""),
+                    stage_ctx.stage_key,
+                )
+            else:
+                logger.warning(
+                    "[analyze_scene] no_episode_id_skip_persist provider=%s model=%s output_chars=%s raw_total_chars=%s dedup_total_chars=%s stage_key=%s",
+                    (config or {}).get("provider"),
+                    (config or {}).get("model"),
+                    len(result_content or ""),
+                    raw_total_chars,
+                    dedup_total_chars,
+                    stage_ctx.stage_key,
+                )
 
         if integrity_meta.get("truncation_suspected") or continuation_stopped_by_max_segments:
             logger.warning(
@@ -1664,7 +1679,7 @@ async def execute_analyze_scene(
                     len(str(result_content or "")),
                     str(result_content or "")[-400:],
                 )
-        if not saved_to_episode:
+        if not saved_to_episode and not persist_skipped and not getattr(request, "episode_id", None):
             response_payload["warnings"] = [
                 *list(response_payload.get("warnings") or []),
                 "No episode_id was provided; raw LLM output was returned but not persisted to episode fields.",
