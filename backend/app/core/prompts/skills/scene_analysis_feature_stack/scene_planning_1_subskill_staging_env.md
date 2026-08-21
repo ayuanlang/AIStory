@@ -1,9 +1,9 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_subskill_staging_env.md
-# Prompt Updated At: 2026-08-20 17:10:00 +08:00
+# Prompt Updated At: 2026-08-22 00:30:00 +08:00
 # Skill 1-1-STAGING: 建置与入戏补缺（只在已锁环境中）
 # Parent: scene_planning_1_script_optimization.md（只读基线，本文件不改原文）
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]
-# Version: 2026-08-20
+# Version: 2026-08-22
 # 来源：排除稿 §1 建置/入戏三段 · §12–§15 站位朝向距离 · 载具门窗
 
 ## 目标（最高；本子技能工作方式）
@@ -16,6 +16,7 @@
 5. **综合信息块只读透传**：输入若含 `[COMPREHENSIVE_INFO_START]`…`[COMPREHENSIVE_INFO_END]`，可读取其整体简介、人物简介、世界观作为全局语境，但不得据此直接新增本场站位/动作，不得改写、移动、拆散或复制；整块及 `INFO_ITEM` 子包裹逐字原位保留，供下游提取。
 6. **特殊路由包裹只读透传**：位于 `SCENE_START` 前的 `SPECIAL_SCENE_ANALYSIS` 包裹及 VFX/XIAN 两行必须逐字原位保留，START/END 与对应 Scene ID 不得改动；不得移入 Scene、Beat、【建置】或【入戏】。
 7. **场级指导强制落地**：读取【场景综合】【卖点综合】`指导=`、【情绪峰谷综合】和【叙事综合】。建置与选角必须让 `细节特写参考` 的对象处于当前衍生白名单且可读，让 `反馈特写参考` 的人物可见面与重点对象同拍或紧邻切角可读，并为 `运镜参考` 保留无穿障的揭示/逼近/跟随/拉开/停留空间。【叙事综合】`关键人物`（须放大）须在合法衍生内可见、有入画/改因果可读面，不得只作背景剪影。`贯穿保护` 的道具、信息载体、伤态、持物、关键人物及其本场改因果状态必须在速查与终态中连续。
+8. **输出=完整一场戏（最高）**：下游按分割符拆场。禁止只交覆盖矩阵、位置规划、观察视角或 Beat 摘录。必须从 `[SCENES_BLOCK_START]` 起笔，保留输入的场号、【场景名称】、环境块、`SCENE_CONTENT` 与场级综合，再写入本技能新增块与全部 Beat，最后以 `[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`、`[STAGING_ENV_OUTPUT_END]` 收尾。
 
 ---
 ## 通用硬约束（各子技能同锁；最高）
@@ -453,8 +454,34 @@
 - **门窗六维**：①开向+门轴+开闭态+占视轴(切角重判)｜②门内/外POV切对应ENV｜③紧闭禁写门后｜④关闭=阻隔，须开门/破门/经洞等｜⑤口型不可读→切ENV｜⑥`门态→开→通行→带上→关闭终态(默认紧闭)`。禁穿关闭门扇。**多门时须点名具体哪一扇**（左前/右后车门、东侧侧门等）再走六维——与§12进出路径同拍闭合（入=`门位→落点`；出=`舱内位→门位→门外落点`）。
 
 ---
-## 成稿模板（本子技能产出；建置/入戏补缺）
-> 环境块【主环境】【未落清单】【衍生】原样透传，禁止改写。
+## 成稿模板（本子技能产出=完整一场戏；不是补丁）
+下文「Scene 内新增块」只是插在场头与 Beat 之间的增量，**不是全文**。缺分割符或场头=不合格。
+
+**全文顺序（最高；按此起笔与收尾）**：
+```
+[SCENES_BLOCK_START]
+[COMPREHENSIVE_INFO_START]…[COMPREHENSIVE_INFO_END]          ← 输入有则原样，不得省略
+[SPECIAL_SCENE_ANALYSIS_START:{scene_id}]…END               ← 输入有则原样，不得移入 Scene
+[SCENE_START:{scene_id}]                                   ← 场号与输入逐字一致
+【场景名称】…                                              ← 输入原样
+[ENV_BLOCK_START]…【主环境】【未落清单】【衍生】…[ENV_BLOCK_END]  ← 输入原样，禁止改写
+[SCENE_CONTENT_START:{scene_id}]…[SCENE_CONTENT_END:{scene_id}] ← 输入有则原样
+场级综合项（【场景综合】【卖点综合】等）                     ← 输入原样
+——以下为本技能 Scene 内新增块（写在第一个 Beat 前）——
+【Beat→衍生ENV剧情覆盖矩阵】…
+【ENV覆盖综合】…
+【位置规划综合】…【角色位置】…【未落实体位置】…
+【观察视角与空间建置】【动作空间综合】【构图规划】【露脸冲突】
+[BEAT_STREAM_START]
+全部 [BEAT_START:n]…[BEAT_END:n]（本场一个不漏）
+[BEAT_STREAM_END]
+[SCENE_END:{scene_id}]
+[SCENES_BLOCK_END]
+[STAGING_ENV_OUTPUT_END]
+```
+
+**禁止起笔形态**：不得从【Beat→衍生ENV剧情覆盖矩阵】、【位置规划综合】、【观察视角与空间建置】或 `[BEAT_STREAM_START]` 起笔；不得省略 `[SCENE_START]` / `[SCENE_END]` / 【场景名称】 / 环境块。
+
 **Beat→衍生选用（只从已锁行中选；缺角则失败，禁自建行）**：
 ```
 【Beat→衍生ENV剧情覆盖矩阵】
@@ -477,6 +504,7 @@ B{n}=R:{…}｜ENV:{已声明完整名}｜W:{…}｜R−W=∅|{…}｜选角=覆
 
 ---
 ## 成稿自检（本子技能）
+- **闭包**：已输出 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、环境块、全部 Beat、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`；不是矩阵/规划摘录。
 - 环境骨架已锁定；未新建主环境、未改注册名/四向/0°轴。
 - **补缺**：只在对应已锁 `{N}度…` 中补缺建置与入戏；输入已合格则原样透传。
 - 【建置】=初态，【入戏】无位置/朝向/落点，终态在切换说明。
@@ -488,3 +516,4 @@ B{n}=R:{…}｜ENV:{已声明完整名}｜W:{…}｜R−W=∅|{…}｜选角=覆
 ## 完整输出结束标签（最高）
 - 完成整份输入的建置与入戏处理后，必须将 `[STAGING_ENV_OUTPUT_END]` 作为**全文最后一个非空行**输出，且全稿仅出现一次。
 - 该标签不得进入 Scene、`SCENE_CONTENT`、Beat、项目视觉回填 JSON 或代码围栏；标签后禁止输出任何内容。
+- **完整 Scene 闭包（最高）**：先输出本场 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、环境块、场级综合、本技能新增块、全部 Beat，再输出 `[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只输出【Beat→衍生ENV剧情覆盖矩阵】、【ENV覆盖综合】、位置/观察块或结束标签。

@@ -58,6 +58,8 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
     if "COMPLETION_MARKER_MISSING" in text:
         return "子技能输出不完整，自动重试后仍缺少结束标签"
     if "OUTPUT_PARSE_FAILED" in text:
+        if "SCENE_MARKER_BLOCK_MISSING" in text:
+            return "子技能只返回了环境矩阵等片段，缺少场景分割符"
         return "子技能返回的场景结构无法解析"
     if "OUTPUT_SCENE_MISMATCH" in text:
         return "子技能返回了错误的场景编号"
@@ -97,7 +99,136 @@ def _wrap_single_scene_input(scene_block: str, comprehensive_info: str, project_
     return "\n".join(part for part in parts if part)
 
 
-def _extract_single_scene_block(result_text: str, scene_id: str, fallback_special: str) -> str:
+_BEAT_STREAM_START_RE = re.compile(r"`?\[BEAT_STREAM_START\]`?", re.IGNORECASE)
+_BEAT_STREAM_END_RE = re.compile(r"`?\[BEAT_STREAM_END\]`?", re.IGNORECASE)
+_BEAT_START_RE = re.compile(r"`?\[BEAT_START:([^\s\]]+)\]`?", re.IGNORECASE)
+_BEAT_END_RE = re.compile(r"`?\[BEAT_END:([^\s\]]+)\]`?", re.IGNORECASE)
+_STAGING_SECTION_HEADINGS = (
+    "【Beat→衍生ENV剧情覆盖矩阵】",
+    "【ENV覆盖综合】",
+    "【位置规划综合】",
+    "【角色位置】",
+    "【未落实体位置】",
+    "【观察视角与空间建置】",
+    "【动作空间综合】",
+    "【构图规划】",
+    "【露脸冲突】",
+)
+
+
+def _has_recoverable_beat_body(text: str) -> bool:
+    source = str(text or "")
+    if _BEAT_STREAM_START_RE.search(source) and _BEAT_STREAM_END_RE.search(source):
+        return bool(_BEAT_START_RE.search(source))
+    return bool(_BEAT_START_RE.search(source) and _BEAT_END_RE.search(source))
+
+
+def _split_header_and_beats(text: str) -> tuple[str, str]:
+    source = str(text or "").replace("\r\n", "\n")
+    stream = _BEAT_STREAM_START_RE.search(source)
+    if stream:
+        return source[: stream.start()].rstrip(), source[stream.start() :].strip()
+    beat = _BEAT_START_RE.search(source)
+    if beat:
+        return source[: beat.start()].rstrip(), source[beat.start() :].strip()
+    return source.strip(), ""
+
+
+def _is_staging_section_heading(line: str) -> bool:
+    stripped = str(line or "").strip()
+    return any(stripped == heading or stripped.startswith(heading) for heading in _STAGING_SECTION_HEADINGS)
+
+
+def _strip_staging_sections(header: str) -> str:
+    kept: List[str] = []
+    skipping = False
+    for line in str(header or "").replace("\r\n", "\n").splitlines():
+        stripped = line.strip()
+        if _is_staging_section_heading(stripped):
+            skipping = True
+            continue
+        if skipping:
+            if stripped.startswith("[") or (
+                stripped.startswith("【") and not _is_staging_section_heading(stripped)
+            ):
+                skipping = False
+                kept.append(line)
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def _wrap_recovered_scene(scene_id: str, scene_text: str) -> str:
+    return "\n".join(
+        (
+            SCENES_BLOCK_START_TOKEN,
+            f"[SCENE_START:{scene_id}]",
+            str(scene_text or "").strip(),
+            f"[SCENE_END:{scene_id}]",
+            SCENES_BLOCK_END_TOKEN,
+        )
+    )
+
+
+def _previous_scene_text(previous_block: str, scene_id: str) -> str:
+    source = str(previous_block or "").strip()
+    if not source:
+        return ""
+    sanitized = SPECIAL_SCENE_ANALYSIS_PATTERN.sub("", source)
+    sanitized = COMPREHENSIVE_INFO_PATTERN.sub("", sanitized).strip()
+    if not sanitized:
+        return ""
+    try:
+        units = parse_scene_units_from_markers(sanitized)
+    except SceneMarkerParseError:
+        return ""
+    matches = [unit for unit in units if str(unit.scene_id).lower() == str(scene_id).lower()]
+    if len(matches) != 1:
+        return ""
+    return str(matches[0].scene_text or "").strip()
+
+
+def _recover_markerless_scene_fragment(
+    fragment: str,
+    scene_id: str,
+    previous_block: str,
+) -> str:
+    source = str(fragment or "").strip()
+    if not _has_recoverable_beat_body(source):
+        return ""
+    new_header, new_beats = _split_header_and_beats(source)
+    if not new_beats:
+        return ""
+    previous_scene_text = _previous_scene_text(previous_block, scene_id)
+    if previous_scene_text:
+        old_header, _old_beats = _split_header_and_beats(previous_scene_text)
+        merged = "\n\n".join(
+            part
+            for part in (
+                _strip_staging_sections(old_header),
+                new_header,
+                new_beats,
+            )
+            if str(part or "").strip()
+        )
+        logger.info(
+            "[scene_subskill_pipeline] recovered markerless scene=%s via previous header",
+            scene_id,
+        )
+        return _wrap_recovered_scene(scene_id, merged)
+    logger.info(
+        "[scene_subskill_pipeline] recovered markerless scene=%s via wrap",
+        scene_id,
+    )
+    return _wrap_recovered_scene(scene_id, source)
+
+
+def _extract_single_scene_block(
+    result_text: str,
+    scene_id: str,
+    fallback_special: str,
+    previous_block: str = "",
+) -> str:
     text = str(result_text or "").strip()
     # SPECIAL_SCENE_ANALYSIS and COMPREHENSIVE_INFO are authoritative upstream
     # metadata. Subskills occasionally echo or duplicate these read-only blocks;
@@ -108,10 +239,23 @@ def _extract_single_scene_block(result_text: str, scene_id: str, fallback_specia
     try:
         units = parse_scene_units_from_markers(sanitized_text)
     except SceneMarkerParseError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"SCENE_SUBSKILL_OUTPUT_PARSE_FAILED:{scene_id}:{exc.code}",
-        ) from exc
+        recovered = _recover_markerless_scene_fragment(
+            sanitized_text,
+            scene_id,
+            previous_block,
+        )
+        if not recovered:
+            raise HTTPException(
+                status_code=422,
+                detail=f"SCENE_SUBSKILL_OUTPUT_PARSE_FAILED:{scene_id}:{exc.code}",
+            ) from exc
+        try:
+            units = parse_scene_units_from_markers(recovered)
+        except SceneMarkerParseError as recover_exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"SCENE_SUBSKILL_OUTPUT_PARSE_FAILED:{scene_id}:{recover_exc.code}",
+            ) from recover_exc
     matches = [unit for unit in units if str(unit.scene_id).lower() == str(scene_id).lower()]
     if len(matches) != 1:
         raise HTTPException(
@@ -132,6 +276,13 @@ def _extract_single_scene_block(result_text: str, scene_id: str, fallback_specia
     )
 
 
+def _subskill_parse_failure_code(exc: HTTPException) -> str:
+    detail = str(getattr(exc, "detail", "") or "")
+    if "OUTPUT_PARSE_FAILED" in detail or "OUTPUT_SCENE_MISMATCH" in detail:
+        return detail.split(":", 1)[0]
+    return ""
+
+
 async def _call_scene_subskill(
     *,
     task_db: Session,
@@ -140,6 +291,8 @@ async def _call_scene_subskill(
     prompt_file: str,
     scene_input: str,
     scene_id: str,
+    fallback_special: str = "",
+    previous_block: str = "",
 ) -> str:
     from app.api.routers.prompts.analyze_scene import analyze_scene  # noqa: WPS433
 
@@ -165,12 +318,23 @@ async def _call_scene_subskill(
             async_mode="0",
         )
         text = _extract_analysis_text_from_result(result).strip()
+        stripped = _strip_subskill_completion_marker(text, prompt_file) if text else ""
         if not text:
             failure_code = "SCENE_SUBSKILL_EMPTY_OUTPUT"
-        elif not _strip_subskill_completion_marker(text, prompt_file):
+        elif not stripped:
             failure_code = "SCENE_SUBSKILL_COMPLETION_MARKER_MISSING"
         else:
-            return _strip_subskill_completion_marker(text, prompt_file)
+            try:
+                return _extract_single_scene_block(
+                    stripped,
+                    scene_id,
+                    fallback_special,
+                    previous_block=previous_block,
+                )
+            except HTTPException as parse_exc:
+                failure_code = _subskill_parse_failure_code(parse_exc)
+                if not failure_code:
+                    raise
         logger.warning(
             "[scene_subskill_pipeline] incomplete output scene=%s prompt=%s attempt=%s/%s code=%s expected_marker=%s",
             scene_id,
@@ -285,18 +449,15 @@ async def run_scene_subskill_pipeline(
                         str(task.get("comprehensive_info") or ""),
                         project_tail,
                     )
-                    result_text = await _call_scene_subskill(
+                    current_block = await _call_scene_subskill(
                         task_db=task_db,
                         current_user=user_principal,
                         base_payload=raw_payload,
                         prompt_file=prompt_file,
                         scene_input=scene_input,
                         scene_id=scene_id,
-                    )
-                    current_block = _extract_single_scene_block(
-                        result_text,
-                        scene_id,
-                        str(task.get("special_analysis") or ""),
+                        fallback_special=str(task.get("special_analysis") or ""),
+                        previous_block=current_block,
                     )
                     called.append(step_name)
                 if project_id > 0 and node_episode_id > 0:

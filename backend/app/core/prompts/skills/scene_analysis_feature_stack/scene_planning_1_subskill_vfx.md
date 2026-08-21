@@ -1,9 +1,9 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_subskill_vfx.md
-# Prompt Updated At: 2026-08-20 17:10:00 +08:00
+# Prompt Updated At: 2026-08-22 00:30:00 +08:00
 # Skill 1-1-VFX: 法攻与通用特效
 # Parent: scene_planning_1_script_optimization.md（只读基线，本文件不改原文）
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]
-# Version: 2026-08-20
+# Version: 2026-08-22
 # 来源：SRC-5D3F6C376C3B §5/§6/§8/§27–§31/附录A·B（剔除仙攻专规）
 
 ## 目标（最高；本子技能工作方式）
@@ -12,6 +12,7 @@
 2. **服从场核**：加密须兑现本场卖点/高潮（如打斗美学），不得把文戏场写成无据决战，不得改谁胜谁负。
 3. **其余原样输出**：对白、文戏特写、场核标签、场号、建置几何、仙攻段、未涉打斗的叙述。
 4. **无命中则整份原样**：不得为填规则造招、造特效。
+5. **输出=完整一场戏**：无论是否改写，都必须输出 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、环境块/`SCENE_CONTENT`（输入有则原样）、全部 Beat、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只交命中段或结束标签。
 
 ## 场景提取入口（最高；按切分标签）
 1. 先扫描每个 `[SCENE_START:{scene_id}]`…`[SCENE_END:{scene_id}]` 内的：
@@ -159,3 +160,4 @@
 ## 完整输出结束标签（最高）
 - 完成整份输入的 VFX 子技能处理后，必须将 `[VFX_SUBSKILL_OUTPUT_END]` 作为**全文最后一个非空行**输出，且全稿仅出现一次。
 - 即使当前 Scene 最终无需改写，也必须输出完整只读结果并以该标签收尾；标签不得进入 Scene、Beat、JSON 或代码围栏，标签后禁止输出任何内容。
+- **完整 Scene 闭包（最高）**：正文必须包含本场 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、全部 Beat、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只输出命中段、覆盖矩阵或结束标签。

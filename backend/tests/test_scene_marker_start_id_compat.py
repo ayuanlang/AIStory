@@ -134,3 +134,104 @@ optimized scene body
     assert extracted.count("[SPECIAL_SCENE_ANALYSIS_START:EP01_SC03]") == 1
     assert "[COMPREHENSIVE_INFO_START]" not in extracted
     assert "optimized scene body" in extracted
+
+
+def test_subskill_env_matrix_only_output_is_parse_failed():
+    from fastapi import HTTPException
+
+    from app.services.scene_subskill_pipeline_runner import (
+        _scene_subskill_failure_reason,
+        _subskill_parse_failure_code,
+    )
+
+    matrix_only = """【Beat→衍生ENV剧情覆盖矩阵】
+B1=R:{朝堂铁骑:全貌|地平线:可见面}｜ENV:0度荒漠残阳古道｜W:{沙丘:正面}｜R−W=∅｜选角=覆盖｜跨对向=否
+【ENV覆盖综合】Beat=全量｜缺项=0｜同ENV最长=2｜新建主环境=无
+"""
+    try:
+        _extract_single_scene_block(matrix_only, "EP01_SC02", "")
+    except HTTPException as exc:
+        assert exc.status_code == 422
+        assert "SCENE_SUBSKILL_OUTPUT_PARSE_FAILED:EP01_SC02:SCENE_MARKER_BLOCK_MISSING" == exc.detail
+        assert _subskill_parse_failure_code(exc) == "SCENE_SUBSKILL_OUTPUT_PARSE_FAILED"
+        assert "环境矩阵" in _scene_subskill_failure_reason(exc)
+    else:
+        raise AssertionError("expected parse failure for matrix-only output")
+
+
+def test_subskill_staging_fragment_recovers_scene_wrappers():
+    previous = """[SPECIAL_SCENE_ANALYSIS_START:EP01_SC02]
+[VFX] 命中=否｜类型=无｜证据=无
+[XIAN] 命中=否｜类型=无｜证据=无
+[SPECIAL_SCENE_ANALYSIS_END:EP01_SC02]
+[SCENE_START:EP01_SC02]
+【场景名称】清河城接头｜日·外
+[ENV_BLOCK_START]
+────【主环境】────
+【主环境】荒漠残阳古道｜日夜内外=黄昏·外
+[ENV_BLOCK_END]
+[BEAT_STREAM_START]
+[BEAT_START:1]
+- Beat 1：
+旧建置
+[BEAT_END:1]
+[BEAT_STREAM_END]
+[SCENE_END:EP01_SC02]"""
+    fragment = """【Beat→衍生ENV剧情覆盖矩阵】
+B1=R:{朝堂铁骑:全貌|地平线:可见面}｜ENV:0度荒漠残阳古道｜W:{沙丘:正面}｜R−W=∅｜选角=覆盖｜跨对向=否
+【ENV覆盖综合】Beat=全量｜缺项=0｜同ENV最长=3≤3｜例外:无｜新建主环境=无
+
+【位置规划综合】主锚=无｜C位=朝堂铁骑簇｜依据=大军压境为本场唯一焦点
+【角色位置】无
+【未落实体位置】朝堂铁骑簇=初:后景中央｜变:B1-B3:向前景逼近｜终:前景中央
+
+[BEAT_STREAM_START]
+[BEAT_START:1]
+- Beat 1：
+镜头从残阳如血、狂风卷起漫天黄沙的空镜头缓慢向下摇。
+[BEAT_END:1]
+[BEAT_START:2]
+~ Beat 2：
+镜头极速推近至沙地特写。
+[BEAT_END:2]
+[BEAT_START:3]
+- Beat 3：
+铁骑阵列保持着冰冷的秩序。
+[BEAT_END:3]
+[BEAT_STREAM_END]"""
+    special = """[SPECIAL_SCENE_ANALYSIS_START:EP01_SC02]
+[VFX] 命中=否｜类型=无｜证据=无
+[XIAN] 命中=否｜类型=无｜证据=无
+[SPECIAL_SCENE_ANALYSIS_END:EP01_SC02]"""
+
+    extracted = _extract_single_scene_block(
+        fragment,
+        "EP01_SC02",
+        special,
+        previous_block=previous,
+    )
+
+    assert extracted.count("[SCENE_START:EP01_SC02]") == 1
+    assert extracted.count("[SCENE_END:EP01_SC02]") == 1
+    assert "【场景名称】清河城接头｜日·外" in extracted
+    assert "【主环境】荒漠残阳古道" in extracted
+    assert "【Beat→衍生ENV剧情覆盖矩阵】" in extracted
+    assert "镜头从残阳如血" in extracted
+    assert "铁骑阵列保持着冰冷的秩序" in extracted
+    assert "旧建置" not in extracted
+    assert extracted.count("[SPECIAL_SCENE_ANALYSIS_START:EP01_SC02]") == 1
+
+
+def test_subskill_staging_fragment_wraps_when_previous_missing():
+    fragment = """[BEAT_STREAM_START]
+[BEAT_START:1]
+- Beat 1：
+空镜。
+[BEAT_END:1]
+[BEAT_STREAM_END]"""
+
+    extracted = _extract_single_scene_block(fragment, "EP01_SC02", "")
+
+    assert "[SCENE_START:EP01_SC02]" in extracted
+    assert "[SCENE_END:EP01_SC02]" in extracted
+    assert "空镜。" in extracted
