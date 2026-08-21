@@ -101,7 +101,24 @@ def _strip_embedded_subject_index_from_stage_text(raw_text: Any) -> str:
 
     if not cut_positions:
         return text.strip()
-    return text[:min(cut_positions)].strip()
+
+    si_cut = min(cut_positions)
+    script_anchors = [
+        match.start()
+        for pattern in (
+            r"\[优化后剧本",
+            r"`?\[SCENES_BLOCK_START\]`?",
+            r"`?\[SCENE_START:",
+        )
+        for match in [re.search(pattern, text, flags=re.IGNORECASE)]
+        if match
+    ]
+    script_start = min(script_anchors) if script_anchors else None
+    # Subject Index is prepended before the script in Stage 2.2. Keep the script
+    # instead of cutting from the SI header to the end of the request.
+    if script_start is not None and script_start > si_cut:
+        return text[script_start:].strip()
+    return text[:si_cut].strip()
 
 def _extract_embedded_subject_index_from_stage_text(raw_text: Any) -> str:
     text = sanitize_subject_index_text(raw_text)
@@ -332,7 +349,18 @@ def _resolve_scene_beats_adapted_script_text(
         extract_adapted_script_from_beats_user_input,
     )
 
-    sanitized = _sanitize_scene_beats_stage_text(raw_text)
+    raw = str(raw_text or "")
+    # Extract the script from the raw request first. Sanitizing Subject Index
+    # must not discard a trailing [优化后剧本] / SCENES_BLOCK payload.
+    adapted = extract_adapted_script_from_beats_user_input(raw)
+    if adapted and (
+        SCENES_BLOCK_START_TOKEN in adapted
+        or "[SCENE_START" in adapted
+        or "[SCENES_BLOCK_END]" in adapted
+    ):
+        return adapted
+
+    sanitized = _sanitize_scene_beats_stage_text(raw)
     adapted = extract_adapted_script_from_beats_user_input(sanitized)
     if adapted:
         return adapted

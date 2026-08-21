@@ -36,6 +36,31 @@ one
     assert units[0].scene_id == "EP01_SC01"
 
 
+def test_missing_outer_end_is_recovered_when_start_and_scene_pairs_exist():
+    script = """
+[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+one
+[SCENE_END:EP01_SC01]
+"""
+    units = parse_scene_units_from_markers(script)
+    assert len(units) == 1
+    assert units[0].scene_id == "EP01_SC01"
+    assert units[0].scene_text == "one"
+
+
+def test_missing_outer_wrappers_are_recovered_when_scene_pairs_exist():
+    script = """
+[SCENE_START:EP01_SC02]
+two
+[SCENE_END:EP01_SC02]
+"""
+    units = parse_scene_units_from_markers(script)
+    assert len(units) == 1
+    assert units[0].scene_id == "EP01_SC02"
+    assert units[0].scene_text == "two"
+
+
 def test_missing_outer_start_is_recovered_when_scene_pairs_and_end_exist():
     script = """
 [COMPREHENSIVE_INFO_START]

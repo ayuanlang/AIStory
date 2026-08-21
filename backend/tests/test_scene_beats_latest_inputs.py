@@ -99,6 +99,38 @@ def test_scene_units_do_not_fall_back_to_stale_episode_adaptation():
     assert "adapted_script" in source
 
 
+def test_scene_beats_keeps_script_when_subject_index_is_prepended():
+    from app.core.prompt_injection import wrap_injection_section
+
+    wrapped_script = wrap_injection_section(
+        "优化后剧本",
+        f"[优化后剧本 - Stage 2.2权威输入]\n{NEW_SCRIPT}",
+    )
+    request_text = "\n".join(
+        [
+            "[Stage 2-1 Subject Index - REQUIRED INPUT]",
+            "The following Subject Index is authoritative for Stage 2.2.",
+            wrap_injection_section("Subject Index", NEW_SUBJECT_INDEX),
+            wrapped_script,
+        ]
+    )
+    resolved = _resolve_scene_beats_adapted_script_text(request_text, OLD_SCRIPT)
+    assert "新剧本正文" in resolved
+    assert "旧剧本正文" not in resolved
+
+    units, source = resolve_scene_units_for_markdown_orchestration(
+        db=None,
+        user_text=request_text,
+        adapted_script_text=resolved,
+        project_id=0,
+        episode_id=0,
+        episode_adaptation_text=OLD_SCRIPT,
+    )
+    assert source == "adapted_script"
+    assert len(units) == 1
+    assert "新剧本正文" in str(units[0].scene_text)
+
+
 def test_scene_units_parse_request_adapted_script():
     units, source = resolve_scene_units_for_markdown_orchestration(
         db=None,

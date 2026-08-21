@@ -529,12 +529,20 @@ def _normalize_scene_marker_script_text(script_text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    has_scene_pairs = bool(SCENE_START_PATTERN.search(text) and SCENE_END_PATTERN.search(text))
     if (
         not SCENES_BLOCK_START_PATTERN.search(text)
-        and SCENE_START_PATTERN.search(text)
+        and has_scene_pairs
         and SCENES_BLOCK_END_PATTERN.search(text)
     ):
         text = f"{SCENES_BLOCK_START_TOKEN}\n{text}"
+    start_match = SCENES_BLOCK_START_PATTERN.search(text)
+    if start_match and has_scene_pairs:
+        after_start = text[start_match.end():]
+        if not SCENES_BLOCK_END_PATTERN.search(after_start):
+            text = f"{text.rstrip()}\n{SCENES_BLOCK_END_TOKEN}"
+    elif has_scene_pairs and not SCENES_BLOCK_START_PATTERN.search(text):
+        text = f"{SCENES_BLOCK_START_TOKEN}\n{text.rstrip()}\n{SCENES_BLOCK_END_TOKEN}"
     return text
 
 

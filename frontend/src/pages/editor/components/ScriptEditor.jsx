@@ -680,18 +680,29 @@ const stripBlockLevelMarkersFromSceneText = (text) => (
 const normalizeSceneMarkerScriptText = (scriptText) => {
     const text = String(scriptText || '').replace(/\r\n/g, '\n');
     if (!text.trim()) return '';
-    const normalized = text.replace(
+    let normalized = text.replace(
         /`+(\[(?:SCENES?_BLOCK_(?:START|END)|SCENE_(?:START|END)(?::[^\]]+)?)])`+/gi,
         '$1'
     );
+    const hasScenePairs = /\[SCENE_START:[^\s\]]+\]/i.test(normalized)
+        && /\[SCENE_END:[^\s\]]+\]/i.test(normalized);
     // Recover model output that contains complete scene pairs and the block END
     // but accidentally omits only the outer START marker.
     if (
         !/\[SCENES_BLOCK_START\]/i.test(normalized)
-        && /\[SCENE_START:[^\s\]]+\]/i.test(normalized)
+        && hasScenePairs
         && /\[SCENES_BLOCK_END\]/i.test(normalized)
     ) {
-        return `${SCENES_BLOCK_START_TOKEN}\n${normalized}`;
+        normalized = `${SCENES_BLOCK_START_TOKEN}\n${normalized}`;
+    }
+    if (/\[SCENES_BLOCK_START\]/i.test(normalized) && hasScenePairs) {
+        const startMatch = /\[SCENES_BLOCK_START\]/i.exec(normalized);
+        const afterStart = normalized.slice((startMatch?.index || 0) + (startMatch?.[0]?.length || 0));
+        if (!/\[SCENES_BLOCK_END\]/i.test(afterStart)) {
+            normalized = `${normalized.trimEnd()}\n${SCENES_BLOCK_END_TOKEN}`;
+        }
+    } else if (hasScenePairs && !/\[SCENES_BLOCK_START\]/i.test(normalized)) {
+        normalized = `${SCENES_BLOCK_START_TOKEN}\n${normalized.trimEnd()}\n${SCENES_BLOCK_END_TOKEN}`;
     }
     return normalized;
 };
