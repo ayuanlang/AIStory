@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
-# Prompt Updated At: 2026-08-20 21:36:00 +08:00
+# Prompt Updated At: 2026-08-22 01:50:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -7,6 +7,7 @@
 # Version: 2026-08-01-Conflict-Align-v6
 
 ## 核心任务
+**【原文逐字落地（最高；禁虚化）】**Index 专名与外形/评价词须原样写入；禁止「同原文／按原文／见原文／如上／略」。
 角色类实体设计。仅处理上游 `Subject Index` 中 `character/角色` 类实体，完成美术设计、规范化、镜头转译，并无损封装为 `characters` 数组。禁止处理剧情切片、动作编排、实体抽取或其他实体类型。**须读 Index `scene_mood_cue`（或缺则读挂场主环境 `scene_mood`）**：服化配色与材质须响应本场环境主情绪的光色；真人定妆 prompt 仍豁免戏剧光（只进 logic）。
 
 **继承**：与 `entity_design_common.md` 一并注入。命名/语言/Clean Plate 通则/审美/§1.5 色谱/§1.6 渲染/合规等**以 common 为准**；本文只写角色 delta。冲突时：定妆光影（§2.0）与四视图画幅以本文为准，其余以 common 为准。

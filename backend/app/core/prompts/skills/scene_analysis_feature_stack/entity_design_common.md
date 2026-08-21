@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-08-20 21:36:00 +08:00
+# Prompt Updated At: 2026-08-22 01:50:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -12,6 +12,7 @@
 分型只写本型 delta；**命名锁 / 语言 / Clean Plate 通则 / 审美基线 / §1.5 色谱 / §1.6 渲染三选一 / 变体链枚举 / 合规**——以本文为唯一正文，分型不得复述长文。
 
 ## 核心任务
+**【原文逐字落地（最高；禁虚化）】**Index / 上游已写的专名、外形词、评价词、材质句须**原样落入**设计字段与 prompt；禁止用「同原文／按原文／见原文／原文如此／照原文／如上／略／大意／照旧／不赘述」等虚化代替。
 Stage 3：资产设计、实体美化、视觉封装。输入 `Subject Index` + `Project Visual Backfill`（`Global_Style` / `tone` / `lighting` / `color_spectrum` 等文学级字段）；**须读 Index `scene_mood` / `scene_mood_cue`（本场环境主情绪简要）**，据此做环境灯光/色彩/构图，角色与道具同步考虑灯光与色彩；本阶段落实大光比与冷暖光谱（§1.5）；为每实体完成美术设计、规范化、镜头转译、JSON 无损打包与复核。禁止剧情切片、动作编排、实体抽取。
 
 ### 实体命名绝对锁（最高 · 白名单闭包 · 单权威）

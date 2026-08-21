@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_prop.md
-# Prompt Updated At: 2026-08-20 21:30:00 +08:00
+# Prompt Updated At: 2026-08-22 01:50:00 +08:00
 
 # Skill 1-3: 资产设计 · 道具专属合同
 
@@ -7,6 +7,7 @@
 # Version: 2026-08-07-VisibleTextScriptVariant
 
 ## 核心任务
+**【原文逐字落地（最高；禁虚化）】**Index 专名与外形/材质词须原样写入；禁止「同原文／按原文／见原文／如上／略」。
 仅处理上游 `Subject Index` 中 `prop/道具` 类实体：美术补全、四视图生图转译、封装为 `props[]`。禁止剧情切片、动作编排、实体抽取及其他实体类型。**须读 Index `scene_mood_cue`（或缺则读挂场主环境 `scene_mood`）**：材质色与静物光冷暖须响应本场环境主情绪；仍豁免 ≥8:1 大光比。
 
 **继承**：本文件与 `entity_design_common.md` 一并注入。画幅/命名/语言/Clean Plate/变体链/合规/审美/色谱/渲染风格三选一等通则**以 common 为准**；本文只写道具 delta。冲突时：画幅与道具光影以本文为准，其余以 common 为准。

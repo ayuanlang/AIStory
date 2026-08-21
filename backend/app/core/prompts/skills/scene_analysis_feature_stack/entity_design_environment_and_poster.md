@@ -1,5 +1,5 @@
 ﻿# Prompt File: skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md
-# Prompt Updated At: 2026-08-19 01:39:00 +08:00
+# Prompt Updated At: 2026-08-22 01:50:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -7,6 +7,7 @@
 # Version: 2026-08-07-EnvVisibleTextScriptVariant
 
 ## 核心任务
+**【原文逐字落地（最高；禁虚化）】**Index 环境名与环境文学须原样写入；禁止「同原文／按原文／见原文／如上／略」。
 场景类与封面海报类实体设计。仅处理上游 `Subject Index` 中 `environment/场景` 与 `cover_poster/海报/封面` 类实体，完成美术设计、规范化、镜头转译，并无损封装为 `environments` 与 `posters` 数组。禁止处理剧情切片、动作编排、实体抽取、角色设计或其他实体类型。**须读 Index `scene_mood`**：本场环境主情绪驱动灯光、色彩与构图倾向（仍守四方正交）。
 
 **继承**：与 `entity_design_common.md` 一并注入。命名/语言/审美/§1.5 色谱/§1.6 渲染/合规等通则**以 common 为准**；本文只写环境·海报 delta。冲突时：空间权威（§2.5）与环境光学（§2.7–§2.9）以本文为准，其余以 common 为准。
