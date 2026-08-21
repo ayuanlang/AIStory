@@ -33,6 +33,7 @@ from app.services.script_analysis_flow import (
     SceneMissingBeat1Error,
     coerce_target_scene_ids_for_orchestration,
     extract_scene_markdown_text_from_analyze_result,
+    extract_environment_names_from_scene_text,
     extract_scene_name_value_from_scene_text,
     extract_scenes_table_markdown_block,
     filter_scene_units_by_target_ids,
@@ -55,6 +56,23 @@ logger = logging.getLogger("api_logger")
 
 def _extract_scene_markdown_text_from_result(result: Any) -> str:
     return extract_scene_markdown_text_from_analyze_result(result)
+
+
+def _scene_orchestration_environment_name(unit: Any) -> str:
+    return extract_environment_names_from_scene_text(getattr(unit, "scene_text", "") or "")
+
+
+def _scene_orchestration_environment_instruction(environment_name: str) -> str:
+    env_name = str(environment_name or "").strip()
+    if env_name:
+        return (
+            f" Environment Name 列必须填写 `{env_name}`（本场已锁定主环境），"
+            "禁止写 None。"
+        )
+    return (
+        " Environment Name 列必须填写 Subject Index 中本场 environment 行的主环境名，"
+        "禁止因 Beat 未写 ENV:[] 而填 None。"
+    )
 
 
 async def _run_scene_markdown_node_per_scene(
@@ -144,12 +162,14 @@ async def _run_scene_markdown_node_per_scene(
                 beats_exc.min_chars,
             )
             raise HTTPException(status_code=422, detail=beats_exc.detail) from beats_exc
+        locked_environment_name = _scene_orchestration_environment_name(unit)
         single_scene_instruction = (
             f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 1/1 场）。"
             "输入剧本正文含该场 `【场景名称】{短名}｜{日·内/外}` 场景头 + `[BEAT_START:…]`…`[BEAT_END:…]` Beat 块"
             "（不含 Scene 级【主环境】等其它说明块）；"
             "请将 `【场景名称】` 后的 `{短名}｜{日·内/外}` 原样落入 Scene Name 列，并对 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。"
             f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`。"
+            f"{_scene_orchestration_environment_instruction(locked_environment_name)}"
             "禁止输出思考过程、解释、规划说明或任何非表格内容；"
             "直接以 Markdown 表格输出（仅含表头、分隔行与本场一行数据；不要输出 Part 1: Scenes Table 标题）。"
         )
@@ -302,6 +322,7 @@ async def _run_scene_markdown_node_per_scene(
                                 beats_exc.min_chars,
                             )
                             raise HTTPException(status_code=422, detail=beats_exc.detail) from beats_exc
+                        locked_environment_name = _scene_orchestration_environment_name(unit)
                         single_scene_instruction = (
                             f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 {index}/{total_scenes} 场）。"
                             "输入剧本正文含该场 `【场景名称】{短名}｜{日·内/外}` 场景头 + `[BEAT_START:…]`…`[BEAT_END:…]` Beat 块"
@@ -309,6 +330,7 @@ async def _run_scene_markdown_node_per_scene(
                             "请将 `【场景名称】` 后的 `{短名}｜{日·内/外}` 原样落入 Scene Name 列，并对 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。"
                             f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`，"
                             "不得仅填场次序号或其他别名。"
+                            f"{_scene_orchestration_environment_instruction(locked_environment_name)}"
                             "禁止输出思考过程、解释、规划说明或任何非表格内容；"
                             "直接以 Markdown 表格输出（仅含表头、分隔行与本场一行数据；不要输出 Part 1: Scenes Table 标题）。"
                         )
@@ -338,6 +360,7 @@ async def _run_scene_markdown_node_per_scene(
                             scene_name=extract_scene_name_value_from_scene_text(
                                 getattr(unit, "scene_text", "") or ""
                             ),
+                            environment_name=locked_environment_name,
                         )
                         if scene_text != raw_scene_text:
                             logger.info(

@@ -124,6 +124,12 @@ SCENE_MARKER_LINE_PATTERN = re.compile(
 )
 MIN_SCENE_BEATS_CHARS = 20
 SCENE_NAME_HEADER_PATTERN = re.compile(r"【场景名称】\s*[^\n【]+")
+_MAIN_ENV_NAME_LINE_PATTERN = re.compile(r"(?m)^[ \t]*【主环境】[ \t]*(.+?)\s*$")
+_ENV_BLOCK_LEADING_NAME_PATTERN = re.compile(
+    r"\[ENV_BLOCK_START(?::[^\]]+)?\]\s*([^,，\n\]]+)[,，]",
+    re.IGNORECASE,
+)
+_OWNING_MAIN_ENV_PATTERN = re.compile(r"所属主环境\s*=\s*([^\s｜|\r\n]+)")
 
 ISSUE_SEVERITY_VALUES = {"INFO", "WARNING", "BLOCKER"}
 
@@ -1699,6 +1705,47 @@ def extract_scene_name_value_from_scene_text(scene_text: str) -> str:
     return normalized
 
 
+def extract_environment_names_from_scene_text(scene_text: str) -> str:
+    """
+    Extract locked main-environment names from Stage 1 ENV_BLOCK / 【主环境】 lines.
+
+    Used to backfill Scenes Table `Environment Name` after Stage 2.2, which does not
+    receive the environment block and may otherwise emit None.
+    """
+    text = str(scene_text or "")
+    if not text.strip():
+        return ""
+
+    names: List[str] = []
+    seen: Set[str] = set()
+
+    def _add(raw_name: str) -> None:
+        cleaned = str(raw_name or "").strip().strip("`\"'“”‘’[]")
+        cleaned = re.split(r"[｜|]", cleaned, maxsplit=1)[0].strip()
+        cleaned = re.sub(r"^(名称|主环境|环境名|环境)\s*[=：:]\s*", "", cleaned).strip()
+        if not cleaned:
+            return
+        if cleaned.startswith("─") or cleaned.startswith("-"):
+            return
+        normalized = re.sub(r"[\s_*`'\"“”‘’]+", "", cleaned).lower()
+        if normalized in {"none", "null", "nil", "n/a", "na", "无", "空"}:
+            return
+        if cleaned in seen:
+            return
+        seen.add(cleaned)
+        names.append(cleaned)
+
+    for match in _MAIN_ENV_NAME_LINE_PATTERN.finditer(text):
+        _add(match.group(1))
+    if not names:
+        for match in _ENV_BLOCK_LEADING_NAME_PATTERN.finditer(text):
+            _add(match.group(1))
+    if not names:
+        for match in _OWNING_MAIN_ENV_PATTERN.finditer(text):
+            _add(match.group(1))
+    return "／".join(names)
+
+
 def extract_beat_blocks_from_scene_text(scene_text: str) -> str:
     """
     Extract only `[BEAT_START:…]`…`[BEAT_END:…]` blocks from a Stage 1 scene body.
@@ -1850,11 +1897,14 @@ def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
         if used_fallback
         else extract_scene_name_header_from_scene_text(scene_text)
     )
+    environment_names = extract_environment_names_from_scene_text(scene_text)
     parts = [SCENES_BLOCK_START_TOKEN]
     if marker_start:
         parts.append(marker_start)
     if scene_name_header:
         parts.append(scene_name_header)
+    if environment_names:
+        parts.append(f"【本场环境名】{environment_names}")
     if body_text:
         parts.append(body_text)
     if marker_end:
@@ -2441,12 +2491,44 @@ def _scene_markdown_ids_match(expected: str, returned: str, scene_order: Optiona
     return False
 
 
+def _orchestration_row_match_score(
+    cells: List[str],
+    *,
+    scene_id_idx: int,
+    scene_no_idx: int,
+    scene_name_idx: int,
+    expected_scene_id: str,
+    scene_order: Optional[int],
+    scene_name: str,
+) -> int:
+    row_scene_id = _scene_table_cell_value(cells, scene_id_idx)
+    row_scene_no = _scene_table_cell_value(cells, scene_no_idx)
+    row_scene_name = _scene_table_cell_value(cells, scene_name_idx)
+    score = 0
+    if _scene_markdown_ids_match(expected_scene_id, row_scene_id, scene_order):
+        score += 100
+    if (
+        scene_order is not None
+        and not _scene_id_has_letter_suffix(expected_scene_id)
+        and str(row_scene_no).strip() == str(scene_order).strip()
+    ):
+        score += 50
+    preferred_name = str(scene_name or "").strip()
+    if preferred_name and row_scene_name:
+        left = preferred_name.replace(" ", "")
+        right = row_scene_name.replace(" ", "")
+        if left == right or left in right or right in left:
+            score += 20
+    return score
+
+
 def patch_single_scene_markdown_for_orchestration(
     scene_text: Any,
     expected_scene_id: str,
     *,
     scene_order: Optional[int] = None,
     scene_name: Optional[str] = None,
+    environment_name: Optional[str] = None,
 ) -> str:
     text = sanitize_scene_markdown_llm_output(scene_text) or str(scene_text or "").strip()
     expected = str(expected_scene_id or "").strip()
@@ -2459,6 +2541,7 @@ def patch_single_scene_markdown_for_orchestration(
 
     episode_id = _extract_episode_id_from_scene_id(expected)
     preferred_scene_name = str(scene_name or "").strip()
+    preferred_environment_name = str(environment_name or "").strip()
 
     for block in blocks:
         lines = [line.strip() for line in str(block or "").splitlines() if str(line or "").strip()]
@@ -2473,6 +2556,10 @@ def patch_single_scene_markdown_for_orchestration(
         scene_no_idx = _find_scene_table_col_idx(normalized_headers, ["sceneno", "场次序号", "场次"])
         scene_name_idx = _find_scene_table_col_idx(normalized_headers, ["scenename", "场景名", "场景名称"])
         episode_id_idx = _find_scene_table_col_idx(normalized_headers, ["episodeid", "剧集id", "分集id"])
+        environment_idx = _find_scene_table_col_idx(
+            normalized_headers,
+            ["environmentname", "环境名", "环境名称", "环境"],
+        )
 
         candidate_rows: List[List[str]] = []
         for line in lines[1:]:
@@ -2487,19 +2574,20 @@ def patch_single_scene_markdown_for_orchestration(
             continue
 
         selected_row = candidate_rows[0]
+        best_score = -1
         for cells in candidate_rows:
-            row_scene_id = _scene_table_cell_value(cells, scene_id_idx)
-            row_scene_no = _scene_table_cell_value(cells, scene_no_idx)
-            if _scene_markdown_ids_match(expected, row_scene_id, scene_order):
+            score = _orchestration_row_match_score(
+                cells,
+                scene_id_idx=scene_id_idx,
+                scene_no_idx=scene_no_idx,
+                scene_name_idx=scene_name_idx,
+                expected_scene_id=expected,
+                scene_order=scene_order,
+                scene_name=preferred_scene_name,
+            )
+            if score > best_score:
+                best_score = score
                 selected_row = cells
-                break
-            if (
-                scene_order is not None
-                and not _scene_id_has_letter_suffix(expected)
-                and str(row_scene_no).strip() == str(scene_order).strip()
-            ):
-                selected_row = cells
-                break
 
         row = list(selected_row)
         while len(row) < len(headers):
@@ -2518,6 +2606,10 @@ def patch_single_scene_markdown_for_orchestration(
             current_name = _scene_table_cell_value(row, scene_name_idx)
             if not current_name or current_name.lower() in {"none", "null", "n/a", "-"}:
                 row[scene_name_idx] = preferred_scene_name
+        if preferred_environment_name and environment_idx >= 0:
+            current_env = _scene_table_cell_value(row, environment_idx)
+            if _is_blank_or_none_environment_name(current_env):
+                row[environment_idx] = preferred_environment_name
         return _build_scene_markdown_from_table_row(headers, row)
 
     return text
@@ -2734,6 +2826,7 @@ __all__ = [
     "wrap_scene_unit_as_script_block",
     "extract_scene_name_header_from_scene_text",
     "extract_scene_name_value_from_scene_text",
+    "extract_environment_names_from_scene_text",
     "extract_beat_blocks_from_scene_text",
     "extract_legacy_beat_sections_from_scene_text",
     "extract_env_block_from_scene_text",

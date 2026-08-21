@@ -3,8 +3,11 @@ from app.services.script_analysis_flow import (
     ParsedSceneUnit,
     _build_scene_markdown_from_table_row,
     coerce_target_scene_ids_for_orchestration,
+    extract_environment_names_from_scene_text,
     extract_scene_name_value_from_scene_text,
     filter_scene_units_by_target_ids,
+    patch_single_scene_markdown_for_orchestration,
+    validate_single_scene_markdown_for_orchestration,
 )
 
 
@@ -73,3 +76,39 @@ def test_legacy_scene_name_drops_keys_and_moves_validation_out():
     assert extract_scene_name_value_from_scene_text(scene_text) == (
         "客栈天井玉佩掉落与真气爆发·黄昏·内·正常叙事"
     )
+
+
+def test_extract_environment_names_from_main_env_block():
+    scene_text = """
+[ENV_BLOCK_START]
+────【主环境】────
+【主环境】客栈废墟外｜日夜内外=黄昏·外｜主环境角色=当下主线
+────【衍生环境】────
+- `0度客栈废墟外`：所属主环境=客栈废墟外
+[ENV_BLOCK_END]
+"""
+    assert extract_environment_names_from_scene_text(scene_text) == "客栈废墟外"
+
+
+def test_patch_orchestration_backfills_environment_name_and_picks_correct_row():
+    llm_table = """
+| Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Adapted Script Excerpt | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| EP01 | EP01_SC05 | 1 | 金镶玉看破李玄伪装·黄昏·内·正常叙事 | None | beat-sc01 | None | None | None | None | None | None | None | CHAR:[@金镶玉] | None |
+| EP01 | EP01_SC05 | 5 | 两人并肩迎敌·黄昏·外·正常叙事 | None | beat-sc05 | None | None | None | None | None | None | None | CHAR:[@金镶玉] | PROP:[纯金算盘] |
+"""
+    patched = patch_single_scene_markdown_for_orchestration(
+        llm_table,
+        "EP01_SC05",
+        scene_order=5,
+        scene_name="两人并肩迎敌·黄昏·外·正常叙事",
+        environment_name="客栈废墟外",
+    )
+    assert "beat-sc05" in patched
+    assert "beat-sc01" not in patched
+    assert "客栈废墟外" in patched
+    assert validate_single_scene_markdown_for_orchestration(
+        patched,
+        "EP01_SC05",
+        scene_order=5,
+    ) is None
