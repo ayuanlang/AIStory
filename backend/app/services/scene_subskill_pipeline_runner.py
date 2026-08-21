@@ -70,14 +70,36 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
     return "逐场子技能执行失败"
 
 
+def _completion_marker_pattern(marker: str):
+    return re.compile(rf"`?{re.escape(marker)}`?", re.IGNORECASE)
+
+
 def _strip_subskill_completion_marker(text: str, prompt_file: str) -> str:
     marker = _SUBSKILL_COMPLETION_MARKERS[prompt_file]
-    source = str(text or "").strip()
-    if not source or source.count(marker) != 1:
+    source = str(text or "").replace("\r\n", "\n").strip()
+    if not source:
         return ""
-    if source.splitlines()[-1].strip() != marker:
+    matches = list(_completion_marker_pattern(marker).finditer(source))
+    if not matches:
         return ""
-    return source[: source.rfind(marker)].rstrip()
+    return source[: matches[-1].start()].rstrip()
+
+
+def _try_extract_subskill_scene_block(
+    result_text: str,
+    scene_id: str,
+    fallback_special: str,
+    previous_block: str = "",
+) -> str:
+    try:
+        return _extract_single_scene_block(
+            result_text,
+            scene_id,
+            fallback_special,
+            previous_block=previous_block,
+        )
+    except HTTPException:
+        return ""
 
 
 def _extract_project_tail(script_text: str) -> str:
@@ -319,13 +341,32 @@ async def _call_scene_subskill(
         )
         text = _extract_analysis_text_from_result(result).strip()
         stripped = _strip_subskill_completion_marker(text, prompt_file) if text else ""
+        candidate = stripped or text
+        extracted = (
+            _try_extract_subskill_scene_block(
+                candidate,
+                scene_id,
+                fallback_special,
+                previous_block=previous_block,
+            )
+            if candidate
+            else ""
+        )
+        if extracted:
+            if not stripped:
+                logger.warning(
+                    "[scene_subskill_pipeline] accepted complete scene without end marker scene=%s prompt=%s",
+                    scene_id,
+                    prompt_file,
+                )
+            return extracted
         if not text:
             failure_code = "SCENE_SUBSKILL_EMPTY_OUTPUT"
         elif not stripped:
             failure_code = "SCENE_SUBSKILL_COMPLETION_MARKER_MISSING"
         else:
             try:
-                return _extract_single_scene_block(
+                _extract_single_scene_block(
                     stripped,
                     scene_id,
                     fallback_special,
@@ -335,6 +376,8 @@ async def _call_scene_subskill(
                 failure_code = _subskill_parse_failure_code(parse_exc)
                 if not failure_code:
                     raise
+            else:
+                failure_code = "SCENE_SUBSKILL_OUTPUT_INVALID"
         logger.warning(
             "[scene_subskill_pipeline] incomplete output scene=%s prompt=%s attempt=%s/%s code=%s expected_marker=%s",
             scene_id,
@@ -366,6 +409,20 @@ async def _call_scene_subskill(
             )
             task_db.commit()
         if attempt >= max_attempts:
+            if previous_block and prompt_file == STAGING_PROMPT:
+                fallback = _try_extract_subskill_scene_block(
+                    previous_block,
+                    scene_id,
+                    fallback_special,
+                    previous_block=previous_block,
+                )
+                if fallback:
+                    logger.warning(
+                        "[scene_subskill_pipeline] staging fell back to previous scene block scene=%s code=%s",
+                        scene_id,
+                        failure_code,
+                    )
+                    return fallback
             raise HTTPException(
                 status_code=422,
                 detail=f"{failure_code}:{scene_id}:{completion_marker}",

@@ -1,9 +1,9 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_subskill_environment.md
-# Prompt Updated At: 2026-08-20 17:10:00 +08:00
+# Prompt Updated At: 2026-08-22 01:38:00 +08:00
 # Skill 1-1-ENV: 逐场主/衍生环境补丁（复用与新设计）
 # Parent: scene_planning_1_script_optimization.md（只读基线，本文件不改原文）
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]
-# Version: 2026-08-20
+# Version: 2026-08-22
 # 来源：原站位子技能 §9–§11 主/衍生环境 · 复用 · 新建
 
 ## 目标（最高；本子技能工作方式）
@@ -15,6 +15,7 @@
 5. **综合信息只读使用、不输出**：输入若含 `[COMPREHENSIVE_INFO_START]`…`[COMPREHENSIVE_INFO_END]`，可读取其世界观、整体简介、人物简介作为环境核销语境，但不得在结果中复制、移动或改写。
 6. **项目级与路由元数据只读使用、不输出**：可读取 `SPECIAL_SCENE_ANALYSIS` 与 `project_visual_backfill` 作为环境承载依据，但输出中不得出现这两类包裹或 JSON。
 7. **场级指导强制承载**：读取【卖点综合】`指导=`与【叙事综合】贯穿信息。凡 `细节特写参考` 或 `贯穿保护` 涉及环境、道具、文字/线索载体，必须进入主环境/未落清单及至少一个合法衍生的可见白名单；为 `反馈特写参考` 保留可同显的角色活动空间，为 `运镜参考` 保留可揭示、逼近、跟随、拉开或停留的连续可见空间。只提供环境承载条件，不在本文件写具体镜头执行。
+8. **结束标签硬闸**：全部 Scene 补丁写完后，全文最后一行必须是 `[ENVIRONMENT_PLAN_OUTPUT_END]`，缺则失败。
 
 ---
 ## 通用硬约束（各子技能同锁；最高）
@@ -192,6 +193,7 @@ B{n}=R:{…}｜ENV:{完整名}｜W:{…}｜R−W=∅|{…}｜选角=覆盖|交�
 - Beat 当前环境永不挂裸主名（建置选用本文件已声明 `{N}度…`）。
 - 未命中内容不输出；由程序直接保留上游权威文本。
 
-## 完整输出结束标签（最高）
-- 完成全部 Scene 的逐场环境补丁后，必须将 `[ENVIRONMENT_PLAN_OUTPUT_END]` 作为**全文最后一个非空行**输出，且全稿仅出现一次。
-- 该标签不得放入任何 `ENV_SCENE_PATCH`、`ENV_BLOCK` 或代码围栏；标签后禁止输出解释、标点或任何其他内容。
+## 完整输出结束标签（最高；缺则整份不合格）
+- 交付前最后一步：全文最后一个非空行必须逐字是 `[ENVIRONMENT_PLAN_OUTPUT_END]`，全稿仅一次，无反引号、无围栏。
+- 写完最后一个 `ENV_SCENE_PATCH` 后立刻换行打该标签；禁止在补丁后截断。
+- 该标签不得放入任何 `ENV_SCENE_PATCH`、`ENV_BLOCK` 或代码围栏；标签后禁止任何字、标点或解释。缺该行=失败。

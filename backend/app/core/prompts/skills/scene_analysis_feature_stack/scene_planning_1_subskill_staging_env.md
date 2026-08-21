@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_subskill_staging_env.md
-# Prompt Updated At: 2026-08-22 00:30:00 +08:00
+# Prompt Updated At: 2026-08-22 01:38:00 +08:00
 # Skill 1-1-STAGING: 建置与入戏补缺（只在已锁环境中）
 # Parent: scene_planning_1_script_optimization.md（只读基线，本文件不改原文）
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]
@@ -17,6 +17,7 @@
 6. **特殊路由包裹只读透传**：位于 `SCENE_START` 前的 `SPECIAL_SCENE_ANALYSIS` 包裹及 VFX/XIAN 两行必须逐字原位保留，START/END 与对应 Scene ID 不得改动；不得移入 Scene、Beat、【建置】或【入戏】。
 7. **场级指导强制落地**：读取【场景综合】【卖点综合】`指导=`、【情绪峰谷综合】和【叙事综合】。建置与选角必须让 `细节特写参考` 的对象处于当前衍生白名单且可读，让 `反馈特写参考` 的人物可见面与重点对象同拍或紧邻切角可读，并为 `运镜参考` 保留无穿障的揭示/逼近/跟随/拉开/停留空间。【叙事综合】`关键人物`（须放大）须在合法衍生内可见、有入画/改因果可读面，不得只作背景剪影。`贯穿保护` 的道具、信息载体、伤态、持物、关键人物及其本场改因果状态必须在速查与终态中连续。
 8. **输出=完整一场戏（最高）**：下游按分割符拆场。禁止只交覆盖矩阵、位置规划、观察视角或 Beat 摘录。必须从 `[SCENES_BLOCK_START]` 起笔，保留输入的场号、【场景名称】、环境块、`SCENE_CONTENT` 与场级综合，再写入本技能新增块与全部 Beat，最后以 `[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`、`[STAGING_ENV_OUTPUT_END]` 收尾。
+9. **结束标签硬闸（最高）**：缺 `[STAGING_ENV_OUTPUT_END]` = 整份未完成=失败。写完 `[SCENES_BLOCK_END]` 必须立刻换行输出该标签作为**全文最后一行**；禁止在 Beat 结束后停下、禁止用「完/已完成」代替、禁止反引号包裹。
 
 ---
 ## 通用硬约束（各子技能同锁；最高）
@@ -504,7 +505,7 @@ B{n}=R:{…}｜ENV:{已声明完整名}｜W:{…}｜R−W=∅|{…}｜选角=覆
 
 ---
 ## 成稿自检（本子技能）
-- **闭包**：已输出 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、环境块、全部 Beat、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`；不是矩阵/规划摘录。
+- **闭包**：已输出 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、环境块、全部 Beat、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`、`[STAGING_ENV_OUTPUT_END]`；不是矩阵/规划摘录。最后一行必须是结束标签。
 - 环境骨架已锁定；未新建主环境、未改注册名/四向/0°轴。
 - **补缺**：只在对应已锁 `{N}度…` 中补缺建置与入戏；输入已合格则原样透传。
 - 【建置】=初态，【入戏】无位置/朝向/落点，终态在切换说明。
@@ -513,7 +514,9 @@ B{n}=R:{…}｜ENV:{已声明完整名}｜W:{…}｜R−W=∅|{…}｜选角=覆
 - 未改对白词、未改特效过程、未改场核。
 - 未命中段无润色/重排/顺带改写。
 
-## 完整输出结束标签（最高）
-- 完成整份输入的建置与入戏处理后，必须将 `[STAGING_ENV_OUTPUT_END]` 作为**全文最后一个非空行**输出，且全稿仅出现一次。
-- 该标签不得进入 Scene、`SCENE_CONTENT`、Beat、项目视觉回填 JSON 或代码围栏；标签后禁止输出任何内容。
-- **完整 Scene 闭包（最高）**：先输出本场 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、环境块、场级综合、本技能新增块、全部 Beat，再输出 `[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只输出【Beat→衍生ENV剧情覆盖矩阵】、【ENV覆盖综合】、位置/观察块或结束标签。
+## 完整输出结束标签（最高；缺则整份不合格）
+- 交付前最后一步：确认全文最后一个非空行逐字是 `[STAGING_ENV_OUTPUT_END]`，全稿仅一次，无反引号、无代码围栏。
+- 顺序必须是 `[BEAT_STREAM_END]` → `[SCENE_END:{scene_id}]` → `[SCENES_BLOCK_END]` → `[STAGING_ENV_OUTPUT_END]`。写完 `SCENES_BLOCK_END` 立刻换行打标签，禁止在 Beat 后截断收束。
+- 该标签不得进入 Scene、`SCENE_CONTENT`、Beat、JSON 或围栏；标签后禁止任何字、标点或解释。
+- 缺该行、写在中间、或用「完/已完成/END」代替 = 失败。
+- **完整 Scene 闭包（最高）**：先输出本场 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、环境块、场级综合、本技能新增块、全部 Beat，再输出 `[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`、结束标签。禁止只输出【Beat→衍生ENV剧情覆盖矩阵】、【ENV覆盖综合】、位置/观察块。

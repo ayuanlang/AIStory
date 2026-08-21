@@ -2982,7 +2982,14 @@ const Editor = ({
                                 const duplicateExisting = (existingScenes || []).some(
                                     (s) => String(s?.scene_no || '').replace(/\s+/g, '') === sceneNoKey
                                 );
-                                if (duplicatePending || duplicateExisting) {
+                                if (duplicatePending) {
+                                    addLog(
+                                        `Skipped Scene ${scData.scene_no}: already queued in this import.`,
+                                        'warning'
+                                    );
+                                    continue;
+                                }
+                                if (duplicateExisting && !importOptions?.updateExistingScenes) {
                                     addLog(
                                         `Skipped Scene ${scData.scene_no}: already queued or exists in workspace; import abandoned.`,
                                         'warning'
@@ -3141,7 +3148,10 @@ const Editor = ({
 
                 if (pendingSceneRows.length > 0) {
                     try {
-                        const batchResp = await batchUpsertScenes(activeEpisodeId, pendingSceneRows, { recomputeCost: false });
+                        const batchResp = await batchUpsertScenes(activeEpisodeId, pendingSceneRows, {
+                            recomputeCost: false,
+                            skipExisting: !importOptions?.updateExistingScenes,
+                        });
                         const batchScenes = Array.isArray(batchResp?.scenes) ? batchResp.scenes : [];
                         const sceneIdByNo = new Map(
                             batchScenes
@@ -4170,7 +4180,7 @@ const Editor = ({
                                             </div>
                                         )}
                                     >
-                                        <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} tabMediaRefreshSignal={tabMediaRefreshSignals.script} isTabActive={activeTab === 'script'} onMediaRefreshRequest={() => bumpTabMediaRefresh('script')} />
+                                        <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} onWorkspaceScenesChanged={() => setScenesRefreshKey((prev) => prev + 1)} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} tabMediaRefreshSignal={tabMediaRefreshSignals.script} isTabActive={activeTab === 'script'} onMediaRefreshRequest={() => bumpTabMediaRefresh('script')} />
                                     </ErrorBoundary>
                                 </div>
                             )}

@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_subskill_drama_standardization.md
-# Prompt Updated At: 2026-08-22 00:30:00 +08:00
+# Prompt Updated At: 2026-08-22 01:38:00 +08:00
 # Skill 1-1-CORE: 文戏标准化与最终 Beat 确认
 # Parent: scene_planning_1_script_optimization.md（只读基线，本文件为新增摘除稿，不改原文）
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]
@@ -18,7 +18,7 @@
 **【边界】**不改事实/因果；禁新增改因果事件；**禁删/漏原剧本任一文字单元**。具名 §19｜上游实体名逐字｜中英同义只留项目语言 §5a｜**禁实拍执行语**。不改已锁卖点名/峰谷。
 **【下游】**`shot_generation.md` 负责完整分镜。本文件仅可为落实【卖点综合】`运镜参考`，在对应 Beat【入戏】写一条短的有动机镜头运动句；禁焦距、设备、机位参数、复杂镜头表及指导外的分镜处方。
 **【允许】**可增微表演/特写切口/标点节奏/关键情报加厚——**不改因果、原文信息零丢失**，且须服务输入已锁的本场重点。可拆对白落拍、另起 Beat。上游已写则保真不得压扁；上游空泛则按 §5 加密表演/特写。
-**【输出】**Part1 核销标签｜`[ADAPTED_SCRIPT]` 内**完整一场戏**（【角色设定】禁发散）｜输入已有的 `project_visual_backfill` 原样置于末尾。Part2 必须含 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、输入已有环境块/`SCENE_CONTENT`、最终 Beat、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只交第一部分说明或无分割符的 Beat 摘录。
+**【输出】**Part1 核销标签｜`[ADAPTED_SCRIPT]` 内**完整一场戏**（【角色设定】禁发散）｜输入已有的 `project_visual_backfill` 原样置于末尾。Part2 必须含 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、输入已有环境块/`SCENE_CONTENT`、最终 Beat、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只交第一部分说明或无分割符的 Beat 摘录。全文最后一行必须是 `[DRAMA_STANDARDIZATION_OUTPUT_END]`，缺则失败。
 **【成稿口径（最高）】**除 Beat 画面句外，成稿一律结构化极简：Markdown 区=`【标签】键=值｜键=值`；【入戏】=过程画面散文（对白/微表演/音效/环境情绪）。**本文件不在入戏写位置、朝向、层位、左右、距离、起终点或槽位**（若输入已写空间词，不删不改）。规则只作内部，成稿只交结论。
 **【Beat 格式继承（最高）】**完整继承父提示 `scene_planning_1_script_optimization.md` 的三段式 Beat 输出接口：每个 Beat 必须依次包含 `────【建置】────`、`────【入戏】────`、`────【Beat切换说明】────`…`────【Beat切换说明结束】────`，不得省略、改名或换序。本文件不重新承担环境、空间、构图规划：输入已有字段原样继承；拆分/新增 Beat 时沿用其来源 Beat 的建置基线，只更新因最终 Beat 编号、入戏内容及前后承接必然变化的引用，禁止无据改 ENV、站位、朝向或构图。
 ## 阅读地图
@@ -287,8 +287,11 @@ Part1 必须输出：
 - VFX/XIAN 专项指导只作 `专项保留`，本文件未重复扩写；无“标签写已落地但 Beat 无内容”。
 - **禁止越界**：未重切 Scene、未改卖点名/峰谷、未把文戏改写成武戏/仙攻。
 - 原文信息覆盖=100%，每项唯一落点；拆句不改词；每场 Beat 从 1 连续，START/标题/END 与所有 B 引用一致。
+- **结束标签**：全文最后一行是 `[DRAMA_STANDARDIZATION_OUTPUT_END]`。
 
-## 完整输出结束标签（最高）
-- 完成整份输入的文戏标准化后，必须将 `[DRAMA_STANDARDIZATION_OUTPUT_END]` 作为**全文最后一个非空行**输出，且全稿仅出现一次。
-- 该标签不得进入任何 Scene、`SCENE_CONTENT`、Beat、项目视觉回填 JSON 或代码围栏；标签后禁止输出任何内容。
-- **完整 Scene 闭包（最高）**：Part2 必须包含本场 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、最终 Beat 列表、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只输出第一部分说明、覆盖矩阵、无分割符的 Beat 或结束标签。
+## 完整输出结束标签（最高；缺则整份不合格）
+- 交付前最后一步：全文最后一个非空行必须逐字是 `[DRAMA_STANDARDIZATION_OUTPUT_END]`，全稿仅一次，无反引号、无围栏。
+- 写完 `[SCENES_BLOCK_END]`（及输入已有的 visual backfill）后立刻换行打该标签；禁止在 Beat 或 Part1 后截断。
+- 该标签不得进入 Scene、`SCENE_CONTENT`、Beat、JSON 或围栏；标签后禁止任何字、标点或解释。
+- 缺该行或用「完/已完成」代替 = 失败。
+- **完整 Scene 闭包（最高）**：Part2 必须包含本场 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、最终 Beat 列表、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只输出第一部分说明、覆盖矩阵或无分割符的 Beat。

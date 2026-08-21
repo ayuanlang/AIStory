@@ -501,7 +501,8 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
         if len(headers) < 4:
             continue
 
-        scene_no_idx = _find_idx(headers, ["Scene No", "场次", "场次号"])
+        scene_no_idx = _find_idx(headers, ["Scene No", "场次", "场次号", "场次序号"])
+        scene_id_idx = _find_idx(headers, ["Scene ID", "场景ID", "场景编号"])
         core_idx = _find_idx(headers, ["Core Scene Info", "核心场景信息", "Core Goal"])
         original_idx = _find_idx(headers, ["Original Script Text", "原始剧本文本", "Description", "Adapted Script Text", "改编剧本", "改编剧本文本"])
 
@@ -538,6 +539,7 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
                 return _clean_scene_table_cell(cols[idx]) if idx >= 0 and idx < len(cols) else ""
 
             row_payload = {
+                "scene_id": _get(scene_id_idx),
                 "scene_no": _get(scene_no_idx),
                 "scene_name": _get(scene_name_idx),
                 "equivalent_duration": _get(duration_idx),

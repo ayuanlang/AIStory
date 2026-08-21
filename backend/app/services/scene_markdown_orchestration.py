@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
@@ -119,6 +119,103 @@ def _scene_orchestration_error_code(exc: Exception, scene_id: str) -> str:
     return f"SCENE_MARKDOWN_ORCHESTRATION_FAILED:{scene_id}"
 
 
+def _select_workspace_row_from_orchestration_markdown(
+    markdown: str,
+    *,
+    target_scene_id: str,
+    scene_order: Optional[int] = None,
+) -> Optional[Dict[str, str]]:
+    from app.services.scene_no_utils import _canonicalize_scene_no
+    from app.services.scene_subject_helpers import _parse_scene_rows_from_markdown
+
+    rows = _parse_scene_rows_from_markdown(markdown)
+    if not rows:
+        return None
+    target = str(target_scene_id or "").strip()
+    target_no = _canonicalize_scene_no(None, scene_id=target) or (
+        str(int(scene_order)) if scene_order else ""
+    )
+    for row in rows:
+        row_id = str(row.get("scene_id") or "").strip()
+        row_no = _canonicalize_scene_no(row.get("scene_no"), scene_id=row_id)
+        if target and row_id and target.lower() == row_id.lower():
+            return row
+        if target_no and row_no and target_no == row_no:
+            return row
+    if len(rows) == 1:
+        return rows[0]
+    return None
+
+
+def upsert_workspace_scene_from_orchestration_markdown(
+    db: Session,
+    *,
+    episode_id: int,
+    markdown: str,
+    target_scene_id: str,
+    scene_order: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Write the validated Scenes Table row into workspace Scene records."""
+    from app.models.all_models import Scene
+    from app.services.scene_no_utils import _canonicalize_scene_no, _find_active_scene_by_scene_no
+
+    row = _select_workspace_row_from_orchestration_markdown(
+        markdown,
+        target_scene_id=target_scene_id,
+        scene_order=scene_order,
+    )
+    if not row:
+        return {"ok": False, "reason": "no_importable_row", "created": 0, "updated": 0}
+
+    scene_id = str(row.get("scene_id") or target_scene_id or "").strip()
+    scene_no = _canonicalize_scene_no(row.get("scene_no"), scene_id=scene_id)
+    if not scene_no and scene_order:
+        scene_no = str(int(scene_order))
+    if not scene_no:
+        return {"ok": False, "reason": "scene_no_required", "created": 0, "updated": 0}
+
+    existing = _find_active_scene_by_scene_no(
+        db,
+        episode_id=int(episode_id),
+        scene_no=scene_no,
+        scene_id=scene_id,
+    )
+    payload = {
+        "scene_no": scene_no,
+        "scene_name": str(row.get("scene_name") or "").strip() or None,
+        "original_script_text": str(row.get("original_script_text") or "").strip() or None,
+        "equivalent_duration": str(row.get("equivalent_duration") or "").strip() or None,
+        "core_scene_info": str(row.get("core_scene_info") or "").strip() or None,
+        "environment_name": str(row.get("environment_name") or "").strip() or None,
+        "linked_characters": str(row.get("linked_characters") or "").strip() or None,
+        "key_props": str(row.get("key_props") or "").strip() or None,
+    }
+    if existing is not None:
+        for key, value in payload.items():
+            setattr(existing, key, value)
+        db.add(existing)
+        return {
+            "ok": True,
+            "reason": "updated",
+            "created": 0,
+            "updated": 1,
+            "scene_no": scene_no,
+            "workspace_scene_id": int(getattr(existing, "id", 0) or 0) or None,
+        }
+
+    scene = Scene(episode_id=int(episode_id), **payload)
+    db.add(scene)
+    db.flush()
+    return {
+        "ok": True,
+        "reason": "created",
+        "created": 1,
+        "updated": 0,
+        "scene_no": scene_no,
+        "workspace_scene_id": int(getattr(scene, "id", 0) or 0) or None,
+    }
+
+
 def _import_scene_markdown_stage_with_retry(
     db: Session,
     *,
@@ -163,7 +260,7 @@ def _derive_scene_orchestration_phase(
 ) -> str:
     import_key = str(import_status or "").strip().lower()
     parse_key = str(parse_status or "").strip().lower()
-    if import_key in {"success"}:
+    if import_key in {"success", "imported"}:
         return "imported"
     if import_key in {"awaiting_workspace_import"}:
         return "llm_returned"

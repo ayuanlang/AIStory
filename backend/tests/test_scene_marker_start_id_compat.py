@@ -235,3 +235,28 @@ def test_subskill_staging_fragment_wraps_when_previous_missing():
     assert "[SCENE_START:EP01_SC02]" in extracted
     assert "[SCENE_END:EP01_SC02]" in extracted
     assert "空镜。" in extracted
+
+
+def test_subskill_accepts_complete_beats_without_end_marker():
+    from app.services.scene_subskill_pipeline_runner import (
+        STAGING_PROMPT,
+        _strip_subskill_completion_marker,
+        _try_extract_subskill_scene_block,
+    )
+
+    body = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC04]
+【场景名称】客栈夜话｜夜·内
+[BEAT_STREAM_START]
+[BEAT_START:1]
+- Beat 1：
+入夜。
+[BEAT_END:1]
+[BEAT_STREAM_END]
+[SCENE_END:EP01_SC04]
+[SCENES_BLOCK_END]"""
+
+    assert _strip_subskill_completion_marker(body, STAGING_PROMPT) == ""
+    extracted = _try_extract_subskill_scene_block(body, "EP01_SC04", "")
+    assert "[SCENE_START:EP01_SC04]" in extracted
+    assert "入夜。" in extracted

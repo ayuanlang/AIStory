@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_subskill_xian_attack.md
-# Prompt Updated At: 2026-08-22 00:30:00 +08:00
+# Prompt Updated At: 2026-08-22 01:38:00 +08:00
 # Skill 1-1-XIAN: 仙攻特效
 # Parent: scene_planning_1_script_optimization.md（只读基线，本文件不改原文）
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]
@@ -12,7 +12,7 @@
 2. **服从场核**：过程加密服务本场情节/情绪重点；未达启用门槛不得加仙攻。
 3. **其余原样输出**：对白、文戏、近身拳脚、通用法攻、场核、场号、建置几何。
 4. **无命中则整份原样**。
-5. **输出=完整一场戏**：无论是否改写，都必须输出 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、环境块/`SCENE_CONTENT`（输入有则原样）、全部 Beat、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只交命中段或结束标签。
+5. **输出=完整一场戏**：无论是否改写，都必须输出 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、环境块/`SCENE_CONTENT`（输入有则原样）、全部 Beat、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只交命中段或结束标签。全文最后一行必须是 `[XIAN_ATTACK_OUTPUT_END]`，缺则失败。
 
 **启用门槛（命中任一才优化仙攻段）**：题材=仙侠/武侠/玄幻/修真/御剑/空战；或角色有轻功/法力/飞剑/法相/金身；或原文出现灵气/真元/罡气/剑气/结印/域场/化龙凤。
 
@@ -177,8 +177,10 @@
 - 入戏无位置/朝向/落点；终态在切换说明。
 - 未命中启用门槛时不得凭空加仙攻。
 - 未命中段无润色/重排/顺带改写。
+- 全文最后一行是 `[XIAN_ATTACK_OUTPUT_END]`。
 
-## 完整输出结束标签（最高）
-- 完成整份输入的仙攻子技能处理后，必须将 `[XIAN_ATTACK_OUTPUT_END]` 作为**全文最后一个非空行**输出，且全稿仅出现一次。
-- 即使当前 Scene 最终无需改写，也必须输出完整只读结果并以该标签收尾；标签不得进入 Scene、Beat、JSON 或代码围栏，标签后禁止输出任何内容。
-- **完整 Scene 闭包（最高）**：正文必须包含本场 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、全部 Beat、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只输出命中段、覆盖矩阵或结束标签。
+## 完整输出结束标签（最高；缺则整份不合格）
+- 交付前最后一步：全文最后一个非空行必须逐字是 `[XIAN_ATTACK_OUTPUT_END]`，全稿仅一次，无反引号、无围栏。
+- 即使本场无需改写，也必须输出完整只读正文后立刻换行打该标签；禁止在命中段或 Beat 后截断。
+- 标签不得进入 Scene、Beat、JSON 或围栏；标签后禁止任何字、标点或解释。缺该行=失败。
+- **完整 Scene 闭包（最高）**：正文必须包含本场 `[SCENES_BLOCK_START]`、`[SCENE_START:{scene_id}]`、【场景名称】、全部 Beat、`[SCENE_END:{scene_id}]`、`[SCENES_BLOCK_END]`。禁止只输出命中段或覆盖矩阵。

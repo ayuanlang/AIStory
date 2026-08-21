@@ -2215,6 +2215,11 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         onRefresh: reloadScenesData,
     });
 
+    useEffect(() => {
+        if (!isTabActive || !activeEpisode?.id) return;
+        void reloadScenesData();
+    }, [isTabActive, activeEpisode?.id, reloadScenesData]);
+
     // Load cost data from project's cost_estimation snapshot
     useEffect(() => {
         if (!projectId) return;

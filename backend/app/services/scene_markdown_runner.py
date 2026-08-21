@@ -24,6 +24,7 @@ from app.services.scene_markdown_orchestration import (
     _extract_analysis_text_from_result,
     _import_scene_markdown_stage_with_retry,
     _is_retryable_scene_orchestration_error,
+    upsert_workspace_scene_from_orchestration_markdown,
     _replace_adapted_script_in_beats_user_input,
     _scene_orchestration_error_code,
 )
@@ -431,6 +432,39 @@ async def _run_scene_markdown_node_per_scene(
                                 scene_markdown=scene_text,
                                 parse_error_code=None,
                             )
+                            workspace_import = {"ok": False, "reason": "not_attempted"}
+                            try:
+                                workspace_import = upsert_workspace_scene_from_orchestration_markdown(
+                                    task_db,
+                                    episode_id=node_episode_id,
+                                    markdown=scene_text,
+                                    target_scene_id=unit.scene_id,
+                                    scene_order=index,
+                                )
+                                task_db.commit()
+                                logger.info(
+                                    "[场景编排] 工作区已入库 | scene_id=%s scene_order=%s/%s scene_no=%s created=%s updated=%s",
+                                    unit.scene_id,
+                                    index,
+                                    total_scenes,
+                                    workspace_import.get("scene_no"),
+                                    workspace_import.get("created"),
+                                    workspace_import.get("updated"),
+                                )
+                            except Exception as workspace_exc:
+                                task_db.rollback()
+                                workspace_import = {
+                                    "ok": False,
+                                    "reason": str(getattr(workspace_exc, "detail", "") or workspace_exc),
+                                }
+                                logger.warning(
+                                    "[scene_markdown] workspace scene persist failed | scene_id=%s scene_order=%s/%s error=%s",
+                                    unit.scene_id,
+                                    index,
+                                    total_scenes,
+                                    workspace_import["reason"],
+                                    exc_info=workspace_exc,
+                                )
                             logger.info(
                                 "[场景编排] 同步进度表 | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s",
                                 unit.scene_id,
@@ -448,20 +482,21 @@ async def _run_scene_markdown_node_per_scene(
                                     script_id=script_id,
                                     target_scene_id=unit.scene_id,
                                 )
-                                # Progress-table sync ≠ workspace Scene rows. Keep
-                                # awaiting_workspace_import until the frontend doImportText
-                                # path confirms DB scenes, so the panel never shows
-                                # 「已入库」prematurely.
                                 await _mark_scene_orchestration_status(
                                     task_db,
                                     scene_id=unit.scene_id,
-                                    import_status="awaiting_workspace_import",
+                                    import_status=(
+                                        "imported"
+                                        if workspace_import.get("ok")
+                                        else "awaiting_workspace_import"
+                                    ),
                                     parse_status="success",
                                     scene_markdown=scene_text,
                                     parse_error_code=None,
                                 )
                                 logger.info(
-                                    "[场景编排] 进度表已同步，等待工作区入库 | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s",
+                                    "[场景编排] %s | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s",
+                                    "已入库" if workspace_import.get("ok") else "进度表已同步，等待工作区入库",
                                     unit.scene_id,
                                     index,
                                     total_scenes,
@@ -483,7 +518,11 @@ async def _run_scene_markdown_node_per_scene(
                                 await _mark_scene_orchestration_status(
                                     task_db,
                                     scene_id=unit.scene_id,
-                                    import_status="awaiting_workspace_import",
+                                    import_status=(
+                                        "imported"
+                                        if workspace_import.get("ok")
+                                        else "awaiting_workspace_import"
+                                    ),
                                     parse_status="success",
                                     scene_markdown=scene_text,
                                     parse_error_code=None,

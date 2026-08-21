@@ -73,7 +73,11 @@ def test_completion_markers_must_be_unique_and_terminal():
         f"[SCENES_BLOCK_START]\nscene\n[SCENES_BLOCK_END]\n{drama_marker}",
         DRAMA_PROMPT,
     ).endswith("[SCENES_BLOCK_END]")
-    assert not _strip_subskill_completion_marker(
-        f"{drama_marker}\n{drama_marker}",
+    assert _strip_subskill_completion_marker(
+        f"[SCENES_BLOCK_START]\nscene\n[SCENES_BLOCK_END]\n`{drama_marker}`\n(ok)",
         DRAMA_PROMPT,
-    )
+    ).endswith("[SCENES_BLOCK_END]")
+    assert _strip_subskill_completion_marker(
+        f"body\n{drama_marker}\nnote",
+        DRAMA_PROMPT,
+    ) == "body"

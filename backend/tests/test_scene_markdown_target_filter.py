@@ -112,3 +112,24 @@ def test_patch_orchestration_backfills_environment_name_and_picks_correct_row():
         "EP01_SC05",
         scene_order=5,
     ) is None
+
+
+def test_orchestration_workspace_row_uses_scene_id_and_canonical_no():
+    from app.services.scene_markdown_orchestration import (
+        _select_workspace_row_from_orchestration_markdown,
+    )
+
+    markdown = """
+| Episode ID | Scene ID | Scene No. | Scene Name | Core Scene Info | Original Script Text | Environment Name | Linked Characters | Key Props |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| EP01 | EP01_SC05 | 5 | 荒漠铁骑压境·黄昏·外 | 大军压境 | 残阳古道 | 荒漠残阳古道 | 无 | 无 |
+"""
+    row = _select_workspace_row_from_orchestration_markdown(
+        markdown,
+        target_scene_id="EP01_SC05",
+        scene_order=5,
+    )
+    assert row is not None
+    assert row["scene_id"] == "EP01_SC05"
+    assert row["scene_no"] == "5"
+    assert row["environment_name"] == "荒漠残阳古道"

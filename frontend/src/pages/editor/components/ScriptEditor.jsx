@@ -169,7 +169,7 @@ const deriveSceneOrchestrationPhase = (unit) => {
     if (explicit) return explicit;
     const importStatus = String(unit.import_status || '').trim().toLowerCase();
     const parseStatus = String(unit.parse_status || '').trim().toLowerCase();
-    if (importStatus === 'success') return 'imported';
+    if (importStatus === 'success' || importStatus === 'imported') return 'imported';
     if (importStatus === 'importing') return 'importing';
     if (importStatus === 'awaiting_workspace_import') return 'llm_returned';
     if (importStatus === 'llm_returned') return 'llm_returned';
@@ -627,6 +627,37 @@ const collectOrchestrationResetSceneIds = (units, episodePrefix) => {
         if (canonicalMatch) ids.add(String(Number(canonicalMatch[1])));
     });
     return [...ids].filter(Boolean);
+};
+
+const expandSceneIdAllowlist = (ids, episodePrefix = 'EP01') => {
+    const out = new Set();
+    (ids instanceof Set ? [...ids] : (Array.isArray(ids) ? ids : [])).forEach((raw) => {
+        const id = String(raw || '').trim();
+        if (!id) return;
+        out.add(id);
+        const order = deriveSceneOrderFromSceneId(id);
+        const canonical = canonicalizeSceneUnitId(id, order, episodePrefix);
+        if (canonical) out.add(canonical);
+        if (Number.isFinite(order) && order > 0 && !sceneIdHasLetterSuffix(id)) {
+            out.add(String(order));
+            out.add(`SC${String(order).padStart(2, '0')}`);
+        }
+    });
+    return out;
+};
+
+const isSceneIdInAllowlist = (marker, allowlist, episodePrefix = 'EP01') => {
+    if (!(allowlist instanceof Set) || allowlist.size <= 0) return true;
+    const expanded = expandSceneIdAllowlist(allowlist, episodePrefix);
+    const candidates = expandSceneIdAllowlist([marker], episodePrefix);
+    for (const id of candidates) {
+        if (expanded.has(id)) return true;
+        const token = normalizeSceneIdToken(id);
+        if (token && [...expanded].some((item) => normalizeSceneIdToken(item) === token)) {
+            return true;
+        }
+    }
+    return false;
 };
 
 const SCENES_BLOCK_START_TOKEN = '[SCENES_BLOCK_START]';
@@ -2649,7 +2680,7 @@ const createSkippedSubjectConsistencyReport = () => ({
     skipped: true,
 });
 
-export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog: parentOnLog, onImportText, onSwitchToScenes, assetRerunRequest = null, onAssetRerunRequestConsumed = null, uiLang = 'zh', tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
+export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog: parentOnLog, onImportText, onSwitchToScenes, onWorkspaceScenesChanged = null, assetRerunRequest = null, onAssetRerunRequestConsumed = null, uiLang = 'zh', tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const { logs: systemPanelLogs } = useLog();
     const parentOnLogRef = useRef(parentOnLog);
@@ -8189,11 +8220,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Reject kickoffs outside this run's scene-orchestration Scene ID set.
         const canonical = orchestrationCanonicalSceneIdsRef.current;
         if (!force && canonical instanceof Set && canonical.size > 0) {
-            const token = normalizeSceneIdToken(stableMarker);
-            const allowed = token
-                ? [...canonical].some((id) => normalizeSceneIdToken(id) === token)
-                : canonical.has(stableMarker);
-            if (!allowed) {
+            if (!isSceneIdInAllowlist(stableMarker, canonical, resolveEpisodeSceneIdPrefix(activeEpisode))) {
                 onLog?.(
                     t(
                         `[分镜生成] ${stableMarker} 不在场景编排场次列表中，跳过`,
@@ -8804,12 +8831,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const marker = String(markerSceneId || '').trim();
             if (!marker || seenMarkers.has(marker)) return;
             // Storyboard may only target scenes present in this run's scene orchestration.
-            if (canonical.size > 0) {
-                const token = normalizeSceneIdToken(marker);
-                const allowed = token
-                    ? [...canonical].some((id) => normalizeSceneIdToken(id) === token)
-                    : canonical.has(marker);
-                if (!allowed) return;
+            if (canonical.size > 0 && !isSceneIdInAllowlist(marker, canonical, resolveEpisodeSceneIdPrefix(activeEpisode))) {
+                return;
             }
             // Marker is claimed at kickoff entry (including waiting_env), so residual
             // skips scenes already owned by live import / flush — same claim-before-await
@@ -11256,6 +11279,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             );
 
+            if (typeof fetchScenes === 'function' && activeEpisode?.id) {
+                const dbScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+                const existingRow = findDbSceneByPatchSceneId(dbScenes, stableSceneId);
+                if (existingRow?.id) {
+                    onWorkspaceScenesChanged?.();
+                    publishSceneOrchestrationPanelStatus({
+                        sceneId: stableSceneId,
+                        phase: 'imported',
+                        sceneOrder,
+                    });
+                    void kickoffStoryboardForImportedScene({
+                        markerSceneId: stableSceneId,
+                        sceneOrder,
+                        importReport: {
+                            ok: true,
+                            importedSceneRows: [existingRow],
+                            scenes: [existingRow],
+                        },
+                    });
+                    return {
+                        ok: true,
+                        importedSceneRows: [existingRow],
+                        scenes: [existingRow],
+                    };
+                }
+            }
+
             const importPrecheck = validateAutoSceneTableImport(patchEntry.markdown);
             let textForImport = patchEntry.markdown;
             if (importPrecheck?.ok && importPrecheck.tableText) {
@@ -11272,6 +11322,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const sceneImportReport = await doImportText(textForImport, 'scene', {
                 suppressAlerts: true,
                 autoSupplementSceneSubjects: false,
+                updateExistingScenes: true,
             });
             if (!isSuccessfulSceneImportReport(sceneImportReport)) {
                 publishSceneOrchestrationPanelStatus({
@@ -11306,6 +11357,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phase: 'imported',
                 sceneOrder,
             });
+            onWorkspaceScenesChanged?.();
             void kickoffStoryboardForImportedScene({
                 markerSceneId: stableSceneId,
                 sceneOrder,
@@ -11323,6 +11375,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         fetchScenes,
         kickoffStoryboardForImportedScene,
         onLog,
+        onWorkspaceScenesChanged,
         onRefreshEpisodes,
         patchSceneTableRowIdentity,
         persistSceneMarkdownPatch,
@@ -13441,10 +13494,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             : [];
         let unitsToProcess = explicitSceneUnits.length > 0 ? explicitSceneUnits : sceneUnits;
         // Single source of truth for storyboard kickoff: orchestration unit Scene IDs only.
-        orchestrationCanonicalSceneIdsRef.current = new Set(
+        orchestrationCanonicalSceneIdsRef.current = expandSceneIdAllowlist(
             (unitsToProcess || [])
                 .map((unit) => String(unit?.sceneId || '').trim())
-                .filter(Boolean)
+                .filter(Boolean),
+            episodePrefix
         );
         if (explicitSceneUnits.length > 0 && explicitSceneUnits.length !== sceneUnits.length) {
             onLog?.(
@@ -13629,13 +13683,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         unitsToProcess = unitsAfterBeat1Gate;
         // Keep skipExisting markers in the allowlist so storyboard kickoffs for already-imported
         // scenes remain valid while remaining scenes continue orchestration.
-        orchestrationCanonicalSceneIdsRef.current = new Set(
+        orchestrationCanonicalSceneIdsRef.current = expandSceneIdAllowlist(
             [
-                ...(unitsToProcess || []),
-                ...(skippedExistingSceneUnits || []),
-            ]
-                .map((unit) => String(unit?.sceneId || '').trim())
-                .filter(Boolean)
+                ...(orchestrationCanonicalSceneIdsRef.current || []),
+                ...(unitsToProcess || []).map((unit) => String(unit?.sceneId || '').trim()),
+                ...(skippedExistingSceneUnits || []).map((unit) => String(unit?.sceneId || '').trim()),
+            ].filter(Boolean),
+            episodePrefix
         );
         const publishMissingBeat1Failures = (totalScenes) => {
             if (!missingBeat1Units.length) return;
@@ -13756,10 +13810,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     .filter(Boolean)
             );
             orchestrationLiveImportedScenesRef.current = preservedLiveImported;
-            orchestrationCanonicalSceneIdsRef.current = new Set([
-                ...(orchestrationSceneIds || []).map((id) => String(id || '').trim()).filter(Boolean),
+            orchestrationCanonicalSceneIdsRef.current = expandSceneIdAllowlist([
+                ...(orchestrationCanonicalSceneIdsRef.current || []),
+                ...(orchestrationSceneIds || []),
                 ...preservedLiveImported,
-            ]);
+            ], episodePrefix);
             orchestrationPersistedSceneMarkdownRef.current = {};
             setLiveSceneMarkdownByScene({});
             // Do not resetStoryboardKickoffTracking here: skipExisting may already have
@@ -19709,7 +19764,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ).trim())
                         .filter(Boolean);
                     if (markers.length > 0) {
-                        orchestrationCanonicalSceneIdsRef.current = new Set(markers);
+                        orchestrationCanonicalSceneIdsRef.current = expandSceneIdAllowlist(
+                            markers,
+                            resolveEpisodeSceneIdPrefix(activeEpisode)
+                        );
                         orchestrationLiveImportedScenesRef.current = new Set(markers);
                     }
                 } catch (seedErr) {
@@ -22355,8 +22413,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             // Arm panel after clear so endSceneOrchestrationPanelTracking inside clear cannot wipe it.
             beginSceneOrchestrationPanelTracking(orchestrationSceneCount);
-            orchestrationCanonicalSceneIdsRef.current = new Set(
-                (rerunSceneIds || []).map((id) => String(id || '').trim()).filter(Boolean)
+            orchestrationCanonicalSceneIdsRef.current = expandSceneIdAllowlist(
+                rerunSceneIds,
+                episodePrefix
             );
             if (projectId && activeEpisode?.id && rerunSceneIds.length > 0) {
                 try {
@@ -23232,8 +23291,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         // Seed canonical set so force/non-force kickoffs stay aligned with workspace scenes.
         if (candidates.length > 0) {
-            const nextCanonical = new Set(
-                candidates.map((item) => String(item?.sceneId || '').trim()).filter(Boolean)
+            const nextCanonical = expandSceneIdAllowlist(
+                candidates.map((item) => String(item?.sceneId || '').trim()).filter(Boolean),
+                resolveEpisodeSceneIdPrefix(activeEpisode)
             );
             if (nextCanonical.size > 0) {
                 orchestrationCanonicalSceneIdsRef.current = nextCanonical;
