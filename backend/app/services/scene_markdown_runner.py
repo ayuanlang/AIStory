@@ -129,7 +129,7 @@ async def _run_scene_markdown_node_per_scene(
     if len(scene_units) == 1:
         unit = scene_units[0]
         try:
-            single_scene_block = wrap_scene_unit_as_script_block(unit)
+            single_scene_block = wrap_scene_unit_as_script_block(unit).replace("|", "／")
         except SceneMissingBeat1Error as missing_exc:
             logger.error(
                 "[scene_markdown] missing Beat marker | scene_id=%s — skip orchestration (invalid scene)",
@@ -287,7 +287,7 @@ async def _run_scene_markdown_node_per_scene(
                         )
 
                         try:
-                            single_scene_block = wrap_scene_unit_as_script_block(unit)
+                            single_scene_block = wrap_scene_unit_as_script_block(unit).replace("|", "／")
                         except SceneMissingBeat1Error as missing_exc:
                             logger.error(
                                 "[scene_markdown] missing Beat marker | scene_id=%s — skip orchestration (invalid scene)",

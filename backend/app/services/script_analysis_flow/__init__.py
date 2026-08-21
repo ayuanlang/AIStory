@@ -1656,12 +1656,47 @@ def extract_scene_name_header_from_scene_text(scene_text: str) -> str:
 def extract_scene_name_value_from_scene_text(scene_text: str) -> str:
     """
     Extract Scenes Table `Scene Name` cell value from Stage 1 header:
-    `{短名}｜{日·内/外}` (without the 【场景名称】 prefix).
+    `{短名}·{日夜}·{内外}·{可选附加项}` (without the 【场景名称】 prefix).
+    Legacy keyed headers are normalized and validation fields are discarded.
     """
     header = extract_scene_name_header_from_scene_text(scene_text)
     if not header:
         return ""
-    return re.sub(r"^【场景名称】\s*", "", header).strip()
+    raw = re.sub(r"^【场景名称】\s*", "", header).strip()
+    if not raw:
+        return ""
+
+    parts = [part.strip() for part in re.split(r"[|｜]", raw) if part.strip()]
+    values: List[str] = []
+    allowed_keys = {
+        "短名",
+        "名称",
+        "场景名",
+        "日夜",
+        "时间",
+        "内外",
+        "季节",
+        "气候",
+        "叙事线",
+        "叙事",
+    }
+    excluded_keys = {"校验", "纯地名", "命名校验"}
+    for part in parts:
+        if "=" in part:
+            key, value = part.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if key in excluded_keys or not value:
+                continue
+            if key in allowed_keys:
+                values.append(value)
+            continue
+        values.append(part)
+
+    normalized = "·".join(values) if values else raw
+    normalized = re.sub(r"[|｜；]+", "·", normalized)
+    normalized = re.sub(r"·{2,}", "·", normalized).strip(" ·")
+    return normalized
 
 
 def extract_beat_blocks_from_scene_text(scene_text: str) -> str:
@@ -1964,6 +1999,12 @@ def merge_scenes_table_markdown_outputs(outputs: List[str]) -> str:
     return f"### Part 1: Scenes Table\n\n{table}".strip()
 
 
+def _sanitize_scene_markdown_cell(value: Any, *, scene_name: bool = False) -> str:
+    text = str(value or "").replace("\r\n", "<br>").replace("\r", "<br>").replace("\n", "<br>")
+    replacement = "·" if scene_name else "／"
+    return text.replace("\\|", replacement).replace("|", replacement).replace("｜", replacement)
+
+
 def _build_scene_markdown_from_table_row(headers: List[str], cells: List[str]) -> str:
     if not headers or not cells:
         return ""
@@ -1976,14 +2017,20 @@ def _build_scene_markdown_from_table_row(headers: List[str], cells: List[str]) -
     scene_name = _scene_table_cell_value(cells, scene_name_idx)
     if not scene_id:
         scene_id = scene_no or scene_name
-    row = list(cells)
+    row = [
+        _sanitize_scene_markdown_cell(
+            cell,
+            scene_name=(idx == scene_name_idx),
+        )
+        for idx, cell in enumerate(cells)
+    ]
     while len(row) < len(headers):
         row.append("")
     header_line = "| " + " | ".join(headers) + " |"
     separator_line = "| " + " | ".join(":---" for _ in headers) + " |"
     row_line = "| " + " | ".join(row[: len(headers)]) + " |"
     table = "\n".join([header_line, separator_line, row_line])
-    title = scene_name or scene_id or "Scene"
+    title = _sanitize_scene_markdown_cell(scene_name or scene_id or "Scene", scene_name=True)
     return f"### Part 1: Scenes Table\n\n#### {title}\n\n{table}".strip()
 
 

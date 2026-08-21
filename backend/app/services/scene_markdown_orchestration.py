@@ -19,9 +19,9 @@ from app.services.script_analysis_flow import (
 )
 from app.services.script_analysis_flow.analyze_scene_stages import import_scene_markdown_stage
 
-SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS = 3
+SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS = 1
 SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC = 2.0
-SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS = 1
+SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS = 0
 
 def _extract_analysis_text_from_result(result: Any) -> str:
     if isinstance(result, str):
