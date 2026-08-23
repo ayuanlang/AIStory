@@ -43,6 +43,13 @@ from .registry import (
     get_script_analysis_flow_registry,
     normalize_script_analysis_flow_config,
 )
+from .derived_env_ingest import (
+    collect_derived_environment_jsons,
+    extract_derived_environment_names_from_scene_text,
+    ingest_derived_environments_from_framing,
+    parse_derived_env_extract_items,
+)
+from .environment_reuse import parse_scene_env_ident_items
 
 ScriptProgressSceneUnit = models.ScriptProgressSceneUnit
 ScriptProgressPipelineNode = models.ScriptProgressPipelineNode
@@ -888,13 +895,37 @@ def _reconcile_scene_table_row_cells(cells: List[str], headers: List[str]) -> Li
     if len(row) == header_count:
         return row[:header_count]
 
-    core_info_idx = -1
-    for idx, header in enumerate(headers):
-        normalized = _normalize_scene_table_header(header)
-        if "coresceneinfo" in normalized or "核心场景信息" in normalized:
-            core_info_idx = idx
-            break
-    merge_start_idx = core_info_idx if core_info_idx >= 0 else min(5, header_count - 1)
+    normalized_headers = [_normalize_scene_table_header(header) for header in headers]
+    core_info_idx = _find_scene_table_col_idx(normalized_headers, ["coresceneinfo", "核心场景信息"])
+    environment_idx = _find_scene_table_col_idx(
+        normalized_headers,
+        ["environmentname", "环境名", "环境名称", "环境"],
+    )
+    pin_left_until = core_info_idx if core_info_idx >= 0 else min(5, header_count - 1)
+    pin_right_from = environment_idx if environment_idx > pin_left_until else -1
+
+    # Pin identity on the left and Environment Name…Key Props on the right so
+    # unescaped "|" inside Core Scene Info / Adapted Excerpt cannot shift
+    # Environment Name onto a None placeholder.
+    if pin_right_from > pin_left_until >= 0:
+        left = row[:pin_left_until]
+        right_count = header_count - pin_right_from
+        right = row[-right_count:]
+        middle = row[pin_left_until : len(row) - right_count]
+        middle_header_count = pin_right_from - pin_left_until
+        if middle_header_count <= 0:
+            merged_middle = ["|".join(middle)] if middle else []
+        elif len(middle) <= middle_header_count:
+            merged_middle = list(middle) + [""] * (middle_header_count - len(middle))
+        else:
+            overflow = len(middle) - middle_header_count
+            merged_middle = ["|".join(middle[: overflow + 1])] + list(middle[overflow + 1 :])
+        merged = left + merged_middle + right
+        while len(merged) < header_count:
+            merged.append("")
+        return merged[:header_count]
+
+    merge_start_idx = pin_left_until
     overflow = len(row) - header_count
     merge_end_idx = merge_start_idx + overflow + 1
     merged = (
@@ -1303,7 +1334,16 @@ def parse_scene_units_from_scenes_table(script_text: str) -> List[ParsedSceneUni
         core_info_idx = _find_scene_table_col_idx(normalized_headers, ["coresceneinfo", "核心场景信息"])
         adapted_idx = _find_scene_table_col_idx(
             normalized_headers,
-            ["adaptedscripttext", "改编剧本文本", "改编剧本", "originalscripttext", "原始剧本文本", "scripttext"],
+            [
+                "adaptedscripttext",
+                "adaptedscriptexcerpt",
+                "改编剧本文本",
+                "改编剧本摘录",
+                "改编剧本",
+                "originalscripttext",
+                "原始剧本文本",
+                "scripttext",
+            ],
         )
         environment_idx = _find_scene_table_col_idx(normalized_headers, ["environmentname", "环境名", "环境名称", "环境"])
         linked_characters_idx = _find_scene_table_col_idx(normalized_headers, ["linkedcharacters", "关联角色", "角色", "characters"])
@@ -1638,6 +1678,42 @@ def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
     return strip_beat_transition_notes_from_script(rebuilt or script)
 
 
+def resolve_assets_extraction_source_text(
+    request_text: str,
+    episode_adaptation: str = "",
+) -> str:
+    """Whole-episode assets extraction: Stage-1 scene text plus per-scene ENV.
+
+    Starts after ``environment_plan`` (main-env splice). Prefer the request if it
+    already contains merged ``ENV_BLOCK``s. If a later Stage-1 adaptation has
+    derivatives, use that; otherwise keep the environment-plan script.
+    """
+    incoming = str(request_text or "").strip()
+    adaptation = str(episode_adaptation or "").strip()
+    incoming_has_env = "[ENV_BLOCK_START]" in incoming
+    adaptation_has_env = "[ENV_BLOCK_START]" in adaptation
+    incoming_has_derived = "【衍生环境】" in incoming
+    adaptation_has_derived = "【衍生环境】" in adaptation
+    if incoming_has_env and (incoming_has_derived or not adaptation_has_derived):
+        return incoming
+    if not adaptation_has_env:
+        return incoming
+    from app.core.prompt_injection import (
+        strip_injection_section,
+        unwrap_injection_section,
+        wrap_injection_section,
+    )
+
+    if unwrap_injection_section(incoming, "优化后剧本") is not None:
+        prefix = strip_injection_section(incoming, "优化后剧本")
+        replaced = wrap_injection_section(
+            "优化后剧本",
+            "[优化后剧本 - Stage 2.1权威输入（场景切分+按场环境注入）]\n" + adaptation,
+        )
+        return f"{prefix}\n\n{replaced}".strip() if prefix else replaced
+    return adaptation
+
+
 def extract_legacy_beat_sections_from_scene_text(scene_text: str) -> str:
     """Wrap legacy `- Beat N` / `~ Beat N` sections with BEAT_START/END when markers are absent."""
     text = str(scene_text or "")
@@ -1717,8 +1793,8 @@ def extract_environment_names_from_scene_text(scene_text: str) -> str:
     """
     Extract locked main-environment names from Stage 1 ENV_BLOCK / 【主环境】 lines.
 
-    Used to backfill Scenes Table `Environment Name` after Stage 2.2, which does not
-    receive the environment block and may otherwise emit None.
+    Used by project-library / environment-reuse to collect locked main-environment names.
+    Stage 2.2 Environment Name backfill uses derived names only.
     """
     text = str(scene_text or "")
     if not text.strip():
@@ -1751,7 +1827,7 @@ def extract_environment_names_from_scene_text(scene_text: str) -> str:
     if not names:
         for match in _OWNING_MAIN_ENV_PATTERN.finditer(text):
             _add(match.group(1))
-    return "／".join(names)
+    return "，".join(names)
 
 
 def extract_beat_blocks_from_scene_text(scene_text: str) -> str:
@@ -1905,14 +1981,14 @@ def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
         if used_fallback
         else extract_scene_name_header_from_scene_text(scene_text)
     )
-    environment_names = extract_environment_names_from_scene_text(scene_text)
+    derived_environment_names = extract_derived_environment_names_from_scene_text(scene_text)
     parts = [SCENES_BLOCK_START_TOKEN]
     if marker_start:
         parts.append(marker_start)
     if scene_name_header:
         parts.append(scene_name_header)
-    if environment_names:
-        parts.append(f"【本场环境名】{environment_names}")
+    if derived_environment_names:
+        parts.append(f"【本场衍生环境名】{derived_environment_names}")
     if body_text:
         parts.append(body_text)
     if marker_end:
@@ -2161,11 +2237,16 @@ def sync_scene_units_from_script_text(
         units = parse_scene_units_from_markers(script_text)
         parse_source = "scene_markers"
     else:
+        looks_like_table = _find_scenes_table_header_pos(script_text) >= 0
         try:
             # Stage 2.2 output contract is Scenes Table markdown only (title optional).
             # Parse table first; marker parsing is kept as backward compatibility.
             units = parse_scene_units_from_scenes_table(script_text)
         except SceneMarkerParseError:
+            # A Scenes Table must not fall back to SCENE_START parsing — that
+            # masks the real table error as SCENE_MARKER_BLOCK_MISSING.
+            if looks_like_table:
+                raise
             units = parse_scene_units_from_markers(script_text)
             parse_source = "scene_markers"
     episode_row = None
@@ -2616,7 +2697,10 @@ def patch_single_scene_markdown_for_orchestration(
                 row[scene_name_idx] = preferred_scene_name
         if preferred_environment_name and environment_idx >= 0:
             current_env = _scene_table_cell_value(row, environment_idx)
-            if _is_blank_or_none_environment_name(current_env):
+            if (
+                _is_blank_or_none_environment_name(current_env)
+                or current_env != preferred_environment_name
+            ):
                 row[environment_idx] = preferred_environment_name
         return _build_scene_markdown_from_table_row(headers, row)
 
@@ -2835,6 +2919,8 @@ __all__ = [
     "extract_scene_name_header_from_scene_text",
     "extract_scene_name_value_from_scene_text",
     "extract_environment_names_from_scene_text",
+    "extract_derived_environment_names_from_scene_text",
+    "parse_scene_env_ident_items",
     "extract_beat_blocks_from_scene_text",
     "extract_legacy_beat_sections_from_scene_text",
     "extract_env_block_from_scene_text",
@@ -2843,6 +2929,10 @@ __all__ = [
     "extract_scene_env_and_beats_body",
     "extract_entity_profile_block_from_adapted",
     "build_assets_extraction_script_from_adapted",
+    "resolve_assets_extraction_source_text",
+    "collect_derived_environment_jsons",
+    "ingest_derived_environments_from_framing",
+    "parse_derived_env_extract_items",
     "strip_beat_transition_notes_from_script",
     "extract_scene_markdown_text_from_analyze_result",
     "import_analyze_scene_stage_result",

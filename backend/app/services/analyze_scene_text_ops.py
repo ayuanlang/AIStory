@@ -257,6 +257,8 @@ def _infer_subject_index_allowed_types_for_request(
             for normalized in (_normalize_requested_asset_target_type(item) for item in feature_targets)
             if normalized
         }
+        if "cover" in normalized_targets or "environment" in normalized_targets:
+            normalized_targets.update({"environment", "cover"})
         if normalized_targets:
             return normalized_targets
 
@@ -271,6 +273,8 @@ def _infer_subject_index_allowed_types_for_request(
             )
             if normalized
         }
+        if "cover" in normalized_targets or "environment" in normalized_targets:
+            normalized_targets.update({"environment", "cover"})
         if normalized_targets:
             return normalized_targets
 

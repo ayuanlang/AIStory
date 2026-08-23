@@ -75,6 +75,7 @@ from app.services.scene_subject_helpers import (
     _normalize_prior_entity_design_type,
 )
 from app.services.script_analysis_flow import (
+    extract_derived_environment_names_from_scene_text,
     extract_scenes_table_markdown_block,
     persist_analyze_scene_stage_result,
     resolve_analyze_scene_stage,
@@ -85,6 +86,7 @@ from app.services.script_analysis_flow.subject_index_name_align import (
     align_scene_markdown_names_with_subject_index,
     align_subjects_json_names_with_subject_index,
     apply_text_name_replacements,
+    format_entity_table_names_for_orchestration,
 )
 from app.services.script_analysis_llm_config import (
     _inject_llm_call_log_trace,
@@ -364,6 +366,21 @@ async def execute_analyze_scene(
         is_subject_index_extraction_stage = stage_ctx.is_subject_index_extraction_stage
         is_script_optimization_stage = stage_ctx.is_script_optimization_stage
         is_entity_design_phase = stage_ctx.is_entity_design_phase
+        is_scene_split_stage = bool(
+            "cut_transition" in prompt_file_lower
+            or "scene_split" in function_name_lower
+            or mode_lower in {"scene_split"}
+        )
+        is_environment_plan_stage = bool(
+            "subskill_environment" in prompt_file_lower
+            or "environment_plan" in function_name_lower
+            or mode_lower in {"environment_plan"}
+        )
+        is_derived_framing_stage = bool(
+            "subskill_derived_framing" in prompt_file_lower
+            or "derived_framing" in function_name_lower
+            or mode_lower in {"derived_framing"}
+        )
         is_subject_index_consumer_stage = bool(
             "scene_planning_2_2" in prompt_file_lower
             or "entity_design" in prompt_file_lower
@@ -427,8 +444,9 @@ async def execute_analyze_scene(
 
 
 
-        # Scene orchestration (2.2) and asset design require a usable Subject Index.
-        if is_subject_index_consumer_stage:
+        # Asset design still requires a usable Subject Index. Scene orchestration (2.2)
+        # injects names from the asset table instead and does not read Subject Index.
+        if is_subject_index_consumer_stage and not is_scene_beats_stage:
             request_embedded_subject_index = _extract_embedded_subject_index_from_stage_text(request.text)
             gate_subject_index = (
                 persisted_subject_index_raw_for_gate
@@ -462,7 +480,57 @@ async def execute_analyze_scene(
                         log_prompt_file=getattr(request, "prompt_file", None),
                     )
 
-        if persisted_subject_index_for_prompt:
+        if is_scene_beats_stage:
+            orchestration_project_id = getattr(request, "project_id", None)
+            if not orchestration_project_id and getattr(request, "episode_id", None):
+                try:
+                    _ep_for_assets = (
+                        db.query(Episode)
+                        .filter(Episode.id == request.episode_id, _active_episode_clause())
+                        .first()
+                    )
+                    orchestration_project_id = getattr(_ep_for_assets, "project_id", None)
+                except Exception:
+                    orchestration_project_id = None
+            index_for_prompt = format_entity_table_names_for_orchestration(
+                db,
+                project_id=orchestration_project_id,
+                episode_id=getattr(request, "episode_id", None),
+                extra_derived_environment_names=extract_derived_environment_names_from_scene_text(
+                    request.text
+                ),
+            )
+            saved_asset_table_block = ""
+            if index_for_prompt:
+                saved_asset_table_block = (
+                    "[Saved Asset Table Injection - Authoritative]\n"
+                    "Names-only whitelist from the project asset table (中文名 / 英文名). No descriptions. Do not use Subject Index.\n"
+                    "Inject all CHAR and PROP names. ENV is derived-only ({N}度…) — never a bare main-environment name.\n"
+                    "CHAR/PROP wrap names MUST be character-identical to the CHAR:/PROP: names below.\n"
+                    "ENV:[] and Environment Name MUST use the ENV list or 【本场衍生环境名】 — never a bare main-environment name.\n"
+                    "Do NOT wrap names inside dialogue/台词 or physical text on letters, screens, books, signs.\n"
+                    "If a Beat entity is not in these lists, keep Stage-1 natural language and do NOT wrap it.\n\n"
+                    f"{wrap_injection_section('资产表', index_for_prompt)}"
+                )
+            canonical_stage_text = _resolve_scene_beats_adapted_script_text(request.text, episode_adaptation_for_scene_beats)
+            if should_trim_before_submit:
+                canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
+            script_block = _build_script_to_analyze_block(canonical_stage_text)
+            user_content = (
+                f"{saved_asset_table_block}\n\n{script_block}".strip()
+                if saved_asset_table_block
+                else script_block
+            )
+            logger.info(
+                "[analyze_scene] injected asset-table names into user prompt episode_id=%s project_id=%s name_chars=%s mode=%s prompt_file=%s",
+                getattr(request, "episode_id", None),
+                orchestration_project_id,
+                len(index_for_prompt),
+                effective_scene_analysis_mode,
+                getattr(request, "prompt_file", None),
+            )
+        elif persisted_subject_index_for_prompt:
+            index_for_prompt = persisted_subject_index_for_prompt
             saved_subject_index_block = (
                 "[Saved Subject Index Injection - Authoritative]\n"
                 "The following Subject Index is loaded from persisted sanitized episode data.\n"
@@ -479,12 +547,7 @@ async def execute_analyze_scene(
             )
             # In downstream Subject-Index consumer stages, use persisted sanitized
             # Subject Index as canonical source to avoid request text contamination.
-            if is_scene_beats_stage:
-                canonical_stage_text = _resolve_scene_beats_adapted_script_text(request.text, episode_adaptation_for_scene_beats)
-                if should_trim_before_submit:
-                    canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
-                user_content = f"{saved_subject_index_block}\n\n{_build_script_to_analyze_block(canonical_stage_text)}"
-            elif is_subject_index_consumer_stage:
+            if is_subject_index_consumer_stage:
                 canonical_stage_text = str(request.text or "")
                 if should_trim_before_submit:
                     canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
@@ -495,9 +558,10 @@ async def execute_analyze_scene(
                     canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
                 user_content = f"{saved_subject_index_block}\n\n{_build_script_to_analyze_block(canonical_stage_text)}"
             logger.info(
-                "[analyze_scene] injected subject index into user prompt episode_id=%s saved_chars=%s mode=%s prompt_file=%s is_scene_beats_stage=%s",
+                "[analyze_scene] injected subject index into user prompt episode_id=%s saved_chars=%s prompt_chars=%s mode=%s prompt_file=%s is_scene_beats_stage=%s",
                 getattr(request, "episode_id", None),
                 len(persisted_subject_index_for_prompt),
+                len(index_for_prompt),
                 effective_scene_analysis_mode,
                 getattr(request, "prompt_file", None),
                 is_scene_beats_stage,
@@ -565,6 +629,37 @@ async def execute_analyze_scene(
                         _estimate_tokens(meta_str),
                     )
 
+        catalog_project_id = int(getattr(request, "project_id", 0) or 0)
+        if catalog_project_id <= 0 and request_episode is not None:
+            catalog_project_id = int(getattr(request_episode, "project_id", 0) or 0)
+        if (is_scene_split_stage or is_environment_plan_stage) and catalog_project_id > 0:
+            try:
+                from app.services.script_analysis_flow.environment_reuse import (
+                    PROJECT_MAIN_ENV_LABEL,
+                    build_project_main_environment_injection,
+                    collect_project_main_environment_catalog,
+                )
+
+                already_has_catalog = f"[{PROJECT_MAIN_ENV_LABEL}开始]" in str(user_content or "")
+                if already_has_catalog:
+                    logger.info("[analyze_scene] skipped project main env catalog: already present")
+                else:
+                    catalog = collect_project_main_environment_catalog(
+                        db,
+                        project_id=int(catalog_project_id),
+                        current_episode_id=int(getattr(request, "episode_id", 0) or 0),
+                    )
+                    catalog_block = build_project_main_environment_injection(catalog)
+                    if catalog_block:
+                        user_content = f"{catalog_block}\n\n{user_content}"
+                        logger.info(
+                            "[analyze_scene] injected project main env catalog count=%s stage=%s",
+                            len(catalog),
+                            "scene_split" if is_scene_split_stage else "environment_plan",
+                        )
+            except Exception as env_catalog_exc:
+                logger.warning("[analyze_scene] failed to inject project main env catalog: %s", env_catalog_exc)
+
         # Optional platform knowledge-base RAG (reference-only; never mutates Subject Index names).
         if is_script_optimization_stage or is_entity_design_phase:
             try:
@@ -589,7 +684,7 @@ async def execute_analyze_scene(
             except Exception as kb_exc:
                 logger.warning("[analyze_scene] KB RAG injection skipped: %s", kb_exc)
 
-        if is_script_optimization_stage and getattr(request, "project_id", None):
+        if (is_script_optimization_stage or is_derived_framing_stage) and getattr(request, "project_id", None):
             try:
                 from app.api.routers.entities_pkg.analyze import _entity_analysis_is_main_environment
                 
@@ -1516,10 +1611,16 @@ async def execute_analyze_scene(
                 or str(result_content or "")
             )
             try:
+                align_scene_id = str(getattr(request, "target_scene_id", "") or "").strip()
                 scene_name_align = await align_scene_markdown_names_with_subject_index(
                     scene_markdown=scene_table_candidate,
                     subject_index_text=persisted_subject_index_for_prompt,
                     llm_config=config,
+                    action_name=(
+                        f"实体名对齐 · {align_scene_id}"
+                        if align_scene_id
+                        else "实体名对齐 · 场景表"
+                    ),
                 )
                 subject_index_name_align_meta["scene_markdown"] = {
                     "mismatch_count": scene_name_align.get("mismatch_count") or 0,
@@ -1766,6 +1867,7 @@ async def execute_analyze_scene(
                         subjects_json=subjects_json,
                         subject_index_text=align_index_text,
                         llm_config=config,
+                        action_name="实体名对齐 · 资产设计",
                     )
                     subject_index_name_align_meta["subjects_json"] = {
                         "mismatch_count": subjects_name_align.get("mismatch_count") or 0,

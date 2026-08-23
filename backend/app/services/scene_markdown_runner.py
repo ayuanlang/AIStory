@@ -34,7 +34,7 @@ from app.services.script_analysis_flow import (
     SceneMissingBeat1Error,
     coerce_target_scene_ids_for_orchestration,
     extract_scene_markdown_text_from_analyze_result,
-    extract_environment_names_from_scene_text,
+    extract_derived_environment_names_from_scene_text,
     extract_scene_name_value_from_scene_text,
     extract_scenes_table_markdown_block,
     filter_scene_units_by_target_ids,
@@ -60,19 +60,24 @@ def _extract_scene_markdown_text_from_result(result: Any) -> str:
 
 
 def _scene_orchestration_environment_name(unit: Any) -> str:
-    return extract_environment_names_from_scene_text(getattr(unit, "scene_text", "") or "")
+    return extract_derived_environment_names_from_scene_text(getattr(unit, "scene_text", "") or "")
 
 
-def _scene_orchestration_environment_instruction(environment_name: str) -> str:
-    env_name = str(environment_name or "").strip()
-    if env_name:
+def _scene_orchestration_environment_instruction(derived_environment_names: str = "") -> str:
+    derived_names = str(derived_environment_names or "").strip()
+    if derived_names:
         return (
-            f" Environment Name 列必须填写 `{env_name}`（本场已锁定主环境），"
-            "禁止写 None。"
+            f" Environment Name 列必须且只能填写本场衍生环境 `{derived_names}`，"
+            "禁止写入裸主环境名，禁止写 None。"
+            f" 【本场衍生环境名】`{derived_names}` 是本场唯一 ENV 白名单；"
+            "Index 裸主环境行不得列入 Environment Name，也不得套 ENV:[]。"
+            "Beat 叙述层出现这些完整名（含当前环境= / [DERIVED_ENV:] / 自然语言）时必须套 ENV:[原样名]，"
+            "禁止另起未列出的衍生名，禁止把主环境裸名套成 ENV:[]。"
         )
     return (
-        " Environment Name 列必须填写 Subject Index 中本场 environment 行的主环境名，"
-        "禁止因 Beat 未写 ENV:[] 而填 None。"
+        " Environment Name 列只允许填写【本场衍生环境名】中的可拍衍生名，禁止写入裸主环境名。"
+        " 无已识别衍生名时填 None。"
+        " Beat 明文出现这些衍生名时必须套 ENV:[原样名]，禁止另起未列出衍生名。"
     )
 
 
@@ -119,6 +124,15 @@ async def _run_scene_markdown_node_per_scene(
             detail=f"SCENE_MARKDOWN_UNITS_UNAVAILABLE:{scene_units_source}",
         )
 
+    from app.services.script_analysis_flow_runner import build_script_analysis_retry_api_attempts
+
+    _original_api_id, markdown_api_attempts = build_script_analysis_retry_api_attempts(
+        db,
+        raw_payload.get("function_name") or "script_analysis",
+        raw_payload.get("system_api_id"),
+        node_key="scene_markdown",
+    )
+
     target_scene_ids = coerce_target_scene_ids_for_orchestration(raw_payload, user_text)
     if target_scene_ids:
         episode_prefix = "EP01"
@@ -145,47 +159,9 @@ async def _run_scene_markdown_node_per_scene(
         )
         scene_units = filtered_units
 
-    if len(scene_units) == 1:
-        unit = scene_units[0]
-        try:
-            single_scene_block = wrap_scene_unit_as_script_block(unit).replace("|", "／")
-        except SceneMissingBeat1Error as missing_exc:
-            logger.error(
-                "[scene_markdown] missing Beat marker | scene_id=%s — skip orchestration (invalid scene)",
-                missing_exc.scene_id,
-            )
-            raise HTTPException(status_code=422, detail=missing_exc.detail) from missing_exc
-        except SceneBeatsTooShortError as beats_exc:
-            logger.error(
-                "[scene_markdown] beats too short | scene_id=%s chars=%s min=%s",
-                beats_exc.scene_id,
-                beats_exc.char_count,
-                beats_exc.min_chars,
-            )
-            raise HTTPException(status_code=422, detail=beats_exc.detail) from beats_exc
-        locked_environment_name = _scene_orchestration_environment_name(unit)
-        single_scene_instruction = (
-            f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 1/1 场）。"
-            "输入剧本正文含该场 `【场景名称】{短名}｜{日·内/外}` 场景头 + `[BEAT_START:…]`…`[BEAT_END:…]` Beat 块"
-            "（不含 Scene 级【主环境】等其它说明块）；"
-            "请将 `【场景名称】` 后的 `{短名}｜{日·内/外}` 原样落入 Scene Name 列，并对 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。"
-            f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`。"
-            f"{_scene_orchestration_environment_instruction(locked_environment_name)}"
-            "禁止输出思考过程、解释、规划说明或任何非表格内容；"
-            "直接以 Markdown 表格输出（仅含表头、分隔行与本场一行数据；不要输出 Part 1: Scenes Table 标题）。"
-        )
-        single_payload = dict(raw_payload)
-        single_payload["text"] = _replace_adapted_script_in_beats_user_input(
-            f"{single_scene_instruction}\n\n{user_text}",
-            single_scene_block,
-        )
-        return await analyze_scene(
-            AnalyzeSceneRequest(**single_payload),
-            current_user=current_user,
-            db=db,
-            async_mode="0",
-        )
-
+    # Single-scene and multi-scene share the same patch / validate / live-import
+    # path. The old one-scene shortcut returned raw analyze_scene output, and the
+    # flow runner then tried to bulk-import a Scenes Table as SCENE_START markers.
     script_id = f"episode:{node_episode_id}"
     total_scenes = len(scene_units)
     sync_source_text = adapted_script_text or episode_adaptation_text
@@ -327,20 +303,28 @@ async def _run_scene_markdown_node_per_scene(
                         single_scene_instruction = (
                             f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 {index}/{total_scenes} 场）。"
                             "输入剧本正文含该场 `【场景名称】{短名}｜{日·内/外}` 场景头 + `[BEAT_START:…]`…`[BEAT_END:…]` Beat 块"
-                            "（不含 Scene 级【主环境】等其它说明块）；"
+                            "（不含 Scene 级【主环境】块；可含【本场衍生环境名】，不得列入裸主环境名）；"
                             "请将 `【场景名称】` 后的 `{短名}｜{日·内/外}` 原样落入 Scene Name 列，并对 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。"
+                            "对白正文与信/屏幕/书等物理字样内的资产名不要套 CHAR:/ENV:/PROP: 前缀；"
                             f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`，"
                             "不得仅填场次序号或其他别名。"
                             f"{_scene_orchestration_environment_instruction(locked_environment_name)}"
+                            "Environment Name、Linked Characters、Key Props、{登场实体} 中多个实体必须用中文逗号`，`分隔"
+                            "（例：CHAR:[@林岳]，CHAR:[@苏晚]），禁止用/、／、|、顿号或英文逗号列举。"
                             "禁止输出思考过程、解释、规划说明或任何非表格内容；"
                             "直接以 Markdown 表格输出（仅含表头、分隔行与本场一行数据；不要输出 Part 1: Scenes Table 标题）。"
                         )
                         scene_payload = dict(raw_payload)
                         scene_payload["skip_episode_persist"] = True
+                        scene_payload["target_scene_id"] = str(unit.scene_id)
+                        scene_payload["action_name"] = f"场景编排 · {unit.scene_id}"
                         scene_payload["text"] = _replace_adapted_script_in_beats_user_input(
                             f"{single_scene_instruction}\n\n{user_text}",
                             single_scene_block,
                         )
+                        api_id = markdown_api_attempts[min(attempt, len(markdown_api_attempts)) - 1]
+                        if api_id > 0:
+                            scene_payload["system_api_id"] = api_id
                         result = await analyze_scene(
                             AnalyzeSceneRequest(**scene_payload),
                             current_user=current_user,
@@ -795,6 +779,13 @@ async def _run_scene_markdown_node_per_scene(
                 "total_count": total_scenes,
                 "failed_scenes": failed_scene_reports,
                 "succeeded_count": len(success_by_index),
+                "succeeded_scenes": [
+                    {
+                        "scene_id": str(success_by_index[index][1]),
+                        "scene_order": int(index),
+                    }
+                    for index in sorted(success_by_index)
+                ],
                 "skipped_missing_beat1_scenes": skipped_missing_beat1_reports,
                 "skipped_missing_beat1_count": len(skipped_missing_beat1_reports),
             },
@@ -854,7 +845,7 @@ async def _run_scene_markdown_node_per_scene(
         result_payload["content"] = presence_text
         result_payload["scenes_markdown"] = presence_text
         result_payload["per_scene_count"] = total_scenes
-        result_payload["per_scene_parallel"] = max_concurrency
+        result_payload["per_scene_parallel"] = True
         result_payload["per_scene_source"] = scene_units_source
         result_payload["per_scene_persist_mode"] = "by_scene_only"
         result_payload["per_scene_outputs"] = per_scene_results
@@ -865,7 +856,7 @@ async def _run_scene_markdown_node_per_scene(
         "content": presence_text,
         "scenes_markdown": presence_text,
         "per_scene_count": total_scenes,
-        "per_scene_parallel": max_concurrency,
+        "per_scene_parallel": True,
         "per_scene_source": scene_units_source,
         "per_scene_persist_mode": "by_scene_only",
         "per_scene_outputs": per_scene_results,

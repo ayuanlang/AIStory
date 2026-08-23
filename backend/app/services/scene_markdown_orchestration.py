@@ -19,7 +19,7 @@ from app.services.script_analysis_flow import (
 )
 from app.services.script_analysis_flow.analyze_scene_stages import import_scene_markdown_stage
 
-SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS = 1
+SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS = 3
 SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC = 2.0
 SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS = 0
 
@@ -183,7 +183,7 @@ def upsert_workspace_scene_from_orchestration_markdown(
     payload = {
         "scene_no": scene_no,
         "scene_name": str(row.get("scene_name") or "").strip() or None,
-        "original_script_text": str(row.get("original_script_text") or "").strip() or None,
+        "original_script_text": str(row.get("original_script_text") or "").strip(),
         "equivalent_duration": str(row.get("equivalent_duration") or "").strip() or None,
         "core_scene_info": str(row.get("core_scene_info") or "").strip() or None,
         "environment_name": str(row.get("environment_name") or "").strip() or None,

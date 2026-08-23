@@ -904,11 +904,35 @@ export const SCENE_SUBJECT_TYPE_LABELS = {
 
 export const getSceneSubjectStatusKey = (scene) => String(scene?.id || scene?.scene_no || scene?.scene_name || '');
 
+const SCENE_SUBJECT_TYPED_TOKEN_RE = /\b(?:CHAR|PROP|ENV|VEFX|SFX)\s*:\s*\[[^\]]+\]/gi;
+const SCENE_SUBJECT_NAME_SEPARATOR_RE = /[\n,，;；、/／|｜+＆&]+/;
+
 export const splitSceneSubjectNames = (value) => {
-    return String(value || '')
-        .split(/[\n,，;；]/)
-        .map((item) => String(item || '').trim())
-        .filter(Boolean);
+    const source = String(value || '').trim();
+    if (!source) return [];
+    const compact = source.replace(/[\s_*`'"]+/g, '').toLowerCase();
+    if (['none', 'null', 'nil', 'n/a', 'na', '无', '空', '-', '—', '－'].includes(compact)) {
+        return [];
+    }
+
+    const tokens = [];
+    const seen = new Set();
+    const push = (item) => {
+        const display = String(item || '').trim();
+        if (!display) return;
+        const key = display.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        tokens.push(display);
+    };
+
+    // Typed tokens are atomic so CHAR:[@A]／CHAR:[@B] still splits into two names.
+    const remainder = source.replace(SCENE_SUBJECT_TYPED_TOKEN_RE, (match) => {
+        push(match);
+        return ' ';
+    });
+    remainder.split(SCENE_SUBJECT_NAME_SEPARATOR_RE).forEach((part) => push(part));
+    return tokens;
 };
 
 export const normalizeSceneSubjectDefaultType = (value) => {
@@ -959,13 +983,19 @@ export const parseTypedSceneSubjectToken = (rawToken, defaultType) => {
 export const extractSceneSubjectRefsFromField = (value, defaultType, sourceField) => {
     const stableDefaultType = normalizeSceneSubjectDefaultType(defaultType) || 'character';
     return splitSceneSubjectNames(value)
-        .map((token) => {
+        .flatMap((token) => {
             const parsed = parseTypedSceneSubjectToken(token, stableDefaultType);
-            return {
+            const rawName = String(parsed.name || '').trim();
+            if (!rawName) return [];
+            // CHAR:[@林岳/苏晚] still packs two names; expand leftover list marks.
+            const innerNames = SCENE_SUBJECT_NAME_SEPARATOR_RE.test(rawName)
+                ? rawName.split(SCENE_SUBJECT_NAME_SEPARATOR_RE).map((part) => String(part || '').trim()).filter(Boolean)
+                : [rawName];
+            return innerNames.map((innerName) => ({
                 type: parsed.type || stableDefaultType,
-                name: parsed.name,
+                name: innerName,
                 sourceField,
-            };
+            }));
         })
         .filter((item) => {
             const name = String(item?.name || '').trim();

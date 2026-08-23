@@ -118,6 +118,7 @@ You MUST use all of them together.
 - Linked Characters must cover all characters who materially act, interact, or are required by the scene reading.
 - Key Props must cover only props with actual scene relevance.
 - Environment Name must reflect the correct reusable environment anchor or required new environment variant.
+- Multi-entity list separator (Mandatory): `Environment Name`, `Linked Characters`, and `Key Props` MUST separate two or more names with the Chinese comma `，` only (example: `CHAR:[@林岳]，CHAR:[@苏晚]` / `清河城茶摊，客栈废墟外` / `PROP:[短刀]，PROP:[信件]`). Forbidden list separators: `/`, `／`, `|`, `｜`, `、`, `;`, `；`, ASCII comma `,`, `+`, `&`, or whitespace-only lists. Single value: no separator. Empty: leave empty or `None`.
 - Core Scene Info must preserve the scene's core visual guidance and action logic from `Original Script Grounding`; if the existing row is materially incomplete or obviously wrong, rewrite the row patch to restore those facts.
 - No floating entities: a generated missing subject must also be reflected through the scene row patch where relevant, especially in Environment Name, Linked Characters, or Key Props.
 - Beat-to-shot subject budgeting applies here as well: even when the current scene contains many valid entities, any beat intended to map cleanly into one shot should budget only 1-3 core shot-facing subjects for the downstream video prompt, while other entities stay as support/background coverage.
@@ -248,6 +249,7 @@ You MUST use all of them together.
 - 每个被抽取实体必须至少在以下之一显式落点：当前场景行补丁中的 `Environment Name`、`Linked Characters`、`Key Props`、当前场景内容、用户补充要求所要求的动作关系；缺一判无效。
 - `Linked Characters` 必须覆盖所有有动作交互或对白交流的角色。
 - `Key Props` 抽取标准：剧情意义明确 + 持续影响 + 重复出现/被引用。
+- 多实体列表分隔（Mandatory）：`Environment Name`、`Linked Characters`、`Key Props` 中凡出现两个及以上实体名，**必须且只能**用中文逗号 `，` 分隔（例：`CHAR:[@林岳]，CHAR:[@苏晚]` / `清河城茶摊，客栈废墟外` / `PROP:[短刀]，PROP:[信件]`）。**禁止**用 `/`、`／`、`|`、`｜`、`、`、`;`、`；`、英文逗号 `,`、`+`、`&` 或仅空格列举。单值不写分隔符；无则留空或 `None`。
 
 ### 四、角色 subject 规则
 - 着装重大状态变化前置规则（Mandatory）：只要同一人物出现可识别的着装变化，且该变化会改变角色轮廓、身份识别、职业状态、行动状态或叙事阅读（如制服 -> 便装、外套脱下、礼服 -> 战损装、口罩/头盔/披风/防护服上身或移除、明显换鞋、整套配色与层次切换），就必须视为重大状态变化，不得继续并入同一 `character` subject。
@@ -367,6 +369,7 @@ Do not print this validation process. Only print the final result.
   - Environment Name
   - Linked Characters
   - Key Props
+- When writing those three cells, multiple names MUST be joined with Chinese comma `，` only. Do not emit `/`, `／`, `|`, `、`, or ASCII comma lists.
 - Do NOT split into multiple scenes in entity supplement mode.
 - Do NOT modify unrelated scene facts.
 

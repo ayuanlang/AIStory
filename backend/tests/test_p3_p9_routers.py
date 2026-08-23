@@ -542,7 +542,7 @@ def test_scene_markdown_orchestration_and_await_sink():
     import inspect
     assert SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS == 3
     assert SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC == 2.0
-    assert SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS == 1
+    assert SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS == 0
     assert _derive_scene_orchestration_phase(import_status="success", parse_status="ok") == "imported"
     assert _derive_scene_orchestration_phase(import_status="awaiting_workspace_import", parse_status="ok") == "llm_returned"
     assert callable(_is_retryable_scene_orchestration_error)

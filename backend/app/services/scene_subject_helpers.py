@@ -504,7 +504,16 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
         scene_no_idx = _find_idx(headers, ["Scene No", "场次", "场次号", "场次序号"])
         scene_id_idx = _find_idx(headers, ["Scene ID", "场景ID", "场景编号"])
         core_idx = _find_idx(headers, ["Core Scene Info", "核心场景信息", "Core Goal"])
-        original_idx = _find_idx(headers, ["Original Script Text", "原始剧本文本", "Description", "Adapted Script Text", "改编剧本", "改编剧本文本"])
+        original_idx = _find_idx(headers, [
+            "Original Script Text",
+            "Adapted Script Excerpt",
+            "Adapted Script Text",
+            "原始剧本文本",
+            "Description",
+            "改编剧本摘录",
+            "改编剧本",
+            "改编剧本文本",
+        ])
 
         if core_idx < 0 and original_idx < 0:
             continue

@@ -2,9 +2,9 @@
 """Scene API schemas."""
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class SceneCreate(BaseModel):
@@ -30,13 +30,19 @@ class ScenePurgeRequest(BaseModel):
 class SceneOut(BaseModel):
     id: int
     scene_no: str
-    original_script_text: str
+    original_script_text: str = ""
     scene_name: Optional[str]
     equivalent_duration: Optional[str]
     core_scene_info: Optional[str]
     environment_name: Optional[str]
     linked_characters: Optional[str]
     key_props: Optional[str]
+
+    @field_validator("original_script_text", mode="before")
+    @classmethod
+    def coerce_original_script_text(cls, value: Any) -> str:
+        return "" if value is None else str(value)
+
     class Config:
         from_attributes = True
 

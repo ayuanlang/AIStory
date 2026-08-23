@@ -4,7 +4,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -483,22 +483,30 @@ def persist_analyze_scene_stage_result(
     }
 
 
+_SCENE_TABLE_HEADER_HINT_RE = re.compile(r"(?i)\|\s*episode\s*id\s*\|\s*scene\s*id")
+
+
 def extract_scene_markdown_text_from_analyze_result(result: Any) -> str:
     if isinstance(result, str):
         return result
     if not isinstance(result, dict):
         return ""
-    for key in ("adapted_script", "scenes_markdown", "content", "result"):
+
+    candidates: List[str] = []
+    for key in ("scenes_markdown", "result", "content", "adapted_script"):
         value = result.get(key)
         if isinstance(value, str) and value.strip():
-            return value
+            candidates.append(value)
     data = result.get("data")
     if isinstance(data, dict):
-        for key in ("adapted_script", "scenes_markdown", "content"):
+        for key in ("scenes_markdown", "result", "content", "adapted_script"):
             value = data.get(key)
             if isinstance(value, str) and value.strip():
-                return value
-    return ""
+                candidates.append(value)
+    for text in candidates:
+        if _SCENE_TABLE_HEADER_HINT_RE.search(text):
+            return text
+    return candidates[0] if candidates else ""
 
 
 def validate_scene_markdown_import_text(script_text: Any) -> None:

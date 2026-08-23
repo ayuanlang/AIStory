@@ -186,6 +186,16 @@ def _script_analysis_action_label(
     if ctx in {"generate_project_character_profile"}:
         return "生成角色档案设定"
     fn = str(function_name or "").strip().lower()
+    if "derived_framing" in fn:
+        return "景别构图与衍生环境"
+    if "subskill_staging" in fn:
+        return "建置与入戏"
+    if "subskill_drama" in fn:
+        return "文戏标准化"
+    if "subskill_vfx" in fn:
+        return "特效增强"
+    if "subskill_xian" in fn:
+        return "仙攻增强"
     if "stage_1" in fn or "script_optimization" in fn:
         return "剧本优化"
     if "stage_2_1" in fn or "assets_extraction" in fn:

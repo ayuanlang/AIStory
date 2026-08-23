@@ -10,10 +10,15 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
 from app.core.entity_token import subject_compare_key
+from app.models.all_models import Entity
 from app.services.llm_service import llm_service
+from app.services.soft_delete import _active_entity_clause
 
 logger = logging.getLogger("api_logger")
 
@@ -21,6 +26,9 @@ _TYPED_TOKEN_RE = re.compile(
     r"(?P<prefix>CHAR|PROP|ENV)\s*:\s*\[(?P<body>@?[^\]]+)\]",
     flags=re.IGNORECASE,
 )
+# Canonical writer uses Chinese comma ； readers must also accept slash/pipe/顿号/etc.
+_SCENE_SUBJECT_SEPARATOR_RE = re.compile(r"[\n,，;；、/／|｜+＆&]+")
+_SCENE_SUBJECT_SEPARATOR_KEEP_RE = re.compile(r"([\n,，;；、/／|｜+＆&]+)")
 _PLACEHOLDER_KEYS = {
     "",
     "none",
@@ -34,6 +42,7 @@ _PLACEHOLDER_KEYS = {
     "无",
     "空",
 }
+_DERIVED_ENV_NAME_RE = re.compile(r"^\d+\s*度")
 
 
 def _normalize_display_name(value: Any) -> str:
@@ -126,6 +135,150 @@ def parse_subject_index_whitelist(subject_index_text: Any) -> Dict[str, Any]:
     }
 
 
+def _is_derived_environment_name(name: Any) -> bool:
+    return bool(_DERIVED_ENV_NAME_RE.match(_normalize_display_name(name)))
+
+
+def _split_extra_derived_environment_names(value: Any) -> List[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(item or "").strip() for item in value if str(item or "").strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [part.strip() for part in _SCENE_SUBJECT_SEPARATOR_RE.split(text) if part.strip()]
+
+
+def _format_zh_en_name(name_zh: Any, name_en: Any = "") -> str:
+    zh = _normalize_display_name(name_zh)
+    en = _normalize_display_name(name_en)
+    if zh and en and subject_compare_key(zh) != subject_compare_key(en):
+        return f"{zh} / {en}"
+    return zh or en
+
+
+def format_entity_rows_for_orchestration(
+    rows: Iterable[Any],
+    extra_derived_environment_names: Any = "",
+) -> str:
+    """Format CHAR/PROP (all) + derived ENV names as 中文 / 英文 pairs."""
+    characters: List[str] = []
+    props: List[str] = []
+    environments: List[str] = []
+    seen_characters: Set[str] = set()
+    seen_props: Set[str] = set()
+    seen_environments: Set[str] = set()
+
+    def _push(bucket: str, name_zh: Any, name_en: Any = "") -> None:
+        zh = _normalize_display_name(name_zh)
+        en = _normalize_display_name(name_en)
+        display = _format_zh_en_name(zh, en)
+        if not display or _is_placeholder_name(zh or en):
+            return
+        if bucket == "environments" and not (
+            _is_derived_environment_name(zh) or _is_derived_environment_name(en)
+        ):
+            return
+        key = subject_compare_key(zh or en)
+        if not key:
+            return
+        if bucket == "characters":
+            if key in seen_characters:
+                return
+            seen_characters.add(key)
+            characters.append(display)
+            return
+        if bucket == "props":
+            if key in seen_props:
+                return
+            seen_props.add(key)
+            props.append(display)
+            return
+        if bucket == "environments":
+            if key in seen_environments:
+                return
+            seen_environments.add(key)
+            environments.append(display)
+
+    for raw in rows or []:
+        if isinstance(raw, dict):
+            bucket = str(raw.get("bucket") or _bucket_from_subject_type(raw.get("type") or raw.get("subject_type")) or "")
+            name_zh = raw.get("name") or raw.get("name_zh") or ""
+            name_en = raw.get("name_en") or ""
+        else:
+            bucket = _bucket_from_subject_type(getattr(raw, "type", None))
+            name_zh = getattr(raw, "name", None) or ""
+            name_en = getattr(raw, "name_en", None) or ""
+        _push(bucket, name_zh, name_en)
+    for extra_name in _split_extra_derived_environment_names(extra_derived_environment_names):
+        _push("environments", extra_name, "")
+
+    lines: List[str] = []
+    if characters:
+        lines.append("CHAR: " + "，".join(characters))
+    if props:
+        lines.append("PROP: " + "，".join(props))
+    if environments:
+        lines.append("ENV: " + "，".join(environments))
+    return "\n".join(lines)
+
+
+def collect_orchestration_entity_rows(
+    db: Session,
+    *,
+    project_id: Any = None,
+    episode_id: Any = None,
+) -> List[Entity]:
+    """Load asset-table entities for Stage 2.2 name injection."""
+    if db is None or not project_id:
+        return []
+    filters = [
+        Entity.project_id == int(project_id),
+        _active_entity_clause(),
+    ]
+    if episode_id:
+        filters.append(or_(Entity.episode_id == int(episode_id), Entity.episode_id.is_(None)))
+    return (
+        db.query(Entity)
+        .filter(*filters)
+        .order_by(Entity.id.asc())
+        .all()
+    )
+
+
+def format_entity_table_names_for_orchestration(
+    db: Session,
+    *,
+    project_id: Any = None,
+    episode_id: Any = None,
+    extra_derived_environment_names: Any = "",
+) -> str:
+    """Return CHAR/PROP + derived ENV 中文/英文 names from the asset table."""
+    return format_entity_rows_for_orchestration(
+        collect_orchestration_entity_rows(db, project_id=project_id, episode_id=episode_id),
+        extra_derived_environment_names=extra_derived_environment_names,
+    )
+
+
+def format_subject_index_names_for_orchestration(
+    subject_index_text: Any,
+    extra_derived_environment_names: Any = "",
+) -> str:
+    """Legacy Index-text formatter. Stage 2.2 now uses the asset table."""
+    whitelist = parse_subject_index_whitelist(subject_index_text)
+    rows = [
+        {
+            "bucket": str(row.get("bucket") or ""),
+            "name": str(row.get("name") or ""),
+            "name_en": str(row.get("name_en") or ""),
+        }
+        for row in list(whitelist.get("rows") or [])
+    ]
+    return format_entity_rows_for_orchestration(
+        rows,
+        extra_derived_environment_names=extra_derived_environment_names,
+    )
+
+
 def _format_subject_index_compact(rows: List[Dict[str, str]]) -> str:
     if not rows:
         return ""
@@ -152,7 +305,12 @@ def _format_subject_index_compact(rows: List[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _split_cell_tokens(cell_value: Any) -> List[str]:
+def split_scene_subject_field(cell_value: Any) -> List[str]:
+    """Split Environment Name / Linked Characters / Key Props into display names.
+
+    Typed tokens (`CHAR:[…]` / `ENV:[…]` / `PROP:[…]`) are atomic. Writers must use
+    Chinese comma `，`, but readers also accept `/` `／` `|` `、` and other list marks.
+    """
     text = str(cell_value or "").strip()
     if not text or _is_placeholder_name(text):
         return []
@@ -160,22 +318,24 @@ def _split_cell_tokens(cell_value: Any) -> List[str]:
     tokens: List[str] = []
     seen: Set[str] = set()
 
-    for match in _TYPED_TOKEN_RE.finditer(text):
-        display = _normalize_display_name(match.group("body"))
+    def _push(raw: Any) -> None:
+        display = _normalize_display_name(raw)
         key = subject_compare_key(display)
         if display and key and key not in seen and not _is_placeholder_name(display):
             seen.add(key)
             tokens.append(display)
 
-    # Also accept plain comma/semicolon separated names (without TYPE: wrappers).
+    for match in _TYPED_TOKEN_RE.finditer(text):
+        _push(match.group("body"))
+
     remainder = _TYPED_TOKEN_RE.sub(" ", text)
-    for part in re.split(r"[\n,，;；|/]+", remainder):
-        display = _normalize_display_name(part)
-        key = subject_compare_key(display)
-        if display and key and key not in seen and not _is_placeholder_name(display):
-            seen.add(key)
-            tokens.append(display)
+    for part in _SCENE_SUBJECT_SEPARATOR_RE.split(remainder):
+        _push(part)
     return tokens
+
+
+def _split_cell_tokens(cell_value: Any) -> List[str]:
+    return split_scene_subject_field(cell_value)
 
 
 def _name_in_whitelist(
@@ -413,12 +573,24 @@ def _extract_json_object(raw: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _llm_config_with_action(llm_config: Dict[str, Any], action_name: str) -> Dict[str, Any]:
+    """Copy config so name-align logs do not reuse the parent 场景编排 action label."""
+    cfg = dict(llm_config or {})
+    inner = dict(cfg.get("config") or {}) if isinstance(cfg.get("config"), dict) else {}
+    label = str(action_name or "").strip()
+    if label:
+        inner["__resolved_action"] = label
+    cfg["config"] = inner
+    return cfg
+
+
 async def _call_name_align_llm(
     *,
     llm_config: Dict[str, Any],
     system_prompt: str,
     user_prompt: str,
     context: str,
+    action_name: str = "",
 ) -> Optional[Dict[str, Any]]:
     if not llm_config or not str((llm_config.get("api_key") or "")).strip():
         logger.warning("[%s] skip name align: missing llm config/api_key", context)
@@ -429,7 +601,7 @@ async def _call_name_align_llm(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            llm_config,
+            _llm_config_with_action(llm_config, action_name or "实体名对齐"),
         )
         raw = str((response or {}).get("content") or "").strip()
         parsed = _extract_json_object(raw)
@@ -507,11 +679,11 @@ def _apply_plain_name_replacements_exact(cell: str, ordered: List[Tuple[str, str
 
     masked = _TYPED_TOKEN_RE.sub(_hold, out)
     # Split on common separators while keeping separators.
-    parts = re.split(r"([,\n，;；|/]+)", masked)
+    parts = _SCENE_SUBJECT_SEPARATOR_KEEP_RE.split(masked)
     remap = {src: dst for src, dst in ordered}
     rebuilt: List[str] = []
     for part in parts:
-        if not part or re.fullmatch(r"[,\n，;；|/]+", part or ""):
+        if not part or _SCENE_SUBJECT_SEPARATOR_RE.fullmatch(part or ""):
             rebuilt.append(part)
             continue
         display = _normalize_display_name(part)
@@ -656,6 +828,7 @@ async def align_scene_markdown_names_with_subject_index(
     scene_markdown: str,
     subject_index_text: str,
     llm_config: Dict[str, Any],
+    action_name: str = "",
 ) -> Dict[str, Any]:
     """Check scene table names; if missing from Index, one LLM call to remap."""
     mismatches = collect_scene_table_name_mismatches(scene_markdown, subject_index_text)
@@ -702,6 +875,7 @@ async def align_scene_markdown_names_with_subject_index(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         context="scene_markdown_name_align",
+        action_name=action_name or "实体名对齐 · 场景表",
     )
     raw_reps = list((parsed or {}).get("replacements") or []) if isinstance(parsed, dict) else []
     validated: List[Dict[str, str]] = []
@@ -765,6 +939,7 @@ async def align_subjects_json_names_with_subject_index(
     subjects_json: Dict[str, Any],
     subject_index_text: str,
     llm_config: Dict[str, Any],
+    action_name: str = "",
 ) -> Dict[str, Any]:
     """Check asset JSON name/name_en; if missing from Index, one LLM call to remap."""
     mismatches = collect_subjects_json_name_mismatches(subjects_json, subject_index_text)
@@ -805,6 +980,7 @@ async def align_subjects_json_names_with_subject_index(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         context="subjects_json_name_align",
+        action_name=action_name or "实体名对齐 · 资产设计",
     )
     raw_reps = list((parsed or {}).get("replacements") or []) if isinstance(parsed, dict) else []
     validated: List[Dict[str, str]] = []

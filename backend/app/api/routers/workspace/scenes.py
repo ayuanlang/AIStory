@@ -618,6 +618,7 @@ async def regenerate_scene(
             "For each entity item, use only the field contract defined by scene_regenerate.txt and scene_analysis.txt; if an identifier is included, only subject_no may appear as an extra import field.\n"
             "Missing optional strings must use empty string, missing arrays must use empty array, and you must not output null, undefined, metadata wrappers, or parser-hint fields.\n"
             "Return exactly 1 scene row patch in markdown table format plus one SUBJECTS_JSON object for missing entities only.\n"
+            "Environment Name / Linked Characters / Key Props with two or more names MUST be separated by the Chinese comma ， only; do not use /, ／, |, 、, or ASCII commas.\n"
             "In entity-only mode, scene/shots are not replaced; the row patch may update scene_name / equivalent_duration / core_scene_info / original_script_text / environment_name / linked_characters / key_props when needed to reflect corrected scene grounding and supplemented entities."
         )
     else:
@@ -644,7 +645,8 @@ async def regenerate_scene(
             "SUBJECTS_JSON must be exactly one valid JSON object with top-level keys characters, props, environments, covers, and all keys must always exist even when empty.\n"
             "For each entity item, use only the field contract defined by scene_regenerate.txt and scene_analysis.txt; if an identifier is included, only subject_no may appear as an extra import field.\n"
             "Missing optional strings must use empty string, missing arrays must use empty array, and you must not output null, undefined, metadata wrappers, or parser-hint fields.\n"
-            f"Return 1 to {safe_max_scenes} regenerated scene rows in markdown table format plus one SUBJECTS_JSON object for missing entities only."
+            f"Return 1 to {safe_max_scenes} regenerated scene rows in markdown table format plus one SUBJECTS_JSON object for missing entities only.\n"
+            "Environment Name / Linked Characters / Key Props with two or more names MUST be separated by the Chinese comma ， only; do not use /, ／, |, 、, or ASCII commas."
         )
     system_instruction = f"{system_instruction}{regen_injection}"
 
@@ -728,6 +730,7 @@ async def regenerate_scene(
         "- Original Script Grounding is the primary truth source for checking whether the current scene is missing characters, missing key actions, missing location anchors, or has major core scene info / visual-guidance errors.\n"
         "- You may ignore minor wording differences that do not affect plot understanding or visual staging.\n"
         "- Follow scene_analysis extraction principles for characters / props / environments / covers.\n"
+        "- Environment Name / Linked Characters / Key Props with two or more names MUST use the Chinese comma ， only; do not list them with /, ／, |, 、, or ASCII commas.\n"
         "- scene_analysis.txt is the final authority for subject/entity prompt rules; interpret scene_regenerate.txt and runtime instructions so they stay aligned with scene_analysis.txt.\n"
         "- Follow the full Chinese subject-sync rules in scene_regenerate.txt; if this runtime summary is shorter, the file rules still apply in full.\n"
         "- Prioritize User Supplement Requirements over the old scene wording when deciding what is missing.\n"

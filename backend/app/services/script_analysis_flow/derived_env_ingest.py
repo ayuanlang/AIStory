@@ -1,0 +1,632 @@
+# -*- coding: utf-8 -*-
+"""Programmatic derived-environment JSON + asset-library ingest (no LLM)."""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session
+
+from app.models.all_models import Entity, Episode
+from app.services.soft_delete import _active_entity_clause, _active_episode_clause
+
+logger = logging.getLogger("api_logger")
+
+DERIVED_ENV_TAG_PATTERN = re.compile(r"\[DERIVED_ENV:([^\]]+)\]")
+DERIVED_ENV_EXTRACT_BLOCK_PATTERN = re.compile(
+    r"`?\[DERIVED_ENV_EXTRACT_START\]`?(.*?)`?\[DERIVED_ENV_EXTRACT_END\]`?",
+    re.IGNORECASE | re.DOTALL,
+)
+DERIVED_ENV_LINE_PATTERN = re.compile(
+    r"^\s*\[DERIVED_ENV\]\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+DEGREE_NAME_PATTERN = re.compile(r"^(\d+)\s*度")
+FRAMING_ENV_FIELD_PATTERN = re.compile(
+    r"【Beat景别构图方案】(.*?)(?:【景别构图综合】|\[DERIVED_ENV_EXTRACT_START\]|\[BEAT_STREAM_START\])",
+    re.IGNORECASE | re.DOTALL,
+)
+PLAN_ENV_NAME_PATTERN = re.compile(
+    r"(?:ENV\s*[:=＝]\s*`?([^｜|\r\n`\[\]]+)`?|`(\d+\s*度[^`]+)`)",
+    re.IGNORECASE,
+)
+
+GRID_BY_ANGLE = {
+    0: "左上0度格",
+    90: "右上90度格",
+    270: "左下270度格",
+    180: "右下180度格",
+}
+
+FIRST_CUT_PROMPT = (
+    "所属主环境={main}。angle_key={main}|{angle}。"
+    "请严格要求按对应主环境「{main}」四向拼图参考图，截取并放大其中对应的明确宫格位置（{grid}），"
+    "不要重新描述画面细节，直接作为本镜头的最终画面。"
+    "切割衍生环境时均按16:9固定比例，并保证高分辨率。只切割，不要改画。"
+    "成稿须为单张完整镜头：禁止保留四向拼图的宫格分割线、宫格边框、格标/角标、十字拼缝或任何拼图装配痕迹。"
+)
+STATE_CUT_PROMPT = (
+    "所属主环境={main}。angle_key={main}|{angle}。"
+    "以已切割的同角衍生「{parent}」参考图为本镜头最终画面。16:9，高分辨率。"
+    "不要改构图，不要重切宫格，不要描述未改实体。禁止画回宫格分割线、格标或拼缝。"
+)
+FIRST_CUT_NEGATIVE = (
+    "people, person, human, dutch angle, tilted horizon, looking into a room corner, "
+    "re-described furniture layout, mirrored room, four-panel grid lines, 2x2 collage seams, "
+    "panel borders, quadrant labels, split-screen divider"
+)
+STATE_CUT_NEGATIVE = (
+    "people, person, human, dutch angle, recropped four-panel, wrong camera angle, mirrored room, "
+    "four-panel grid lines, 2x2 collage seams, panel borders, quadrant labels, split-screen divider"
+)
+SOURCE_FLAG = "programmatic_derived_framing"
+
+
+def _clean(value: Any) -> str:
+    return str(value or "").strip().strip("`\"'“”‘’[]")
+
+
+def _parse_field_line(raw: str) -> Dict[str, str]:
+    fields: Dict[str, str] = {}
+    for part in re.split(r"[｜|]", str(raw or "")):
+        piece = part.strip()
+        if not piece or "=" not in piece:
+            continue
+        key, value = piece.split("=", 1)
+        fields[_clean(key)] = _clean(value)
+    return fields
+
+
+def _angle_from_name(name: str) -> Optional[int]:
+    match = DEGREE_NAME_PATTERN.match(_clean(name))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_angle(value: Any, name: str = "") -> int:
+    text = _clean(value)
+    if text.isdigit():
+        angle = int(text)
+        if angle in GRID_BY_ANGLE:
+            return angle
+    named = _angle_from_name(name)
+    if named in GRID_BY_ANGLE:
+        return int(named)
+    if named is not None:
+        return int(named)
+    return 0
+
+
+def _main_from_name(name: str) -> str:
+    text = _clean(name)
+    stripped = DEGREE_NAME_PATTERN.sub("", text, count=1).strip()
+    if "_" in stripped:
+        stripped = stripped.split("_", 1)[0].strip()
+    return stripped
+
+
+def _state_suffix(name: str, main_name: str) -> str:
+    text = _clean(name)
+    prefix = f"{_angle_from_name(text) if _angle_from_name(text) is not None else ''}度{main_name}"
+    if text.startswith(prefix) and len(text) > len(prefix):
+        rest = text[len(prefix):]
+        return rest[1:] if rest.startswith("_") else rest.lstrip("_")
+    if "_" in text:
+        return text.rsplit("_", 1)[-1].strip()
+    return ""
+
+
+def _same_angle_parent(name: str, main_name: str, angle: int) -> str:
+    return f"{int(angle)}度{main_name}"
+
+
+def _is_state_row(item: Dict[str, Any]) -> bool:
+    kind = _clean(item.get("kind") or item.get("类型")).lower()
+    if kind in {"第一刀", "first_cut", "first-cut", "视角衍生"}:
+        return False
+    if kind in {"衍生的衍生", "state", "delta"}:
+        return True
+    parent = _clean(item.get("parent") or item.get("同角切割父"))
+    if parent and parent not in {"无", "n/a", "none", "-"}:
+        return True
+    delta = _clean(item.get("state_delta") or item.get("状态Delta"))
+    return bool(delta and delta not in {"无", "n/a", "none", "-"})
+
+
+def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
+    """Parse [DERIVED_ENV:…] tags and the extract block from framing output."""
+    source = str(text or "")
+    by_name: Dict[str, Dict[str, Any]] = {}
+
+    def _upsert(name: str, extra: Optional[Dict[str, Any]] = None) -> None:
+        clean_name = _clean(name)
+        if not clean_name:
+            return
+        row = by_name.get(clean_name) or {"name": clean_name}
+        if extra:
+            for key, value in extra.items():
+                if _clean(value):
+                    row[key] = value
+        if not _clean(row.get("main") or row.get("所属主环境")):
+            row["main"] = _main_from_name(clean_name)
+        row["angle"] = _normalize_angle(row.get("angle") or row.get("view_angle_from_main"), clean_name)
+        by_name[clean_name] = row
+
+    for match in DERIVED_ENV_EXTRACT_BLOCK_PATTERN.finditer(source):
+        block = str(match.group(1) or "")
+        for line_match in DERIVED_ENV_LINE_PATTERN.finditer(block):
+            fields = _parse_field_line(line_match.group(1))
+            name = fields.get("名称") or fields.get("name") or ""
+            _upsert(
+                name,
+                {
+                    "main": fields.get("所属主环境") or fields.get("main"),
+                    "angle": fields.get("view_angle_from_main") or fields.get("angle"),
+                    "kind": fields.get("类型") or fields.get("kind"),
+                    "trigger": fields.get("触发") or fields.get("trigger"),
+                    "lens_profile": fields.get("lens_profile"),
+                    "axis_crossing": fields.get("axis_crossing"),
+                    "spatial_axis": fields.get("spatial_axis"),
+                    "parent": fields.get("同角切割父") or fields.get("parent"),
+                    "state_delta": fields.get("状态Delta") or fields.get("state_delta"),
+                },
+            )
+
+    for match in DERIVED_ENV_TAG_PATTERN.finditer(source):
+        _upsert(match.group(1))
+
+    plan_match = FRAMING_ENV_FIELD_PATTERN.search(source)
+    if plan_match:
+        for env_match in PLAN_ENV_NAME_PATTERN.finditer(plan_match.group(1) or ""):
+            _upsert(env_match.group(1) or env_match.group(2))
+
+    return list(by_name.values())
+
+
+def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    name = _clean(item.get("name"))
+    main = _clean(item.get("main") or item.get("所属主环境")) or _main_from_name(name)
+    angle = _normalize_angle(item.get("angle") or item.get("view_angle_from_main"), name)
+    grid = GRID_BY_ANGLE.get(angle, "左上0度格")
+    is_state = _is_state_row({**item, "name": name, "main": main, "angle": angle})
+    parent = _clean(item.get("parent") or item.get("同角切割父"))
+    if parent in {"无", "n/a", "none", "-", ""}:
+        parent = _same_angle_parent(name, main, angle) if is_state else ""
+    if is_state and parent == name:
+        parent = _same_angle_parent(name, main, angle)
+    lens = _clean(item.get("lens_profile")) or ("Wide" if angle == 0 else "Standard")
+    axis_crossing = _clean(item.get("axis_crossing")) or "None"
+    spatial_axis = _clean(item.get("spatial_axis")) or "继承主环境"
+    trigger = _clean(item.get("trigger") or item.get("触发")) or ("Master" if angle == 0 else "复用/剧情覆盖")
+    delta = _clean(item.get("state_delta") or item.get("状态Delta"))
+    if delta in {"无", "n/a", "none", "-"}:
+        delta = ""
+    suffix = _state_suffix(name, main)
+    name_en = f"{angle}deg {main}" + (f" {suffix}" if suffix else "")
+    if is_state:
+        prompt = STATE_CUT_PROMPT.format(main=main, angle=angle, parent=parent or _same_angle_parent(name, main, angle))
+        if delta:
+            prompt = f"{prompt}在此画面基础上叠加：{delta}。"
+        logic = (
+            f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
+            f"所属主环境={main}。angle_key={main}|{angle}。同角切割父={parent or _same_angle_parent(name, main, angle)}。"
+            f"状态Delta={delta or '无'}。形状Delta=无。未改实体=不写。触发={trigger}。"
+        )
+        deps = [f"ENV:[{parent or _same_angle_parent(name, main, angle)}]"]
+        negative = STATE_CUT_NEGATIVE
+        atmosphere = f"Same {angle}deg crop with state delta"
+        visual_params = f"{lens}/Derived/State"
+        anchor = f"same-angle crop of {main}, {grid}, empty plate"
+    else:
+        prompt = FIRST_CUT_PROMPT.format(main=main, angle=angle, grid=grid)
+        logic = (
+            f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
+            f"所属主环境={main}。截取宫格={grid}。触发={trigger}。"
+        )
+        deps = [f"ENV:[{main}]"]
+        negative = FIRST_CUT_NEGATIVE
+        atmosphere = f"{'Master' if angle == 0 else 'Angle'} empty plate crop"
+        visual_params = f"{lens}/Derived/{angle}"
+        anchor = f"crop {grid} from {main} four-direction grid, empty plate, eye-level"
+    return {
+        "name": name,
+        "name_en": name_en,
+        "base_name_en": main,
+        "atmosphere": atmosphere,
+        "visual_params": visual_params,
+        "description_cn": "",
+        "generation_prompt_cn": prompt,
+        "generation_prompt_en": "",
+        "negative_prompt_en": negative,
+        "anchor_description": anchor,
+        "visual_dependencies": deps,
+        "dependency_strategy": {
+            "type": "Type A",
+            "logic": logic,
+        },
+        "custom_attributes": {
+            "source": SOURCE_FLAG,
+            "main_environment": main,
+            "view_angle_from_main": angle,
+            "grid_cell": grid,
+            "derived_kind": "state" if is_state else "first_cut",
+            "negative_prompt_en": negative,
+        },
+    }
+
+
+def group_derived_environment_jsons(items: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One JSON string per main environment, environments[] = derived rows only."""
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for item in items or []:
+        payload = build_derived_environment_item(item)
+        main = _clean(payload.get("base_name_en")) or _clean((payload.get("custom_attributes") or {}).get("main_environment"))
+        if not main or not payload.get("name"):
+            continue
+        bucket = grouped.setdefault(main, [])
+        if any(_clean(existing.get("name")) == _clean(payload.get("name")) for existing in bucket):
+            continue
+        bucket.append(payload)
+    result: List[Dict[str, Any]] = []
+    for main, rows in grouped.items():
+        rows.sort(key=lambda row: (
+            int((row.get("custom_attributes") or {}).get("view_angle_from_main") or 0),
+            _clean(row.get("name")),
+        ))
+        body = {"environments": rows}
+        result.append(
+            {
+                "main_environment": main,
+                "count": len(rows),
+                "json": json.dumps(body, ensure_ascii=False, indent=2),
+                "payload": body,
+            }
+        )
+    return result
+
+
+def collect_derived_environment_jsons(text: str) -> List[Dict[str, Any]]:
+    return group_derived_environment_jsons(parse_derived_env_extract_items(text))
+
+
+_DERIVED_ENV_SECTION_PATTERN = re.compile(
+    r"(?:\r?\n)?────【衍生环境】────(?P<body>.*?)(?=(?:\r?\n\[ENV_BLOCK_END)|(?:\r?\n────【)|$)",
+    re.DOTALL,
+)
+_DERIVED_ENV_BACKTICK_NAME_PATTERN = re.compile(r"`([^`\n]+)`")
+_DERIVED_ENV_DEGREE_LINE_PATTERN = re.compile(
+    r"^\s*[-*]\s*(\d+\s*度[^\s`：:｜|,，]+)",
+    re.MULTILINE,
+)
+_MAIN_ENV_LINE_PATTERN = re.compile(r"(?m)^[ \t]*【主环境】[ \t]*(.+?)\s*$")
+_OWNING_MAIN_ENV_PATTERN = re.compile(r"所属主环境\s*=\s*([^\s｜|\r\n]+)")
+_DERIVED_ENV_NAME_PATTERN = re.compile(r"^\d+\s*度")
+_SCENE_DERIVED_ENV_HEADER_PATTERN = re.compile(
+    r"【本场衍生环境名】\s*([^\r\n]+)"
+)
+
+
+def _normalize_env_name_key(value: str) -> str:
+    return re.sub(r"[\s_*`'\"“”‘’]+", "", str(value or "")).lower()
+
+
+def _main_environment_name_keys(text: str) -> Set[str]:
+    keys: Set[str] = set()
+    for match in _MAIN_ENV_LINE_PATTERN.finditer(text):
+        cleaned = _clean(re.split(r"[｜|]", match.group(1) or "", maxsplit=1)[0])
+        key = _normalize_env_name_key(cleaned)
+        if key:
+            keys.add(key)
+    for match in _OWNING_MAIN_ENV_PATTERN.finditer(text):
+        key = _normalize_env_name_key(match.group(1) or "")
+        if key:
+            keys.add(key)
+    return keys
+
+
+def extract_derived_environment_names_from_scene_text(scene_text: str) -> str:
+    """Collect this scene's derived ENV names only (never bare main-environment names).
+
+    Sources: 【本场衍生环境名】 / [DERIVED_ENV:…] / extract block / 【衍生环境】 bullets.
+    Names are joined with Chinese comma `，`.
+    """
+    text = str(scene_text or "")
+    if not text.strip():
+        return ""
+
+    names: List[str] = []
+    seen: Set[str] = set()
+    main_keys = _main_environment_name_keys(text)
+
+    def _add(raw_name: str) -> None:
+        cleaned = _clean(raw_name)
+        cleaned = re.split(r"[｜|]", cleaned, maxsplit=1)[0].strip()
+        cleaned = re.sub(r"^(名称|环境名|环境|ENV)\s*[=：:]\s*", "", cleaned).strip()
+        if not cleaned or cleaned.startswith("─") or cleaned.startswith("-"):
+            return
+        if not _DERIVED_ENV_NAME_PATTERN.match(cleaned):
+            return
+        normalized = _normalize_env_name_key(cleaned)
+        if normalized in {"none", "null", "nil", "n/a", "na", "无", "空"}:
+            return
+        if normalized in main_keys:
+            return
+        if cleaned in seen:
+            return
+        seen.add(cleaned)
+        names.append(cleaned)
+
+    for item in parse_derived_env_extract_items(text):
+        _add(item.get("name"))
+
+    header_match = _SCENE_DERIVED_ENV_HEADER_PATTERN.search(text)
+    if header_match:
+        for part in re.split(r"[,，;；、/／]+", header_match.group(1) or ""):
+            _add(part)
+
+    section = _DERIVED_ENV_SECTION_PATTERN.search(text)
+    if section:
+        body = str(section.group("body") or "")
+        for match in _DERIVED_ENV_BACKTICK_NAME_PATTERN.finditer(body):
+            _add(match.group(1))
+        for match in _DERIVED_ENV_DEGREE_LINE_PATTERN.finditer(body):
+            _add(match.group(1))
+
+    return "，".join(names)
+
+
+def _upsert_environment_entity(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    payload: Dict[str, Any],
+) -> Tuple[str, int]:
+    name = _clean(payload.get("name"))
+    name_en = _clean(payload.get("name_en"))
+    candidates = {value.lower() for value in (name, name_en) if value}
+    if not candidates:
+        return "skipped", 0
+    name_expr = func.lower(func.trim(func.coalesce(Entity.name, "")))
+    name_en_expr = func.lower(func.trim(func.coalesce(Entity.name_en, "")))
+    existing = (
+        db.query(Entity)
+        .filter(
+            Entity.project_id == int(project_id),
+            Entity.episode_id == int(episode_id),
+            _active_entity_clause(),
+            func.lower(func.trim(func.coalesce(Entity.type, ""))) == "environment",
+            or_(name_expr.in_(candidates), name_en_expr.in_(candidates)),
+        )
+        .first()
+    )
+    attrs = dict(payload.get("custom_attributes") or {})
+    prompt = _clean(payload.get("generation_prompt_cn"))
+    deps = list(payload.get("visual_dependencies") or [])
+    strategy = payload.get("dependency_strategy") or {}
+    if existing is None:
+        entity = Entity(
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            name=name,
+            type="environment",
+            description=prompt,
+            generation_prompt_cn=prompt,
+            generation_prompt_en=_clean(payload.get("generation_prompt_en")),
+            anchor_description=_clean(payload.get("anchor_description")),
+            name_en=name_en,
+            base_name_en=_clean(payload.get("base_name_en")),
+            atmosphere=_clean(payload.get("atmosphere")),
+            visual_params=_clean(payload.get("visual_params")),
+            narrative_description=prompt,
+            visual_dependencies=deps,
+            dependency_strategy=strategy,
+            custom_attributes=attrs,
+        )
+        db.add(entity)
+        db.flush()
+        return "created", int(entity.id)
+    existing_attrs = dict(existing.custom_attributes or {}) if isinstance(existing.custom_attributes, dict) else {}
+    existing_prompt = _clean(existing.generation_prompt_cn)
+    can_overwrite = (not existing_prompt) or existing_attrs.get("source") == SOURCE_FLAG
+    if can_overwrite:
+        existing.generation_prompt_cn = prompt
+        existing.description = prompt or existing.description
+        existing.narrative_description = prompt or existing.narrative_description
+        existing.generation_prompt_en = _clean(payload.get("generation_prompt_en")) or existing.generation_prompt_en
+        existing.anchor_description = _clean(payload.get("anchor_description")) or existing.anchor_description
+        existing.name_en = name_en or existing.name_en
+        existing.base_name_en = _clean(payload.get("base_name_en")) or existing.base_name_en
+        existing.atmosphere = _clean(payload.get("atmosphere")) or existing.atmosphere
+        existing.visual_params = _clean(payload.get("visual_params")) or existing.visual_params
+        existing.visual_dependencies = deps or existing.visual_dependencies
+        existing.dependency_strategy = strategy or existing.dependency_strategy
+        existing_attrs.update(attrs)
+        existing.custom_attributes = existing_attrs
+    return "updated" if can_overwrite else "kept", int(existing.id)
+
+
+def _environments_from_group(group: Dict[str, Any]) -> List[Dict[str, Any]]:
+    payload = group.get("payload")
+    if isinstance(payload, dict):
+        rows = payload.get("environments")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    raw_json = group.get("json")
+    if isinstance(raw_json, str) and raw_json.strip():
+        try:
+            parsed = json.loads(raw_json)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            rows = parsed.get("environments")
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def merge_derived_environment_groups(
+    existing: Sequence[Dict[str, Any]],
+    incoming: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Merge by main_environment; same-name rows in a main take the incoming copy."""
+    by_main: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    order: List[str] = []
+
+    def _absorb(groups: Sequence[Dict[str, Any]]) -> None:
+        for group in groups or []:
+            if not isinstance(group, dict):
+                continue
+            main = _clean(group.get("main_environment"))
+            if not main:
+                continue
+            if main not in by_main:
+                by_main[main] = {}
+                order.append(main)
+            bucket = by_main[main]
+            for row in _environments_from_group(group):
+                name = _clean(row.get("name"))
+                if name:
+                    bucket[name] = row
+
+    _absorb(existing)
+    _absorb(incoming)
+    result: List[Dict[str, Any]] = []
+    for main in order:
+        rows = list(by_main[main].values())
+        rows.sort(
+            key=lambda row: (
+                int((row.get("custom_attributes") or {}).get("view_angle_from_main") or 0),
+                _clean(row.get("name")),
+            )
+        )
+        body = {"environments": rows}
+        result.append(
+            {
+                "main_environment": main,
+                "count": len(rows),
+                "json": json.dumps(body, ensure_ascii=False, indent=2),
+                "payload": body,
+            }
+        )
+    return result
+
+
+def persist_derived_environment_jsons(
+    episode: Episode,
+    groups: Sequence[Dict[str, Any]],
+) -> None:
+    raw = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
+    try:
+        obj = json.loads(raw) if raw else {"version": 1, "stages": {}}
+        if not isinstance(obj, dict):
+            obj = {"version": 1, "stages": {}}
+    except Exception:
+        obj = {"version": 1, "stages": {}}
+    stages = obj.setdefault("stages", {})
+    if not isinstance(stages, dict):
+        stages = {}
+        obj["stages"] = stages
+    stage1 = stages.setdefault("stage1", {"key": "stage1", "outputs": {}})
+    if not isinstance(stage1, dict):
+        stage1 = {"key": "stage1", "outputs": {}}
+        stages["stage1"] = stage1
+    outputs = stage1.setdefault("outputs", {})
+    if not isinstance(outputs, dict):
+        outputs = {}
+        stage1["outputs"] = outputs
+    existing_groups: List[Dict[str, Any]] = []
+    existing_blob = outputs.get("derived_environment_jsons")
+    if isinstance(existing_blob, dict):
+        raw_content = existing_blob.get("content")
+        try:
+            parsed = (
+                json.loads(raw_content)
+                if isinstance(raw_content, str) and raw_content.strip()
+                else raw_content
+            )
+        except Exception:
+            parsed = []
+        if isinstance(parsed, list):
+            existing_groups = [item for item in parsed if isinstance(item, dict)]
+    merged = merge_derived_environment_groups(existing_groups, groups)
+    slim_groups = [
+        {
+            "main_environment": group.get("main_environment"),
+            "count": group.get("count"),
+            "json": group.get("json"),
+        }
+        for group in merged
+    ]
+    outputs["derived_environment_jsons"] = {
+        "key": "derived_environment_jsons",
+        "kind": "json",
+        "title": "按主环境切割的衍生环境 JSON",
+        "content": json.dumps(slim_groups, ensure_ascii=False, indent=2),
+    }
+    episode.ai_stage_outputs = json.dumps(obj, ensure_ascii=False, indent=2)
+
+
+def ingest_derived_environments_from_framing(
+    *,
+    db: Session,
+    project_id: int,
+    episode_id: int,
+    scene_text: str,
+) -> Dict[str, Any]:
+    groups = collect_derived_environment_jsons(scene_text)
+    created = 0
+    updated = 0
+    kept = 0
+    entity_ids: List[int] = []
+    if int(project_id or 0) > 0 and int(episode_id or 0) > 0:
+        for group in groups:
+            for row in (group.get("payload") or {}).get("environments") or []:
+                action, entity_id = _upsert_environment_entity(
+                    db,
+                    project_id=int(project_id),
+                    episode_id=int(episode_id),
+                    payload=row,
+                )
+                if entity_id:
+                    entity_ids.append(entity_id)
+                if action == "created":
+                    created += 1
+                elif action == "updated":
+                    updated += 1
+                elif action == "kept":
+                    kept += 1
+        episode = (
+            db.query(Episode)
+            .filter(Episode.id == int(episode_id), _active_episode_clause())
+            .first()
+        )
+        if episode is not None:
+            persist_derived_environment_jsons(episode, groups)
+        db.commit()
+    logger.info(
+        "[derived_env_ingest] mains=%s created=%s updated=%s kept=%s episode_id=%s",
+        len(groups),
+        created,
+        updated,
+        kept,
+        episode_id,
+    )
+    return {
+        "group_count": len(groups),
+        "created": created,
+        "updated": updated,
+        "kept": kept,
+        "entity_ids": entity_ids,
+        "groups": [
+            {"main_environment": group.get("main_environment"), "count": group.get("count"), "json": group.get("json")}
+            for group in groups
+        ],
+    }

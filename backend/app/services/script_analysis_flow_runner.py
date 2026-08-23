@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -28,6 +28,7 @@ from app.services.script_analysis_flow import (
     import_analyze_scene_stage_result,
     parse_scene_units_from_markers,
     persist_script_optimization_stage,
+    resolve_assets_extraction_source_text,
     upsert_pipeline_node_status,
 )
 from app.services.script_analysis_llm_config import (
@@ -46,7 +47,8 @@ logger = logging.getLogger("api_logger")
 _FLOW_NODE_ACTION_LABELS = {
     "script_optimization": "剧本优化（旧版）",
     "scene_split": "场景拆分",
-    "environment_plan": "环境规划",
+    "environment_plan": "主环境规划",
+    "scene_subskill_pipeline": "文戏/构图/建置",
     "assets_extraction": "资产清单提取",
     "scene_markdown": "场景编排",
     "asset_design_character": "角色资产设计",
@@ -65,7 +67,6 @@ _FLOW_DOWNSTREAM_NODES = {
         "storyboard_generation",
     ],
     "environment_plan": [
-        "scene_subskill_pipeline",
         "assets_extraction",
         "scene_markdown",
         "asset_design_character",
@@ -240,6 +241,44 @@ def _next_script_analysis_fallback_api_id(db: Session, function_name: Any, syste
     return _coerce_system_api_id(fallback_ids[0])
 
 
+SCRIPT_ANALYSIS_MAIN_PATH_RETRY_ATTEMPTS = 3
+
+
+def build_script_analysis_retry_api_attempts(
+    db: Session,
+    function_name: Any,
+    system_api_id: Any,
+    *,
+    node_key: str = "",
+) -> Tuple[int, List[int]]:
+    """Scene-split schedule: same API × 2, then one fallback API (or same if none)."""
+    original_api_id = _coerce_system_api_id(system_api_id)
+    fallback_api_id = 0
+    try:
+        fallback_api_id = _next_script_analysis_fallback_api_id(
+            db,
+            function_name or "script_analysis",
+            original_api_id or system_api_id,
+        )
+    except Exception as fallback_exc:
+        logger.warning(
+            "[剧本分析流程] 节点 %s 无法解析备用 API | err=%s",
+            node_key or "main_path",
+            fallback_exc,
+        )
+    api_attempts = [original_api_id, original_api_id]
+    if fallback_api_id > 0 and fallback_api_id != original_api_id:
+        api_attempts.append(fallback_api_id)
+    else:
+        api_attempts.append(original_api_id)
+        logger.warning(
+            "[剧本分析流程] 节点 %s 无可用备用 API，第三次仍使用当前 API | system_api_id=%s",
+            node_key or "main_path",
+            original_api_id or None,
+        )
+    return original_api_id, api_attempts
+
+
 async def execute_scene_analysis_flow_node(
     *,
     request: Any,
@@ -287,8 +326,8 @@ async def execute_scene_analysis_flow_node(
             or scoped_action_name
         )
         if node_key in {"scene_split", "environment_plan"}:
-            # Scene split returns the authoritative full script. Environment planning returns
-            # per-scene patches that this runner merges back into that script.
+            # Scene split returns the authoritative full script. Environment planning is
+            # one whole-episode LLM call; code then injects reuse patches per scene.
             raw_payload["scene_analysis_mode"] = "stage1"
             raw_payload["skip_episode_persist"] = node_key == "environment_plan"
         
@@ -389,27 +428,48 @@ async def execute_scene_analysis_flow_node(
         logger.info("[剧本分析流程] 开始调用 evaluate_scene 执行节点 %s...", node_key)
         try:
             if node_key == "assets_extraction":
-                # Pass Stage 1 optimized script as-is (no ENV/Beat slim cut).
-                max_attempts = 2
+                # One whole-episode call: scene-split text + per-scene ENV injections.
+                episode_adaptation = str(
+                    getattr(episode, "ai_scene_analysis_adaptation", "") or ""
+                ).strip() if episode is not None else ""
+                resolved_assets_text = resolve_assets_extraction_source_text(
+                    str(raw_payload.get("text") or ""),
+                    episode_adaptation,
+                )
+                if resolved_assets_text:
+                    raw_payload["text"] = resolved_assets_text
+                original_api_id, api_attempts = build_script_analysis_retry_api_attempts(
+                    db,
+                    raw_payload.get("function_name") or "script_analysis",
+                    raw_payload.get("system_api_id"),
+                    node_key=node_key,
+                )
                 result = None
                 assets_cover_poster_missing_after_retries = False
-                for attempt in range(1, max_attempts + 1):
-                    result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
+                max_attempts = len(api_attempts)
+                for attempt, api_id in enumerate(api_attempts, start=1):
+                    payload = dict(raw_payload)
+                    if api_id > 0:
+                        payload["system_api_id"] = api_id
+                    switched = api_id > 0 and api_id != original_api_id
+                    result = await analyze_scene(AnalyzeSceneRequest(**payload), current_user=current_user, db=db, async_mode="0")
                     result_text = _extract_analysis_text_from_result(result)
                     has_cover_poster = _subject_index_has_cover_poster(result_text)
                     if has_cover_poster:
                         if attempt > 1:
                             logger.info(
-                                "[剧本分析流程] 节点 %s 在重试后通过 cover_poster 校验 | attempt=%s",
+                                "[剧本分析流程] 节点 %s 在重试后通过 cover_poster 校验 | attempt=%s switched_api=%s",
                                 node_key,
                                 attempt,
+                                switched,
                             )
                         break
                     logger.warning(
-                        "[剧本分析流程] 节点 %s 缺少 cover_poster/poster 条目 | attempt=%s/%s",
+                        "[剧本分析流程] 节点 %s 缺少 cover_poster/poster 条目 | attempt=%s/%s switched_api=%s",
                         node_key,
                         attempt,
                         max_attempts,
+                        switched,
                     )
                     if attempt >= max_attempts:
                         assets_cover_poster_missing_after_retries = True
@@ -430,7 +490,7 @@ async def execute_scene_analysis_flow_node(
                         retry_count=attempt,
                         runtime_meta={"business_event": "retry", "business_reason": "资产清单缺少封面项"},
                         error_code="ASSETS_EXTRACTION_COVER_POSTER_MISSING",
-                        error_message="cover_poster/poster missing, auto-retrying once",
+                        error_message="cover_poster/poster missing, auto-retrying like scene_split",
                     )
                     db.commit()
                 if assets_cover_poster_missing_after_retries and node_project_id > 0 and node_episode_id > 0:
@@ -449,30 +509,12 @@ async def execute_scene_analysis_flow_node(
             elif node_key in {"script_optimization", "scene_split"}:
                 # Visual backfill JSON is a completeness gate, not a standalone artifact.
                 # Incomplete output => full Stage 1 rerun (same API x2, then one switched API).
-                original_api_id = _coerce_system_api_id(raw_payload.get("system_api_id"))
-                fallback_api_id = 0
-                try:
-                    fallback_api_id = _next_script_analysis_fallback_api_id(
-                        db,
-                        raw_payload.get("function_name") or "script_analysis",
-                        original_api_id or raw_payload.get("system_api_id"),
-                    )
-                except Exception as fallback_exc:
-                    logger.warning(
-                        "[剧本分析流程] 节点 %s 无法解析备用 API | err=%s",
-                        node_key,
-                        fallback_exc,
-                    )
-                api_attempts = [original_api_id, original_api_id]
-                if fallback_api_id > 0 and fallback_api_id != original_api_id:
-                    api_attempts.append(fallback_api_id)
-                else:
-                    api_attempts.append(original_api_id)
-                    logger.warning(
-                        "[剧本分析流程] 节点 %s 无可用备用 API，第三次仍使用当前 API | system_api_id=%s",
-                        node_key,
-                        original_api_id or None,
-                    )
+                original_api_id, api_attempts = build_script_analysis_retry_api_attempts(
+                    db,
+                    raw_payload.get("function_name") or "script_analysis",
+                    raw_payload.get("system_api_id"),
+                    node_key=node_key,
+                )
                 result = None
                 max_attempts = len(api_attempts)
                 for attempt, api_id in enumerate(api_attempts, start=1):
@@ -530,56 +572,32 @@ async def execute_scene_analysis_flow_node(
                         error_code="SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING",
                         error_message=(
                             "incomplete Stage 1 output, switching API and rerunning"
-                            if (attempt + 1) == max_attempts and fallback_api_id > 0 and fallback_api_id != original_api_id
+                            if switched or (attempt + 1) == max_attempts
                             else "incomplete Stage 1 output, auto-retrying full script_optimization"
                         ),
                     )
                     db.commit()
             elif node_key == "environment_plan":
-                scene_split_text = str(raw_payload.get("text") or "").strip()
-                patch_result = None
-                patch_text = ""
-                for attempt in range(1, 3):
-                    patch_result = await analyze_scene(
-                        AnalyzeSceneRequest(**raw_payload),
-                        current_user=current_user,
-                        db=db,
-                        async_mode="0",
-                    )
-                    raw_patch_text = _extract_analysis_text_from_result(patch_result)
-                    patch_text = _strip_required_completion_marker(
-                        raw_patch_text,
-                        _ENVIRONMENT_COMPLETION_MARKER,
-                    )
-                    if patch_text:
-                        break
-                    logger.warning(
-                        "[剧本分析流程] 环境规划输出缺少结束标签，整段重试 | attempt=%s/2 expected_marker=%s",
-                        attempt,
-                        _ENVIRONMENT_COMPLETION_MARKER,
-                    )
-                    if node_project_id > 0 and node_episode_id > 0 and attempt < 2:
-                        upsert_pipeline_node_status(
-                            db,
-                            project_id=node_project_id,
-                            episode_id=node_episode_id,
-                            script_id=f"episode:{node_episode_id}",
-                            node_name=node_key,
-                            status="running",
-                            progress_percent=15.0,
-                            retry_count=attempt,
-                            runtime_meta={"business_event": "retry", "business_reason": "环境规划返回不完整"},
-                            error_code="ENVIRONMENT_PLAN_COMPLETION_MARKER_MISSING",
-                            error_message="completion marker missing; retrying environment plan",
-                        )
-                        db.commit()
-                if not patch_text:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"ENVIRONMENT_PLAN_COMPLETION_MARKER_MISSING:{_ENVIRONMENT_COMPLETION_MARKER}",
-                    )
-                merged_text = _merge_environment_patches(scene_split_text, patch_text)
-                result = _replace_analysis_result_text(patch_result, merged_text)
+                from app.services.environment_plan_runner import run_environment_plan
+
+                merged_text, plan_meta = await run_environment_plan(
+                    raw_payload=raw_payload,
+                    current_user=current_user,
+                    db=db,
+                    node_project_id=node_project_id,
+                    node_episode_id=node_episode_id,
+                )
+                result = _replace_analysis_result_text(
+                    {"content": merged_text, "adapted_script": merged_text, **plan_meta},
+                    merged_text,
+                )
+                logger.info(
+                    "[剧本分析流程] 环境规划整集完成 | scenes=%s reused=%s planned=%s catalog=%s",
+                    plan_meta.get("scene_count"),
+                    plan_meta.get("reused_scene_ids"),
+                    plan_meta.get("planned_scene_ids"),
+                    plan_meta.get("catalog_count"),
+                )
                 # analyze_scene may release/expire ORM instances while the long LLM call
                 # is running. Re-query the Episode before Stage-1 persistence so deferred
                 # attributes such as ai_stage_outputs remain session-bound.
@@ -795,7 +813,7 @@ async def execute_scene_analysis_flow_node(
                         error_message=str(parse_exc),
                     )
                     db.commit()
-                    raise HTTPException(status_code=422, detail=parse_error_code)
+                    raise HTTPException(status_code=422, detail=parse_error_code) from parse_exc
                 scene_markdown_elapsed_ms = int((time.perf_counter() - scene_markdown_started_perf) * 1000)
                 logger.info(
                     "[场景编排2.2] 节点后处理完成 | project_id=%s | episode_id=%s | post_elapsed_ms=%s",

@@ -741,7 +741,7 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
         if (bracketMatches && bracketMatches.length > 0) {
             anchors = bracketMatches.map(m => m.replace(/[\[\]\*]/g, '').trim());
         } else {
-            anchors = sourceText.split(/[,，]/).map(s => s.replace(/[\*]/g, '').trim()).filter(Boolean);
+            anchors = splitSceneSubjectNames(sourceText).map(s => s.replace(/[\*]/g, '').trim()).filter(Boolean);
         }
 
         const validUrls = [];
@@ -1019,9 +1019,9 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                                 <div className="flex flex-col gap-0.5">
                                     <span className="font-bold text-white/40 text-[9px] uppercase">{t('角色', 'Cast')}</span>
                                     <div className="flex flex-wrap gap-1">
-                                        {scene.linked_characters.split(/[，,]/).filter(Boolean).map((char, i) => (
+                                        {splitSceneSubjectNames(scene.linked_characters).map((char, i) => (
                                             <span key={i} className="inline-block bg-indigo-500/20 text-indigo-200 border border-indigo-500/30 px-1.5 py-0.5 rounded text-[10px]">
-                                                {char.trim()}
+                                                {parseTypedSceneSubjectToken(char, 'character').name || char.trim()}
                                             </span>
                                         ))}
                                     </div>
@@ -1032,9 +1032,9 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                                 <div className="flex flex-col gap-0.5">
                                     <span className="font-bold text-white/40 text-[9px] uppercase">{t('道具', 'Props')}</span>
                                     <div className="flex flex-wrap gap-1">
-                                        {scene.key_props.split(/[，,]/).filter(Boolean).map((prop, i) => (
+                                        {splitSceneSubjectNames(scene.key_props).map((prop, i) => (
                                             <span key={i} className="inline-block bg-emerald-500/20 text-emerald-200 border border-emerald-500/30 px-1.5 py-0.5 rounded text-[10px]">
-                                                {prop.trim()}
+                                                {parseTypedSceneSubjectToken(prop, 'prop').name || prop.trim()}
                                             </span>
                                         ))}
                                     </div>
@@ -4395,9 +4395,9 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                                                 <InputGroup label={t('时长', 'Duration')} value={editingScene.equivalent_duration} onChange={v => handleSceneUpdate({...editingScene, equivalent_duration: v})} />
                                             </div>
                                                 <InputGroup label={t('场景名称', 'Scene Name')} value={editingScene.scene_name} onChange={v => handleSceneUpdate({...editingScene, scene_name: v})} />
-                                                <InputGroup label={t('环境锚点', 'Environment Anchor')} value={editingScene.environment_name} onChange={v => handleSceneUpdate({...editingScene, environment_name: v})} />
-                                                <InputGroup label={t('关联角色（逗号分隔）', 'Linked Characters (Comma separated)')} value={editingScene.linked_characters} onChange={v => handleSceneUpdate({...editingScene, linked_characters: v})} />
-                                                <InputGroup label={t('关键道具', 'Key Props')} value={editingScene.key_props} onChange={v => handleSceneUpdate({...editingScene, key_props: v})} />
+                                                <InputGroup label={t('环境锚点（多环境用中文逗号分隔）', 'Environment Anchor (Chinese comma if multiple)')} value={editingScene.environment_name} onChange={v => handleSceneUpdate({...editingScene, environment_name: v})} />
+                                                <InputGroup label={t('关联角色（中文逗号分隔）', 'Linked Characters (Chinese comma separated)')} value={editingScene.linked_characters} onChange={v => handleSceneUpdate({...editingScene, linked_characters: v})} />
+                                                <InputGroup label={t('关键道具（中文逗号分隔）', 'Key Props (Chinese comma separated)')} value={editingScene.key_props} onChange={v => handleSceneUpdate({...editingScene, key_props: v})} />
                                         </div>
 
                                         <div className="flex flex-col h-full"> 

@@ -1,4 +1,4 @@
-
+# Reload stamp: scene_subskill contract framing-before-staging-v3
 from contextlib import asynccontextmanager
 from typing import Iterable, Tuple, Dict, Any, List
 from datetime import datetime

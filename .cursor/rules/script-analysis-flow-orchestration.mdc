@@ -12,30 +12,28 @@ alwaysApply: false
 
 ## Core topology
 
-Stage 1 先全局串行执行：
+Stage 1 先执行 `scene_split`，然后**两条主线同时开始**：
 
-1. `scene_split`
-2. `environment_plan`：LLM 只返回按 `scene_id` 包裹的逐场环境补丁；后端程序将补丁拼入 `scene_split` 对应 Scene，禁止模型重写/透传整份分场结果。
+1. `environment_plan`：LLM 只返回按 `scene_id` 包裹的逐场**主环境**补丁；后端程序将补丁拼入 `scene_split` 对应 Scene。衍生环境不在此节点。
+2. `scene_subskill_pipeline`：Scene 之间并发，单 Scene 内先执行 drama → VFX? → XIAN?。**景别构图必须等本轮 `environment_plan` 节点成功**，再按场注入主环境，然后 derived_framing → staging。分场旧稿或上轮 adaptation 里的环境块不得提前开闸。建置 LLM **禁止**在该场景别构图 LLM 成功（含【Beat景别构图方案】与 `[DERIVED_ENV…]` 提取标签）之前发出。
 
-`environment_plan` 完成后立即并行启动：
-
-1. `assets_extraction`
-2. `scene_subskill_pipeline`：程序切分 `COMPREHENSIVE_INFO`、特殊路由和 Scene；Scene 之间并发，单 Scene 内依次执行 drama → VFX? → XIAN? → staging。
-
-Subject Index 与逐场子技能都完成后运行 `scene_markdown`；资产三类别并行。Scene 导入且关联 ENV 资产就绪后启动分镜。
+`environment_plan` 完成后立即运行 `assets_extraction`（不等待逐场优化）。该场 `derived_framing` 成功后立即程序提取衍生环境并写入资产库提示词，不等待建置或其它场次。Subject Index 完成后资产三类别并行。`scene_markdown` 等 Subject Index 与该场逐场子技能都完成后运行。Scene 导入且关联 ENV 资产就绪后启动分镜。
 
 ```text
-scene_split → environment_plan
-  ├─ assets_extraction + persist Subject Index
-  │  └─ asset_design_character
-       asset_design_prop
-       asset_design_environment
+scene_split
+  ├─ environment_plan（仅主环境+未落）
   └─ scene_subskill_pipeline
-       ├─ SC01: drama → VFX? → XIAN? → staging
-       ├─ SC02: drama → VFX? → XIAN? → staging
+       ├─ SC01: drama → VFX? → XIAN? → derived_framing → staging
+       ├─ SC02: drama → VFX? → XIAN? → derived_framing → staging
        └─ ...
 
-assets_extraction + scene_subskill_pipeline
+environment_plan
+  → assets_extraction + persist Subject Index
+       └─ asset_design_character
+          asset_design_prop
+          asset_design_environment
+
+assets_extraction + per-scene scene_subskill complete
   → scene_markdown → per-scene workspace import
 
 per-scene import + linked ENV visual assets ready
@@ -48,8 +46,9 @@ Storyboard 只等待当前 Scene 的 `scene_markdown` 与 `asset_design_environm
 
 文件：`backend/app/services/script_analysis_flow/registry.py`
 
-- `environment_plan.fan_out`：`assets_extraction`、`scene_subskill_pipeline`
-- `environment_plan.fan_out_mode`：`parallel_after_complete`
+- `scene_split.fan_out`：`environment_plan`、`scene_subskill_pipeline`
+- `scene_split.fan_out_mode`：`parallel_after_complete`
+- `assets_extraction.depends_on`：`environment_plan`
 - `assets_extraction.fan_out`：`asset_design_character`、`asset_design_prop`、`asset_design_environment`
 - `assets_extraction.fan_out_mode`：`parallel_after_complete`
 - `scene_markdown.depends_on`：`scene_subskill_pipeline`、`assets_extraction`
@@ -58,8 +57,8 @@ Storyboard 只等待当前 Scene 的 `scene_markdown` 与 `asset_design_environm
 
 ## Frontend and backend
 
-- `executeAdvancedAnalysis`：scene_split → environment_plan 环境补丁按 Scene 程序回填；随后资产提取与逐场子技能并行；两者完成后场景编排。
-- 进度诊断拓扑：分场 → 环境逐场回填 →（资产清单 ∥ 逐场优化）→（场景编排 ∥ 资产设计）→ 分镜。
+- `executeAdvancedAnalysis`：scene_split 后并行 environment_plan（主环境回填）与 scene_subskill_pipeline（文戏/增强 → 景别构图衍生 → 建置入戏）；主环境规划一完成即资产提取；随后场景编排与资产设计。
+- 进度诊断拓扑：分场 →（主环境回填 ∥ 逐场优化）→ 资产清单 →（场景编排 ∥ 资产设计）→ 分镜。
 - `runPostImportSceneSubjectPipeline`：三类资产并发；ENV 成功后 flush storyboard queue。
 - `handleRestartStage2`：与主路径保持同样并发。
 - `tryResumeAnalysisFromExistingArtifacts`：缺 scenes 时 scene+assets 并行；仅 subjects JSON 不完整时只补 assets。
@@ -93,7 +92,7 @@ Storyboard 只等待当前 Scene 的 `scene_markdown` 与 `asset_design_environm
 ## Canonical prompt map
 
 - Stage 1 只读基线：`scene_planning_1_script_optimization.md`
-- Stage 1 子技能链：`scene_planning_1_subskill_cut_transition.md` → `scene_planning_1_subskill_environment.md` → per-scene `drama_standardization` → `vfx?` → `xian_attack?` → `staging_env`
+- Stage 1 子技能链：`scene_planning_1_subskill_cut_transition.md` → `scene_planning_1_subskill_environment.md`（仅主环境） → per-scene `drama_standardization` → `vfx?` → `xian_attack?` → `derived_framing` → `staging_env`
 - Stage 2.1 Subject Index/XOR/衍生字段：`scene_planning_2_1_assets_extraction.md`
 - Stage 2.2 Beat 落表：`scene_planning_2_2_beats_generation.md`
 - Stage 3 共通：`entity_design_common.md`
