@@ -842,8 +842,15 @@ api.interceptors.response.use(
                         window.location.replace('/auth');
                     }
                 }
-            } else if (error.response.status === 402) {
-                // Dispatch event for UI to handle (Show Recharge Modal)
+            } else if (
+                error.response.status === 402
+                || (
+                    error.response.status === 422
+                    && /insufficient[_\s-]?credits|积分不足|个人积分不足|组积分不足/i.test(String(normalizedMessage || ''))
+                    && !/供应商/.test(String(normalizedMessage || ''))
+                )
+            ) {
+                // User credit miss: 402 from billing, or a 422 that wrapped 积分不足 (e.g. scene orchestration).
                 window.dispatchEvent(new Event('SHOW_RECHARGE_MODAL'));
             }
         }
@@ -3898,6 +3905,10 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
     if (normalizedTargetSceneIds.length > 0) {
         analyze_payload.target_scene_ids = normalizedTargetSceneIds;
         analyze_payload.target_scene_id = normalizedTargetSceneIds[0];
+    }
+    const startFromStep = String(runtimeHooks?.startFromStep || runtimeHooks?.start_from_step || '').trim();
+    if (startFromStep) {
+        analyze_payload.start_from_step = startFromStep;
     }
     if (runtimeHooks?.skipEpisodePersist === true || runtimeHooks?.skip_episode_persist === true) {
         // Concurrent Stage 3 category calls share one episode field; frontend merges then persists.

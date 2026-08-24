@@ -17,6 +17,11 @@ from app.schemas.user_auth import (
     USER_ACTIVE_LEVEL_DEFAULT,
     resolve_user_batch_parallel_limit as _resolve_user_batch_parallel_limit,
 )
+from app.services.credit_error import (
+    INSUFFICIENT_CREDITS_CODE,
+    classify_batch_credit_failure,
+    credit_error_user_message,
+)
 from app.services.scene_markdown_orchestration import (
     SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS,
     SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS,
@@ -755,6 +760,16 @@ async def _run_scene_markdown_node_per_scene(
         failed_scene_reports.append(report)
 
     if failed_scene_reports:
+        credit_code = classify_batch_credit_failure(failed_scene_reports)
+        persist_error_code = credit_code or "SCENE_MARKDOWN_PARTIAL_FAILURE"
+        persist_error_message = (
+            credit_error_user_message(credit_code)
+            if credit_code
+            else (
+                f"failed {len(failed_scene_reports)}/{total_scenes}: "
+                + ", ".join(item["scene_id"] for item in failed_scene_reports)
+            )
+        )
         if node_project_id > 0 and node_episode_id > 0:
             upsert_pipeline_node_status(
                 db,
@@ -764,17 +779,16 @@ async def _run_scene_markdown_node_per_scene(
                 node_name="scene_markdown",
                 status="failed",
                 progress_percent=min(95.0, 5.0 + (85.0 * len(success_by_index) / max(total_scenes, 1))),
-                error_code="SCENE_MARKDOWN_PARTIAL_FAILURE",
-                error_message=(
-                    f"failed {len(failed_scene_reports)}/{total_scenes}: "
-                    + ", ".join(item["scene_id"] for item in failed_scene_reports)
-                ),
+                error_code=persist_error_code,
+                error_message=persist_error_message,
+                runtime_meta={"business_reason": persist_error_message} if credit_code else None,
             )
             db.commit()
         raise HTTPException(
-            status_code=422,
+            status_code=402 if credit_code == INSUFFICIENT_CREDITS_CODE else 422,
             detail={
-                "code": "SCENE_MARKDOWN_PARTIAL_FAILURE",
+                "code": persist_error_code,
+                "message": persist_error_message,
                 "failed_count": len(failed_scene_reports),
                 "total_count": total_scenes,
                 "failed_scenes": failed_scene_reports,

@@ -28,6 +28,7 @@ from app.services.script_analysis_flow import (
     SPECIAL_SCENE_ANALYSIS_PATTERN,
     SceneMarkerParseError,
     build_scene_subskill_task_payloads,
+    coerce_target_scene_ids_for_orchestration,
     extract_env_block_from_scene_text,
     parse_scene_units_from_markers,
     persist_script_optimization_stage,
@@ -98,10 +99,111 @@ _ENV_BLOCK_WITH_COVERAGE_PATTERN = re.compile(
 )
 _ENV_PLAN_WAIT_SECONDS = 1200.0
 _ENV_PLAN_POLL_SECONDS = 1.5
+_SUBSKILL_START_ALIASES = {
+    "drama": "drama",
+    "drama_opt": "drama",
+    "combat": "combat",
+    "combat_opt": "combat",
+    "vfx": "combat",
+    "xian": "combat",
+    "framing": "framing",
+    "framing_opt": "framing",
+    "derived_framing": "framing",
+    "wait_env": "framing",
+    "staging": "staging",
+    "staging_opt": "staging",
+    "staging_env": "staging",
+}
 
 
 def _subskill_action_label(prompt_file: str) -> str:
     return _SUBSKILL_ACTION_LABELS.get(prompt_file, "逐场子技能")
+
+
+def resolve_subskill_start_group(raw_payload: Optional[Dict[str, Any]] = None) -> str:
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    raw = str(
+        payload.get("start_from_step")
+        or payload.get("target_subskill")
+        or payload.get("subskill_group")
+        or "drama"
+    ).strip().lower()
+    return _SUBSKILL_START_ALIASES.get(raw, "drama")
+
+
+def _task_matches_target_scene(task: Dict[str, Any], target_ids: List[str]) -> bool:
+    sid = str(task.get("scene_id") or "").strip().lower()
+    if not sid:
+        return False
+    for raw in target_ids or []:
+        wanted = str(raw or "").strip().lower()
+        if not wanted:
+            continue
+        if sid == wanted:
+            return True
+        if sid.endswith(f"_{wanted}") or wanted.endswith(f"_{sid}"):
+            return True
+        sid_tail = sid.split("_")[-1]
+        wanted_tail = wanted.split("_")[-1]
+        if sid_tail and sid_tail == wanted_tail and sid_tail.startswith("sc"):
+            return True
+    return False
+
+
+def filter_subskill_tasks_by_target_ids(
+    tasks: List[Dict[str, Any]],
+    target_ids: List[str],
+) -> List[Dict[str, Any]]:
+    requested = [str(item or "").strip() for item in (target_ids or []) if str(item or "").strip()]
+    if not requested:
+        return list(tasks or [])
+    matched = [task for task in (tasks or []) if _task_matches_target_scene(task, requested)]
+    return matched
+
+
+def merge_scene_blocks_into_script(
+    base_script: str,
+    updated_items: List[Dict[str, Any]],
+) -> str:
+    """Replace matching Scene blocks in an existing Stage-1 script; keep other scenes."""
+    updates: Dict[str, Tuple[str, str]] = {}
+    for item in updated_items or []:
+        sid = str(item.get("scene_id") or "").strip()
+        block = str(item.get("scene_block") or "").strip()
+        if sid and block:
+            updates[sid.lower()] = (sid, block)
+    if not updates:
+        return str(base_script or "").strip()
+    try:
+        tasks = build_scene_subskill_task_payloads(base_script) if str(base_script or "").strip() else []
+    except Exception:
+        tasks = []
+    if not tasks:
+        parts = [SCENES_BLOCK_START_TOKEN]
+        parts.extend(block for _sid, block in updates.values())
+        parts.append(SCENES_BLOCK_END_TOKEN)
+        return "\n".join(parts)
+    comprehensive = str(tasks[0].get("comprehensive_info") or "").strip()
+    project_tail = _extract_project_tail(base_script)
+    used: set[str] = set()
+    parts = [SCENES_BLOCK_START_TOKEN]
+    if comprehensive:
+        parts.append(comprehensive)
+    for task in tasks:
+        sid = str(task.get("scene_id") or "").strip()
+        key = sid.lower()
+        if key in updates:
+            parts.append(updates[key][1])
+            used.add(key)
+        else:
+            parts.append(str(task.get("scene_block") or "").strip())
+    for key, (_sid, block) in updates.items():
+        if key not in used:
+            parts.append(block)
+    parts.append(SCENES_BLOCK_END_TOKEN)
+    if project_tail:
+        parts.append(project_tail)
+    return "\n".join(part for part in parts if part)
 
 
 _FRAMING_LOCK_HEADING = "【取景锁定】"
@@ -916,8 +1018,45 @@ async def _run_derived_framing_then_staging(
     enhance_block: str,
     env_catalog: List[Dict[str, Any]],
     called: List[str],
+    skip_framing: bool = False,
 ) -> str:
     """Framing LLM must succeed before staging LLM is allowed to start."""
+    if skip_framing:
+        current_block = assert_derived_framing_ready_for_staging(enhance_block, scene_id)
+        if "derived_framing" not in called:
+            called.append("derived_framing")
+        current_input = _wrap_single_scene_input(
+            current_block,
+            comprehensive_info,
+            project_tail,
+        )
+        prompt_file = STAGING_PROMPT
+        _mark_scene_subskill_step(
+            task_db,
+            project_id=project_id,
+            episode_id=episode_id,
+            scene_id=scene_id,
+            step_name="staging",
+            step_label=_subskill_action_label(prompt_file),
+        )
+        logger.info(
+            "[scene_subskill_pipeline] start staging scene=%s contract=%s skip_framing=1",
+            scene_id,
+            PIPELINE_CONTRACT_VERSION,
+        )
+        current_block = await _call_scene_subskill(
+            task_db=task_db,
+            current_user=user_principal,
+            base_payload=raw_payload,
+            prompt_file=prompt_file,
+            scene_input=current_input,
+            scene_id=scene_id,
+            fallback_special=special,
+            previous_block=current_block,
+        )
+        called.append("staging")
+        return current_block
+
     framing_block = splice_environment_and_enhance_scene(
         scene_id,
         env_scene,
@@ -1016,15 +1155,26 @@ async def run_scene_subskill_pipeline(
     node_episode_id: int,
 ) -> Dict[str, Any]:
     """Drama/VFX/Xian from scene-split; framing then staging after main-env splice."""
+    script_text = str(raw_payload.get("text") or "").strip()
+    start_group = resolve_subskill_start_group(raw_payload)
+    target_scene_ids = coerce_target_scene_ids_for_orchestration(raw_payload, script_text)
     logger.warning(
-        "[scene_subskill_pipeline] start contract=%s post_env_steps=%s",
+        "[scene_subskill_pipeline] start contract=%s post_env_steps=%s start_from=%s targets=%s",
         PIPELINE_CONTRACT_VERSION,
         [step for step, _ in SCENE_SUBSKILL_POST_ENV_STEPS],
+        start_group,
+        target_scene_ids,
     )
-    script_text = str(raw_payload.get("text") or "").strip()
     tasks = build_scene_subskill_task_payloads(script_text)
     if not tasks:
         raise HTTPException(status_code=422, detail="SCENE_SUBSKILL_NO_SCENES")
+    if target_scene_ids:
+        tasks = filter_subskill_tasks_by_target_ids(tasks, target_scene_ids)
+        if not tasks:
+            raise HTTPException(
+                status_code=422,
+                detail=f"SCENE_SUBSKILL_TARGET_SCENE_NOT_FOUND:{','.join(target_scene_ids)}",
+            )
     missing_routes = [task["scene_id"] for task in tasks if not task.get("special_analysis")]
     if missing_routes:
         raise HTTPException(
@@ -1092,17 +1242,28 @@ async def run_scene_subskill_pipeline(
                     )
                     task_db.commit()
                 special = str(task.get("special_analysis") or "")
-                current_block = strip_environment_planning_sections(
-                    str(task.get("scene_block") or "")
-                )
+                raw_scene_block = str(task.get("scene_block") or "")
+                if start_group == "staging":
+                    current_block = raw_scene_block.strip()
+                else:
+                    current_block = strip_environment_planning_sections(raw_scene_block)
                 if special and special not in current_block:
                     current_block = "\n".join(part for part in (special, current_block) if part)
                 called: List[str] = []
+                if start_group == "combat" and not task.get("call_vfx") and not task.get("call_xian"):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"SCENE_SUBSKILL_COMBAT_NOT_ROUTED:{scene_id}",
+                    )
                 enhance_steps = [(DRAMA_PROMPT, "drama")]
                 if task.get("call_vfx"):
                     enhance_steps.append((VFX_PROMPT, "vfx"))
                 if task.get("call_xian"):
                     enhance_steps.append((XIAN_PROMPT, "xian"))
+                if start_group == "combat":
+                    enhance_steps = [item for item in enhance_steps if item[1] != "drama"]
+                elif start_group in {"framing", "staging"}:
+                    enhance_steps = []
                 for prompt_file, step_name in enhance_steps:
                     _mark_scene_subskill_step(
                         task_db,
@@ -1129,21 +1290,24 @@ async def run_scene_subskill_pipeline(
                     )
                     called.append(step_name)
 
-                _mark_scene_subskill_step(
-                    task_db,
-                    project_id=project_id,
-                    episode_id=node_episode_id,
-                    scene_id=scene_id,
-                    step_name="wait_env",
-                    step_label="等待主环境注入",
-                )
-                env_script = await env_plan_task
-                env_scene = _scene_block_from_script(env_script, scene_id)
-                if not env_scene:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"STAGING_ENV_SCENE_MISSING:{scene_id}",
+                env_script = ""
+                env_scene = ""
+                if start_group != "staging":
+                    _mark_scene_subskill_step(
+                        task_db,
+                        project_id=project_id,
+                        episode_id=node_episode_id,
+                        scene_id=scene_id,
+                        step_name="wait_env",
+                        step_label="等待主环境注入",
                     )
+                    env_script = await env_plan_task
+                    env_scene = _scene_block_from_script(env_script, scene_id)
+                    if not env_scene:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"STAGING_ENV_SCENE_MISSING:{scene_id}",
+                        )
                 current_block = await _run_derived_framing_then_staging(
                     task_db=task_db,
                     user_principal=user_principal,
@@ -1159,6 +1323,7 @@ async def run_scene_subskill_pipeline(
                     enhance_block=current_block,
                     env_catalog=env_catalog,
                     called=called,
+                    skip_framing=start_group == "staging",
                 )
                 if project_id > 0 and node_episode_id > 0:
                     upsert_pipeline_node_status(
@@ -1232,19 +1397,26 @@ async def run_scene_subskill_pipeline(
             .first()
         )
         if episode is not None:
+            persist_text = aggregate_text
+            if target_scene_ids:
+                base_script = str(getattr(episode, "ai_scene_analysis_adaptation", "") or "").strip()
+                if not base_script:
+                    base_script = load_environment_planned_script(db, int(node_episode_id)) or script_text
+                persist_text = merge_scene_blocks_into_script(base_script, ordered)
             persist_script_optimization_stage(
                 db=db,
                 episode=episode,
-                result_content=aggregate_text,
+                result_content=persist_text,
                 node_output_key="scene_subskills",
             )
             _ingest_derived_environments_after_framing(
                 db,
                 project_id=int(raw_payload.get("project_id") or 0),
                 episode_id=int(node_episode_id),
-                scene_text=aggregate_text,
+                scene_text=persist_text,
                 phase="after_all_scenes",
             )
+            aggregate_text = persist_text
 
     logger.info(
         "[scene_subskill_pipeline] completed scenes=%s concurrency=%s episode_id=%s",

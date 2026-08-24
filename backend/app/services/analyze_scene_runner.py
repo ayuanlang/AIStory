@@ -408,6 +408,7 @@ async def execute_analyze_scene(
         persisted_subject_index_for_prompt = ""
         persisted_subject_index_raw_for_gate = ""
         episode_adaptation_for_scene_beats = ""
+        orchestration_project_id = None
         if is_subject_index_consumer_stage and getattr(request, "episode_id", None):
             try:
                 _ep_for_subject_index = (
@@ -1616,6 +1617,12 @@ async def execute_analyze_scene(
                     scene_markdown=scene_table_candidate,
                     subject_index_text=persisted_subject_index_for_prompt,
                     llm_config=config,
+                    db=db,
+                    project_id=getattr(request, "project_id", None) or orchestration_project_id,
+                    episode_id=getattr(request, "episode_id", None),
+                    extra_derived_environment_names=extract_derived_environment_names_from_scene_text(
+                        getattr(request, "text", "") or ""
+                    ),
                     action_name=(
                         f"实体名对齐 · {align_scene_id}"
                         if align_scene_id
@@ -1959,7 +1966,37 @@ async def execute_analyze_scene(
             extraction_gap_meta = _detect_subjects_json_extraction_gap(result_content, subjects_json)
             debug_meta["subjects_json_extraction_gap"] = extraction_gap_meta
 
-            subject_index_coverage_meta = _detect_subject_index_coverage_warnings(source_subject_index_text, subjects_json)
+            try:
+                subject_index_coverage_meta = _detect_subject_index_coverage_warnings(
+                    source_subject_index_text, subjects_json
+                )
+            except Exception as coverage_exc:
+                logger.warning(
+                    "[analyze_scene] subject_index_coverage check failed episode_id=%s err=%s",
+                    getattr(request, "episode_id", None),
+                    coverage_exc,
+                    exc_info=coverage_exc,
+                )
+                subject_index_coverage_meta = {
+                    "expected_total": 0,
+                    "expected_by_bucket": {
+                        "characters": 0,
+                        "props": 0,
+                        "environments": 0,
+                        "covers": 0,
+                        "posters": 0,
+                    },
+                    "missing_total": 0,
+                    "missing_by_bucket": {
+                        "characters": [],
+                        "props": [],
+                        "environments": [],
+                        "covers": [],
+                        "posters": [],
+                    },
+                    "warning_codes": [],
+                    "warnings": [],
+                }
             debug_meta["subject_index_coverage"] = subject_index_coverage_meta
             debug_meta["subject_index_reconciliation"] = subject_index_reconcile_meta
             debug_meta["subject_index_name_align"] = subject_index_name_align_meta

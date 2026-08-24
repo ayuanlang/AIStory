@@ -17,6 +17,11 @@ from app.services.script_analysis_flow import (
     SceneMissingBeat1Error,
     strip_beat_transition_notes_from_script,
 )
+from app.services.credit_error import (
+    credit_error_code,
+    credit_error_user_message,
+    is_insufficient_credits_error,
+)
 from app.services.script_analysis_flow.analyze_scene_stages import import_scene_markdown_stage
 
 SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS = 3
@@ -79,6 +84,8 @@ def _is_retryable_scene_orchestration_error(exc: Exception) -> bool:
             return False
         if detail.startswith("SCENE_MARKDOWN_MISSING_BEAT_1"):
             return False
+        if status == 402 or is_insufficient_credits_error(exc):
+            return False
         if status in (408, 429, 500, 502, 503, 504):
             return True
         if detail.startswith(
@@ -107,11 +114,15 @@ def _scene_orchestration_error_code(exc: Exception, scene_id: str) -> str:
     if isinstance(exc, (SceneBeatsTooShortError, SceneMissingBeat1Error)):
         return exc.detail
     if isinstance(exc, HTTPException):
+        if is_insufficient_credits_error(exc):
+            return f"{credit_error_code(exc)}:{scene_id}"
         detail = str(getattr(exc, "detail", "") or "")
         if detail.startswith("SCENE_MARKDOWN_SCENE_ID_MISMATCH"):
             return detail if "," in detail or detail.count(":") > 1 else detail
         if detail.startswith("SCENE_MARKDOWN_") or detail.startswith("SCENES_TABLE_"):
             return detail
+    if is_insufficient_credits_error(exc):
+        return f"{credit_error_code(exc)}:{scene_id}:{credit_error_user_message(exc)}"
     exc_type = type(exc).__name__
     msg = str(exc or "").strip().replace("\n", " ")[:240]
     if msg:

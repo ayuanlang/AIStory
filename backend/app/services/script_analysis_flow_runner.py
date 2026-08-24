@@ -13,6 +13,13 @@ from sqlalchemy.orm import Session
 from app.api.settings import get_script_analysis_flow_config
 from app.models.all_models import Episode, User
 from app.schemas.agent import AnalyzeSceneRequest
+from app.services.credit_error import (
+    INSUFFICIENT_CREDITS_CODE,
+    credit_error_code,
+    credit_error_user_message,
+    http_exception_detail_text,
+    is_insufficient_credits_error,
+)
 from app.services.endpoint_misc import _build_scene_analysis_blocking_failure_detail
 from app.services.project_access import _require_project_access
 from app.services.scene_ai_shots_batch import _start_scene_ai_shots_batch_for_episode
@@ -24,6 +31,7 @@ from app.services.scene_markdown_runner import _run_scene_markdown_node_per_scen
 from app.services.scene_subskill_pipeline_runner import run_scene_subskill_pipeline
 from app.services.script_analysis_flow import (
     STAGE_SCENE_MARKDOWN,
+    coerce_target_scene_ids_for_orchestration,
     get_script_analysis_flow_registry,
     import_analyze_scene_stage_result,
     parse_scene_units_from_markers,
@@ -316,11 +324,21 @@ async def execute_scene_analysis_flow_node(
         raw_payload["function_name"] = raw_payload.get("function_name") or request.function_name or "script_analysis"
         raw_payload["system_api_id"] = raw_payload.get("system_api_id") or request.system_api_id
         target_scene_id = str(raw_payload.get("target_scene_id") or "").strip()
-        scoped_action_name = (
-            f"场景编排 · {target_scene_id}"
-            if node_key == "scene_markdown" and target_scene_id
-            else _FLOW_NODE_ACTION_LABELS.get(node_key)
+        target_scene_ids = coerce_target_scene_ids_for_orchestration(
+            raw_payload,
+            str(raw_payload.get("text") or ""),
         )
+        scoped_rerun = bool(target_scene_ids)
+        start_from_step = str(raw_payload.get("start_from_step") or "").strip()
+        if node_key == "scene_markdown" and target_scene_id:
+            scoped_action_name = f"场景编排 · {target_scene_id}"
+        elif node_key == "scene_subskill_pipeline" and target_scene_id:
+            scoped_action_name = (
+                f"逐场优化 · {target_scene_id}"
+                + (f" · {start_from_step}" if start_from_step else "")
+            )
+        else:
+            scoped_action_name = _FLOW_NODE_ACTION_LABELS.get(node_key)
         raw_payload["action_name"] = (
             str(raw_payload.get("action_name") or "").strip()
             or scoped_action_name
@@ -412,16 +430,17 @@ async def execute_scene_analysis_flow_node(
                 retry_count=0,
                 runtime_meta={"business_event": "started"},
             )
-            for downstream_node in _FLOW_DOWNSTREAM_NODES.get(node_key, []):
-                upsert_pipeline_node_status(
-                    db,
-                    project_id=node_project_id,
-                    episode_id=node_episode_id,
-                    script_id=f"episode:{node_episode_id}",
-                    node_name=downstream_node,
-                    status="queued",
-                    progress_percent=0.0,
-                )
+            if not scoped_rerun:
+                for downstream_node in _FLOW_DOWNSTREAM_NODES.get(node_key, []):
+                    upsert_pipeline_node_status(
+                        db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name=downstream_node,
+                        status="queued",
+                        progress_percent=0.0,
+                    )
             db.commit()
 
         llm_started_perf = time.perf_counter()
@@ -641,18 +660,20 @@ async def execute_scene_analysis_flow_node(
                 result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
         except Exception as exc:
             if node_project_id > 0 and node_episode_id > 0:
-                error_text = str(exc or "")
-                if isinstance(exc, HTTPException):
-                    error_text = str(getattr(exc, "detail", "") or error_text)
-                error_code = (
-                    "ASSETS_EXTRACTION_COVER_POSTER_MISSING"
-                    if "ASSETS_EXTRACTION_COVER_POSTER_MISSING" in error_text
-                    else (
-                        "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING"
-                        if "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING" in error_text
-                        else "FLOW_RUN_NODE_FAILED"
-                    )
-                )
+                error_text = http_exception_detail_text(exc)
+                credit_hit = is_insufficient_credits_error(exc)
+                if credit_hit:
+                    error_code = credit_error_code(exc)
+                    error_message = credit_error_user_message(exc)
+                elif "ASSETS_EXTRACTION_COVER_POSTER_MISSING" in error_text:
+                    error_code = "ASSETS_EXTRACTION_COVER_POSTER_MISSING"
+                    error_message = error_text or str(exc)
+                elif "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING" in error_text:
+                    error_code = "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING"
+                    error_message = error_text or str(exc)
+                else:
+                    error_code = "FLOW_RUN_NODE_FAILED"
+                    error_message = error_text or str(exc)
                 upsert_pipeline_node_status(
                     db,
                     project_id=node_project_id,
@@ -661,9 +682,22 @@ async def execute_scene_analysis_flow_node(
                     node_name=node_key,
                     status="failed",
                     error_code=error_code,
-                    error_message=str(exc),
+                    error_message=error_message,
+                    runtime_meta={"business_reason": error_message} if credit_hit else None,
                 )
                 db.commit()
+            if (
+                is_insufficient_credits_error(exc)
+                and credit_error_code(exc) == INSUFFICIENT_CREDITS_CODE
+                and not (isinstance(exc, HTTPException) and int(getattr(exc, "status_code", 0) or 0) == 402)
+            ):
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "code": INSUFFICIENT_CREDITS_CODE,
+                        "message": credit_error_user_message(exc),
+                    },
+                ) from exc
             raise
         llm_elapsed_ms = int((time.perf_counter() - llm_started_perf) * 1000)
         logger.info("[剧本分析流程] 节点 %s 执行完成 | llm_elapsed_ms=%s", node_key, llm_elapsed_ms)

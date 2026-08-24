@@ -1,8 +1,9 @@
-"""Post-LLM Subject Index name alignment for scene orchestration and asset design.
+"""Post-LLM name alignment for scene orchestration and asset design.
 
-When Environment Name / Linked Characters / Key Props (scenes) or name / name_en
-(assets) are not present in the Subject Index whitelist, call the LLM once to
-map those names onto Index-canonical values, then apply the replacements.
+CHAR/PROP first check Subject Index. Names still missing after that (the delta),
+especially derived ENV (`{N}度…`), are resolved against the asset library.
+Subject Index no longer lists derived environments, so Environment Name / ENV:[]
+must never be remapped onto a bare main-environment Index name.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ _PLACEHOLDER_KEYS = {
     "空",
 }
 _DERIVED_ENV_NAME_RE = re.compile(r"^\d+\s*度")
+_DERIVED_ENV_NAME_EN_RE = re.compile(r"^\d+\s*deg(?:rees?)?(?:\s|_)", flags=re.IGNORECASE)
 
 
 def _normalize_display_name(value: Any) -> str:
@@ -136,7 +138,17 @@ def parse_subject_index_whitelist(subject_index_text: Any) -> Dict[str, Any]:
 
 
 def _is_derived_environment_name(name: Any) -> bool:
-    return bool(_DERIVED_ENV_NAME_RE.match(_normalize_display_name(name)))
+    display = _normalize_display_name(name)
+    return bool(_DERIVED_ENV_NAME_RE.match(display) or _DERIVED_ENV_NAME_EN_RE.match(display))
+
+
+def _is_derived_to_main_environment_collapse(src: Any, dst: Any) -> bool:
+    """True when a derived ENV ({N}度…) would be rewritten to a bare main ENV."""
+    src_name = _normalize_display_name(src)
+    dst_name = _normalize_display_name(dst)
+    if not src_name or not dst_name or src_name == dst_name:
+        return False
+    return _is_derived_environment_name(src_name) and not _is_derived_environment_name(dst_name)
 
 
 def _split_extra_derived_environment_names(value: Any) -> List[str]:
@@ -305,6 +317,130 @@ def _format_subject_index_compact(rows: List[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def parse_entity_rows_whitelist(
+    rows: Iterable[Any],
+    extra_derived_environment_names: Any = "",
+    *,
+    environments_derived_only: bool = True,
+) -> Dict[str, Any]:
+    """Parse asset-library rows into the same whitelist shape as Subject Index."""
+    by_bucket: Dict[str, Dict[str, str]] = {
+        "characters": {},
+        "props": {},
+        "environments": {},
+        "covers": {},
+        "posters": {},
+    }
+    all_keys: Dict[str, str] = {}
+    parsed_rows: List[Dict[str, str]] = []
+
+    def _add(bucket: str, name_zh: Any, name_en: Any = "", subject_no: str = "") -> None:
+        zh = _normalize_display_name(name_zh)
+        en = _normalize_display_name(name_en)
+        if not zh and not en:
+            return
+        if _is_placeholder_name(zh or en):
+            return
+        if bucket == "environments" and environments_derived_only:
+            if not (_is_derived_environment_name(zh) or _is_derived_environment_name(en)):
+                return
+        row = {
+            "subject_no": str(subject_no or "").strip(),
+            "bucket": bucket,
+            "name": zh,
+            "name_en": en,
+        }
+        parsed_rows.append(row)
+        for candidate in (zh, en):
+            key = subject_compare_key(candidate)
+            if not key:
+                continue
+            by_bucket[bucket][key] = candidate
+            all_keys[key] = candidate
+            if bucket == "covers":
+                by_bucket["posters"][key] = candidate
+
+    for raw in rows or []:
+        if isinstance(raw, dict):
+            bucket = str(
+                raw.get("bucket")
+                or _bucket_from_subject_type(raw.get("type") or raw.get("subject_type"))
+                or ""
+            )
+            name_zh = raw.get("name") or raw.get("name_zh") or ""
+            name_en = raw.get("name_en") or ""
+            subject_no = str(raw.get("subject_no") or raw.get("id") or "").strip()
+        else:
+            bucket = _bucket_from_subject_type(getattr(raw, "type", None))
+            name_zh = getattr(raw, "name", None) or ""
+            name_en = getattr(raw, "name_en", None) or ""
+            subject_no = str(getattr(raw, "id", "") or "").strip()
+        if bucket:
+            _add(bucket, name_zh, name_en, subject_no)
+    for extra_name in _split_extra_derived_environment_names(extra_derived_environment_names):
+        _add("environments", extra_name, "")
+
+    return {
+        "rows": parsed_rows,
+        "by_bucket": by_bucket,
+        "all_keys": all_keys,
+        "compact_table": _format_subject_index_compact(parsed_rows),
+    }
+
+
+def _merge_name_maps(*maps: Optional[Dict[str, str]]) -> Dict[str, str]:
+    merged: Dict[str, str] = {}
+    for item in maps:
+        if item:
+            merged.update(item)
+    return merged
+
+
+def build_scene_name_align_whitelist(
+    subject_index_text: Any,
+    asset_rows: Any = None,
+    extra_derived_environment_names: Any = "",
+) -> Dict[str, Any]:
+    """CHAR/PROP = Index ∪ asset library; ENV = asset-library derived names only."""
+    index = parse_subject_index_whitelist(subject_index_text)
+    assets = parse_entity_rows_whitelist(
+        asset_rows or [],
+        extra_derived_environment_names,
+        environments_derived_only=True,
+    )
+    index_by = index.get("by_bucket") or {}
+    asset_by = assets.get("by_bucket") or {}
+    by_bucket = {
+        "characters": _merge_name_maps(index_by.get("characters"), asset_by.get("characters")),
+        "props": _merge_name_maps(index_by.get("props"), asset_by.get("props")),
+        "environments": dict(asset_by.get("environments") or {}),
+        "covers": _merge_name_maps(index_by.get("covers"), asset_by.get("covers")),
+        "posters": _merge_name_maps(index_by.get("posters"), asset_by.get("posters")),
+    }
+    rows = [row for row in list(index.get("rows") or []) if str(row.get("bucket") or "") != "environments"]
+    rows.extend(list(assets.get("rows") or []))
+    all_keys: Dict[str, str] = {}
+    for bucket_map in by_bucket.values():
+        all_keys.update(bucket_map)
+    return {
+        "rows": rows,
+        "by_bucket": by_bucket,
+        "all_keys": all_keys,
+        "index": index,
+        "assets": assets,
+        "compact_index": index.get("compact_table") or "",
+        "compact_assets": assets.get("compact_table") or "",
+    }
+
+
+def _whitelist_has_name_sources(whitelist: Dict[str, Any]) -> bool:
+    if whitelist.get("rows"):
+        return True
+    index_rows = ((whitelist.get("index") or {}).get("rows") or []) if isinstance(whitelist.get("index"), dict) else []
+    asset_rows = ((whitelist.get("assets") or {}).get("rows") or []) if isinstance(whitelist.get("assets"), dict) else []
+    return bool(index_rows or asset_rows)
+
+
 def split_scene_subject_field(cell_value: Any) -> List[str]:
     """Split Environment Name / Linked Characters / Key Props into display names.
 
@@ -397,18 +533,29 @@ def _bucket_from_typed_prefix(prefix: Any) -> str:
 def collect_typed_token_name_mismatches(
     scene_markdown: Any,
     subject_index_text: Any,
+    asset_rows: Any = None,
+    extra_derived_environment_names: Any = "",
+    whitelist: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
-    """Return CHAR:/ENV:/PROP: bracket names anywhere in scene markdown that are off-Index."""
-    whitelist = parse_subject_index_whitelist(subject_index_text)
-    if not whitelist.get("rows"):
+    """Return CHAR:/ENV:/PROP: names missing from Index (CHAR/PROP) or asset library (ENV)."""
+    whitelist = whitelist or build_scene_name_align_whitelist(
+        subject_index_text,
+        asset_rows=asset_rows,
+        extra_derived_environment_names=extra_derived_environment_names,
+    )
+    if not _whitelist_has_name_sources(whitelist):
         return []
 
+    env_map = (whitelist.get("by_bucket") or {}).get("environments") or {}
     mismatches: List[Dict[str, str]] = []
     seen: Set[str] = set()
     for match in _TYPED_TOKEN_RE.finditer(str(scene_markdown or "")):
         bucket = _bucket_from_typed_prefix(match.group("prefix"))
         display = _normalize_display_name(match.group("body"))
         if not bucket or not display or _is_placeholder_name(display):
+            continue
+        # ENV 差额只对资产库。库里还没有衍生环境时，不要拿 Index 主环境去“对齐”。
+        if bucket == "environments" and not env_map:
             continue
         if _name_in_whitelist(display, whitelist=whitelist, bucket=bucket):
             continue
@@ -429,11 +576,18 @@ def collect_typed_token_name_mismatches(
 def collect_scene_table_name_mismatches(
     scene_markdown: Any,
     subject_index_text: Any,
+    asset_rows: Any = None,
+    extra_derived_environment_names: Any = "",
 ) -> List[Dict[str, str]]:
     """Return mismatched names from table columns and all typed tokens in Beats/body."""
-    whitelist = parse_subject_index_whitelist(subject_index_text)
-    if not whitelist.get("rows"):
+    whitelist = build_scene_name_align_whitelist(
+        subject_index_text,
+        asset_rows=asset_rows,
+        extra_derived_environment_names=extra_derived_environment_names,
+    )
+    if not _whitelist_has_name_sources(whitelist):
         return []
+    env_map = (whitelist.get("by_bucket") or {}).get("environments") or {}
 
     text = str(scene_markdown or "")
     lines = [ln.strip() for ln in text.splitlines() if str(ln or "").strip()]
@@ -479,6 +633,8 @@ def collect_scene_table_name_mismatches(
                 if idx < 0 or idx >= len(cells):
                     continue
                 for token in _split_cell_tokens(cells[idx]):
+                    if bucket == "environments" and not env_map:
+                        continue
                     if _name_in_whitelist(token, whitelist=whitelist, bucket=bucket):
                         continue
                     dedupe = f"{bucket}|{subject_compare_key(token)}"
@@ -495,7 +651,13 @@ def collect_scene_table_name_mismatches(
             j += 1
         i = j
 
-    for item in collect_typed_token_name_mismatches(text, subject_index_text):
+    for item in collect_typed_token_name_mismatches(
+        text,
+        subject_index_text,
+        asset_rows=asset_rows,
+        extra_derived_environment_names=extra_derived_environment_names,
+        whitelist=whitelist,
+    ):
         dedupe = f"{item.get('bucket')}|{subject_compare_key(item.get('name'))}"
         if dedupe in seen:
             continue
@@ -717,6 +879,7 @@ def apply_scene_table_name_replacements(
             for r in replacements
             if str(r.get("from") or "").strip() and str(r.get("to") or "").strip()
             and str(r.get("from") or "").strip() != str(r.get("to") or "").strip()
+            and not _is_derived_to_main_environment_collapse(r.get("from"), r.get("to"))
         ],
         key=lambda pair: len(pair[0]),
         reverse=True,
@@ -804,6 +967,11 @@ def apply_subjects_json_name_replacements(
         to_name_en = _normalize_display_name(rep.get("to_name_en") or "")
         if not to_name and not to_name_en:
             continue
+        if bucket == "environments" and (
+            _is_derived_to_main_environment_collapse(from_name, to_name)
+            or _is_derived_to_main_environment_collapse(from_name_en, to_name_en)
+        ):
+            continue
         from_name_key = subject_compare_key(from_name)
         from_name_en_key = subject_compare_key(from_name_en)
         for item in payload[bucket]:
@@ -829,9 +997,30 @@ async def align_scene_markdown_names_with_subject_index(
     subject_index_text: str,
     llm_config: Dict[str, Any],
     action_name: str = "",
+    asset_rows: Any = None,
+    extra_derived_environment_names: Any = "",
+    db: Any = None,
+    project_id: Any = None,
+    episode_id: Any = None,
 ) -> Dict[str, Any]:
-    """Check scene table names; if missing from Index, one LLM call to remap."""
-    mismatches = collect_scene_table_name_mismatches(scene_markdown, subject_index_text)
+    """Remap off-whitelist scene names. CHAR/PROP use Index∪资产库; ENV uses 资产库 only."""
+    if asset_rows is None and db is not None and project_id:
+        asset_rows = collect_orchestration_entity_rows(
+            db,
+            project_id=project_id,
+            episode_id=episode_id,
+        )
+    whitelist = build_scene_name_align_whitelist(
+        subject_index_text,
+        asset_rows=asset_rows,
+        extra_derived_environment_names=extra_derived_environment_names,
+    )
+    mismatches = collect_scene_table_name_mismatches(
+        scene_markdown,
+        subject_index_text,
+        asset_rows=asset_rows,
+        extra_derived_environment_names=extra_derived_environment_names,
+    )
     if not mismatches:
         return {
             "text": scene_markdown,
@@ -842,29 +1031,34 @@ async def align_scene_markdown_names_with_subject_index(
             "replacements": [],
         }
 
-    whitelist = parse_subject_index_whitelist(subject_index_text)
+    index_compact = whitelist.get("compact_index") or subject_index_text
+    asset_compact = whitelist.get("compact_assets") or "(none)"
     system_prompt = (
-        "You are a strict Subject Index name aligner for film scene tables.\n"
-        "Map incorrect entity names onto the authoritative Subject Index whitelist.\n"
+        "You are a strict entity-name aligner for film scene tables.\n"
+        "CHAR/PROP: map incorrect names onto Subject Index first; if absent there, "
+        "use the asset-library CHAR/PROP names.\n"
+        "ENV / Environment Name: Subject Index no longer lists derived environments. "
+        "Map only onto asset-library derived environment names (`{N}度…` / `{N}度…_{状态}`).\n"
         "Return ONE JSON object only. No markdown fences, no explanation.\n"
         "Schema:\n"
         '{"replacements":[{"field":"Environment Name|Linked Characters|Key Props|CHAR:[]|ENV:[]|PROP:[]",'
-        '"from":"<exact incorrect name>","to":"<exact Subject Index subject_name_zh>"}]}\n'
+        '"from":"<exact incorrect name>","to":"<exact whitelist name>"}]}\n'
         "Rules:\n"
-        "- `to` MUST be character-identical to a Subject Index subject_name_zh (preferred) "
-        "or subject_name_en when only EN exists.\n"
-        "- Prefer the closest semantic match within the correct type "
-        "(Environment Name/ENV:[]→environment, Linked Characters/CHAR:[]→character, "
-        "Key Props/PROP:[]→prop).\n"
-        "- Do not invent names absent from Subject Index.\n"
-        "- If no confident Index match exists, omit that item "
-        "(off-Index typed tokens will remain for upstream retry).\n"
+        "- CHAR/PROP `to` MUST be character-identical to a Subject Index subject_name_zh "
+        "(preferred) or an asset-library CHAR/PROP name.\n"
+        "- ENV / Environment Name `to` MUST be character-identical to an asset-library "
+        "derived environment name. Never use a bare main-environment name from Subject Index.\n"
+        "- Prefer the closest semantic match within the correct type.\n"
+        "- Do not invent names absent from the type-appropriate whitelist.\n"
+        "- If no confident match exists, omit that item.\n"
         "- Remap only entity names; do not rewrite Beat prose wording beyond the name string."
     )
     user_prompt = (
-        "# Authoritative Subject Index\n"
-        f"{whitelist.get('compact_table') or subject_index_text}\n\n"
-        "# Names not found in Subject Index\n"
+        "# Subject Index (CHAR / PROP; main environments are NOT ENV targets)\n"
+        f"{index_compact}\n\n"
+        "# Asset library (authoritative for ENV; also CHAR/PROP delta)\n"
+        f"{asset_compact}\n\n"
+        "# Names not found in the type-appropriate whitelist\n"
         f"{json.dumps(mismatches, ensure_ascii=False, indent=2)}\n\n"
         "# Scene table excerpt (context only)\n"
         f"{str(scene_markdown or '')[:12000]}\n\n"
@@ -911,12 +1105,19 @@ async def align_scene_markdown_names_with_subject_index(
         dst = dst_zh or dst_raw
         if not src or not dst or src == dst:
             continue
+        if bucket == "environments" and _is_derived_to_main_environment_collapse(src, dst):
+            continue
         if not _name_in_whitelist(dst, whitelist=whitelist, bucket=bucket):
             continue
         validated.append({"field": field, "from": src, "to": dst})
 
     aligned = apply_scene_table_name_replacements(scene_markdown, validated)
-    remaining = collect_scene_table_name_mismatches(aligned, subject_index_text)
+    remaining = collect_scene_table_name_mismatches(
+        aligned,
+        subject_index_text,
+        asset_rows=asset_rows,
+        extra_derived_environment_names=extra_derived_environment_names,
+    )
     logger.info(
         "[subject_index_name_align] scene_markdown mismatches=%s applied=%s remaining=%s",
         len(mismatches),
@@ -966,6 +1167,8 @@ async def align_subjects_json_names_with_subject_index(
         "- to_name / to_name_en MUST be character-identical to Subject Index values.\n"
         "- Keep bucket type consistent with Subject Index subject_type.\n"
         "- Prefer closest semantic match; do not invent names.\n"
+        "- Environment rows that already use a derived name (`{N}度…`) MUST stay derived. "
+        "Never remap them to a bare main-environment name.\n"
         "- If no confident match, omit that item."
     )
     user_prompt = (
@@ -1017,6 +1220,11 @@ async def align_subjects_json_names_with_subject_index(
             to_name_en = ""
         if not from_name and not from_name_en:
             continue
+        if bucket == "environments" and (
+            _is_derived_to_main_environment_collapse(from_name, to_name)
+            or _is_derived_to_main_environment_collapse(from_name_en, to_name_en)
+        ):
+            continue
         validated.append(
             {
                 "bucket": bucket,
@@ -1060,7 +1268,7 @@ def apply_text_name_replacements(text: Any, replacements: List[Dict[str, str]]) 
         ):
             src = str(rep.get(src_key) or "").strip()
             dst = str(rep.get(dst_key) or "").strip()
-            if src and dst and src != dst:
+            if src and dst and src != dst and not _is_derived_to_main_environment_collapse(src, dst):
                 pairs.append((src, dst))
     pairs = sorted(set(pairs), key=lambda p: len(p[0]), reverse=True)
     for src, dst in pairs:

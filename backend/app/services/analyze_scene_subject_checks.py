@@ -689,7 +689,7 @@ def _detect_subject_index_coverage_warnings(source_text: str, subjects_payload: 
             },
             "missing_total": 0,
             "missing_by_bucket": {
-                "characters": [], "props": [], "environments": [], "covers": [], "posters": [], "posters": []
+                "characters": [], "props": [], "environments": [], "covers": [], "posters": []
             },
             "warning_codes": [],
             "warnings": [],
@@ -700,6 +700,7 @@ def _detect_subject_index_coverage_warnings(source_text: str, subjects_payload: 
         "props": set(),
         "environments": set(),
         "covers": set(),
+        "posters": set(),
     }
 
     for bucket in ("characters", "props", "environments", "covers", "posters"):
@@ -708,8 +709,14 @@ def _detect_subject_index_coverage_warnings(source_text: str, subjects_payload: 
                 continue
             for raw_name in (item.get("name"), item.get("name_en")):
                 key = _normalize_subject_compare_key(raw_name)
-                if key:
-                    generated_keys[bucket].add(key)
+                if not key:
+                    continue
+                generated_keys[bucket].add(key)
+                # Cover poster rows are stored as covers in Subject Index and as
+                # posters/covers in design JSON. Treat them as one identity.
+                if bucket in {"covers", "posters"}:
+                    generated_keys["covers"].add(key)
+                    generated_keys["posters"].add(key)
 
     missing_by_bucket: Dict[str, List[str]] = {
         "characters": [],
