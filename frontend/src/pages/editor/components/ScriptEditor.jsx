@@ -2635,6 +2635,9 @@ const ANALYSIS_STAGE_LABELS = {
     extract_assets: { zh: '资产清单（并行）', en: 'Asset Inventory (Parallel)' },
     scene_beats: { zh: '场景编排', en: 'Scene Orchestration' },
     assets_gen: { zh: '资产设计（并行）', en: 'Asset Design (Parallel)' },
+    assets_gen_character: { zh: '角色生成', en: 'Character Gen' },
+    assets_gen_prop: { zh: '道具生成', en: 'Prop Gen' },
+    assets_gen_environment: { zh: '环境生成', en: 'Environment Gen' },
     storyboard: { zh: '分镜生成', en: 'Storyboard Generation' },
 };
 
@@ -28457,18 +28460,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 failed: Boolean(assetsExtractionBaseState.failed || extractSettledIncomplete),
                             }
                             : { ready: false, active: false, failed: false };
-                        const showAssetFailure = Boolean(workflowCompletenessStats?.hasFailedSubtask) && (
-                            !analysisLive || assetDesignReady
-                        );
-                        const assetDesignState = {
-                            ready: assetDesignReady,
-                            active: Boolean(
-                                assetsExtractionState.ready
-                                && !assetsExtractionState.active
-                                && assetDesignActive
-                            ),
-                            failed: Boolean(showAssetFailure),
-                        };
                         const scenePreparationReady = Boolean(
                             scriptOptReady
                             && !(
@@ -28478,14 +28469,97 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 )
                             )
                         );
-                        const environmentCompleteness = (workflowCompletenessStats?.summaryItems || [])
-                            .find((row) => row?.key === 'environment');
+                        const assetDesignCategorySpecs = [
+                            {
+                                key: 'character',
+                                stepKey: 'assets_gen_character',
+                                nodeName: 'asset_design_character',
+                                category: 'characters',
+                                targets: ['characters'],
+                                number: 5,
+                            },
+                            {
+                                key: 'prop',
+                                stepKey: 'assets_gen_prop',
+                                nodeName: 'asset_design_prop',
+                                category: 'props',
+                                targets: ['props'],
+                                number: 6,
+                            },
+                            {
+                                key: 'environment',
+                                stepKey: 'assets_gen_environment',
+                                nodeName: 'asset_design_environment',
+                                category: 'environments',
+                                targets: ['environments', 'posters', 'covers'],
+                                number: 7,
+                            },
+                        ];
+                        const runningAssetTargets = Array.isArray(phase2RetryOptionsRef.current?.targetEntityTypes)
+                            ? phase2RetryOptionsRef.current.targetEntityTypes.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
+                            : null;
+                        const resolveAssetCategoryState = (spec) => {
+                            const completeness = (workflowCompletenessStats?.summaryItems || [])
+                                .find((row) => row?.key === spec.key);
+                            const nodeState = resolveNodeState(spec.nodeName, false, false);
+                            const expected = Number(completeness?.analysisCount || 0);
+                            const imported = Number(completeness?.importedCount || 0);
+                            const status = String(completeness?.status || '').trim().toLowerCase();
+                            const skipped = Boolean(
+                                assetsExtractionState.ready
+                                && expected <= 0
+                                && imported <= 0
+                                && !completeness?.failed
+                                && (!completeness || status === 'none')
+                            );
+                            const readyByData = Boolean(
+                                ['ok', 'extra'].includes(status)
+                                || (imported > 0 && expected > 0 && imported >= expected)
+                            );
+                            const targeted = !runningAssetTargets?.length
+                                || spec.targets.some((target) => runningAssetTargets.includes(target));
+                            const active = Boolean(
+                                assetsExtractionState.ready
+                                && !skipped
+                                && !readyByData
+                                && (
+                                    nodeState.active
+                                    || (assetDesignActive && targeted)
+                                )
+                            );
+                            const failed = Boolean(
+                                assetsExtractionState.ready
+                                && !active
+                                && !skipped
+                                && (
+                                    completeness?.failed
+                                    || status === 'missing'
+                                    || nodeState.failed
+                                )
+                            );
+                            const ready = Boolean(
+                                assetsExtractionState.ready
+                                && !active
+                                && !failed
+                                && (readyByData || skipped)
+                            );
+                            return {
+                                ready,
+                                active,
+                                failed,
+                                skipped,
+                                waitingInventory: !assetsExtractionState.ready,
+                                completeness,
+                                detail: String(completeness?.errorMessage || '').trim(),
+                            };
+                        };
+                        const assetCategoryStates = Object.fromEntries(
+                            assetDesignCategorySpecs.map((spec) => [spec.key, resolveAssetCategoryState(spec)])
+                        );
                         const environmentDesignReady = Boolean(
-                            assetDesignReady
-                            && (
-                                !environmentCompleteness
-                                || ['ok', 'extra', 'none'].includes(environmentCompleteness.status)
-                            )
+                            assetCategoryStates.environment?.ready
+                            && !assetCategoryStates.environment?.active
+                            && !assetCategoryStates.environment?.failed
                         );
                         const storyboardCanStart = Boolean(sceneMarkdownReady && environmentDesignReady);
                         const storyboardInFlight = Boolean(isRerunningStoryboard)
@@ -28524,7 +28598,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             && scenePreparationReady
                             && (sceneMarkdownReady || subjectIndexReady)
                         );
-                        const canRerunAssets = Boolean(!assetDesignActive && (assetDesignReady || subjectIndexReady || hasAssetGenerationPrerequisite));
                         const canRerunStoryboard = Boolean((storyboardCanStart || storyboardSettled) && !storyboardInFlight && !isRerunningStoryboard);
                         const diagnosticBtnClass = 'text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-40 disabled:cursor-not-allowed hover:text-white transition-colors';
                         const renderImportButton = (kind, enabled) => (
@@ -28548,6 +28621,91 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 {t('处理中', 'Processing')}
                             </span>
                         );
+                        const renderAssetCategoryCell = (spec) => {
+                            const state = assetCategoryStates[spec.key] || {
+                                ready: false,
+                                active: false,
+                                failed: false,
+                                skipped: false,
+                                waitingInventory: true,
+                            };
+                            const canRerunCategory = Boolean(
+                                (subjectIndexReady || hasAssetGenerationPrerequisite)
+                                && !state.active
+                                && !isRetryingPhase2
+                            );
+                            const canImportCategory = Boolean(canImportAssets && !state.active);
+                            const statusLabel = state.active
+                                ? t('处理中', 'Processing')
+                                : state.failed
+                                    ? t('未完成', 'Incomplete')
+                                    : state.skipped
+                                        ? t('无需', 'None')
+                                        : state.ready
+                                            ? t('已完成', 'Ready')
+                                            : state.waitingInventory
+                                                ? t('待资产清单完成', 'Wait asset inventory')
+                                                : t('等待中', 'Waiting');
+                            return (
+                                <div className="flex flex-col items-center gap-2 relative">
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
+                                        state.active
+                                            ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                                            : state.failed
+                                                ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
+                                                : state.ready
+                                                    ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
+                                                    : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'
+                                    }`}>
+                                        {state.active
+                                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                                            : state.failed
+                                                ? <X className="w-4 h-4" />
+                                                : state.ready
+                                                    ? <Check className="w-4 h-4" />
+                                                    : spec.number}
+                                    </div>
+                                    <div className="flex flex-col items-center gap-1 text-center">
+                                        <span
+                                            className={`text-[10px] ${
+                                                state.failed
+                                                    ? 'text-red-300'
+                                                    : state.ready
+                                                        ? 'text-emerald-400/80'
+                                                        : state.active
+                                                            ? 'text-purple-300'
+                                                            : 'text-white/30'
+                                            }`}
+                                            title={state.detail || ''}
+                                        >
+                                            {statusLabel}
+                                        </span>
+                                        <div className="flex items-center gap-1 flex-wrap justify-center">
+                                            {renderImportButton('assets', canImportCategory)}
+                                            {state.waitingInventory ? null : (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => openPhase2RerunModal({
+                                                        mode: 'category',
+                                                        category: spec.category,
+                                                    })}
+                                                    disabled={!canRerunCategory}
+                                                    className={state.failed
+                                                        ? 'text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50'
+                                                        : diagnosticBtnClass}
+                                                    title={t(
+                                                        `重跑${getAnalysisStageLabel(spec.stepKey, t)}`,
+                                                        `Rerun ${getAnalysisStageLabel(spec.stepKey, t)}`
+                                                    )}
+                                                >
+                                                    {t('重跑', 'Rerun')}
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        };
                         const renderPipelineNodeStep = (stepKey, state, number, nodeKey) => (
                             <div className="flex flex-col items-center gap-2 relative min-w-[78px]">
                                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
@@ -28611,7 +28769,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             { key: 'scene_split' },
                             { key: 'environment_plan' },
                             { key: 'extract_assets' },
-                            { key: 'assets_gen' },
+                            { key: 'assets_gen_character' },
+                            { key: 'assets_gen_prop' },
+                            { key: 'assets_gen_environment' },
                         ];
                         const sceneMatrixColumns = [
                             { key: 'drama_opt' },
@@ -28904,12 +29064,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="mb-1.5">
                                 <div className="text-xs font-bold text-white/85">{t('全文节点', 'Episode-wide nodes')}</div>
                                 <div className="text-[10px] text-white/35">
-                                    {t('按整集剧本处理：全局统筹、环境规划、资产清单、资产设计。', 'Runs on the full episode: global orchestration, environment planning, inventory, and asset design.')}
+                                    {t('按整集剧本处理：全局统筹、环境规划、资产清单、角色生成、道具生成、环境生成。', 'Runs on the full episode: global orchestration, environment planning, inventory, then character, prop, and environment generation.')}
                                 </div>
                             </div>
                         <div
-                            className="min-w-[560px] grid gap-x-1 gap-y-0 items-stretch"
-                            style={{ gridTemplateColumns: '6.5rem repeat(4, minmax(6rem, 1fr))' }}
+                            className="min-w-[820px] grid gap-x-1 gap-y-0 items-stretch"
+                            style={{ gridTemplateColumns: '6.5rem repeat(6, minmax(5.5rem, 1fr))' }}
                         >
                             <div className="px-1 pb-2 text-[10px] font-semibold text-white/35">{t('全文', 'Episode')}</div>
                             {episodeMatrixColumns.map((col) => (
@@ -28999,69 +29159,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </div>
                         </div>
                             </div>
-                            <div className="border-t border-white/10">
-                        <div className="flex flex-col items-center gap-2 relative">
-                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
-                                assetDesignState.active
-                                    ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
-                                    : showAssetFailure
-                                        ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
-                                        : assetDesignState.ready
-                                            ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
-                                            : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'
-                            }`}>
-                                {assetDesignState.active
-                                    ? <Loader2 className="w-4 h-4 animate-spin" />
-                                    : (showAssetFailure
-                                        ? <X className="w-4 h-4" />
-                                        : (assetDesignState.ready
-                                            ? <Check className="w-4 h-4" />
-                                            : 6))}
-                            </div>
-                            <div className="flex flex-col items-center gap-1 text-center">
-                                {assetDesignState.active ? (
-                                    <div className="flex flex-col items-center gap-1">
-                                        {renderProcessingLabel()}
-                                        {renderImportButton('assets', canImportAssets)}
-                                    </div>
-                                ) : showAssetFailure ? (
-                                    <div
-                                        className="flex flex-col items-center gap-0.5"
-                                        title={workflowCompletenessStats.failedCategories.map((row) => `${t(row.labelZh, row.labelEn)}: ${row.errorMessage || t('生成失败', 'Generation failed')}`).join('\n')}
-                                    >
-                                        <span className="text-[10px] text-red-300 font-semibold">
-                                            {t('失败：', 'Failed: ')}{workflowCompletenessStats.failedCategories.map((row) => t(row.labelZh, row.labelEn)).join('、')}
-                                        </span>
-                                        <div className="flex items-center gap-1 flex-wrap justify-center">
-                                            {renderImportButton('assets', canImportAssets)}
-                                            <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={!canRerunAssets} className="text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                                {t('重跑失败项', 'Rerun failed')}
-                                            </button>
-                                        </div>
-                                    </div>
-                                ) : assetDesignReady ? (
-                                    <div className="flex items-center gap-1 flex-wrap justify-center">
-                                        <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
-                                        {renderImportButton('assets', canImportAssets)}
-                                        <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={!canRerunAssets} className={`${diagnosticBtnClass} flex items-center gap-1`}>
-                                            {t('重跑', 'Rerun')}
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-col items-center gap-1">
-                                        {(subjectIndexReady || hasAssetGenerationPrerequisite) ? (
-                                             <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={!canRerunAssets} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                                {t('可重跑', 'Ready')}
-                                            </button>
-                                        ) : (
-                                            <span className="text-[10px] text-white/30">{t('待资产清单完成', 'Wait asset inventory')}</span>
-                                        )}
-                                        {renderImportButton('assets', canImportAssets)}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                            </div>
+                            {assetDesignCategorySpecs.map((spec) => (
+                                <div key={`episode-asset-${spec.key}`} className="border-t border-white/10">
+                                    {renderAssetCategoryCell(spec)}
+                                </div>
+                            ))}
                         </div>
                         </div>
 
