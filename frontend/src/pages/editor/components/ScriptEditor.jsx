@@ -2811,6 +2811,7 @@ const normalizeAnalysisLivePhase = (phase) => {
 
 /** Map persistence gaps → business progress phase for the 5-step strip. */
 const resolveSupervisorProgressPhase = (probe = {}) => {
+    if (!probe?.hasSubjectIndex) return 'extract_assets';
     if (probe?.needsScenes) return 'scene_beats';
     if (probe?.needsAssets) return 'assets_gen';
     if (probe?.needsStoryboard) return 'storyboard';
@@ -2820,6 +2821,7 @@ const resolveSupervisorProgressPhase = (probe = {}) => {
 const formatSupervisorGapLabels = (probe = {}, tFn = (zh) => zh) => {
     const t = typeof tFn === 'function' ? tFn : (zh) => zh;
     const labels = [];
+    if (!probe?.hasSubjectIndex) labels.push(t('资产清单', 'asset inventory'));
     if (probe?.needsScenes) labels.push(t('场景编排入库', 'scene import'));
     if (probe?.needsAssets) {
         const assetLabels = Array.isArray(probe?.pendingAssetLabels) && probe.pendingAssetLabels.length
@@ -18125,7 +18127,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const fromStage1 = markerPhaseKey === '1' || markerPhase === 1;
                         const extractionAlreadyDone = Boolean(
                             String(latestStage2_1TextRef.current || '').trim()
-                            || hasEntityDesign
                             || Number(markerPhase) === 2
                             || ['2', 'extract_assets', 'scene_beats', 'assets_gen'].includes(markerPhaseKey)
                         );
@@ -23071,6 +23072,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     'Scene orchestration result was not persisted (missing scenes table); analysis cannot finish. Retry scene orchestration.'
                 ));
             }
+            if (!supervisorResult?.probe?.hasSubjectIndex) {
+                throw new Error(t(
+                    '资产清单未落库，分析不能结束。请重试资产提取。',
+                    'Asset inventory was not persisted; analysis cannot finish. Retry asset extraction.'
+                ));
+            }
             const coverage = supervisorResult?.probe?.storyboardCoverage;
             if (coverage) {
                 setDiagnosticsEpisodeShotStats({
@@ -23472,6 +23479,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let globalStage2_1Text = stage2_1SubjectIndexText;
             if (stage2_1SubjectIndexText) {
                 latestStage2_1TextRef.current = extractPureSubjectIndexText(stage2_1SubjectIndexText) || stage2_1SubjectIndexText;
+                setSubjectIndexText(extractPureSubjectIndexText(stage2_1SubjectIndexText) || stage2_1SubjectIndexText);
+                try {
+                    await persistLlmResultContent(stage2_1SubjectIndexText, 'ai_scene_analysis_subject_index', {
+                        source: 'restart-stage2-subject-index-immediate',
+                    });
+                } catch (persistErr) {
+                    onLog?.(t(
+                        `保存资产清单失败：${persistErr?.message || persistErr}`,
+                        `Failed to save asset inventory: ${persistErr?.message || persistErr}`
+                    ), 'warning');
+                }
             }
             if (onLog) onLog('资产清单完成（重跑场景），开始并发执行：场景编排 + 资产设计。', 'info');
 
@@ -23787,7 +23805,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         );
         const extractionAlreadyDone = Boolean(
             String(latestStage2_1TextRef.current || '').trim()
-            || hasPersistedEntityDesignPayload(activeEpisode?.ai_entity_design_result)
             || ['2', 'extract_assets', 'scene_beats', 'assets_gen'].includes(String(markerPhase || '').trim())
         );
         // Stage 1 node success is not itself a Subject Index. Re-extract only when this
@@ -26261,6 +26278,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     } = {}) => {
         let workingImportReport = importReport;
         let workingPostImport = postImportSceneSubjectReport;
+        let workingSubjectIndexText = String(subjectIndexText || '').trim();
         let supervisorRound = 0;
         let lastGapSignature = '';
         let stagnantRounds = 0;
@@ -26277,7 +26295,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 projectId,
                 episodeId: activeEpisode?.id,
                 expectedSceneCount,
-                subjectIndexText,
+                subjectIndexText: workingSubjectIndexText,
                 parseSubjectIndexEntries: parseSubjectIndexEntriesForAssetRerun,
                 checkStoryboards: storyboardEnabled,
                 stage3AutoStart,
@@ -26309,12 +26327,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     'Stage 1 adapted script is missing from storage; cannot auto-continue. Re-run script analysis.'
                 ));
             }
-            if (!probe.hasSubjectIndex) {
-                throw new Error(t(
-                    '落库缺少资产清单，无法自动续跑。请重新执行资产提取。',
-                    'Subject Index is missing from storage; cannot auto-continue. Re-run asset extraction.'
-                ));
-            }
 
             const gapSignature = probe.gaps.join('|');
             if (gapSignature === lastGapSignature) {
@@ -26343,6 +26355,82 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             let didWork = false;
 
+            if (!probe.hasSubjectIndex) {
+                throwIfAnalysisStopped();
+                const stage1Text = String(
+                    stage1SourceText
+                    || activeEpisode?.ai_scene_analysis_adaptation
+                    || activeEpisode?.ai_scene_analysis_result
+                    || ''
+                ).trim();
+                const {
+                    adaptedScriptText,
+                    userInput: stage2UserInput,
+                } = buildStage2UserInputFromStage1(stage1Text, selectedReuseSubjectAssets);
+                if (!stage1Text || !String(adaptedScriptText || '').trim()) {
+                    throw new Error(t(
+                        '落库缺少资产清单，且第一阶段产物不可用，无法自动补抽。请重新执行剧本分析。',
+                        'Subject Index is missing and Stage 1 output is unusable; cannot auto-extract. Re-run script analysis.'
+                    ));
+                }
+                onLog?.('[Pipeline Supervisor] Re-running asset extraction; Subject Index is missing.', 'process');
+                const stage2_1PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md');
+                const runStage2_1Attempt = async () => (
+                    await awaitAnalyzeSceneWithRecovery(
+                        () => runScriptAnalysisFlowAnalyzeNode(
+                            'assets_extraction',
+                            stage2UserInput,
+                            stage2_1PromptRes?.content || '',
+                            null,
+                            activeEpisode?.id || null,
+                            analysisAttentionNotes,
+                            selectedReuseSubjectAssets,
+                            {
+                                onTaskCreated: (taskId) => {
+                                    registerActiveAnalysisTask(taskId);
+                                    saveAnalysisTaskMarker(activeEpisode?.id, {
+                                        taskId,
+                                        startedAt: Date.now(),
+                                        phase: 'extract_assets',
+                                    });
+                                },
+                            },
+                            projectId,
+                            'script_analysis',
+                            resolveSelectedScriptAnalysisApiId()
+                        ),
+                        { startedAt: Date.now(), baselineText: stage1Text }
+                    )
+                );
+                const { text: stage2_1Text, validation: stage2_1Validation } = await runStage2_1WithValidationRetry(
+                    runStage2_1Attempt,
+                    'Stage 2.1 supervisor'
+                );
+                const extractedIndex = String(stage2_1Validation?.subjectIndexText || '').trim()
+                    || extractPureSubjectIndexText(stage2_1Text).trim()
+                    || String(stage2_1Text || '').trim();
+                if (!extractedIndex) {
+                    throw new Error(t(
+                        '自动补抽资产清单未返回内容。请手动重试资产提取。',
+                        'Supervisor asset extraction returned no content. Retry asset extraction manually.'
+                    ));
+                }
+                workingSubjectIndexText = extractedIndex;
+                latestStage2_1TextRef.current = extractPureSubjectIndexText(extractedIndex) || extractedIndex;
+                setSubjectIndexText(extractPureSubjectIndexText(extractedIndex) || extractedIndex);
+                try {
+                    await persistLlmResultContent(extractedIndex, 'ai_scene_analysis_subject_index', {
+                        source: 'pipeline-supervisor-assets-extraction',
+                    });
+                } catch (persistErr) {
+                    onLog?.(t(
+                        `保存资产清单失败：${persistErr?.message || persistErr}`,
+                        `Failed to save asset inventory: ${persistErr?.message || persistErr}`
+                    ), 'warning');
+                }
+                didWork = true;
+            }
+
             if (probe.needsScenes && allowSceneOrchestrationRetry) {
                 throwIfAnalysisStopped();
                 if (probe.hasSceneMarkdown && Number(probe.dbSceneCount || 0) <= 0) {
@@ -26367,7 +26455,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         || activeEpisode?.ai_scene_analysis_result
                         || ''
                     ).trim();
-                    const indexText = String(probe.subjectIndex || subjectIndexText || '').trim();
+                    const indexText = String(workingSubjectIndexText || probe.subjectIndex || '').trim();
                     if (stage1Text && indexText) {
                         onLog?.('[Pipeline Supervisor] Re-running scene orchestration for missing workspace scenes...', 'process');
                         const stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1Text);
@@ -26437,9 +26525,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
                 workingPostImport = await runPostImportSceneSubjectPipeline(
                     workingImportReport || { importedSceneRows: [] },
-                    probe.subjectIndex || subjectIndexText,
+                    workingSubjectIndexText || probe.subjectIndex,
                     {
-                        explicitSubjectIndexText: probe.subjectIndex || subjectIndexText,
+                        explicitSubjectIndexText: workingSubjectIndexText || probe.subjectIndex,
                         targetEntityTypes: probe.pendingAssetTargets,
                         isRetryPhase2: true,
                         skipExistingAssets: true,
@@ -26499,21 +26587,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.ai_scene_analysis_adaptation,
         activeEpisode?.ai_scene_analysis_result,
         activeEpisode?.id,
+        analysisAttentionNotes,
+        awaitAnalyzeSceneWithRecovery,
         awaitPendingStoryboardTasks,
+        buildStage2UserInputFromStage1,
         buildStage2_2UserInputFromStage1,
         ensureStage3AutoStartCache,
+        extractPureSubjectIndexText,
         importScenesFromPerScenePatchMap,
         isStoryboardAutoStartEnabled,
         onLog,
         parseSubjectIndexEntriesForAssetRerun,
+        persistLlmResultContent,
         persistSceneMarkdownBundle,
         persistSceneMarkdownPatch,
         projectId,
         registerActiveAnalysisTask,
+        resolveSelectedScriptAnalysisApiId,
         runAutoImportAndSwitchToScenes,
         runPostImportSceneSubjectPipeline,
+        runStage2_1WithValidationRetry,
         runStage2_2WithValidationRetry,
         saveAnalysisTaskMarker,
+        selectedReuseSubjectAssets,
         t,
         throwIfAnalysisStopped,
         validateStage2_2BeatsOutput,
@@ -28268,10 +28364,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const scriptOptReady = hasScriptOptArtifact && trustArtifact('script_opt');
                         const subjectIndexReady = hasSubjectIndexArtifact && trustArtifact('extract_assets');
                         const sceneMarkdownReady = hasSceneMarkdownArtifact && trustArtifact('scene_beats');
-                        const assetDesignReady = Boolean(
+                        const assetDesignReadyUngated = Boolean(
                             (hasAssetDesignArtifact && trustArtifact('assets_gen'))
                             || ((workspaceAssetsImported || assetsGenSettledThisRun) && !isRetryingPhase2)
                         );
+                        // Leftover Stage 3 JSON / imported entities must not look "done"
+                        // when this run never produced a Subject Index.
+                        const assetDesignReady = Boolean(subjectIndexReady && assetDesignReadyUngated);
                         // Per-stage running UI: clear as soon as that stage's artifact is ready.
                         const scriptOptActive = isAnalysisLiveStepActive(livePhase, 'script_opt', { isLive: analysisLive, stepReady: scriptOptReady });
                         const subjectIndexActive = isAnalysisLiveStepActive(livePhase, 'extract_assets', { isLive: analysisLive, stepReady: subjectIndexReady });
@@ -28334,14 +28433,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             subjectIndexReady,
                             subjectIndexActive && environmentPlanDone
                         );
+                        const assetsExtractionActive = Boolean(
+                            environmentPlanDone
+                            && !subjectIndexReady
+                            && (assetsExtractionBaseState.active || subjectIndexActive)
+                        );
+                        const extractSettledIncomplete = Boolean(
+                            environmentPlanDone
+                            && !assetsExtractionActive
+                            && !subjectIndexReady
+                            && !assetsExtractionBaseState.ready
+                            && (
+                                !analysisLive
+                                || ['scene_beats', 'assets_gen', 'storyboard', 'failed', 'completed', 'warning'].includes(
+                                    String(livePhase || '').trim().toLowerCase()
+                                )
+                            )
+                        );
                         const assetsExtractionState = environmentPlanDone
                             ? {
                                 ready: Boolean(assetsExtractionBaseState.ready || subjectIndexReady),
-                                active: Boolean(
-                                    !subjectIndexReady
-                                    && (assetsExtractionBaseState.active || subjectIndexActive)
-                                ),
-                                failed: Boolean(assetsExtractionBaseState.failed),
+                                active: assetsExtractionActive,
+                                failed: Boolean(assetsExtractionBaseState.failed || extractSettledIncomplete),
                             }
                             : { ready: false, active: false, failed: false };
                         const showAssetFailure = Boolean(workflowCompletenessStats?.hasFailedSubtask) && (
@@ -28397,7 +28510,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         // Full Stage1/Stage2 restarts stay blocked while the main pipeline is live
                         // (they clear downstream work). Scene/asset/storyboard local actions may run.
                         const canRerunScriptOpt = Boolean(!scriptOptActive && !analysisLive && (scriptOptReady || Boolean(activeEpisode?.id)));
-                        const canRerunSubjectIndex = Boolean(!subjectIndexActive && !analysisLive && (subjectIndexReady || scriptOptReady));
+                        const canRerunSubjectIndex = Boolean(
+                            environmentPlanDone
+                            && !assetsExtractionState.active
+                            && !subjectIndexActive
+                            && (
+                                !analysisLive
+                                || assetsExtractionState.failed
+                            )
+                        );
                         const canRerunSceneBeats = Boolean(
                             !sceneMarkdownActive
                             && scenePreparationReady
@@ -28804,8 +28925,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="border-t border-white/10">{renderPipelineNodeStep('environment_plan', environmentPlanState, 2, 'environment_plan')}</div>
                             <div className="border-t border-white/10">
                         <div className="flex flex-col items-center gap-2 relative">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${assetsExtractionState.active ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : (assetsExtractionState.ready ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
-                                {assetsExtractionState.active ? <Loader2 className="w-4 h-4 animate-spin" /> : (assetsExtractionState.ready ? <Check className="w-4 h-4" /> : 4)}
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
+                                assetsExtractionState.active
+                                    ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                                    : assetsExtractionState.failed
+                                        ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
+                                        : assetsExtractionState.ready
+                                            ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
+                                            : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'
+                            }`}>
+                                {assetsExtractionState.active
+                                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                                    : assetsExtractionState.failed
+                                        ? <X className="w-4 h-4" />
+                                        : assetsExtractionState.ready
+                                            ? <Check className="w-4 h-4" />
+                                            : 4}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 {assetsExtractionState.active ? (
@@ -28834,12 +28969,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                      </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
-                                        <span className="text-[10px] text-white/30">
-                                            {environmentPlanDone
-                                                ? t('等待中', 'Waiting')
-                                                : t('待环境规划完成', 'Wait environment plan')}
+                                        <span className={`text-[10px] ${assetsExtractionState.failed ? 'text-red-300' : 'text-white/30'}`}>
+                                            {assetsExtractionState.failed
+                                                ? t('未完成', 'Incomplete')
+                                                : environmentPlanDone
+                                                    ? t('等待中', 'Waiting')
+                                                    : t('待环境规划完成', 'Wait environment plan')}
                                         </span>
-                                        {renderImportButton('subject_index', canImportSubjectIndex)}
+                                        <div className="flex items-center gap-1 flex-wrap justify-center">
+                                            {renderImportButton('subject_index', canImportSubjectIndex)}
+                                            {environmentPlanDone ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleRestartStage2({
+                                                        allowWhileAnalyzing: Boolean(analysisLive && assetsExtractionState.failed),
+                                                    })}
+                                                    disabled={!canRerunSubjectIndex}
+                                                    className={assetsExtractionState.failed
+                                                        ? 'text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50'
+                                                        : diagnosticBtnClass}
+                                                    title={t('重跑资产清单，并按序重跑后续资产设计', 'Rerun asset inventory and continue into asset design')}
+                                                >
+                                                    {t('重跑', 'Rerun')}
+                                                </button>
+                                            ) : null}
+                                        </div>
                                     </div>
                                 )}
                             </div>
