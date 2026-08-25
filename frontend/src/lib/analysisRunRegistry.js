@@ -87,8 +87,16 @@ function emptyProgressSnapshot() {
         detailLogs: [],
         uiReport: null,
         isAnalyzing: false,
+        pipelineNodes: [],
+        sceneUnits: [],
         updatedAt: 0,
     };
+}
+
+export function hasInFlightPipelineNodes(nodes) {
+    return (Array.isArray(nodes) ? nodes : []).some((node) => (
+        ['running', 'queued'].includes(String(node?.status || '').trim().toLowerCase())
+    ));
 }
 
 export function trackEpisodeAnalysisRun(episodeId, runPromise, meta = {}) {
@@ -263,6 +271,12 @@ export function publishEpisodeAnalysisProgress(episodeId, patch = {}) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'isAnalyzing')) {
         next.isAnalyzing = Boolean(patch.isAnalyzing);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'pipelineNodes') && Array.isArray(patch.pipelineNodes)) {
+        next.pipelineNodes = patch.pipelineNodes;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'sceneUnits') && Array.isArray(patch.sceneUnits)) {
+        next.sceneUnits = patch.sceneUnits;
     }
     analysisProgressByEpisode.set(id, next);
 

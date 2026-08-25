@@ -73,6 +73,12 @@ SPECIAL_CUT_PROMPT = (
 SPECIAL_STATE_INJECT = "特别表述={note}。按该表述改俯仰或透视；仍以同角切割图为空间基准。"
 SOURCE_FLAG = "programmatic_derived_framing"
 SPECIAL_KIND_PREFIXES = ("仰天", "屋顶", "变形")
+LOOK_UP_SUFFIXES = {"仰天", "仰视", "屋顶"}
+USAGE_MERGE_TOKENS = (
+    "反打", "近景", "远景", "特写", "乙侧", "覆盖", "过肩", "空镜",
+    "全景", "中景", "大远景", "大特写", "insert", "ews", "ws", "fs",
+    "ms", "mcu", "cu", "ecu",
+)
 _EMPTY_FIELD_MARKERS = {"", "无", "n/a", "na", "none", "-"}
 
 
@@ -138,6 +144,58 @@ def _same_angle_parent(name: str, main_name: str, angle: int) -> str:
     return f"{int(angle)}度{main_name}"
 
 
+def canonicalize_derived_environment_name(
+    name: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Merge same-direction usage/shot-size suffixes into `{N}度{主}`.
+
+    Keep look-up specials as `{N}度{主}_仰天`, explicit warp as `_变形`,
+    and marked state rows as `{N}度{主}_{状态}`.
+    """
+    extra = extra or {}
+    clean_name = _clean(name)
+    angle = _angle_from_name(clean_name)
+    if angle is None:
+        return clean_name
+    main = _clean(extra.get("main") or extra.get("所属主环境")) or _main_from_name(clean_name)
+    if not main:
+        return clean_name
+    suffix = _state_suffix(clean_name, main)
+    kind = extra.get("kind") or extra.get("类型") or ""
+    special_kind, _ = _parse_special_note(
+        extra.get("special_note") or extra.get("特别表述")
+    )
+    state_delta = _clean(extra.get("state_delta") or extra.get("状态Delta"))
+    if suffix in LOOK_UP_SUFFIXES or special_kind in {"仰天", "屋顶"}:
+        return f"{int(angle)}度{main}_仰天"
+    if suffix == "变形" or special_kind == "变形":
+        return f"{int(angle)}度{main}_变形"
+    row = {
+        **extra,
+        "name": clean_name,
+        "main": main,
+        "kind": kind,
+        "state_delta": state_delta,
+    }
+    if suffix and (
+        _is_state_row(row)
+        or (state_delta and state_delta.lower() not in _EMPTY_FIELD_MARKERS)
+    ):
+        return f"{int(angle)}度{main}_{suffix}"
+    if not suffix:
+        return f"{int(angle)}度{main}"
+    kind_text = _clean(kind).lower()
+    if _is_usage_suffix(suffix) or kind_text in {"第一刀", "first_cut", "first-cut", "视角衍生"}:
+        return f"{int(angle)}度{main}"
+    return clean_name
+
+
+def _is_usage_suffix(suffix: str) -> bool:
+    text = _clean(suffix).lower()
+    return any(token in text for token in USAGE_MERGE_TOKENS)
+
+
 def _parse_special_note(raw: Any) -> Tuple[str, str]:
     """Return (kind, sentence). kind ∈ 仰天/屋顶/变形 or empty; sentence is the inject text."""
     text = _clean(raw)
@@ -183,7 +241,8 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
     by_name: Dict[str, Dict[str, Any]] = {}
 
     def _upsert(name: str, extra: Optional[Dict[str, Any]] = None) -> None:
-        clean_name = _clean(name)
+        fields = extra or {}
+        clean_name = canonicalize_derived_environment_name(name, fields)
         if not clean_name:
             return
         row = by_name.get(clean_name) or {"name": clean_name}
@@ -229,8 +288,10 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
 
 
 def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
-    name = _clean(item.get("name"))
-    main = _clean(item.get("main") or item.get("所属主环境")) or _main_from_name(name)
+    raw_item = dict(item or {})
+    main = _clean(raw_item.get("main") or raw_item.get("所属主环境"))
+    name = canonicalize_derived_environment_name(raw_item.get("name"), {**raw_item, "main": main})
+    main = main or _main_from_name(name)
     angle = _normalize_angle(item.get("angle") or item.get("view_angle_from_main"), name)
     grid = GRID_BY_ANGLE.get(angle, "左上0度格")
     is_state = _is_state_row({**item, "name": name, "main": main, "angle": angle})
@@ -415,6 +476,7 @@ def extract_derived_environment_names_from_scene_text(scene_text: str) -> str:
             return
         if not _DERIVED_ENV_NAME_PATTERN.match(cleaned):
             return
+        cleaned = canonicalize_derived_environment_name(cleaned)
         normalized = _normalize_env_name_key(cleaned)
         if normalized in {"none", "null", "nil", "n/a", "na", "无", "空"}:
             return
@@ -442,6 +504,29 @@ def extract_derived_environment_names_from_scene_text(scene_text: str) -> str:
             _add(match.group(1))
 
     return "，".join(names)
+
+
+_DERIVED_NAME_TOKEN_PATTERN = re.compile(r"\d+\s*度[^\s`：:｜|,，\[\]\r\n]+")
+
+
+def rewrite_merged_derived_environment_names(text: str) -> str:
+    """Rewrite same-direction usage/shot-size aliases to `{N}度{主}` in framing text."""
+    source = str(text or "")
+    if not source.strip():
+        return source
+    replacements: Dict[str, str] = {}
+    for match in _DERIVED_NAME_TOKEN_PATTERN.finditer(source):
+        raw = _clean(match.group(0))
+        if not raw:
+            continue
+        canonical = canonicalize_derived_environment_name(raw)
+        if canonical and canonical != raw:
+            replacements[raw] = canonical
+    if not replacements:
+        return source
+    for raw in sorted(replacements, key=len, reverse=True):
+        source = source.replace(raw, replacements[raw])
+    return source
 
 
 def _upsert_environment_entity(

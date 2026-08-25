@@ -26,6 +26,7 @@ import {
     getEpisodeAnalysisProgress,
     clearEpisodeAnalysisProgress,
     subscribeEpisodeAnalysisProgress,
+    hasInFlightPipelineNodes,
     markEpisodeAnalysisDetached,
     clearEpisodeAnalysisDetached,
     isEpisodeAnalysisDetached,
@@ -3207,6 +3208,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisFlowHistoryRef = useRef([]);
     const analysisUiReportRef = useRef(null);
     const storyboardTaskProgressRef = useRef(EMPTY_STORYBOARD_TASK_PROGRESS);
+    const diagnosticsPipelineNodesRef = useRef([]);
+    const diagnosticsSceneUnitsRef = useRef([]);
+    const analysisProgressHydratedRef = useRef(false);
 
     const publishLiveAnalysisProgressSnapshot = useCallback((patch = {}) => {
         if (applyingRemoteProgressRef.current) return;
@@ -3231,6 +3235,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             isAnalyzing: Boolean(latestIsAnalyzingRef.current),
             ...patch,
         };
+        // Detached (unmounted) publishers must not keep overwriting diagnostics
+        // with a stale in-memory snapshot after the user returns.
+        const includeDiagnostics = scriptEditorMountedRef.current
+            || Object.prototype.hasOwnProperty.call(patch, 'pipelineNodes')
+            || Object.prototype.hasOwnProperty.call(patch, 'sceneUnits');
+        if (includeDiagnostics) {
+            if (!Object.prototype.hasOwnProperty.call(patch, 'pipelineNodes')) {
+                snapshot.pipelineNodes = Array.isArray(diagnosticsPipelineNodesRef.current)
+                    ? diagnosticsPipelineNodesRef.current
+                    : [];
+            }
+            if (!Object.prototype.hasOwnProperty.call(patch, 'sceneUnits')) {
+                snapshot.sceneUnits = Array.isArray(diagnosticsSceneUnitsRef.current)
+                    ? diagnosticsSceneUnitsRef.current
+                    : [];
+            }
+        }
         latestAnalysisProgressUiRef.current = {
             flowStatus: snapshot.flowStatus,
             flowHistory: snapshot.flowHistory,
@@ -3393,6 +3414,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     });
     const [diagnosticsPipelineNodes, setDiagnosticsPipelineNodes] = useState([]);
     const [diagnosticsSceneUnits, setDiagnosticsSceneUnits] = useState([]);
+    const [diagnosticsRefreshNonce, setDiagnosticsRefreshNonce] = useState(0);
     const diagnosticsNodeLogStateRef = useRef({});
     const diagnosticsEpochRef = useRef(0);
     const latestStage1NodeOutputsRef = useRef({});
@@ -11419,9 +11441,41 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     useEffect(() => {
         let mounted = true;
         let timer = null;
+        const episodeId = Number(activeEpisode?.id || 0);
+
+        const applySnapshot = (nodes, units) => {
+            diagnosticsPipelineNodesRef.current = nodes;
+            diagnosticsSceneUnitsRef.current = units;
+            setDiagnosticsPipelineNodes(nodes);
+            setDiagnosticsSceneUnits(units);
+            if (episodeId > 0) {
+                publishEpisodeAnalysisProgress(episodeId, {
+                    pipelineNodes: nodes,
+                    sceneUnits: units,
+                });
+            }
+        };
+
+        const shouldKeepPolling = (nodes = diagnosticsPipelineNodesRef.current) => (
+            Boolean(isAnalyzing)
+            || Boolean(isRetryingPhase2)
+            || Boolean(getEpisodeAnalysisRun(episodeId)?.promise)
+            || isEpisodeAnalysisClaimed(episodeId)
+            || hasInFlightPipelineNodes(nodes)
+        );
+
+        const startPollingIfNeeded = (nodes) => {
+            if (timer || !shouldKeepPolling(nodes)) return;
+            timer = window.setInterval(() => {
+                void loadPipelineNodes();
+            }, 2000);
+        };
+
         const loadPipelineNodes = async () => {
-            if (!activeEpisode?.id) {
+            if (!episodeId) {
                 if (mounted) {
+                    diagnosticsPipelineNodesRef.current = [];
+                    diagnosticsSceneUnitsRef.current = [];
                     setDiagnosticsPipelineNodes([]);
                     setDiagnosticsSceneUnits([]);
                 }
@@ -11429,30 +11483,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             const epoch = diagnosticsEpochRef.current;
             try {
-                const snapshot = await getEpisodeProgressSnapshot(activeEpisode.id);
+                const snapshot = await getEpisodeProgressSnapshot(episodeId);
                 if (!mounted || epoch !== diagnosticsEpochRef.current) return;
-                setDiagnosticsPipelineNodes(
-                    Array.isArray(snapshot?.pipeline_nodes) ? snapshot.pipeline_nodes : []
-                );
-                setDiagnosticsSceneUnits(
-                    Array.isArray(snapshot?.scene_units) ? snapshot.scene_units : []
-                );
+                const nodes = Array.isArray(snapshot?.pipeline_nodes) ? snapshot.pipeline_nodes : [];
+                const units = Array.isArray(snapshot?.scene_units) ? snapshot.scene_units : [];
+                applySnapshot(nodes, units);
+                startPollingIfNeeded(nodes);
             } catch (_) {
-                if (mounted && epoch === diagnosticsEpochRef.current && !isAnalyzing && !isRetryingPhase2) {
-                    setDiagnosticsPipelineNodes([]);
-                    setDiagnosticsSceneUnits([]);
-                }
+                if (!mounted || epoch !== diagnosticsEpochRef.current) return;
+                // Keep the last known snapshot on transient fetch errors.
+                startPollingIfNeeded(diagnosticsPipelineNodesRef.current);
             }
         };
+
         loadPipelineNodes();
-        if (isAnalyzing || isRetryingPhase2) {
-            timer = window.setInterval(loadPipelineNodes, 2000);
-        }
+        startPollingIfNeeded(diagnosticsPipelineNodesRef.current);
         return () => {
             mounted = false;
             if (timer) window.clearInterval(timer);
         };
-    }, [activeEpisode?.id, isAnalyzing, isRetryingPhase2]);
+    }, [activeEpisode?.id, diagnosticsRefreshNonce, isAnalyzing, isRetryingPhase2, isTabActive]);
 
     useEffect(() => {
         const labelMap = {
@@ -13624,6 +13674,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         diagnosticsEpochRef.current += 1;
         diagnosticsNodeLogStateRef.current = {};
         latestStage1NodeOutputsRef.current = {};
+        diagnosticsPipelineNodesRef.current = [];
+        diagnosticsSceneUnitsRef.current = [];
         setDiagnosticsPipelineNodes([]);
         setDiagnosticsSceneUnits([]);
         setDiagnosticsEpisodeSceneCount(0);
@@ -13704,8 +13756,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
             if (Object.prototype.hasOwnProperty.call(snapshot, 'isAnalyzing')) {
-                latestIsAnalyzingRef.current = Boolean(snapshot.isAnalyzing);
-                setIsAnalyzing(Boolean(snapshot.isAnalyzing));
+                const nextAnalyzing = Boolean(snapshot.isAnalyzing);
+                const episodeId = Number(latestActiveEpisodeIdRef.current || 0);
+                const keepLive = !nextAnalyzing && episodeId > 0 && (
+                    isEpisodeAnalysisClaimed(episodeId)
+                    || Boolean(getEpisodeAnalysisRun(episodeId)?.promise)
+                );
+                if (!keepLive) {
+                    latestIsAnalyzingRef.current = nextAnalyzing;
+                    setIsAnalyzing(nextAnalyzing);
+                }
+            }
+            if (Array.isArray(snapshot.pipelineNodes)) {
+                diagnosticsPipelineNodesRef.current = snapshot.pipelineNodes;
+                setDiagnosticsPipelineNodes(snapshot.pipelineNodes);
+            }
+            if (Array.isArray(snapshot.sceneUnits)) {
+                diagnosticsSceneUnitsRef.current = snapshot.sceneUnits;
+                setDiagnosticsSceneUnits(snapshot.sceneUnits);
             }
             return true;
         } finally {
@@ -17720,6 +17788,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         latestActiveEpisodeIdRef.current = activeEpisode?.id || null;
         const episodeId = Number(activeEpisode?.id || 0);
         if (!episodeId || applyingRemoteProgressRef.current) return;
+        // Remount starts with isAnalyzing=false. Do not overwrite the surviving
+        // live snapshot until restore/bootstrap has hydrated this instance.
+        if (!analysisProgressHydratedRef.current) return;
         publishEpisodeAnalysisProgress(episodeId, { isAnalyzing: Boolean(isAnalyzing) });
     }, [isAnalyzing, activeEpisode?.id]);
 
@@ -18235,8 +18306,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         scriptEditorMountedRef.current = true;
         latestActiveEpisodeIdRef.current = episodeId;
         mountResumeReadyRef.current = false;
+        analysisProgressHydratedRef.current = false;
         restoreAnalysisProgressFromSession(episodeId);
         bootstrapPendingAnalysisUi();
+        analysisProgressHydratedRef.current = true;
         // Remount: rehydrate stop/deadline control so this instance matches the background run.
         const pipelineControl = getEpisodeAnalysisPipelineControl(episodeId);
         if (Number(pipelineControl?.deadlineAt || 0) > 0) {
@@ -18308,6 +18381,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 // Flush one last live snapshot so remount hydrates beyond leave-time localStorage.
                 publishLiveAnalysisProgressSnapshot({
                     isAnalyzing: Boolean(latestIsAnalyzingRef.current),
+                    pipelineNodes: Array.isArray(diagnosticsPipelineNodesRef.current)
+                        ? diagnosticsPipelineNodesRef.current
+                        : [],
+                    sceneUnits: Array.isArray(diagnosticsSceneUnitsRef.current)
+                        ? diagnosticsSceneUnitsRef.current
+                        : [],
                 });
             }
             persistAnalysisSessionSnapshot(leavingEpisodeId);
@@ -18354,11 +18433,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             lastTryResumePendingAnalysisAtRef.current = now;
             tryResumePendingAnalysis();
         };
+        const refreshDiagnosticsOnVisible = () => {
+            if (document.visibilityState !== 'visible') return;
+            setDiagnosticsRefreshNonce((value) => value + 1);
+        };
         document.addEventListener('visibilitychange', refreshPendingAnalysis);
         window.addEventListener('focus', refreshPendingAnalysis);
+        document.addEventListener('visibilitychange', refreshDiagnosticsOnVisible);
+        window.addEventListener('focus', refreshDiagnosticsOnVisible);
         return () => {
             document.removeEventListener('visibilitychange', refreshPendingAnalysis);
             window.removeEventListener('focus', refreshPendingAnalysis);
+            document.removeEventListener('visibilitychange', refreshDiagnosticsOnVisible);
+            window.removeEventListener('focus', refreshDiagnosticsOnVisible);
         };
     }, [tryResumePendingAnalysis]);
 
@@ -28218,7 +28305,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             scriptOptReady,
                             scriptOptActive && sceneSplitState.ready
                         );
-                        const environmentPlanState = (sceneSplitState.active || sceneSplitState.failed)
+                        // Only block downstream when the scene_split *node* is still
+                        // running/failed. Artifact-only fallback "active" after remount
+                        // must not hide already-persisted environment / subskill nodes.
+                        const blockDownstreamFromSceneSplit = Boolean(
+                            pipelineNodeByName.scene_split
+                                ? (sceneSplitState.active || sceneSplitState.failed)
+                                : sceneSplitState.failed
+                        );
+                        const environmentPlanState = blockDownstreamFromSceneSplit
                             ? { ...environmentPlanBaseState, ready: false, active: false }
                             : environmentPlanBaseState;
                         const sceneSubskillsBaseState = resolveNodeState(
@@ -28226,10 +28321,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             scriptOptReady,
                             scriptOptActive && sceneSplitState.ready
                         );
-                        const sceneSubskillsState = (
-                            sceneSplitState.active
-                            || sceneSplitState.failed
-                        )
+                        const sceneSubskillsState = blockDownstreamFromSceneSplit
                             ? { ...sceneSubskillsBaseState, ready: false, active: false }
                             : sceneSubskillsBaseState;
                         const environmentPlanDone = Boolean(

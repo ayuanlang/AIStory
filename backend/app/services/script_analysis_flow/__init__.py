@@ -46,10 +46,12 @@ from .registry import (
     normalize_script_analysis_flow_config,
 )
 from .derived_env_ingest import (
+    canonicalize_derived_environment_name,
     collect_derived_environment_jsons,
     extract_derived_environment_names_from_scene_text,
     ingest_derived_environments_from_framing,
     parse_derived_env_extract_items,
+    rewrite_merged_derived_environment_names,
 )
 from .environment_reuse import extract_scene_env_ident_block, parse_scene_env_ident_items
 
@@ -2942,9 +2944,11 @@ __all__ = [
     "extract_entity_profile_block_from_adapted",
     "build_assets_extraction_script_from_adapted",
     "resolve_assets_extraction_source_text",
+    "canonicalize_derived_environment_name",
     "collect_derived_environment_jsons",
     "ingest_derived_environments_from_framing",
     "parse_derived_env_extract_items",
+    "rewrite_merged_derived_environment_names",
     "strip_beat_transition_notes_from_script",
     "extract_scene_markdown_text_from_analyze_result",
     "import_analyze_scene_stage_result",

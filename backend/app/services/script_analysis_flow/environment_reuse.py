@@ -284,10 +284,17 @@ def _collect_previous_episode_env_blocks(
 
 
 def _derivatives_from_env_block(env_block: str, main_name: str) -> List[Dict[str, Any]]:
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        canonicalize_derived_environment_name,
+    )
+
     derivatives: List[Dict[str, Any]] = []
     seen: set = set()
     for match in re.finditer(r"`([^`]*度[^`]+)`", str(env_block or "")):
-        name = _clean_env_name(match.group(1))
+        name = canonicalize_derived_environment_name(
+            _clean_env_name(match.group(1)),
+            {"main": main_name},
+        )
         key = normalize_environment_name(name)
         if not name or key in seen:
             continue

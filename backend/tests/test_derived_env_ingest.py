@@ -357,7 +357,7 @@ def test_special_note_injected_into_generation_prompt():
     assert "dutch angle" not in warped["negative_prompt_en"]
 
 
-def test_coverage_suffix_stays_first_cut():
+def test_coverage_suffix_merges_into_degree_main_name():
     item = build_derived_environment_item(
         {
             "name": "180度客栈大堂_桌后反打",
@@ -366,6 +366,28 @@ def test_coverage_suffix_stays_first_cut():
             "kind": "第一刀",
         }
     )
+    assert item["name"] == "180度客栈大堂"
     assert item["visual_dependencies"] == ["ENV:[客栈大堂]"]
     assert "右下180度格" in item["generation_prompt_cn"]
     assert "已切割的同角衍生" not in item["generation_prompt_cn"]
+
+
+def test_same_direction_shot_size_aliases_merge():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        canonicalize_derived_environment_name,
+        rewrite_merged_derived_environment_names,
+    )
+
+    assert canonicalize_derived_environment_name("0度客栈大堂_近景", {"main": "客栈大堂"}) == "0度客栈大堂"
+    assert canonicalize_derived_environment_name("0度客栈大堂_仰视", {"main": "客栈大堂"}) == "0度客栈大堂_仰天"
+    assert canonicalize_derived_environment_name(
+        "0度客栈大堂_沙尘",
+        {"main": "客栈大堂", "kind": "衍生的衍生", "state_delta": "地面沙尘加厚"},
+    ) == "0度客栈大堂_沙尘"
+    rewritten = rewrite_merged_derived_environment_names(
+        "当前环境=0度客栈大堂_近景｜[DERIVED_ENV:0度客栈大堂_桌后反打]｜ENV:0度客栈大堂_沙尘"
+    )
+    assert "0度客栈大堂_近景" not in rewritten
+    assert "0度客栈大堂_桌后反打" not in rewritten
+    assert "[DERIVED_ENV:0度客栈大堂]" in rewritten
+    assert "ENV:0度客栈大堂_沙尘" in rewritten

@@ -40,6 +40,7 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     DERIVED_ENV_EXTRACT_BLOCK_PATTERN,
     DERIVED_ENV_TAG_PATTERN,
     ingest_derived_environments_from_framing,
+    rewrite_merged_derived_environment_names,
 )
 from app.services.script_analysis_flow.environment_reuse import (
     SCENE_ENV_IDENT_PATTERN,
@@ -243,7 +244,7 @@ def _beat_has_framing_lock(body: str) -> bool:
 
 def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> str:
     """Hard gate: staging must not start unless framing output is extractable."""
-    source = str(text or "").strip()
+    source = rewrite_merged_derived_environment_names(str(text or "")).strip()
     sid = str(scene_id or "").strip()
     if not source:
         raise HTTPException(status_code=422, detail=f"STAGING_BLOCKED_FRAMING_EMPTY:{sid}")
