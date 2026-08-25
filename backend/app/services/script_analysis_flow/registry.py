@@ -115,10 +115,10 @@ def _base_node_specs() -> List[Dict[str, Any]]:
         {
             "key": "scene_split",
             "phase": 1,
-            "title": "场景拆分与特殊情景分析",
+            "title": "全局统筹（多线叙事、场景识别、场际衔接、全局风格与光线）",
             "prompt_file": "skills/scene_analysis_feature_stack/scene_planning_1_subskill_cut_transition.md",
             "depends_on": [],
-            "outputs": ["adapted_script", "scene_routing", "comprehensive_info", "project_visual_backfill"],
+            "outputs": ["adapted_script", "project_visual_backfill", "inter_scene_join"],
             "persist_targets": ["episode.ai_scene_analysis_adaptation", "episode.ai_stage_outputs.stage1.scene_split"],
             "injection_chain": [
                 "frontend.stage1_project_context",
@@ -136,7 +136,7 @@ def _base_node_specs() -> List[Dict[str, Any]]:
         {
             "key": "environment_plan",
             "phase": 1,
-            "title": "整集主环境规划与按场回填",
+            "title": "环境规划（场景勘探与主环境规划）",
             "prompt_file": "skills/scene_analysis_feature_stack/scene_planning_1_subskill_environment.md",
             "depends_on": ["scene_split"],
             "outputs": ["per_scene_environment_patches", "environment_planned_script"],
@@ -155,7 +155,7 @@ def _base_node_specs() -> List[Dict[str, Any]]:
         {
             "key": "scene_subskill_pipeline",
             "phase": 1,
-            "title": "文戏标准化与按场增强/景别构图/建置",
+            "title": "文戏增强与按场特效/现场编排/建置",
             "prompt_file": "skills/scene_analysis_feature_stack/scene_planning_1_subskill_drama_standardization.md",
             "depends_on": ["scene_split"],
             "outputs": ["adapted_script", "per_scene_outputs", "scene_routing"],

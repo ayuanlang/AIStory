@@ -225,8 +225,11 @@ _VISUAL_BACKFILL_CONTENT_KEYS = (
     "global_style",
     "borrowed_films",
     "tone",
+    "lighting",
     "color_spectrum",
     "plot_summary",
+    "comprehensive_plot",
+    "comprehensive_assets",
     "music_recommendation",
 )
 

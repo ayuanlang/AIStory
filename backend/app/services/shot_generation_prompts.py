@@ -506,7 +506,8 @@ def _build_scene_subject_image_prompts_cn_section(
     A scene may use a view/state derivative, but its optical source is the
     derivative's main environment.  Inject that main ENV prompt and retain the
     selected derivative -> main ENV mapping so the storyboard model knows which
-    view/state is actually in use.
+    view/state is actually in use. Multiple derivatives that resolve to the
+    same main ENV are merged into one family row (prompt injected once).
     CHAR/PROP image prompts are intentionally excluded from this injection.
     """
     if not subject_match_keys:
@@ -557,6 +558,7 @@ def _build_scene_subject_image_prompts_cn_section(
                 "entity_name",
                 "reference_env",
                 "base_name",
+                "main_environment",
                 "derivative_base_zh",
                 "derivative_base_en",
             ):
@@ -586,7 +588,8 @@ def _build_scene_subject_image_prompts_cn_section(
                     return possible_main
         return None
 
-    prompt_lines: List[str] = []
+    families: Dict[str, Dict[str, Any]] = {}
+    family_order: List[str] = []
     seen_refs: set = set()
     for ent in matched_entities:
         used_env_name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
@@ -597,26 +600,65 @@ def _build_scene_subject_image_prompts_cn_section(
             continue
         seen_refs.add(used_env_ref)
 
-        main_ent = _find_main_environment(ent)
-        main_ent = main_ent or ent
+        resolved_main = _find_main_environment(ent)
+        main_ent = resolved_main or ent
         main_env_name = str(
             getattr(main_ent, "name", None) or getattr(main_ent, "name_en", None) or ""
         ).strip()
         prompt_cn = re.sub(
             r"\s+", " ", str(getattr(main_ent, "generation_prompt_cn", None) or "")
         ).strip()
-        if not prompt_cn:
+        if not prompt_cn or not main_env_name:
             continue
 
+        family_key = str(getattr(main_ent, "id", None) or "") or subject_compare_key(main_env_name)
+        family = families.get(family_key)
+        if family is None:
+            family = {
+                "main_ent": main_ent,
+                "main_env_name": main_env_name,
+                "prompt_cn": prompt_cn,
+                "derived_refs": [],
+                "includes_main": False,
+            }
+            families[family_key] = family
+            family_order.append(family_key)
+
         if main_ent is ent:
-            prompt_lines.append(
-                f"- 当前场景环境={used_env_ref}（主环境） | "
-                f"主环境 generation_prompt_cn={prompt_cn}"
+            family["includes_main"] = True
+        else:
+            family["derived_refs"].append(used_env_ref)
+
+    prompt_lines: List[str] = []
+    for family_key in family_order:
+        family = families[family_key]
+        main_ref = f"ENV:[{family['main_env_name']}]"
+        prompt_cn = str(family["prompt_cn"])
+        derived_refs = list(family["derived_refs"])
+        if derived_refs:
+            derived_list = "、".join(derived_refs)
+            main_clause = (
+                f"明确：以上衍生环境对应同一个主环境={main_ref}"
+                if len(derived_refs) > 1
+                else f"对应主环境={main_ref}"
             )
+            if family["includes_main"]:
+                main_clause = f"{main_clause}（本场亦使用该主环境）"
+            if len(derived_refs) > 1:
+                prompt_lines.append(
+                    f"- 同一主环境族：主环境={main_ref} | "
+                    f"本场使用的衍生环境={derived_list}（{main_clause}） | "
+                    f"主环境 generation_prompt_cn={prompt_cn}"
+                )
+            else:
+                prompt_lines.append(
+                    f"- 当前场景使用的衍生环境={derived_list} | "
+                    f"{main_clause} | "
+                    f"主环境 generation_prompt_cn={prompt_cn}"
+                )
         else:
             prompt_lines.append(
-                f"- 当前场景使用的衍生环境={used_env_ref} | "
-                f"对应主环境=ENV:[{main_env_name}] | "
+                f"- 当前场景环境={main_ref}（主环境） | "
                 f"主环境 generation_prompt_cn={prompt_cn}"
             )
 
@@ -632,8 +674,10 @@ def _build_scene_subject_image_prompts_cn_section(
         "# Scene Subject Image Prompts (CN)\n"
         "Authoritative Chinese image-generation prompts for the MAIN ENVIRONMENT assets that "
         "scene-linked ENVIRONMENT assets depend on (main-ENV generation_prompt_cn for optical anchoring). "
-        "Each row explicitly identifies the scene-used ENV derivative and its corresponding main ENV; "
-        "preserve that derivative's declared view/state while using only the mapped main ENV prompt as its visual base. "
+        "Each row is one main-ENV family. When several scene-used ENV derivatives belong to the same main ENV, "
+        "they are merged into a single row that explicitly states they correspond to that same main ENV; "
+        "inject that main prompt once and do not treat those derivatives as unrelated spaces. "
+        "Preserve each derivative's declared view/state while using only the mapped main ENV prompt as its visual base. "
         "For every shot using a derivative ENV, design lighting direction, light color, color palette, and "
         "background-object micro-motion from that derivative's corresponding directional panel in the mapped "
         "main ENV four-panel reference, together with the derivative's declared visible-content boundary. "
@@ -1006,13 +1050,16 @@ def _build_shot_prompts(
             f"【本场时长上限】MaxShotSeconds={max_shot_seconds}"
             f"（# Project Context「分镜最长秒数」；未注入则默认 {DEFAULT_MAX_SHOT_SECONDS}）。"
             f"鼓励合并门槛=MaxShotSeconds-6={max(0, max_shot_seconds - 6)}。"
+            f"合镜不认主环境：相邻Beat默认合镜，只按时长门槛封口；衍生ENV名变只写转换运镜（切角过程/闪回胶片/门槛），禁止因跨主或闪回拆镜。"
             f"符合合并逻辑时须一直累计到基准合镜Duration>门槛才封口；"
             f"若基准已>MaxShotSeconds，表列Duration强制=MaxShotSeconds，禁止超时拆镜。"
             f"镜末语言延续：本镜最后一个Beat为语言类（有非空台词的对白/OS/V.O./旁白/自白等）时，Duration在Duration0之后固定+1s（不参与封口判定，不得被下浮吃掉）；Video末秒须写说完后余韵定格，禁止卡音节切断。"
-            f"景别构图继承：每镜景别与构图只抄该拍【取景锁定】/【Beat景别构图方案】/建置首句已锁档（七档景别+三分/中心/纵深及可兼/落点/留白/纵深）；Logic必填景别继承与构图规划；合镜逐Beat落各自锁档。禁止本层另选远近或另造构图（禁对白必须MCU、禁按画幅另选、禁为特写配额/递进/加压改档）。缺锁定标upstream_missing_framing回流。"
-            f"上游放大应答：凡上游指导/峰值放大/低点放大/构图综合/运镜参考等要求下游加强放大的项，覆盖镜头须在已锁构图、运镜、俯仰视角三轴同时给出可核销应答（Logic填上游放大应答，Video有P段落点）；禁止为放大改锁档、禁止运镜参考推近却全程Static、禁止压迫/渺小放大却无动机全程平视。"
-            f"情节升格：【叙事综合】指导=关键人物（对情节改变有重大影响、须放大）及关键情节揭示须24fps升格慢放钉出场/抉择/揭示/改因果（Ramp入出，0.9–2.7s，面容或轮廓可读），Logic升格=慢放亮相或慢放砸点；禁止常速一晃而过，禁止用60fps冒充升格，禁止龙套入画也升格，禁止纯对白加压无揭示却通镜升格。"
-            f"高级运镜：本场高潮/弧光/卖点揭示须从§三.4例举点名落地（如希区柯克变焦=机位推近同时变焦拉远或反向，主体画幅近似不变、背景透视膨胀或压缩，须写焦距变=）；禁止只写变焦或Push冒充，禁止Crash与Dolly Zoom同相，禁止无锚堆名。"
+            f"景别构图与镜头角度：每镜只抄该拍【建置】拍摄键（缺则【取景锁定】）原文进Logic（景别继承/观察角度/构图规划）与Video落地句；合镜逐Beat抄各自锁档。禁止本层另选远近/构图/镜头角度。缺锁定标upstream_missing_framing回流。"
+            f"影视语言：焦距/跟焦/帧率/曝光三角/光比/色温/柔硬/色调须可回指Video两光影段与运镜段；美术锚=ENV CN四宫格同方向格，不另起无锚光。"
+            f"最终提示词镜头语言：Video五段须中英专业词并列点名（MCU/OTS/Eye-level/50mm Standard/Shallow DOF/Follow Focus/24fps/Key/Fill/Soft Light/Medium Contrast/Cool等），禁止口语冲淡（有光/推近一点/背景糊了/电影感）。"
+            f"上游放大应答：凡上游指导/峰值放大/低点放大/构图综合/运镜参考等要求下游加强放大的项，覆盖镜头须在已锁构图、运镜、俯仰视角三轴同时给出可核销应答（Logic填上游放大应答，Video有P段落点）；禁止为放大改锁档、禁止运镜参考推近却全程Static。"
+            f"情节升格：是否升格认上游节奏(-/~)与情节源；本层只做帧率与时间测算差异化——升格段24fps+Slow Motion+Ramp，秒数按§三.5分项（~放、-只钉节点P）。禁止本层自判触发，禁止60fps冒充升格。"
+            f"高级运镜：本场高潮/弧光/卖点揭示须从§四.5例举点名落地（如希区柯克变焦=机位推近同时变焦拉远或反向，主体画幅近似不变、背景透视膨胀或压缩，须写焦距变=）；禁止只写变焦或Push冒充，禁止Crash与Dolly Zoom同相，禁止无锚堆名。"
             f"打斗帧率节奏：近身连击/缠斗/追逐等常速快相位须按场面抬到48/60fps高帧率（决战优先60；Video点名fps，动作更密更利落）；命中升格与对峙仍24fps电影帧+升格钉点。高帧率不等于升格。禁止快打全程24fps发糊，禁止升格段写成60fps快放。"
             f"下文合镜封口、Duration钳制、未继续合并说明一律用该值，禁止回退写死 15（除非本场即默认 15）。\n\n"
             + system_prompt
@@ -1045,7 +1092,7 @@ def _build_shot_prompts(
 {scene_subject_index_section}
 {scene_subject_image_prompts_section}
 # Instruction
-1. Analyze `# Core Scene Info` Beats and break them down into shots per §二.1.5/§二.1.6.
+1. Analyze `# Core Scene Info` Beats and break them down into shots per §三.3.
 2. Output exactly one Shot List markdown table. Do not copy prompt example/template rows (e.g. `{{Scene ID}}_SHzz` or a second header).
 3. Scene opening / OT- / 吸睛 must be P segments inside the Shot that covers Beat 1 — never an extra Shot outside Beat-Shot mapping.
 4. Every Beat must appear in some row's `Beat-Shot映射`; do not invent unmapped opening shots.

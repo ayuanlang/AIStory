@@ -500,14 +500,18 @@ async def execute_analyze_scene(
                 extra_derived_environment_names=extract_derived_environment_names_from_scene_text(
                     request.text
                 ),
+                subject_index_text=persisted_subject_index_for_prompt
+                or persisted_subject_index_raw_for_gate,
             )
             saved_asset_table_block = ""
             if index_for_prompt:
                 saved_asset_table_block = (
                     "[Saved Asset Table Injection - Authoritative]\n"
-                    "Names-only whitelist from the project asset table (中文名 / 英文名). No descriptions. Do not use Subject Index.\n"
+                    "CHAR/PROP name whitelist from the project asset table (中文名 / 英文名), plus 【服化道连续性】 when present.\n"
+                    "Do not expect other asset descriptions. Do not use the full Subject Index table.\n"
                     "Inject all CHAR and PROP names. ENV is derived-only ({N}度…) — never a bare main-environment name.\n"
                     "CHAR/PROP wrap names MUST be character-identical to the CHAR:/PROP: names below.\n"
+                    "【服化道连续性】 tells which scene / beat a CHAR or PROP form change starts; use it to wrap the matching variant name.\n"
                     "ENV:[] and Environment Name MUST use the ENV list or 【本场衍生环境名】 — never a bare main-environment name.\n"
                     "Do NOT wrap names inside dialogue/台词 or physical text on letters, screens, books, signs.\n"
                     "If a Beat entity is not in these lists, keep Stage-1 natural language and do NOT wrap it.\n\n"
@@ -650,7 +654,10 @@ async def execute_analyze_scene(
                         project_id=int(catalog_project_id),
                         current_episode_id=int(getattr(request, "episode_id", 0) or 0),
                     )
-                    catalog_block = build_project_main_environment_injection(catalog)
+                    catalog_block = build_project_main_environment_injection(
+                        catalog,
+                        for_planning=is_environment_plan_stage,
+                    )
                     if catalog_block:
                         user_content = f"{catalog_block}\n\n{user_content}"
                         logger.info(

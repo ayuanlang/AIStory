@@ -45,6 +45,32 @@ _PLACEHOLDER_KEYS = {
 }
 _DERIVED_ENV_NAME_RE = re.compile(r"^\d+\s*度")
 _DERIVED_ENV_NAME_EN_RE = re.compile(r"^\d+\s*deg(?:rees?)?(?:\s|_)", flags=re.IGNORECASE)
+_FORM_CONTINUITY_HEADER_ALIASES = {
+    "form_continuity",
+    "formcontinuity",
+    "costume_prop_continuity",
+    "costumecontinuity",
+    "服化道连续性",
+    "形态变化",
+    "形态连续性",
+}
+_FORM_CONTINUITY_ATTR_RE = re.compile(
+    r"(?:^|[；;])\s*form_continuity\s*[：:]\s*([^；;]+)",
+    flags=re.IGNORECASE,
+)
+_EMPTY_CONTINUITY_VALUES = {
+    "",
+    "none",
+    "null",
+    "nil",
+    "n/a",
+    "na",
+    "-",
+    "—",
+    "－",
+    "无",
+    "空",
+}
 
 
 def _normalize_display_name(value: Any) -> str:
@@ -82,9 +108,64 @@ def _bucket_from_subject_type(raw_type: Any) -> str:
     return ""
 
 
+def _normalize_continuity_header_key(value: Any) -> str:
+    return re.sub(r"[\s_.\-]+", "", str(value or "").strip().lower())
+
+
+def _extract_form_continuity_from_attributes(attrs: Any) -> str:
+    text = str(attrs or "").strip()
+    if not text:
+        return ""
+    match = _FORM_CONTINUITY_ATTR_RE.search(text)
+    if not match:
+        return ""
+    return str(match.group(1) or "").strip()
+
+
+def _is_empty_form_continuity(value: Any) -> bool:
+    text = re.sub(r"<br\s*/?>", " ", str(value or ""), flags=re.IGNORECASE).strip()
+    compact = re.sub(r"[\s_*`'\"“”‘’]+", "", text).lower()
+    return (not text) or compact in _EMPTY_CONTINUITY_VALUES
+
+
+def _detect_subject_index_header_indexes(lines: List[str]) -> Dict[str, int]:
+    """Return column indexes from the first Subject Index header row, if any."""
+    indexes: Dict[str, int] = {}
+    for raw_line in lines:
+        stripped = str(raw_line or "").replace("\ufeff", "").strip()
+        stripped = re.sub(r"^\s*>\s*", "", stripped).strip()
+        if not stripped or not stripped.startswith("|"):
+            continue
+        if re.match(r"^\|?\s*S\d+\s*\|", stripped, flags=re.IGNORECASE):
+            break
+        parts = [p.strip() for p in stripped.strip("|").strip().split("|")]
+        normalized = [_normalize_continuity_header_key(part) for part in parts]
+        if "subjectno" not in normalized and "subject_no" not in {str(p or "").strip().lower() for p in parts}:
+            if not any("subject" in key and "no" in key for key in normalized):
+                continue
+        for idx, key in enumerate(normalized):
+            if key in {"subjectno", "subject_id", "id", "编号"} or (key.startswith("subject") and key.endswith("no")):
+                indexes.setdefault("subject_no", idx)
+            elif key in {"subjecttype", "type", "类型", "类别"}:
+                indexes.setdefault("subject_type", idx)
+            elif key in {"subjectnamezh", "subjectnameexact", "subjectname", "name", "名称", "名字"}:
+                indexes.setdefault("name", idx)
+            elif key in {"subjectnameen", "nameen", "englishname", "enname"}:
+                indexes.setdefault("name_en", idx)
+            elif key in _FORM_CONTINUITY_HEADER_ALIASES:
+                indexes.setdefault("form_continuity", idx)
+            elif key in {"entityattributes", "attributes", "实体属性"}:
+                indexes.setdefault("entity_attributes", idx)
+        if indexes:
+            break
+    return indexes
+
+
 def parse_subject_index_whitelist(subject_index_text: Any) -> Dict[str, Any]:
     """Parse Subject Index into per-bucket name sets and canonical rows."""
     raw = str(subject_index_text or "").replace("\r\n", "\n")
+    lines = raw.splitlines()
+    header_indexes = _detect_subject_index_header_indexes(lines)
     by_bucket: Dict[str, Dict[str, str]] = {
         "characters": {},
         "props": {},
@@ -95,7 +176,7 @@ def parse_subject_index_whitelist(subject_index_text: Any) -> Dict[str, Any]:
     all_keys: Dict[str, str] = {}
     rows: List[Dict[str, str]] = []
 
-    for line in raw.splitlines():
+    for line in lines:
         stripped = str(line or "").replace("\ufeff", "").strip()
         stripped = re.sub(r"^\s*>\s*", "", stripped)
         stripped = re.sub(r"^\s*[-*+]\s+", "", stripped).strip()
@@ -106,18 +187,34 @@ def parse_subject_index_whitelist(subject_index_text: Any) -> Dict[str, Any]:
         parts = [p.strip() for p in stripped.strip("|").strip().split("|")]
         if len(parts) < 4:
             continue
-        bucket = _bucket_from_subject_type(parts[1])
+        type_idx = header_indexes.get("subject_type", 1)
+        name_idx = header_indexes.get("name", 2)
+        name_en_idx = header_indexes.get("name_en", 3)
+        if type_idx >= len(parts) or name_idx >= len(parts):
+            continue
+        bucket = _bucket_from_subject_type(parts[type_idx])
         if not bucket:
             continue
-        name_zh = _normalize_display_name(parts[2])
-        name_en = _normalize_display_name(parts[3]) if len(parts) > 3 else ""
+        name_zh = _normalize_display_name(parts[name_idx])
+        name_en = _normalize_display_name(parts[name_en_idx]) if name_en_idx < len(parts) else ""
         if not name_zh and not name_en:
             continue
+        continuity_idx = header_indexes.get("form_continuity")
+        if continuity_idx is None and len(parts) >= 9:
+            continuity_idx = 8
+        form_continuity = ""
+        if continuity_idx is not None and continuity_idx < len(parts):
+            form_continuity = str(parts[continuity_idx] or "").strip()
+        if _is_empty_form_continuity(form_continuity):
+            attrs_idx = header_indexes.get("entity_attributes", 6 if len(parts) >= 7 else -1)
+            if attrs_idx >= 0 and attrs_idx < len(parts):
+                form_continuity = _extract_form_continuity_from_attributes(parts[attrs_idx])
         row = {
-            "subject_no": str(parts[0] or "").strip(),
+            "subject_no": str(parts[header_indexes.get("subject_no", 0)] or "").strip(),
             "bucket": bucket,
             "name": name_zh,
             "name_en": name_en,
+            "form_continuity": form_continuity,
         }
         rows.append(row)
         for candidate in (name_zh, name_en):
@@ -168,19 +265,63 @@ def _format_zh_en_name(name_zh: Any, name_en: Any = "") -> str:
     return zh or en
 
 
+def _lookup_form_continuity(
+    *,
+    name_zh: Any,
+    name_en: Any = "",
+    form_continuity_by_name: Optional[Dict[str, str]] = None,
+) -> str:
+    mapping = form_continuity_by_name or {}
+    if not mapping:
+        return ""
+    for candidate in (name_zh, name_en):
+        display = _normalize_display_name(candidate)
+        key = subject_compare_key(display)
+        if key and mapping.get(key):
+            return str(mapping.get(key) or "").strip()
+    return ""
+
+
+def parse_form_continuity_map(subject_index_text: Any) -> Dict[str, str]:
+    """Map compare-key(name zh/en) → form_continuity for CHAR/PROP rows."""
+    mapping: Dict[str, str] = {}
+    whitelist = parse_subject_index_whitelist(subject_index_text)
+    for row in list(whitelist.get("rows") or []):
+        bucket = str(row.get("bucket") or "")
+        if bucket not in {"characters", "props"}:
+            continue
+        continuity = str(row.get("form_continuity") or "").strip()
+        if _is_empty_form_continuity(continuity):
+            continuity = "无"
+        for candidate in (row.get("name"), row.get("name_en")):
+            key = subject_compare_key(candidate)
+            if key:
+                mapping[key] = continuity
+    return mapping
+
+
 def format_entity_rows_for_orchestration(
     rows: Iterable[Any],
     extra_derived_environment_names: Any = "",
+    form_continuity_by_name: Optional[Dict[str, str]] = None,
 ) -> str:
-    """Format CHAR/PROP (all) + derived ENV names as 中文 / 英文 pairs."""
+    """Format CHAR/PROP (all) + derived ENV names as 中文 / 英文 pairs.
+
+    When CHAR/PROP continuity is available, append a 【服化道连续性】 block
+    paired with the Chinese (or English) asset name for Stage 2.2 injection.
+    """
     characters: List[str] = []
     props: List[str] = []
     environments: List[str] = []
+    continuities: List[str] = []
     seen_characters: Set[str] = set()
     seen_props: Set[str] = set()
     seen_environments: Set[str] = set()
+    seen_continuity: Set[str] = set()
+    has_real_continuity = False
 
-    def _push(bucket: str, name_zh: Any, name_en: Any = "") -> None:
+    def _push(bucket: str, name_zh: Any, name_en: Any = "", form_continuity: Any = "") -> None:
+        nonlocal has_real_continuity
         zh = _normalize_display_name(name_zh)
         en = _normalize_display_name(name_en)
         display = _format_zh_en_name(zh, en)
@@ -198,29 +339,54 @@ def format_entity_rows_for_orchestration(
                 return
             seen_characters.add(key)
             characters.append(display)
-            return
-        if bucket == "props":
+        elif bucket == "props":
             if key in seen_props:
                 return
             seen_props.add(key)
             props.append(display)
-            return
-        if bucket == "environments":
+        elif bucket == "environments":
             if key in seen_environments:
                 return
             seen_environments.add(key)
             environments.append(display)
+            return
+        else:
+            return
+        if bucket not in {"characters", "props"}:
+            return
+        continuity = str(form_continuity or "").strip()
+        if _is_empty_form_continuity(continuity):
+            continuity = _lookup_form_continuity(
+                name_zh=zh,
+                name_en=en,
+                form_continuity_by_name=form_continuity_by_name,
+            )
+        if not _is_empty_form_continuity(continuity):
+            has_real_continuity = True
+        if _is_empty_form_continuity(continuity):
+            continuity = "无"
+        label = zh or en
+        cont_key = subject_compare_key(label)
+        if cont_key and cont_key not in seen_continuity:
+            seen_continuity.add(cont_key)
+            continuities.append(f"{label}｜{continuity}")
 
     for raw in rows or []:
         if isinstance(raw, dict):
             bucket = str(raw.get("bucket") or _bucket_from_subject_type(raw.get("type") or raw.get("subject_type")) or "")
             name_zh = raw.get("name") or raw.get("name_zh") or ""
             name_en = raw.get("name_en") or ""
+            form_continuity = raw.get("form_continuity") or ""
         else:
             bucket = _bucket_from_subject_type(getattr(raw, "type", None))
             name_zh = getattr(raw, "name", None) or ""
             name_en = getattr(raw, "name_en", None) or ""
-        _push(bucket, name_zh, name_en)
+            form_continuity = getattr(raw, "form_continuity", None) or ""
+            if not form_continuity:
+                custom = getattr(raw, "custom_attributes", None)
+                if isinstance(custom, dict):
+                    form_continuity = custom.get("form_continuity") or ""
+        _push(bucket, name_zh, name_en, form_continuity)
     for extra_name in _split_extra_derived_environment_names(extra_derived_environment_names):
         _push("environments", extra_name, "")
 
@@ -231,6 +397,9 @@ def format_entity_rows_for_orchestration(
         lines.append("PROP: " + "，".join(props))
     if environments:
         lines.append("ENV: " + "，".join(environments))
+    if has_real_continuity and continuities:
+        lines.append("【服化道连续性】")
+        lines.extend(continuities)
     return "\n".join(lines)
 
 
@@ -263,11 +432,16 @@ def format_entity_table_names_for_orchestration(
     project_id: Any = None,
     episode_id: Any = None,
     extra_derived_environment_names: Any = "",
+    subject_index_text: Any = "",
 ) -> str:
-    """Return CHAR/PROP + derived ENV 中文/英文 names from the asset table."""
+    """Return CHAR/PROP + derived ENV 中文/英文 names from the asset table.
+
+    Overlay CHAR/PROP `form_continuity` from persisted Subject Index when present.
+    """
     return format_entity_rows_for_orchestration(
         collect_orchestration_entity_rows(db, project_id=project_id, episode_id=episode_id),
         extra_derived_environment_names=extra_derived_environment_names,
+        form_continuity_by_name=parse_form_continuity_map(subject_index_text),
     )
 
 
@@ -282,12 +456,14 @@ def format_subject_index_names_for_orchestration(
             "bucket": str(row.get("bucket") or ""),
             "name": str(row.get("name") or ""),
             "name_en": str(row.get("name_en") or ""),
+            "form_continuity": str(row.get("form_continuity") or ""),
         }
         for row in list(whitelist.get("rows") or [])
     ]
     return format_entity_rows_for_orchestration(
         rows,
         extra_derived_environment_names=extra_derived_environment_names,
+        form_continuity_by_name=parse_form_continuity_map(subject_index_text),
     )
 
 

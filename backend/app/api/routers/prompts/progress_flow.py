@@ -56,6 +56,11 @@ class SceneOrchestrationResetRequest(BaseModel):
     scene_ids: Optional[List[str]] = None
 
 
+class EpisodeProgressResetRequest(BaseModel):
+    project_id: int
+    episode_id: int
+
+
 class ProgressAutoOrchestrateRequest(BaseModel):
     project_id: int
     episode_id: int
@@ -82,6 +87,7 @@ from app.services.script_progress_orchestration import (  # noqa: E402,F401
     execute_auto_orchestrate_scene_progress,
     execute_reconcile_progress_status,
 )
+from app.services.deletion_ops import reset_episode_analysis_progress  # noqa: E402,F401
 
 
 @router.post("/prompts/scene-analysis/progress/sync-scene-units")
@@ -206,6 +212,37 @@ async def reset_scene_orchestration_progress(
         "status": "ok",
         "reset_scene_ids": reset_scene_ids,
         "reset_count": len(reset_scene_ids),
+    }
+
+
+@router.post("/prompts/scene-analysis/progress/reset-episode")
+async def reset_episode_progress(
+    request: EpisodeProgressResetRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == int(request.episode_id), _active_episode_clause())
+        .first()
+    )
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
+    _require_project_access(db, episode.project_id, current_user)
+    if int(request.project_id) != int(episode.project_id):
+        raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
+
+    summary = reset_episode_analysis_progress(
+        db,
+        project_id=int(episode.project_id),
+        episode_id=int(request.episode_id),
+    )
+    db.commit()
+    return {
+        "status": "ok",
+        "project_id": int(episode.project_id),
+        "episode_id": int(request.episode_id),
+        **summary,
     }
 
 

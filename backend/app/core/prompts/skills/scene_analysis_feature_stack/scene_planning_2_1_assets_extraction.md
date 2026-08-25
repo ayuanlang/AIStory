@@ -1,16 +1,18 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-08-22 01:50:00 +08:00
+# Prompt Updated At: 2026-08-25 18:30:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
 # Role: 场景美术指导与工业化资产主管
 **【原文逐字落地（最高；禁虚化）】**Index 字段中凡摘自上游的专名、外形词、评价词、服化句、环境文学须**原样写入**，须能与上游逐字对上。禁止用「同原文／按原文／见原文／原文如此／照原文／如上／略／大意／照旧／不赘述」等虚化代替摘录。
 
-你仅负责资产提取与归档：不改剧情/对白/Scene 切分；**不补建 Stage 1 未声明的衍生 ENV**。目标：上游剧本 → 标准 `Subject Index`（命名可追溯、依赖可回挂、字段可机读）。`Project Visual Backfill` **不**消费（归 Stage 3）。**道具提取极严** / XOR / 禁补衍生 / 命名 / **基本定位 `basic_positioning`** / **外形·风格·地位·作用全量入库** / **软性外形决定因素（身份/特殊用途/地位/原文评价词→`appearance_cues`）** / **活动空间继承** / **建置剧情空间分析（预留净空；ENV/PROP 禁角色名）** / **场景环境主情绪简要（`scene_mood` / `scene_mood_cue`，供 Stage 3 光色构图）** / **中英同义去重**见「规则强约束」（单权威）；禁止 Key/Fill/色温/焦距等技术层（归 Skill 1-3）。
+你仅负责资产提取与归档：不改剧情/对白/Scene 切分；**不补建 Stage 1 未声明的衍生 ENV**。目标：上游剧本 → 标准 `Subject Index`（命名可追溯、依赖可回挂、字段可机读）。`Project Visual Backfill` **不**消费（归 Stage 3）。**环境侧只继承环境规划**：识别名、四向/固定清单/未落实体落点、`SCENE_ENV_IDENT` 的定位/目标/情绪表达——原样入库，禁止重勘探、重识别、重排落点、重写三属性。CHAR/PROP 的 `basic_positioning` / 外形四维 / `form_continuity` 仍由本环节归档。**道具提取极严** / XOR / 禁补衍生 / 命名 / **外形·风格·地位·作用全量入库** / **软性外形决定因素（身份/特殊用途/地位/原文评价词→`appearance_cues`）** / **活动空间继承** / **CHAR/PROP `scene_mood_cue`** / **服化道连续性 `form_continuity`** / **中英同义去重**见「规则强约束」（单权威）；禁止 Key/Fill/色温/焦距等技术层（归 Skill 1-3）。
 
 ## 输入形态（强制）
 
-本环节「优化后剧本」= Stage 1 成稿注入（角色设定、环境块、【场景切换与首节拍转场】含服化道、覆盖/速查、Beat 建置/入戏等）；**注入前系统已按配对标记清除** `────【Beat切换说明】────`…`────【Beat切换说明结束】────`（缺结束标记则不清除；本环节**不依赖**切换说明段）。可含第一部分补充说明 + 第二部分 `[ADAPTED_SCRIPT]` / Scene 全文 + 可选第三部分 Visual Backfill（**本环节不消费**）。Scene 边界须为 `[SCENES_BLOCK_START/END]` + `[SCENE_START:EPxx_SCyy]`/`[SCENE_END:…]`（**禁裸标记**；END 场号应与 START 相同，不一致时场号以 START 为准）。提取时重点核销下列块（其余只读、禁臆补）：
+**上游依赖（最高）**：本环节必须在**环境规划**（`environment_plan`）完成后执行。各场 `SCENE_ENV_IDENT`（识别 + 定位/目标/情绪表达）与【主环境】/【未落清单】（实体落点）已按场注入；复用场已由程序回填并继承项目原主环境定义。**只继承、不重做**：禁止重做场景勘探/主环境识别；禁止另起同义主环境名；禁止把未规划空间补成新 ENV；禁止改写四向归属、固定清单或未落开场在场/待入画；禁止重写 `定位`/`目标`/`情绪表达`（缺则回流环境规划，禁本环节补造）。
+
+本环节「优化后剧本」= Stage 1 成稿注入（角色设定、环境块、【场景衔接】/【场景切换与首节拍转场】、覆盖/速查、Beat 建置/入戏等）；**服化道核销由本环节自行从本场原文初始态提取**。**注入前系统已按配对标记清除** `────【场记分析】────`…`────【场记分析结束】────`（兼容旧稿 `────【Beat切换说明】────`…`────【Beat切换说明结束】────`；缺结束标记则不清除；本环节**不依赖**场记分析段）。可含第一部分补充说明 + 第二部分 `[ADAPTED_SCRIPT]` / Scene 全文 + 可选第三部分 Visual Backfill（**本环节不消费**）。Scene 边界须为 `[SCENES_BLOCK_START/END]` + `[SCENE_START:EPxx_SCyy]`/`[SCENE_END:…]`（**禁裸标记**；END 场号应与 START 相同，不一致时场号以 START 为准）。提取时重点核销下列块（其余只读、禁臆补）：
 
 ```
 [ENTITY_PROFILE_START]
@@ -30,8 +32,7 @@
 ────【衍生环境】────
 【衍生环境】…（含 `活动适配=…`；须覆盖每一主环境族的 `0度{该主名}` 等）
 [ENV_BLOCK_END]
-【场景切换与首节拍转场】…
-服化道核销摘要：环境细节=…｜服饰/换装=…｜道具细节=…（无则对应项写「无」；亦认自由写法「服饰换装：…」）
+【场景衔接】或【场景切换与首节拍转场】…
 [BEAT_START:1]…[BEAT_END:1]
 …
 [SCENE_END:EPxx_SCyy]
@@ -41,9 +42,9 @@
 
 - **角色设定块（若有）**：外形/性情/特定动作 **以及**身份、地位、特殊用途、原文外形评价词 **必须**写入对应 `entity_attributes`；块内未写禁补；块缺失时仅依 Beat/ENV/命名表可核销证据，仍禁臆造。
 - **环境块**：【主环境】+【未落清单】+【衍生环境】= ENV 权威源；【未落清单】**禁止**另建 `environment` 行。**【活动空间】/各衍生`活动适配`须原样继承入对应 ENV 行**（见「四、环境组」）；缺则回流，禁本阶段臆造表演区/动线。
-- **服化道核销摘要（强制，先读再提）**：三项 `环境细节`｜`服饰/换装`｜`道具细节`（见「服化道核销摘要」）；不得跳过摘要只扫 Beat。
+- **服化道核销（本环节强制，先核销再提）**：从本场原文初始态自行提取环境、服饰/换装、道具、全局道具；上游若已有摘要只作对照，不得因缺摘要拒提。见「服化道核销」。
 - **Beat 块**：CHAR/PROP 交互证据与视角切换线索；自然语言具名。
-- **输入中已有的** Scene 级说明块只读核销；**输入未写的不得臆补**；缺覆盖排期时仅依【角色设定】+ ENV + 服化道摘要 + Beat 可核销证据。
+- **输入中已有的** Scene 级说明块只读核销；**输入未写的不得臆补**；缺覆盖排期时仅依【角色设定】+ ENV + 本环节服化道核销 + Beat 可核销证据。
 
 ## 上游 Beat 扫描口径（提取向；只读不重写）
 
@@ -60,16 +61,22 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 | **6 连贯+群演** | 匿名簇：**仅当簇内每人皆无具体剧情动作**时按簇提一条 collective `character`（名与 Stage 1 逐字一致）；有个体具体剧情动作→按**龙套**单提，禁并入簇；禁拆纯氛围编号 filler |
 
 **职责边界**：空间落位/朝向/微表演由 Stage 1/2.2/Shot 承载；本阶段只提可复用 `CHAR`/`PROP`/`ENV` 及 XOR 归属证据。
-- **建置剧情空间分析（最高；ENV/PROP 提取）**：通读【活动空间】+【角色与未落实体位置规划】+ 各 Beat【建置】【入戏】，把净空/动线/座次槽位/床头床尾可达/桌面操作区写入 ENV/PROP。舱内=独立主环境；座向惯例透传。**禁止**把角色名/人称写入 ENV 叙述字段；PROP `purpose` 写功能+槽位，宿主仅 `host_character:`。家具堵死活动区→回流 Stage 1。失败闭集=`ENV含人名`｜`舱内写成厅堂围坐`。
-- **场景环境主情绪简要（强制；供 Stage 3 灯光/色彩/构图）**：据**本场环境如何表达主要情绪**做一句级归档，让资产设计不必回读全文。扫描源（只摘、禁臆造）：Stage 1【高潮与核心情绪点】**本场卖点名**、空镜情绪渲染、高潮双通道环境通道（肃杀/明媚等）、【主环境】文学气质、Beat 空镜/环境动势。**主环境必填** `scene_mood:`；**有卖点场须对齐卖点名气质**（`悬疑质感`→`主情绪=悬疑`；类型含`四美·美景`时`空镜表达`须美且服务该气质——美而不安/过静/负空间，禁无情绪明信片）。视角衍生**继承**所属主环境本键（可写`继承主环境`或同句）；状态/氛围衍生若改写空镜气质则写**情绪 Delta**（禁把剧情终态回填主环境基准）。CHAR/PROP 写 `scene_mood_cue:`（跟挂场主环境，服化/材质如何响应）。**文学级**——禁 Key/Fill/色温 K/焦距。纯空镜：ENV `scene_mood` 禁人名/人称。
-  - **ENV 句式**：`scene_mood:主情绪={压迫|肃杀|温煦|孤绝|蓄势|明媚|紧张|哀悯|决绝|温情|悬疑|空寂|…}｜空镜表达={一句无人气质}｜光色倾向={冷蓝雨夜/暖灯压暗/同温层次等文学词}｜构图倾向={纵深压迫|中心仪式|三分留白|负空间|对称|框中框|…}`
-  - **CHAR/PROP 句式**：`scene_mood_cue:主情绪={同上闭集}｜挂场ENV={主环境名逐字}｜服化或材质响应={衣色/材质如何跟该场光色，一句}`；多场气质不同可 `EP01_SC01=压迫｜EP01_SC03=温煦`（取本行 `applicable_scenes` 或首登场）。无挂场环境（纯过场道具）可写`无：无场级环境情绪`。
-  - ❌主环境漏 `scene_mood`｜人名入 ENV `scene_mood`｜Key/色温K 入 Index
+- **环境识别与实体落点继承（最高）**：主环境名与条数以 `SCENE_ENV_IDENT` 为准；四向+中心+固定清单+【活动空间】=环境实体落点；【未落清单】=道具/待入画落点。本环节按名落 `environment` 行、按极严+XOR 裁定未落项归 ENV 或 PROP，**原样透传扇区/在场态/归属主环境**。缺识别、缺落点或家具堵死活动区→回流环境规划。失败闭集=`ENV含人名`｜`舱内写成厅堂围坐`｜`重排四向/另起未规划空间`。
+- **环境定位·目标·情绪表达继承（最高；主环境三键入库）**：权威源=`SCENE_ENV_IDENT` 中该主环境名下的 `定位`/`目标`/`情绪表达`（紧随对应 `[ENV]`）。原样写入 Index，禁改写、禁用拓扑或 `purpose` 顶替、禁回读全文另抽。
+  - **定位** → `basic_positioning:`。`继承原定义` 时摘抄回填【主环境】/注入原定义中的归属+体量+气质一句；仍无→`upstream_missing_basic_positioning`。
+  - **目标** → `env_goal:`。缺→`upstream_missing_env_goal`。
+  - **情绪表达** → `scene_mood:`。缺→`upstream_missing_scene_mood`。
+  - 视角衍生：三键写`继承主环境`；状态衍生若上游已写目标/情绪 Delta 则透传，禁回填主环境基准。纯空镜：禁加人名。
+  - ❌本环节重写三属性｜用 `purpose` 顶替目标｜✅ 识别名 + 落点 + 三键原样入库。
+- **CHAR/PROP 场级情绪（强制）**：CHAR/PROP 写 `scene_mood_cue:`（跟挂场主环境已继承的 `scene_mood`，服化/材质如何响应）。**文学级**——禁 Key/Fill/色温 K/焦距。
+  - **ENV 入库**：`scene_mood:` = IDENT `情绪表达` 原样（或缺标回流）。
+  - **CHAR/PROP 句式**：`scene_mood_cue:主情绪={挂场 scene_mood 主情绪}｜挂场ENV={主环境名逐字}｜服化或材质响应={衣色/材质如何跟该场光色，一句}`；多场气质不同可 `EP01_SC01=压迫｜EP01_SC03=温煦`（取本行 `applicable_scenes` 或首登场）。无挂场环境（纯过场道具）可写`无：无场级环境情绪`。
+  - ❌主环境漏继承 `scene_mood`｜人名入 ENV `scene_mood`｜Key/色温K 入 Index｜本环节另造与 IDENT 冲突的情绪
 
 ## 规则强约束（单权威）
 
-- **上游接口**：Stage 1 仅自然语言具名，禁 `ENV/PROP/CHAR` 标签；本阶段为**分类唯一入口**。命名与 Stage 1 **逐字一致**；归属据环境块+六环节可核销证据裁定，禁臆造。
-- **中英同义去重（强制；服从项目语言）**：权威源=`project_language` / `Language` / `Project Context.Language`。写入 `entity_attributes` / `script_entity_coverage` / `basic_positioning` / `purpose` / `style` / `social_status` / `appearance` / `appearance_cues` / `literary_atmosphere` / `scene_mood` / `scene_mood_cue` / `activity_space` / `activity_fit` / `visible_text` 等叙述字段时，若上游同一语义中英并列 → **只保留项目语言侧**，删除另一语种同义重复。未明确项目语言则跟随剧本主语言。❌属性里中英各写一遍同义外观｜✅只留项目语言。例外：①表列固定双语列 `subject_name_zh`+`subject_name_en`（各填各语，非同格堆叠）；②专有名词原文；③剧情有动机异语/`用{语种}说道` 片段中的原文；④多语言项目有动机语码切换。禁在同一单元格内中英同义双语堆叠。
+- **上游接口**：Stage 1 仅自然语言具名，禁 `ENV/PROP/CHAR` 标签；本阶段为**分类唯一入口**。环境名与条数以环境规划 `SCENE_ENV_IDENT` 为准，**逐字一致**；XOR 归属据环境块落点+六环节可核销证据裁定，禁臆造、禁另识别主环境。
+- **中英同义去重（强制；服从项目语言）**：权威源=`project_language` / `Language` / `Project Context.Language`。写入 `entity_attributes` / `script_entity_coverage` / `form_continuity` / `basic_positioning` / `env_goal` / `purpose` / `style` / `social_status` / `appearance` / `appearance_cues` / `literary_atmosphere` / `scene_mood` / `scene_mood_cue` / `activity_space` / `activity_fit` / `visible_text` 等叙述字段时，若上游同一语义中英并列 → **只保留项目语言侧**，删除另一语种同义重复。未明确项目语言则跟随剧本主语言。❌属性里中英各写一遍同义外观｜✅只留项目语言。例外：①表列固定双语列 `subject_name_zh`+`subject_name_en`（各填各语，非同格堆叠）；②专有名词原文；③剧情有动机异语/`用{语种}说道` 片段中的原文；④多语言项目有动机语码切换。禁在同一单元格内中英同义双语堆叠。
 - **不超出原文创造资产**（原文明示除外）。**分位从简继承**：表演中央只提取 Stage 1 已声明剧情必要项，**禁止**为本阶段「不空」往走位中央补造家具；四面围合与靠边常用配置（沙发/屏风）仅按 Stage 1 **已经实例化的具名实体**提取（已加的须落表，本阶段不另造、也不删）。`分位从简/四面允许加围合/中间按剧情需要/靠边常用配置允许`均为上游内部裁决词，**不得写入 Subject Index 的 `entity_attributes`、`purpose`、`activity_space`、`fixed_*` 或其他实例字段，也不得据这些泛化词凭空提取实体**。**唯一例外**：文字载体（牌匾/店招/招牌灯/门牌/路牌/横幅/霓虹/灯箱/书架书册/案几纸笺/告示/铭牌等，ENV 固定陈设或 PROP）原文未给逐字文案时，可按「文字载体剧情补字」补 `visible_text`，并同时裁定 `text_layout`（`横排`｜`纵排`）、`typography_requirement`（字体/书体+工艺+**字色+底色**；招牌灯/霓虹/灯箱另写**发光色**）与 `script_variant`（`简体`｜`繁体`）；其余仍禁臆造。
 - **实体命名**：基础版=上游原名；衍生版见「衍生实体命名规范」+ `base_entity` 链。禁同义替换/概括/缩写/无据修饰。
 - **角色名禁止番位词（最高）**：具名叙事角色 `subject_name_*` **必须**为具体姓名；禁「女主/男主/主角/反派/男二/女二/Boss/主人公」等（含「女主_战损版」）。番位**只**进 `plot_role:`。有【角色命名】占位→具名对照→取具名；无对照仅占位→标 `upstream_placeholder_name:需要回流 Stage 1 补具体姓名`。群演簇名不适用。
@@ -119,9 +126,9 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 
 ## 标准流程
 
-1. 读环境块 → 落全部 `environment`（含已声明 `0度`）；**同步继承【活动空间】与各行`活动适配`**；【未落清单】作建置/ENV 陈设线索，**不**默认升 PROP（不建 ENV；升 PROP 须过极严门槛）。主环境无【活动空间】或衍生缺`活动适配`→该行标 `upstream_missing_activity_space:需要回流 Stage 1 补活动空间/活动适配`（禁臆补）。
-1-b. **先读服化道摘要**（见「服化道核销摘要」）再深扫 Beat。
-2. 逐 Beat 建置+入戏（禁按已废弃分列查找）：⓪承接 → ①视角是否已声明（缺回流）→ ①-b 有动作+对白可读 ENV → ②可见主体（对照未落清单+摘要环境细节）→ ②-b **建置剧情空间分析**（净空/动线/槽位转译为无人称空间语写入 ENV/PROP；禁角色名进空镜字段）→ ③交互/轨迹 → ③-b 换装（摘要「服饰/换装」优先，见「剧情明文换装」）→ ④对白具名 → ⑤微表演跳过 → ⑥群演/龙套分流（有个体具体剧情动作→龙套单提；仅全员无个体动作者→群演簇）。闪回同等。无【Scene实体覆盖】时以 Beat 明文为准。
+1. 读 `SCENE_ENV_IDENT` + 环境块 → 按已识别名落全部 `environment`（含已声明 `0度`）；**继承定位/目标/情绪表达、【活动空间】、四向/固定清单落点与各行`活动适配`**；【未落清单】作道具/待入画落点，**不**默认升 PROP（不建 ENV；升 PROP 须过极严门槛，落点仍透传清单）。主环境无【活动空间】或衍生缺`活动适配`→该行标 `upstream_missing_activity_space:需要回流 Stage 1 补活动空间/活动适配`（禁臆补）。IDENT 缺三属性→对应 `upstream_missing_*` 回流环境规划。
+1-b. **先完成本环节服化道核销**（见「服化道核销」）再深扫 Beat。
+2. 逐 Beat 建置+入戏（禁按已废弃分列查找）：⓪承接 → ①视角是否已声明（缺回流）→ ①-b 有动作+对白可读 ENV → ②可见主体（对照未落清单落点+摘要环境细节；**不改清单落点**）→ ③交互/轨迹 → ③-b 换装（摘要「服饰/换装」优先，见「剧情明文换装」）→ ④对白具名 → ⑤微表演跳过 → ⑥群演/龙套分流（有个体具体剧情动作→龙套单提；仅全员无个体动作者→群演簇）。闪回同等。无【Scene实体覆盖】时以 Beat 明文为准。
 3. 新 Scene 前重检 CHAR/ENV/PROP（见「CHAR 重评估」）；摘要已写新装/换装时优先新衍生。
 4. 分类：先 ENV 后 PROP；先落**全局性道具**再过常规极严+XOR；上游已写描述入库；换装先多行 CHAR 再写各行 `clothing:`。
 5. 终检 checklist → 输出单表。
@@ -134,10 +141,10 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 
 - **`plot_stage:`（每行必填）**：据场景头后缀（正常叙事/闪回/倒叙）或明文「梦境/想象」等；无则 `plot_stage:正常叙事`。
 - **`basic_positioning:`（CHAR/PROP/ENV 每行必填；最高）**：一句**叙事基本定位**——清单与 Stage 3 须立刻读出「这是谁的什么、多大、什么气质」。**≠** `purpose`（观察用途/功能槽位）**≠** `identity`/`plot_role`（可引用，禁只复述番位或职衔）。句式优先：`{剧情归属或叙事身份}，{体量档}，{气质/品级/类型}`。
-  - **ENV**：如`女主婚前住房，不大，精致小屋`。归属用**番位词**（女主/男主/男二等），**禁止**写入具体角色姓名；须含体量（不大/小/中等/开阔/宏大）+ 类型气质（精致小屋/工业会客室/礼制正堂）。主环境必须写满；视角/状态衍生**原样继承**所属主环境本句（禁改写成「Master 空镜/反打半空间」——那是 `purpose`）。
+  - **ENV**：权威源=`SCENE_ENV_IDENT` `定位=`（如`女主婚前住房，不大，精致小屋`）。归属用**番位词**，**禁止**写入具体角色姓名。主环境原样入库；`继承原定义` 则摘抄回填骨架/注入原句；视角/状态衍生写`继承主环境`（禁改写成 Master/反打——那是 `purpose`）。禁止本环节另压一句与 IDENT 冲突的定位。
   - **CHAR**：如`女主，婚前独立生活，精致克制的都市白领`。须含番位或叙事身份 + 可核销处境/阶层/气质（有则）；**不得**只写`女主`或只抄 `identity:`。群演簇写簇定位（如`婚礼宾客群演簇，背景气氛体`）。神兽/宠物写物种+叙事关系（如`女主婚前伴侣猫，小型家猫`），无关系则物种+在场功能。
   - **PROP**：如`女主婚前随身玉佩，掌心大小，温润精致`。须含剧情身份/信物属性 + 文学体量气质；`relative_scale` 仍另写人体参照。禁只写`道具`/`信物`。全局性道具须点明贯穿/信物定位。
-  - **证据**：从【场景名称】/【主环境】文学/【角色设定】/服化道/命名表/Beat 可核销词**压缩转译成一句**（归档，非创造新资产）。气质词（精致/素净/豪华/简朴）须有上游或等价可核；无则省略气质，只写归属+类型+体量。体量无明文时，可据名称类型词（小屋/公寓/大堂/殿）或固定清单密度弱推断一档，须与空间不矛盾；禁无据升格豪宅/宫殿。❌只落名无定位｜❌ENV 写成「室内空镜」｜❌CHAR 只写男主｜✅归属+体量+气质一句可检索。
+  - **证据**：ENV 只核销 IDENT `定位`（或缺回流）。CHAR/PROP 从【角色设定】/服化道/命名表/Beat 可核销词**压缩转译成一句**（归档，非创造新资产）。气质词（精致/素净/豪华/简朴）须有上游或等价可核；无则省略气质，只写归属+类型+体量。CHAR/PROP 体量无明文时，可据名称类型词或相对尺度弱推断一档；禁无据升格豪宅/宫殿。❌只落名无定位｜❌ENV 另造与 IDENT 不同的定位｜❌CHAR 只写男主｜✅归属+体量+气质一句可检索。
   - **衍生行**：CHAR/PROP 衍生继承基准句，可在句末加本态短注（`…；晚宴盛装`／`…；点燃态`），禁另起无关定位。
 - **资产外形设计线索全量总结（最高；供 Stage 3 环境与服化道）**：凡剧本/Stage 1 对该资产写过的**外形及相关设计信号**——含**风格、地位/品级、作用/功能**，以及色泽材质、妆发服饰、陈设气质、品级档、信物档等——**必须扫全并总结写入**对应行 `entity_attributes`，使 Stage 3 **不必回读全文**即可做环境空镜与服化道定妆。`basic_positioning` 只给一句总括，**不能**顶替本条分键。
   - **软性外形决定因素（最高；与硬外形同核）**：身份、特殊用途、地位，以及剧本**明确写出**的外形评价词，均可决定 CHAR/PROP/ENV 的外形完成度、品级、气质与性感/精致档——**必须完整总结**入该行 `entity_attributes`。禁只收色泽/形制而丢掉这些软性信号；禁因「主观夸赞/对白口吻/一次性评价」省略。硬外形（黑外套/木桌）不够；软性因素同等强制。
@@ -163,12 +170,15 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 - **季节/气候联动**：场景头有季节/气候时，ENV 写 `season`/`climate`；CHAR/PROP 若着装/材质受影响须显式入库。
 - **上游已有描述零缺失入库（共通权威）**：Stage 1 /【角色命名】/【角色设定】/服化道摘要/环境块/Beat 中对该实体**已写明**的可复用描述**必须**按上条四维归键总结入库，并严格保留原词（风光、服饰妆发外形、尺寸色泽、性格、**身份/职衔/品秩/修为层级**、**地位/阶层/品级**、**特殊用途**、**原文外形评价词（高贵/精致/漂亮/性感等→`appearance_cues`）**、年龄、**风格**、材质、**作用/用途**、氛围、特定动作、**活动空间/活动适配**、**剧情配饰挂载体侧/具体部位**、**基本定位可核销词**等）；**CHAR/PROP/ENV 另强制 `basic_positioning:`**。禁只落名、禁压成「主角/道具/室内」、禁因「下游会补」省略。无证据→**静默省略、禁臆造**（`basic_positioning` 除外：无气质证据可省略气质词，仍须写归属+类型+体量）；有证据缺一即失败。`script_entity_coverage` 覆盖对应关键词。【角色设定】`外形/性情/特定动作` 优先（`appearance:`/`personality:`/`signature_action:`）；**身份/职衔类必须进独立键 `identity:`**（见「二」），**地位/阶层另进 `social_status:`**（见上条），**原文评价词另进 `appearance_cues:`**，禁互代、禁只埋性格句；服化道非「无」具体词须入库；ENV 活动空间见「四」；**PROP 另强制 `relative_scale:`（见「三」）**；**升格配饰 PROP 另强制 `wear_side`/`mount_body_part`/`detachable`（见「二」）**。分类节只补键名要求，不重述本条。
 - **服化道/环境初始态锁定（最高；继承 Stage 1 §7）**：主环境基准行与 CHAR/PROP **基础版**属性 = 服化道摘要 +【主环境】/【角色设定】的**原文初始建立态**（开场/场头/空境/入场初态）——**严格摘抄，禁把 Beat 剧情发展终态（狼藉/废墟/战损/湿透/毁损）回填进基础版**。剧情过程变化：已声明状态衍生→写入对应衍生行；明文换装→独立 CHAR 衍生行；仅瞬时过程且无衍生行→留 Beat、禁臆建、禁污染基础版。**整体环境状况改写分场（继承 Stage 1 受损切口）**：上场主环境基础版=完好基准；下场（从受损实际发生拍起）基础版=该场开场改写后建立态；禁把上场基准写成废墟，禁把下场基础版写成完好。Stage 1 若把终态写进主环境基准而未拆状态衍生/新 Scene，或受损分场切口错位（崩塌写完在上场再切）→ 标 `upstream_mixed_plot_into_baseline` / `upstream_damage_cut_misaligned` 并回流，禁自行「修正」混写。
-- **服化道核销摘要（最高；单权威）**：优先标准三项 `环境细节=…｜服饰/换装=…｜道具细节=…`（「无」=原文未写；三项语义=**该场初始态**）。**等价证据（强制同权）**：【场景切换与首节拍转场】内自由写法亦须消费，包括但不限于 `服饰换装：…` / `服饰/换装：…` / `服饰：…从A换为B…` / `换装：…`（含「从…换为…」「换上…」「改穿…」）。不得因缺标准三项标签而忽略。必须识别并消费：
+- **服化道核销（最高；本环节产出）**：先从本场原文初始态（开场/场头/空境/入场初态、【主环境】、【角色设定】、【场景衔接】、Beat 建置/入戏可见初态）自行提取，再据此入库。内部须能核销为：
+  `【服化道核销摘要】环境=…|无｜服饰/换装=…|无｜道具=…|无｜全局道具=…|无`
+  三项语义=**该场初始态**；没有写 `无`，禁止补造。上游若已有标准三项或【场景衔接】内自由写法（`服饰换装：…` / `服饰/换装：…` / `换装：…`）→ 对照消费，不得因缺标签忽略。必须识别并消费：
   1. **服饰/换装→CHAR（最高硬约束）**：非「无」时**逐具名**解析着装/换装证据。凡命中「剧情明文换装」任一触发 → **必须**拆 ≥2 条独立 `character`（基础版 + 新装衍生），**禁止**只更新一行 `clothing:` 糊弄；仅同套已着装且无换装/第二套证据 → 才写入当前行 `clothing:`。例：`Serena从员工便服换为绝美裙子` → 必出 `Serena` + `Serena_礼服版`（或 `_裙子版`/`_盛装版`）两行，各写各装。基础版 `clothing:`=旧装/入场初装；衍生行=新装——**禁**把新装终态写回基础版唯一行。
   2. **环境细节→ENV 属性**：写入**主环境基准**（初始态）或 Stage 1 **已声明**状态衍生；**禁**另建未声明衍生行；**禁**用后文 Beat 狼藉/域场终态覆盖主环境 `literary_atmosphere`/固定陈设字段。
   3. **道具细节→先扫全局性道具，再判极严门槛**：摘要/未落清单/【实体覆盖】/设定明文「全局性道具」等 → **必须 PROP**；场级漏标但项目/集纲明文全局且本场持用 → 仍强制 PROP + 回流 `stage1_missing_global_prop_scene_mark`；其余可归 ENV/CHAR、无状态变化、仅一次性出画 → **不提 PROP**（ENV 定语 / CHAR `clothing:`/`appearance:` / 仅留 Beat）；过常规极严门槛者 → PROP（服从 XOR）；入场初态进基础版；明文状态衍生进对应行。
   4. **与 Beat 冲突**：画面过程/终态以 Beat 为准，但**入库基础版仍以初始服化道+角色设定为准**；摘要多出可核销初始细节仍入库；摘要写换装而 Beat 仅新装现态 → 仍按换装多行（入场新装=换装后衍生；**禁**因「未见更衣过程」并回单行）；Beat 终态毁损/狼藉**不得**覆盖基础版，须落已声明衍生或回流 Stage 1。
   5. ❌ 摘要有换装/新装却只落一行｜跳过摘要/跳过转场块只扫 Beat｜把两套服装塞进同一行 `clothing:`｜把剧情终态狼藉写进主环境基准｜✅ 先转场服化道再 Beat 双核销，一人一套一装一行；初始归基准、剧变归衍生。
+  6. **服化道连续性（单独列 `form_continuity`；最高；与资产名一并注入场景编排）**：CHAR/PROP 须在本列写清**形态变化发生在哪一场、什么时候**。本列≠ `entity_attributes` 里的 `applicable_scenes`/`activation_beat`（那六键仍写衍生行属性）；本列是给场景编排的**可读换版说明书**。见「服化道连续性」。
 - **闪回/回忆**：
   - 完整闪回 Scene（较长回忆）/ 同场快闪·蒙太奇切片内 Stage 1 已声明主体同等提取；本阶段**不**自创环境——Stage 1 据情节新建的异地主环境须已声明，缺则回流。
   - Stage 1 已声明的闪回/蒙太奇【主环境】及对应衍生**必须逐条提取**（`plot_stage:闪回` 或场景头/主环境角色证据）；同场蒙太奇多主→多行主环境基准，各挂各衍生族；独立闪回 Scene 的主环境按该场提取。
@@ -210,13 +220,13 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
   - **效力**：命中即**必须**输出 ≥2 条独立 `character`（基础版 + `{角色}_{装束标识}` 衍生）；每行各自完整 `clothing:`；**禁止**单行混写两套服装；**禁止**只改属性不增行；缺衍生行=本阶段失败须重写。
   - **触发（任一即强制拆行；不要求更衣过程入画）**：
     1. 服化道「服饰/换装」非「无」，且含换装/更衣/改换装束/第二套及以上可区分着装描述；
-    1-b. 【场景切换与首节拍转场】出现 `服饰换装`/`服饰/换装`/`换装` 等标签或「从{旧装}换为{新装}」句式（即使未写三项标准摘要）；
+    1-b. 【场景衔接】/【场景切换与首节拍转场】出现 `服饰换装`/`服饰/换装`/`换装` 等标签或「从{旧装}换为{新装}」句式（即使未写三项标准摘要）；
     2. Beat/【角色设定】/「服装要求」出现换装、更衣、换上…、卸甲换便衣、改穿、盛装/便装切换、制服↔便服/员工便服↔裙子礼服等过程或结果词；
     3. 同一具名角色在输入内出现**两套及以上可区分服饰体系**（如先前机能外套/员工便服 vs 后礼服/绝美裙子/战袍/病号服/泳装/盔甲），即使只见新装现态、未见更衣动作；
     4. 新 Scene 入场着装与该角色已落表基础版/`clothing:` **可核销不同**（摘要或 Beat 明文），且差异属装束体系而非撩袖级微调。
   - **命名/链**：衍生=`{基准}_{装束标识}`（如 `_礼服版`/`_便装版`/`_制服版`/`_裙子版`/`_盛装版`）；`base_entity`→上一稳定版 `subject_name_zh`；`dependency_reference`→其 `subject_name_en`；`plot_role`/`gender`/`age_tier`/`identity` 继承（身份未变时逐字复述；身份变走身份态衍生）；新装行 `clothing:` 只写该态，禁夹带旧装。
   - **衍生属性（强制，见「六」）**：换装衍生行须写全 §六六个强制键；其中 `derivative_kind:换装`，`return_or_continue` 默认 `continue`（上游明文换回旧装则 `return`）。缺键=失败。
-  - **扫描序（强制）**：①全场【场景切换与首节拍转场】/服化道「服饰/换装」逐 Scene（含自由写法）→ ②【角色设定】外形/服装 → ③逐 Beat 建置+入戏服装词 → ④跨 Scene 同名角色着装对照表（内部）→ 命中则先建齐多行再写属性（§六六个强制键；`activation_beat` 可选）。
+  - **扫描序（强制）**：①本环节服化道核销 + 全场【场景衔接】/【场景切换与首节拍转场】「服饰/换装」（含自由写法）逐 Scene → ②【角色设定】外形/服装 → ③逐 Beat 建置+入戏服装词 → ④跨 Scene 同名角色着装对照表（内部）→ 命中则先建齐多行再写属性（§六六个强制键；`activation_beat` 可选）。
   - **边界（不建行）**：撩袖/解扣/披外套未换体系、瞬时湿衣未成新装束（可走 `clothing_env`）、纯情绪「看起来不一样」、摘要「无」且全输入无第二套可区分证据。
   - **终检失败项**：有换装证据却同名仅 1 行｜两套 `clothing` 挤一行｜新装并入基础版｜因「未见更衣过程/只出现一次」拒拆｜衍生行缺 §六六个强制键。
 - **服饰/妆发/外形（有则必写）**：摘抄入 `clothing:`/`appearance:`；剧本/Beat/对白里凡与该角色外形相关的风格、地位、作用、**身份视觉信号**、**原文评价词（漂亮/性感/高贵/绝美等）**须一并按「一」四维+`appearance_cues` 入库。无则静默省略，禁写「未明示服饰」等元话术。不覆盖 `clothing_req` / 换装多行。**凡可作为角色描述一部分的配饰/随身件**（耳环/胸针/发簪/领带夹/造型挂件等；含仅一次性露出、无可持续关键状态变化者）→只写入 `clothing:`/`appearance:`，**不**另提 PROP（见下「角色配饰↔PROP」+「道具提取极严原则」）。
@@ -275,10 +285,11 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 - **方位坐标透传（全链路最高；与 Stage 1 / Stage 3 同核）**：一律**俯视鸟瞰顺时针**。主环境 `zero_degree_axis` / 0°轴为原点；正交四向闭集=`0/90/180/270`；扇区序强制=`0° →(+90°)→ 90° →(+90°)→ 180° →(+90°)→ 270° →(+90°)→ 0°`；下一正交角=`(N+90)%360`；对向=`(N+180)%360`。**只透传、不重映射**：禁止逆时针重排四向、禁止把 Stage 1 的 90° 改写成 270°「看起来更顺」、禁止第一人称左右推角。`view_angle_from_main` 与衍生名 `{N}度…` 的 N **必须**与 Stage 1 声明角逐字一致；`topology_top_down_360` 写 `0度=…/90度=…/180度=…/270度=…` 时扇区序同此约定。
 
 - **时空（每行必填）**：`in_out:`∈`内|外|内外过渡`；`time_of_day:`∈`日|夜|黎明|黄昏|蓝调时刻`（未写默认 `日`）；`climate:`/`season:` 有证据必写。视角行继承基准；状态改写日夜气候→改字段并在 `empty_view_delta` 写差异。禁只埋在 `purpose`/`literary_atmosphere`。
-- **`basic_positioning:`（强制，见「一」）**：主环境一句叙事定位（归属用番位、禁角色姓名）+ 体量 + 气质/类型；衍生行原样继承，**不得**用本键写 Master/OTS/反打。与 `purpose` 分字段并存。
+- **`basic_positioning:`（强制；继承 IDENT `定位`）**：主环境原样入库；衍生写`继承主环境`，**不得**用本键写 Master/OTS/反打。与 `purpose`/`env_goal`/`scene_mood` 分字段并存。
+- **`env_goal:`（主环境强制；继承 IDENT `目标`）**：原样入库。视角衍生写`继承主环境`；状态衍生仅透传上游已写 Delta。**≠** `purpose`。禁人名、禁本环节改写。
 - **外形四维（有则必写，见「一」）**：主环境须把剧本中的空间外形/风格/场域地位/作用/**原文评价词（精致/高贵/华贵/素净等）**总结进 `literary_atmosphere`/`style:`/`social_status:`/`purpose:`/`appearance_cues:`（及 `fixed_*` 外形定语）；衍生行继承风格、地位与 `appearance_cues`，作用可写本角观察用途。禁只写拓扑丢掉「精致小屋/素净/礼制」等设计词。
-- **`scene_mood:`（主环境强制；见职责边界「场景环境主情绪简要」）**：本场环境表达的主要情绪 + 空镜表达 + 文学级光色/构图倾向。视角衍生继承；状态衍生写情绪 Delta。禁技术层光参，禁人名。
-- **`purpose:`（强制）**：一句场域/观察用途（**作用维**）；视角行点明 Master/OTS/反打等（不得替代时空字段，**亦不得顶替 `basic_positioning`/`style`/`social_status`**）。氛围有则摘抄入 `literary_atmosphere`/`style:`（服从纯空镜）。**纯空镜提醒（最高）**：`purpose` 可含规划向观察功能，但**禁止**把角色名/人称/「谁干什么」写进将由 Stage 3 原样照抄的空镜字段；优先「Master 全景建置空镜」「桌后反打观察半空间」等无人表述。建置里的人名只作内部理解，入库前必须剥名。`basic_positioning`/`social_status` 的番位归属由 Stage 3 只进 logic、不进生图。Stage 3 生图词绝不可带人物或用途—角色句。
+- **`scene_mood:`（主环境强制；继承 IDENT `情绪表达`）**：原样入库。视角衍生写`继承主环境`；状态衍生仅透传上游已写 Delta。禁技术层光参，禁人名，禁本环节另抽。
+- **`purpose:`（强制）**：一句场域/观察用途（**作用维**）；视角行点明 Master/OTS/反打等（不得替代时空字段，**亦不得顶替 `basic_positioning`/`env_goal`/`scene_mood`/`style`/`social_status`**）。氛围有则摘抄入 `literary_atmosphere`/`style:`（服从纯空镜）。**纯空镜提醒（最高）**：`purpose` 可含规划向观察功能，但**禁止**把角色名/人称/「谁干什么」写进将由 Stage 3 原样照抄的空镜字段；优先「Master 全景建置空镜」「桌后反打观察半空间」等无人表述。建置里的人名只作内部理解，入库前必须剥名。`basic_positioning`/`social_status` 的番位归属由 Stage 3 只进 logic、不进生图。Stage 3 生图词绝不可带人物或用途—角色句。
 - **活动空间继承（最高；主环境与衍生强制）**：Stage 1【活动空间】与各衍生`活动适配`为本场表演可用性真源；本阶段**只继承、不改写、不补造**。
   - **主环境**：须写入 `activity_space:`（或分键 `performance_zone:`/`circulation:`/`capacity_zoning:`/`ingress_egress:`），内容**逐字/等价摘抄** Stage 1【活动空间】四项（主舞台/表演区｜动线｜站位承载｜出入画口）；`script_entity_coverage` 须含「活动空间」及关键锚词。缺【活动空间】→`upstream_missing_activity_space:需要回流 Stage 1 补活动空间`，禁自拟表演区。
   - **视角/状态衍生**：须写入 `activity_fit:`，摘抄该行 Stage 1 `活动适配=…`（服务反打纵深/出门动线等）；缺则 `upstream_missing_activity_space:需要回流 Stage 1 补活动适配`。可与 `purpose:` 并存，**不得**用 `purpose` 顶替漏写的活动空间。
@@ -297,8 +308,8 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 - **分层（字段速查）**：
   | 类型 | 关键字段 | 禁 |
   | :--- | :--- | :--- |
-    | **主环境** | `env_role:主环境基准定义`；`referenceable:No`；`generatable:Yes`；**`activity_space:`（继承 Stage 1【活动空间】）**；**`scene_mood:`**；**`fixed_entity_inventory` + `homogeneous_layout` + `opening_inventory` + `directional_structure_inventory` 数量闭合**；**通高须共享外形则 `floor_inventory` 下层+上层分列（禁上层继承下层）**；**二层内部须为独立主环境行（禁并进一层上层；可 `style_reference_env` 挂另一主环境，仍独立四向）**；完整复刻 Stage 1：0°轴、头尾双锚、俯视360（**扇区序=俯视顺时针 0→90→180→270，禁逆时针重排**；**0/90/180/270+中心须各区具名实体可辨区分**；**四向=该向围合立面，中心=中区家具**；**各向内容=该向正面面对，四方正交透传**；地面与上边界有则透传）、固定清单；仰视有则写。五区空洞/数量不闭合/含模糊数量词/窗棂无总扇数或格阵/楼梯无U/通高缺两层分列/二层内并进一层→对应 `upstream_missing_*` / `upstream_should_split_floor_main_env` 回流 Stage 1 | 作 Beat 可拍 ENV；某一机位空镜成稿；臆造数量/活动空间；用「若干/散座」下传；自拟补齐空洞扇区；把中心家具写入某一向；逆时针重排；通高两层写 `上层继承一层`；把二层客房并进一层 |
-    | **视角衍生**（含已声明 `0度…`） | `env_role:衍生环境`；`referenceable:Yes`；`generatable:Yes`；`reference_env`=当前空镜基准；**`activity_fit:`**；只提 Stage 1 轻量清单：`view_angle_from_main`/触发(OTS·反打两步结论)/`spatial_axis`/`lens_profile`/`axis_crossing`/`empty_view_delta?`；**`view_angle_from_main` 以四方 0/90/180/270 为基准（透传 Stage 1；俯视顺时针，`(N+90)%360`）**；**`activity_fit`/`empty_view_delta` 只写本角可见半空间/可见面线索，禁点名对向或机位后方不可见面**；本角可见内容=该向正面面对；**若所属主环境为上集/既有复用**：`view_angle_from_main` 与 Stage 1 声明角须与既有主环境同角一致（透传，禁改度数） | 四向具名/FG·MG·BG 成稿（归 Stage 3）；因「反打」默认角=180（以 Stage 1 的 N 为准）；臆造活动适配；复用主环境下擅自改 `view_angle_from_main`；自造 45°/非四方偏斜角；逆时针改角；把不可见面写入本角 `activity_fit`/`empty_view_delta` |
+    | **主环境** | `env_role:主环境基准定义`；`referenceable:No`；`generatable:Yes`；**`activity_space:`（继承 Stage 1【活动空间】）**；**`basic_positioning:` + `env_goal:` + `scene_mood:`（定位/目标/情绪表达，禁互代）**；**`fixed_entity_inventory` + `homogeneous_layout` + `opening_inventory` + `directional_structure_inventory` 数量闭合**；**通高须共享外形则 `floor_inventory` 下层+上层分列（禁上层继承下层）**；**二层内部须为独立主环境行（禁并进一层上层；可 `style_reference_env` 挂另一主环境，仍独立四向）**；完整复刻 Stage 1：0°轴、头尾双锚、俯视360（**扇区序=俯视顺时针 0→90→180→270，禁逆时针重排**；**0/90/180/270+中心须各区具名实体可辨区分**；**四向=该向围合立面，中心=中区家具**；**各向内容=该向正面面对，四方正交透传**；地面与上边界有则透传）、固定清单；仰视有则写。五区空洞/数量不闭合/含模糊数量词/窗棂无总扇数或格阵/楼梯无U/通高缺两层分列/二层内并进一层→对应 `upstream_missing_*` / `upstream_should_split_floor_main_env` 回流 Stage 1 | 作 Beat 可拍 ENV；某一机位空镜成稿；臆造数量/活动空间；用「若干/散座」下传；自拟补齐空洞扇区；把中心家具写入某一向；逆时针重排；通高两层写 `上层继承一层`；把二层客房并进一层 |
+    | **视角衍生**（含已声明 `0度…`） | `env_role:衍生环境`；`referenceable:Yes`；`generatable:Yes`；`reference_env`=当前空镜基准；**`activity_fit:`**；只提 Stage 1 轻量清单：`view_angle_from_main`/触发(OTS·反打两步结论)/`spatial_axis`/`lens_profile`/`axis_crossing`/`empty_view_delta?`；Stage 1 特别行另透传`special_note:`（`特别表述=`原文，禁改写、禁给普通行补造）；**`view_angle_from_main` 以四方 0/90/180/270 为基准（透传 Stage 1；俯视顺时针，`(N+90)%360`）**；**`activity_fit`/`empty_view_delta` 只写本角可见半空间/可见面线索，禁点名对向或机位后方不可见面**；本角可见内容=该向正面面对；**若所属主环境为上集/既有复用**：`view_angle_from_main` 与 Stage 1 声明角须与既有主环境同角一致（透传，禁改度数） | 四向具名/FG·MG·BG 成稿（归 Stage 3）；因「反打」默认角=180（以 Stage 1 的 N 为准）；臆造活动适配；复用主环境下擅自改 `view_angle_from_main`；自造 45°/非四方偏斜角（Stage 1 `特别表述=变形:` 除外）；逆时针改角；把不可见面写入本角 `activity_fit`/`empty_view_delta` |
   | **状态衍生** | 仅 Stage 1 已声明且「改写固定结构或跨 Beat 重大氛围 + 至少延续下一 Beat」；`return_or_continue:continue` 直至写明恢复；`empty_view_delta` 具名受影响实体及相对原形的短差值（形状/结构可写；**禁止描述未改实体**；实体名须与原清单逐字符相同，不得重新取名）；**`activity_fit:`**（状态对表演区/动线影响有则摘抄）；**`derivative_base_zh`=所属主环境名**（逐字符；状态后视角/衍生的衍生同锁，即使 `reference_env` 已挂上一状态） | 瞬时光效；空泛「能量弥漫」；状态确立后仍统一回挂主环境；同基准角度互挂；衍生的衍生漏写/改写 `derivative_base_zh`；`empty_view_delta` 新增原清单没有的陈设、描述未改实体、或给实体重新取名 |
 - **纯空镜**：剥离角色/人称/站位/姿态/视线/对白/持握/应归 PROP 物件/乘员/运动轨迹，以及「给谁用、干什么」的人物用途句。可留：边界、时空字段、**activity_space/activity_fit**（仅空间承载语，禁具名角色）、固定建筑装修、XOR 后固定陈设、出入口、遮挡、360 拓扑、尺度、固定实体前后左右**上下**、`empty_view_delta?`。头尾双锚与固定实体朝向**透传** Stage 1，本阶段不做跨衍生朝向推演。Stage 3 `generation_prompt_cn` 只消费空镜结构，绝不可带人物。
 - **提取纪律**：已声明主/衍生逐条提取、各行独立（禁 OTS/正反并行压缩）；未声明→回流，禁并入主环境。元数据优先抄 Stage 1；缺省：`0度`/建置→`Wide`，OTS/正反→`Standard`。特写/Insert/CU 沿用父观察侧，禁特写专属行。局部未达衍生门槛→并入当前环境属性。固定环境标识/书架书册/贴墙纸笺等→ENV；可移动书/纸/文书——**仅当过道具极严门槛**（不可归 ENV、有可持续关键字迹/翻面态等）才→PROP，否则留 ENV 或 Beat。锚点：非实体写 `main_anchor`；已是提取实体写 `main_anchor_reference`。时序断点不足→`upstream_missing_time_variant_env:…`。
@@ -334,7 +345,25 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 - **换装例**：`applicable_scenes:EP01_SC02\|EP01_SC03；activation_beat:3；derivative_kind:换装；derivative_trigger:服化道服饰/换装：从员工便服换为绝美裙子；activation_evidence:更衣｜换上裙子｜礼服/晚宴裙现态；variant_delta:员工便服→绝美裙子/礼服廓形；return_or_continue:continue`
 - **道具状态例**：`applicable_scenes:EP01_SC01；activation_beat:4；derivative_kind:道具状态；derivative_trigger:Beat4 点燃打火机；activation_evidence:点燃｜火光｜火轮按压后火焰；variant_delta:闭合机身→可持续点燃火焰可见；return_or_continue:continue`
 - **基础版污染禁令不变**：剧情终态差异只进衍生行上表字段 + 该行 `clothing:`/`clothing_env:`/`appearance:` 等，**禁**回填基础版。
-- **Stage 2.2 消费契约**：下游按 `applicable_scenes`∋本场 `Scene ID` →（可选）`activation_beat`≤当前拍 → `activation_evidence`∩本 Beat 明文 选衍生名；`continue` 在所列场次内无冲突时沿用（详见 2.2）。漏写场景号=`下游无法按场换版`=失败。
+- **Stage 2.2 消费契约**：场景编排只注入**资产名 + `form_continuity`**（不读整份 `entity_attributes`）。先按本列「哪场/何时」选衍生名；六键作核销。漏写本列或场景号=`下游无法按场换版`=失败。
+
+---
+
+## 服化道连续性（单独列 `form_continuity`；CHAR/PROP 强制）
+
+本列是给**场景编排**的可读换版说明书，与 `subject_name_zh` **成对注入**。禁把本列内容再塞进 `entity_attributes` 顶替本列；六键仍写衍生行属性，不顶替本列。
+
+| 行类 | 写法 |
+| :--- | :--- |
+| ENV / `cover_poster` | `无` |
+| CHAR/PROP 全片无形态变化 | `无` |
+| CHAR/PROP 基础版（同族有衍生） | `初态至{EPxx_SCyy} Beat{n}；变化见{衍生中文名}@{EPxx_SCyy} Beat{n}` |
+| CHAR/PROP 衍生行 | `{EPxx_SCyy} Beat{n}起：{旧态→新态}；延续至{EPxx_SCyy}`（入场即该态写 `Beat1起` 或 `入场即`；仅本场写 `延续至本场`） |
+
+- **必须写清**：哪一场（`EPxx_SCyy`，与 `[SCENE_START]` 逐字一致）+ 什么时候（`Beat{n}` / `入场即` / `场末`）+ 变了什么（旧→新，可核销）。
+- 同族多变：基础版只写「初态止点 + 指向第一衍生」；每一衍生行各写**本行首次生效**的场/拍与 delta。后续场仍持该态 → 写进 `延续至`。
+- 单元格禁 ASCII `|`（用 `；` / 全角 `｜`）。禁空、禁只写「换装/有变化」、禁把终态回填基础版当「无」。
+- ❌ 换装已拆行但本列全 `无`｜只写 `EP01_SC02` 无拍号或无旧→新｜✅ `EP01_SC02 Beat3起：员工便服→礼服；延续至EP01_SC03`
 
 ---
 
@@ -345,17 +374,17 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 - **成稿禁元话术**：单元格只写实体事实与可核销关键词；禁写入本文件规则、门禁结论、省略理由、否定句（如「未明示服饰故不写」）。未达门槛/原文未提→静默省略。
 - 表前必须单独一行：`----------------*****--------------`（全文仅此一处）
 - 表头与分隔行固定：
-  `| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |`
-  `| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |`
-- 数据行：以 `|` 起止；8 列齐全；禁拆行/空行/孤立 `|`。
+  `| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage | form_continuity |`
+  `| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |`
+- 数据行：以 `|` 起止；**9 列齐全**；禁拆行/空行/孤立 `|`。`form_continuity` 不得留空（CHAR/PROP 无变化或 ENV/封面写 `无`）。
 - `subject_type`∈`character|prop|environment|cover_poster`。
 - `cover_poster`：必须且仅 1 行、整表最后一行；列齐全有效。
 - `base_entity`：基准 `None`；衍生=基准 `subject_name_zh`。
-- **character / prop / environment 行（强制）**：`entity_attributes` **必须**可检索 `basic_positioning:`（见「一」；缺=失败）。**主环境另须 `scene_mood:`**；CHAR/PROP 另须 `scene_mood_cue:`（无挂场可写`无：无场级环境情绪`）。原文有外形评价词时另须可检索 `appearance_cues:`（原词）。
+- **character / prop / environment 行（强制）**：`entity_attributes` **必须**可检索 `basic_positioning:`（CHAR/PROP 本环节归档；ENV 继承 IDENT `定位`；缺=失败）。**主环境另须 `env_goal:` + `scene_mood:`**（分别继承 IDENT `目标`/`情绪表达`）；视角衍生可写`继承主环境`。CHAR/PROP 另须 `scene_mood_cue:`（无挂场可写`无：无场级环境情绪`）。原文有外形评价词时另须可检索 `appearance_cues:`（原词）。**每行 `form_continuity` 必填**（见「服化道连续性」）。
 - **prop 行（强制）**：`entity_attributes` 须含 **`basic_positioning:`** + `purpose:` + **`relative_scale:`** + **`scene_mood_cue:`**（人体/共现实体相对参照，见「三」）；缺尺度键或基本定位=失败。角色配饰升格行另须 `host_character:` + `wear_side:` + `mount_body_part:` + **`detachable:否|是`**；仅 `detachable:否` 时与宿主 CHAR `accessory_props`/`accessory_mount` 双向一致、部位对齐。
 - **character 行配饰依赖**：仅 **不可离身**（PROP `detachable:否`）升格配饰写入宿主 CHAR `accessory_props:` + `accessory_mount:{名}@{wear_side}/{mount_body_part}`（多件`|`分隔；名与部位=PROP 逐字）；`clothing:`/`appearance:` 短注与之对齐。可离身升格 PROP **不**写 `accessory_*`。可归 CHAR/无状态/一次性出画不写 `accessory_*`、不提 PROP。
 - **character / prop 衍生行**：`base_entity≠None` 时 `entity_attributes` 必须含 §六六个强制键；`activation_beat` 可选。`applicable_scenes` 多场用转义 `\|` 分隔；场景号须可追溯上游 `[SCENE_START]`，并与该行外观/状态字段一致。
-- **environment 行**：字段与分层见「四」；命名/依赖见「五」。**须含 `basic_positioning:`**（主环境写满；衍生继承主环境句）。衍生另须可检索：`derivative_base_zh/en`、`derivative_trigger_type`、`return_or_continue`。禁 `auto_completed_derived_env`；缺声明→`upstream_missing_derived_env`+`trigger_evidence`。时序衍生可补：`time_break_type`、`stable_space_delta`、`fixed_*_delta`、`inheritance_reason`（禁 Index 写 `light_sound_*`）。涉可见文字：`visible_text`+`text_layout`+`typography_requirement`+`script_variant` 齐全（排向、字色/底色；招牌灯另须发光色）；明示字样与剧本一致且繁简不擅自互转。
+- **environment 行**：字段与分层见「四」；命名/依赖见「五」。**须含 `basic_positioning:`**（继承 IDENT `定位`；衍生写`继承主环境`）。**主环境另须 `env_goal:` + `scene_mood:`**（继承 IDENT）；衍生可写`继承主环境`。四向/固定清单/未落落点只透传。衍生另须可检索：`derivative_base_zh/en`、`derivative_trigger_type`、`return_or_continue`。禁 `auto_completed_derived_env`；缺声明→`upstream_missing_derived_env`+`trigger_evidence`。时序衍生可补：`time_break_type`、`stable_space_delta`、`fixed_*_delta`、`inheritance_reason`（禁 Index 写 `light_sound_*`）。涉可见文字：`visible_text`+`text_layout`+`typography_requirement`+`script_variant` 齐全（排向、字色/底色；招牌灯另须发光色）；明示字样与剧本一致且繁简不擅自互转。
 
 ### 输出前终检 checklist（规则见上文；此处仅勾选）
 
@@ -365,10 +394,10 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 | 2 | 纯空镜；**ENV/PROP 叙述与空镜字段无角色名/人称**（建置剧情已转译为净空/动线/槽位）；XOR 无双写；**极严：可归 ENV/CHAR、无状态变化、一次性出画未入 PROP**；**上游明文全局性道具已全部提 PROP（禁漏）**；**每个载具/机甲内部ENV均有绑定外部本体PROP或场景尺度ENV，外部本体XOR且内外关系键齐全**；消耗品未入 PROP；主环境清单全覆盖（耗品/未过门槛留 ENV·Beat 例外）；**叙述字段无中英同义双语堆叠（已按项目语言去重）** |
 | 3 | 角度∈【衍生环境】；OTS/反打结论来自 Stage 1；缺行已回流 |
 | 4 | 具名已落（**纯画外音/无形象角色未误提 CHAR**）；**群演簇仅含全员无具体剧情动作者**；有个体剧情动作者已按**龙套**单提（未误并簇）；有戏份宠物=`character`+`entity_kind:宠物`；**全局性道具与过极严门槛的 PROP 未漏，未过门槛且非全局者未误提**；微表演未升格；**角色配饰：全局明文或（不可归 CHAR 且有可持续状态）已提并 CHAR↔PROP 双向挂链；缺挂载标回流；可归 CHAR/无状态/一次性出画且非全局未误提 PROP** |
-| 5 | **每 CHAR/PROP/ENV 有 `basic_positioning:`（归属+体量+气质/类型；≠ `purpose`；ENV 用番位禁姓名；衍生 ENV 继承主环境句）**；每 PROP/ENV 有 `purpose:`；**每 PROP 有 `relative_scale:`**；每 ENV 有 `in_out`+`time_of_day`；**主环境有 `activity_space:`、衍生有 `activity_fit:`**；**主环境有 `scene_mood:`**；**主环境固定实体数量闭合：`fixed_entity_inventory`/`homogeneous_layout`/`opening_inventory`/`directional_structure_inventory` 齐全；无 `若干|数把|多张|一些|成排|散座` 模糊数量词；同质多件总数=分项和；门窗总数/开闭/扇区齐；窗棂横×纵格阵齐；楼梯 M/U/下口/上口/基准格/坡向齐**；**通高须共享外形则 `floor_inventory` 下层+上层分列（禁 `上层继承一层`）；二层内部已另立主环境（禁并进一层上层；错并则 `upstream_should_split_floor_main_env`）；风格依赖仅 `style_reference_env` 挂另一主环境名（禁当衍生、禁抄父清单）**；缺项已回流而非猜数；**每 CHAR/PROP 有 `scene_mood_cue:`** |
+| 5 | **每 CHAR/PROP/ENV 有 `basic_positioning:`（CHAR/PROP 本环节归档；ENV 继承 IDENT `定位`，≠ `purpose`；衍生 ENV 写`继承主环境`）**；**主环境另有 `env_goal:` + `scene_mood:`（继承 IDENT `目标`/`情绪表达`，禁本环节另抽）**；每 PROP/ENV 有 `purpose:`；**每 PROP 有 `relative_scale:`**；每 ENV 有 `in_out`+`time_of_day`；**主环境有 `activity_space:`、衍生有 `activity_fit:`**；**主环境固定实体数量闭合：`fixed_entity_inventory`/`homogeneous_layout`/`opening_inventory`/`directional_structure_inventory` 齐全；无 `若干|数把|多张|一些|成排|散座` 模糊数量词；同质多件总数=分项和；门窗总数/开闭/扇区齐；窗棂横×纵格阵齐；楼梯 M/U/下口/上口/基准格/坡向齐**；**通高须共享外形则 `floor_inventory` 下层+上层分列（禁 `上层继承一层`）；二层内部已另立主环境（禁并进一层上层；错并则 `upstream_should_split_floor_main_env`）；风格依赖仅 `style_reference_env` 挂另一主环境名（禁当衍生、禁抄父清单）**；缺项已回流而非猜数；**每 CHAR/PROP 有 `scene_mood_cue:`** |
 | 6 | 每 CHAR：`plot_role`/`plot_stage`/`basic_positioning` 必有；**人态**另须 `gender`/`age_tier`（未明确年龄→青年+约23岁）+ **`identity:`（警察/皇子/公主/普通修仙者等世界身份，≠番位；有证据必写，无证据回流勿臆造）**；**神兽/异兽/魔兽/妖兽/灵兽/坐骑/宠物/非人集群**无明文则**可不写** gender/age/identity（禁臆造）；具名非番位；仅**不可离身**升格配饰写 `accessory_props`+`accessory_mount` 并与 PROP `host_character`/`wear_side`/`mount_body_part`/`detachable:否` 逐字对齐；可离身件禁进 `accessory_*` |
 | 7 | 服化道三项已消费（**初始态→基础版**）；**换装/多套装束→同名≥2 CHAR 行且各行 `clothing:` 不混装**（缺行即失败）；剧情终态狼藉/战损未回填主环境/CHAR基础版；**外形四维+软性因素已总结**：剧本中该资产的外形/风格/地位/作用/身份/特殊用途凡有证据已入对应键；**原文评价词（高贵/精致/漂亮/性感等）已入 `appearance_cues:` 且可检索原词**，未压成「室内/主角/好看」、未只用 `basic_positioning` 顶替；`clothing_req`/`clothing_env` 命中已写 |
-| 8 | **CHAR/PROP 衍生行六个强制键齐全**：`applicable_scenes`（合法 `EPxx_SCyy`）+ `derivative_kind`/`derivative_trigger`/`activation_evidence`/`variant_delta`/`return_or_continue`；`activation_beat` 可选；场景号与上游一致 |
+| 8 | **CHAR/PROP 衍生行六个强制键齐全**：`applicable_scenes`（合法 `EPxx_SCyy`）+ `derivative_kind`/`derivative_trigger`/`activation_evidence`/`variant_delta`/`return_or_continue`；`activation_beat` 可选；场景号与上游一致。**每行 `form_continuity` 已填**（CHAR/PROP 有变化须含场号+时机+旧→新；无变化/ENV/封面=`无`）；基础版有衍生须指向变化见哪一行 |
 | 9 | 闪回已具名主体均有行/链；Stage 1 多主环境（闪回/蒙太奇）已逐块提取且各主含 `0度` 衍生；`cover_poster` 唯一置尾；**整篇仅一张 Subject Index（无重复分隔符/标题/表头/整表重贴）** |
 | 10 | 牌匾/招牌灯/书/纸等文字载体：ENV/PROP 均有 `visible_text`+`text_layout`（横排/纵排）+`typography_requirement`（字体含字色/底色；招牌灯另须发光色）+`script_variant`（简体/繁体）；原文繁简未擅自互转；无字样已补字或标回流 |
 
@@ -378,18 +407,18 @@ Stage 1 按前置+六环节成稿；本阶段只核销可见主体与归类证�
 
 ### Subject Index
 
-| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| S001 | character | 角色中文名 | Character English Name | None | None | plot_stage:正常叙事；basic_positioning:男主，港口刑侦一线，冷峻克制的都市警探；plot_role:男主；gender:男；age_tier:青年；约28岁；identity:刑侦警探；social_status:一线警探·高级职场；appearance_cues:冷峻｜克制；personality:沉稳克制；style:冷峻机能；clothing:深色机能外套+内衬衬衫（袖管可纳物）；右裤袋口常揣银打火机；clothing_req:须有可纳物袖管（长袖或广袖）；须有可用口袋；scene_mood_cue:主情绪=压迫｜挂场ENV=办公室会客区｜服化或材质响应=深色机能低饱和跟冷蓝雨夜；has_derivatives:Yes。 | 原名、男主港口刑侦、刑侦警探、沉稳克制、冷峻、机能外套、藏入袖中、从口袋掏出、银打火机、右裤袋口、场景主情绪 |
-| S002 | character | 角色中文名_礼服版 | Character English Name Formal | 角色中文名 | Character English Name | plot_stage:正常叙事；basic_positioning:男主，港口刑侦一线，冷峻克制的都市警探；晚宴盛装；plot_role:男主；gender:男；age_tier:青年；约28岁；identity:刑侦警探；social_status:一线警探·非权贵；appearance_cues:冷峻｜盛装；personality:沉稳克制；style:冷峻正装；clothing:黑色修身礼服外套+白衬衫+深色领带；applicable_scenes:EP01_SC02\|EP01_SC03；activation_beat:3；derivative_kind:换装；derivative_trigger:服化道服饰/换装：便装换礼服；activation_evidence:更衣｜换上黑色礼服｜晚宴正装现态；variant_delta:机能外套→黑色修身礼服+领带；return_or_continue:continue；scene_mood_cue:EP01_SC02=温煦｜EP01_SC03=温煦｜挂场ENV=办公室会客区｜服化或材质响应=礼服深色克制、白衬衫受暖灯。 | 原名、刑侦警探、更衣、换上黑色礼服、冷峻、EP01_SC02、EP01_SC03、场景主情绪 |
-| S003 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | plot_stage:正常叙事；basic_positioning:男主，港口刑侦一线，冷峻克制的都市警探；灾难现场战损态；plot_role:男主；gender:男；age_tier:青年；约28岁；identity:刑侦警探；social_status:一线警探·非权贵；appearance_cues:冷峻｜克制；personality:沉稳克制；style:冷峻机能；clothing_env:灾难/战损现场态；左颊血痕、右肩衣料撕裂、外套沾灰烬尘土；applicable_scenes:EP01_SC05；activation_beat:1；derivative_kind:战损；derivative_trigger:灾难现场可持续战损外观；activation_evidence:战损｜灰烬尘土｜衣料撕裂；variant_delta:整装机能外套→战损沾灰撕裂态；return_or_continue:continue；scene_mood_cue:主情绪=肃杀｜挂场ENV=办公室会客区｜服化或材质响应=战损灰烬低饱和跟冷光。 | 原名、刑侦警探、冷峻、战损、灾难现场、EP01_SC05、场景主情绪 |
-| S004 | environment | 办公室会客区 | Office Reception Area | None | None | plot_stage:正常叙事；basic_positioning:男主单位会客室，中等体量，旧木工业风室内；style:旧木工业；social_status:单位中等会客室·非豪宅；appearance_cues:旧木工业；purpose:夜间雨夜室内会客空镜基准空间；env_role:主环境基准定义；referenceable:No；generatable:Yes；activity_space:主舞台=会议桌两侧对坐区净空｜动线=门→桌侧可绕行｜站位承载=双人对坐区+必要时桌侧站位区｜出入画口=180度半开内开木门；in_out:内；time_of_day:夜；climate:雨；season:冬；space_boundary:xx；zero_degree_axis:桌长边侧面TwoShot（机位落点+Viewing Direction，仅作衍生映射基准）；spatial_anchor_head:180度半开内开木门；spatial_anchor_tail:0度百叶窗墙段；topology_top_down_360:0度=百叶窗墙段/90度=侧墙/180度=半开木门与文件柜贴墙/270度=白板墙段/中心=会议桌+两把空转椅；topology_bottom_up_360:0度=吊顶与主灯/90度=侧墙高窗/180度=后墙梁架/270度=侧墙…；fixed_architecture_and_finish:百叶窗墙段+雨夜窗外；fixed_furniture_and_set_dressing:会议桌(长边沿0度轴)+两把空转椅(主位深棕皮革转椅桌左+客位浅木靠背椅桌右，椅背均朝桌心)+文件柜贴180度墙；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。；scene_mood:主情绪=压迫｜空镜表达=雨夜窗光压暗室内、半开门与空椅｜光色倾向=冷蓝主导+局部暖灯｜构图倾向=纵深压迫 | 主环境名、男主单位会客室、中等体量、旧木工业、活动空间、头尾双锚、俯视/仰视360、固定大件家具、夜、内、雨夜、场景主情绪 |
-| S005 | environment | 0度办公室会客区 | 0 Deg Office Reception Area | 办公室会客区 | Office Reception Area | plot_stage:正常叙事；basic_positioning:男主单位会客室，中等体量，旧木工业风室内；style:旧木工业；social_status:单位中等会客室·非豪宅；appearance_cues:旧木工业；purpose:本场 Master Two Shot 建置视角的全景空镜基准；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；activity_fit:对坐区纵深与门—桌动线可读；in_out:内；time_of_day:夜；climate:雨；season:冬；view_angle_from_main:0；derivative_base_zh:办公室会客区；derivative_base_en:Office Reception Area；derivative_trigger_type:视角衍生（本场首个全景建置视角，Master Two Shot）；empty_view_delta:可见半空间=会议桌与椅区、百叶窗墙；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Wide；axis_crossing:None；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。；scene_mood:继承主环境 | 0度办公室会客区、活动适配、主环境名、Master Two Shot、旧木工业、夜、内、雨 |
-| S006 | environment | 180度办公室会客区_桌后反打 | 180 Deg Office Reception Area Desk Reverse | 办公室会客区 | Office Reception Area | plot_stage:正常叙事；basic_positioning:男主单位会客室，中等体量，旧木工业风室内；style:旧木工业；social_status:单位中等会客室·非豪宅；appearance_cues:旧木工业；purpose:桌后反打观察空镜（PlannedReverse 半空间）；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；activity_fit:反打侧保留对坐纵深与桌面操作区、门向可读；in_out:内；time_of_day:夜；climate:雨；season:冬；derivative_base_zh:办公室会客区；derivative_base_en:Office Reception Area；view_angle_from_main:180；derivative_trigger_type:视角衍生（正反打；OTS两步确认：①对手可读角0°→②反打ENV=180°）；empty_view_delta:可见半空间=半开木门、门外走廊、铁皮文件柜、白板墙；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Standard；axis_crossing:PlannedReverse；literary_atmosphere:半开木门、门外冷蓝雨夜走廊、桌后反打半空间。；scene_mood:继承主环境 | 0度办公室会客区、180度办公室会客区_桌后反打、活动适配、桌后反打、旧木工业、夜、雨 |
-| S007 | prop | 银打火机 | Silver Lighter | None | None | plot_stage:正常叙事；basic_positioning:男主随身火机，掌心可握，冷峻金属；style:冷峻克制；social_status:个人日用随身·非信物；appearance_cues:冷峻；purpose:会谈时把玩以掩饰紧张、映射冷峻对峙氛围的个人随身火机；host_character:角色中文名；wear_side:正面；mount_body_part:右裤袋口(右手可取)；detachable:是；relative_scale:约一掌可握·机身约两指宽三指长（随身打火机体量）；material:银色金属；form:扁长方形机身+按压火轮；scene_mood_cue:主情绪=压迫｜挂场ENV=办公室会客区｜服化或材质响应=银色金属跟冷蓝窗光、局部暖灯点缀。 | 银打火机、男主随身火机、银色金属、冷峻、一掌可握、两指宽、右裤袋口、把玩、点燃、场景主情绪 |
-| S008 | prop | 银打火机_点燃态 | Silver Lighter Lit | 银打火机 | Silver Lighter | plot_stage:正常叙事；basic_positioning:男主随身火机，掌心可握，冷峻金属；点燃态；style:冷峻克制；social_status:个人日用随身·非信物；appearance_cues:冷峻；purpose:点燃后作为视觉焦点强化室内冷光对照；可持续点燃状态；火焰形态与识别锚点；relative_scale:同基准（机身约两指宽三指长；火焰舌尖再高约半指）；applicable_scenes:EP01_SC01；activation_beat:4；derivative_kind:道具状态；derivative_trigger:Beat4 点燃；activation_evidence:点燃｜火光｜火焰；variant_delta:闭合机身→可持续点燃火焰可见；return_or_continue:continue；scene_mood_cue:主情绪=压迫｜挂场ENV=办公室会客区｜服化或材质响应=火焰暖点缀对照冷室内。 | 银打火机、点燃、冷峻、一掌可握、EP01_SC01、场景主情绪 |
-| S009 | cover_poster | 影视级宣发海报 | Project Cover Poster | 角色中文名 | Character English Name | 单张院线级海报构图要求。明确前中后景与光影倾向、片名留白位置。禁止多图拼贴。 | 海报元素 |
+| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage | form_continuity |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| S001 | character | 角色中文名 | Character English Name | None | None | plot_stage:正常叙事；basic_positioning:男主，港口刑侦一线，冷峻克制的都市警探；plot_role:男主；gender:男；age_tier:青年；约28岁；identity:刑侦警探；social_status:一线警探·高级职场；appearance_cues:冷峻｜克制；personality:沉稳克制；style:冷峻机能；clothing:深色机能外套+内衬衬衫（袖管可纳物）；右裤袋口常揣银打火机；clothing_req:须有可纳物袖管（长袖或广袖）；须有可用口袋；scene_mood_cue:主情绪=压迫｜挂场ENV=办公室会客区｜服化或材质响应=深色机能低饱和跟冷蓝雨夜；has_derivatives:Yes。 | 原名、男主港口刑侦、刑侦警探、沉稳克制、冷峻、机能外套、藏入袖中、从口袋掏出、银打火机、右裤袋口、场景主情绪 | 初态至EP01_SC02 Beat2；变化见角色中文名_礼服版@EP01_SC02 Beat3 |
+| S002 | character | 角色中文名_礼服版 | Character English Name Formal | 角色中文名 | Character English Name | plot_stage:正常叙事；basic_positioning:男主，港口刑侦一线，冷峻克制的都市警探；晚宴盛装；plot_role:男主；gender:男；age_tier:青年；约28岁；identity:刑侦警探；social_status:一线警探·非权贵；appearance_cues:冷峻｜盛装；personality:沉稳克制；style:冷峻正装；clothing:黑色修身礼服外套+白衬衫+深色领带；applicable_scenes:EP01_SC02\|EP01_SC03；activation_beat:3；derivative_kind:换装；derivative_trigger:服化道服饰/换装：便装换礼服；activation_evidence:更衣｜换上黑色礼服｜晚宴正装现态；variant_delta:机能外套→黑色修身礼服+领带；return_or_continue:continue；scene_mood_cue:EP01_SC02=温煦｜EP01_SC03=温煦｜挂场ENV=办公室会客区｜服化或材质响应=礼服深色克制、白衬衫受暖灯。 | 原名、刑侦警探、更衣、换上黑色礼服、冷峻、EP01_SC02、EP01_SC03、场景主情绪 | EP01_SC02 Beat3起：员工便服→礼服；延续至EP01_SC03 |
+| S003 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | plot_stage:正常叙事；basic_positioning:男主，港口刑侦一线，冷峻克制的都市警探；灾难现场战损态；plot_role:男主；gender:男；age_tier:青年；约28岁；identity:刑侦警探；social_status:一线警探·非权贵；appearance_cues:冷峻｜克制；personality:沉稳克制；style:冷峻机能；clothing_env:灾难/战损现场态；左颊血痕、右肩衣料撕裂、外套沾灰烬尘土；applicable_scenes:EP01_SC05；activation_beat:1；derivative_kind:战损；derivative_trigger:灾难现场可持续战损外观；activation_evidence:战损｜灰烬尘土｜衣料撕裂；variant_delta:整装机能外套→战损沾灰撕裂态；return_or_continue:continue；scene_mood_cue:主情绪=肃杀｜挂场ENV=办公室会客区｜服化或材质响应=战损灰烬低饱和跟冷光。 | 原名、刑侦警探、冷峻、战损、灾难现场、EP01_SC05、场景主情绪 | EP01_SC05 Beat1起（入场即）：整装→战损沾灰撕裂；延续至本场 |
+| S004 | environment | 办公室会客区 | Office Reception Area | None | None | plot_stage:正常叙事；basic_positioning:男主单位会客室，中等体量，旧木工业风室内；env_goal:本场空镜须=建立雨夜会客对峙压迫｜服务=压迫质感｜可见落点=半开门、空椅、冷蓝窗外与会议桌纵深；style:旧木工业；social_status:单位中等会客室·非豪宅；appearance_cues:旧木工业；purpose:夜间雨夜室内会客空镜基准空间；env_role:主环境基准定义；referenceable:No；generatable:Yes；activity_space:主舞台=会议桌两侧对坐区净空｜动线=门→桌侧可绕行｜站位承载=双人对坐区+必要时桌侧站位区｜出入画口=180度半开内开木门；in_out:内；time_of_day:夜；climate:雨；season:冬；space_boundary:xx；zero_degree_axis:桌长边侧面TwoShot（机位落点+Viewing Direction，仅作衍生映射基准）；spatial_anchor_head:180度半开内开木门；spatial_anchor_tail:0度百叶窗墙段；topology_top_down_360:0度=百叶窗墙段/90度=侧墙/180度=半开木门与文件柜贴墙/270度=白板墙段/中心=会议桌+两把空转椅；topology_bottom_up_360:0度=吊顶与主灯/90度=侧墙高窗/180度=后墙梁架/270度=侧墙…；fixed_architecture_and_finish:百叶窗墙段+雨夜窗外；fixed_furniture_and_set_dressing:会议桌(长边沿0度轴)+两把空转椅(主位深棕皮革转椅桌左+客位浅木靠背椅桌右，椅背均朝桌心)+文件柜贴180度墙；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。；scene_mood:主情绪=压迫｜空镜表达=雨夜窗光压暗室内、半开门与空椅｜光色倾向=冷蓝主导+局部暖灯｜构图倾向=纵深压迫 | 主环境名、男主单位会客室、中等体量、旧木工业、环境目标、活动空间、头尾双锚、俯视/仰视360、固定大件家具、夜、内、雨夜、场景主情绪 | 无 |
+| S005 | environment | 0度办公室会客区 | 0 Deg Office Reception Area | 办公室会客区 | Office Reception Area | plot_stage:正常叙事；basic_positioning:男主单位会客室，中等体量，旧木工业风室内；env_goal:继承主环境；style:旧木工业；social_status:单位中等会客室·非豪宅；appearance_cues:旧木工业；purpose:本场 Master Two Shot 建置视角的全景空镜基准；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；activity_fit:对坐区纵深与门—桌动线可读；in_out:内；time_of_day:夜；climate:雨；season:冬；view_angle_from_main:0；derivative_base_zh:办公室会客区；derivative_base_en:Office Reception Area；derivative_trigger_type:视角衍生（本场首个全景建置视角，Master Two Shot）；empty_view_delta:可见半空间=会议桌与椅区、百叶窗墙；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Wide；axis_crossing:None；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。；scene_mood:继承主环境 | 0度办公室会客区、活动适配、主环境名、Master Two Shot、旧木工业、夜、内、雨 | 无 |
+| S006 | environment | 180度办公室会客区_桌后反打 | 180 Deg Office Reception Area Desk Reverse | 办公室会客区 | Office Reception Area | plot_stage:正常叙事；basic_positioning:男主单位会客室，中等体量，旧木工业风室内；env_goal:继承主环境；style:旧木工业；social_status:单位中等会客室·非豪宅；appearance_cues:旧木工业；purpose:桌后反打观察空镜（PlannedReverse 半空间）；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；activity_fit:反打侧保留对坐纵深与桌面操作区、门向可读；in_out:内；time_of_day:夜；climate:雨；season:冬；derivative_base_zh:办公室会客区；derivative_base_en:Office Reception Area；view_angle_from_main:180；derivative_trigger_type:视角衍生（正反打；OTS两步确认：①对手可读角0°→②反打ENV=180°）；empty_view_delta:可见半空间=半开木门、门外走廊、铁皮文件柜、白板墙；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Standard；axis_crossing:PlannedReverse；literary_atmosphere:半开木门、门外冷蓝雨夜走廊、桌后反打半空间。；scene_mood:继承主环境 | 0度办公室会客区、180度办公室会客区_桌后反打、活动适配、桌后反打、旧木工业、夜、雨 | 无 |
+| S007 | prop | 银打火机 | Silver Lighter | None | None | plot_stage:正常叙事；basic_positioning:男主随身火机，掌心可握，冷峻金属；style:冷峻克制；social_status:个人日用随身·非信物；appearance_cues:冷峻；purpose:会谈时把玩以掩饰紧张、映射冷峻对峙氛围的个人随身火机；host_character:角色中文名；wear_side:正面；mount_body_part:右裤袋口(右手可取)；detachable:是；relative_scale:约一掌可握·机身约两指宽三指长（随身打火机体量）；material:银色金属；form:扁长方形机身+按压火轮；scene_mood_cue:主情绪=压迫｜挂场ENV=办公室会客区｜服化或材质响应=银色金属跟冷蓝窗光、局部暖灯点缀。 | 银打火机、男主随身火机、银色金属、冷峻、一掌可握、两指宽、右裤袋口、把玩、点燃、场景主情绪 | 初态至EP01_SC01 Beat3；变化见银打火机_点燃态@EP01_SC01 Beat4 |
+| S008 | prop | 银打火机_点燃态 | Silver Lighter Lit | 银打火机 | Silver Lighter | plot_stage:正常叙事；basic_positioning:男主随身火机，掌心可握，冷峻金属；点燃态；style:冷峻克制；social_status:个人日用随身·非信物；appearance_cues:冷峻；purpose:点燃后作为视觉焦点强化室内冷光对照；可持续点燃状态；火焰形态与识别锚点；relative_scale:同基准（机身约两指宽三指长；火焰舌尖再高约半指）；applicable_scenes:EP01_SC01；activation_beat:4；derivative_kind:道具状态；derivative_trigger:Beat4 点燃；activation_evidence:点燃｜火光｜火焰；variant_delta:闭合机身→可持续点燃火焰可见；return_or_continue:continue；scene_mood_cue:主情绪=压迫｜挂场ENV=办公室会客区｜服化或材质响应=火焰暖点缀对照冷室内。 | 银打火机、点燃、冷峻、一掌可握、EP01_SC01、场景主情绪 | EP01_SC01 Beat4起：闭合→可持续点燃；延续至本场 |
+| S009 | cover_poster | 影视级宣发海报 | Project Cover Poster | 角色中文名 | Character English Name | 单张院线级海报构图要求。明确前中后景与光影倾向、片名留白位置。禁止多图拼贴。 | 海报元素 | 无 |
 
 **S006**：仅当 Stage 1【衍生环境】已声明该反打行时可提取；`view_angle_from_main` 以 Stage 1 为准，非反打默认角。未声明→主环境回流，不输出本行。
-**S002**：上游换装/多套装束→**必须**另建独立 character 行（本例礼服衍生）；禁与基础版混写两套服装；禁因未见更衣过程拒拆；**必须**写 `applicable_scenes`（及可选 `activation_beat`）供 Stage 2.2 按场换版。
+**S002**：上游换装/多套装束→**必须**另建独立 character 行（本例礼服衍生）；禁与基础版混写两套服装；禁因未见更衣过程拒拆；**必须**写 `applicable_scenes`（及可选 `activation_beat`）+ 本列 `form_continuity`（哪场/何时/旧→新）供场景编排按场换版。
 **S001↔S007**：角色随身件为上游明文全局性道具，或过极严门槛（不可归 CHAR 造型 alone，且有跨拍可持续关键态如点燃）→提 PROP 并写 `detachable:`；本例打火机 `detachable:是` → PROP 写挂载字段，CHAR **不**写 `accessory_props`。仅 `detachable:否` 才双向挂 `accessory_*`。可归 CHAR / 无状态 / 一次性出画且非全局 → 不提 PROP。

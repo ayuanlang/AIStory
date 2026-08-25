@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Scene-split environment identification + project-library reuse helpers."""
+"""Environment-plan identification + project-library reuse helpers."""
 from __future__ import annotations
 
 import json
@@ -76,6 +76,21 @@ def _normalize_source(value: Any) -> str:
     if text.startswith("新建") or text in _SOURCE_NEW:
         return "新建"
     return text or "新建"
+
+
+def extract_scene_env_ident_block(text: str, scene_id: str = "") -> str:
+    """Return the first matching [SCENE_ENV_IDENT_*] block, or empty."""
+    source = str(text or "")
+    sid = str(scene_id or "").strip().lower()
+    for match in SCENE_ENV_IDENT_PATTERN.finditer(source):
+        start_id = str(match.group(1) or "").strip()
+        end_id = str(match.group(3) or "").strip()
+        if start_id and end_id and start_id.lower() != end_id.lower():
+            continue
+        if sid and start_id.lower() != sid:
+            continue
+        return str(match.group(0) or "").strip()
+    return ""
 
 
 def parse_scene_env_ident_items(text: str, scene_id: str = "") -> List[Dict[str, Any]]:
@@ -450,6 +465,16 @@ def _truncate_env_text(value: Any, limit: int = 280) -> str:
     return text
 
 
+def _original_definition_excerpt(item: Dict[str, Any]) -> str:
+    block = _strip_derived_environment_section(str(item.get("env_block") or ""))
+    if block:
+        return _truncate_env_text(block, 800)
+    return _truncate_env_text(
+        item.get("description") or item.get("generation_prompt_cn") or "",
+        480,
+    )
+
+
 def _catalog_item_injection_lines(item: Dict[str, Any]) -> List[str]:
     name = _clean_env_name(item.get("name"))
     if not name:
@@ -458,12 +483,8 @@ def _catalog_item_injection_lines(item: Dict[str, Any]) -> List[str]:
     episode_tag = str(item.get("episode_tag") or "").strip()
     extra = f"｜集={episode_tag}" if episode_tag and "EP" not in source_label else ""
     lines = [f"- {name}｜来源={source_label}{extra}"]
-    desc = _truncate_env_text(
-        item.get("description") or item.get("generation_prompt_cn") or ""
-    )
-    if not desc:
-        desc = _truncate_env_text(item.get("env_block"), 360)
-    lines.append(f"  摘要={desc or '无'}")
+    definition = _original_definition_excerpt(item)
+    lines.append(f"  原定义={definition or '无'}")
     derived_names = [
         _clean_env_name(row.get("name"))
         for row in (item.get("derivatives") or [])
@@ -473,29 +494,39 @@ def _catalog_item_injection_lines(item: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def build_project_main_environment_injection(catalog: Sequence[Dict[str, Any]]) -> str:
+def build_project_main_environment_injection(
+    catalog: Sequence[Dict[str, Any]],
+    *,
+    for_planning: bool = False,
+) -> str:
     usable = [
         item
         for item in (catalog or [])
         if _clean_env_name(item.get("name"))
     ]
     if not usable:
-        return wrap_injection_section(
-            PROJECT_MAIN_ENV_LABEL,
-            "\n".join(
-                (
-                    "可复用/可参考主环境=无",
-                    "当前项目库与上集均无可用主环境（已删除的不计入）。",
-                    "场景切分时不得臆造“项目库已有”或“上集已有”；本集全部主环境必须标 复用=否｜来源=新建｜匹配主环境=无。",
-                    "一集之内禁止把同一连续时空拆成多个可复用 Scene——应合并为一场。本集出去再回来按闪切/闪回处理，短段并入大场。",
-                )
-            ),
-        )
-    lines = [
-        "当前项目已登记的主环境（含项目库与本集之前各集；已删除的不计入）。场景切分时必须逐场评估能否复用；能复用则沿用原名并标复用。",
-        "一集之内禁止把同一连续时空拆成多个可复用 Scene——应合并为一场。本集出去再回来按闪切/闪回处理，短段并入大场，禁止拆成回切场再标来源=本集。",
-        "复用只对照下列清单。日夜/天气不同不另起名。禁止同空间另起近义名。",
-    ]
+        empty_lines = [
+            "可复用/可参考主环境=无",
+            "当前项目库与上集均无可用主环境（已删除的不计入）。",
+            "不得臆造“项目库已有”或“上集已有”；本集全部主环境必须标 复用=否｜来源=新建｜匹配主环境=无。",
+        ]
+        if not for_planning:
+            empty_lines.append(
+                "一集之内禁止把同一连续时空拆成多个可复用 Scene——应合并为一场。本集出去再回来按闪切/闪回处理，短段并入大场。"
+            )
+        return wrap_injection_section(PROJECT_MAIN_ENV_LABEL, "\n".join(empty_lines))
+    if for_planning:
+        lines = [
+            "当前项目已登记的主环境（含项目库与本集之前各集；已删除的不计入）。环境规划必须先读本清单及原定义，再做场景勘探。",
+            "同空间必须复用：沿用原名，继承原定义，禁止另起同义空壳或重写骨架。",
+            "复用只对照下列清单。日夜/天气不同不另起名。",
+        ]
+    else:
+        lines = [
+            "当前项目已登记的主环境（含项目库与本集之前各集；已删除的不计入）。场景切分时必须逐场评估能否复用；能复用则沿用原名并标复用。",
+            "一集之内禁止把同一连续时空拆成多个可复用 Scene——应合并为一场。本集出去再回来按闪切/闪回处理，短段并入大场，禁止拆成回切场再标来源=本集。",
+            "复用只对照下列清单。日夜/天气不同不另起名。禁止同空间另起近义名。",
+        ]
     for item in usable:
         lines.extend(_catalog_item_injection_lines(item))
     return wrap_injection_section(PROJECT_MAIN_ENV_LABEL, "\n".join(lines))
@@ -615,7 +646,7 @@ def build_reused_derived_environment_injection(
             derivatives = [_default_master_derivative(name)]
         lines = [
             f"所属主环境={name}",
-            "景别构图节点当前 ENV 必须从下列已声明衍生名中选用或沿用；缺覆盖角可在同坐标系内补合法新行，禁止另起近义衍生名，禁止重映射角度。",
+            "场景现场编排当前 ENV 必须从下列已声明衍生名中选用或沿用；缺覆盖角可在同坐标系内补合法新行，禁止另起近义衍生名，禁止重映射角度。",
         ]
         for item in derivatives:
             derived_name = _clean_env_name(item.get("name"))
@@ -790,10 +821,10 @@ def format_selected_global_environment_injection(catalog: Sequence[Dict[str, Any
         )
     lines = [
         "以下主环境来自剧本页「全局资产」勾选（已删除不计入）。",
-        "必须先把本集需要的环境（SCENE_ENV_IDENT 名称 + 情节确认空间）与本清单逐条对照，找出可对应项：",
-        "名称相同、同空间别称、或摘要空间类型与本场包络同一处即命中。",
-        "命中且 SCENE_ENV_IDENT 已标 复用=是 → 只锁注册名，禁止重写骨架。",
-        "命中但识别为新建 → 写骨架时必须参考本条名称/摘要/已有衍生，禁止另起同义空壳。",
+        "必须先把本集勘探出的拍摄环境与本清单逐条对照，找出可对应项：",
+        "名称相同、同空间别称、或原定义空间类型与本场包络同一处即命中。",
+        "命中且 SCENE_ENV_IDENT 已标 复用=是 → 只锁注册名，继承原定义，禁止重写骨架。",
+        "命中但识别为新建 → 写骨架时必须参考本条名称/原定义/已有衍生，禁止另起同义空壳。",
         "未命中才按新建设计；未对应的勾选项不得硬塞进无关场。",
     ]
     for item in usable:
@@ -809,13 +840,16 @@ def format_reuse_lock_instruction(
     if not names:
         return (
             "【整集环境规划】待复用主环境=无。"
-            "场景拆分未标任何可复用主环境；本集新建环境全部按 复用=否 写骨架。"
+            "本集没有预锁复用名；场景勘探后对照已注入的项目主环境/用户选定全局环境自行判定。"
+            "复用=是 只锁注册名并继承原定义，禁止输出该主环境骨架。"
+            "全复用场仍须输出 SCENE_ENV_IDENT（含本场定位/目标/情绪表达），不要输出【主环境】骨架。"
             "不得臆造项目库/上集复用名。"
         )
     lines = [
-        "【整集环境规划】以下主环境已由场景拆分判定复用，禁止输出其【主环境】骨架；"
-        "只为复用=否的新建环境写主环境补丁；全复用场不要输出补丁。复用骨架由程序按下列具体信息回填。"
-        "已有衍生名只作后续景别构图节点参考，本文件不写衍生行。",
+        "【整集环境规划】以下主环境可对照复用（项目库/上集/用户选定），禁止输出其【主环境】骨架；"
+        "只为复用=否的新建环境写主环境骨架与实体落点；全复用场仍须输出 SCENE_ENV_IDENT（含本场定位/目标/情绪表达），不要输出骨架。"
+        "复用骨架由程序按下列具体信息回填。"
+        "已有衍生名只作后续场景现场编排参考，本文件不写衍生行。",
         "待复用主环境：",
     ]
     for name in names:
@@ -823,5 +857,5 @@ def format_reuse_lock_instruction(
         if item:
             lines.extend(_catalog_item_injection_lines(item))
         else:
-            lines.append(f"- {name}｜来源=场景拆分锁定｜摘要=无｜已有衍生=无")
+            lines.append(f"- {name}｜来源=环境识别锁定｜摘要=无｜已有衍生=无")
     return "\n".join(lines)

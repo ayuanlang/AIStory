@@ -101,6 +101,7 @@ def test_persist_overwrites_old_adaptation_and_stage_outputs():
         db=_DummyDb(),
         episode=episode,
         result_content=NEW_SCRIPT,
+        node_output_key="scene_split",
     )
 
     assert "新剧本正文" in episode.ai_scene_analysis_adaptation
@@ -118,6 +119,7 @@ def test_persist_overwrites_old_adaptation_and_stage_outputs():
     assert "旧风格" not in visual
     parsed_visual = json.loads(visual)
     assert parsed_visual["project_visual_backfill"]["Global_Style"] == "冷峻写实"
+    assert "新剧本正文" in outputs["stages"]["stage1"]["outputs"]["scene_split"]["content"]
 
 
 def test_persist_clears_stale_visual_backfill_when_json_missing():

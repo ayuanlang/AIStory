@@ -39,6 +39,7 @@ from app.services.script_analysis_flow import (
     resolve_assets_extraction_source_text,
     upsert_pipeline_node_status,
 )
+from app.services.script_analysis_flow.environment_reuse import SCENE_ENV_IDENT_PATTERN
 from app.services.script_analysis_llm_config import (
     _resolve_script_analysis_dropdown_order,
     _select_script_analysis_api_order,
@@ -54,9 +55,9 @@ logger = logging.getLogger("api_logger")
 
 _FLOW_NODE_ACTION_LABELS = {
     "script_optimization": "剧本优化（旧版）",
-    "scene_split": "场景拆分",
-    "environment_plan": "主环境规划",
-    "scene_subskill_pipeline": "文戏/构图/建置",
+    "scene_split": "全局统筹",
+    "environment_plan": "环境规划",
+    "scene_subskill_pipeline": "文戏增强/构图/建置",
     "assets_extraction": "资产清单提取",
     "scene_markdown": "场景编排",
     "asset_design_character": "角色资产设计",
@@ -67,12 +68,6 @@ _FLOW_DOWNSTREAM_NODES = {
     "scene_split": [
         "environment_plan",
         "scene_subskill_pipeline",
-        "assets_extraction",
-        "scene_markdown",
-        "asset_design_character",
-        "asset_design_prop",
-        "asset_design_environment",
-        "storyboard_generation",
     ],
     "environment_plan": [
         "assets_extraction",
@@ -112,7 +107,9 @@ def _extract_environment_patches(environment_output: str) -> Dict[str, str]:
         if start_id in patches:
             raise HTTPException(status_code=422, detail=f"ENV_SCENE_PATCH_DUPLICATE:{start_id}")
         body = str(match.group(2) or "").strip()
-        if not body or "[ENV_BLOCK_START" not in body.upper() or "[ENV_BLOCK_END" not in body.upper():
+        has_env = "[ENV_BLOCK_START" in body.upper() and "[ENV_BLOCK_END" in body.upper()
+        has_ident = "[SCENE_ENV_IDENT_START" in body.upper() and "[SCENE_ENV_IDENT_END" in body.upper()
+        if not body or not (has_env or has_ident):
             raise HTTPException(status_code=422, detail=f"ENV_SCENE_PATCH_BLOCK_MISSING:{start_id}")
         patches[start_id] = body
     if patches:
@@ -166,6 +163,7 @@ def _merge_environment_patches(scene_split_text: str, environment_output: str) -
             raise HTTPException(status_code=422, detail=f"ENV_SCENE_TARGET_MISSING:{scene_id}")
         scene_body = str(scene_match.group(2) or "")
         scene_body = _ENV_BLOCK_WITH_COVERAGE_PATTERN.sub("", scene_body, count=1)
+        scene_body = SCENE_ENV_IDENT_PATTERN.sub("", scene_body)
         content_marker = re.search(
             rf"`?\[SCENE_CONTENT_START:{re.escape(scene_id)}\]`?",
             scene_body,
@@ -587,7 +585,7 @@ async def execute_scene_analysis_flow_node(
                         status="running",
                         progress_percent=15.0,
                         retry_count=attempt,
-                        runtime_meta={"business_event": "retry", "business_reason": "场景拆分结果不完整"},
+                        runtime_meta={"business_event": "retry", "business_reason": "全局统筹结果不完整"},
                         error_code="SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING",
                         error_message=(
                             "incomplete Stage 1 output, switching API and rerunning"

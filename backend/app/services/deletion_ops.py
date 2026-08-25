@@ -20,6 +20,7 @@ from app.models.all_models import (
     Project,
     Scene,
     Shot,
+    ScriptProgressIssue,
     ScriptProgressPipelineNode,
     ScriptProgressSceneUnit,
     User,
@@ -294,10 +295,13 @@ def _hard_purge_episode_scenes(db: Session, episode_id: int) -> int:
     return int(deleted or 0)
 
 
-def _purge_episode_scene_progress(db: Session, *, project_id: int, episode_id: int) -> int:
-    removed = 0
+def reset_episode_analysis_progress(db: Session, *, project_id: int, episode_id: int) -> Dict[str, int]:
+    """Clear diagnosis-panel progress: all pipeline nodes, scene units, and issues."""
+    removed_units = 0
+    removed_nodes = 0
+    removed_issues = 0
     if ScriptProgressSceneUnit is not None:
-        removed += int(
+        removed_units = int(
             db.query(ScriptProgressSceneUnit)
             .filter(
                 ScriptProgressSceneUnit.project_id == int(project_id),
@@ -307,12 +311,35 @@ def _purge_episode_scene_progress(db: Session, *, project_id: int, episode_id: i
             or 0
         )
     if ScriptProgressPipelineNode is not None:
-        db.query(ScriptProgressPipelineNode).filter(
-            ScriptProgressPipelineNode.project_id == int(project_id),
-            ScriptProgressPipelineNode.episode_id == int(episode_id),
-            ScriptProgressPipelineNode.node_name.in_(["scene_markdown", "scene_planning", "scene_import"]),
-        ).delete(synchronize_session=False)
-    return removed
+        removed_nodes = int(
+            db.query(ScriptProgressPipelineNode)
+            .filter(
+                ScriptProgressPipelineNode.project_id == int(project_id),
+                ScriptProgressPipelineNode.episode_id == int(episode_id),
+            )
+            .delete(synchronize_session=False)
+            or 0
+        )
+    if ScriptProgressIssue is not None:
+        removed_issues = int(
+            db.query(ScriptProgressIssue)
+            .filter(
+                ScriptProgressIssue.project_id == int(project_id),
+                ScriptProgressIssue.episode_id == int(episode_id),
+            )
+            .delete(synchronize_session=False)
+            or 0
+        )
+    return {
+        "removed_scene_units": removed_units,
+        "removed_pipeline_nodes": removed_nodes,
+        "removed_issues": removed_issues,
+    }
+
+
+def _purge_episode_scene_progress(db: Session, *, project_id: int, episode_id: int) -> int:
+    result = reset_episode_analysis_progress(db, project_id=project_id, episode_id=episode_id)
+    return int(result.get("removed_scene_units") or 0)
 
 
 def _soft_delete_scenes(

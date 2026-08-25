@@ -10,6 +10,22 @@ from app.services.script_analysis_flow_runner import (
 )
 
 
+def test_scene_transition_header_accepts_join_alias():
+    from app.services.script_analysis_flow import extract_scene_transition_block_from_scene_text
+
+    legacy = """【场景切换与首节拍转场】
+服饰换装：Serena从员工便服换为裙子
+[BEAT_START:1]
+beat
+[BEAT_END:1]"""
+    modern = """【场景衔接】上场=开场｜手法=硬切｜音画=无
+[BEAT_START:1]
+beat
+[BEAT_END:1]"""
+    assert "服饰换装" in extract_scene_transition_block_from_scene_text(legacy)
+    assert "手法=硬切" in extract_scene_transition_block_from_scene_text(modern)
+
+
 def test_environment_patches_merge_into_matching_scenes_without_rewriting_source():
     split_text = """[SCENES_BLOCK_START]
 [COMPREHENSIVE_INFO_START]
@@ -103,7 +119,13 @@ def test_scene_env_ident_parse_and_reuse_decision():
     text = """【场景名称】客栈对峙·夜·内
 [SCENE_ENV_IDENT_START:EP02_SC01]
 [ENV] 名称=客栈大堂｜复用=是｜来源=项目库｜匹配主环境=客栈大堂｜依据=原文：“大堂”
+定位=继承原定义
+目标=本场空镜须=建立夜内对峙压迫｜服务=无｜可见落点=大门与空椅
+情绪表达=主情绪=压迫｜空镜表达=灯下空堂｜光色倾向=暖灯压暗｜构图倾向=纵深压迫
 [ENV] 名称=马车内舱｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“上车”
+定位=载具内舱，窄小，密闭座舱
+目标=本场空镜须=锁前向驾驶座舱｜服务=无｜可见落点=前窗与驾驶台
+情绪表达=主情绪=紧张｜空镜表达=窄舱前窗｜光色倾向=夜窗冷渗｜构图倾向=框中框
 [SCENE_ENV_IDENT_END:EP02_SC01]
 """
     items = parse_scene_env_ident_items(text, "EP02_SC01")
@@ -137,6 +159,10 @@ def test_scene_env_ident_parse_and_reuse_decision():
     assert "[项目主环境名开始]" in injection
     assert "客栈大堂｜来源=项目库" in injection
     assert "已有衍生=`0度客栈大堂`" in injection or "0度客栈大堂" in injection
+    assert "原定义=" in injection
+    planning_injection = build_project_main_environment_injection(catalog, for_planning=True)
+    assert "环境规划必须先读本清单及原定义" in planning_injection
+    assert "继承原定义" in planning_injection
     empty_injection = build_project_main_environment_injection([])
     assert "[项目主环境名开始]" in empty_injection
     assert "可复用/可参考主环境=无" in empty_injection
@@ -164,9 +190,10 @@ def test_reuse_lock_instruction_is_whole_episode():
     text = format_reuse_lock_instruction(["客栈大堂", "马车外"])
     assert "整集环境规划" in text
     assert "客栈大堂" in text
-    assert "全复用场不要输出补丁" in text
+    assert "全复用场仍须输出 SCENE_ENV_IDENT" in text
     empty = format_reuse_lock_instruction([])
     assert "待复用主环境=无" in empty
+    assert "场景勘探后对照已注入的项目主环境" in empty
     detailed = format_reuse_lock_instruction(
         ["客栈大堂"],
         [
@@ -180,7 +207,7 @@ def test_reuse_lock_instruction_is_whole_episode():
         ],
     )
     assert "待复用主环境：" in detailed
-    assert "摘要=夜市内堂，柜台在180度侧" in detailed
+    assert "原定义=夜市内堂，柜台在180度侧" in detailed
     assert "0度客栈大堂" in detailed
 
 
@@ -211,6 +238,56 @@ def test_selected_global_environment_injection_marks_none_and_details():
     assert "禁止另起同义空壳" in selected
 
 
+def test_ident_only_reuse_patch_merges_before_scene_content():
+    split_text = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC03]
+【场景名称】回客栈
+[SCENE_CONTENT_START:EP01_SC03]
+original three
+[SCENE_CONTENT_END:EP01_SC03]
+[SCENE_END:EP01_SC03]
+[SCENES_BLOCK_END]"""
+    patch_text = """[ENV_SCENE_PATCH_START:EP01_SC03]
+[SCENE_ENV_IDENT_START:EP01_SC03]
+[ENV] 名称=客栈大堂｜复用=是｜来源=项目库｜匹配主环境=客栈大堂｜依据=原文：“回客栈”
+[SCENE_ENV_IDENT_END:EP01_SC03]
+[ENV_SCENE_PATCH_END:EP01_SC03]"""
+
+    merged = _merge_environment_patches(split_text, patch_text)
+
+    assert "[SCENE_ENV_IDENT_START:EP01_SC03]" in merged
+    assert merged.index("【场景名称】回客栈") < merged.index("[SCENE_ENV_IDENT_START:EP01_SC03]")
+    assert merged.index("[SCENE_ENV_IDENT_END:EP01_SC03]") < merged.index("[SCENE_CONTENT_START:EP01_SC03]")
+    assert "original three" in merged
+    assert "ENV_SCENE_PATCH_START" not in merged
+
+
+def test_ident_and_env_block_merge_together():
+    split_text = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+【场景名称】短名=one
+[SCENE_CONTENT_START:EP01_SC01]
+original one
+[SCENE_CONTENT_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]"""
+    patch_text = """[ENV_SCENE_PATCH_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=room one｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“室内”
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+【主环境】room one
+[ENV_BLOCK_END]
+[ENV_SCENE_PATCH_END:EP01_SC01]"""
+
+    merged = _merge_environment_patches(split_text, patch_text)
+
+    assert merged.index("【场景名称】") < merged.index("[SCENE_ENV_IDENT_START:EP01_SC01]")
+    assert merged.index("[SCENE_ENV_IDENT_END:EP01_SC01]") < merged.index("[ENV_BLOCK_START]")
+    assert merged.index("【主环境】room one") < merged.index("[SCENE_CONTENT_START:EP01_SC01]")
+    assert "original one" in merged
+
+
 def test_framing_waits_for_environment_plan_node_success():
     from app.services.scene_subskill_pipeline_runner import (
         environment_plan_ready_for_framing,
@@ -229,6 +306,7 @@ def test_framing_waits_for_environment_plan_node_success():
 
 def test_staging_splices_env_plan_scene_onto_drama_enhance():
     from app.services.scene_subskill_pipeline_runner import (
+        extract_environment_planning_sections,
         splice_environment_and_enhance_scene,
         strip_environment_planning_sections,
     )
@@ -284,6 +362,9 @@ standardized beat
         "[SCENE_ENV_IDENT_END:EP01_SC01]\n[ENV_BLOCK_START]\n【主环境】旧稿\n[ENV_BLOCK_END]",
     )
     assert "【主环境】旧稿" not in strip_environment_planning_sections(mixed)
+    extracted_env = extract_environment_planning_sections(env_scene)
+    assert "[SCENE_ENV_IDENT_START:EP01_SC01]" in extracted_env
+    assert "【主环境】客栈大堂" in extracted_env
 
 
 def test_assets_extraction_uses_scene_split_plus_per_scene_env():

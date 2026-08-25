@@ -149,6 +149,7 @@ import {
     recomputeEpisodeCostEstimation,
     syncSceneUnitsProgress,
     resetSceneOrchestrationProgress,
+    resetEpisodeAnalysisProgress,
     getEpisodeProgressSnapshot,
     splitEpisodeScript,
 } from '../../../services/api';
@@ -906,29 +907,60 @@ const formatSubjectIndexNamesForOrchestration = (subjectIndexText) => {
     if (!text.trim()) return '';
     const characters = [];
     const props = [];
+    const continuities = [];
     const seenCharacters = new Set();
     const seenProps = new Set();
+    const seenContinuity = new Set();
+    const emptyContinuity = new Set(['', 'none', 'null', 'nil', 'n/a', 'na', '-', '—', '－', '无', '空']);
     const typeOf = (raw) => {
         const type = String(raw || '').trim().toLowerCase();
         if (['character', 'characters', 'char', '人物', '角色'].includes(type)) return 'character';
         if (['prop', 'props', '道具', '物件'].includes(type)) return 'prop';
         return '';
     };
-    const add = (bucket, raw) => {
+    const normalizeHeader = (raw) => String(raw || '').trim().toLowerCase().replace(/[\s_.\-]+/g, '');
+    const isEmptyContinuity = (raw) => emptyContinuity.has(String(raw || '').trim().toLowerCase().replace(/[\s_*`'“”‘’"]+/g, ''));
+    const extractContinuityFromAttrs = (raw) => {
+        const match = String(raw || '').match(/(?:^|[；;])\s*form_continuity\s*[：:]\s*([^；;]+)/i);
+        return String(match?.[1] || '').trim();
+    };
+    let headerIndexes = null;
+    const detectHeaders = (parts) => {
+        const normalized = parts.map(normalizeHeader);
+        if (!normalized.some((key) => key.includes('subject') && key.includes('no')) && !normalized.includes('subjectno')) {
+            return null;
+        }
+        const indexes = {};
+        normalized.forEach((key, idx) => {
+            if (key === 'subjecttype' || key === 'type' || key === '类型' || key === '类别') indexes.subject_type = idx;
+            if (['subjectnamezh', 'subjectnameexact', 'subjectname', 'name', '名称', '名字'].includes(key)) indexes.name = idx;
+            if (['formcontinuity', 'costumepropcontinuity', 'costumecontinuity', '服化道连续性', '形态变化', '形态连续性'].includes(key)) {
+                indexes.form_continuity = idx;
+            }
+            if (key === 'entityattributes' || key === 'attributes' || key === '实体属性') indexes.entity_attributes = idx;
+        });
+        return indexes;
+    };
+    const add = (bucket, raw, continuityRaw = '') => {
         const name = String(raw || '').trim().replace(/^[`'“”‘’"[\]]+|[`'“”‘’"[\]]+$/g, '').trim();
         if (!name) return;
         const normalized = name.replace(/[\s_*`'"]+/g, '').toLowerCase();
-        if (['none', 'null', 'nil', 'n/a', 'na', '-', '无', '空'].includes(normalized)) return;
+        if (emptyContinuity.has(normalized)) return;
         if (bucket === 'character') {
             if (seenCharacters.has(normalized)) return;
             seenCharacters.add(normalized);
             characters.push(name);
-            return;
-        }
-        if (bucket === 'prop') {
+        } else if (bucket === 'prop') {
             if (seenProps.has(normalized)) return;
             seenProps.add(normalized);
             props.push(name);
+        } else {
+            return;
+        }
+        const continuity = String(continuityRaw || '').trim() || '无';
+        if (!seenContinuity.has(normalized)) {
+            seenContinuity.add(normalized);
+            continuities.push({ name, continuity, real: !isEmptyContinuity(continuityRaw) });
         }
     };
     for (const rawLine of text.split(/\r?\n/)) {
@@ -936,18 +968,39 @@ const formatSubjectIndexNamesForOrchestration = (subjectIndexText) => {
         if (!line) continue;
         const kvType = line.match(/\bsubject_type\s*=\s*([^|`\n]+)/i);
         const kvZh = line.match(/\bsubject_name_(?:zh|exact)\s*=\s*([^|`\n]+)/i);
+        const kvCont = line.match(/\bform_continuity\s*=\s*([^|`\n]+)/i);
         if (kvType && kvZh) {
-            add(typeOf(kvType[1]), kvZh[1]);
+            add(typeOf(kvType[1]), kvZh[1], kvCont?.[1] || '');
             continue;
         }
-        if (!/^\|?\s*S\d+\s*\|/i.test(line)) continue;
+        if (!/^\|?\s*S\d+\s*\|/i.test(line)) {
+            if (line.startsWith('|') && !headerIndexes) {
+                const headerParts = line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+                headerIndexes = detectHeaders(headerParts);
+            }
+            continue;
+        }
         const parts = line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
         if (parts.length < 3) continue;
-        add(typeOf(parts[1]), parts[2]);
+        const typeIdx = headerIndexes?.subject_type ?? 1;
+        const nameIdx = headerIndexes?.name ?? 2;
+        const contIdx = headerIndexes?.form_continuity ?? (parts.length >= 9 ? 8 : -1);
+        const attrsIdx = headerIndexes?.entity_attributes ?? (parts.length >= 7 ? 6 : -1);
+        let continuity = contIdx >= 0 ? String(parts[contIdx] || '').trim() : '';
+        if (isEmptyContinuity(continuity) && attrsIdx >= 0) {
+            continuity = extractContinuityFromAttrs(parts[attrsIdx]);
+        }
+        add(typeOf(parts[typeIdx]), parts[nameIdx], continuity);
     }
     const lines = [];
     if (characters.length) lines.push(`CHAR: ${characters.join('，')}`);
     if (props.length) lines.push(`PROP: ${props.join('，')}`);
+    if (continuities.some((item) => item.real)) {
+        lines.push('【服化道连续性】');
+        continuities.forEach((item) => {
+            lines.push(`${item.name}｜${item.continuity}`);
+        });
+    }
     return lines.join('\n');
 };
 
@@ -1104,6 +1157,52 @@ const parseSceneUnitsFromScriptMarkersText = (scriptText) => {
 };
 
 const SCENE_SUBSKILL_EDIT_KINDS = new Set(['drama_opt', 'combat_opt', 'framing_opt', 'staging_opt']);
+const SCENE_SUBSKILL_RESULT_KEYS = {
+    drama_opt: 'drama',
+    combat_opt: 'combat',
+    framing_opt: 'framing',
+    staging_opt: 'staging',
+};
+const STAGE1_NODE_RESULT_KEYS = ['scene_split', 'environment_plan', 'scene_subskills', 'scene_subskill_results'];
+
+const parseSceneSubskillResultsMap = (raw) => {
+    const text = String(raw || '').trim();
+    if (!text) return {};
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch (_) {}
+    return {};
+};
+
+const collectStage1NodeOutputsFromSlotMap = (outputs) => {
+    const collected = {};
+    if (!outputs || typeof outputs !== 'object' || Array.isArray(outputs)) return collected;
+    STAGE1_NODE_RESULT_KEYS.forEach((key) => {
+        const value = outputs[key];
+        const content = value && typeof value === 'object' && !Array.isArray(value)
+            ? String(value.content || '')
+            : String(value == null ? '' : value);
+        if (content.trim()) collected[key] = content;
+    });
+    return collected;
+};
+
+const resolveSceneSubskillStoredContent = (resultsMap, sceneId, stepKey, episodePrefix = 'EP01') => {
+    const map = resultsMap && typeof resultsMap === 'object' ? resultsMap : {};
+    const target = String(sceneId || '').trim();
+    const keyName = String(stepKey || '').trim();
+    if (!target || !keyName) return '';
+    const direct = String(map[target]?.[keyName] || '').trim();
+    if (direct) return direct;
+    const hit = Object.keys(map).find((key) => sceneUnitIdsMatch(
+        key,
+        target,
+        deriveSceneOrderFromSceneId(target),
+        episodePrefix
+    ));
+    return String(map[hit]?.[keyName] || '').trim();
+};
 
 const extractAdaptedSceneBlockFromScript = (scriptText, sceneId, episodePrefix = 'EP01') => {
     const text = String(scriptText || '').trim();
@@ -1249,21 +1348,25 @@ const stripBeatBoundaryMarkers = (beatsText) => String(beatsText || '')
     .trim();
 
 /**
- * Strip Stage 1 Beat切换说明 blocks before Stage 2.1 / 2.2 injection.
+ * Strip Stage 1 analysis blocks before Stage 2.1 / 2.2 injection.
  * Only removes paired segments:
+ *   ────【场记分析】──── … ────【场记分析结束】────
  *   ────【Beat切换说明】──── … ────【Beat切换说明结束】────
  * Unclosed blocks are left untouched (never greedy-eat past SCENE/BEAT markers).
  */
 const stripBeatTransitionNotesFromScript = (scriptText) => {
     let text = String(scriptText || '').replace(/\r\n/g, '\n');
     if (!text) return '';
-    const pairedRe = new RegExp(
-        String.raw`(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*Beat[ \t]*切换说明[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*\n` +
-        String.raw`[\s\S]*?` +
-        String.raw`(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*Beat[ \t]*切换说明结束[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*(?=\n|$)`,
-        'gi'
-    );
-    text = text.replace(pairedRe, '\n');
+    const pairedNames = ['场记分析', String.raw`Beat[ \t]*切换说明`];
+    for (const name of pairedNames) {
+        const pairedRe = new RegExp(
+            String.raw`(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*${name}[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*\n` +
+            String.raw`[\s\S]*?` +
+            String.raw`(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*${name}结束[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*(?=\n|$)`,
+            'gi'
+        );
+        text = text.replace(pairedRe, '\n');
+    }
     return text.replace(/\n{3,}/g, '\n\n').trim();
 };
 
@@ -2508,7 +2611,7 @@ const clearAnalysisSessionProgressSnapshot = (episodeId) => {
 
 /**
  * Diagnostic strip order. The actual DAG is:
- * scene split -> environment patch merge -> (per-scene subskills || asset inventory)
+ * scene split -> environment plan -> (per-scene subskills || asset inventory)
  * -> (scene orchestration || asset design) -> storyboards.
  */
 const ANALYSIS_LIVE_STEP_ORDER = [
@@ -2520,13 +2623,13 @@ const ANALYSIS_LIVE_STEP_ORDER = [
 ];
 
 const ANALYSIS_STAGE_LABELS = {
-    scene_split: { zh: '场景拆分', en: 'Scene Split' },
-    environment_plan: { zh: '环境回填', en: 'Environment Merge' },
+    scene_split: { zh: '全局统筹', en: 'Global Orchestration' },
+    environment_plan: { zh: '环境规划', en: 'Environment Plan' },
     scene_subskills: { zh: '逐场优化', en: 'Per-Scene Refinement' },
     script_opt: { zh: '逐场优化', en: 'Per-Scene Refinement' },
     drama_opt: { zh: '文戏优化', en: 'Drama Refinement' },
     combat_opt: { zh: '武戏优化（含特效与仙攻）', en: 'Action Refinement (VFX + Xian)' },
-    framing_opt: { zh: '景别构图', en: 'Framing' },
+    framing_opt: { zh: '场景现场编排', en: 'Floor Staging' },
     staging_opt: { zh: '建置入戏', en: 'Staging' },
     extract_assets: { zh: '资产清单（并行）', en: 'Asset Inventory (Parallel)' },
     scene_beats: { zh: '场景编排', en: 'Scene Orchestration' },
@@ -2602,17 +2705,17 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
         [/\[Stage\s*2\.1\]/gi, t('[资产清单]', '[Asset inventory]')],
         [/\[Stage\s*2\.2\]/gi, t('[场景编排]', '[Scene orchestration]')],
         [/\[Stage\s*3\]/gi, t('[资产设计]', '[Asset design]')],
-        [/\[Stage\s*1\]/gi, t('[场景拆分]', '[Scene split]')],
+        [/\[Stage\s*1\]/gi, t('[全局统筹]', '[Global orchestration]')],
         [/\bStage\s*2\.1\b/gi, t('资产清单', 'asset inventory')],
         [/\bStage\s*2\.2\b/gi, t('场景编排', 'scene orchestration')],
         [/\bStage\s*3\b/gi, t('资产设计', 'asset design')],
-        [/\bStage\s*1\b/gi, t('场景拆分', 'scene split')],
+        [/\bStage\s*1\b/gi, t('全局统筹', 'global orchestration')],
         [/\bSubject Index\b/gi, t('资产清单', 'asset inventory')],
         [/\bscene_markdown_by_scene\b/gi, t('分场场景编排', 'per-scene orchestration')],
         [/\bscene_markdown\b/gi, t('场景编排内容', 'scene orchestration content')],
-        [/\bscript_optimization\b/gi, t('场景拆分', 'scene split')],
-        [/\bscene_split\b/gi, t('场景拆分', 'scene split')],
-        [/\benvironment_plan\b/gi, t('环境回填', 'environment merge')],
+        [/\bscript_optimization\b/gi, t('全局统筹', 'global orchestration')],
+        [/\bscene_split\b/gi, t('全局统筹', 'global orchestration')],
+        [/\benvironment_plan\b/gi, t('环境规划', 'environment plan')],
         [/\bscene_subskill_pipeline\b/gi, t('逐场优化', 'per-scene refinement')],
         [/\bassets_extraction\b/gi, t('资产清单', 'asset inventory')],
         [/\basset_design_environment\b/gi, t('环境资产设计', 'environment asset design')],
@@ -2634,7 +2737,7 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
         [/Incomplete after persistence retries[^。]*/i, t('部分资产尚未入库，稍后会自动补齐。', 'Some assets are not in the library yet; they will be filled in automatically.')],
         [/环境与海报资产设计已就绪[（(][^）)]+[）)]，待启动分镜\s*0\s*场/g, ''],
         [/Environment\/poster asset design ready[ (][^)]+[)]?;?\s*0\s*scene\(s\) queued.*/i, ''],
-        [/Persisting advanced raw .+ immediately after environment_plan return\.\.\./i, t('正在保存环境回填结果…', 'Saving environment merge result...')],
+        [/Persisting advanced raw .+ immediately after environment_plan return\.\.\./i, t('正在保存环境规划结果…', 'Saving environment plan result...')],
         [/Persisting clean .+ immediately after return\.\.\./i, t('正在保存资产清单…', 'Saving asset inventory...')],
         [/Persisting per-scene .+ immediately after parallel beats return\.\.\./i, t('正在保存各场场景编排结果…', 'Saving per-scene orchestration...')],
         [/Submitting .+ \(Asset Extraction\)\.\.\./i, t('正在生成资产清单…', 'Generating asset inventory...')],
@@ -2697,7 +2800,8 @@ const normalizeAnalysisLivePhase = (phase) => {
     if (key === 'supplement') return 'assets_gen';
     if (key === 'readiness' || key === 'repair') return 'assets_gen';
     if (key === 'running') return 'script_opt';
-    if (key === 'parallel_prepare') return 'extract_assets';
+    if (key === 'parallel_prepare') return 'script_opt';
+    if (key === 'environment_plan') return 'script_opt';
     if (key === 'scene_subskills') return 'script_opt';
     // Terminal "completed" means all 5 stages finished; treat as past storyboard.
     if (key === 'completed') return 'storyboard';
@@ -2762,7 +2866,10 @@ const isAnalysisLiveStepActive = (phase, stepKey, { isLive = false, stepReady = 
     const rawPhase = String(phase || '').trim().toLowerCase();
     if (['failed', 'warning', 'completed', 'idle'].includes(rawPhase)) return false;
     if (rawPhase === 'parallel_prepare') {
-        return stepKey === 'script_opt' || stepKey === 'extract_assets';
+        return stepKey === 'script_opt';
+    }
+    if (rawPhase === 'environment_plan') {
+        return stepKey === 'script_opt';
     }
     if (rawPhase === 'scene_subskills') {
         return stepKey === 'script_opt';
@@ -2953,11 +3060,13 @@ const SUBJECT_INDEX_STANDARD_HEADERS = [
     'dependency_reference',
     'entity_attributes',
     'script_entity_coverage',
+    'form_continuity',
 ];
 
 const SUBJECT_INDEX_LONG_TEXT_FIELDS = new Set([
     'entity_attributes',
     'script_entity_coverage',
+    'form_continuity',
     'description',
     'description_cn',
     'narrative_description',
@@ -2972,6 +3081,7 @@ const SUBJECT_INDEX_FIELD_LABELS = {
     dependency_reference: { zh: '依赖引用', en: 'Dependency Reference' },
     entity_attributes: { zh: '实体属性', en: 'Entity Attributes' },
     script_entity_coverage: { zh: '剧本覆盖', en: 'Script Coverage' },
+    form_continuity: { zh: '服化道连续性', en: 'Form Continuity' },
 };
 
 const resolveSubjectFieldValueByAliases = (fields, aliases = []) => {
@@ -3020,6 +3130,7 @@ const normalizeSubjectIndexEntryFields = (rawFields = {}, entry = {}) => {
         dependency_reference: ['dependency_reference', 'dependency', '依赖引用'],
         entity_attributes: ['entity_attributes', 'attributes', '实体属性'],
         script_entity_coverage: ['script_entity_coverage', 'coverage', '剧本覆盖'],
+        form_continuity: ['form_continuity', '服化道连续性', '形态变化', '形态连续性'],
     };
 
     const resolved = {};
@@ -3283,6 +3394,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [diagnosticsPipelineNodes, setDiagnosticsPipelineNodes] = useState([]);
     const [diagnosticsSceneUnits, setDiagnosticsSceneUnits] = useState([]);
     const diagnosticsNodeLogStateRef = useRef({});
+    const diagnosticsEpochRef = useRef(0);
+    const latestStage1NodeOutputsRef = useRef({});
     const [selectedReuseSubjectIds, setSelectedReuseSubjectIds] = useState([]);
     const [reuseSubjectTypeFilter, setReuseSubjectTypeFilter] = useState('environment');
     const [reuseDropdownOpen, setReuseDropdownOpen] = useState(false);
@@ -3952,7 +4065,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     return JSON.stringify({ project_visual_backfill: inner }, null, 2);
                 }
             }
-            const contentKeys = ['Global_Style', 'global_style', 'borrowed_films', 'tone', 'color_spectrum', 'plot_summary', 'music_recommendation'];
+            const contentKeys = ['Global_Style', 'global_style', 'borrowed_films', 'tone', 'lighting', 'color_spectrum', 'plot_summary', 'music_recommendation'];
             if (contentKeys.some((key) => Object.prototype.hasOwnProperty.call(parsed, key))) {
                 return JSON.stringify({ project_visual_backfill: parsed }, null, 2);
             }
@@ -4023,7 +4136,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         );
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2InputParts = [
-            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为 Stage 1 优化后剧本（含角色设定、环境块、【场景切换与首节拍转场】服化道核销摘要、覆盖/速查与 Beat 建置/入戏；**已清除配对【Beat切换说明】…【Beat切换说明结束】段**）；据此提取实体并建立 Subject Index；**服饰/换装项命中换装或第二套可区分装束时，须强制拆多条 CHAR 供下游角色设计**；角色设定块中已摘录的外形/性情/特定动作须写入对应 `entity_attributes`；【未落环境实体清单】供 PROP/建置核销线索，禁止据此另建 ENV 行；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
+            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为环境规划完成后的剧本（含 `SCENE_ENV_IDENT` 识别与定位/目标/情绪表达、【主环境】/【未落清单】实体落点、角色设定、覆盖/速查与已有 Beat；**已清除配对【场记分析】…【场记分析结束】（及旧稿【Beat切换说明】）段**）。环境名、落点与三属性只继承入库，禁止重做场景勘探/识别或重排四向与未落落点；`basic_positioning`/`env_goal`/`scene_mood` 原样抄 IDENT。据此建立 Subject Index；**服饰/换装项命中换装或第二套可区分装束时，须强制拆多条 CHAR 供下游角色设计**；角色与道具形态变化须单独写入 `form_continuity`（哪一场、什么时候变）；角色设定块中已摘录的外形/性情/特定动作须写入对应 `entity_attributes`；【未落环境实体清单】只作 PROP/XOR 线索，禁止据此另建 ENV 行；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -4042,7 +4155,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Keep SCENES_BLOCK as the last section so nothing appears after [SCENES_BLOCK_END].
         stage2InputParts.push(wrapInjectionSection(
             '优化后剧本',
-            `[优化后剧本 - Stage 2.1权威输入（已清除【Beat切换说明】配对段）]\n${adaptedScriptText || ''}`
+            `[优化后剧本 - Stage 2.1权威输入（已清除【场记分析】/【Beat切换说明】配对段）]\n${adaptedScriptText || ''}`
         ));
 
         return {
@@ -4062,7 +4175,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         );
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2_2InputParts = [
-            '请执行第二阶段的第二步：节拍工程映射（Stage 2.2）。输入为 CHAR/PROP 资产名清单 + 本场已识别衍生环境名 + 单场 `【场景名称】{短名}｜{日·内/外}` 场景头 + Beat 块（`[BEAT_START:…]`…`[BEAT_END:…]`，含建置/入戏；**已清除【Beat切换说明】…【Beat切换说明结束】**；不含 Scene 级【主环境】块与资产描述，可含【本场衍生环境名】，不得列入裸主环境名）。将 `{短名}｜{日·内/外}` 原样落入 Scene Name；仅对 Beat 叙述层做名称转译并落入《Scenes Table》的 `{Beats}`；Environment Name 与 ENV:[] 只认【本场衍生环境名】，Beat 明文出现时须套 ENV:[原样]；禁止把主环境裸名列入或套 ENV:[]；禁止改情节/对白/建置/补实体；禁止补写切换说明段；输出仅含表头、分隔行与数据行，不要输出 Part 1: Scenes Table 标题。',
+            '请执行第二阶段的第二步：节拍工程映射（Stage 2.2）。输入为 CHAR/PROP 资产名清单 + 本场已识别衍生环境名 + 单场 `【场景名称】{短名}｜{日·内/外}` 场景头 + Beat 块（`[BEAT_START:…]`…`[BEAT_END:…]`，含建置/入戏；**已清除【场记分析】…【场记分析结束】**；不含 Scene 级【主环境】块与资产描述，可含【本场衍生环境名】，不得列入裸主环境名）。将 `{短名}｜{日·内/外}` 原样落入 Scene Name；仅对 Beat 叙述层做名称转译并落入《Scenes Table》的 `{Beats}`；Environment Name 与 ENV:[] 只认【本场衍生环境名】，Beat 明文出现时须套 ENV:[原样]；禁止把主环境裸名列入或套 ENV:[]；禁止改情节/对白/建置/补实体；禁止补写场记分析段；输出仅含表头、分隔行与数据行，不要输出 Part 1: Scenes Table 标题。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -4163,8 +4276,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!namesOnly) return '';
         return [
             '[Stage 2-1 Subject Index - REQUIRED INPUT]',
-            'Names-only whitelist for Stage 2.2. Do not expect asset descriptions.',
+            'CHAR/PROP name whitelist plus 【服化道连续性】 (which scene / when form changes). Do not expect other asset descriptions.',
             'NAME LOCK: CHAR/PROP wrap names MUST be character-identical to the CHAR:/PROP: lists below.',
+            'Use 【服化道连续性】 to wrap the matching CHAR/PROP variant name at the stated scene/beat.',
             'ENV and Environment Name MUST be character-identical to 【本场衍生环境名】 only — never a bare main-environment name.',
             'Forbidden: any rename, polish, invent, or ENV wrap of a bare main-environment name. Mismatch = discard and rewrite.',
             wrapInjectionSection('Subject Index', namesOnly),
@@ -4532,7 +4646,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             warning: t('结果需人工复核', 'Result needs manual review'),
             failed: t('本轮处理失败', 'This run failed'),
             running: t('处理中', 'In progress'),
-            parallel_prepare: t('资产清单与逐场优化并行', 'Inventory and per-scene refinement in parallel'),
+            parallel_prepare: t('环境规划与逐场优化并行', 'Environment plan and per-scene refinement in parallel'),
             scene_subskills: t('逐场优化与编排衔接', 'Per-scene refinement and orchestration handoff'),
             supplement: getAnalysisStageLabel('assets_gen', t),
         };
@@ -10306,7 +10420,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return rows.length;
     }, [llmMarkdownTable]);
 
-    const buildStageOutputsObject = useCallback(({ analysisRawText = '', assetRawText = '', stage1RawText = '', stage2RawText = '', stage2_1Text = '', sceneMarkdownByScene = null, replaceSceneMarkdownByScene = false, replaceSubjectIndex = false } = {}) => {
+    const buildStageOutputsObject = useCallback(({ analysisRawText = '', assetRawText = '', stage1RawText = '', stage2RawText = '', stage2_1Text = '', sceneMarkdownByScene = null, replaceSceneMarkdownByScene = false, replaceSubjectIndex = false, stage1NodeOutputs = null } = {}) => {
         const resolvedAnalysisRawText = String(analysisRawText || '').trim();
         const resolvedAssetRawText = String(assetRawText || '').trim();
         const resolvedStage1RawText = String(stage1RawText || '').trim();
@@ -10427,6 +10541,52 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ? JSON.stringify(stage3EntitiesPayload, null, 2)
             : resolvedAssetRawText;
 
+        const persistedStage1Outputs = (() => {
+            try {
+                const raw = String(activeEpisode?.ai_stage_outputs || '').trim();
+                if (!raw) return {};
+                const parsed = JSON.parse(raw);
+                const outputs = parsed?.stages?.stage1?.outputs;
+                return outputs && typeof outputs === 'object' && !Array.isArray(outputs) ? outputs : {};
+            } catch (_) {
+                return {};
+            }
+        })();
+        const mergedNodeOutputs = {
+            ...collectStage1NodeOutputsFromSlotMap(persistedStage1Outputs),
+            ...collectStage1NodeOutputsFromSlotMap(latestStage1NodeOutputsRef.current),
+            ...collectStage1NodeOutputsFromSlotMap(stage1NodeOutputs),
+        };
+        const stage1Outputs = {
+            adapted_script: {
+                key: 'adapted_script',
+                kind: 'markdown',
+                title: '优化后剧本',
+                content: stage1AdaptedScript,
+            },
+            project_visual_backfill: {
+                key: 'project_visual_backfill',
+                kind: 'json',
+                title: '全局风格',
+                content: stage1VisualBackfillJson,
+            },
+            raw_text: {
+                key: 'raw_text',
+                kind: 'text',
+                title: '第一阶段完整结果',
+                content: resolvedStage1RawText,
+            },
+        };
+        Object.entries(mergedNodeOutputs).forEach(([key, content]) => {
+            if (!String(content || '').trim()) return;
+            stage1Outputs[key] = {
+                key,
+                kind: key === 'scene_subskill_results' ? 'json' : 'markdown',
+                title: key,
+                content,
+            };
+        });
+
         return {
             version: 1,
             stages: {
@@ -10448,26 +10608,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             content: projectContextJson,
                         },
                     },
-                    outputs: {
-                        adapted_script: {
-                            key: 'adapted_script',
-                            kind: 'markdown',
-                            title: '优化后剧本',
-                            content: stage1AdaptedScript,
-                        },
-                        project_visual_backfill: {
-                            key: 'project_visual_backfill',
-                            kind: 'json',
-                            title: '全局风格',
-                            content: stage1VisualBackfillJson,
-                        },
-                        raw_text: {
-                            key: 'raw_text',
-                            kind: 'text',
-                            title: '第一阶段完整结果',
-                            content: resolvedStage1RawText,
-                        },
-                    },
+                    outputs: stage1Outputs,
                 },
                 stage2: {
                     key: 'stage2',
@@ -11286,18 +11427,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 return;
             }
+            const epoch = diagnosticsEpochRef.current;
             try {
                 const snapshot = await getEpisodeProgressSnapshot(activeEpisode.id);
-                if (mounted) {
-                    setDiagnosticsPipelineNodes(
-                        Array.isArray(snapshot?.pipeline_nodes) ? snapshot.pipeline_nodes : []
-                    );
-                    setDiagnosticsSceneUnits(
-                        Array.isArray(snapshot?.scene_units) ? snapshot.scene_units : []
-                    );
-                }
+                if (!mounted || epoch !== diagnosticsEpochRef.current) return;
+                setDiagnosticsPipelineNodes(
+                    Array.isArray(snapshot?.pipeline_nodes) ? snapshot.pipeline_nodes : []
+                );
+                setDiagnosticsSceneUnits(
+                    Array.isArray(snapshot?.scene_units) ? snapshot.scene_units : []
+                );
             } catch (_) {
-                if (mounted && !isAnalyzing && !isRetryingPhase2) {
+                if (mounted && epoch === diagnosticsEpochRef.current && !isAnalyzing && !isRetryingPhase2) {
                     setDiagnosticsPipelineNodes([]);
                     setDiagnosticsSceneUnits([]);
                 }
@@ -11315,8 +11456,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     useEffect(() => {
         const labelMap = {
-            scene_split: t('场景拆分', 'Scene split'),
-            environment_plan: t('环境回填', 'Environment merge'),
+            scene_split: t('全局统筹', 'Global orchestration'),
+            environment_plan: t('环境规划', 'Environment plan'),
             scene_subskill_pipeline: t('逐场优化', 'Per-scene refinement'),
             assets_extraction: t('资产清单', 'Asset inventory'),
             scene_markdown: t('场景编排', 'Scene orchestration'),
@@ -11598,6 +11739,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const nextContent = String(content || '');
             const updatePayload = { [resultField]: nextContent };
             const logSource = String(options?.source || 'unspecified').trim() || 'unspecified';
+            let mergedNodeOutputs = {
+                ...collectStage1NodeOutputsFromSlotMap(latestStage1NodeOutputsRef.current),
+            };
+            try {
+                const freshEpisode = await fetchEpisode(activeEpisode.id);
+                mergedNodeOutputs = {
+                    ...mergedNodeOutputs,
+                    ...collectStage1NodeOutputsFromSlotMap(
+                        parseStageOutputsObject(freshEpisode?.ai_stage_outputs || '')?.stages?.stage1?.outputs
+                    ),
+                };
+            } catch (_) {}
+            if (options?.stage1NodeOutputs && typeof options.stage1NodeOutputs === 'object') {
+                mergedNodeOutputs = {
+                    ...mergedNodeOutputs,
+                    ...collectStage1NodeOutputsFromSlotMap(options.stage1NodeOutputs),
+                };
+            }
+            latestStage1NodeOutputsRef.current = mergedNodeOutputs;
             const persistedStageOutputs = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
             const persistedStage1RawText = String(persistedStageOutputs?.stages?.stage1?.outputs?.raw_text?.content || '').trim();
             const persistedStage2RawText = String(persistedStageOutputs?.stages?.stage2?.outputs?.raw_text?.content || '').trim();
@@ -12614,6 +12774,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
         if (SCENE_SUBSKILL_EDIT_KINDS.has(stableKind)) {
             const stage1Outputs = currentStageOutputs?.stages?.stage1?.outputs || {};
+            const stepKey = SCENE_SUBSKILL_RESULT_KEYS[stableKind];
+            const storedMap = parseSceneSubskillResultsMap(
+                stage1Outputs?.scene_subskill_results?.content
+                || latestStage1NodeOutputsRef.current?.scene_subskill_results
+            );
+            const storedContent = resolveSceneSubskillStoredContent(
+                storedMap,
+                requestedSceneId,
+                stepKey,
+                episodePrefix
+            );
             const source = String(
                 resolveScriptOptBeatsContent()
                 || stage1Outputs?.scene_subskills?.content
@@ -12621,7 +12792,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || activeEpisode?.ai_scene_analysis_adaptation
                 || ''
             ).trim();
-            const content = extractAdaptedSceneBlockFromScript(source, requestedSceneId, episodePrefix);
+            const content = storedContent || extractAdaptedSceneBlockFromScript(source, requestedSceneId, episodePrefix);
             if (!content) {
                 reportAnalysisPanelNotice(t('暂无该场逐场优化内容可编辑。', 'No per-scene refinement content is available to edit.'), 'warning');
                 return;
@@ -12629,7 +12800,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const labels = {
                 drama_opt: ['文戏优化', 'Drama Refinement'],
                 combat_opt: ['武戏优化', 'Action Refinement'],
-                framing_opt: ['景别构图', 'Framing'],
+                framing_opt: ['场景现场编排', 'Floor Staging'],
                 staging_opt: ['建置入戏', 'Staging'],
             };
             const [titleZh, titleEn] = labels[stableKind] || ['逐场优化', 'Per-Scene Refinement'];
@@ -12662,8 +12833,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return;
             }
             const labels = {
-                scene_split: ['场景拆分', 'Scene Split'],
-                environment_plan: ['环境回填', 'Environment Merge'],
+                scene_split: ['全局统筹', 'Global Orchestration'],
+                environment_plan: ['环境规划', 'Environment Plan'],
                 scene_subskills: ['逐场优化', 'Per-Scene Refinement'],
             };
             const [titleZh, titleEn] = labels[stableKind];
@@ -12879,6 +13050,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     || ''
                 ).trim();
                 const nextScript = replaceAdaptedSceneBlockInScript(fullScript, sceneId, content.trim(), episodePrefix);
+                const stepKey = SCENE_SUBSKILL_RESULT_KEYS[kind];
+                const stageOutputs = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
+                const existingMap = parseSceneSubskillResultsMap(
+                    stageOutputs?.stages?.stage1?.outputs?.scene_subskill_results?.content
+                    || latestStage1NodeOutputsRef.current?.scene_subskill_results
+                );
+                const nextMap = { ...existingMap };
+                const sceneMap = {
+                    ...(nextMap[sceneId] && typeof nextMap[sceneId] === 'object' ? nextMap[sceneId] : {}),
+                };
+                if (stepKey) sceneMap[stepKey] = content.trim();
+                nextMap[sceneId] = sceneMap;
+                latestStage1NodeOutputsRef.current = {
+                    ...latestStage1NodeOutputsRef.current,
+                    scene_subskills: nextScript,
+                    scene_subskill_results: JSON.stringify(nextMap),
+                };
                 await persistAdaptedScriptEdit(nextScript);
             } else if (kind === 'storyboard') {
                 const dbSceneId = Number(stageArtifactEditModal.dbSceneId || 0);
@@ -13431,6 +13619,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const phase = String(flowStatus?.phase || '').trim().toLowerCase();
         return Boolean(phase && phase !== 'idle');
     }, []);
+
+    const clearDiagnosticsPanelState = useCallback(() => {
+        diagnosticsEpochRef.current += 1;
+        diagnosticsNodeLogStateRef.current = {};
+        latestStage1NodeOutputsRef.current = {};
+        setDiagnosticsPipelineNodes([]);
+        setDiagnosticsSceneUnits([]);
+        setDiagnosticsEpisodeSceneCount(0);
+        setDiagnosticsEpisodeShotStats({ shotCount: 0, sceneCountWithShots: 0 });
+    }, []);
+
+    const resetEpisodeDiagnosticsProgress = useCallback(async () => {
+        clearDiagnosticsPanelState();
+        const episodeId = Number(activeEpisode?.id || 0);
+        const pid = Number(projectId || 0);
+        if (!episodeId || !pid) return;
+        try {
+            await resetEpisodeAnalysisProgress({
+                project_id: pid,
+                episode_id: episodeId,
+            });
+        } catch (resetErr) {
+            onLog?.(`Diagnosis panel reset warning: ${resetErr?.message || resetErr}`, 'warning');
+        }
+    }, [activeEpisode?.id, clearDiagnosticsPanelState, onLog, projectId]);
 
     const clearAnalysisProgressUiState = useCallback((episodeId, { persist = true } = {}) => {
         const id = Number(episodeId || activeEpisode?.id || 0);
@@ -14186,8 +14399,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const cutText = String(extractAnalysisTextFromResult(cutResult) || '').trim();
         if (!cutText) {
             throw new Error(t(
-                '场景拆分子技能未返回内容。',
-                'The scene-splitting subskill returned no content.'
+                '全局统筹子技能未返回内容。',
+                'The global-orchestration subskill returned no content.'
             ));
         }
 
@@ -19427,6 +19640,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // Keep preparing UI (preserveProgressUi) so the button/progress stay in running state.
             try {
                 if (onLog) onLog('Clearing workspace analysis artifacts and diagnostic panel before AI Script Analysis...', 'process');
+                await resetEpisodeDiagnosticsProgress();
                 await clearAnalysisOutputsForRestart({
                     preserveProgressUi: true,
                     deferWorkspaceUiReset: false,
@@ -19892,7 +20106,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         if (clearStage1) {
             const outputs = ensureOutputs('stage1');
-            ['raw_text', 'adapted_script', 'project_visual_backfill'].forEach((key) => clearSlot(outputs, key));
+            ['raw_text', 'adapted_script', 'project_visual_backfill', ...STAGE1_NODE_RESULT_KEYS].forEach((key) => clearSlot(outputs, key));
         }
         if (clearSubjectIndex) {
             const outputs = ensureOutputs('stage2');
@@ -20073,8 +20287,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setSubjectConsistencyResultText('');
                 setDiagnosticImportingKind('');
                 setIsRerunningStoryboard(false);
-                setDiagnosticsEpisodeSceneCount(0);
-                setDiagnosticsEpisodeShotStats({ shotCount: 0, sceneCountWithShots: 0 });
+                clearDiagnosticsPanelState();
                 if (!preserveProgressUi) {
                     analysisTimerStartedAtRef.current = 0;
                     setAnalysisUiReport(null);
@@ -20247,6 +20460,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setAnalysisRuntimeMeta(null);
                 lastLoadedAnalysisRef.current = null;
                 latestStage1RawTextRef.current = '';
+                latestStage1NodeOutputsRef.current = {};
                 latestStage2_1TextRef.current = '';
                 latestAnalysisRawTextRef.current = '';
                 latestAssetRawTextRef.current = '';
@@ -21077,6 +21291,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // explicit Stop action. Auto-canceling a stale React task id can terminate the
         // currently running node during resume/remount races.
 
+        if (forceRegenerate) {
+            await resetEpisodeDiagnosticsProgress();
+        }
         const clearedBeforeRun = await ensureStageAnalysisFieldsClearedBeforeRun({
             forceRegenerate,
             preserveProgressUi: true,
@@ -21158,7 +21375,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             phaseMarks.analyzeStartedAt = Date.now();
             onLog?.(
-                t('[场景拆分] 已提交 AI（场景切分）...', '[Scene split] Submitted to AI...'),
+                t('[全局统筹] 已提交 AI（场景识别与场际衔接）...', '[Global orchestration] Submitted to AI...'),
                 'info'
             );
             logSelectedScriptAnalysisApi('scene_split');
@@ -21221,7 +21438,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             llmReturned = true;
             phaseMarks.llmReturnedAt = Date.now();
             onLog?.(
-                t('[环境回填] AI 已返回，正在校验与持久化...', '[Environment merge] AI returned; validating and persisting...'),
+                t('[环境规划] AI 已返回，正在校验与持久化...', '[Environment plan] AI returned; validating and persisting...'),
                 'success'
             );
 
@@ -21655,6 +21872,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // by the tracked run/claim guards. Only the explicit Stop action may cancel a
         // backend analysis task; otherwise resume/remount races can kill a live node.
 
+        if (forceRegenerate) {
+            await resetEpisodeDiagnosticsProgress();
+        }
         const clearedBeforeRun = await ensureStageAnalysisFieldsClearedBeforeRun({
             forceRegenerate,
             preserveProgressUi: true,
@@ -21687,9 +21907,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisStopRequestedRef.current = false;
         analysisStopReasonRef.current = '';
         armAnalysisPipelineDeadline(startedAt);
-        if (!forceRegenerate) {
-            resetAnalysisRunProgressLogs();
-        }
+        resetAnalysisRunProgressLogs();
         beginAnalysisTimer(startedAt);
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
@@ -21744,7 +21962,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             phaseMarks.analyzeStartedAt = Date.now();
             onLog?.(
-                t('[场景拆分] 已提交 AI（场景切分）...', '[Scene split] Submitted to AI...'),
+                t('[全局统筹] 已提交 AI（场景识别与场际衔接）...', '[Global orchestration] Submitted to AI...'),
                 'info'
             );
             logSelectedScriptAnalysisApi('scene_split');
@@ -21791,6 +22009,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', {
                         source: 'advanced-analysis-stage1-immediate',
                         stage1RawText: analyzedText || '',
+                        stage1NodeOutputs: { scene_split: analyzedText || '' },
                     });
                     finalRawResultPersistedEarly = true;
                 } catch (persistErr) {
@@ -21812,7 +22031,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             llmReturned = true;
             phaseMarks.llmReturnedAt = Date.now();
             onLog?.(
-                t('[场景拆分] AI 已返回，正在并行启动环境规划与文戏标准化...', '[Scene split] AI returned; starting environment planning and drama standardization in parallel...'),
+                t('[全局统筹] AI 已返回，正在并行启动环境规划与文戏增强...', '[Global orchestration] AI returned; starting environment planning and drama enhancement in parallel...'),
                 'success'
             );
 
@@ -21901,8 +22120,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 if (onLog) onLog(
                     t(
-                        '场景拆分已完成。两条主线同时开始：主环境规划 ∥ 逐场优化。景别构图须等主环境规划完成并注入各场主环境后才开始。',
-                        'Scene splitting completed. Two trunks start together: main-environment planning ∥ per-scene refinement. Derived framing waits until main environments are injected.'
+                        '全局统筹已完成。两条主线同时开始：环境规划 ∥ 逐场优化。场景现场编排须等环境规划完成并按场注入主环境后才开始。',
+                        'Global orchestration completed. Two trunks start together: environment plan ∥ per-scene refinement. Floor staging waits until main environments are injected per scene.'
                     ),
                     'info'
                 );
@@ -21982,8 +22201,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setAnalysisFlowStatus({
                     phase: 'parallel_prepare',
                     message: t(
-                        '📝 正在并行：整集主环境规划 + 分场文戏。主环境规划一完成即抽资产清单，不等待逐场优化。',
-                        'Running in parallel: whole-episode main-environment planning + per-scene drama. Asset extraction starts as soon as main-environment planning finishes.'
+                        '📝 正在并行：整集环境规划 + 分场文戏增强。环境规划一完成即抽资产清单，不等待逐场优化。',
+                        'Running in parallel: whole-episode environment plan + per-scene drama enhancement. Asset extraction starts as soon as environment planning finishes.'
                     ),
                 });
 
@@ -21993,8 +22212,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ).trim();
                 if (!environmentPlanText) {
                     throw new Error(t(
-                        '整集主环境规划未返回内容。',
-                        'Whole-episode main-environment planning returned no content.'
+                        '整集环境规划未返回内容。',
+                        'Whole-episode environment plan returned no content.'
                     ));
                 }
                 stage1PhaseRawText = environmentPlanText;
@@ -22005,23 +22224,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 } = buildStage2UserInputFromStage1(environmentPlanText, selectedReuseSubjectAssets);
                 if (!String(adaptedScriptText || '').trim()) {
                     throw new Error(t(
-                        '主环境规划后未提取到可抽资产的剧本文，请确认环境回填已写入各场后重试。',
-                        'No usable script was available after main-environment planning. Confirm per-scene environment blocks were written and retry.'
+                        '环境规划后未提取到可抽资产的剧本文，请确认各场主环境已写入后重试。',
+                        'No usable script was available after environment planning. Confirm per-scene main environments were written and retry.'
                     ));
                 }
                 setAdaptationText(adaptedScriptText);
+                try {
+                    if (onLog) onLog('Persisting advanced raw LLM output immediately after environment_plan return...', 'process');
+                    await persistLlmResultContent(environmentPlanText, 'ai_scene_analysis_result', {
+                        source: 'advanced-analysis-stage1-environment-plan-immediate',
+                        stage1RawText: environmentPlanText,
+                        stage1NodeOutputs: { environment_plan: environmentPlanText },
+                    });
+                } catch (persistErr) {
+                    if (onLog) onLog(`Immediate environment plan save warning: ${persistErr?.message || persistErr}`, 'warning');
+                }
                 if (onLog) onLog(
                     t(
-                        '主环境规划已完成，正在抽取资产清单（逐场优化继续并行）…',
-                        'Main-environment planning finished; extracting the asset inventory while per-scene refinement continues...'
+                        '环境规划已完成，正在抽取资产清单（逐场优化继续并行）…',
+                        'Environment planning finished; extracting the asset inventory while per-scene refinement continues...'
                     ),
                     'info'
                 );
                 setAnalysisFlowStatus({
                     phase: 'extract_assets',
                     message: t(
-                        '主环境规划已完成，正在抽取资产清单…',
-                        'Main-environment planning finished; extracting the asset inventory...'
+                        '环境规划已完成，正在抽取资产清单…',
+                        'Environment planning finished; extracting the asset inventory...'
                     ),
                 });
 
@@ -24224,8 +24453,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const stableNode = String(nodeKey || '').trim();
         const config = {
             scene_split: {
-                labelZh: '场景拆分',
-                labelEn: 'Scene Split',
+                labelZh: '全局统筹',
+                labelEn: 'Global Orchestration',
                 prompt: 'skills/scene_analysis_feature_stack/scene_planning_1_subskill_cut_transition.md',
                 source: ensureStage1ProjectContextInjected(
                     String(rawContent || activeEpisode?.script_content || '').trim(),
@@ -24233,8 +24462,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ),
             },
             environment_plan: {
-                labelZh: '环境回填',
-                labelEn: 'Environment Merge',
+                labelZh: '环境规划',
+                labelEn: 'Environment Plan',
                 prompt: 'skills/scene_analysis_feature_stack/scene_planning_1_subskill_environment.md',
                 source: String(
                     getStageOutputContent('stage1', 'scene_split')
@@ -26612,6 +26841,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             dependency_reference: 'None',
             entity_attributes: '',
             script_entity_coverage: '',
+            form_continuity: '',
         });
         setPhase2RerunModal((prev) => ({
             ...prev,
@@ -27869,8 +28099,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <span className="font-bold text-sm">{t('进度诊断面板', 'Workflow Diagnostics')}</span>
                             <span className="text-[9px] leading-4 text-white/40 max-w-[520px]">
                                 {t(
-                                    '全文节点与分场节点分行展示。分场优化细分为文戏、武戏（特效/仙攻）、景别构图、建置入戏，再接场景编排与分镜。',
-                                    'Episode-wide and per-scene nodes are shown in separate sections. Per-scene refinement splits into drama, action (VFX/Xian), framing, and staging, then orchestration and storyboards.'
+                                    '全文节点与分场节点分行展示。分场优化细分为文戏、武戏（特效/仙攻）、场景现场编排、建置入戏，再接场景编排与分镜。',
+                                    'Episode-wide and per-scene nodes are shown in separate sections. Per-scene refinement splits into drama, action (VFX/Xian), floor staging, and blocking, then scene orchestration and storyboards.'
                                 )}
                             </span>
                         </div>
@@ -28002,9 +28232,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         )
                             ? { ...sceneSubskillsBaseState, ready: false, active: false }
                             : sceneSubskillsBaseState;
+                        const environmentPlanDone = Boolean(
+                            environmentPlanState.ready
+                            && !environmentPlanState.active
+                            && !environmentPlanState.failed
+                        );
+                        const assetsExtractionBaseState = resolveNodeState(
+                            'assets_extraction',
+                            subjectIndexReady,
+                            subjectIndexActive && environmentPlanDone
+                        );
+                        const assetsExtractionState = environmentPlanDone
+                            ? {
+                                ready: Boolean(assetsExtractionBaseState.ready || subjectIndexReady),
+                                active: Boolean(
+                                    !subjectIndexReady
+                                    && (assetsExtractionBaseState.active || subjectIndexActive)
+                                ),
+                                failed: Boolean(assetsExtractionBaseState.failed),
+                            }
+                            : { ready: false, active: false, failed: false };
                         const showAssetFailure = Boolean(workflowCompletenessStats?.hasFailedSubtask) && (
                             !analysisLive || assetDesignReady
                         );
+                        const assetDesignState = {
+                            ready: assetDesignReady,
+                            active: Boolean(
+                                assetsExtractionState.ready
+                                && !assetsExtractionState.active
+                                && assetDesignActive
+                            ),
+                            failed: Boolean(showAssetFailure),
+                        };
                         const scenePreparationReady = Boolean(
                             scriptOptReady
                             && !(
@@ -28432,7 +28691,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="mb-1.5">
                                 <div className="text-xs font-bold text-white/85">{t('全文节点', 'Episode-wide nodes')}</div>
                                 <div className="text-[10px] text-white/35">
-                                    {t('按整集剧本处理：场景拆分、环境回填、资产清单、资产设计。', 'Runs on the full episode: split, environment merge, inventory, and asset design.')}
+                                    {t('按整集剧本处理：全局统筹、环境规划、资产清单、资产设计。', 'Runs on the full episode: global orchestration, environment planning, inventory, and asset design.')}
                                 </div>
                             </div>
                         <div
@@ -28453,16 +28712,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="border-t border-white/10">{renderPipelineNodeStep('environment_plan', environmentPlanState, 2, 'environment_plan')}</div>
                             <div className="border-t border-white/10">
                         <div className="flex flex-col items-center gap-2 relative">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${subjectIndexActive ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : (subjectIndexReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : ((scriptOptReady || scriptOptActive) ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'))}`}>
-                                {subjectIndexActive ? <Loader2 className="w-4 h-4 animate-spin" /> : (subjectIndexReady ? <Check className="w-4 h-4" /> : 4)}
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${assetsExtractionState.active ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : (assetsExtractionState.ready ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                                {assetsExtractionState.active ? <Loader2 className="w-4 h-4 animate-spin" /> : (assetsExtractionState.ready ? <Check className="w-4 h-4" /> : 4)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                {subjectIndexActive ? (
+                                {assetsExtractionState.active ? (
                                     <div className="flex flex-col items-center gap-1">
                                         {renderProcessingLabel()}
                                         {renderImportButton('subject_index', canImportSubjectIndex)}
                                     </div>
-                                ) : subjectIndexReady ? (
+                                ) : assetsExtractionState.ready ? (
                                      <div className="flex items-center gap-1 flex-wrap justify-center">
                                          <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                          {renderImportButton('subject_index', canImportSubjectIndex)}
@@ -28483,13 +28742,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                      </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
-                                        {scriptOptReady ? (
-                                            <button onClick={handleRestartStage2} disabled={!canRerunSubjectIndex} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                                {t('可重跑', 'Ready')}
-                                            </button>
-                                        ) : (
-                                            <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
-                                        )}
+                                        <span className="text-[10px] text-white/30">
+                                            {environmentPlanDone
+                                                ? t('等待中', 'Waiting')
+                                                : t('待环境规划完成', 'Wait environment plan')}
+                                        </span>
                                         {renderImportButton('subject_index', canImportSubjectIndex)}
                                     </div>
                                 )}
@@ -28499,26 +28756,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="border-t border-white/10">
                         <div className="flex flex-col items-center gap-2 relative">
                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
-                                assetDesignActive
+                                assetDesignState.active
                                     ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
                                     : showAssetFailure
                                         ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
-                                        : assetDesignReady
+                                        : assetDesignState.ready
                                             ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
-                                            : (subjectIndexReady || hasAssetGenerationPrerequisite
-                                                ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
-                                                : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')
+                                            : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'
                             }`}>
-                                {assetDesignActive
+                                {assetDesignState.active
                                     ? <Loader2 className="w-4 h-4 animate-spin" />
                                     : (showAssetFailure
                                         ? <X className="w-4 h-4" />
-                                        : (assetDesignReady
+                                        : (assetDesignState.ready
                                             ? <Check className="w-4 h-4" />
                                             : 6))}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                {assetDesignActive ? (
+                                {assetDesignState.active ? (
                                     <div className="flex flex-col items-center gap-1">
                                         {renderProcessingLabel()}
                                         {renderImportButton('assets', canImportAssets)}
@@ -28569,7 +28824,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <div className="text-xs font-bold text-white/85">{t('分场节点', 'Per-scene nodes')}</div>
                                     <div className="text-[10px] text-white/35">
-                                        {t('每场一行：文戏、武戏（特效/仙攻）、景别构图、建置入戏、场景编排、分镜生成。重跑某一节点会按序自动带起该场后续节点。', 'One row per scene: drama, action (VFX/Xian), framing, staging, orchestration, and storyboards. Rerunning a node automatically continues through later nodes for that scene.')}
+                                        {t('每场一行：文戏、武戏（特效/仙攻）、场景现场编排、建置入戏、场景编排、分镜生成。重跑某一节点会按序自动带起该场后续节点。', 'One row per scene: drama, action (VFX/Xian), floor staging, blocking, scene orchestration, and storyboards. Rerunning a node automatically continues through later nodes for that scene.')}
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">
@@ -28637,7 +28892,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             })}
                             {diagnosticSceneRows.length <= 0 ? (
                                 <div className="col-span-7 px-1 py-2 text-[10px] text-white/35 border-t border-white/10">
-                                    {t('分场行将在场景拆分完成后出现。', 'Scene rows appear after scene split completes.')}
+                                    {t('分场行将在全局统筹完成后出现。', 'Scene rows appear after global orchestration completes.')}
                                 </div>
                             ) : null}
                         </div>

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Whole-episode environment planning: one LLM call, per-scene reuse injected in code."""
+"""Whole-episode environment planning: scout shooting envs, then splice reuse/new skeletons."""
 from __future__ import annotations
 
 import logging
@@ -17,11 +17,12 @@ from app.services.script_analysis_flow import (
 )
 from app.services.script_analysis_flow.environment_reuse import (
     build_reused_environment_patch,
+    build_project_main_environment_injection,
     collect_episode_env_blocks_by_name,
     collect_project_main_environment_catalog,
     collect_selected_global_environment_catalog,
+    extract_scene_env_ident_block,
     find_catalog_environment,
-    format_reuse_lock_instruction,
     format_selected_global_environment_injection,
     merge_reused_and_new_env_blocks,
     parse_scene_env_ident_items,
@@ -62,19 +63,6 @@ def _wrap_scene_patch(scene_id: str, body: str) -> str:
     )
 
 
-def _collect_reused_names(tasks: List[Dict[str, Any]]) -> List[str]:
-    names: List[str] = []
-    seen = set()
-    for task in tasks:
-        for name in scene_reused_environment_names(task.get("items") or []):
-            key = name.strip()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            names.append(key)
-    return names
-
-
 async def _call_environment_plan_episode(
     *,
     db: Session,
@@ -98,7 +86,7 @@ async def _call_environment_plan_episode(
             or "skills/scene_analysis_feature_stack/scene_planning_1_subskill_environment.md",
             "system_prompt": None,
             "function_name": payload.get("function_name") or "script_analysis",
-            "action_name": payload.get("action_name") or "主环境规划",
+            "action_name": payload.get("action_name") or "环境规划",
             "scene_analysis_mode": "stage1",
             "skip_episode_persist": True,
         }
@@ -145,7 +133,7 @@ async def _call_environment_plan_episode(
                 retry_count=attempt,
                 runtime_meta={"business_event": "retry", "business_reason": "环境规划返回不完整"},
                 error_code=last_error,
-                error_message="completion marker missing; retrying environment plan like scene_split",
+                error_message="completion marker missing; retrying environment plan like global orchestration",
             )
             db.commit()
     raise HTTPException(status_code=422, detail=f"{last_error}:{_ENVIRONMENT_COMPLETION_MARKER}")
@@ -182,50 +170,45 @@ async def run_environment_plan(
             if not find_catalog_environment(catalog, item.get("name")):
                 catalog.append(item)
 
-    tasks: List[Dict[str, Any]] = []
-    for unit in units:
-        items = parse_scene_env_ident_items(str(unit.scene_text or ""), unit.scene_id)
-        tasks.append(
-            {
-                "scene_id": unit.scene_id,
-                "items": items,
-                "needs_llm": scene_has_new_environments(items),
-            }
+    instruction = "\n\n".join(
+        (
+            build_project_main_environment_injection(catalog, for_planning=True),
+            format_selected_global_environment_injection(selected_catalog),
         )
+    )
+    episode_input = f"{instruction}\n\n{scene_split_text}"
+    llm_output = await _call_environment_plan_episode(
+        db=db,
+        current_user=current_user,
+        base_payload=raw_payload,
+        episode_input=episode_input,
+        node_project_id=node_project_id,
+        node_episode_id=node_episode_id,
+    )
 
-    reuse_only = [task for task in tasks if not task["needs_llm"]]
-    llm_tasks = [task for task in tasks if task["needs_llm"]]
     planned_patches: Dict[str, str] = {}
-    llm_output = ""
+    reuse_only_ids: List[str] = []
+    planned_scene_ids: List[str] = []
+    episode_blocks = collect_episode_env_blocks_by_name(scene_split_text)
+    episode_blocks.update(collect_episode_env_blocks_by_name(llm_output))
 
-    if llm_tasks:
-        reused_names = _collect_reused_names(tasks)
-        instruction = "\n\n".join(
-            (
-                format_reuse_lock_instruction(reused_names, catalog),
-                format_selected_global_environment_injection(selected_catalog),
-            )
-        )
-        episode_input = f"{instruction}\n\n{scene_split_text}"
-        llm_output = await _call_environment_plan_episode(
-            db=db,
-            current_user=current_user,
-            base_payload=raw_payload,
-            episode_input=episode_input,
-            node_project_id=node_project_id,
-            node_episode_id=node_episode_id,
-        )
-        for task in llm_tasks:
-            scene_id = str(task["scene_id"])
-            body = _patch_body_from_wrapped(llm_output, scene_id)
-            if body:
-                planned_patches[scene_id] = _wrap_scene_patch(scene_id, body)
-
-    for task in tasks:
-        scene_id = str(task["scene_id"])
-        episode_blocks = collect_episode_env_blocks_by_name(scene_split_text)
-        episode_blocks.update(collect_episode_env_blocks_by_name("\n\n".join(planned_patches.values())))
-        reused_items = [item for item in task["items"] if item.get("reuse")]
+    for unit in units:
+        scene_id = str(unit.scene_id)
+        body = _patch_body_from_wrapped(llm_output, scene_id)
+        if not body:
+            raise HTTPException(status_code=422, detail=f"ENVIRONMENT_PLAN_SCENE_PATCH_MISSING:{scene_id}")
+        ident = extract_scene_env_ident_block(body, scene_id)
+        items = parse_scene_env_ident_items(body, scene_id)
+        if not ident or not items:
+            raise HTTPException(status_code=422, detail=f"ENVIRONMENT_PLAN_ENV_IDENT_MISSING:{scene_id}")
+        has_new = scene_has_new_environments(items)
+        reused_items = [item for item in items if item.get("reuse")]
+        if has_new:
+            planned_scene_ids.append(scene_id)
+            if "[ENV_BLOCK_START" not in body.upper():
+                raise HTTPException(status_code=422, detail=f"ENVIRONMENT_PLAN_NEW_ENV_BLOCK_MISSING:{scene_id}")
+        else:
+            reuse_only_ids.append(scene_id)
         reused_patch = (
             build_reused_environment_patch(
                 scene_id,
@@ -236,28 +219,17 @@ async def run_environment_plan(
             if reused_items
             else ""
         )
-        if task["needs_llm"]:
-            llm_patch = planned_patches.get(scene_id) or ""
-            if reused_patch and llm_patch:
-                planned_patches[scene_id] = _wrap_scene_patch(
-                    scene_id,
-                    merge_reused_and_new_env_blocks(reused_patch, llm_patch),
-                )
-            elif llm_patch:
-                planned_patches[scene_id] = llm_patch
-            elif reused_patch:
-                planned_patches[scene_id] = reused_patch
-            else:
-                raise HTTPException(status_code=422, detail=f"ENVIRONMENT_PLAN_SCENE_PATCH_MISSING:{scene_id}")
-            continue
-        if not reused_patch:
+        if reused_items and not reused_patch:
             raise HTTPException(status_code=422, detail=f"ENVIRONMENT_PLAN_REUSE_BLOCK_MISSING:{scene_id}")
-        planned_patches[scene_id] = reused_patch
-        logger.info(
-            "[environment_plan] reused library env scene=%s names=%s",
-            scene_id,
-            scene_reused_environment_names(task["items"]),
-        )
+        env_material = merge_reused_and_new_env_blocks(reused_patch, body)
+        composed = "\n".join(part for part in (ident, env_material) if str(part or "").strip())
+        planned_patches[scene_id] = _wrap_scene_patch(scene_id, composed)
+        if reused_items:
+            logger.info(
+                "[environment_plan] reused library env scene=%s names=%s",
+                scene_id,
+                scene_reused_environment_names(items),
+            )
 
     ordered_patches = [planned_patches[str(unit.scene_id)] for unit in units if str(unit.scene_id) in planned_patches]
     missing = [str(unit.scene_id) for unit in units if str(unit.scene_id) not in planned_patches]
@@ -270,8 +242,8 @@ async def run_environment_plan(
     merged_text = _merge_environment_patches(scene_split_text, aggregate)
     return merged_text, {
         "scene_count": len(units),
-        "reused_scene_ids": [task["scene_id"] for task in reuse_only],
-        "planned_scene_ids": [task["scene_id"] for task in llm_tasks],
+        "reused_scene_ids": reuse_only_ids,
+        "planned_scene_ids": planned_scene_ids,
         "catalog_count": len(catalog),
         "whole_episode": True,
     }

@@ -159,7 +159,7 @@ def test_post_env_steps_are_framing_then_staging():
     )
     assert framing_req.prompt_file == FRAMING_PROMPT
     assert framing_req.action_name == f"{_subskill_action_label(FRAMING_PROMPT)} · EP01_SC01"
-    assert framing_req.action_name.startswith("景别构图与衍生环境")
+    assert framing_req.action_name.startswith("场景现场编排")
     assert framing_req.system_prompt is None
     assert framing_req.scene_analysis_mode == "classic"
 
@@ -197,11 +197,19 @@ def test_staging_gate_requires_per_beat_framing_lock():
         SAMPLE
         + "\n[BEAT_STREAM_START]\n"
         + "[BEAT_START:1]\n- Beat 1：\n"
-        + "【取景锁定】当前环境=0度客栈大堂｜[DERIVED_ENV:0度客栈大堂]｜景别=WS｜构图=三分｜主体落点=画左三分｜留白=视线前｜纵深层=前中后同时可读\n"
-        + "掌柜拨算盘。\n[BEAT_END:1]\n"
+        + "【取景锁定】当前环境=0度客栈大堂｜景别=WS｜构图=三分｜镜头角度=平拍｜关系角=干净｜主体落点=画左三分｜留白=视线前｜纵深层=前中后同时可读\n"
+        + "掌柜拨算盘。\n"
+        + "────【场记分析】────\n"
+        + "选择证据=ENV:Beat:拨算盘｜机位:Beat:柜台后｜景别:文戏:开场画面｜构图:场级三分｜[DERIVED_ENV:0度客栈大堂]\n"
+        + "────【场记分析结束】────\n"
+        + "[BEAT_END:1]\n"
         + "[BEAT_START:2]\n- Beat 2：\n"
-        + "【取景锁定】当前环境=180度客栈大堂｜[DERIVED_ENV:180度客栈大堂]｜景别=MS｜构图=中心｜主体落点=中央｜留白=无｜纵深层=浅层单焦\n"
-        + "客人抬头。\n[BEAT_END:2]\n"
+        + "【取景锁定】当前环境=180度客栈大堂｜景别=MS｜构图=中心｜镜头角度=平拍｜关系角=过肩｜主体落点=中央｜留白=无｜纵深层=浅层单焦\n"
+        + "客人抬头。\n"
+        + "────【场记分析】────\n"
+        + "选择证据=ENV:Beat:客人抬头｜机位:Beat:对掌柜｜景别:Beat:对白｜构图:文戏:对峙｜[DERIVED_ENV:180度客栈大堂]\n"
+        + "────【场记分析结束】────\n"
+        + "[BEAT_END:2]\n"
         + "[BEAT_STREAM_END]\n"
     )
     ready = assert_derived_framing_ready_for_staging(locked, "EP01_SC02")
@@ -232,6 +240,57 @@ def test_staging_gate_requires_per_beat_framing_lock():
         raise AssertionError("expected missing 景别 to block staging")
     except HTTPException as exc:
         assert "STAGING_BLOCKED_FRAMING_BEAT_LOCK" in str(exc.detail)
+
+    missing_angle = (
+        SAMPLE
+        + "\n[BEAT_START:1]\n- Beat 1：\n"
+        + "【取景锁定】当前环境=0度客栈大堂｜[DERIVED_ENV:0度客栈大堂]｜景别=WS｜构图=三分\n"
+        + "掌柜拨算盘。\n[BEAT_END:1]\n"
+    )
+    try:
+        assert_derived_framing_ready_for_staging(missing_angle, "EP01_SC02")
+        raise AssertionError("expected missing 镜头角度 to block staging")
+    except HTTPException as exc:
+        assert "STAGING_BLOCKED_FRAMING_BEAT_LOCK" in str(exc.detail)
+
+    missing_evidence = (
+        SAMPLE
+        + "\n[BEAT_START:1]\n- Beat 1：\n"
+        + "【取景锁定】当前环境=0度客栈大堂｜[DERIVED_ENV:0度客栈大堂]｜景别=WS｜构图=三分｜镜头角度=平拍\n"
+        + "掌柜拨算盘。\n[BEAT_END:1]\n"
+    )
+    try:
+        assert_derived_framing_ready_for_staging(missing_evidence, "EP01_SC02")
+        raise AssertionError("expected missing 选择证据 to block staging")
+    except HTTPException as exc:
+        assert "STAGING_BLOCKED_FRAMING_BEAT_LOCK" in str(exc.detail)
+
+
+def test_strip_beat_notes_removes_analysis_and_legacy_transition():
+    from app.services.script_analysis_flow import strip_beat_transition_notes_from_script
+
+    source = (
+        "[BEAT_START:8]\n- Beat 8：节拍=铺垫\n"
+        "────【建置】────\n当前环境=0度无极宗山顶广场｜景别=MS\n"
+        "────【入戏】────\n大长老递令牌。\n"
+        "────【场记分析】────\n"
+        "选择证据=ENV:Beat:授受双方同场｜跨度=越级:交付拉开\n"
+        "速查更新=楚玄|扇区=0|F≈0\n"
+        "────【场记分析结束】────\n"
+        "[BEAT_END:8]\n"
+        "[BEAT_START:9]\n- Beat 9：\n"
+        "────【建置】────\n当前环境=0度无极宗山顶广场｜景别=MCU\n"
+        "────【Beat切换说明】────\n变化过程=走位=无\n"
+        "────【Beat切换说明结束】────\n"
+        "[BEAT_END:9]\n"
+    )
+    cleaned = strip_beat_transition_notes_from_script(source)
+    assert "【建置】" in cleaned
+    assert "大长老递令牌" in cleaned
+    assert "场记分析" not in cleaned
+    assert "选择证据=" not in cleaned
+    assert "Beat切换说明" not in cleaned
+    assert "变化过程=走位=无" not in cleaned
 
 
 def test_merge_derived_environment_groups_keeps_prior_mains():
@@ -272,6 +331,30 @@ def test_pipeline_ingests_derived_env_immediately_after_framing():
     assert framing_idx != -1
     assert ingest_idx > framing_idx
     assert ingest_idx < staging_continue
+
+
+def test_special_note_injected_into_generation_prompt():
+    items = parse_derived_env_extract_items(
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=第一刀｜同角切割父=无｜状态Delta=无\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂_仰天｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=特别｜特别表述=仰天:满幅夜空与檐口剪影，地面仅近端截断｜同角切割父=无｜状态Delta=无\n"
+        "[DERIVED_ENV] 名称=180度客栈大堂_变形｜所属主环境=客栈大堂｜view_angle_from_main=180｜类型=特别｜特别表述=变形:荷兰角地平线左低右高，立柱倾斜压迫｜同角切割父=无｜状态Delta=无\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+    )
+    by_name = {item["name"]: item for item in items}
+    assert by_name["0度客栈大堂_仰天"]["special_note"].startswith("仰天")
+    regular = build_derived_environment_item(by_name["0度客栈大堂"])
+    assert "特别表述=" not in regular["generation_prompt_cn"]
+    assert regular["custom_attributes"]["derived_kind"] == "first_cut"
+    look_up = build_derived_environment_item(by_name["0度客栈大堂_仰天"])
+    assert "特别表述=仰天:满幅夜空与檐口剪影，地面仅近端截断" in look_up["generation_prompt_cn"]
+    assert "按该特别表述改机位俯仰或透视" in look_up["generation_prompt_cn"]
+    assert "只切割，不要改画" not in look_up["generation_prompt_cn"]
+    assert look_up["custom_attributes"]["derived_kind"] == "special"
+    assert look_up["visual_dependencies"] == ["ENV:[客栈大堂]"]
+    warped = build_derived_environment_item(by_name["180度客栈大堂_变形"])
+    assert "特别表述=变形:荷兰角地平线左低右高，立柱倾斜压迫" in warped["generation_prompt_cn"]
+    assert "dutch angle" not in warped["negative_prompt_en"]
 
 
 def test_coverage_suffix_stays_first_cut():

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -236,6 +237,159 @@ def _format_project_visual_backfill_json(raw_text: str) -> str:
     return json.dumps({"project_visual_backfill": obj}, ensure_ascii=False, indent=2)
 
 
+_STAGE_OUTPUT_PATCH_LOCKS: Dict[int, threading.Lock] = {}
+_STAGE_OUTPUT_PATCH_LOCKS_GUARD = threading.Lock()
+SCENE_SUBSKILL_RESULTS_OUTPUT_KEY = "scene_subskill_results"
+_SUBSKILL_RESULT_STEP_KEYS = {
+    "drama": "drama",
+    "vfx": "combat",
+    "xian": "combat",
+    "derived_framing": "framing",
+    "staging": "staging",
+}
+
+
+def _get_stage_output_patch_lock(episode_id: int) -> threading.Lock:
+    eid = int(episode_id or 0)
+    with _STAGE_OUTPUT_PATCH_LOCKS_GUARD:
+        lock = _STAGE_OUTPUT_PATCH_LOCKS.get(eid)
+        if lock is None:
+            lock = threading.Lock()
+            _STAGE_OUTPUT_PATCH_LOCKS[eid] = lock
+        return lock
+
+
+def _load_stage_outputs_obj(episode: Episode) -> Dict[str, Any]:
+    raw = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
+    try:
+        obj = json.loads(raw) if raw else {"version": 1, "stages": {}}
+        if not isinstance(obj, dict):
+            obj = {"version": 1, "stages": {}}
+    except Exception:
+        obj = {"version": 1, "stages": {}}
+    stages = obj.setdefault("stages", {})
+    if not isinstance(stages, dict):
+        obj["stages"] = {}
+    return obj
+
+
+def _dump_stage_outputs_obj(episode: Episode, obj: Dict[str, Any]) -> None:
+    episode.ai_stage_outputs = json.dumps(obj, ensure_ascii=False, indent=2)
+
+
+def _ensure_stage_outputs(obj: Dict[str, Any], stage_key: str) -> Dict[str, Any]:
+    stages = obj.setdefault("stages", {})
+    if not isinstance(stages, dict):
+        stages = {}
+        obj["stages"] = stages
+    stage = stages.setdefault(str(stage_key), {"key": str(stage_key), "outputs": {}})
+    if not isinstance(stage, dict):
+        stage = {"key": str(stage_key), "outputs": {}}
+        stages[str(stage_key)] = stage
+    outputs = stage.setdefault("outputs", {})
+    if not isinstance(outputs, dict):
+        outputs = {}
+        stage["outputs"] = outputs
+    return outputs
+
+
+def patch_episode_stage_output_slot(
+    episode: Episode,
+    *,
+    stage_key: str,
+    output_key: str,
+    content: str,
+    kind: str = "markdown",
+    title: str = "",
+) -> None:
+    obj = _load_stage_outputs_obj(episode)
+    outputs = _ensure_stage_outputs(obj, stage_key)
+    slot = outputs.get(output_key) if isinstance(outputs.get(output_key), dict) else {}
+    outputs[str(output_key)] = {
+        **slot,
+        "key": str(output_key),
+        "kind": slot.get("kind") or kind,
+        "title": slot.get("title") or title or output_key,
+        "content": str(content or ""),
+    }
+    _dump_stage_outputs_obj(episode, obj)
+
+
+def persist_scene_subskill_step_result(
+    *,
+    db: Session,
+    episode_id: int,
+    scene_id: str,
+    step_key: str,
+    result_text: str,
+) -> Dict[str, Any]:
+    from app.services.soft_delete import _active_episode_clause
+
+    eid = int(episode_id or 0)
+    sid = str(scene_id or "").strip()
+    key = str(step_key or "").strip()
+    text = str(result_text or "").strip()
+    if eid <= 0 or not sid or not key or not text:
+        return {"patched": False, "reason": "invalid_args"}
+    lock = _get_stage_output_patch_lock(eid)
+    with lock:
+        episode = (
+            db.query(Episode)
+            .filter(Episode.id == eid, _active_episode_clause())
+            .populate_existing()
+            .first()
+        )
+        if episode is None:
+            return {"patched": False, "reason": "episode_missing"}
+        obj = _load_stage_outputs_obj(episode)
+        outputs = _ensure_stage_outputs(obj, "stage1")
+        slot = (
+            outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
+            if isinstance(outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY), dict)
+            else {}
+        )
+        raw_map = str(slot.get("content") or "").strip() or "{}"
+        try:
+            result_map = json.loads(raw_map)
+            if not isinstance(result_map, dict):
+                result_map = {}
+        except Exception:
+            result_map = {}
+        scene_map = result_map.get(sid) if isinstance(result_map.get(sid), dict) else {}
+        scene_map[key] = text
+        result_map[sid] = scene_map
+        outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = {
+            **slot,
+            "key": SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
+            "kind": "json",
+            "title": slot.get("title") or "逐场优化分步结果",
+            "content": json.dumps(result_map, ensure_ascii=False, indent=2),
+        }
+        _dump_stage_outputs_obj(episode, obj)
+        db.commit()
+    return {"patched": True, "scene_id": sid, "step_key": key, "chars": len(text)}
+
+
+def persist_scene_subskill_named_step(
+    *,
+    db: Session,
+    episode_id: int,
+    scene_id: str,
+    step_name: str,
+    result_text: str,
+) -> Dict[str, Any]:
+    mapped = _SUBSKILL_RESULT_STEP_KEYS.get(str(step_name or "").strip())
+    if not mapped:
+        return {"patched": False, "reason": "unknown_step"}
+    return persist_scene_subskill_step_result(
+        db=db,
+        episode_id=episode_id,
+        scene_id=scene_id,
+        step_key=mapped,
+        result_text=result_text,
+    )
+
+
 def _patch_episode_stage1_outputs(
     episode: Episode,
     *,
@@ -348,7 +502,24 @@ def persist_assets_extraction_stage(
 ) -> Dict[str, Any]:
     from app.services.llm_markdown_sanitize import sanitize_subject_index_text
 
-    episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(result_content)
+    sanitized = sanitize_subject_index_text(result_content)
+    episode.ai_scene_analysis_subject_index = sanitized
+    patch_episode_stage_output_slot(
+        episode,
+        stage_key="stage2",
+        output_key="subject_index",
+        content=sanitized,
+        kind="markdown",
+        title="资产清单",
+    )
+    patch_episode_stage_output_slot(
+        episode,
+        stage_key="stage2",
+        output_key="assets_extraction",
+        content=sanitized,
+        kind="markdown",
+        title="资产清单",
+    )
     db.commit()
     try:
         db.refresh(episode)
@@ -377,6 +548,14 @@ def persist_scene_markdown_stage(
     result_content: str,
 ) -> Dict[str, Any]:
     episode.ai_scene_analysis_scene_markdown = result_content
+    patch_episode_stage_output_slot(
+        episode,
+        stage_key="stage2",
+        output_key="scene_markdown",
+        content=result_content,
+        kind="markdown",
+        title="场景编排",
+    )
     db.commit()
     try:
         db.refresh(episode)
@@ -402,6 +581,22 @@ def persist_entity_design_stage(
     result_content: str,
 ) -> Dict[str, Any]:
     episode.ai_entity_design_result = result_content
+    patch_episode_stage_output_slot(
+        episode,
+        stage_key="stage3",
+        output_key="asset_design_json",
+        content=result_content,
+        kind="json",
+        title="资产设计",
+    )
+    patch_episode_stage_output_slot(
+        episode,
+        stage_key="stage3",
+        output_key="raw_text",
+        content=result_content,
+        kind="text",
+        title="第三阶段完整结果",
+    )
     db.commit()
     try:
         db.refresh(episode)

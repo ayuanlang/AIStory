@@ -107,6 +107,45 @@ scene body
     assert tasks[0]["special_analysis"].startswith("[SPECIAL_SCENE_ANALYSIS_START:EP01_SC01]")
 
 
+def test_drama_output_special_is_kept_when_fallback_empty():
+    drama_output = """
+[SCENES_BLOCK_START]
+[SPECIAL_SCENE_ANALYSIS_START:EP01_SC01]
+[VFX] 命中=是｜类型=近身打斗｜证据=原文：“挥拳”
+[XIAN] 命中=否｜类型=无｜证据=无
+[SPECIAL_SCENE_ANALYSIS_END:EP01_SC01]
+[SCENE_START:EP01_SC01]
+【场景综合】本场卖点=对峙
+optimized drama body
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+"""
+    extracted = _extract_single_scene_block(drama_output, "EP01_SC01", "")
+    assert extracted.startswith("[SPECIAL_SCENE_ANALYSIS_START:EP01_SC01]")
+    assert extracted.count("[SPECIAL_SCENE_ANALYSIS_START:EP01_SC01]") == 1
+    assert "[VFX] 命中=是" in extracted
+    assert "optimized drama body" in extracted
+
+
+def test_scene_split_without_special_builds_tasks():
+    script = """
+[SCENES_BLOCK_START]
+[COMPREHENSIVE_INFO_START]
+overall plot
+[COMPREHENSIVE_INFO_END]
+[SCENE_START:EP01_SC01]
+【场景衔接】上场=开场｜下场=EP01_SC02｜手法=硬切
+scene body
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+"""
+    tasks = build_scene_subskill_task_payloads(script)
+    assert len(tasks) == 1
+    assert tasks[0]["special_analysis"] == ""
+    assert tasks[0]["call_vfx"] is False
+    assert tasks[0]["call_xian"] is False
+
+
 def test_subskill_duplicate_readonly_metadata_is_replaced_by_authoritative_block():
     authoritative_special = """[SPECIAL_SCENE_ANALYSIS_START:EP01_SC03]
 [VFX] 命中=否｜类型=无｜证据=无

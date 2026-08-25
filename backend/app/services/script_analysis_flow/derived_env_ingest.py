@@ -62,7 +62,18 @@ STATE_CUT_NEGATIVE = (
     "people, person, human, dutch angle, recropped four-panel, wrong camera angle, mirrored room, "
     "four-panel grid lines, 2x2 collage seams, panel borders, quadrant labels, split-screen divider"
 )
+SPECIAL_CUT_PROMPT = (
+    "所属主环境={main}。angle_key={main}|{angle}。"
+    "以对应主环境「{main}」四向拼图参考图的{grid}为空间与实体基准。"
+    "特别表述={note}。"
+    "按该特别表述改机位俯仰或透视生成单张16:9空镜，高分辨率。"
+    "不得另造未声明实体，不得把未改实体写成新陈设。"
+    "成稿须为单张完整镜头：禁止保留四向拼图的宫格分割线、宫格边框、格标/角标、十字拼缝或任何拼图装配痕迹。"
+)
+SPECIAL_STATE_INJECT = "特别表述={note}。按该表述改俯仰或透视；仍以同角切割图为空间基准。"
 SOURCE_FLAG = "programmatic_derived_framing"
+SPECIAL_KIND_PREFIXES = ("仰天", "屋顶", "变形")
+_EMPTY_FIELD_MARKERS = {"", "无", "n/a", "na", "none", "-"}
 
 
 def _clean(value: Any) -> str:
@@ -127,8 +138,34 @@ def _same_angle_parent(name: str, main_name: str, angle: int) -> str:
     return f"{int(angle)}度{main_name}"
 
 
+def _parse_special_note(raw: Any) -> Tuple[str, str]:
+    """Return (kind, sentence). kind ∈ 仰天/屋顶/变形 or empty; sentence is the inject text."""
+    text = _clean(raw)
+    if text.lower() in _EMPTY_FIELD_MARKERS:
+        return "", ""
+    for prefix in SPECIAL_KIND_PREFIXES:
+        for sep in (":", "："):
+            if text.startswith(prefix + sep):
+                body = text.split(sep, 1)[1].strip()
+                return prefix, (f"{prefix}:{body}" if body else text)
+    if any(token in text for token in ("荷兰", "倾斜", "扭曲", "变形", "dutch")):
+        return "变形", text
+    if any(token in text for token in ("屋顶", "天花", "梁架", "吊顶")):
+        return "屋顶", text
+    if any(token in text for token in ("仰天", "天空", "看天")):
+        return "仰天", text
+    return "", text
+
+
+def _is_special_kind(kind: str) -> bool:
+    text = _clean(kind).lower()
+    return text in {"特别", "special", "仰天", "屋顶", "变形"}
+
+
 def _is_state_row(item: Dict[str, Any]) -> bool:
     kind = _clean(item.get("kind") or item.get("类型")).lower()
+    if _is_special_kind(kind):
+        return False
     if kind in {"第一刀", "first_cut", "first-cut", "视角衍生"}:
         return False
     if kind in {"衍生的衍生", "state", "delta"}:
@@ -176,6 +213,7 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
                     "spatial_axis": fields.get("spatial_axis"),
                     "parent": fields.get("同角切割父") or fields.get("parent"),
                     "state_delta": fields.get("状态Delta") or fields.get("state_delta"),
+                    "special_note": fields.get("特别表述") or fields.get("special_note"),
                 },
             )
 
@@ -206,24 +244,42 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
     spatial_axis = _clean(item.get("spatial_axis")) or "继承主环境"
     trigger = _clean(item.get("trigger") or item.get("触发")) or ("Master" if angle == 0 else "复用/剧情覆盖")
     delta = _clean(item.get("state_delta") or item.get("状态Delta"))
-    if delta in {"无", "n/a", "none", "-"}:
+    if delta.lower() in _EMPTY_FIELD_MARKERS:
         delta = ""
+    special_kind, special_note = _parse_special_note(
+        item.get("special_note") or item.get("特别表述")
+    )
     suffix = _state_suffix(name, main)
     name_en = f"{angle}deg {main}" + (f" {suffix}" if suffix else "")
     if is_state:
         prompt = STATE_CUT_PROMPT.format(main=main, angle=angle, parent=parent or _same_angle_parent(name, main, angle))
         if delta:
             prompt = f"{prompt}在此画面基础上叠加：{delta}。"
+        if special_note:
+            prompt = f"{prompt}{SPECIAL_STATE_INJECT.format(note=special_note)}"
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
             f"所属主环境={main}。angle_key={main}|{angle}。同角切割父={parent or _same_angle_parent(name, main, angle)}。"
             f"状态Delta={delta or '无'}。形状Delta=无。未改实体=不写。触发={trigger}。"
         )
+        if special_note:
+            logic = f"{logic}特别表述={special_note}。"
         deps = [f"ENV:[{parent or _same_angle_parent(name, main, angle)}]"]
         negative = STATE_CUT_NEGATIVE
         atmosphere = f"Same {angle}deg crop with state delta"
         visual_params = f"{lens}/Derived/State"
         anchor = f"same-angle crop of {main}, {grid}, empty plate"
+    elif special_note:
+        prompt = SPECIAL_CUT_PROMPT.format(main=main, angle=angle, grid=grid, note=special_note)
+        logic = (
+            f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
+            f"所属主环境={main}。截取宫格={grid}。触发={trigger}。特别表述={special_note}。"
+        )
+        deps = [f"ENV:[{main}]"]
+        negative = FIRST_CUT_NEGATIVE
+        atmosphere = f"Special {special_kind or 'plate'} from {grid}"
+        visual_params = f"{lens}/Derived/Special/{special_kind or angle}"
+        anchor = f"{grid} of {main} as spatial base; {special_note}"
     else:
         prompt = FIRST_CUT_PROMPT.format(main=main, angle=angle, grid=grid)
         logic = (
@@ -235,6 +291,8 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
         atmosphere = f"{'Master' if angle == 0 else 'Angle'} empty plate crop"
         visual_params = f"{lens}/Derived/{angle}"
         anchor = f"crop {grid} from {main} four-direction grid, empty plate, eye-level"
+    if special_kind == "变形":
+        negative = negative.replace("dutch angle, tilted horizon, ", "").replace("dutch angle, ", "")
     return {
         "name": name,
         "name_en": name_en,
@@ -256,7 +314,11 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
             "main_environment": main,
             "view_angle_from_main": angle,
             "grid_cell": grid,
-            "derived_kind": "state" if is_state else "first_cut",
+            "derived_kind": (
+                "state" if is_state else ("special" if special_note else "first_cut")
+            ),
+            "special_kind": special_kind,
+            "special_note": special_note,
             "negative_prompt_en": negative,
         },
     }

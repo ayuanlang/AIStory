@@ -31,6 +31,8 @@ from .analyze_scene_stages import (
     persist_entity_design_stage,
     persist_generic_analyze_scene_stage,
     persist_scene_markdown_stage,
+    persist_scene_subskill_named_step,
+    persist_scene_subskill_step_result,
     persist_script_optimization_stage,
     resolve_analyze_scene_stage,
     validate_analyze_scene_llm_finish_reason,
@@ -49,7 +51,7 @@ from .derived_env_ingest import (
     ingest_derived_environments_from_framing,
     parse_derived_env_extract_items,
 )
-from .environment_reuse import parse_scene_env_ident_items
+from .environment_reuse import extract_scene_env_ident_block, parse_scene_env_ident_items
 
 ScriptProgressSceneUnit = models.ScriptProgressSceneUnit
 ScriptProgressPipelineNode = models.ScriptProgressPipelineNode
@@ -113,7 +115,7 @@ LEGACY_ENV_BLOCK_END_PATTERN = re.compile(
     r"【对白拆句)",
     re.IGNORECASE,
 )
-SCENE_TRANSITION_HEADER_PATTERN = re.compile(r"【场景切换与首节拍转场】")
+SCENE_TRANSITION_HEADER_PATTERN = re.compile(r"【(?:场景衔接|场景切换与首节拍转场)】")
 SCENE_TRANSITION_BLOCK_END_PATTERN = re.compile(
     r"(?=\[BEAT_START|"
     r"\[SCENE_END|"
@@ -1523,8 +1525,8 @@ def extract_env_block_from_scene_text(scene_text: str) -> str:
 
 def extract_scene_transition_block_from_scene_text(scene_text: str) -> str:
     """
-    Extract Stage 1【场景切换与首节拍转场】block (含服化道/换装摘要).
-    Required by Stage 2.1 costume-change → derived CHAR rules.
+    Extract Stage 1【场景衔接】or legacy【场景切换与首节拍转场】block.
+    Used by Stage 2.1 as a costume/prop cross-check, not as the sole wardrobe source.
     """
     text = str(scene_text or "")
     header_match = SCENE_TRANSITION_HEADER_PATTERN.search(text)
@@ -1866,22 +1868,30 @@ def _strip_beat_boundary_markers(beats_text: str) -> str:
     return cleaned.strip()
 
 
-_BEAT_TRANSITION_NOTES_PAIR_RE = re.compile(
-    r"(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*Beat[ \t]*切换说明[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*\n"
-    r"[\s\S]*?"
-    r"(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*Beat[ \t]*切换说明结束[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*(?=\n|$)",
-    re.IGNORECASE,
-)
+def _paired_beat_notes_re(name: str) -> re.Pattern:
+    return re.compile(
+        rf"(?:^|\n)[ \t]*(?:─{{2,}}|-{{2,}})?[ \t]*【[ \t]*{name}[ \t]*】[ \t]*(?:─{{2,}}|-{{2,}})?[ \t]*\n"
+        rf"[\s\S]*?"
+        rf"(?:^|\n)[ \t]*(?:─{{2,}}|-{{2,}})?[ \t]*【[ \t]*{name}结束[ \t]*】[ \t]*(?:─{{2,}}|-{{2,}})?[ \t]*(?=\n|$)",
+        re.IGNORECASE,
+    )
+
+
+_BEAT_TRANSITION_NOTES_PAIR_RE = _paired_beat_notes_re(r"Beat[ \t]*切换说明")
+_BEAT_ANALYSIS_NOTES_PAIR_RE = _paired_beat_notes_re(r"场记分析")
 
 
 def strip_beat_transition_notes_from_script(script_text: str) -> str:
-    """Remove paired Stage 1 【Beat切换说明】…【Beat切换说明结束】 before Stage 2.x injection.
+    """Remove paired Stage 1 analysis blocks before Stage 2.x injection.
 
-    Unclosed blocks are left untouched (never greedy-eat past SCENE/BEAT markers).
+    Strips both 【场记分析】…【场记分析结束】 and legacy
+    【Beat切换说明】…【Beat切换说明结束】. Unclosed blocks are left
+    untouched (never greedy-eat past SCENE/BEAT markers).
     """
     text = str(script_text or "").replace("\r\n", "\n")
     if not text.strip():
         return ""
+    text = _BEAT_ANALYSIS_NOTES_PAIR_RE.sub("\n", text)
     text = _BEAT_TRANSITION_NOTES_PAIR_RE.sub("\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -2921,6 +2931,8 @@ __all__ = [
     "extract_environment_names_from_scene_text",
     "extract_derived_environment_names_from_scene_text",
     "parse_scene_env_ident_items",
+    "extract_scene_env_ident_block",
+    "parse_special_scene_analysis_blocks",
     "extract_beat_blocks_from_scene_text",
     "extract_legacy_beat_sections_from_scene_text",
     "extract_env_block_from_scene_text",
@@ -2942,6 +2954,8 @@ __all__ = [
     "persist_entity_design_stage",
     "persist_generic_analyze_scene_stage",
     "persist_scene_markdown_stage",
+    "persist_scene_subskill_named_step",
+    "persist_scene_subskill_step_result",
     "persist_script_optimization_stage",
     "raise_progress_issue",
     "resolve_analyze_scene_stage",

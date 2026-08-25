@@ -31,6 +31,8 @@ from app.services.script_analysis_flow import (
     coerce_target_scene_ids_for_orchestration,
     extract_env_block_from_scene_text,
     parse_scene_units_from_markers,
+    parse_special_scene_analysis_blocks,
+    persist_scene_subskill_named_step,
     persist_script_optimization_stage,
     upsert_pipeline_node_status,
 )
@@ -40,9 +42,11 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     ingest_derived_environments_from_framing,
 )
 from app.services.script_analysis_flow.environment_reuse import (
+    SCENE_ENV_IDENT_PATTERN,
     build_reused_derived_environment_injection,
     collect_episode_env_blocks_by_name,
     collect_project_main_environment_catalog,
+    extract_scene_env_ident_block,
     parse_scene_env_ident_items,
 )
 from app.services.soft_delete import _active_episode_clause
@@ -62,10 +66,10 @@ SCENE_SUBSKILL_POST_ENV_STEPS: Tuple[Tuple[str, str], ...] = (
 )
 
 _SUBSKILL_ACTION_LABELS = {
-    DRAMA_PROMPT: "文戏标准化",
+    DRAMA_PROMPT: "文戏增强",
     VFX_PROMPT: "特效增强",
     XIAN_PROMPT: "仙攻增强",
-    FRAMING_PROMPT: "景别构图与衍生环境",
+    FRAMING_PROMPT: "场景现场编排",
     STAGING_PROMPT: "建置与入戏",
 }
 _SUBSKILL_FUNCTION_NAMES = {
@@ -207,7 +211,8 @@ def merge_scene_blocks_into_script(
 
 
 _FRAMING_LOCK_HEADING = "【取景锁定】"
-_FRAMING_LOCK_REQUIRED_FIELDS = ("当前环境=", "景别=", "构图=")
+_FRAMING_LOCK_REQUIRED_FIELDS = ("当前环境=", "景别=", "构图=", "镜头角度=")
+_FRAMING_EVIDENCE_FIELD = "选择证据="
 
 
 def _iter_beat_bodies(source: str) -> List[Tuple[str, str]]:
@@ -228,13 +233,12 @@ def _iter_beat_bodies(source: str) -> List[Tuple[str, str]]:
 
 def _beat_has_framing_lock(body: str) -> bool:
     text = str(body or "")
-    if _FRAMING_LOCK_HEADING in text:
-        lock_start = text.find(_FRAMING_LOCK_HEADING)
-        snippet = text[lock_start : lock_start + 500]
-    else:
-        snippet = text
-    compact = snippet.replace(" ", "")
-    return all(field in compact for field in _FRAMING_LOCK_REQUIRED_FIELDS)
+    if _FRAMING_LOCK_HEADING not in text:
+        return False
+    compact = text.replace(" ", "")
+    return all(field in compact for field in _FRAMING_LOCK_REQUIRED_FIELDS) and (
+        _FRAMING_EVIDENCE_FIELD in compact
+    )
 
 
 def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> str:
@@ -367,9 +371,9 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
     if "OUTPUT_SCENE_MISMATCH" in text:
         return "子技能返回了错误的场景编号"
     if "STAGING_BLOCKED_FRAMING" in text:
-        return "景别构图与衍生环境未完成，不能进入建置与入戏"
+        return "场景现场编排未完成，不能进入建置与入戏"
     if "ROUTING_MISSING" in text:
-        return "场景缺少特殊情景路由信息"
+        return "文戏增强未产出特效宽松评估"
     if "NO_SCENES" in text:
         return "未解析到可执行的场景"
     return "逐场子技能执行失败"
@@ -548,6 +552,34 @@ def _recover_markerless_scene_fragment(
     return _wrap_recovered_scene(scene_id, source)
 
 
+def _special_block_from_text(text: str, scene_id: str) -> str:
+    try:
+        parsed = parse_special_scene_analysis_blocks(text)
+    except SceneMarkerParseError:
+        return ""
+    sid = str(scene_id or "").strip().lower()
+    for key, value in parsed.items():
+        if str(key).strip().lower() == sid:
+            return str(value.get("block_text") or "").strip()
+    return ""
+
+
+def _routes_from_special_text(special: str, scene_id: str) -> Tuple[bool, bool]:
+    try:
+        parsed = parse_special_scene_analysis_blocks(special)
+    except SceneMarkerParseError:
+        return False, False
+    sid = str(scene_id or "").strip().lower()
+    routes: Dict[str, Any] = {}
+    for key, value in parsed.items():
+        if str(key).strip().lower() == sid:
+            routes = dict(value.get("routes") or {})
+            break
+    if not routes and parsed:
+        routes = dict(next(iter(parsed.values())).get("routes") or {})
+    return bool((routes.get("VFX") or {}).get("hit")), bool((routes.get("XIAN") or {}).get("hit"))
+
+
 def _extract_single_scene_block(
     result_text: str,
     scene_id: str,
@@ -555,10 +587,10 @@ def _extract_single_scene_block(
     previous_block: str = "",
 ) -> str:
     text = str(result_text or "").strip()
-    # SPECIAL_SCENE_ANALYSIS and COMPREHENSIVE_INFO are authoritative upstream
-    # metadata. Subskills occasionally echo or duplicate these read-only blocks;
-    # remove every returned copy before parsing, then reattach the original routing
-    # block exactly once below.
+    # COMPREHENSIVE_INFO is read-only global metadata and must not stay in the
+    # per-scene block. SPECIAL_SCENE_ANALYSIS is authoritative from fallback
+    # (VFX/XIAN after 文戏增强) or, when fallback is empty, from this output
+    # (文戏增强 newly wrote the loose VFX/XIAN routing).
     sanitized_text = SPECIAL_SCENE_ANALYSIS_PATTERN.sub("", text)
     sanitized_text = COMPREHENSIVE_INFO_PATTERN.sub("", sanitized_text)
     try:
@@ -588,7 +620,7 @@ def _extract_single_scene_block(
             detail=f"SCENE_SUBSKILL_OUTPUT_SCENE_MISMATCH:{scene_id}",
         )
     unit = matches[0]
-    special = str(fallback_special or "").strip()
+    special = str(fallback_special or "").strip() or _special_block_from_text(text, scene_id)
     return "\n".join(
         part
         for part in (
@@ -614,14 +646,15 @@ def environment_plan_ready_for_framing(status: str, persisted_text: str) -> bool
 
 def extract_environment_planning_sections(scene_text: str) -> str:
     source = str(scene_text or "")
+    ident = extract_scene_env_ident_block(source)
     match = _ENV_BLOCK_WITH_COVERAGE_PATTERN.search(source)
-    if match:
-        return str(match.group(0) or "").strip()
-    return extract_env_block_from_scene_text(source).strip()
+    env = str(match.group(0) or "").strip() if match else extract_env_block_from_scene_text(source).strip()
+    return "\n".join(part for part in (ident, env) if str(part or "").strip())
 
 
 def strip_environment_planning_sections(scene_text: str) -> str:
-    stripped = _ENV_BLOCK_WITH_COVERAGE_PATTERN.sub("", str(scene_text or ""))
+    stripped = SCENE_ENV_IDENT_PATTERN.sub("", str(scene_text or ""))
+    stripped = _ENV_BLOCK_WITH_COVERAGE_PATTERN.sub("", stripped)
     stripped = re.sub(
         r"`?\[ENV_BLOCK_START(?:\:[^\]]+)?\]`?.*?"
         r"`?\[ENV_BLOCK_END(?:\:[^\]]+)?\]`?",
@@ -1055,6 +1088,13 @@ async def _run_derived_framing_then_staging(
             previous_block=current_block,
         )
         called.append("staging")
+        persist_scene_subskill_named_step(
+            db=task_db,
+            episode_id=episode_id,
+            scene_id=scene_id,
+            step_name="staging",
+            result_text=current_block,
+        )
         return current_block
 
     framing_block = splice_environment_and_enhance_scene(
@@ -1119,6 +1159,13 @@ async def _run_derived_framing_then_staging(
             fallback_special=special,
             previous_block=current_block,
         )
+        persist_scene_subskill_named_step(
+            db=task_db,
+            episode_id=episode_id,
+            scene_id=scene_id,
+            step_name=step_name,
+            result_text=current_block,
+        )
         if step_name == "derived_framing":
             current_block = assert_derived_framing_ready_for_staging(current_block, scene_id)
             ingest_meta = _ingest_derived_environments_after_framing(
@@ -1175,13 +1222,6 @@ async def run_scene_subskill_pipeline(
                 status_code=422,
                 detail=f"SCENE_SUBSKILL_TARGET_SCENE_NOT_FOUND:{','.join(target_scene_ids)}",
             )
-    missing_routes = [task["scene_id"] for task in tasks if not task.get("special_analysis")]
-    if missing_routes:
-        raise HTTPException(
-            status_code=422,
-            detail=f"SCENE_SUBSKILL_ROUTING_MISSING:{','.join(missing_routes)}",
-        )
-
     max_concurrency = resolve_user_batch_parallel_limit(
         getattr(current_user, "is_active", USER_ACTIVE_LEVEL_DEFAULT),
     )
@@ -1250,21 +1290,11 @@ async def run_scene_subskill_pipeline(
                 if special and special not in current_block:
                     current_block = "\n".join(part for part in (special, current_block) if part)
                 called: List[str] = []
-                if start_group == "combat" and not task.get("call_vfx") and not task.get("call_xian"):
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"SCENE_SUBSKILL_COMBAT_NOT_ROUTED:{scene_id}",
-                    )
-                enhance_steps = [(DRAMA_PROMPT, "drama")]
-                if task.get("call_vfx"):
-                    enhance_steps.append((VFX_PROMPT, "vfx"))
-                if task.get("call_xian"):
-                    enhance_steps.append((XIAN_PROMPT, "xian"))
-                if start_group == "combat":
-                    enhance_steps = [item for item in enhance_steps if item[1] != "drama"]
-                elif start_group in {"framing", "staging"}:
-                    enhance_steps = []
-                for prompt_file, step_name in enhance_steps:
+                call_vfx = bool(task.get("call_vfx"))
+                call_xian = bool(task.get("call_xian"))
+
+                async def _run_enhance_step(prompt_file: str, step_name: str) -> None:
+                    nonlocal current_block
                     _mark_scene_subskill_step(
                         task_db,
                         project_id=project_id,
@@ -1289,6 +1319,48 @@ async def run_scene_subskill_pipeline(
                         previous_block=current_block,
                     )
                     called.append(step_name)
+                    persist_scene_subskill_named_step(
+                        db=task_db,
+                        episode_id=node_episode_id,
+                        scene_id=scene_id,
+                        step_name=step_name,
+                        result_text=current_block,
+                    )
+
+                if start_group not in {"combat", "framing", "staging"}:
+                    await _run_enhance_step(DRAMA_PROMPT, "drama")
+                    special = _special_block_from_text(current_block, scene_id) or special
+                    call_vfx, call_xian = _routes_from_special_text(special, scene_id)
+                    task["special_analysis"] = special
+                    task["call_vfx"] = call_vfx
+                    task["call_xian"] = call_xian
+                    if special:
+                        try:
+                            parsed_routes = parse_special_scene_analysis_blocks(special)
+                            for key, value in parsed_routes.items():
+                                if str(key).strip().lower() == scene_id.lower():
+                                    task["routes"] = value.get("routes") or {}
+                                    break
+                        except SceneMarkerParseError:
+                            pass
+                    if not special:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"SCENE_SUBSKILL_ROUTING_MISSING:{scene_id}",
+                        )
+                if start_group == "combat":
+                    special = special or _special_block_from_text(current_block, scene_id)
+                    call_vfx, call_xian = _routes_from_special_text(special, scene_id)
+                    if not call_vfx and not call_xian:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"SCENE_SUBSKILL_COMBAT_NOT_ROUTED:{scene_id}",
+                        )
+                if start_group not in {"framing", "staging"}:
+                    if call_vfx:
+                        await _run_enhance_step(VFX_PROMPT, "vfx")
+                    if call_xian:
+                        await _run_enhance_step(XIAN_PROMPT, "xian")
 
                 env_script = ""
                 env_scene = ""
