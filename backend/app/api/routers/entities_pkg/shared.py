@@ -1114,13 +1114,44 @@ def delete_episode_entities(
         action_type="episode_entities",
         label=f"{episode.title or f'Episode {episode_id}'} entities",
     )
-    deleted_count = _soft_delete_entities(
-        db,
-        project_id=project_id,
-        episode_id=episode_id,
-        batch_id=batch_id,
-        subject_type=subject_type,
-    )
+    subject_type_key = str(subject_type or "").strip().lower()
+    if subject_type_key in {"environment_main", "main_environment"}:
+        from app.api.routers.entities_pkg.analyze import (
+            _entity_analysis_category,
+            _entity_analysis_is_main_environment,
+        )
+        env_rows = (
+            db.query(Entity)
+            .filter(
+                Entity.project_id == project_id,
+                Entity.episode_id == episode_id,
+                _active_entity_clause(),
+            )
+            .all()
+        )
+        main_ids = [
+            int(row.id)
+            for row in env_rows
+            if _entity_analysis_category(getattr(row, "type", None)) == "environment"
+            and _entity_analysis_is_main_environment(row)
+        ]
+        deleted_count = (
+            _soft_delete_entities(
+                db,
+                entity_ids=main_ids,
+                batch_id=batch_id,
+            )
+            if main_ids
+            else 0
+        )
+    else:
+        deleted_count = _soft_delete_entities(
+            db,
+            project_id=project_id,
+            episode_id=episode_id,
+            batch_id=batch_id,
+            subject_type=subject_type,
+        )
     _finalize_deletion_batch(db, batch_id)
     db.commit()
     return {

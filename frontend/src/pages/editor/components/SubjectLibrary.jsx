@@ -20,6 +20,7 @@ import {
 } from '../editorHelpers';
 
 import { generateEntityFromText, generateEntityFromImage, generateEntityDerived } from '../../../services/api';
+import { isReusableMainEnvironmentAsset } from '../reuseEnvAssets';
 import { 
     fetchProject, 
     updateProject,
@@ -4841,7 +4842,21 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             'WARNING: This will delete ALL subjects/entities in the current episode (soft delete). Continue?'
         );
         
-        if (subjectType) {
+        if (subjectType === 'environment_main') {
+            const currentEpisodeId = String(currentEpisode.id || '').trim();
+            const mainEnvCount = (allEntities || []).filter((entity) => (
+                String(entity?.episode_id || '').trim() === currentEpisodeId
+                && isReusableMainEnvironmentAsset(entity)
+            )).length;
+            if (mainEnvCount <= 0) {
+                alert(t('当前分集没有可删除的主环境。', 'No main environments to delete in this episode.'));
+                return;
+            }
+            confirmMsg = t(
+                `警告：将删除当前分集下的 ${mainEnvCount} 个主环境（不含角度/状态衍生环境，软删除）。确定继续？`,
+                `WARNING: This will delete ${mainEnvCount} main environment(s) in the current episode (derived angle/state ENVs are kept; soft delete). Continue?`
+            );
+        } else if (subjectType) {
             const typesZh = {
                 character: '角色',
                 environment: '环境',
@@ -7752,7 +7767,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                     <Trash2 size={16} />
                                     <ChevronDown size={14} className="absolute right-1 text-white/50" />
                                 </button>
-                                <div className="absolute right-0 top-full mt-1 w-32 bg-[#1C1C1F] border border-white/10 rounded shadow-xl opacity-0 invisible group-hover/deleteall:opacity-100 group-hover/deleteall:visible group-focus-within/deleteall:opacity-100 group-focus-within/deleteall:visible transition-all z-[100] py-1">
+                                <div className="absolute right-0 top-full mt-1 w-40 bg-[#1C1C1F] border border-white/10 rounded shadow-xl opacity-0 invisible group-hover/deleteall:opacity-100 group-hover/deleteall:visible group-focus-within/deleteall:opacity-100 group-focus-within/deleteall:visible transition-all z-[100] py-1">
                                     <div 
                                         className="px-3 py-1.5 text-xs text-white/80 hover:text-red-400 hover:bg-white/5 cursor-pointer whitespace-nowrap"
                                         onClick={() => handleDeleteAllEntities(null)}
@@ -7770,6 +7785,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                         onClick={() => handleDeleteAllEntities('environment')}
                                     >
                                         {t('仅删除环境', 'Delete Environments')}
+                                    </div>
+                                    <div 
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-red-400 hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                                        onClick={() => handleDeleteAllEntities('environment_main')}
+                                    >
+                                        {t('仅删除主环境', 'Delete Main ENVs')}
                                     </div>
                                     <div 
                                         className="px-3 py-1.5 text-xs text-white/80 hover:text-red-400 hover:bg-white/5 cursor-pointer whitespace-nowrap"

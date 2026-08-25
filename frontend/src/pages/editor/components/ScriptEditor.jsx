@@ -3416,6 +3416,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [isSavingAnalysisAttentionNotes, setIsSavingAnalysisAttentionNotes] = useState(false);
     const [availableSubjectAssets, setAvailableSubjectAssets] = useState([]);
     const [episodeOwnedEntities, setEpisodeOwnedEntities] = useState([]);
+    const [assetLibrarySyncing, setAssetLibrarySyncing] = useState(false);
+    const assetLibrarySyncSeqRef = useRef(0);
     const [diagnosticsEpisodeSceneCount, setDiagnosticsEpisodeSceneCount] = useState(0);
     const [diagnosticsEpisodeShotStats, setDiagnosticsEpisodeShotStats] = useState({
         shotCount: 0,
@@ -11396,7 +11398,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         loadAssets();
         return () => { mounted = false; };
-    }, [projectId, activeEpisode?.id, analysisUiReport?.importReport, isAnalyzing, isRetryingPhase2]);
+    }, [projectId, activeEpisode?.id, analysisUiReport?.importReport, isAnalyzing, isRetryingPhase2, analysisFlowStatus?.assetsGenSettled]);
+
+    const refreshEpisodeOwnedEntities = useCallback(async () => {
+        if (!projectId || !activeEpisode?.id) return;
+        const seq = ++assetLibrarySyncSeqRef.current;
+        setAssetLibrarySyncing(true);
+        try {
+            const owned = await fetchEntities(projectId, {
+                episode_id: Number(activeEpisode.id) || undefined,
+            }).catch(() => []);
+            if (seq !== assetLibrarySyncSeqRef.current) return;
+            setEpisodeOwnedEntities(Array.isArray(owned) ? owned : []);
+        } finally {
+            if (seq === assetLibrarySyncSeqRef.current) {
+                setAssetLibrarySyncing(false);
+            }
+        }
+    }, [activeEpisode?.id, projectId]);
 
     useEffect(() => {
         // Drop selected reuse IDs that are not injectable (missing, or angle-derivative ENV).
@@ -16152,6 +16171,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     pendingKeys: assetPromptKeysSnapshot.filter((k) => !assetsGenCompletedKeys.includes(k)),
                     highlightHint,
                 });
+                void refreshEpisodeOwnedEntities();
             };
 
             const pureSubjectIndexText = extractPureSubjectIndexText(subjectIndexTextForDesign);
@@ -16799,12 +16819,75 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     break;
                 }
 
-                // Drop categories already covered in the entity library (persistence ground truth).
+                // Drop categories only when THIS-RUN designed names (or Subject Index
+                // names) are already in the entity table. Raw type counts are not
+                // enough: leftover derived ENVs can outnumber the 4 new mains and
+                // falsely mark environment design as imported.
                 if (projectId && episodeIdForAssetSubtasks && typeof fetchEntities === 'function') {
                     try {
                         const dbEntities = await fetchEntities(projectId, {
                             episode_id: Number(episodeIdForAssetSubtasks) || undefined,
                         }).catch(() => []);
+                        const collectDesignedSubjectEntries = (pData, cachedPayload, filteredText) => {
+                            const entries = [];
+                            const payload = cachedPayload && typeof cachedPayload === 'object' ? cachedPayload : {};
+                            const buckets = pData.key === 'characters'
+                                ? ['characters']
+                                : (pData.key === 'props' ? ['props'] : ['environments', 'posters', 'covers']);
+                            const bucketToReport = {
+                                characters: 'character',
+                                props: 'prop',
+                                environments: 'environment',
+                                posters: 'poster',
+                                covers: 'poster',
+                            };
+                            buckets.forEach((bucket) => {
+                                (Array.isArray(payload[bucket]) ? payload[bucket] : []).forEach((item) => {
+                                    const name = String(
+                                        item?.name
+                                        || item?.name_zh
+                                        || item?.subject_name_zh
+                                        || item?.subject_name_exact
+                                        || item?.subject_name
+                                        || ''
+                                    ).trim();
+                                    if (name) {
+                                        entries.push({
+                                            name,
+                                            reportType: bucketToReport[bucket] || 'environment',
+                                        });
+                                    }
+                                });
+                            });
+                            if (entries.length > 0) return entries;
+                            String(filteredText || '').split('\n').forEach((line) => {
+                                const detected = detectSubjectIndexLineType(line);
+                                if (!detected.isSubjectRow) return;
+                                const reportType = detected.type === 'cover_poster'
+                                    ? 'poster'
+                                    : (detected.type === 'character' || detected.type === 'prop' || detected.type === 'environment'
+                                        ? detected.type
+                                        : '');
+                                if (!reportType) return;
+                                extractSubjectIndexRowNames(line).forEach((name) => {
+                                    if (name) entries.push({ name, reportType });
+                                });
+                            });
+                            return entries;
+                        };
+                        const countDesignedEntriesCovered = (entries) => {
+                            const byType = new Map();
+                            (Array.isArray(entries) ? entries : []).forEach((entry) => {
+                                const type = String(entry?.reportType || '').trim() || 'environment';
+                                if (!byType.has(type)) byType.set(type, []);
+                                byType.get(type).push(entry);
+                            });
+                            let covered = 0;
+                            byType.forEach((list, type) => {
+                                covered += countSubjectIndexEntriesCoveredInDb(list, type, dbEntities);
+                            });
+                            return covered;
+                        };
                         const stillMissing = [];
                         for (const pData of nextPending) {
                             const filtered = filterSubjectIndexTextForAssetTask(
@@ -16813,18 +16896,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 requestedTargetFilters
                             );
                             if (Number(filtered?.keptRows || 0) <= 0) continue;
-                            const reportType = pData.key === 'characters'
-                                ? 'character'
-                                : (pData.key === 'props'
-                                    ? 'prop'
-                                    : (pData.key === 'environments' ? 'environment' : 'poster'));
-                            const dbCount = countDbEntitiesByType(reportType, dbEntities);
-                            if (dbCount >= Number(filtered.keptRows || 0)) {
+                            const cachedPayload = cachedSubjectsByKey.get(String(pData.key || ''));
+                            const designedEntries = collectDesignedSubjectEntries(
+                                pData,
+                                cachedPayload,
+                                filtered.text
+                            );
+                            const covered = countDesignedEntriesCovered(designedEntries);
+                            const needed = designedEntries.length;
+                            if (needed > 0 && covered >= needed) {
                                 onLog?.(
-                                    `[Stage 3 Asset Design] ${pData.key} already covered in DB (${dbCount}/${filtered.keptRows}); stop retrying this category.`,
+                                    `[Stage 3 Asset Design] ${pData.key} already covered in DB by name (${covered}/${needed}); stop retrying this category.`,
                                     'info'
                                 );
-                                // Synthesize an ok settled result so merge/status treat this category as done.
                                 resultByKey.set(String(pData.key || ''), {
                                     status: 'fulfilled',
                                     value: {
@@ -16834,9 +16918,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         subtaskImportReport: {
                                             createdSubjectItems: [],
                                             skippedSubjectItems: [{
-                                                type: reportType,
-                                                reason: 'db_coverage',
-                                                count: dbCount,
+                                                type: pData.key,
+                                                reason: 'db_name_coverage',
+                                                count: covered,
                                             }],
                                         },
                                         subtaskImportError: '',
@@ -16847,6 +16931,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 });
                                 continue;
                             }
+                            onLog?.(
+                                t(
+                                    `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} 入库未齐套（按名称 ${covered}/${needed || filtered.keptRows}），继续补入库，不用库内残留数量冒充完成。`,
+                                    `[Stage 3 Asset Design] ${pData.key} not name-covered in DB (${covered}/${needed || filtered.keptRows}); keep retrying import instead of counting leftover rows.`
+                                ),
+                                'warning'
+                            );
                             stillMissing.push(pData);
                         }
                         pendingAssetPrompts = stillMissing;
@@ -16867,6 +16958,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ));
 
             throwIfAnalysisStopped();
+            await refreshEpisodeOwnedEntities();
 
             const completedAssetTaskLabels = assetsGenCompletedKeys.map(getAssetDesignTaskLabel).filter(Boolean).join('、');
             const unfinishedKeys = assetPromptKeysSnapshot.filter((key) => !assetsGenCompletedKeys.includes(key));
@@ -17193,12 +17285,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
         project, extractPureSubjectIndexText, extractAnalysisSections, filterSubjectIndexTextForAssetTask,
         filterSubjectIndexExcludingExistingEntities, buildExistingEntityNameSet, fetchEntities,
+        detectSubjectIndexLineType, extractSubjectIndexRowNames,
         hasSubjectIndexStructure, hasPersistedEnvironmentAssetDesign, markEnvironmentAssetDesignReady,
         failWaitingStoryboardKickoffsForEnvAbort,
         throwIfAnalysisStopped, registerActiveAnalysisTask, isTaskCanceledError, createAnalysisCanceledError,
         createAnalysisPipelineTimeoutError,
         buildStage2_2UserInputFromStage1, clearAnalysisTaskMarker, finalizeAnalysisFlowHistoryForPhase,
         saveAnalysisTaskMarker, updateEpisodeAnalysisRun, resolveSelectedScriptAnalysisApiId,
+        refreshEpisodeOwnedEntities,
     ]);
 
     const applyBackgroundTaskMonitoringUi = useCallback((phase, startedAt = Date.now(), options = {}) => {
@@ -27606,7 +27700,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 status = 'missing';
                 failed = true;
                 errorMessage = subtaskInfo.error;
-            } else if (status === 'none' && pipelineExpectsAssets && requireNonZeroAssetKeys.has(key)) {
+            } else if (
+                status === 'none'
+                && pipelineExpectsAssets
+                && requireNonZeroAssetKeys.has(key)
+                && (subjectIndexCount > 0 || designCount > 0)
+            ) {
                 status = 'missing';
             }
             return {
@@ -28534,10 +28633,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const readyByData = Boolean(
                                 ['ok', 'extra'].includes(status)
                                 || (imported > 0 && expected > 0 && imported >= expected)
+                                || (imported > 0 && expected <= 0)
                             );
                             const targeted = !runningAssetTargets?.length
                                 || spec.targets.some((target) => runningAssetTargets.includes(target));
                             const thisRunLaunched = liveAssetDesignTaskKeys.includes(spec.key);
+                            const settledThisRun = Boolean(analysisFlowStatus?.assetsGenSettled) && !isRetryingPhase2;
+                            const waitingForLibrary = Boolean(isLoadingSubjectAssets || assetLibrarySyncing);
                             // Running/queued pipeline nodes are honest only when this run
                             // submitted that category, or analysis is still live (remount
                             // resume). Ignore leftover "running" after the run has settled.
@@ -28554,10 +28656,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 assetsExtractionState.ready
                                 && !active
                                 && !skipped
+                                && !readyByData
+                                && !waitingForLibrary
                                 && (
                                     completeness?.failed
-                                    || status === 'missing'
-                                    || nodeState.failed
+                                    || (status === 'missing' && expected > 0 && imported <= 0)
+                                    || (nodeState.failed && imported <= 0 && !settledThisRun && !thisRunLaunched)
                                 )
                             );
                             const ready = Boolean(
