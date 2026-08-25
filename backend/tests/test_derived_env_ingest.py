@@ -391,3 +391,37 @@ def test_same_direction_shot_size_aliases_merge():
     assert "0度客栈大堂_桌后反打" not in rewritten
     assert "[DERIVED_ENV:0度客栈大堂]" in rewritten
     assert "ENV:0度客栈大堂_沙尘" in rewritten
+
+
+def test_beat_evidence_titles_are_not_derived_env_names():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        canonicalize_derived_environment_name,
+        parse_derived_env_extract_items,
+        rewrite_merged_derived_environment_names,
+    )
+
+    extra = {"main": "当铺柜房"}
+    assert canonicalize_derived_environment_name("Beat:金镶玉拨算盘", extra) == "0度当铺柜房"
+    assert canonicalize_derived_environment_name(
+        "0deg Beat:金镶玉拨算盘，再收紧些",
+        extra,
+    ) == "0度当铺柜房"
+    assert canonicalize_derived_environment_name("Beat:金镶玉拨算盘") == ""
+    assert canonicalize_derived_environment_name("0deg当铺柜房", extra) == "0度当铺柜房"
+
+    source = (
+        "【主环境】当铺柜房｜日夜内外=日/内\n"
+        "当前环境=Beat:金镶玉拨算盘｜[DERIVED_ENV:0deg Beat:金镶玉拨算盘，再收紧些]\n"
+        "选择证据=ENV:Beat:金镶玉拨算盘｜机位:Beat:柜台后\n"
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=Beat:金镶玉拨算盘｜所属主环境=当铺柜房｜view_angle_from_main=0｜类型=第一刀｜同角切割父=无｜状态Delta=无\n"
+        "[DERIVED_ENV] 名称=0deg Beat:金镶玉拨算盘，再收紧些｜所属主环境=当铺柜房｜view_angle_from_main=0｜类型=第一刀｜同角切割父=无｜状态Delta=无\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+    )
+    rewritten = rewrite_merged_derived_environment_names(source)
+    assert "当前环境=0度当铺柜房" in rewritten
+    assert "[DERIVED_ENV:0度当铺柜房]" in rewritten
+    assert "选择证据=ENV:Beat:金镶玉拨算盘" in rewritten
+    assert "Beat:金镶玉拨算盘，再收紧些" not in rewritten
+    names = {item["name"] for item in parse_derived_env_extract_items(rewritten)}
+    assert names == {"0度当铺柜房"}

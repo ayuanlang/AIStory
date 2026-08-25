@@ -24,7 +24,14 @@ DERIVED_ENV_LINE_PATTERN = re.compile(
     r"^\s*\[DERIVED_ENV\]\s*(.+?)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
-DEGREE_NAME_PATTERN = re.compile(r"^(\d+)\s*度")
+DEGREE_NAME_PATTERN = re.compile(
+    r"^(\d+)\s*(?:度|deg(?:rees?)?|°)",
+    re.IGNORECASE,
+)
+EVIDENCE_NAME_PATTERN = re.compile(
+    r"(?:文戏|Beat|原文)\s*[:：]",
+    re.IGNORECASE,
+)
 FRAMING_ENV_FIELD_PATTERN = re.compile(
     r"【Beat景别构图方案】(.*?)(?:【景别构图综合】|\[DERIVED_ENV_EXTRACT_START\]|\[BEAT_STREAM_START\])",
     re.IGNORECASE | re.DOTALL,
@@ -76,7 +83,8 @@ SPECIAL_KIND_PREFIXES = ("仰天", "屋顶", "变形")
 LOOK_UP_SUFFIXES = {"仰天", "仰视", "屋顶"}
 USAGE_MERGE_TOKENS = (
     "反打", "近景", "远景", "特写", "乙侧", "覆盖", "过肩", "空镜",
-    "全景", "中景", "大远景", "大特写", "insert", "ews", "ws", "fs",
+    "全景", "中景", "大远景", "大特写", "收紧", "再收", "再近", "再远",
+    "再广", "再特写", "insert", "ews", "ws", "fs",
     "ms", "mcu", "cu", "ecu",
 )
 _EMPTY_FIELD_MARKERS = {"", "无", "n/a", "na", "none", "-"}
@@ -97,14 +105,35 @@ def _parse_field_line(raw: str) -> Dict[str, str]:
     return fields
 
 
-def _angle_from_name(name: str) -> Optional[int]:
-    match = DEGREE_NAME_PATTERN.match(_clean(name))
+def _split_degree_prefix(name: str) -> Tuple[Optional[int], str]:
+    text = _clean(name)
+    match = DEGREE_NAME_PATTERN.match(text)
     if not match:
-        return None
+        return None, text
     try:
-        return int(match.group(1))
+        angle = int(match.group(1))
     except (TypeError, ValueError):
-        return None
+        return None, text
+    return angle, text[match.end():].strip()
+
+
+def _angle_from_name(name: str) -> Optional[int]:
+    angle, _ = _split_degree_prefix(name)
+    return angle
+
+
+def _is_evidence_or_beat_title(name: str) -> bool:
+    return bool(EVIDENCE_NAME_PATTERN.search(_clean(name)))
+
+
+def _strip_usage_comma_tail(name: str) -> str:
+    text = _clean(name)
+    if not text:
+        return text
+    head, *tail = re.split(r"[,，、]", text, maxsplit=1)
+    if tail and _is_usage_suffix(tail[0]):
+        return head.strip()
+    return text
 
 
 def _normalize_angle(value: Any, name: str = "") -> int:
@@ -122,11 +151,13 @@ def _normalize_angle(value: Any, name: str = "") -> int:
 
 
 def _main_from_name(name: str) -> str:
-    text = _clean(name)
-    stripped = DEGREE_NAME_PATTERN.sub("", text, count=1).strip()
-    if "_" in stripped:
-        stripped = stripped.split("_", 1)[0].strip()
-    return stripped
+    angle, rest = _split_degree_prefix(name)
+    text = _strip_usage_comma_tail(rest if angle is not None else _clean(name))
+    if _is_evidence_or_beat_title(text):
+        return ""
+    if "_" in text:
+        text = text.split("_", 1)[0].strip()
+    return text
 
 
 def _state_suffix(name: str, main_name: str) -> str:
@@ -152,13 +183,22 @@ def canonicalize_derived_environment_name(
 
     Keep look-up specials as `{N}度{主}_仰天`, explicit warp as `_变形`,
     and marked state rows as `{N}度{主}_{状态}`.
+    Drop Beat:/文戏:/原文: evidence titles that leaked into ENV names.
     """
     extra = extra or {}
     clean_name = _clean(name)
-    angle = _angle_from_name(clean_name)
+    angle, rest = _split_degree_prefix(clean_name)
+    main = _clean(extra.get("main") or extra.get("所属主环境"))
+    if _is_evidence_or_beat_title(clean_name) or _is_evidence_or_beat_title(rest):
+        if not main:
+            return ""
+        resolved_angle = angle if angle in GRID_BY_ANGLE else 0
+        return f"{int(resolved_angle)}度{main}"
     if angle is None:
         return clean_name
-    main = _clean(extra.get("main") or extra.get("所属主环境")) or _main_from_name(clean_name)
+    rest = _strip_usage_comma_tail(rest)
+    clean_name = f"{int(angle)}度{rest}" if rest else f"{int(angle)}度"
+    main = main or _main_from_name(clean_name)
     if not main:
         return clean_name
     suffix = _state_suffix(clean_name, main)
@@ -243,7 +283,7 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
     def _upsert(name: str, extra: Optional[Dict[str, Any]] = None) -> None:
         fields = extra or {}
         clean_name = canonicalize_derived_environment_name(name, fields)
-        if not clean_name:
+        if not clean_name or not re.match(r"^\d+\s*度", clean_name):
             return
         row = by_name.get(clean_name) or {"name": clean_name}
         if extra:
@@ -507,23 +547,91 @@ def extract_derived_environment_names_from_scene_text(scene_text: str) -> str:
 
 
 _DERIVED_NAME_TOKEN_PATTERN = re.compile(r"\d+\s*度[^\s`：:｜|,，\[\]\r\n]+")
+_ENGLISH_BEAT_ENV_TOKEN_PATTERN = re.compile(
+    r"\d+\s*deg(?:rees?)?\s+(?:Beat|文戏|原文)\s*[:：][^`｜|\r\n\[\]]+",
+    re.IGNORECASE,
+)
+_CURRENT_ENV_FIELD_PATTERN = re.compile(r"(当前环境=)([^｜|\r\n]+)")
+_PLAN_ENV_FIELD_PATTERN = re.compile(
+    r"(?<!选择证据=)(?<!选择证据＝)(\bENV\s*[:：=＝]\s*)([^｜|\r\n`\[\]]+)"
+)
+
+
+_MAIN_ENV_INLINE_PATTERN = re.compile(r"【主环境】[ \t]*([^｜|\r\n─]+)")
+
+
+def _scene_main_names(text: str) -> List[str]:
+    names: List[str] = []
+    seen: Set[str] = set()
+    for pattern in (_MAIN_ENV_LINE_PATTERN, _MAIN_ENV_INLINE_PATTERN):
+        for match in pattern.finditer(text):
+            cleaned = _clean(re.split(r"[｜|]", match.group(1) or "", maxsplit=1)[0])
+            key = _normalize_env_name_key(cleaned)
+            if cleaned and key not in seen:
+                seen.add(key)
+                names.append(cleaned)
+    for match in _OWNING_MAIN_ENV_PATTERN.finditer(text):
+        cleaned = _clean(match.group(1) or "")
+        key = _normalize_env_name_key(cleaned)
+        if cleaned and key not in seen:
+            seen.add(key)
+            names.append(cleaned)
+    return names
 
 
 def rewrite_merged_derived_environment_names(text: str) -> str:
-    """Rewrite same-direction usage/shot-size aliases to `{N}度{主}` in framing text."""
+    """Rewrite usage/shot-size aliases and leaked Beat: titles to `{N}度{主}`."""
     source = str(text or "")
     if not source.strip():
         return source
+    default_main = (_scene_main_names(source) or [""])[0]
+
+    def _canon(raw: str, line_main: str = "") -> str:
+        extra = {"main": line_main or default_main}
+        canonical = canonicalize_derived_environment_name(raw, extra)
+        if canonical:
+            return canonical
+        angle, rest = _split_degree_prefix(raw)
+        if (line_main or default_main) and (
+            _is_evidence_or_beat_title(raw) or _is_evidence_or_beat_title(rest)
+        ):
+            resolved = angle if angle in GRID_BY_ANGLE else 0
+            return f"{int(resolved)}度{line_main or default_main}"
+        return raw
+
+    def _repl_extract_line(match: re.Match) -> str:
+        raw_line = match.group(0)
+        fields = _parse_field_line(match.group(1))
+        name = fields.get("名称") or fields.get("name") or ""
+        main = fields.get("所属主环境") or fields.get("main") or default_main
+        canon = _canon(name, main)
+        if name and canon and canon != name:
+            return raw_line.replace(name, canon, 1)
+        return raw_line
+
+    source = DERIVED_ENV_LINE_PATTERN.sub(_repl_extract_line, source)
+    source = DERIVED_ENV_TAG_PATTERN.sub(
+        lambda match: f"[DERIVED_ENV:{_canon(match.group(1))}]",
+        source,
+    )
+    source = _CURRENT_ENV_FIELD_PATTERN.sub(
+        lambda match: f"{match.group(1)}{_canon(match.group(2))}",
+        source,
+    )
+    source = _PLAN_ENV_FIELD_PATTERN.sub(
+        lambda match: f"{match.group(1)}{_canon(match.group(2))}",
+        source,
+    )
+
     replacements: Dict[str, str] = {}
-    for match in _DERIVED_NAME_TOKEN_PATTERN.finditer(source):
-        raw = _clean(match.group(0))
-        if not raw:
-            continue
-        canonical = canonicalize_derived_environment_name(raw)
-        if canonical and canonical != raw:
-            replacements[raw] = canonical
-    if not replacements:
-        return source
+    for pattern in (_DERIVED_NAME_TOKEN_PATTERN, _ENGLISH_BEAT_ENV_TOKEN_PATTERN):
+        for match in pattern.finditer(source):
+            raw = _clean(match.group(0))
+            if not raw:
+                continue
+            canonical = _canon(raw)
+            if canonical and canonical != raw:
+                replacements[raw] = canonical
     for raw in sorted(replacements, key=len, reverse=True):
         source = source.replace(raw, replacements[raw])
     return source

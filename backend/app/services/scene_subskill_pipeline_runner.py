@@ -267,6 +267,15 @@ def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> s
             status_code=422,
             detail=f"STAGING_BLOCKED_FRAMING_BEAT_LOCK:{sid}:{','.join(missing_locks)}",
         )
+    if re.search(
+        r"\[DERIVED_ENV:(?:Beat|文戏|原文)\s*[:：]|\[DERIVED_ENV:\d+\s*deg|当前环境=(?:Beat|文戏|原文)\s*[:：]",
+        source,
+        re.IGNORECASE,
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"STAGING_BLOCKED_ILLEGAL_DERIVED_ENV:{sid}",
+        )
     return source
 
 
