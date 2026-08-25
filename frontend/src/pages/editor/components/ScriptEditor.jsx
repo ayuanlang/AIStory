@@ -2849,7 +2849,10 @@ const canTrustStageArtifactDuringLiveRun = (phase, stepKey, { isLive = false } =
     const rawPhase = String(phase || '').trim().toLowerCase();
     if (['failed', 'warning', 'idle', 'completed'].includes(rawPhase)) return true;
     if (rawPhase === 'parallel_prepare') return false;
-    if (rawPhase === 'scene_subskills' && stepKey === 'extract_assets') return true;
+    // Leftover Subject Index must not look ready while this-run extraction
+    // has not finished. Trusting it here made the three gen columns spin
+    // (and blocked this-run design because latestStage2_1TextRef was empty).
+    if (rawPhase === 'scene_subskills' && stepKey === 'extract_assets') return false;
     const normalizedPhase = normalizeAnalysisLivePhase(phase);
     const phaseIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(normalizedPhase);
     const stepIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(String(stepKey || '').trim());
@@ -2888,8 +2891,9 @@ const isAnalysisLiveStepActive = (phase, stepKey, { isLive = false, stepReady = 
     // already rejected by canTrustStageArtifactDuringLiveRun, so stepReady is false
     // during regen and true after this-run import/settlement.
     if (phaseIdx === stepIdx) return !stepReady;
-    // Sibling concurrent branch: clear its spinner once that sibling's artifact is ready.
-    if (phaseIdx === 2 && stepKey === 'assets_gen') return !stepReady;
+    // Scene orchestration may still be live after the banner flips to assets_gen.
+    // Do NOT light assets_gen just because scene_beats is live — that marked
+    // character/prop/environment as Processing before any LLM was submitted.
     if (phaseIdx === 3 && stepKey === 'scene_beats') return !stepReady;
     return false;
 };
@@ -3599,6 +3603,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [adaptationText, setAdaptationText] = useState('');
     const [isEditingSubjectIndex, setIsEditingSubjectIndex] = useState(false);
     const [isRetryingPhase2, setIsRetryingPhase2] = useState(false);
+    const [liveAssetDesignTaskKeys, setLiveAssetDesignTaskKeys] = useState([]);
     const [systemPrompt, setSystemPrompt] = useState('');
     const [userPrompt, setUserPrompt] = useState('');
     const [isSuperuser, setIsSuperuser] = useState(false);
@@ -16063,6 +16068,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const targetAssetsCount = promptFiles.length;
         const runningAssetTaskLabels = promptFiles.map((p) => getAssetDesignTaskLabel(p.key)).filter(Boolean).join('、');
+        const promptKeyToLiveAssetKey = (key) => (
+            key === 'characters' ? 'character' : (key === 'props' ? 'prop' : (key === 'environments' ? 'environment' : ''))
+        );
+        setLiveAssetDesignTaskKeys(
+            promptFiles.map((item) => promptKeyToLiveAssetKey(item.key)).filter(Boolean)
+        );
 
 
 
@@ -16246,6 +16257,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     // Skip empty category (no rows of this type, or all already in DB).
                     // Supervisor retries must not re-bill a finished environment design.
                     if (filteredSubjectIndex.keptRows <= 0) {
+                        const skippedLiveKey = promptKeyToLiveAssetKey(pData.key);
+                        if (skippedLiveKey) {
+                            setLiveAssetDesignTaskKeys((prev) => prev.filter((item) => item !== skippedLiveKey));
+                        }
                         onLog?.(
                             t(
                                 `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} 无需生成（索引无待设计行或均已存在），跳过 LLM`,
@@ -16287,6 +16302,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         || (pData.key === 'characters'
                             ? 'asset_design_character'
                             : (pData.key === 'props' ? 'asset_design_prop' : 'asset_design_environment'));
+                    const liveKey = promptKeyToLiveAssetKey(pData.key);
+                    if (liveKey) {
+                        setLiveAssetDesignTaskKeys((prev) => (prev.includes(liveKey) ? prev : [...prev, liveKey]));
+                    }
 
                     return awaitAnalyzeSceneWithRecovery(
                         () => runScriptAnalysisFlowAnalyzeNode(
@@ -17156,6 +17175,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             throw error;
         } finally {
             phase2GenerationInFlightRef.current = false;
+            setLiveAssetDesignTaskKeys([]);
             if (options?.isRetryPhase2) {
                 setIsRetryingPhase2(false);
             }
@@ -28378,11 +28398,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const scriptOptActive = isAnalysisLiveStepActive(livePhase, 'script_opt', { isLive: analysisLive, stepReady: scriptOptReady });
                         const subjectIndexActive = isAnalysisLiveStepActive(livePhase, 'extract_assets', { isLive: analysisLive, stepReady: subjectIndexReady });
                         const sceneMarkdownActive = isAnalysisLiveStepActive(livePhase, 'scene_beats', { isLive: analysisLive, stepReady: sceneMarkdownReady });
-                        const assetDesignActive = Boolean(isRetryingPhase2)
-                            || (
-                                !assetDesignReady
-                                && isAnalysisLiveStepActive(livePhase, 'assets_gen', { isLive: analysisLive, stepReady: assetDesignReady })
-                            );
+                        const assetDesignActive = Boolean(
+                            isRetryingPhase2
+                            || liveAssetDesignTaskKeys.length > 0
+                        );
                         const pipelineNodeByName = Object.fromEntries(
                             (diagnosticsPipelineNodes || [])
                                 .filter((node) => String(node?.node_name || '').trim())
@@ -28518,14 +28537,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             );
                             const targeted = !runningAssetTargets?.length
                                 || spec.targets.some((target) => runningAssetTargets.includes(target));
+                            const thisRunLaunched = liveAssetDesignTaskKeys.includes(spec.key);
+                            // Running/queued pipeline nodes are honest only when this run
+                            // submitted that category, or analysis is still live (remount
+                            // resume). Ignore leftover "running" after the run has settled.
+                            const nodeLooksRunning = Boolean(nodeState.active)
+                                && (thisRunLaunched || analysisLive || isRetryingPhase2);
                             const active = Boolean(
                                 assetsExtractionState.ready
                                 && !skipped
                                 && !readyByData
-                                && (
-                                    nodeState.active
-                                    || (assetDesignActive && targeted)
-                                )
+                                && targeted
+                                && (thisRunLaunched || nodeLooksRunning)
                             );
                             const failed = Boolean(
                                 assetsExtractionState.ready
