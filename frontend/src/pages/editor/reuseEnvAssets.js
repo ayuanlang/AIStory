@@ -69,6 +69,19 @@ export const isReusableMainEnvironmentAsset = (asset) => {
     return true;
 };
 
+/** Angle / look-up / state derivative ENV names (`0度港口`, `0度港口_仰天`). */
+export const isDerivedEnvironmentName = (envName) => {
+    const raw = String(envName || '').trim();
+    if (!raw) return false;
+    return isAngleDerivativeEnvironmentName(raw);
+};
+
+export const isDerivedEnvironmentAsset = (asset) => (
+    Boolean(asset)
+    && isEnvironmentAssetType(asset?.type)
+    && !isReusableMainEnvironmentAsset(asset)
+);
+
 /**
  * Extract location names from script:
  * - `{location=云渊仙境(Cloud Abyss)}`

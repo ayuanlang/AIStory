@@ -1115,7 +1115,12 @@ def delete_episode_entities(
         label=f"{episode.title or f'Episode {episode_id}'} entities",
     )
     subject_type_key = str(subject_type or "").strip().lower()
-    if subject_type_key in {"environment_main", "main_environment"}:
+    if subject_type_key in {
+        "environment_main",
+        "main_environment",
+        "environment_derived",
+        "derived_environment",
+    }:
         from app.api.routers.entities_pkg.analyze import (
             _entity_analysis_category,
             _entity_analysis_is_main_environment,
@@ -1129,19 +1134,20 @@ def delete_episode_entities(
             )
             .all()
         )
-        main_ids = [
+        want_main = subject_type_key in {"environment_main", "main_environment"}
+        scoped_ids = [
             int(row.id)
             for row in env_rows
             if _entity_analysis_category(getattr(row, "type", None)) == "environment"
-            and _entity_analysis_is_main_environment(row)
+            and bool(_entity_analysis_is_main_environment(row)) == want_main
         ]
         deleted_count = (
             _soft_delete_entities(
                 db,
-                entity_ids=main_ids,
+                entity_ids=scoped_ids,
                 batch_id=batch_id,
             )
-            if main_ids
+            if scoped_ids
             else 0
         )
     else:

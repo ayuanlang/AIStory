@@ -45,6 +45,8 @@ import {
 import {
     isEnvironmentAssetType,
     isReusableMainEnvironmentAsset,
+    isDerivedEnvironmentName,
+    isDerivedEnvironmentAsset,
     isAngleDerivativeEnvironmentName,
     assetHasAngleDerivativeName,
     extractScriptLocationEnvNames,
@@ -3972,6 +3974,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
     }, [detectSubjectIndexLineType, getSubjectIndexTypesForAssetTask]);
 
+    const filterSubjectIndexTextByEnvironmentScope = useCallback((sourceText, envScope) => {
+        const scope = String(envScope || '').trim().toLowerCase();
+        const source = String(sourceText || '');
+        if (!source.trim() || !scope || scope === 'all') return source;
+        const keepDerived = scope === 'derived';
+        return source.split('\n').filter((line) => {
+            const detected = detectSubjectIndexLineType(line);
+            if (!detected.isSubjectRow) return true;
+            const rowType = String(detected.type || '').trim().toLowerCase();
+            if (rowType === 'cover_poster') return !keepDerived;
+            if (rowType !== 'environment') return true;
+            const names = extractSubjectIndexRowNames(line);
+            const derived = names.some((name) => isDerivedEnvironmentName(name));
+            return keepDerived ? derived : !derived;
+        }).join('\n');
+    }, [detectSubjectIndexLineType, extractSubjectIndexRowNames]);
+
     const isSplitStage1Prompt = useCallback((promptText) => {
         const text = String(promptText || '');
         if (!text.trim()) return false;
@@ -7275,8 +7294,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             const switchToScenes = options?.switchToScenes !== false;
             const importOptions = (options && typeof options.importOptions === 'object') ? options.importOptions : {};
-            const replaceExistingScenes = options?.replaceExistingScenes !== false
-                && importOptions?.replaceExistingScenes !== false;
+            const replaceExistingScenes = options?.replaceExistingScenes === true
+                || importOptions?.replaceExistingScenes === true;
             if (typeof onImportText !== 'function') {
                 if (onLog) onLog('Import is not available in this context.', 'warning');
                 setAnalysisFlowStatus({
@@ -12309,26 +12328,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
 
         try {
-            const storyboardInFlight = Object.values(storyboardTaskProgressRef.current?.items || {}).some((item) => (
-                ['starting', 'generating', 'importing', 'waiting_env', 'waiting_import'].includes(
-                    String(item?.status || '').trim().toLowerCase()
-                )
-            ))
-                || (storyboardKickoffPromisesRef.current?.size || 0) > 0
-                || (storyboardKickoffByMarkerRef.current?.size || 0) > 0;
-            if (
-                replaceExistingScenes
-                && orchestrationLiveImportedScenesRef.current.size <= 0
-                && !storyboardInFlight
-                && activeEpisode?.id
-            ) {
-                try {
-                    await purgeEpisodeScenes(activeEpisode.id, { clearProgress: false });
-                    onLog?.('Cleared existing episode scenes before live per-scene orchestration import.', 'info');
-                } catch (clearErr) {
-                    onLog?.(`Pre-import live orchestration purge warning: ${clearErr?.message || clearErr}`, 'warning');
-                }
-            }
+            // Normal generation never wipes the episode scene list. Existing scenes/shots stay;
+            // this import upserts the current scene only.
 
             const patchedText = patchSceneTableRowIdentity(importText, {
                 sceneId: stableSceneId,
@@ -15785,6 +15786,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         // Full pipeline and supervisor repair: drop Subject Index rows already in the entity table.
         // Manual category rerun passes skipExistingAssets:false (or omits it with isRetryPhase2).
+        if (options?.envScope) {
+            subjectIndexText = filterSubjectIndexTextByEnvironmentScope(subjectIndexText, options.envScope);
+        }
         let subjectIndexTextForDesign = subjectIndexText;
         if (skipExistingAssets && projectId && activeEpisode?.id && typeof fetchEntities === 'function') {
             if (options?.isRetryPhase2) {
@@ -16993,19 +16997,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     options?.rerunSubject?.fields,
                 ).length
             );
+            const scopedEnvMerge = ['main', 'derived'].includes(String(options.envScope || '').trim().toLowerCase());
+            const existingEntities = getAnalysisEntitiesPayloadFromJsonText(
+                activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || ''
+            ) || {};
             if (options.targetEntityTypes && Array.isArray(options.targetEntityTypes)) {
-                const existingEntities = getAnalysisEntitiesPayloadFromJsonText(
-                    activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || ''
-                ) || {};
                 ['characters', 'environments', 'props', 'posters', 'covers'].forEach(k => {
                     const isTarget = options.targetEntityTypes.includes(k) || ((k === 'posters' || k === 'covers') && (options.targetEntityTypes.includes('posters') || options.targetEntityTypes.includes('covers')));
                     if (!isTarget && existingEntities[k]) {
                         mergedBackendSubjectsJson[k] = existingEntities[k];
-                    } else if (isTarget && isSingleSubjectRerun && Array.isArray(existingEntities[k])) {
-                        // Keep siblings; incoming LLM rows upsert by name below.
+                    } else if (isTarget && (isSingleSubjectRerun || (k === 'environments' && scopedEnvMerge)) && Array.isArray(existingEntities[k])) {
+                        // Keep siblings / the other ENV subset; incoming LLM rows upsert by name below.
                         mergedBackendSubjectsJson[k] = existingEntities[k];
                     }
                 });
+            } else if (scopedEnvMerge && Array.isArray(existingEntities.environments)) {
+                mergedBackendSubjectsJson.environments = existingEntities.environments;
             }
             let rawTextParts = [];
             
@@ -17026,7 +17033,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                           }
                           if (r.value.key === 'environments') {
                               if (Array.isArray(bJson.environments) && bJson.environments.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('environments'))) {
-                                  mergedBackendSubjectsJson.environments = isSingleSubjectRerun
+                                  mergedBackendSubjectsJson.environments = (isSingleSubjectRerun || scopedEnvMerge)
                                       ? upsertEntityDesignItemsByName(mergedBackendSubjectsJson.environments, bJson.environments)
                                       : bJson.environments;
                               }
@@ -17284,6 +17291,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
         isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
         project, extractPureSubjectIndexText, extractAnalysisSections, filterSubjectIndexTextForAssetTask,
+        filterSubjectIndexTextByEnvironmentScope,
         filterSubjectIndexExcludingExistingEntities, buildExistingEntityNameSet, fetchEntities,
         detectSubjectIndexLineType, extractSubjectIndexRowNames,
         hasSubjectIndexStructure, hasPersistedEnvironmentAssetDesign, markEnvironmentAssetDesignReady,
@@ -20043,25 +20051,59 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!key) continue;
             if (['character', 'characters', 'char', 'role', 'roles'].includes(key)) mapped.add('character');
             else if (['prop', 'props', 'item', 'items'].includes(key)) mapped.add('prop');
+            else if (['environment_main', 'main_environment'].includes(key)) mapped.add('environment_main');
+            else if (['environment_derived', 'derived_environment'].includes(key)) mapped.add('environment_derived');
             else if (['environment', 'environments', 'env', 'scene', 'scenes'].includes(key)) mapped.add('environment');
             else if (['poster', 'posters', 'cover', 'covers', 'cover_poster'].includes(key)) mapped.add('cover_poster');
         }
         return mapped.size > 0 ? [...mapped] : null;
     }
 
-    function entityDesignKeysFromPurgeTypes(purgeTypes = null) {
+    function remapPurgeTypesForEnvScope(purgeTypes = null, envScope = 'main') {
+        const scope = String(envScope || 'main').trim().toLowerCase();
         if (!Array.isArray(purgeTypes) || purgeTypes.length === 0) {
-            return ['characters', 'props', 'environments', 'posters', 'covers'];
+            // Full Stage-3 asset clear keeps derived ENVs unless caller asks for all.
+            if (scope === 'all') return null;
+            if (scope === 'derived') return ['environment_derived'];
+            return ['character', 'prop', 'cover_poster', 'environment_main'];
+        }
+        const next = [];
+        for (const type of purgeTypes) {
+            if (type === 'environment') {
+                if (scope === 'derived') next.push('environment_derived');
+                else if (scope === 'all') next.push('environment');
+                else next.push('environment_main');
+            } else if (type === 'cover_poster') {
+                if (scope !== 'derived') next.push(type);
+            } else {
+                next.push(type);
+            }
+        }
+        return next;
+    }
+
+    function entityDesignKeysFromPurgeTypes(purgeTypes = null, envScope = null) {
+        const scope = String(envScope || '').trim().toLowerCase();
+        if (!Array.isArray(purgeTypes) || purgeTypes.length === 0) {
+            return scope === 'derived'
+                ? ['environments']
+                : ['characters', 'props', 'environments', 'posters', 'covers'];
         }
         const keys = new Set();
         for (const type of purgeTypes) {
             if (type === 'character') keys.add('characters');
             else if (type === 'prop') keys.add('props');
-            else if (type === 'environment') {
+            else if (type === 'environment' || type === 'environment_main' || type === 'environment_derived') {
                 keys.add('environments');
+                if (type !== 'environment_derived' && scope !== 'derived') {
+                    keys.add('posters');
+                    keys.add('covers');
+                }
             } else if (type === 'cover_poster') {
-                keys.add('posters');
-                keys.add('covers');
+                if (scope !== 'derived') {
+                    keys.add('posters');
+                    keys.add('covers');
+                }
             }
         }
         return [...keys];
@@ -20145,16 +20187,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const episodeId = Number(activeEpisode.id) || undefined;
                 const seenIds = new Set();
                 for (const subjectType of types) {
+                    const typeKey = String(subjectType || '').trim().toLowerCase();
+                    const fetchType = (typeKey === 'environment_main' || typeKey === 'environment_derived')
+                        ? 'environment'
+                        : subjectType;
                     const rows = await fetchEntities(projectId, {
-                        ...(subjectType ? { type: subjectType } : {}),
+                        ...(fetchType ? { type: fetchType } : {}),
                         ...(episodeId ? { episode_id: episodeId } : {}),
                     }).catch(() => []);
                     for (const entity of (Array.isArray(rows) ? rows : [])) {
                         const entityId = Number(entity?.id || 0);
                         if (!entityId || seenIds.has(entityId)) continue;
-                        if (subjectType && normalizeAssetReportType(entity?.type) !== normalizeAssetReportType(subjectType)) {
+                        if (fetchType && normalizeAssetReportType(entity?.type) !== normalizeAssetReportType(fetchType)) {
                             continue;
                         }
+                        if (typeKey === 'environment_main' && isDerivedEnvironmentAsset(entity)) continue;
+                        if (typeKey === 'environment_derived' && !isDerivedEnvironmentAsset(entity)) continue;
                         if (!entityPayloadMatchesPurgeNames(entity, scopedNames)) continue;
                         await deleteEntity(entityId);
                         seenIds.add(entityId);
@@ -20237,7 +20285,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }
 
-    function filterEntityDesignTextByKeys(rawText, keysToClear = null, entityNamesToClear = null) {
+    function filterEntityDesignTextByKeys(rawText, keysToClear = null, entityNamesToClear = null, envScope = null) {
         const text = String(rawText || '').trim();
         if (!text) return '';
         const clearAll = !Array.isArray(keysToClear) || keysToClear.length === 0;
@@ -20252,10 +20300,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         const keySet = new Set((keysToClear || []).map((k) => String(k || '').trim().toLowerCase()));
         const scopedNames = collectEntityPurgeNameCandidates(entityNamesToClear);
-        const clearCategory = (items) => {
+        const scope = String(envScope || '').trim().toLowerCase();
+        const envItemIsDerived = (item) => isDerivedEnvironmentAsset({
+            ...(item && typeof item === 'object' ? item : {}),
+            type: item?.type || 'environment',
+        });
+        const clearCategory = (items, { environmentScope = '' } = {}) => {
             if (!Array.isArray(items) || items.length === 0) return [];
             if (scopedNames.length > 0) {
                 return items.filter((item) => !entityPayloadMatchesPurgeNames(item, scopedNames));
+            }
+            if (environmentScope === 'derived') {
+                return items.filter((item) => !envItemIsDerived(item));
+            }
+            if (environmentScope === 'main') {
+                return items.filter((item) => envItemIsDerived(item));
             }
             return [];
         };
@@ -20266,7 +20325,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             next.props = clearCategory(next.props);
         }
         if (clearAll || keySet.has('environments') || keySet.has('environment')) {
-            next.environments = clearCategory(next.environments);
+            next.environments = clearCategory(next.environments, {
+                environmentScope: scope === 'all' ? '' : scope,
+            });
         }
         if (clearAll || keySet.has('posters') || keySet.has('poster') || keySet.has('covers') || keySet.has('cover')) {
             next.posters = clearCategory(next.posters);
@@ -20283,6 +20344,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         clearAssetDesign = false,
         assetDesignKeysToClear = null,
         assetDesignNamesToClear = null,
+        assetDesignEnvScope = null,
     } = {}) {
         const base = parseStageOutputsObject(activeEpisode?.ai_stage_outputs)
             || buildStageOutputsObject({
@@ -20339,6 +20401,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 currentDesign,
                 assetDesignKeysToClear,
                 assetDesignNamesToClear,
+                assetDesignEnvScope,
             );
             if (!outputs.asset_design_json || typeof outputs.asset_design_json !== 'object') {
                 outputs.asset_design_json = { key: 'asset_design_json', content: filtered };
@@ -20409,11 +20472,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
      *   all | script_opt → everything (Stage 1+)
      *   extract_assets → keep Stage 1; clear 2.1+ (index/scenes/assets/storyboard)
      *   scene_beats → keep Stage 1+2.1 (+ assets); clear scene markdown/scenes/shots
-     *   assets_gen → clear entity design (+ entities); clear storyboard only when ENV design is touched
+     *   assets_gen → clear entity design (+ entities); keep existing storyboards
      *   storyboard → clear shots / shot_content only
      *
-     * Storyboard depends on asset_design_environment only — character / prop / poster-cover
-     * clears must never wipe workspace shots. Pass purgeStoryboard=true|false to override.
+     * Environment regen (main or derived) must not wipe workspace shots.
+     * Pass purgeStoryboard=true only for an explicit storyboard wipe.
      */
     async function clearAnalysisArtifactsFromStage(fromStage, options = {}) {
         if (!activeEpisode?.id) return false;
@@ -20430,6 +20493,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             refreshEpisode = true,
             resetRuntimePanels = true,
             purgeStoryboard = null,
+            envScope = null,
         } = options;
 
         const clearAll = stage === 'all' || stage === 'script_opt';
@@ -20442,20 +20506,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             && Array.isArray(markerSceneIds)
             && markerSceneIds.length > 0;
 
-        const purgeTypes = normalizeEntityPurgeTypes(targetEntityTypes);
+        const resolvedEnvScope = String(envScope || '').trim().toLowerCase()
+            || (stage === 'assets_gen' ? 'main' : 'all');
+        const normalizedPurgeTypes = normalizeEntityPurgeTypes(targetEntityTypes);
+        const purgeTypes = stage === 'assets_gen'
+            ? remapPurgeTypesForEnvScope(normalizedPurgeTypes, resolvedEnvScope)
+            : normalizedPurgeTypes;
         const scopedEntityNames = collectEntityPurgeNameCandidates(entityNamesToPurge);
         const assetDesignKeys = entityDesignKeysFromPurgeTypes(
-            stage === 'assets_gen' ? purgeTypes : null
+            stage === 'assets_gen' ? purgeTypes : null,
+            stage === 'assets_gen' ? resolvedEnvScope : null,
         );
-        // ENV-only storyboard dependency. Never treat cover_poster as ENV.
-        const assetsTouchEnvironment = (() => {
-            if (stage !== 'assets_gen') return false;
-            if (purgeStoryboard === true) return true;
-            if (purgeStoryboard === false) return false;
-            if (Array.isArray(purgeTypes)) return purgeTypes.includes('environment');
-            // Full clear (null types): assume ENV is included unless caller overrides.
-            return true;
-        })();
+        // Asset-design reruns keep existing storyboards unless explicitly overridden.
+        const assetsTouchEnvironment = stage === 'assets_gen' && purgeStoryboard === true;
 
         if (onLog) {
             onLog(
@@ -20628,6 +20691,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
                     assetDesignKeys,
                     scopedEntityNames.length > 0 ? scopedEntityNames : null,
+                    resolvedEnvScope,
                 );
                 episodePatch.ai_entity_design_result = filteredDesign;
                 // Do not blank episode-level shot_content on scoped ENV clear —
@@ -20647,6 +20711,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     assetDesignNamesToClear: stage === 'assets_gen' && scopedEntityNames.length > 0
                         ? scopedEntityNames
                         : null,
+                    assetDesignEnvScope: stage === 'assets_gen' ? resolvedEnvScope : null,
                 });
             }
         }
@@ -20773,9 +20838,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     async function ensureStageAnalysisFieldsClearedBeforeRun({ forceRegenerate = false, preserveProgressUi = true, deferWorkspaceUiReset = false } = {}) {
         if (!activeEpisode?.id) return false;
 
+        // Normal generation / resume must never wipe workspace rows.
+        // Only an explicit user-confirmed regenerate may clear.
+        if (!forceRegenerate) {
+            return false;
+        }
+
         const hasPersistedFields = episodeHasPersistedStageAnalysisFields(activeEpisode);
         const hasInMemoryArtifacts = hasInMemoryStageAnalysisArtifacts();
-        if (!hasPersistedFields && !hasInMemoryArtifacts && !forceRegenerate) {
+        if (!hasPersistedFields && !hasInMemoryArtifacts) {
             return false;
         }
 
@@ -21180,7 +21251,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         await kickoffStoryboardsAfterOrchestrationSuccess(branchImportReport);
                     } else {
                         branchImportReport = await importScenesFromPerScenePatchMap(restartScenePatchMap, {
-                            replaceExistingScenes: liveImported.length <= 0,
+                            replaceExistingScenes: false,
                             skipSceneIds,
                         });
                     }
@@ -22590,7 +22661,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         } else {
                             branchImportReport = await importScenesFromPerScenePatchMap(localParallelPatchMap, {
                                 subjectsJson: result?.subjects_json || null,
-                                replaceExistingScenes: liveImported.length <= 0,
+                                replaceExistingScenes: false,
                                 skipSceneIds,
                             });
                         }
@@ -23030,7 +23101,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     } else {
                         importReport = await importScenesFromPerScenePatchMap(parallelSceneMarkdownPatchMap, {
                             subjectsJson: result?.subjects_json || null,
-                            replaceExistingScenes: liveImported.length <= 0,
+                            replaceExistingScenes: false,
                             skipSceneIds,
                         });
                     }
@@ -23726,7 +23797,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             await kickoffStoryboardsAfterOrchestrationSuccess(branchImportReport);
                         } else {
                             branchImportReport = await importScenesFromPerScenePatchMap(restartScenePatchMap, {
-                                replaceExistingScenes: liveImported.length <= 0,
+                                replaceExistingScenes: false,
                                 skipSceneIds,
                             });
                         }
@@ -25935,7 +26006,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         logSelectedScriptAnalysisApi('Stage 3 asset rerun');
         try {
             resetAutoSubjectsImportCache();
-            onLog?.(`Retrying Stage 3 asset design... targetTypes: ${options.targetEntityTypes ? options.targetEntityTypes.join(',') : 'all'}`, 'process');
+            onLog?.(`Retrying Stage 3 asset design... targetTypes: ${options.targetEntityTypes ? options.targetEntityTypes.join(',') : 'all'} envScope=${options.envScope || 'main'}`, 'process');
             const resolvedSubjectIndexText = extractPureSubjectIndexText(String(
                 options.explicitSubjectIndexText
                 || subjectIndexText
@@ -25947,45 +26018,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 throw new Error(t('缺少第二阶段资产清单，无法重跑资产生成。', 'Missing Stage 2 subject index. Cannot rerun asset generation.'));
             }
 
-            // Storyboard depends on ENV design only — wipe shots only when ENV will actually rerun.
             const retryTargetTypes = Array.isArray(options.targetEntityTypes)
                 ? options.targetEntityTypes
                 : null;
             const normalizedPurgeTypes = normalizeEntityPurgeTypes(retryTargetTypes);
-            let shouldPurgeStoryboard = false;
-            if (Array.isArray(normalizedPurgeTypes)) {
-                shouldPurgeStoryboard = normalizedPurgeTypes.includes('environment');
-            } else {
-                const stage3Config = await ensureStage3AutoStartCache();
-                const envAutoStartOn = stage3Config?.asset_design_environment !== false;
-                const subjectHasEnvRows = /(?:^|\n)\s*\|[^|\n]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(resolvedSubjectIndexText)
-                    || /(?:^|\n)\s*S\d+[^\n|]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(resolvedSubjectIndexText);
-                shouldPurgeStoryboard = Boolean(envAutoStartOn && subjectHasEnvRows);
-            }
-
-            // Clear targeted asset-design temp (+ storyboard only for ENV-linked scenes).
+            const touchesEnvironment = !Array.isArray(normalizedPurgeTypes)
+                || normalizedPurgeTypes.includes('environment')
+                || normalizedPurgeTypes.includes('environment_main')
+                || normalizedPurgeTypes.includes('environment_derived');
             const singleRerunNames = collectEntityPurgeNameCandidates(
                 options?.rerunSubject?.name,
                 options?.rerunSubject?.fields,
             );
             const singleEnvName = String(options?.rerunSubject?.name || '').trim();
-            const environmentNamesToPurge = shouldPurgeStoryboard
-                ? (singleEnvName ? [singleEnvName] : null) // null = all scenes linked to any ENV
-                : [];
+            const envScope = String(options.envScope || '').trim().toLowerCase()
+                || (singleEnvName
+                    ? (isDerivedEnvironmentName(singleEnvName) ? 'derived' : 'main')
+                    : (touchesEnvironment ? 'main' : ''));
+            const scopedSubjectIndexText = touchesEnvironment && envScope
+                ? filterSubjectIndexTextByEnvironmentScope(resolvedSubjectIndexText, envScope)
+                : resolvedSubjectIndexText;
+
+            // Environment / asset reruns keep existing storyboards.
             onLog?.(
-                shouldPurgeStoryboard
-                    ? (
-                        singleEnvName
-                            ? t(
-                                `[资产清理] 将仅清除关联环境「${singleEnvName}」的分镜`,
-                                `[Asset clear] Will purge storyboards only for scenes linked to ENV "${singleEnvName}"`
-                            )
-                            : t(
-                                '[资产清理] 将仅清除关联 ENV 的分镜（无关场景保留）',
-                                '[Asset clear] Will purge storyboards only for ENV-linked scenes (unrelated scenes kept)'
-                            )
-                    )
-                    : t('[资产清理] 保留现有分镜（本次不重跑环境资产设计）', '[Asset clear] Keeping existing storyboards (environment design is not being regenerated)'),
+                t('[资产清理] 保留现有分镜，不删除也不重跑分镜生成', '[Asset clear] Keeping existing storyboards; will not delete or regenerate shots'),
                 'info'
             );
             if (singleRerunNames.length > 0) {
@@ -26000,9 +26056,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             await clearAnalysisArtifactsFromStage('assets_gen', {
                 preserveProgressUi: true,
                 targetEntityTypes: retryTargetTypes,
-                purgeStoryboard: shouldPurgeStoryboard,
-                environmentNamesToPurge: shouldPurgeStoryboard ? environmentNamesToPurge : [],
+                purgeStoryboard: false,
+                environmentNamesToPurge: [],
                 entityNamesToPurge: singleRerunNames.length > 0 ? singleRerunNames : null,
+                envScope: envScope || 'main',
                 reason: 'retry-phase2-downstream-clear',
                 refreshEpisode: true,
             });
@@ -26011,8 +26068,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // It will also bust deduplication cache by using sceneAnalysisMode = "2_pass_generate_assets" internally
             const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(
                 analysisUiReport?.importReport || {},
-                resolvedSubjectIndexText,
-                { isRetryPhase2: true, ...options }
+                scopedSubjectIndexText,
+                {
+                    isRetryPhase2: true,
+                    ...options,
+                    envScope: envScope || options.envScope,
+                    explicitSubjectIndexText: scopedSubjectIndexText,
+                    skipExistingAssets: options.skipExistingAssets === true,
+                    overwriteExistingSubjects: options.overwriteExistingSubjects !== false,
+                }
             );
             
             // Update the UI report with the new asset counts
@@ -26074,23 +26138,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
                 
                 onLog?.('Stage 3 asset design retry completed.', 'success');
-
-                // Resume storyboards only when ENV design was (re)touched — posters alone do not count.
-                if (shouldPurgeStoryboard) {
-                    markEnvironmentAssetDesignReady('phase2-asset-retry');
-                    try {
-                        await flushPendingStoryboardKickoffsRef.current?.('phase2-asset-retry');
-                        await ensureStoryboardTasksForImportedScenes(newImportReport);
-                    } catch (resumeErr) {
-                        onLog?.(
-                            t(
-                                `资产重跑后恢复分镜失败：${resumeErr?.message || resumeErr}`,
-                                `Failed to resume storyboard after asset retry: ${resumeErr?.message || resumeErr}`
-                            ),
-                            'warning'
-                        );
-                    }
-                }
             }
         } catch (error) {
             if (isTaskCanceledError(error) || analysisStopRequestedRef.current) {
@@ -27031,10 +27078,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     preserveProgressUi: true,
                     targetEntityTypes: entry?.targetEntityTypes || null,
                     entityNamesToPurge: purgeNames,
-                    purgeStoryboard: Array.isArray(purgeTypes) && purgeTypes.includes('environment'),
-                    environmentNamesToPurge: Array.isArray(purgeTypes) && purgeTypes.includes('environment')
-                        ? purgeNames
-                        : [],
+                    purgeStoryboard: false,
+                    environmentNamesToPurge: [],
+                    envScope: Array.isArray(purgeTypes) && purgeTypes.includes('environment')
+                        ? (isDerivedEnvironmentName(entry?.name) ? 'derived' : 'main')
+                        : 'main',
                     reason: 'phase2-rerun-delete-single-entity',
                     refreshEpisode: true,
                 });
@@ -27352,9 +27400,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const category = String(phase2RerunModal.category || option.key || '').trim();
             const categoryEntries = (phase2RerunDisplayEntries || []).filter((item) => item.category === category);
             const categorySubjectIndexText = buildFullSubjectIndexTextFromEntries(categoryEntries);
+            const envScope = category === 'environments' ? 'main' : '';
             retryOptions = {
                 targetEntityTypes: option.targetEntityTypes,
-                explicitSubjectIndexText: categorySubjectIndexText || resolvedEditedText,
+                explicitSubjectIndexText: envScope
+                    ? filterSubjectIndexTextByEnvironmentScope(
+                        categorySubjectIndexText || resolvedEditedText,
+                        envScope,
+                    )
+                    : (categorySubjectIndexText || resolvedEditedText),
+                ...(envScope ? { envScope } : {}),
             };
         } else if (mode === 'single') {
             const selected = filteredPhase2RerunSubjectEntries.find((item) => item.key === phase2RerunModal.subjectKey)
@@ -27364,6 +27419,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 reportAnalysisPanelNotice(t('请选择一个资产清单实体后再重跑。', 'Select one subject-index entity before rerunning.'), 'warning');
                 return;
             }
+            const selectedType = String(selected.type || '').trim().toLowerCase();
+            const envScope = selectedType === 'environment'
+                ? (isDerivedEnvironmentName(selected.name) ? 'derived' : 'main')
+                : '';
             retryOptions = {
                 targetEntityTypes: selected.targetEntityTypes,
                 explicitSubjectIndexText: selected.sourceText,
@@ -27373,9 +27432,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     type: selected.type,
                     fields: normalizeSubjectIndexEntryFields(selected.fields, selected),
                 },
+                ...(envScope ? { envScope } : {}),
             };
         } else {
-            retryOptions = { explicitSubjectIndexText: resolvedEditedText };
+            retryOptions = { explicitSubjectIndexText: resolvedEditedText, envScope: 'main' };
         }
 
         setPhase2RerunModal((prev) => ({ ...prev, open: false, draftNewEntry: null }));
@@ -27394,6 +27454,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         assetRerunCategoryOptions,
         buildFullSubjectIndexTextFromEntries,
         filteredPhase2RerunSubjectEntries,
+        filterSubjectIndexTextByEnvironmentScope,
         handleRetryPhase2,
         onLog,
         persistSubjectIndexEdit,
@@ -28139,6 +28200,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             targetEntityTypes: (cat.key === 'environments' || cat.key === 'posters')
                                 ? ['environments', 'posters', 'covers']
                                 : [cat.key],
+                            ...((cat.key === 'environments' || cat.key === 'posters')
+                                ? { envScope: 'main', purgeStoryboard: false }
+                                : {}),
                         }),
                         disabled: isRetryingPhase2 || !hasAssetGenerationPrerequisite,
                         loading: isRetryingPhase2 && (
@@ -28820,14 +28884,40 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     className={state.failed
                                                         ? 'text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50'
                                                         : diagnosticBtnClass}
-                                                    title={t(
-                                                        `重跑${getAnalysisStageLabel(spec.stepKey, t)}`,
-                                                        `Rerun ${getAnalysisStageLabel(spec.stepKey, t)}`
-                                                    )}
+                                                    title={spec.key === 'environment'
+                                                        ? t('重生主环境（保留衍生环境和分镜）', 'Regenerate main environments; keep derived ENVs and storyboards')
+                                                        : t(
+                                                            `重跑${getAnalysisStageLabel(spec.stepKey, t)}`,
+                                                            `Rerun ${getAnalysisStageLabel(spec.stepKey, t)}`
+                                                        )}
                                                 >
                                                     {t('重跑', 'Rerun')}
                                                 </button>
                                             )}
+                                            {spec.key === 'environment' && !state.waitingInventory ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={async () => {
+                                                        const ok = await confirmUiMessage(t(
+                                                            '将仅删除并重生衍生环境。主环境和现有分镜都会保留。是否继续？',
+                                                            'This will delete and regenerate derived environments only. Main environments and existing storyboards are kept. Continue?'
+                                                        ));
+                                                        if (!ok) return;
+                                                        await handleRetryPhase2({
+                                                            targetEntityTypes: ['environments'],
+                                                            envScope: 'derived',
+                                                            skipExistingAssets: false,
+                                                            overwriteExistingSubjects: true,
+                                                            purgeStoryboard: false,
+                                                        });
+                                                    }}
+                                                    disabled={!canRerunCategory}
+                                                    className={diagnosticBtnClass}
+                                                    title={t('仅重生衍生环境，保留主环境和分镜', 'Regenerate derived environments only; keep mains and storyboards')}
+                                                >
+                                                    {t('重生衍生环境', 'Regen derived')}
+                                                </button>
+                                            ) : null}
                                         </div>
                                     </div>
                                 </div>

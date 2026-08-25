@@ -1119,6 +1119,18 @@ export const isReusableMainEnvironmentAsset = (asset) => {
     return true;
 };
 
+export const isDerivedEnvironmentName = (envName) => {
+    const raw = String(envName || '').trim();
+    if (!raw) return false;
+    return isAngleDerivativeEnvironmentName(raw);
+};
+
+export const isDerivedEnvironmentAsset = (asset) => (
+    Boolean(asset)
+    && isEnvironmentAssetType(asset?.type)
+    && !isReusableMainEnvironmentAsset(asset)
+);
+
 /**
  * Extract `{location=云渊仙境(Cloud Abyss)}` entries from script text.
  * Returns unique `{ zh, en, raw }` (either side may be empty; skip empty raw).
