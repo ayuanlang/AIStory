@@ -9,9 +9,30 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.prompt_injection import assert_no_prompt_injection
 from app.models import all_models as models
 
 Episode = models.Episode
+
+
+def _assert_safe_persist(
+    text: Any,
+    *,
+    source: str,
+    db: Optional[Session] = None,
+    episode: Optional[Episode] = None,
+    episode_id: Optional[int] = None,
+    scene_id: Optional[str] = None,
+) -> None:
+    assert_no_prompt_injection(
+        text,
+        source=source,
+        db=db,
+        episode=episode,
+        project_id=getattr(episode, "project_id", None) if episode is not None else None,
+        episode_id=episode_id if episode_id is not None else getattr(episode, "id", None),
+        scene_id=scene_id,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +101,13 @@ def resolve_analyze_scene_stage(
         is_scene_beats_stage=is_scene_beats_stage,
         is_entity_design_phase=is_entity_design_phase,
     )
+
+
+def should_require_subject_index(stage_ctx: AnalyzeSceneStageContext) -> bool:
+    """Subject Index is not the source of truth for asset design or scene beats."""
+    if stage_ctx.is_entity_design_phase or stage_ctx.is_scene_beats_stage:
+        return False
+    return True
 
 
 def validate_analyze_scene_llm_finish_reason(
@@ -164,6 +192,23 @@ def _trim_stage1_adapted_script_body(candidate_text: str) -> str:
             scenes_block = candidate[start_idx:end_idx_abs].strip()
         else:
             scenes_block = candidate[start_idx:].strip()
+        from app.services.script_analysis_flow.character_asset_brief import (
+            extract_char_extract_blocks,
+            splice_char_extract_into_script,
+        )
+        from app.services.script_analysis_flow.prop_asset_brief import (
+            extract_prop_extract_blocks,
+            splice_prop_extract_into_script,
+        )
+
+        scenes_block = splice_char_extract_into_script(
+            scenes_block,
+            extract_char_extract_blocks(candidate),
+        )
+        scenes_block = splice_prop_extract_into_script(
+            scenes_block,
+            extract_prop_extract_blocks(candidate),
+        )
         entity_profile = _extract_entity_profile_prefix_before_scenes(candidate, start_idx)
         if entity_profile:
             return f"{entity_profile}\n{scenes_block}".strip()
@@ -331,6 +376,13 @@ def persist_scene_subskill_step_result(
     text = str(result_text or "").strip()
     if eid <= 0 or not sid or not key or not text:
         return {"patched": False, "reason": "invalid_args"}
+    _assert_safe_persist(
+        text,
+        source=f"persist.scene_subskill.{sid}.{key}",
+        db=db,
+        episode_id=eid,
+        scene_id=sid,
+    )
     lock = _get_stage_output_patch_lock(eid)
     with lock:
         episode = (
@@ -388,6 +440,64 @@ def persist_scene_subskill_named_step(
         step_key=mapped,
         result_text=result_text,
     )
+
+
+def load_scene_subskill_results_map(db: Session, episode_id: int) -> Dict[str, Dict[str, str]]:
+    from app.services.soft_delete import _active_episode_clause
+
+    eid = int(episode_id or 0)
+    if eid <= 0:
+        return {}
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == eid, _active_episode_clause())
+        .populate_existing()
+        .first()
+    )
+    if episode is None:
+        return {}
+    obj = _load_stage_outputs_obj(episode)
+    outputs = _ensure_stage_outputs(obj, "stage1")
+    slot = (
+        outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
+        if isinstance(outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY), dict)
+        else {}
+    )
+    raw = str(slot.get("content") or "").strip() or "{}"
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    result: Dict[str, Dict[str, str]] = {}
+    for scene_id, steps in parsed.items():
+        sid = str(scene_id or "").strip()
+        if not sid or not isinstance(steps, dict):
+            continue
+        result[sid] = {
+            str(step_key or "").strip(): str(step_text or "")
+            for step_key, step_text in steps.items()
+            if str(step_key or "").strip()
+        }
+    return result
+
+
+def lookup_persisted_scene_subskill_steps(
+    result_map: Optional[Dict[str, Any]],
+    scene_id: str,
+) -> Dict[str, str]:
+    sid = str(scene_id or "").strip()
+    if not sid or not isinstance(result_map, dict):
+        return {}
+    direct = result_map.get(sid)
+    if isinstance(direct, dict):
+        return {str(k): str(v or "") for k, v in direct.items()}
+    sid_l = sid.lower()
+    for key, value in result_map.items():
+        if str(key or "").strip().lower() == sid_l and isinstance(value, dict):
+            return {str(k): str(v or "") for k, v in value.items()}
+    return {}
 
 
 def _patch_episode_stage1_outputs(
@@ -462,6 +572,7 @@ def persist_script_optimization_stage(
     node_output_key: str = "",
 ) -> Dict[str, Any]:
     raw_text = str(result_content or "").strip()
+    _assert_safe_persist(raw_text, source="persist.script_optimization", db=db, episode=episode)
     adapted_script = extract_stage1_adapted_script_body(raw_text) or raw_text
     visual_backfill_json = _format_project_visual_backfill_json(raw_text)
     # Always overwrite prior Stage 1 artifacts so a successful rerun cannot keep a stale copy.
@@ -502,6 +613,7 @@ def persist_assets_extraction_stage(
 ) -> Dict[str, Any]:
     from app.services.llm_markdown_sanitize import sanitize_subject_index_text
 
+    _assert_safe_persist(result_content, source="persist.assets_extraction", db=db, episode=episode)
     sanitized = sanitize_subject_index_text(result_content)
     episode.ai_scene_analysis_subject_index = sanitized
     patch_episode_stage_output_slot(
@@ -547,6 +659,7 @@ def persist_scene_markdown_stage(
     episode: Episode,
     result_content: str,
 ) -> Dict[str, Any]:
+    _assert_safe_persist(result_content, source="persist.scene_markdown", db=db, episode=episode)
     episode.ai_scene_analysis_scene_markdown = result_content
     patch_episode_stage_output_slot(
         episode,
@@ -580,6 +693,7 @@ def persist_entity_design_stage(
     episode: Episode,
     result_content: str,
 ) -> Dict[str, Any]:
+    _assert_safe_persist(result_content, source="persist.entity_design", db=db, episode=episode)
     episode.ai_entity_design_result = result_content
     patch_episode_stage_output_slot(
         episode,
@@ -621,6 +735,7 @@ def persist_generic_analyze_scene_stage(
     episode: Episode,
     result_content: str,
 ) -> Dict[str, Any]:
+    _assert_safe_persist(result_content, source="persist.generic", db=db, episode=episode)
     episode.ai_scene_analysis_result = result_content
     db.commit()
     try:

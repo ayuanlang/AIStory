@@ -131,10 +131,14 @@ _SHOT_DURATION_CELL_RE = re.compile(r"^\d+(\.\d+)?$")
 _SHOT_VIDEO_ANCHOR_RE = re.compile(
     r"全局动态风格|运镜与动作流|动态连续光影|光线连动弧光|人物面部稳定不变形"
 )
+_SHOT_VIDEO_ENV_OPENER_RE = re.compile(r"^ENV:\[[^\]]+\]")
+_SHOT_VIDEO_ENV_LEAD_RE = re.compile(
+    r"(?:^|(?:<br\s*/?>)|\n)\s*ENV:\[[^\]]+\][。.]?\s*(?:<br\s*/?>\s*)?$"
+)
 _SHOT_LOGIC_ANCHOR_RE = re.compile(
     r"Beat-Shot映射|节奏需求|^节奏:|内容继承核销|镜头逻辑总规划|场结果|"
     r"时间预估|建置角色覆盖|可剪辑合镜核销|"
-    r"光影锚定|^光影:|^运镜:|^取景:|^衔接:|^实体:|^P链:|^ENV:|"
+    r"光影锚定|^光影:|^运镜:|^取景:|^衔接:|^实体:|^P链:|ENV:ENV:|"
     r"光影继承|摄影综合表达|运镜递进与组合|运镜选用依据|P段时序链|"
     r"本镜出场实体|防穿帮|表情正背面核销|收束落幅判定|上游放大应答|"
     r"环境切换运镜|Beat衔接运镜|分镜衔接|前接说明|360度转角继承"
@@ -144,10 +148,13 @@ _SHOT_ENTITY_TOKEN_RE = re.compile(r"(?:CHAR|ENV|PROP)\s*:\s*\[", re.IGNORECASE)
 
 def _looks_like_shot_logic_prefix(text: Any) -> bool:
     """True when the cell starts as Shot Logic tags, not a video prompt."""
-    head = str(text or "").strip()[:200]
+    value = str(text or "").strip()
+    head = value[:200]
     if not head:
         return False
     if _SHOT_VIDEO_ANCHOR_RE.search(head[:40]):
+        return False
+    if _SHOT_VIDEO_ENV_OPENER_RE.match(head) and _SHOT_VIDEO_ANCHOR_RE.search(value):
         return False
     if _SHOT_LOGIC_ANCHOR_RE.search(head):
         return True
@@ -158,7 +165,15 @@ def _looks_like_shot_logic_prefix(text: Any) -> bool:
 
 
 def _starts_like_shot_video_prompt(text: Any) -> bool:
-    return bool(_SHOT_VIDEO_ANCHOR_RE.search(str(text or "").strip()[:40]))
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if _SHOT_VIDEO_ANCHOR_RE.search(value[:40]):
+        return True
+    return bool(
+        _SHOT_VIDEO_ENV_OPENER_RE.match(value)
+        and _SHOT_VIDEO_ANCHOR_RE.search(value[:160])
+    )
 
 
 def _extract_embedded_shot_video_prompt(text: Any) -> str:
@@ -169,12 +184,18 @@ def _extract_embedded_shot_video_prompt(text: Any) -> str:
     match = _SHOT_VIDEO_ANCHOR_RE.search(value)
     if not match or match.start() <= 0:
         return ""
-    prefix = value[: match.start()].strip()
-    if not prefix:
+    prefix = value[: match.start()]
+    lead = _SHOT_VIDEO_ENV_LEAD_RE.search(prefix)
+    start = lead.start() if lead else match.start()
+    prefix_before_video = value[:start].strip()
+    if not prefix_before_video:
         return ""
-    if not (_looks_like_shot_logic_prefix(prefix) or _SHOT_LOGIC_ANCHOR_RE.search(prefix)):
+    if not (
+        _looks_like_shot_logic_prefix(prefix_before_video)
+        or _SHOT_LOGIC_ANCHOR_RE.search(prefix_before_video)
+    ):
         return ""
-    video = value[match.start() :].strip()
+    video = value[start:].strip()
     return re.sub(r"^(?:<br\s*/?>|\||\n)+", "", video, flags=re.IGNORECASE).strip()
 
 

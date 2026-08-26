@@ -41,6 +41,56 @@ def _bind_endpoint_helpers(*, include_routers: bool = True) -> None:
 _bind_endpoint_helpers(include_routers=False)
 
 
+class PromptSecurityIncidentIn(BaseModel):
+    code: str = ""
+    message: str = ""
+    source: str = "frontend"
+    project_id: Optional[int] = None
+    episode_id: Optional[int] = None
+    scene_id: Optional[str] = None
+    matches: List[Dict[str, str]] = Field(default_factory=list)
+
+
+class PromptSecurityIncidentOut(BaseModel):
+    ok: bool = True
+    recorded: bool = True
+
+
+@router.post("/script_analysis/prompt_security_incident", response_model=PromptSecurityIncidentOut)
+def report_prompt_security_incident(
+    payload: PromptSecurityIncidentIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Frontend intercept of prompt leak / injection: persist audit and notify admins."""
+    from app.core.prompt_injection import PROMPT_INJECTION_DETECTED, PROMPT_LEAK_DETECTED
+    from app.services.prompt_security_incident import record_prompt_security_incident
+
+    raw_code = str(payload.code or "").strip()
+    code = raw_code if raw_code in {PROMPT_INJECTION_DETECTED, PROMPT_LEAK_DETECTED} else PROMPT_INJECTION_DETECTED
+    safe_matches = []
+    for item in list(payload.matches or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip()[:80]
+        snippet = str(item.get("snippet") or "").strip()[:80]
+        if not kind and not snippet:
+            continue
+        safe_matches.append({"kind": kind, "snippet": snippet})
+    record_prompt_security_incident(
+        code=code,
+        message=str(payload.message or "").strip()[:800],
+        source=str(payload.source or "frontend").strip()[:120] or "frontend",
+        matches=safe_matches,
+        db=db,
+        user=current_user,
+        project_id=payload.project_id,
+        episode_id=payload.episode_id,
+        scene_id=payload.scene_id,
+    )
+    return PromptSecurityIncidentOut(ok=True, recorded=True)
+
+
 @router.post("/script_analysis/ai_diagnosis", response_model=ScriptAnalysisAiDiagnosisOut)
 async def run_script_analysis_ai_diagnosis(
     payload: ScriptAnalysisAiDiagnosisRequest,

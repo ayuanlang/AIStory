@@ -425,3 +425,68 @@ def test_beat_evidence_titles_are_not_derived_env_names():
     assert "Beat:金镶玉拨算盘，再收紧些" not in rewritten
     names = {item["name"] for item in parse_derived_env_extract_items(rewritten)}
     assert names == {"0度当铺柜房"}
+
+
+def test_canonicalize_unwraps_typed_env_token():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        canonicalize_derived_environment_name,
+        extract_derived_environment_names_from_scene_text,
+        rewrite_merged_derived_environment_names,
+    )
+
+    assert canonicalize_derived_environment_name("ENV:[0度客栈大堂]") == "0度客栈大堂"
+    source = (
+        "【主环境】客栈大堂\n"
+        "【本场衍生环境名】ENV:[0度客栈大堂]，ENV:[180度客栈大堂]\n"
+        "【取景锁定】当前环境=ENV:[0度客栈大堂]｜景别=WS\n"
+    )
+    rewritten = rewrite_merged_derived_environment_names(source)
+    assert "当前环境=ENV:[0度客栈大堂]" in rewritten
+    names = extract_derived_environment_names_from_scene_text(source)
+    assert "0度客栈大堂" in names
+    assert "180度客栈大堂" in names
+
+
+def test_collect_framing_texts_prefers_scene_framing_output():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        collect_framing_texts_from_results_map,
+        has_derived_env_signals,
+    )
+
+    assert has_derived_env_signals(SAMPLE)
+    rows = collect_framing_texts_from_results_map(
+        {
+            "EP01_SC01": {"framing": SAMPLE, "staging": "建置稿，不含衍生标签"},
+            "EP01_SC02": {"framing": "", "staging": SAMPLE},
+            "EP01_SC03": {"framing": "", "staging": "只有建置"},
+        }
+    )
+    by_id = {row["scene_id"]: row for row in rows}
+    assert by_id["EP01_SC01"]["source"] == "framing"
+    assert by_id["EP01_SC02"]["source"] == "staging"
+    assert "EP01_SC03" not in by_id
+    scoped = collect_framing_texts_from_results_map(
+        {"EP01_SC01": {"framing": SAMPLE}, "EP01_SC02": {"staging": SAMPLE}},
+        scene_ids=["EP01_SC02"],
+    )
+    assert [row["scene_id"] for row in scoped] == ["EP01_SC02"]
+
+
+def test_regen_derived_env_button_does_not_call_llm():
+    from pathlib import Path
+
+    editor = Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "editor" / "components" / "ScriptEditor.jsx"
+    src = editor.read_text(encoding="utf-8")
+    assert "handleRegenDerivedEnvironments" in src
+    assert "ingestDerivedEnvironmentsFromFraming" in src
+    assert "envScope: 'derived'" not in src
+
+
+def test_ingest_endpoint_is_programmatic():
+    from pathlib import Path
+
+    router = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "prompts" / "progress_flow.py"
+    src = router.read_text(encoding="utf-8")
+    assert "ingest-derived-environments" in src
+    assert "regen_derived_environments_from_framing" in src
+    assert "No LLM" in src or "no LLM" in src.lower()

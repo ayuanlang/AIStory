@@ -7,13 +7,14 @@ import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.models.all_models import Episode, User
+from app.models.all_models import Episode, ScriptProgressPipelineNode, User
 from app.schemas.agent import AnalyzeSceneRequest
 from app.schemas.user_auth import (
     USER_ACTIVE_LEVEL_DEFAULT,
@@ -21,6 +22,7 @@ from app.schemas.user_auth import (
 )
 from app.services.db_session_utils import _release_db_connection, _snapshot_user_principal
 from app.services.scene_markdown_orchestration import _extract_analysis_text_from_result
+from app.core.prompt_injection import strip_injection_section
 from app.services.script_analysis_flow import (
     COMPREHENSIVE_INFO_PATTERN,
     SCENES_BLOCK_END_TOKEN,
@@ -32,9 +34,12 @@ from app.services.script_analysis_flow import (
     extract_env_block_from_scene_text,
     parse_scene_units_from_markers,
     parse_special_scene_analysis_blocks,
+    load_scene_subskill_results_map,
+    lookup_persisted_scene_subskill_steps,
     persist_scene_subskill_named_step,
     persist_script_optimization_stage,
     upsert_pipeline_node_status,
+    upsert_workspace_scene_from_staging,
 )
 from app.services.script_analysis_flow.derived_env_ingest import (
     DERIVED_ENV_EXTRACT_BLOCK_PATTERN,
@@ -134,6 +139,185 @@ def resolve_subskill_start_group(raw_payload: Optional[Dict[str, Any]] = None) -
         or "drama"
     ).strip().lower()
     return _SUBSKILL_START_ALIASES.get(raw, "drama")
+
+
+def payload_has_explicit_subskill_start(raw_payload: Optional[Dict[str, Any]] = None) -> bool:
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    return bool(
+        str(payload.get("start_from_step") or "").strip()
+        or str(payload.get("target_subskill") or "").strip()
+        or str(payload.get("subskill_group") or "").strip()
+    )
+
+
+@dataclass(frozen=True)
+class SceneSubskillResume:
+    start_group: str
+    current_block: str
+    called: Tuple[str, ...]
+    skipped_reason: str = ""
+
+
+_PERSISTED_STEP_MARKERS = {
+    "drama": ("[DRAMA_STANDARDIZATION_OUTPUT_END]",),
+    "combat": ("[VFX_SUBSKILL_OUTPUT_END]", "[XIAN_ATTACK_OUTPUT_END]"),
+    "framing": ("[DERIVED_FRAMING_OUTPUT_END]",),
+    "staging": ("[STAGING_ENV_OUTPUT_END]",),
+}
+
+
+def persisted_subskill_step_usable(step_key: str, text: str) -> bool:
+    body = str(text or "").strip()
+    if len(body) < 40:
+        return False
+    key = str(step_key or "").strip()
+    markers = _PERSISTED_STEP_MARKERS.get(key)
+    if markers and any(marker in body for marker in markers):
+        return True
+    # persist_scene_subskill_named_step stores the extracted scene block after
+    # the completion marker is stripped. Marker-only checks would always miss.
+    has_scene = bool(re.search(r"\[SCENE_START", body, re.IGNORECASE))
+    if not has_scene:
+        return False
+    if key == "drama":
+        return True
+    if key == "combat":
+        return True
+    if key == "framing":
+        return (
+            "【Beat景别构图方案】" in body
+            or "[DERIVED_ENV" in body
+            or "【取景锁定】" in body
+        )
+    if key == "staging":
+        return (
+            "[STAGING_ENV" in body
+            or "【入戏】" in body
+            or "【建置】" in body
+            or "入戏状态" in body
+            or "出场状态" in body
+            or "ENV氛围微" in body
+        )
+    return False
+
+
+def resolve_scene_subskill_resume(
+    *,
+    scene_id: str,
+    steps: Optional[Dict[str, str]] = None,
+    pipeline_status: str = "",
+    pipeline_scene_block: str = "",
+    call_vfx: bool = False,
+    call_xian: bool = False,
+) -> SceneSubskillResume:
+    """Pick the first unfinished step for one scene. Completed LLM steps are reused."""
+    sid = str(scene_id or "").strip()
+    scene_steps = steps if isinstance(steps, dict) else {}
+    drama = str(scene_steps.get("drama") or "").strip()
+    combat = str(scene_steps.get("combat") or "").strip()
+    framing = str(scene_steps.get("framing") or "").strip()
+    staging = str(scene_steps.get("staging") or "").strip()
+    status = str(pipeline_status or "").strip().lower()
+    node_block = str(pipeline_scene_block or "").strip()
+
+    if status == "success" and (persisted_subskill_step_usable("staging", staging) or len(node_block) >= 40):
+        return SceneSubskillResume(
+            start_group="done",
+            current_block=staging or node_block,
+            called=("drama", "derived_framing", "staging"),
+            skipped_reason="pipeline_success",
+        )
+    if persisted_subskill_step_usable("staging", staging):
+        return SceneSubskillResume(
+            start_group="done",
+            current_block=staging,
+            called=("drama", "derived_framing", "staging"),
+            skipped_reason="staging_persisted",
+        )
+
+    framing_ready = persisted_subskill_step_usable("framing", framing)
+    if framing_ready:
+        try:
+            framing = assert_derived_framing_ready_for_staging(framing, sid)
+        except Exception:
+            framing_ready = False
+    if framing_ready:
+        return SceneSubskillResume(
+            start_group="staging",
+            current_block=framing,
+            called=("drama", "derived_framing"),
+            skipped_reason="resume_staging",
+        )
+
+    needs_combat = bool(call_vfx or call_xian)
+    combat_ready = persisted_subskill_step_usable("combat", combat)
+    drama_ready = persisted_subskill_step_usable("drama", drama)
+    if drama_ready and (combat_ready or not needs_combat):
+        called = ["drama"]
+        if combat_ready:
+            called.append("vfx" if call_vfx else "xian")
+        return SceneSubskillResume(
+            start_group="framing",
+            current_block=combat if combat_ready else drama,
+            called=tuple(called),
+            skipped_reason="resume_framing",
+        )
+    if drama_ready and needs_combat:
+        return SceneSubskillResume(
+            start_group="combat",
+            current_block=drama,
+            called=("drama",),
+            skipped_reason="resume_combat",
+        )
+    return SceneSubskillResume(
+        start_group="drama",
+        current_block="",
+        called=(),
+        skipped_reason="start_drama",
+    )
+
+
+def _load_scene_pipeline_rows(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+) -> Dict[str, Dict[str, str]]:
+    if int(project_id or 0) <= 0 or int(episode_id or 0) <= 0:
+        return {}
+    rows = (
+        db.query(ScriptProgressPipelineNode)
+        .filter(
+            ScriptProgressPipelineNode.project_id == int(project_id),
+            ScriptProgressPipelineNode.episode_id == int(episode_id),
+            ScriptProgressPipelineNode.node_name == "scene_subskill_scene",
+        )
+        .all()
+    )
+    out: Dict[str, Dict[str, str]] = {}
+    for row in rows:
+        sid = str(getattr(row, "scene_id", "") or "").strip()
+        if not sid:
+            continue
+        meta = getattr(row, "runtime_meta", None)
+        if not isinstance(meta, dict):
+            meta = {}
+        out[sid] = {
+            "status": str(getattr(row, "status", "") or "").strip().lower(),
+            "scene_block": str(meta.get("scene_block") or ""),
+        }
+        out[sid.lower()] = out[sid]
+    return out
+
+
+def _lookup_scene_pipeline_row(
+    rows: Dict[str, Dict[str, str]],
+    scene_id: str,
+) -> Dict[str, str]:
+    sid = str(scene_id or "").strip()
+    if not sid:
+        return {}
+    return rows.get(sid) or rows.get(sid.lower()) or {}
 
 
 def _task_matches_target_scene(task: Dict[str, Any], target_ids: List[str]) -> bool:
@@ -370,8 +554,22 @@ def _ingest_derived_environments_after_framing(
         return None
 
 
+def is_timeout_like_error(exc: Any) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    text = str(exc or "").lower()
+    return (
+        "timed out" in text
+        or "timeout" in text
+        or "read timeout" in text
+        or "wall-clock" in text
+    )
+
+
 def _scene_subskill_failure_reason(exc: Exception) -> str:
     text = str(exc or "")
+    if is_timeout_like_error(exc):
+        return "节点超时，已标记失败并将自动补跑"
     if "COMPLETION_MARKER_MISSING" in text:
         return "子技能输出不完整，自动重试后仍缺少结束标签"
     if "OUTPUT_PARSE_FAILED" in text:
@@ -429,8 +627,15 @@ def _extract_project_tail(script_text: str) -> str:
     return source[match.end():].strip()
 
 
-def _wrap_single_scene_input(scene_block: str, comprehensive_info: str, project_tail: str) -> str:
+def _wrap_single_scene_input(
+    scene_block: str,
+    comprehensive_info: str,
+    project_tail: str,
+    entity_token_brief: str = "",
+) -> str:
     parts = [SCENES_BLOCK_START_TOKEN]
+    if str(entity_token_brief or "").strip():
+        parts.append(str(entity_token_brief).strip())
     if str(comprehensive_info or "").strip():
         parts.append(str(comprehensive_info).strip())
     parts.append(str(scene_block or "").strip())
@@ -603,6 +808,7 @@ def _extract_single_scene_block(
     # (文戏增强 newly wrote the loose VFX/XIAN routing).
     sanitized_text = SPECIAL_SCENE_ANALYSIS_PATTERN.sub("", text)
     sanitized_text = COMPREHENSIVE_INFO_PATTERN.sub("", sanitized_text)
+    sanitized_text = strip_injection_section(sanitized_text, "本场角色道具白名单")
     try:
         units = parse_scene_units_from_markers(sanitized_text)
     except SceneMarkerParseError as exc:
@@ -938,12 +1144,47 @@ async def _call_scene_subskill(
             scene_id=scene_id,
             system_api_id=api_id or base_payload.get("system_api_id"),
         )
-        result = await analyze_scene(
-            request,
-            current_user=current_user,
-            db=task_db,
-            async_mode="0",
-        )
+        try:
+            result = await analyze_scene(
+                request,
+                current_user=current_user,
+                db=task_db,
+                async_mode="0",
+            )
+        except Exception as call_exc:
+            if is_timeout_like_error(call_exc) and attempt < max_attempts:
+                logger.warning(
+                    "[scene_subskill_pipeline] timeout retry scene=%s prompt=%s attempt=%s/%s err=%s",
+                    scene_id,
+                    prompt_file,
+                    attempt,
+                    max_attempts,
+                    call_exc,
+                )
+                project_id = int(base_payload.get("project_id") or 0)
+                episode_id = int(base_payload.get("episode_id") or 0)
+                if project_id > 0 and episode_id > 0:
+                    upsert_pipeline_node_status(
+                        task_db,
+                        project_id=project_id,
+                        episode_id=episode_id,
+                        script_id=f"episode:{episode_id}",
+                        node_name="scene_subskill_scene",
+                        scene_id=scene_id,
+                        status="running",
+                        progress_percent=15.0,
+                        retry_count=attempt,
+                        runtime_meta={
+                            "business_event": "retry",
+                            "business_reason": f"{_subskill_action_label(prompt_file)}超时，正在重试",
+                            "current_step_label": _subskill_action_label(prompt_file),
+                        },
+                        error_code="SCENE_SUBSKILL_TIMEOUT",
+                        error_message=str(call_exc),
+                    )
+                    task_db.commit()
+                continue
+            raise
         text = _extract_analysis_text_from_result(result).strip()
         stripped = _strip_subskill_completion_marker(text, prompt_file) if text else ""
         candidate = stripped or text
@@ -1062,6 +1303,7 @@ async def _run_derived_framing_then_staging(
     env_catalog: List[Dict[str, Any]],
     called: List[str],
     skip_framing: bool = False,
+    entity_token_brief: str = "",
 ) -> str:
     """Framing LLM must succeed before staging LLM is allowed to start."""
     if skip_framing:
@@ -1072,6 +1314,7 @@ async def _run_derived_framing_then_staging(
             current_block,
             comprehensive_info,
             project_tail,
+            entity_token_brief,
         )
         prompt_file = STAGING_PROMPT
         _mark_scene_subskill_step(
@@ -1124,6 +1367,7 @@ async def _run_derived_framing_then_staging(
         framing_block,
         comprehensive_info,
         project_tail,
+        entity_token_brief,
     )
     if derived_block:
         framing_input = f"{derived_block}\n\n{framing_input}"
@@ -1144,6 +1388,7 @@ async def _run_derived_framing_then_staging(
                 current_block,
                 comprehensive_info,
                 project_tail,
+                entity_token_brief,
             )
         _mark_scene_subskill_step(
             task_db,
@@ -1199,6 +1444,7 @@ async def _run_derived_framing_then_staging(
                 current_block,
                 comprehensive_info,
                 project_tail,
+                entity_token_brief,
             )
         called.append(step_name)
     return current_block
@@ -1214,12 +1460,14 @@ async def run_scene_subskill_pipeline(
     """Drama/VFX/Xian from scene-split; framing then staging after main-env splice."""
     script_text = str(raw_payload.get("text") or "").strip()
     start_group = resolve_subskill_start_group(raw_payload)
+    explicit_start = payload_has_explicit_subskill_start(raw_payload)
     target_scene_ids = coerce_target_scene_ids_for_orchestration(raw_payload, script_text)
     logger.warning(
-        "[scene_subskill_pipeline] start contract=%s post_env_steps=%s start_from=%s targets=%s",
+        "[scene_subskill_pipeline] start contract=%s post_env_steps=%s start_from=%s explicit=%s targets=%s",
         PIPELINE_CONTRACT_VERSION,
         [step for step, _ in SCENE_SUBSKILL_POST_ENV_STEPS],
         start_group,
+        explicit_start,
         target_scene_ids,
     )
     tasks = build_scene_subskill_task_payloads(script_text)
@@ -1236,15 +1484,49 @@ async def run_scene_subskill_pipeline(
         getattr(current_user, "is_active", USER_ACTIVE_LEVEL_DEFAULT),
     )
     project_id = int(raw_payload.get("project_id") or 0)
+    persist_map: Dict[str, Dict[str, str]] = {}
+    pipeline_rows: Dict[str, Dict[str, str]] = {}
+    if not explicit_start and node_episode_id > 0:
+        persist_map = load_scene_subskill_results_map(db, node_episode_id)
+        pipeline_rows = _load_scene_pipeline_rows(
+            db,
+            project_id=project_id,
+            episode_id=node_episode_id,
+        )
+    resume_plans: Dict[str, SceneSubskillResume] = {}
+    if not explicit_start:
+        for task in tasks:
+            scene_id = str(task.get("scene_id") or "").strip()
+            node_row = _lookup_scene_pipeline_row(pipeline_rows, scene_id)
+            plan = resolve_scene_subskill_resume(
+                scene_id=scene_id,
+                steps=lookup_persisted_scene_subskill_steps(persist_map, scene_id),
+                pipeline_status=str(node_row.get("status") or ""),
+                pipeline_scene_block=str(node_row.get("scene_block") or ""),
+                call_vfx=bool(task.get("call_vfx")),
+                call_xian=bool(task.get("call_xian")),
+            )
+            resume_plans[scene_id] = plan
+            resume_plans[scene_id.lower()] = plan
+            logger.info(
+                "[scene_subskill_pipeline] resume scene=%s from=%s reason=%s",
+                scene_id,
+                plan.start_group,
+                plan.skipped_reason,
+            )
     if project_id > 0 and node_episode_id > 0:
         for task in tasks:
+            scene_id = str(task.get("scene_id") or "").strip()
+            plan = resume_plans.get(scene_id)
+            if plan and plan.start_group == "done":
+                continue
             upsert_pipeline_node_status(
                 db,
                 project_id=project_id,
                 episode_id=node_episode_id,
                 script_id=f"episode:{node_episode_id}",
                 node_name="scene_subskill_scene",
-                scene_id=str(task.get("scene_id") or ""),
+                scene_id=scene_id,
                 status="queued",
                 progress_percent=0.0,
                 runtime_meta={"business_event": "queued"},
@@ -1274,8 +1556,20 @@ async def run_scene_subskill_pipeline(
 
     async def _run_one(task: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         async with semaphore:
-            task_db = SessionLocal()
             scene_id = str(task.get("scene_id") or "")
+            scene_resume = resume_plans.get(scene_id) or resume_plans.get(scene_id.lower())
+            scene_start = scene_resume.start_group if scene_resume else start_group
+            if scene_start == "done":
+                return int(task.get("scene_order") or 0), {
+                    "scene_id": scene_id,
+                    "scene_order": int(task.get("scene_order") or 0),
+                    "scene_block": str(scene_resume.current_block if scene_resume else task.get("scene_block") or ""),
+                    "called_subskills": list(scene_resume.called) if scene_resume else [],
+                    "routes": task.get("routes") or {},
+                    "skipped": True,
+                    "resume_from": "done",
+                }
+            task_db = SessionLocal()
             try:
                 project_id = int(raw_payload.get("project_id") or 0)
                 if project_id > 0 and node_episode_id > 0:
@@ -1293,13 +1587,16 @@ async def run_scene_subskill_pipeline(
                     task_db.commit()
                 special = str(task.get("special_analysis") or "")
                 raw_scene_block = str(task.get("scene_block") or "")
-                if start_group == "staging":
+                resume_block = str(scene_resume.current_block or "").strip() if scene_resume else ""
+                if resume_block:
+                    current_block = resume_block
+                elif scene_start == "staging":
                     current_block = raw_scene_block.strip()
                 else:
                     current_block = strip_environment_planning_sections(raw_scene_block)
                 if special and special not in current_block:
                     current_block = "\n".join(part for part in (special, current_block) if part)
-                called: List[str] = []
+                called: List[str] = list(scene_resume.called) if scene_resume else []
                 call_vfx = bool(task.get("call_vfx"))
                 call_xian = bool(task.get("call_xian"))
 
@@ -1317,6 +1614,7 @@ async def run_scene_subskill_pipeline(
                         current_block,
                         str(task.get("comprehensive_info") or ""),
                         project_tail,
+                        str(task.get("entity_token_brief") or ""),
                     )
                     current_block = await _call_scene_subskill(
                         task_db=task_db,
@@ -1337,7 +1635,7 @@ async def run_scene_subskill_pipeline(
                         result_text=current_block,
                     )
 
-                if start_group not in {"combat", "framing", "staging"}:
+                if scene_start not in {"combat", "framing", "staging"}:
                     await _run_enhance_step(DRAMA_PROMPT, "drama")
                     special = _special_block_from_text(current_block, scene_id) or special
                     call_vfx, call_xian = _routes_from_special_text(special, scene_id)
@@ -1358,7 +1656,12 @@ async def run_scene_subskill_pipeline(
                             status_code=422,
                             detail=f"SCENE_SUBSKILL_ROUTING_MISSING:{scene_id}",
                         )
-                if start_group == "combat":
+                else:
+                    special = special or _special_block_from_text(current_block, scene_id)
+                    routed_vfx, routed_xian = _routes_from_special_text(special, scene_id)
+                    if routed_vfx or routed_xian:
+                        call_vfx, call_xian = routed_vfx, routed_xian
+                if scene_start == "combat":
                     special = special or _special_block_from_text(current_block, scene_id)
                     call_vfx, call_xian = _routes_from_special_text(special, scene_id)
                     if not call_vfx and not call_xian:
@@ -1366,7 +1669,7 @@ async def run_scene_subskill_pipeline(
                             status_code=422,
                             detail=f"SCENE_SUBSKILL_COMBAT_NOT_ROUTED:{scene_id}",
                         )
-                if start_group not in {"framing", "staging"}:
+                if scene_start not in {"framing", "staging"}:
                     if call_vfx:
                         await _run_enhance_step(VFX_PROMPT, "vfx")
                     if call_xian:
@@ -1374,7 +1677,7 @@ async def run_scene_subskill_pipeline(
 
                 env_script = ""
                 env_scene = ""
-                if start_group != "staging":
+                if scene_start != "staging":
                     _mark_scene_subskill_step(
                         task_db,
                         project_id=project_id,
@@ -1405,9 +1708,25 @@ async def run_scene_subskill_pipeline(
                     enhance_block=current_block,
                     env_catalog=env_catalog,
                     called=called,
-                    skip_framing=start_group == "staging",
+                    skip_framing=scene_start == "staging",
+                    entity_token_brief=str(task.get("entity_token_brief") or ""),
                 )
                 if project_id > 0 and node_episode_id > 0:
+                    workspace_import = {}
+                    try:
+                        workspace_import = upsert_workspace_scene_from_staging(
+                            task_db,
+                            episode_id=node_episode_id,
+                            scene_id=scene_id,
+                            staging_text=current_block,
+                            scene_order=int(task.get("scene_order") or 0) or None,
+                        )
+                    except Exception as import_exc:
+                        logger.warning(
+                            "[scene_subskill] workspace scene import failed scene_id=%s err=%s",
+                            scene_id,
+                            import_exc,
+                        )
                     upsert_pipeline_node_status(
                         task_db,
                         project_id=project_id,
@@ -1422,6 +1741,7 @@ async def run_scene_subskill_pipeline(
                             "scene_block": current_block,
                             "called_subskills": called,
                             "routes": task.get("routes") or {},
+                            "workspace_import": workspace_import,
                         },
                     )
                     task_db.commit()
@@ -1432,7 +1752,7 @@ async def run_scene_subskill_pipeline(
                     "called_subskills": called,
                     "routes": task.get("routes") or {},
                 }
-            except Exception as exc:
+            except asyncio.CancelledError:
                 project_id = int(raw_payload.get("project_id") or 0)
                 if project_id > 0 and node_episode_id > 0:
                     upsert_pipeline_node_status(
@@ -1445,19 +1765,94 @@ async def run_scene_subskill_pipeline(
                         status="failed",
                         progress_percent=100.0,
                         runtime_meta={
-                            "business_event": "failed",
-                            "business_reason": _scene_subskill_failure_reason(exc),
+                            "business_event": "cancelled",
+                            "business_reason": "任务被取消，已退出进行中状态",
                         },
-                        error_code="SCENE_SUBSKILL_SCENE_FAILED",
-                        error_message=str(exc),
+                        error_code="SCENE_SUBSKILL_CANCELLED",
+                        error_message="scene subskill cancelled",
                     )
                     task_db.commit()
                 raise
+            except Exception as exc:
+                project_id = int(raw_payload.get("project_id") or 0)
+                timed_out = is_timeout_like_error(exc)
+                if project_id > 0 and node_episode_id > 0:
+                    upsert_pipeline_node_status(
+                        task_db,
+                        project_id=project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name="scene_subskill_scene",
+                        scene_id=scene_id,
+                        status="failed",
+                        progress_percent=100.0,
+                        runtime_meta={
+                            "business_event": "timeout" if timed_out else "failed",
+                            "business_reason": _scene_subskill_failure_reason(exc),
+                        },
+                        error_code="SCENE_SUBSKILL_TIMEOUT" if timed_out else "SCENE_SUBSKILL_SCENE_FAILED",
+                        error_message=str(exc),
+                    )
+                    task_db.commit()
+                return int(task.get("scene_order") or 0), {
+                    "scene_id": scene_id,
+                    "scene_order": int(task.get("scene_order") or 0),
+                    "scene_block": str(locals().get("current_block") or task.get("scene_block") or ""),
+                    "called_subskills": locals().get("called") if isinstance(locals().get("called"), list) else [],
+                    "routes": task.get("routes") or {},
+                    "failed": True,
+                    "timed_out": timed_out,
+                    "error": str(exc),
+                }
             finally:
                 _release_db_connection(task_db)
 
     try:
-        results = await asyncio.gather(*(_run_one(task) for task in tasks))
+        results = list(await asyncio.gather(*(_run_one(task) for task in tasks)))
+        timeout_retry_tasks = [
+            task for task, (_order, item) in zip(tasks, results)
+            if isinstance(item, dict) and item.get("timed_out")
+        ]
+        if timeout_retry_tasks:
+            logger.warning(
+                "[scene_subskill_pipeline] retrying timed-out scenes once count=%s ids=%s",
+                len(timeout_retry_tasks),
+                [str(task.get("scene_id") or "") for task in timeout_retry_tasks],
+            )
+            refresh_db = SessionLocal()
+            try:
+                persist_map = load_scene_subskill_results_map(refresh_db, node_episode_id)
+                pipeline_rows = _load_scene_pipeline_rows(
+                    refresh_db,
+                    project_id=project_id,
+                    episode_id=node_episode_id,
+                )
+            finally:
+                _release_db_connection(refresh_db)
+            for task in timeout_retry_tasks:
+                scene_id = str(task.get("scene_id") or "").strip()
+                node_row = _lookup_scene_pipeline_row(pipeline_rows, scene_id)
+                plan = resolve_scene_subskill_resume(
+                    scene_id=scene_id,
+                    steps=lookup_persisted_scene_subskill_steps(persist_map, scene_id),
+                    pipeline_status=str(node_row.get("status") or ""),
+                    pipeline_scene_block=str(node_row.get("scene_block") or ""),
+                    call_vfx=bool(task.get("call_vfx")),
+                    call_xian=bool(task.get("call_xian")),
+                )
+                resume_plans[scene_id] = plan
+                resume_plans[scene_id.lower()] = plan
+            retry_results = await asyncio.gather(*(_run_one(task) for task in timeout_retry_tasks))
+            retry_by_id = {
+                str(item.get("scene_id") or "").strip().lower(): (order, item)
+                for order, item in retry_results
+                if isinstance(item, dict)
+            }
+            next_results = []
+            for task, pair in zip(tasks, results):
+                sid = str(task.get("scene_id") or "").strip().lower()
+                next_results.append(retry_by_id.get(sid) or pair)
+            results = next_results
     finally:
         if not env_plan_task.done():
             env_plan_task.cancel()
@@ -1500,9 +1895,15 @@ async def run_scene_subskill_pipeline(
             )
             aggregate_text = persist_text
 
+    failed_ids = [
+        str(item.get("scene_id") or "").strip()
+        for item in ordered
+        if item.get("failed") and str(item.get("scene_id") or "").strip()
+    ]
     logger.info(
-        "[scene_subskill_pipeline] completed scenes=%s concurrency=%s episode_id=%s",
+        "[scene_subskill_pipeline] completed scenes=%s failed=%s concurrency=%s episode_id=%s",
         len(ordered),
+        failed_ids,
         max_concurrency,
         node_episode_id,
     )
@@ -1512,4 +1913,6 @@ async def run_scene_subskill_pipeline(
         "per_scene_parallel": True,
         "per_scene_outputs": ordered,
         "scene_count": len(ordered),
+        "partial_failure": bool(failed_ids),
+        "failed_scene_ids": failed_ids,
     }

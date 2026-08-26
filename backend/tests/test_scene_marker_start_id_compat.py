@@ -23,6 +23,76 @@ scene six body
     assert units[1].scene_text == "scene six body"
 
 
+def test_nested_content_wrappers_and_duplicate_end_still_parse():
+    script = """
+[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+【场景名称】客栈对峙
+[SCENE_CONTENT_START:EP01_SC01]
+[SCENE_START:EP01_SC01]
+[ENV_BLOCK_START]
+客栈内部。
+[ENV_BLOCK_END]
+[SCENE_END:EP01_SC01]
+[SCENE_CONTENT_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+
+[SCENE_START:EP01_SC04]
+【场景名称】客栈毁灭
+[SCENE_CONTENT_START:EP01_SC04]
+[SCENE_START:EP01_SC04]
+[ENV_BLOCK_START]
+客栈废墟。
+[ENV_BLOCK_END]
+[SCENE_END:EP01_SC04]
+[SCENE_START:EP01_SC05]
+[ENV_BLOCK_START]
+荒漠古道。
+[ENV_BLOCK_END]
+[SCENE_END:EP01_SC05]
+[SCENE_CONTENT_END:EP01_SC04]
+[SCENE_END:EP01_SC04]
+[SCENES_BLOCK_END]
+"""
+    units = parse_scene_units_from_markers(script)
+    assert [u.scene_id for u in units] == ["EP01_SC01", "EP01_SC04", "EP01_SC05"]
+    assert "客栈内部" in units[0].scene_text
+    assert "客栈废墟" in units[1].scene_text
+    assert "荒漠古道" in units[2].scene_text
+
+
+def test_extra_trailing_scene_end_is_ignored():
+    script = """
+[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+one
+[SCENE_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+"""
+    units = parse_scene_units_from_markers(script)
+    assert [u.scene_id for u in units] == ["EP01_SC01"]
+    assert units[0].scene_text == "one"
+
+
+def test_visual_backfill_inside_block_does_not_fail_parse():
+    script = """
+[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+one
+[SCENE_END:EP01_SC01]
+{
+  "project_visual_backfill": {
+    "note": "example [SCENE_END:EPxx_SC01]"
+  }
+}
+[SCENES_BLOCK_END]
+"""
+    units = parse_scene_units_from_markers(script)
+    assert [u.scene_id for u in units] == ["EP01_SC01"]
+    assert units[0].scene_text == "one"
+
+
 def test_matching_start_end_ids_still_parse():
     script = """
 [SCENES_BLOCK_START]

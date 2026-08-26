@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.models.all_models import Entity, Episode
+from app.models.all_models import Entity, Episode, ScriptProgressPipelineNode
 from app.services.soft_delete import _active_entity_clause, _active_episode_clause
 
 logger = logging.getLogger("api_logger")
@@ -175,6 +175,20 @@ def _same_angle_parent(name: str, main_name: str, angle: int) -> str:
     return f"{int(angle)}度{main_name}"
 
 
+_TYPED_ENV_NAME_PATTERN = re.compile(
+    r"^(?:ENV\s*:\s*)?\[([^\[\]]+)\]$",
+    re.IGNORECASE,
+)
+
+
+def unwrap_typed_environment_name(name: str) -> str:
+    text = str(name or "").strip()
+    match = _TYPED_ENV_NAME_PATTERN.fullmatch(text)
+    if match:
+        return str(match.group(1) or "").strip()
+    return text
+
+
 def canonicalize_derived_environment_name(
     name: str,
     extra: Optional[Dict[str, Any]] = None,
@@ -186,7 +200,7 @@ def canonicalize_derived_environment_name(
     Drop Beat:/文戏:/原文: evidence titles that leaked into ENV names.
     """
     extra = extra or {}
-    clean_name = _clean(name)
+    clean_name = unwrap_typed_environment_name(name)
     angle, rest = _split_degree_prefix(clean_name)
     main = _clean(extra.get("main") or extra.get("所属主环境"))
     if _is_evidence_or_beat_title(clean_name) or _is_evidence_or_beat_title(rest):
@@ -474,6 +488,10 @@ _DERIVED_ENV_NAME_PATTERN = re.compile(r"^\d+\s*度")
 _SCENE_DERIVED_ENV_HEADER_PATTERN = re.compile(
     r"【本场衍生环境名】\s*([^\r\n]+)"
 )
+_DERIVED_ENV_SIGNAL_PATTERN = re.compile(
+    r"\[DERIVED_ENV|【本场衍生环境名】|────【衍生环境】────",
+    re.IGNORECASE,
+)
 
 
 def _normalize_env_name_key(value: str) -> str:
@@ -509,9 +527,10 @@ def extract_derived_environment_names_from_scene_text(scene_text: str) -> str:
     main_keys = _main_environment_name_keys(text)
 
     def _add(raw_name: str) -> None:
-        cleaned = _clean(raw_name)
+        cleaned = unwrap_typed_environment_name(raw_name)
         cleaned = re.split(r"[｜|]", cleaned, maxsplit=1)[0].strip()
         cleaned = re.sub(r"^(名称|环境名|环境|ENV)\s*[=：:]\s*", "", cleaned).strip()
+        cleaned = unwrap_typed_environment_name(cleaned)
         if not cleaned or cleaned.startswith("─") or cleaned.startswith("-"):
             return
         if not _DERIVED_ENV_NAME_PATTERN.match(cleaned):
@@ -614,10 +633,15 @@ def rewrite_merged_derived_environment_names(text: str) -> str:
         lambda match: f"[DERIVED_ENV:{_canon(match.group(1))}]",
         source,
     )
-    source = _CURRENT_ENV_FIELD_PATTERN.sub(
-        lambda match: f"{match.group(1)}{_canon(match.group(2))}",
-        source,
-    )
+    def _repl_current_env(match: re.Match) -> str:
+        raw = str(match.group(2) or "").strip()
+        wrapped = bool(re.match(r"ENV\s*:\s*\[", raw, re.IGNORECASE))
+        canon = _canon(raw)
+        if wrapped and canon and not re.match(r"ENV\s*:", canon, re.IGNORECASE):
+            return f"{match.group(1)}ENV:[{canon}]"
+        return f"{match.group(1)}{canon}"
+
+    source = _CURRENT_ENV_FIELD_PATTERN.sub(_repl_current_env, source)
     source = _PLAN_ENV_FIELD_PATTERN.sub(
         lambda match: f"{match.group(1)}{_canon(match.group(2))}",
         source,
@@ -643,6 +667,7 @@ def _upsert_environment_entity(
     project_id: int,
     episode_id: int,
     payload: Dict[str, Any],
+    force_overwrite: bool = False,
 ) -> Tuple[str, int]:
     name = _clean(payload.get("name"))
     name_en = _clean(payload.get("name_en"))
@@ -690,7 +715,11 @@ def _upsert_environment_entity(
         return "created", int(entity.id)
     existing_attrs = dict(existing.custom_attributes or {}) if isinstance(existing.custom_attributes, dict) else {}
     existing_prompt = _clean(existing.generation_prompt_cn)
-    can_overwrite = (not existing_prompt) or existing_attrs.get("source") == SOURCE_FLAG
+    can_overwrite = (
+        bool(force_overwrite)
+        or (not existing_prompt)
+        or existing_attrs.get("source") == SOURCE_FLAG
+    )
     if can_overwrite:
         existing.generation_prompt_cn = prompt
         existing.description = prompt or existing.description
@@ -777,6 +806,8 @@ def merge_derived_environment_groups(
 def persist_derived_environment_jsons(
     episode: Episode,
     groups: Sequence[Dict[str, Any]],
+    *,
+    replace_existing: bool = False,
 ) -> None:
     raw = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
     try:
@@ -799,7 +830,7 @@ def persist_derived_environment_jsons(
         stage1["outputs"] = outputs
     existing_groups: List[Dict[str, Any]] = []
     existing_blob = outputs.get("derived_environment_jsons")
-    if isinstance(existing_blob, dict):
+    if (not replace_existing) and isinstance(existing_blob, dict):
         raw_content = existing_blob.get("content")
         try:
             parsed = (
@@ -835,6 +866,9 @@ def ingest_derived_environments_from_framing(
     project_id: int,
     episode_id: int,
     scene_text: str,
+    force_overwrite: bool = False,
+    replace_existing_groups: bool = False,
+    commit: bool = True,
 ) -> Dict[str, Any]:
     groups = collect_derived_environment_jsons(scene_text)
     created = 0
@@ -849,6 +883,7 @@ def ingest_derived_environments_from_framing(
                     project_id=int(project_id),
                     episode_id=int(episode_id),
                     payload=row,
+                    force_overwrite=force_overwrite,
                 )
                 if entity_id:
                     entity_ids.append(entity_id)
@@ -864,8 +899,13 @@ def ingest_derived_environments_from_framing(
             .first()
         )
         if episode is not None:
-            persist_derived_environment_jsons(episode, groups)
-        db.commit()
+            persist_derived_environment_jsons(
+                episode,
+                groups,
+                replace_existing=replace_existing_groups,
+            )
+        if commit:
+            db.commit()
     logger.info(
         "[derived_env_ingest] mains=%s created=%s updated=%s kept=%s episode_id=%s",
         len(groups),
@@ -883,5 +923,217 @@ def ingest_derived_environments_from_framing(
         "groups": [
             {"main_environment": group.get("main_environment"), "count": group.get("count"), "json": group.get("json")}
             for group in groups
+        ],
+    }
+
+
+def has_derived_env_signals(text: str) -> bool:
+    return bool(_DERIVED_ENV_SIGNAL_PATTERN.search(str(text or "")))
+
+
+def load_scene_subskill_results_map(episode: Episode) -> Dict[str, Any]:
+    raw = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
+    try:
+        obj = json.loads(raw) if raw else {}
+    except Exception:
+        obj = {}
+    stages = obj.get("stages") if isinstance(obj, dict) else {}
+    stage1 = stages.get("stage1") if isinstance(stages, dict) else {}
+    outputs = stage1.get("outputs") if isinstance(stage1, dict) else {}
+    slot = outputs.get("scene_subskill_results") if isinstance(outputs, dict) else {}
+    content = slot.get("content") if isinstance(slot, dict) else slot
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str) and content.strip():
+        try:
+            parsed = json.loads(content)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def collect_framing_texts_from_results_map(
+    result_map: Any,
+    scene_ids: Optional[Sequence[str]] = None,
+) -> List[Dict[str, str]]:
+    wanted = {str(item or "").strip() for item in (scene_ids or []) if str(item or "").strip()}
+    rows: List[Dict[str, str]] = []
+    if not isinstance(result_map, dict):
+        return rows
+    for scene_id, scene_map in result_map.items():
+        sid = str(scene_id or "").strip()
+        if not sid or not isinstance(scene_map, dict):
+            continue
+        if wanted and sid not in wanted:
+            continue
+        framing = str(scene_map.get("framing") or "").strip()
+        staging = str(scene_map.get("staging") or "").strip()
+        if framing:
+            rows.append({"scene_id": sid, "source": "framing", "text": framing})
+        elif has_derived_env_signals(staging):
+            rows.append({"scene_id": sid, "source": "staging", "text": staging})
+    return rows
+
+
+def _pipeline_scene_blocks(db: Session, episode_id: int) -> Dict[str, str]:
+    rows = (
+        db.query(ScriptProgressPipelineNode)
+        .filter(
+            ScriptProgressPipelineNode.episode_id == int(episode_id),
+            ScriptProgressPipelineNode.node_name == "scene_subskill_scene",
+        )
+        .all()
+    )
+    result: Dict[str, str] = {}
+    for row in rows:
+        sid = str(getattr(row, "scene_id", "") or "").strip()
+        meta = row.runtime_meta if isinstance(row.runtime_meta, dict) else {}
+        block = str(meta.get("scene_block") or "").strip()
+        if sid and block:
+            result[sid] = block
+    return result
+
+
+def collect_framing_texts_for_episode(
+    db: Session,
+    episode: Episode,
+    scene_ids: Optional[Sequence[str]] = None,
+) -> List[Dict[str, str]]:
+    wanted = {str(item or "").strip() for item in (scene_ids or []) if str(item or "").strip()}
+    sources = collect_framing_texts_from_results_map(
+        load_scene_subskill_results_map(episode),
+        scene_ids,
+    )
+    have = {row["scene_id"] for row in sources}
+    for sid, block in _pipeline_scene_blocks(db, int(episode.id)).items():
+        if wanted and sid not in wanted:
+            continue
+        if sid in have:
+            continue
+        if has_derived_env_signals(block):
+            sources.append({"scene_id": sid, "source": "pipeline_scene_block", "text": block})
+            have.add(sid)
+    return sources
+
+
+def _is_derived_environment_entity(entity: Entity) -> bool:
+    if str(getattr(entity, "type", "") or "").strip().lower() != "environment":
+        return False
+    attrs = getattr(entity, "custom_attributes", None)
+    attrs = attrs if isinstance(attrs, dict) else {}
+    if attrs.get("source") == SOURCE_FLAG:
+        return True
+    if attrs.get("derived_kind"):
+        return True
+    name = str(getattr(entity, "name", "") or "").strip()
+    return bool(_DERIVED_ENV_NAME_PATTERN.match(name))
+
+
+def purge_derived_environment_entities(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+) -> int:
+    from app.services.deletion_ops import _soft_delete_entities
+
+    env_rows = (
+        db.query(Entity)
+        .filter(
+            Entity.project_id == int(project_id),
+            Entity.episode_id == int(episode_id),
+            _active_entity_clause(),
+            func.lower(func.trim(func.coalesce(Entity.type, ""))) == "environment",
+        )
+        .all()
+    )
+    scoped_ids = [int(row.id) for row in env_rows if _is_derived_environment_entity(row)]
+    if not scoped_ids:
+        return 0
+    return _soft_delete_entities(db, entity_ids=scoped_ids)
+
+
+def regen_derived_environments_from_framing(
+    *,
+    db: Session,
+    project_id: int,
+    episode_id: int,
+    scene_ids: Optional[Sequence[str]] = None,
+    purge_existing: bool = True,
+) -> Dict[str, Any]:
+    """Rebuild derived ENV assets from persisted 场景现场编排 output. No LLM."""
+    episode = (
+        db.query(Episode)
+        .filter(
+            Episode.id == int(episode_id),
+            Episode.project_id == int(project_id),
+            _active_episode_clause(),
+        )
+        .first()
+    )
+    if episode is None:
+        return {
+            "ok": False,
+            "reason": "episode_missing",
+            "scene_count": 0,
+            "purged": 0,
+            "created": 0,
+            "updated": 0,
+            "kept": 0,
+            "group_count": 0,
+            "entity_ids": [],
+            "groups": [],
+            "scenes": [],
+        }
+    sources = collect_framing_texts_for_episode(db, episode, scene_ids)
+    if not sources:
+        return {
+            "ok": False,
+            "reason": "no_framing_output",
+            "scene_count": 0,
+            "purged": 0,
+            "created": 0,
+            "updated": 0,
+            "kept": 0,
+            "group_count": 0,
+            "entity_ids": [],
+            "groups": [],
+            "scenes": [],
+        }
+    purged = 0
+    if purge_existing:
+        purged = purge_derived_environment_entities(
+            db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+        )
+    combined = "\n\n".join(row["text"] for row in sources)
+    ingest_meta = ingest_derived_environments_from_framing(
+        db=db,
+        project_id=int(project_id),
+        episode_id=int(episode_id),
+        scene_text=combined,
+        force_overwrite=True,
+        replace_existing_groups=True,
+        commit=True,
+    )
+    logger.info(
+        "[derived_env_ingest] regen scenes=%s purged=%s created=%s updated=%s episode_id=%s",
+        len(sources),
+        purged,
+        ingest_meta.get("created"),
+        ingest_meta.get("updated"),
+        episode_id,
+    )
+    return {
+        "ok": True,
+        "reason": "",
+        "scene_count": len(sources),
+        "purged": purged,
+        **ingest_meta,
+        "scenes": [
+            {"scene_id": row["scene_id"], "source": row["source"]}
+            for row in sources
         ],
     }

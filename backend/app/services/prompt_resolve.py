@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
+from app.core.prompt_injection import attach_skill_watermarks
 from app.core.prompts.skills_loader import get_skill_meta, get_skill_prompt_text
 
 _PROMPT_SKILL_ALIAS = {
@@ -53,14 +54,14 @@ def _resolve_prompt_text(prompt_ref: str) -> str:
             prompt_name = parts[1] if len(parts) > 1 else "system_prompt.txt"
             content = get_skill_prompt_text(skill_id, prompt_name)
             if content:
-                return content
+                return attach_skill_watermarks(content, item_text or ref)
             continue
 
         prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
         prompt_path = os.path.join(prompt_dir, item_text)
         if os.path.isfile(prompt_path):
             with open(prompt_path, "r", encoding="utf-8") as handle:
-                return handle.read()
+                return attach_skill_watermarks(handle.read(), item_text or ref)
 
     raise FileNotFoundError(f"Prompt '{prompt_ref}' not found")
 

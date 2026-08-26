@@ -1095,6 +1095,22 @@ export const createReviewRoundMessage = async (roundId, payload) => {
 }
 
 
+export const reportPromptSecurityIncident = async (payload = {}) => {
+    try {
+        const response = await api.post('/script_analysis/prompt_security_incident', payload || {}, {
+            skipAuthRedirect: true,
+            timeout: 15000,
+        });
+        return response.data;
+    } catch (error) {
+        return {
+            ok: false,
+            recorded: false,
+            error: error?.response?.data?.detail || error?.message || String(error),
+        };
+    }
+}
+
 export const recordSystemLogAction = async (payload = {}) => {
     try {
         const response = await api.post('/system_logs/actions', payload || {});
@@ -4256,6 +4272,9 @@ export const runSceneAnalysisFlowNode = async (payload = {}) => {
     }
     return (await api.post('/prompts/scene-analysis/flow/run-node', enrichedPayload)).data;
 };
+export const ingestDerivedEnvironmentsFromFraming = async (payload = {}) => (
+    await api.post('/prompts/scene-analysis/flow/ingest-derived-environments', payload || {})
+).data;
 export const syncSceneUnitsProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/sync-scene-units', payload || {})).data;
 export const resetSceneOrchestrationProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/reset-scene-orchestration', payload || {})).data;
 export const resetEpisodeAnalysisProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/reset-episode', payload || {})).data;

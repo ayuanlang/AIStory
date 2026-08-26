@@ -135,10 +135,14 @@ export function trackEpisodeAnalysisRun(episodeId, runPromise, meta = {}) {
         const current = analysisRunsByEpisode.get(id);
         if (current?.promise === runPromise) {
             analysisRunsByEpisode.delete(id);
+            releaseEpisodeAnalysisClaim(id, entry.claimToken);
+            clearEpisodeAnalysisDetached(id);
+            clearEpisodeAnalysisPipelineControl(id);
+            return;
         }
+        // Abandoned by user stop / a newer run already replaced this entry.
+        // Never wipe the new run's claim or pipeline control.
         releaseEpisodeAnalysisClaim(id, entry.claimToken);
-        clearEpisodeAnalysisDetached(id);
-        clearEpisodeAnalysisPipelineControl(id);
     });
 
     return entry;

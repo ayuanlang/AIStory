@@ -67,6 +67,90 @@ DEFAULT_KIE_LLM_TIMEOUT_SECONDS = max(
     DEFAULT_LLM_TIMEOUT_SECONDS,
     int(os.getenv("KIE_LLM_TIMEOUT_SECONDS", "900")),
 )
+
+def is_llm_timeout_error(error: Any) -> bool:
+    """True when the transport/call failed because the LLM request exceeded its deadline."""
+    if error is None:
+        return False
+    if isinstance(error, (httpx.ReadTimeout, httpx.TimeoutException, TimeoutError, asyncio.TimeoutError)):
+        return True
+    if isinstance(error, requests.exceptions.Timeout):
+        return True
+    text = str(error or "").strip().lower()
+    return any(
+        marker in text
+        for marker in (
+            "read timeout",
+            "readtimeout",
+            "wall-clock timeout",
+            "timed out",
+            "timeout after",
+        )
+    )
+
+
+def is_stale_llm_request_timestamp(timestamp: Any, timeout_seconds: int, *, now: Any = None) -> bool:
+    """True when an LLM_REQUEST row is older than the provider timeout budget."""
+    raw = str(timestamp or "").strip()
+    if not raw:
+        return False
+    try:
+        from dateutil.parser import isoparse
+        from app.core.time_utils import BEIJING_TZ, now_bj
+        started = isoparse(raw)
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=BEIJING_TZ)
+        current = now if now is not None else now_bj()
+        if getattr(current, "tzinfo", None) is None:
+            current = current.replace(tzinfo=BEIJING_TZ)
+        return (current - started).total_seconds() > max(30, int(timeout_seconds or 0))
+    except Exception:
+        return False
+
+
+def finalize_stale_llm_request_logs(db: Any = None, *, timeout_seconds: Optional[int] = None) -> int:
+    """Mark leftover LLM_REQUEST rows as timed out so admin no longer shows 请求中 forever."""
+    from datetime import timedelta
+    from app.core.time_utils import now_bj
+    from app.db.session import SessionLocal
+    from app.models.all_models import LLMCallLog
+
+    budget = max(30, int(timeout_seconds or DEFAULT_LLM_TIMEOUT_SECONDS))
+    cutoff = now_bj() - timedelta(seconds=budget)
+    cutoff_str = cutoff.isoformat(timespec="microseconds")
+    owns_session = db is None
+    session = db if db is not None else SessionLocal()
+    finalized = 0
+    try:
+        rows = (
+            session.query(LLMCallLog)
+            .filter(LLMCallLog.tag == "LLM_REQUEST")
+            .filter(LLMCallLog.timestamp < cutoff_str)
+            .limit(200)
+            .all()
+        )
+        for row in rows:
+            if not is_stale_llm_request_timestamp(row.timestamp, budget):
+                continue
+            row.tag = "LLM_RESPONSE_ERROR"
+            row.error_msg = f"Error: LLM request timed out after {budget}s (stale pending log)"
+            if row.latency_ms is None:
+                row.latency_ms = budget * 1000
+            finalized += 1
+        if finalized:
+            session.commit()
+    except Exception:
+        if owns_session:
+            session.rollback()
+        raise
+    finally:
+        if owns_session:
+            session.close()
+    if finalized:
+        logger.warning("Finalized %s stale LLM_REQUEST log(s) older than %ss", finalized, budget)
+    return finalized
+
+
 LLM_DEBUG_LOG_ENABLED = os.getenv("LLM_DEBUG_LOG", "0") == "1"
 LLM_DEBUG_LOG_MAX_CHARS = max(512, int(os.getenv("LLM_DEBUG_LOG_MAX_CHARS", "1800") or 1800))
 
@@ -2701,6 +2785,8 @@ class LLMService:
             except AmbiguousLLMTransportError:
                 raise
             except Exception as _collect_exc:
+                if is_llm_timeout_error(_collect_exc):
+                    raise
                 logger.warning(
                     "[_collect_openai_compatible_text_response] request failed; partial content parts=%d err=%s",
                     parts_count, _collect_exc,
@@ -3669,12 +3755,14 @@ class LLMService:
         saw_streamed_text = False
         pending_full_snapshot = ""
 
+        wall_clock_timeout_s = float(self._get_provider_read_timeout_seconds(provider))
         timeout = httpx.Timeout(
             connect=30.0,
-            read=float(self._get_provider_read_timeout_seconds(provider)),
+            read=wall_clock_timeout_s,
             write=30.0,
             pool=30.0,
         )
+        stream_deadline = time.monotonic() + wall_clock_timeout_s
 
         try:
             # Enable HTTP/2 for better connection resilience on long streams
@@ -3849,6 +3937,10 @@ class LLMService:
                             return events, should_stop
 
                         async for raw_line in _stream:
+                            if time.monotonic() > stream_deadline:
+                                raise httpx.ReadTimeout(
+                                    f"LLM stream exceeded wall-clock timeout ({int(wall_clock_timeout_s)}s)"
+                                )
                             line = (raw_line or "").strip()
                             if not line:
                                 # Empty line denotes one completed SSE event.
@@ -3947,6 +4039,28 @@ class LLMService:
             if str(provider or "").strip().lower() == "kie":
                 self._raise_ambiguous_submit_error(provider, payload.get("model") or model, exc, url)
             raise Exception(self._vendor_failed_message(provider, f"Read timeout: {exc}"))
+        except asyncio.CancelledError:
+            human_summary = self._build_human_readable_transport_error_summary(
+                provider=provider,
+                model=payload.get("model") or model,
+                error_kind="timeout",
+                error_text="LLM stream cancelled after deadline",
+            )
+            logger.error("%s", human_summary)
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "request_id": extra_config.get("request_id") if extra_config else None,
+                "provider": provider,
+                "category": resolved_category,
+                "request": {"url": url, "model": payload.get("model") or model, "messages": messages},
+                "model": payload.get("model") or model,
+                "error_kind": "cancelled",
+                "error_text": "LLM stream cancelled after deadline",
+                "human_summary": human_summary,
+                "resolved_source": (extra_config or {}).get("__resolved_source"),
+                "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+                "stream": True,
+            })
+            raise
         except httpx.RemoteProtocolError as exc:
             # Supplier closed the TCP connection mid-stream (incomplete chunked read).
             # Yield whatever was already buffered so callers can use partial results.

@@ -169,6 +169,24 @@ def update_episode(
     # Check access via project
     _require_project_access(db, episode.project_id, current_user)
 
+    from app.core.prompt_injection import ANALYSIS_PERSIST_FIELDS, assert_no_prompt_injection
+
+    for field_name in ANALYSIS_PERSIST_FIELDS:
+        if not hasattr(episode_in, field_name):
+            continue
+        field_value = getattr(episode_in, field_name)
+        if field_value is None:
+            continue
+        assert_no_prompt_injection(
+            field_value,
+            source=f"episode.update.{field_name}",
+            db=db,
+            episode=episode,
+            user=current_user,
+            project_id=getattr(episode, "project_id", None),
+            episode_id=getattr(episode, "id", None),
+        )
+
     if episode_in.title is not None:
         episode.title = episode_in.title
     if episode_in.script_content is not None:

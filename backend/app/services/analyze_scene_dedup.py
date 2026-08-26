@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, engine
 from app.schemas.agent import AnalyzeSceneRequest
-from app.services.llm_service import llm_service
+from app.services.llm_service import DEFAULT_LLM_TIMEOUT_SECONDS, llm_service
 from app.services.task_manager import get_status as _get_task_status
 
 logger = logging.getLogger("api_logger")
@@ -29,6 +29,13 @@ _ANALYZE_SCENE_DEDUP_PRUNE_INTERVAL_SECONDS = max(
 _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS = max(
     30,
     int(os.getenv("ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS", "300") or 300),
+)
+# Soft warning at 300s used to keep waiting forever (SSE keepalives reset httpx read
+# timeouts). Hard-cancel at the provider read budget so 建置/分场 calls cannot hang.
+_ANALYZE_SCENE_SEGMENT_HARD_TIMEOUT_SECONDS = max(
+    _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
+    DEFAULT_LLM_TIMEOUT_SECONDS,
+    int(os.getenv("ANALYZE_SCENE_SEGMENT_HARD_TIMEOUT_SECONDS", "900") or 900),
 )
 _ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP = max(
     2,
@@ -257,15 +264,27 @@ def _collect_analyze_scene_dedup_stats(db: Session, now_ts: Optional[float] = No
 
 async def _await_analyze_scene_segment(messages: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str, Any]:
     started_at = time.monotonic()
+    hard_timeout = float(_ANALYZE_SCENE_SEGMENT_HARD_TIMEOUT_SECONDS)
     llm_task = asyncio.create_task(llm_service.chat_completion_with_fallback(messages, config))
     try:
-        return await asyncio.wait_for(asyncio.shield(llm_task), timeout=_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(llm_task, timeout=hard_timeout)
     except asyncio.TimeoutError:
-        logger.warning(
-            "[analyze_scene] segment_soft_timeout episode_provider=%s model=%s timeout=%ss elapsed=%.2fs; continuing to wait for provider result",
+        elapsed = time.monotonic() - started_at
+        logger.error(
+            "[analyze_scene] segment_hard_timeout episode_provider=%s model=%s timeout=%ss elapsed=%.2fs; cancelling provider wait",
             (config or {}).get("provider"),
             (config or {}).get("model"),
-            _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
-            time.monotonic() - started_at,
+            int(hard_timeout),
+            elapsed,
         )
-        return await llm_task
+        if not llm_task.done():
+            llm_task.cancel()
+        try:
+            await llm_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        raise TimeoutError(
+            f"LLM call timed out after {int(hard_timeout)}s "
+            f"(provider={(config or {}).get('provider') or 'unknown'} "
+            f"model={(config or {}).get('model') or 'unknown'})"
+        ) from None

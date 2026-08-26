@@ -31,10 +31,13 @@ from .analyze_scene_stages import (
     persist_entity_design_stage,
     persist_generic_analyze_scene_stage,
     persist_scene_markdown_stage,
+    load_scene_subskill_results_map,
+    lookup_persisted_scene_subskill_steps,
     persist_scene_subskill_named_step,
     persist_scene_subskill_step_result,
     persist_script_optimization_stage,
     resolve_analyze_scene_stage,
+    should_require_subject_index,
     validate_analyze_scene_llm_finish_reason,
     validate_scene_markdown_import_text,
 )
@@ -48,12 +51,45 @@ from .registry import (
 from .derived_env_ingest import (
     canonicalize_derived_environment_name,
     collect_derived_environment_jsons,
+    collect_framing_texts_from_results_map,
     extract_derived_environment_names_from_scene_text,
     ingest_derived_environments_from_framing,
     parse_derived_env_extract_items,
+    regen_derived_environments_from_framing,
     rewrite_merged_derived_environment_names,
 )
 from .environment_reuse import extract_scene_env_ident_block, parse_scene_env_ident_items
+from .environment_asset_brief import (
+    build_environment_asset_design_brief,
+    environment_plan_has_ident,
+)
+from .character_asset_brief import (
+    build_character_asset_design_brief,
+    char_extract_has_items,
+    extract_char_extract_blocks,
+    extract_char_field,
+    first_text_with_char_extract,
+    parse_char_extract_records,
+    splice_char_extract_into_script,
+)
+from .prop_asset_brief import (
+    build_prop_asset_design_brief,
+    extract_prop_extract_blocks,
+    first_text_with_prop_extract,
+    prop_extract_has_items,
+    splice_prop_extract_into_script,
+)
+from .scene_cast import (
+    build_scene_entity_token_brief,
+    extract_scene_cast_block,
+    extract_scene_cast_blocks,
+)
+from .cover_poster_brief import build_cover_poster_brief
+from .workspace_scene_from_staging import (
+    build_scene_table_markdown_from_staging,
+    build_workspace_scene_payload_from_staging,
+    upsert_workspace_scene_from_staging,
+)
 
 ScriptProgressSceneUnit = models.ScriptProgressSceneUnit
 ScriptProgressPipelineNode = models.ScriptProgressPipelineNode
@@ -75,6 +111,10 @@ SCENES_BLOCK_START_PATTERN = re.compile(r"`?\[SCENES_BLOCK_START\]`?", re.IGNORE
 SCENES_BLOCK_END_PATTERN = re.compile(r"`?\[SCENES_BLOCK_END\]`?", re.IGNORECASE)
 SCENE_START_PATTERN = re.compile(r"`?\[SCENE_START:([^\s\]]+)\]`?", re.IGNORECASE)
 SCENE_END_PATTERN = re.compile(r"`?\[SCENE_END:([^\s\]]+)\]`?", re.IGNORECASE)
+SCENE_CONTENT_MARKER_LINE_PATTERN = re.compile(
+    r"^\s*`?\[SCENE_CONTENT_(?:START|END)(?::[^\]]+)?\]`?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 COMPREHENSIVE_INFO_PATTERN = re.compile(
     r"`?\[COMPREHENSIVE_INFO_START\]`?(.*?)`?\[COMPREHENSIVE_INFO_END\]`?",
     re.IGNORECASE | re.DOTALL,
@@ -535,11 +575,13 @@ def _normalize_scene_marker_script_text(script_text: str) -> str:
     if not text.strip():
         return ""
     text = re.sub(
-        r"`+(\[(?:SCENES?_BLOCK_(?:START|END)|SCENE_(?:START|END)(?::[^\]]+)?)])`+",
+        r"`+(\[(?:SCENES?_BLOCK_(?:START|END)|SCENE_(?:CONTENT_)?(?:START|END)(?::[^\]]+)?)])`+",
         r"\1",
         text,
         flags=re.IGNORECASE,
     )
+    text = SCENE_CONTENT_MARKER_LINE_PATTERN.sub("", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     has_scene_pairs = bool(SCENE_START_PATTERN.search(text) and SCENE_END_PATTERN.search(text))
     if (
         not SCENES_BLOCK_START_PATTERN.search(text)
@@ -670,6 +712,11 @@ def build_scene_subskill_task_payloads(script_text: str) -> List[Dict[str, Any]]
                 "scene_text": unit.scene_text,
                 "scene_block": scene_block,
                 "comprehensive_info": comprehensive_info,
+                "entity_token_brief": build_scene_entity_token_brief(
+                    script_text,
+                    unit.scene_id,
+                    unit.scene_text,
+                ),
                 "special_analysis": special_text,
                 "routes": routing,
                 "call_vfx": bool((routing.get("VFX") or {}).get("hit")),
@@ -749,9 +796,16 @@ def parse_scene_units_from_markers(script_text: str) -> List[ParsedSceneUnit]:
 
     trailing = block_text[cursor:].strip()
     if trailing and (SCENE_START_PATTERN.search(trailing) or SCENE_END_PATTERN.search(trailing)):
-        raise SceneMarkerParseError(
-            "SCENE_MARKER_TRAILING_CONTENT",
-            "unmatched trailing content after scene markers",
+        extra_starts = [str(item or "").strip() for item in SCENE_START_PATTERN.findall(trailing) if str(item or "").strip()]
+        extra_ends = [str(item or "").strip() for item in SCENE_END_PATTERN.findall(trailing) if str(item or "").strip()]
+        # Valid pairs already walked. Leftover markers are usually a duplicate
+        # SCENE_END or project_visual_backfill / prompt example pulled into the
+        # block. Do not fail the downstream LLM call for that.
+        logger.warning(
+            "[scene_markers] ignoring unmatched trailing scene markers after %s scene(s): starts=%s ends=%s",
+            len(parsed),
+            extra_starts[:8],
+            extra_ends[:8],
         )
 
     return parsed
@@ -2466,6 +2520,54 @@ def upsert_pipeline_node_status(
     return row
 
 
+def finalize_stale_pipeline_nodes(
+    db: Session,
+    *,
+    episode_id: int = 0,
+    timeout_seconds: Optional[int] = None,
+) -> int:
+    """Mark running/queued nodes with no progress past the LLM budget as failed."""
+    from app.services.llm_service import DEFAULT_LLM_TIMEOUT_SECONDS, is_stale_llm_request_timestamp
+
+    if ScriptProgressPipelineNode is None:
+        return 0
+    budget = max(30, int(timeout_seconds or DEFAULT_LLM_TIMEOUT_SECONDS))
+    query = db.query(ScriptProgressPipelineNode).filter(
+        ScriptProgressPipelineNode.status.in_(("running", "queued")),
+    )
+    if int(episode_id or 0) > 0:
+        query = query.filter(ScriptProgressPipelineNode.episode_id == int(episode_id))
+    finalized = 0
+    now_iso = now_bj_iso()
+    for row in query.limit(300).all():
+        stamp = (
+            str(getattr(row, "updated_at", "") or "").strip()
+            or str(getattr(row, "started_at", "") or "").strip()
+            or str(getattr(row, "created_at", "") or "").strip()
+        )
+        if not is_stale_llm_request_timestamp(stamp, budget):
+            continue
+        meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
+        meta["business_event"] = "timeout"
+        meta["business_reason"] = f"超过 {budget}s 无进展，已标记超时"
+        row.status = "failed"
+        row.last_error_code = "NODE_TIMEOUT"
+        row.last_error_message = f"Node timed out after {budget}s with no progress"
+        row.runtime_meta = meta
+        row.ended_at = now_iso
+        row.updated_at = now_iso
+        finalized += 1
+    if finalized:
+        db.commit()
+        logger.warning(
+            "[progress] finalized %s stale pipeline node(s) older than %ss episode_id=%s",
+            finalized,
+            budget,
+            episode_id,
+        )
+    return finalized
+
+
 def raise_progress_issue(
     db: Session,
     *,
@@ -2944,10 +3046,33 @@ __all__ = [
     "extract_entity_profile_block_from_adapted",
     "build_assets_extraction_script_from_adapted",
     "resolve_assets_extraction_source_text",
+    "build_environment_asset_design_brief",
+    "environment_plan_has_ident",
+    "build_character_asset_design_brief",
+    "char_extract_has_items",
+    "extract_char_extract_blocks",
+    "extract_char_field",
+    "first_text_with_char_extract",
+    "parse_char_extract_records",
+    "splice_char_extract_into_script",
+    "build_prop_asset_design_brief",
+    "extract_prop_extract_blocks",
+    "first_text_with_prop_extract",
+    "prop_extract_has_items",
+    "splice_prop_extract_into_script",
+    "build_scene_entity_token_brief",
+    "extract_scene_cast_block",
+    "extract_scene_cast_blocks",
+    "build_cover_poster_brief",
+    "build_scene_table_markdown_from_staging",
+    "build_workspace_scene_payload_from_staging",
+    "upsert_workspace_scene_from_staging",
     "canonicalize_derived_environment_name",
     "collect_derived_environment_jsons",
+    "collect_framing_texts_from_results_map",
     "ingest_derived_environments_from_framing",
     "parse_derived_env_extract_items",
+    "regen_derived_environments_from_framing",
     "rewrite_merged_derived_environment_names",
     "strip_beat_transition_notes_from_script",
     "extract_scene_markdown_text_from_analyze_result",
@@ -2958,15 +3083,19 @@ __all__ = [
     "persist_entity_design_stage",
     "persist_generic_analyze_scene_stage",
     "persist_scene_markdown_stage",
+    "load_scene_subskill_results_map",
+    "lookup_persisted_scene_subskill_steps",
     "persist_scene_subskill_named_step",
     "persist_scene_subskill_step_result",
     "persist_script_optimization_stage",
     "raise_progress_issue",
     "resolve_analyze_scene_stage",
+    "should_require_subject_index",
     "resolve_progress_issue",
     "sync_scene_units_from_markers",
     "sync_scene_units_from_script_text",
     "update_scene_unit_orchestration_status",
+    "finalize_stale_pipeline_nodes",
     "upsert_pipeline_node_status",
     "validate_analyze_scene_llm_finish_reason",
     "validate_scene_markdown_import_text",

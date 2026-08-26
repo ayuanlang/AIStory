@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import time
@@ -23,6 +24,7 @@ from app.schemas.agent import AnalyzeSceneRequest
 from app.services.analyze_scene_dedup import (
     _ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP,
     _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP,
+    _ANALYZE_SCENE_SEGMENT_HARD_TIMEOUT_SECONDS,
     _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
     _await_analyze_scene_segment,
 )
@@ -75,11 +77,18 @@ from app.services.scene_subject_helpers import (
     _normalize_prior_entity_design_type,
 )
 from app.services.script_analysis_flow import (
+    build_character_asset_design_brief,
+    build_cover_poster_brief,
+    build_environment_asset_design_brief,
+    build_prop_asset_design_brief,
+    first_text_with_char_extract,
+    first_text_with_prop_extract,
     extract_derived_environment_names_from_scene_text,
     extract_scenes_table_markdown_block,
     persist_analyze_scene_stage_result,
     resolve_analyze_scene_stage,
     sanitize_scene_markdown_llm_output,
+    should_require_subject_index,
     validate_analyze_scene_llm_finish_reason,
 )
 from app.services.script_analysis_flow.subject_index_name_align import (
@@ -445,9 +454,9 @@ async def execute_analyze_scene(
 
 
 
-        # Asset design still requires a usable Subject Index. Scene orchestration (2.2)
-        # injects names from the asset table instead and does not read Subject Index.
-        if is_subject_index_consumer_stage and not is_scene_beats_stage:
+        # Asset design reads CHAR/PROP extracts or the environment plan — not Subject Index.
+        # Scene orchestration (2.2) injects names from the asset table instead.
+        if is_subject_index_consumer_stage and should_require_subject_index(stage_ctx):
             request_embedded_subject_index = _extract_embedded_subject_index_from_stage_text(request.text)
             gate_subject_index = (
                 persisted_subject_index_raw_for_gate
@@ -585,6 +594,171 @@ async def execute_analyze_scene(
                     log_prompt_file=getattr(request, "prompt_file", None),
                 )
             user_content = _build_script_to_analyze_block(request_text_for_prompt)
+
+        is_environment_asset_design = bool(
+            "entity_design_environment" in prompt_file_lower
+            or "2_pass_generate_assets_environments" in mode_lower
+            or (
+                subject_index_allowed_types_for_request
+                and "environment" in subject_index_allowed_types_for_request
+            )
+        )
+        if is_environment_asset_design:
+            request_text = str(getattr(request, "text", "") or "").strip()
+            brief_source = episode_adaptation_for_scene_beats
+            if request_text and (
+                "[SCENE_ENV_IDENT_START" in request_text.upper()
+                or "【主环境】" in request_text
+            ):
+                brief_source = request_text
+            if not brief_source and getattr(request, "episode_id", None):
+                try:
+                    _ep_for_brief = (
+                        db.query(Episode)
+                        .filter(Episode.id == request.episode_id, _active_episode_clause())
+                        .first()
+                    )
+                    if _ep_for_brief:
+                        brief_source = str(
+                            getattr(_ep_for_brief, "ai_scene_analysis_adaptation", "") or ""
+                        ).strip()
+                except Exception as brief_load_err:
+                    logger.warning(
+                        "[analyze_scene] failed loading adaptation for env design brief: %s",
+                        brief_load_err,
+                    )
+            env_brief = build_environment_asset_design_brief(brief_source)
+            if env_brief and "环境规划开始" not in str(user_content or "") and "环境规划与场景分析开始" not in str(user_content or ""):
+                user_content = f"{env_brief}\n\n{user_content}".strip()
+                logger.info(
+                    "[analyze_scene] injected environment-plan+scene-analysis brief episode_id=%s chars=%s",
+                    getattr(request, "episode_id", None),
+                    len(env_brief),
+                )
+            cover_brief = build_cover_poster_brief(brief_source)
+            if cover_brief and "封面海报简报开始" not in str(user_content or ""):
+                user_content = f"{cover_brief}\n\n{user_content}".strip()
+                logger.info(
+                    "[analyze_scene] injected programmatic cover-poster brief episode_id=%s chars=%s",
+                    getattr(request, "episode_id", None),
+                    len(cover_brief),
+                )
+
+        is_prop_asset_design = bool(
+            "entity_design_prop" in prompt_file_lower
+            or "2_pass_generate_assets_props" in mode_lower
+            or (
+                subject_index_allowed_types_for_request
+                and "prop" in subject_index_allowed_types_for_request
+            )
+        )
+        if is_prop_asset_design:
+            brief_source = episode_adaptation_for_scene_beats
+            extra_prop_sources = [str(getattr(request, "text", "") or "")]
+            if getattr(request, "episode_id", None):
+                try:
+                    _ep_for_prop = (
+                        db.query(Episode)
+                        .filter(Episode.id == request.episode_id, _active_episode_clause())
+                        .first()
+                    )
+                    if _ep_for_prop:
+                        extra_prop_sources.append(
+                            str(getattr(_ep_for_prop, "ai_scene_analysis_adaptation", "") or "")
+                        )
+                        extra_prop_sources.append(
+                            str(getattr(_ep_for_prop, "ai_scene_analysis_result", "") or "")
+                        )
+                        raw_outputs = str(getattr(_ep_for_prop, "ai_stage_outputs", "") or "").strip()
+                        if raw_outputs:
+                            try:
+                                payload = json.loads(raw_outputs)
+                                stage1 = ((payload.get("stages") or {}).get("stage1") or {})
+                                outputs = stage1.get("outputs") or {}
+                                for key in ("scene_split", "environment_plan", "raw_text", "adapted_script"):
+                                    slot = outputs.get(key)
+                                    if isinstance(slot, dict):
+                                        extra_prop_sources.append(str(slot.get("content") or ""))
+                                    elif isinstance(slot, str):
+                                        extra_prop_sources.append(slot)
+                            except Exception:
+                                pass
+                except Exception as prop_brief_err:
+                    logger.warning(
+                        "[analyze_scene] failed loading adaptation for prop design brief: %s",
+                        prop_brief_err,
+                    )
+            brief_source = first_text_with_prop_extract(
+                str(getattr(request, "text", "") or ""),
+                brief_source,
+                *extra_prop_sources,
+            ) or brief_source
+            prop_brief = build_prop_asset_design_brief(brief_source)
+            if prop_brief and "全局统筹道具提取开始" not in str(user_content or "") and "环境规划道具提取开始" not in str(user_content or ""):
+                user_content = f"{prop_brief}\n\n{user_content}".strip()
+                logger.info(
+                    "[analyze_scene] injected scene-split prop brief episode_id=%s chars=%s",
+                    getattr(request, "episode_id", None),
+                    len(prop_brief),
+                )
+
+        is_character_asset_design = bool(
+            "entity_design_character" in prompt_file_lower
+            or "2_pass_generate_assets_characters" in mode_lower
+            or (
+                subject_index_allowed_types_for_request
+                and "character" in subject_index_allowed_types_for_request
+            )
+        )
+        if is_character_asset_design:
+            brief_source = episode_adaptation_for_scene_beats
+            extra_char_sources = [str(getattr(request, "text", "") or "")]
+            if getattr(request, "episode_id", None):
+                try:
+                    _ep_for_char = (
+                        db.query(Episode)
+                        .filter(Episode.id == request.episode_id, _active_episode_clause())
+                        .first()
+                    )
+                    if _ep_for_char:
+                        extra_char_sources.append(
+                            str(getattr(_ep_for_char, "ai_scene_analysis_adaptation", "") or "")
+                        )
+                        extra_char_sources.append(
+                            str(getattr(_ep_for_char, "ai_scene_analysis_result", "") or "")
+                        )
+                        raw_outputs = str(getattr(_ep_for_char, "ai_stage_outputs", "") or "").strip()
+                        if raw_outputs:
+                            try:
+                                payload = json.loads(raw_outputs)
+                                stage1 = ((payload.get("stages") or {}).get("stage1") or {})
+                                outputs = stage1.get("outputs") or {}
+                                for key in ("scene_split", "raw_text", "adapted_script"):
+                                    slot = outputs.get(key)
+                                    if isinstance(slot, dict):
+                                        extra_char_sources.append(str(slot.get("content") or ""))
+                                    elif isinstance(slot, str):
+                                        extra_char_sources.append(slot)
+                            except Exception:
+                                pass
+                except Exception as char_brief_err:
+                    logger.warning(
+                        "[analyze_scene] failed loading adaptation for character design brief: %s",
+                        char_brief_err,
+                    )
+            brief_source = first_text_with_char_extract(
+                str(getattr(request, "text", "") or ""),
+                brief_source,
+                *extra_char_sources,
+            ) or brief_source
+            char_brief = build_character_asset_design_brief(brief_source)
+            if char_brief and "全局统筹角色提取开始" not in str(user_content or ""):
+                user_content = f"{char_brief}\n\n{user_content}".strip()
+                logger.info(
+                    "[analyze_scene] injected scene-split character brief episode_id=%s chars=%s",
+                    getattr(request, "episode_id", None),
+                    len(char_brief),
+                )
 
         
         if request.project_metadata:
@@ -1481,7 +1655,7 @@ async def execute_analyze_scene(
             "segments": segments_meta,
             "max_segments": max_segments,
             "requested_max_segments": requested_max_segments,
-            "segment_timeout_seconds": _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
+            "segment_timeout_seconds": _ANALYZE_SCENE_SEGMENT_HARD_TIMEOUT_SECONDS,
             "output_char_hard_cap": _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP,
             "output_char_cap_reached": output_char_cap_reached,
             "continuation_stopped_by_max_segments": continuation_stopped_by_max_segments,

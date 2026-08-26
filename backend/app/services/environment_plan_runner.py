@@ -236,10 +236,16 @@ async def run_environment_plan(
     if missing:
         raise HTTPException(status_code=422, detail=f"ENVIRONMENT_PLAN_SCENE_PATCH_MISSING:{','.join(missing)}")
 
+    from app.services.script_analysis_flow import (
+        extract_prop_extract_blocks,
+        splice_prop_extract_into_script,
+    )
     from app.services.script_analysis_flow_runner import _merge_environment_patches
 
     aggregate = "\n\n".join(ordered_patches).strip() + f"\n{_ENVIRONMENT_COMPLETION_MARKER}"
     merged_text = _merge_environment_patches(scene_split_text, aggregate)
+    prop_extract = extract_prop_extract_blocks(llm_output)
+    merged_text = splice_prop_extract_into_script(merged_text, prop_extract)
     return merged_text, {
         "scene_count": len(units),
         "reused_scene_ids": reuse_only_ids,

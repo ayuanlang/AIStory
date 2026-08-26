@@ -218,6 +218,11 @@ def get_llm_logs(
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Only superusers can view LLM Call Logs")
+    try:
+        from app.services.llm_service import finalize_stale_llm_request_logs
+        finalize_stale_llm_request_logs(db)
+    except Exception as exc:
+        logger.warning("Failed to finalize stale LLM_REQUEST logs: %s", exc)
     query = db.query(LLMCallLog).order_by(LLMCallLog.timestamp.desc())
     if provider:
         query = query.filter(LLMCallLog.provider == provider)

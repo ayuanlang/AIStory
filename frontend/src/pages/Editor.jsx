@@ -2195,7 +2195,7 @@ const Editor = ({
                                 continue;
                              }
                             const existingForName = existingEntityMap.get(normalizeEntityKey('character', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('character', entityNameEn)) : null);
-                            if (existingForName && isSameEpisodeSubject(existingForName)) {
+                            if (existingForName && isSameEpisodeSubject(existingForName) && !shouldOverwriteExistingSubjects) {
                                 logSkippedExistingSubject('character', entityName, entityNameEn);
                                 continue;
                             }
@@ -2243,22 +2243,37 @@ const Editor = ({
                                         ...(char.negative_prompt_en ? { negative_prompt_en: char.negative_prompt_en } : {}),
                                     },
                                 };
-                                const created = await createEntity(id, payload);
-                                if (created?.id) {
-                                    knownEntities.push(created);
-                                    existingEntityMap.set(normalizeEntityKey('character', entityName), created);
-                                    if (entityNameEn) existingEntityMap.set(normalizeEntityKey('character', entityNameEn), created);
+                                const shouldUpdateExisting = Boolean(
+                                    existingForName
+                                    && isSameEpisodeSubject(existingForName)
+                                    && shouldOverwriteExistingSubjects
+                                );
+                                const saved = shouldUpdateExisting
+                                    ? await updateEntity(existingForName.id, payload)
+                                    : await createEntity(id, payload);
+                                if (saved?.id) {
+                                    if (shouldUpdateExisting) {
+                                        knownEntities = knownEntities.map((item) => (item.id === saved.id ? saved : item));
+                                    } else {
+                                        knownEntities.push(saved);
+                                    }
+                                    existingEntityMap.set(normalizeEntityKey('character', entityName), saved);
+                                    if (entityNameEn) existingEntityMap.set(normalizeEntityKey('character', entityNameEn), saved);
                                     count++;
                                     importedSubjectCounts.character += 1;
                                     createdSubjectItems.push({
                                         type: 'character',
                                         name: entityName,
                                         name_en: entityNameEn || '',
-                                        id: created.id,
+                                        id: saved.id,
+                                        updated: shouldUpdateExisting,
                                     });
+                                    if (shouldUpdateExisting) {
+                                        addLog(`Updated existing character subject during import: ${entityName}${entityNameEn ? ` / ${entityNameEn}` : ''}`, 'success');
+                                    }
                                 } else {
-                                    recordFailedSubject('character', entityName, entityNameEn, 'createEntity returned no id');
-                                    addLog(`Character import failed (${entityName}): createEntity returned no id`, 'warning');
+                                    recordFailedSubject('character', entityName, entityNameEn, shouldUpdateExisting ? 'updateEntity returned no id' : 'createEntity returned no id');
+                                    addLog(`Character import failed (${entityName}): ${shouldUpdateExisting ? 'updateEntity' : 'createEntity'} returned no id`, 'warning');
                                 }
                             } catch (err) {
                                 recordFailedSubject('character', entityName, entityNameEn, err?.message || err);
@@ -2286,7 +2301,7 @@ const Editor = ({
                                 continue;
                              }
                              const existingPropForName = existingEntityMap.get(normalizeEntityKey('prop', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('prop', entityNameEn)) : null);
-                             if (existingPropForName && isSameEpisodeSubject(existingPropForName)) {
+                             if (existingPropForName && isSameEpisodeSubject(existingPropForName) && !shouldOverwriteExistingSubjects) {
                                     logSkippedExistingSubject('prop', entityName, entityNameEn);
                                     continue;
                              }
@@ -2324,22 +2339,37 @@ const Editor = ({
                                         ...(prop.negative_prompt_en ? { negative_prompt_en: prop.negative_prompt_en } : {}),
                                     },
                                 };
-                                const created = await createEntity(id, payload);
-                                if (created?.id) {
-                                    knownEntities.push(created);
-                                    existingEntityMap.set(normalizeEntityKey('prop', entityName), created);
-                                    if (entityNameEn) existingEntityMap.set(normalizeEntityKey('prop', entityNameEn), created);
+                                const shouldUpdateExisting = Boolean(
+                                    existingPropForName
+                                    && isSameEpisodeSubject(existingPropForName)
+                                    && shouldOverwriteExistingSubjects
+                                );
+                                const saved = shouldUpdateExisting
+                                    ? await updateEntity(existingPropForName.id, payload)
+                                    : await createEntity(id, payload);
+                                if (saved?.id) {
+                                    if (shouldUpdateExisting) {
+                                        knownEntities = knownEntities.map((item) => (item.id === saved.id ? saved : item));
+                                    } else {
+                                        knownEntities.push(saved);
+                                    }
+                                    existingEntityMap.set(normalizeEntityKey('prop', entityName), saved);
+                                    if (entityNameEn) existingEntityMap.set(normalizeEntityKey('prop', entityNameEn), saved);
                                     count++;
                                     importedSubjectCounts.prop += 1;
                                     createdSubjectItems.push({
                                         type: 'prop',
                                         name: entityName,
                                         name_en: entityNameEn || '',
-                                        id: created.id,
+                                        id: saved.id,
+                                        updated: shouldUpdateExisting,
                                     });
+                                    if (shouldUpdateExisting) {
+                                        addLog(`Updated existing prop subject during import: ${entityName}${entityNameEn ? ` / ${entityNameEn}` : ''}`, 'success');
+                                    }
                                 } else {
-                                    recordFailedSubject('prop', entityName, entityNameEn, 'createEntity returned no id');
-                                    addLog(`Prop import failed (${entityName}): createEntity returned no id`, 'warning');
+                                    recordFailedSubject('prop', entityName, entityNameEn, shouldUpdateExisting ? 'updateEntity returned no id' : 'createEntity returned no id');
+                                    addLog(`Prop import failed (${entityName}): ${shouldUpdateExisting ? 'updateEntity' : 'createEntity'} returned no id`, 'warning');
                                 }
                             } catch (err) {
                                 recordFailedSubject('prop', entityName, entityNameEn, err?.message || err);
@@ -2367,7 +2397,7 @@ const Editor = ({
                                 continue;
                              }
                              const existingEnvForName = existingEntityMap.get(normalizeEntityKey('environment', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('environment', entityNameEn)) : null);
-                             if (existingEnvForName && isSameEpisodeSubject(existingEnvForName)) {
+                             if (existingEnvForName && isSameEpisodeSubject(existingEnvForName) && !shouldOverwriteExistingSubjects) {
                                     logSkippedExistingSubject('environment', entityName, entityNameEn);
                                     continue;
                              }
@@ -2413,22 +2443,37 @@ const Editor = ({
                                         ...(env.negative_prompt_en ? { negative_prompt_en: env.negative_prompt_en } : {}),
                                     },
                                 };
-                                const created = await createEntity(id, payload);
-                                if (created?.id) {
-                                    knownEntities.push(created);
-                                    existingEntityMap.set(normalizeEntityKey('environment', entityName), created);
-                                    if (entityNameEn) existingEntityMap.set(normalizeEntityKey('environment', entityNameEn), created);
+                                const shouldUpdateExisting = Boolean(
+                                    existingEnvForName
+                                    && isSameEpisodeSubject(existingEnvForName)
+                                    && shouldOverwriteExistingSubjects
+                                );
+                                const saved = shouldUpdateExisting
+                                    ? await updateEntity(existingEnvForName.id, payload)
+                                    : await createEntity(id, payload);
+                                if (saved?.id) {
+                                    if (shouldUpdateExisting) {
+                                        knownEntities = knownEntities.map((item) => (item.id === saved.id ? saved : item));
+                                    } else {
+                                        knownEntities.push(saved);
+                                    }
+                                    existingEntityMap.set(normalizeEntityKey('environment', entityName), saved);
+                                    if (entityNameEn) existingEntityMap.set(normalizeEntityKey('environment', entityNameEn), saved);
                                     count++;
                                     importedSubjectCounts.environment += 1;
                                     createdSubjectItems.push({
                                         type: 'environment',
                                         name: entityName,
                                         name_en: entityNameEn || '',
-                                        id: created.id,
+                                        id: saved.id,
+                                        updated: shouldUpdateExisting,
                                     });
+                                    if (shouldUpdateExisting) {
+                                        addLog(`Updated existing environment subject during import: ${entityName}${entityNameEn ? ` / ${entityNameEn}` : ''}`, 'success');
+                                    }
                                 } else {
-                                    recordFailedSubject('environment', entityName, entityNameEn, 'createEntity returned no id');
-                                    addLog(`Environment import failed (${entityName}): createEntity returned no id`, 'warning');
+                                    recordFailedSubject('environment', entityName, entityNameEn, shouldUpdateExisting ? 'updateEntity returned no id' : 'createEntity returned no id');
+                                    addLog(`Environment import failed (${entityName}): ${shouldUpdateExisting ? 'updateEntity' : 'createEntity'} returned no id`, 'warning');
                                 }
                             } catch (err) {
                                 recordFailedSubject('environment', entityName, entityNameEn, err?.message || err);

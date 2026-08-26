@@ -79,6 +79,13 @@ class ProgressReconcileRequest(BaseModel):
     episode_id: int
 
 
+class DerivedEnvIngestRequest(BaseModel):
+    project_id: int
+    episode_id: int
+    scene_ids: Optional[List[str]] = None
+    purge_existing: Optional[bool] = True
+
+
 from app.services.script_analysis_flow_runner import (  # noqa: E402,F401
     execute_scene_analysis_flow_node,
 )
@@ -260,6 +267,9 @@ async def get_episode_progress_snapshot(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
     _require_project_access(db, episode.project_id, current_user)
+    from app.services.script_analysis_flow import finalize_stale_pipeline_nodes
+
+    finalize_stale_pipeline_nodes(db, episode_id=int(episode_id))
 
     scene_units: List[Dict[str, Any]] = []
     if ScriptProgressSceneUnit is not None:
@@ -550,6 +560,48 @@ async def run_scene_analysis_flow_node(
         db=db,
         current_user=current_user,
     )
+
+
+@router.post("/prompts/scene-analysis/flow/ingest-derived-environments")
+def ingest_derived_environments_from_framing_endpoint(
+    request: DerivedEnvIngestRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Rebuild derived ENV assets from each scene's 场景现场编排 output. No LLM."""
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        regen_derived_environments_from_framing,
+    )
+    from app.services.soft_delete import _active_episode_clause
+
+    _require_project_access(db, int(request.project_id), current_user, owner_only=True)
+    episode = (
+        db.query(Episode)
+        .filter(
+            Episode.id == int(request.episode_id),
+            Episode.project_id == int(request.project_id),
+            _active_episode_clause(),
+        )
+        .first()
+    )
+    if episode is None:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    result = regen_derived_environments_from_framing(
+        db=db,
+        project_id=int(request.project_id),
+        episode_id=int(request.episode_id),
+        scene_ids=request.scene_ids,
+        purge_existing=request.purge_existing is not False,
+    )
+    if not result.get("ok"):
+        reason = str(result.get("reason") or "")
+        if reason == "no_framing_output":
+            raise HTTPException(
+                status_code=422,
+                detail="DERIVED_ENV_NO_FRAMING_OUTPUT",
+            )
+        raise HTTPException(status_code=404, detail="Episode not found")
+    return result
 
 
 

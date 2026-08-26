@@ -47,8 +47,6 @@ from app.services.script_analysis_llm_config import (
 from app.services.subject_index_resolve import (
     _script_optimization_has_project_visual_backfill,
     _subject_index_has_cover_poster,
-    _subject_index_has_usable_content,
-    resolve_usable_episode_subject_index,
 )
 
 logger = logging.getLogger("api_logger")
@@ -68,16 +66,14 @@ _FLOW_DOWNSTREAM_NODES = {
     "scene_split": [
         "environment_plan",
         "scene_subskill_pipeline",
-    ],
-    "environment_plan": [
-        "assets_extraction",
-        "scene_markdown",
         "asset_design_character",
         "asset_design_prop",
+    ],
+    "environment_plan": [
         "asset_design_environment",
         "storyboard_generation",
     ],
-    "scene_subskill_pipeline": ["scene_markdown", "storyboard_generation"],
+    "scene_subskill_pipeline": ["storyboard_generation"],
 }
 
 _ENV_SCENE_PATCH_PATTERN = re.compile(
@@ -314,6 +310,42 @@ async def execute_scene_analysis_flow_node(
         "asset_design_prop",
         "asset_design_environment",
     }
+    if node_key in {"assets_extraction", "scene_markdown"}:
+        node_project_id = int(request.project_id or 0)
+        node_episode_id = int(request.episode_id or 0)
+        logger.info("[剧本分析流程] 节点 %s 已退役，跳过 LLM", node_key)
+        if node_project_id > 0 and node_episode_id > 0:
+            upsert_pipeline_node_status(
+                db,
+                project_id=node_project_id,
+                episode_id=node_episode_id,
+                script_id=f"episode:{node_episode_id}",
+                node_name=node_key,
+                status="success",
+                progress_percent=100.0,
+                runtime_meta={"business_event": "retired_skipped"},
+            )
+            if node_key == "scene_markdown":
+                upsert_pipeline_node_status(
+                    db,
+                    project_id=node_project_id,
+                    episode_id=node_episode_id,
+                    script_id=f"episode:{node_episode_id}",
+                    node_name="scene_planning",
+                    status="success",
+                    progress_percent=100.0,
+                    runtime_meta={"business_event": "imported_from_staging"},
+                )
+            db.commit()
+        return {
+            "status": "completed",
+            "node_key": node_key,
+            "executor": "retired",
+            "prompt_file": node.get("prompt_file"),
+            "injection_chain": [],
+            "result": {"retired": True, "content": ""},
+        }
+
     if node_key in analyze_node_keys:
         raw_payload = dict(request.analyze_payload or {})
         if not raw_payload.get("text"):
@@ -376,41 +408,7 @@ async def execute_scene_analysis_flow_node(
             _require_project_access(db, episode.project_id, current_user)
             if raw_payload.get("project_id") and int(raw_payload.get("project_id")) != int(episode.project_id):
                 raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
-            # Scene orchestration / asset design must not start without a usable Subject Index.
-            if node_key in {
-                "scene_markdown",
-                "asset_design_character",
-                "asset_design_prop",
-                "asset_design_environment",
-            }:
-                gate_subject_index = resolve_usable_episode_subject_index(
-                    episode,
-                    request_text=raw_payload.get("text"),
-                    explicit_subject_index=raw_payload.get("subject_index_text"),
-                    heal_episode_field=True,
-                    db=db,
-                )
-                if not _subject_index_has_usable_content(gate_subject_index):
-                    logger.error(
-                        "[剧本分析流程] subject_index_required_blocking node=%s episode_id=%s "
-                        "episode_si_chars=%s stage_outputs_chars=%s explicit_si_chars=%s text_chars=%s",
-                        node_key,
-                        getattr(episode, "id", None),
-                        len(str(getattr(episode, "ai_scene_analysis_subject_index", "") or "")),
-                        len(str(getattr(episode, "ai_stage_outputs", "") or "")),
-                        len(str(raw_payload.get("subject_index_text") or "")),
-                        len(str(raw_payload.get("text") or "")),
-                    )
-                    raise HTTPException(
-                        status_code=400,
-                        detail=_build_scene_analysis_blocking_failure_detail(
-                            ["ANALYSIS_SUBJECT_INDEX_REQUIRED"],
-                            [],
-                            [
-                                "缺少资产清单（Subject Index），无法继续场景编排或资产生成。请先完成第二阶段资产提取后再重试。"
-                            ],
-                        ),
-                    )
+            # Scene import now happens from staging output. Subject Index is no longer a gate.
         elif raw_payload.get("project_id"):
             _require_project_access(db, int(raw_payload.get("project_id")), current_user)
             
@@ -669,6 +667,12 @@ async def execute_scene_analysis_flow_node(
                 elif "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING" in error_text:
                     error_code = "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING"
                     error_message = error_text or str(exc)
+                elif "PROMPT_LEAK_DETECTED" in error_text:
+                    error_code = "PROMPT_LEAK_DETECTED"
+                    error_message = error_text or str(exc)
+                elif "PROMPT_INJECTION_DETECTED" in error_text:
+                    error_code = "PROMPT_INJECTION_DETECTED"
+                    error_message = error_text or str(exc)
                 else:
                     error_code = "FLOW_RUN_NODE_FAILED"
                     error_message = error_text or str(exc)
@@ -709,24 +713,94 @@ async def execute_scene_analysis_flow_node(
             )
             scene_split_text = _extract_analysis_text_from_result(result)
             if scene_split_episode is not None and scene_split_text.strip():
-                persist_script_optimization_stage(
-                    db=db,
-                    episode=scene_split_episode,
-                    result_content=scene_split_text,
-                    node_output_key="scene_split",
+                from app.services.script_analysis_flow import (
+                    extract_char_extract_blocks,
+                    extract_prop_extract_blocks,
+                    splice_char_extract_into_script,
+                    splice_prop_extract_into_script,
                 )
+
+                scene_split_text = splice_char_extract_into_script(
+                    scene_split_text,
+                    extract_char_extract_blocks(scene_split_text),
+                )
+                scene_split_text = splice_prop_extract_into_script(
+                    scene_split_text,
+                    extract_prop_extract_blocks(scene_split_text),
+                )
+                result = _replace_analysis_result_text(result, scene_split_text)
+                try:
+                    persist_script_optimization_stage(
+                        db=db,
+                        episode=scene_split_episode,
+                        result_content=scene_split_text,
+                        node_output_key="scene_split",
+                    )
+                except Exception as persist_exc:
+                    error_text = http_exception_detail_text(persist_exc)
+                    error_code = (
+                        "PROMPT_LEAK_DETECTED"
+                        if "PROMPT_LEAK_DETECTED" in error_text
+                        else (
+                            "PROMPT_INJECTION_DETECTED"
+                            if "PROMPT_INJECTION_DETECTED" in error_text
+                            else "FLOW_RUN_NODE_FAILED"
+                        )
+                    )
+                    upsert_pipeline_node_status(
+                        db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name=node_key,
+                        status="failed",
+                        error_code=error_code,
+                        error_message=error_text or str(persist_exc),
+                    )
+                    db.commit()
+                    raise
                 result = _mark_analysis_result_persisted(result, int(node_episode_id))
 
         if node_project_id > 0 and node_episode_id > 0:
             if node_key != "scene_markdown":
+                partial_failure = isinstance(result, dict) and bool(result.get("partial_failure"))
+                failed_scene_ids = (
+                    list(result.get("failed_scene_ids") or [])
+                    if isinstance(result, dict)
+                    else []
+                )
                 upsert_pipeline_node_status(
                     db,
                     project_id=node_project_id,
                     episode_id=node_episode_id,
                     script_id=f"episode:{node_episode_id}",
                     node_name=node_key,
+                    status="warning" if partial_failure else "success",
+                    progress_percent=100.0,
+                    error_code="SCENE_SUBSKILL_PARTIAL_FAILURE" if partial_failure else None,
+                    error_message=(
+                        f"timed out or failed: {', '.join(failed_scene_ids)}"
+                        if partial_failure
+                        else None
+                    ),
+                    runtime_meta=(
+                        {"business_event": "partial_failure", "failed_scene_ids": failed_scene_ids}
+                        if partial_failure
+                        else None
+                    ),
+                )
+            if node_key == "scene_subskill_pipeline" and not (
+                isinstance(result, dict) and result.get("partial_failure")
+            ):
+                upsert_pipeline_node_status(
+                    db,
+                    project_id=node_project_id,
+                    episode_id=node_episode_id,
+                    script_id=f"episode:{node_episode_id}",
+                    node_name="scene_planning",
                     status="success",
                     progress_percent=100.0,
+                    runtime_meta={"business_event": "imported_from_staging"},
                 )
 
             if node_key == "scene_markdown":
