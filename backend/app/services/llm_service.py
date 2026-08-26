@@ -22,6 +22,40 @@ _llm_log_trace_ctx: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextva
     "llm_log_trace_ctx",
     default=None,
 )
+_LLM_LOG_TRACE_KEYS = (
+    "__resolved_action",
+    "__resolved_user_id",
+    "__resolved_user_name",
+    "__resolved_project_id",
+)
+
+
+def _copy_llm_log_trace_fields(
+    source_config: Optional[Dict[str, Any]],
+    dest_config: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Keep action/user/project on fallback API configs so retry logs stay labeled."""
+    dest = dict(dest_config or {})
+    dest_cfg = dict(dest.get("config") or {}) if isinstance(dest.get("config"), dict) else {}
+    source_cfg: Dict[str, Any] = {}
+    if isinstance(source_config, dict):
+        inner = source_config.get("config")
+        if isinstance(inner, dict):
+            source_cfg = inner
+        else:
+            source_cfg = {
+                key: source_config.get(key)
+                for key in _LLM_LOG_TRACE_KEYS
+                if source_config.get(key) not in (None, "")
+            }
+    for key in _LLM_LOG_TRACE_KEYS:
+        if dest_cfg.get(key) not in (None, ""):
+            continue
+        value = source_cfg.get(key)
+        if value not in (None, ""):
+            dest_cfg[key] = value
+    dest["config"] = dest_cfg
+    return dest
 
 # Some providers (e.g., Ark/Doubao) can take several minutes for large prompts.
 # Default timeout set to 300s, with env override support.
@@ -215,10 +249,17 @@ class LLMService:
     @contextmanager
     def _llm_log_trace(self, extra_config: Optional[Dict[str, Any]]):
         """Bind audit/tracing fields from extra_config for nested _safe_log_json calls."""
-        if not isinstance(extra_config, dict) or not extra_config:
+        prev = _llm_log_trace_ctx.get()
+        prev_dict = prev if isinstance(prev, dict) else {}
+        incoming = extra_config if isinstance(extra_config, dict) else {}
+        if not prev_dict and not incoming:
             yield
             return
-        token = _llm_log_trace_ctx.set(extra_config)
+        merged = {**prev_dict, **incoming}
+        for key in _LLM_LOG_TRACE_KEYS:
+            if merged.get(key) in (None, "") and prev_dict.get(key) not in (None, ""):
+                merged[key] = prev_dict[key]
+        token = _llm_log_trace_ctx.set(merged)
         try:
             yield
         finally:
@@ -2132,7 +2173,11 @@ class LLMService:
                     limit=3,
                 )
                 if isinstance(fallback_candidates, list) and fallback_candidates:
-                    attempts.extend([item for item in fallback_candidates if isinstance(item, dict)])
+                    attempts.extend([
+                        _copy_llm_log_trace_fields(base_attempt_cfg, item)
+                        for item in fallback_candidates
+                        if isinstance(item, dict)
+                    ])
             except Exception as exc:
                 logger.warning("[llm_fallback] failed loading fallback configs: %s", exc)
 
@@ -4222,83 +4267,85 @@ class LLMService:
         last_err = ""
         last_failure_kind = "upstream"
 
-        # ── active config attempts ──
-        for attempt in range(1, active_retry_attempts + 1):
-            result = await self.generate_content(user_prompt, system_prompt, config, image_urls, video_urls)
-            content = str(result.get("content") or "")
-            validation_failed_this_attempt = False
-            if not content.startswith("Error:") and not _is_empty_success(result):
-                validation_ok, validation_error = _validate_response(result, config)
-                if validation_ok:
-                    return self._attach_routing_metadata(result, config)
-                content = f"Error: {validation_error}"
-                last_failure_kind = "postprocess"
-                validation_failed_this_attempt = True
-            if not content.startswith("Error:") and _is_empty_success(result):
-                content = "Error: Empty LLM response"
-                last_failure_kind = "upstream"
-            if content.startswith("Error:") and not validation_failed_this_attempt:
-                last_failure_kind = "upstream"
-            last_err = content
-            if self._is_runtime_shutdown_text(content):
+        with self._llm_log_trace(active_cfg_obj):
+            # ── active config attempts ──
+            for attempt in range(1, active_retry_attempts + 1):
+                result = await self.generate_content(user_prompt, system_prompt, config, image_urls, video_urls)
+                content = str(result.get("content") or "")
+                validation_failed_this_attempt = False
+                if not content.startswith("Error:") and not _is_empty_success(result):
+                    validation_ok, validation_error = _validate_response(result, config)
+                    if validation_ok:
+                        return self._attach_routing_metadata(result, config)
+                    content = f"Error: {validation_error}"
+                    last_failure_kind = "postprocess"
+                    validation_failed_this_attempt = True
+                if not content.startswith("Error:") and _is_empty_success(result):
+                    content = "Error: Empty LLM response"
+                    last_failure_kind = "upstream"
+                if content.startswith("Error:") and not validation_failed_this_attempt:
+                    last_failure_kind = "upstream"
+                last_err = content
+                if self._is_runtime_shutdown_text(content):
+                    logger.warning(
+                        "[llm_fallback] active attempt %d/%d aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
+                        attempt, active_retry_attempts, config.get("provider"), config.get("model"),
+                    )
+                    return self._attach_routing_metadata({"content": last_err, "usage": {}, "finish_reason": None}, config)
                 logger.warning(
-                    "[llm_fallback] active attempt %d/%d aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
-                    attempt, active_retry_attempts, config.get("provider"), config.get("model"),
+                    "[llm_fallback] active attempt %d/%d failed | provider=%s model=%s err=%s",
+                    attempt, active_retry_attempts, config.get("provider"), config.get("model"), content[:200],
                 )
-                return self._attach_routing_metadata({"content": last_err, "usage": {}, "finish_reason": None}, config)
-            logger.warning(
-                "[llm_fallback] active attempt %d/%d failed | provider=%s model=%s err=%s",
-                attempt, active_retry_attempts, config.get("provider"), config.get("model"), content[:200],
-            )
 
-        # ── fallback candidates ──
-        __override_fallback_candidates = active_cfg_obj.get('__override_fallback_candidates')
-        if __override_fallback_candidates is not None:
-            override_ids = [int(x) for x in __override_fallback_candidates]
-            fallbacks = agent_service.get_fallback_configs_by_ids(override_ids)
-        else:
-            fallbacks = agent_service.get_fallback_configs(
-            user_id, category=category, exclude_setting_id=active_setting_id,
-            modality=modality, limit=3,
-        )
-        for idx, fb_cfg in enumerate(fallbacks, 1):
-            logger.info(
-                "[llm_fallback] trying fallback %d/%d | provider=%s model=%s",
-                idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
-            )
-            result = await self.generate_content(user_prompt, system_prompt, fb_cfg, image_urls, video_urls)
-            content = str(result.get("content") or "")
-            validation_failed_this_attempt = False
-            if not content.startswith("Error:") and not _is_empty_success(result):
-                validation_ok, validation_error = _validate_response(result, fb_cfg)
-                if validation_ok:
-                    return self._attach_routing_metadata(result, fb_cfg)
-                content = f"Error: {validation_error}"
-                last_failure_kind = "postprocess"
-                validation_failed_this_attempt = True
-            if not content.startswith("Error:") and _is_empty_success(result):
-                content = "Error: Empty LLM response"
-                last_failure_kind = "upstream"
-            if content.startswith("Error:") and not validation_failed_this_attempt:
-                last_failure_kind = "upstream"
-            last_err = content
-            if self._is_runtime_shutdown_text(content):
-                logger.warning(
-                    "[llm_fallback] fallback %d/%d aborted: runtime shutting down | provider=%s model=%s",
+            # ── fallback candidates ──
+            __override_fallback_candidates = active_cfg_obj.get('__override_fallback_candidates')
+            if __override_fallback_candidates is not None:
+                override_ids = [int(x) for x in __override_fallback_candidates]
+                fallbacks = agent_service.get_fallback_configs_by_ids(override_ids)
+            else:
+                fallbacks = agent_service.get_fallback_configs(
+                    user_id, category=category, exclude_setting_id=active_setting_id,
+                    modality=modality, limit=3,
+                )
+            for idx, fb_cfg in enumerate(fallbacks, 1):
+                fb_cfg = _copy_llm_log_trace_fields(config, fb_cfg)
+                logger.info(
+                    "[llm_fallback] trying fallback %d/%d | provider=%s model=%s",
                     idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
                 )
-                return self._attach_routing_metadata({"content": last_err, "usage": {}, "finish_reason": None}, fb_cfg)
-            logger.warning(
-                "[llm_fallback] fallback %d/%d failed | provider=%s model=%s err=%s",
-                idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), content[:200],
-            )
+                result = await self.generate_content(user_prompt, system_prompt, fb_cfg, image_urls, video_urls)
+                content = str(result.get("content") or "")
+                validation_failed_this_attempt = False
+                if not content.startswith("Error:") and not _is_empty_success(result):
+                    validation_ok, validation_error = _validate_response(result, fb_cfg)
+                    if validation_ok:
+                        return self._attach_routing_metadata(result, fb_cfg)
+                    content = f"Error: {validation_error}"
+                    last_failure_kind = "postprocess"
+                    validation_failed_this_attempt = True
+                if not content.startswith("Error:") and _is_empty_success(result):
+                    content = "Error: Empty LLM response"
+                    last_failure_kind = "upstream"
+                if content.startswith("Error:") and not validation_failed_this_attempt:
+                    last_failure_kind = "upstream"
+                last_err = content
+                if self._is_runtime_shutdown_text(content):
+                    logger.warning(
+                        "[llm_fallback] fallback %d/%d aborted: runtime shutting down | provider=%s model=%s",
+                        idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
+                    )
+                    return self._attach_routing_metadata({"content": last_err, "usage": {}, "finish_reason": None}, fb_cfg)
+                logger.warning(
+                    "[llm_fallback] fallback %d/%d failed | provider=%s model=%s err=%s",
+                    idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), content[:200],
+                )
 
-        return self._attach_routing_metadata({
-            "content": last_err,
-            "usage": {},
-            "finish_reason": None,
-            "_postprocess_validation_failed": last_failure_kind == "postprocess",
-        }, config)
+            return self._attach_routing_metadata({
+                "content": last_err,
+                "usage": {},
+                "finish_reason": None,
+                "_postprocess_validation_failed": last_failure_kind == "postprocess",
+            }, config)
 
     async def chat_completion_with_fallback(
         self,
@@ -4340,67 +4387,68 @@ class LLMService:
         
         last_result = None
 
-        # ── active config attempts ──
-        for attempt in range(1, active_retry_attempts + 1):
-            result = await self.chat_completion(messages, config)
-            content = str(result.get("content") or "")
-            if not _is_empty_or_error(result):
-                result = await self._auto_continue_chat_completion_on_length(messages, config, result)
-                return self._attach_routing_metadata(result, config)
-            
-            last_result = result
-            if self._is_runtime_shutdown_text(content):
-                logger.warning(
-                    "[llm_fallback_chat] active attempt %d/%d aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
-                    attempt, active_retry_attempts, config.get("provider"), config.get("model"),
-                )
-                return self._attach_routing_metadata(last_result, config)
-            logger.warning(
-                "[llm_fallback_chat] active attempt %d/%d failed | provider=%s model=%s finish_reason=%s err=%s",
-                attempt, active_retry_attempts, config.get("provider"), config.get("model"), result.get("finish_reason"), content[:200],
-            )
+        with self._llm_log_trace(active_cfg_obj):
+            # ── active config attempts ──
+            for attempt in range(1, active_retry_attempts + 1):
+                result = await self.chat_completion(messages, config)
+                content = str(result.get("content") or "")
+                if not _is_empty_or_error(result):
+                    result = await self._auto_continue_chat_completion_on_length(messages, config, result)
+                    return self._attach_routing_metadata(result, config)
 
-        # ── fallback candidates ──
-        __override_fallback_candidates = active_cfg_obj.get('__override_fallback_candidates')
-        if __override_fallback_candidates is not None:
-            override_ids = [int(x) for x in __override_fallback_candidates]
-            fallbacks = agent_service.get_fallback_configs_by_ids(override_ids)
-        else:
-            fallbacks = agent_service.get_fallback_configs(
-                user_id, category=category, exclude_setting_id=active_setting_id,
-                modality=modality, limit=3,
-            )
-        for idx, fb_cfg in enumerate(fallbacks, 1):
-            logger.info(
-                "[llm_fallback_chat] trying fallback %d/%d | provider=%s model=%s",
-                idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
-            )
-            result = await self.chat_completion(messages, fb_cfg)
-            content = str(result.get("content") or "")
-            if not _is_empty_or_error(result):
-                result = await self._auto_continue_chat_completion_on_length(messages, fb_cfg, result)
-                # Keep track of fallback warnings
-                warn_msg = f"Fallback {idx} ({fb_cfg.get('provider')}/{fb_cfg.get('model')}) used due to consecutive upstream failures."
-                fb_warnings = result.setdefault("fallback_warnings", [])
-                if warn_msg not in fb_warnings:
-                    fb_warnings.append(warn_msg)
-                return self._attach_routing_metadata(result, fb_cfg)
-            
-            last_result = result
-            if self._is_runtime_shutdown_text(content):
+                last_result = result
+                if self._is_runtime_shutdown_text(content):
+                    logger.warning(
+                        "[llm_fallback_chat] active attempt %d/%d aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
+                        attempt, active_retry_attempts, config.get("provider"), config.get("model"),
+                    )
+                    return self._attach_routing_metadata(last_result, config)
                 logger.warning(
-                    "[llm_fallback_chat] fallback %d/%d aborted: runtime shutting down | provider=%s model=%s",
+                    "[llm_fallback_chat] active attempt %d/%d failed | provider=%s model=%s finish_reason=%s err=%s",
+                    attempt, active_retry_attempts, config.get("provider"), config.get("model"), result.get("finish_reason"), content[:200],
+                )
+
+            # ── fallback candidates ──
+            __override_fallback_candidates = active_cfg_obj.get('__override_fallback_candidates')
+            if __override_fallback_candidates is not None:
+                override_ids = [int(x) for x in __override_fallback_candidates]
+                fallbacks = agent_service.get_fallback_configs_by_ids(override_ids)
+            else:
+                fallbacks = agent_service.get_fallback_configs(
+                    user_id, category=category, exclude_setting_id=active_setting_id,
+                    modality=modality, limit=3,
+                )
+            for idx, fb_cfg in enumerate(fallbacks, 1):
+                fb_cfg = _copy_llm_log_trace_fields(config, fb_cfg)
+                logger.info(
+                    "[llm_fallback_chat] trying fallback %d/%d | provider=%s model=%s",
                     idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
                 )
-                return self._attach_routing_metadata(last_result, fb_cfg)
-            logger.warning(
-                "[llm_fallback_chat] fallback %d/%d failed | provider=%s model=%s finish_reason=%s err=%s",
-                idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), result.get("finish_reason"), content[:200],
-            )
+                result = await self.chat_completion(messages, fb_cfg)
+                content = str(result.get("content") or "")
+                if not _is_empty_or_error(result):
+                    result = await self._auto_continue_chat_completion_on_length(messages, fb_cfg, result)
+                    warn_msg = f"Fallback {idx} ({fb_cfg.get('provider')}/{fb_cfg.get('model')}) used due to consecutive upstream failures."
+                    fb_warnings = result.setdefault("fallback_warnings", [])
+                    if warn_msg not in fb_warnings:
+                        fb_warnings.append(warn_msg)
+                    return self._attach_routing_metadata(result, fb_cfg)
 
-        if not last_result:
-            last_result = {"content": "Error: Empty LLM response", "usage": {}, "finish_reason": "error"}
-        return self._attach_routing_metadata(last_result, config)
+                last_result = result
+                if self._is_runtime_shutdown_text(content):
+                    logger.warning(
+                        "[llm_fallback_chat] fallback %d/%d aborted: runtime shutting down | provider=%s model=%s",
+                        idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
+                    )
+                    return self._attach_routing_metadata(last_result, fb_cfg)
+                logger.warning(
+                    "[llm_fallback_chat] fallback %d/%d failed | provider=%s model=%s finish_reason=%s err=%s",
+                    idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), result.get("finish_reason"), content[:200],
+                )
+
+            if not last_result:
+                last_result = {"content": "Error: Empty LLM response", "usage": {}, "finish_reason": "error"}
+            return self._attach_routing_metadata(last_result, config)
 
     def _mock_fallback(self, query: str) -> Dict[str, Any]:
         if "analyze" in query.lower():

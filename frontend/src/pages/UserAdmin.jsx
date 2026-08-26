@@ -9253,7 +9253,6 @@ const UserAdmin = () => {
                                                   <th className="px-4 py-3">{t('状态', 'Status')}</th>
                                                   <th className="px-4 py-3 whitespace-nowrap" title={t('从发起到返回的耗时', 'Elapsed time from request to response')}>{t('运行时间', 'Runtime')}</th>
                                                   <th className="px-4 py-3 whitespace-nowrap" title={t('实际用户扣费积分', 'Actual user charged credits')}>{t('扣费金额', 'Charged')}</th>
-                                                  <th className="px-4 py-3">API URL</th>
                                                   <th className="px-4 py-3">Details</th>
                                               </tr>
                                           </thead>
@@ -9279,14 +9278,13 @@ const UserAdmin = () => {
                                                       </td>
                                                       <td className="px-4 py-3 whitespace-nowrap font-mono text-xs text-sky-200">{formatLlmRuntime(log.latency_ms)}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap font-mono text-xs text-amber-200">{formatLlmCharge(log.charged_amount)}</td>
-                                                      <td className="px-4 py-3 whitespace-nowrap">{log.api_url ? log.api_url : '-'}</td>
                                                       <td className="px-4 py-3">
                                                           <button className="text-primary hover:underline text-xs" onClick={() => setSelectedLlmLog(log)}>{t('查看', 'View')}</button>
                                                       </td>
                                                   </tr>
                                               ))}
                                               {llmLogs.length === 0 && (
-                                                  <tr><td colSpan="11" className="px-4 py-8 text-center text-gray-500">{t('暂无日志', 'No logs found')}</td></tr>
+                                                  <tr><td colSpan="10" className="px-4 py-8 text-center text-gray-500">{t('暂无日志', 'No logs found')}</td></tr>
                                               )}
                                           </tbody>
                                       </table>

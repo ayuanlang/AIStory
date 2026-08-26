@@ -10,7 +10,7 @@ import remarkBreaks from 'remark-breaks';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { BookOpen, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Bot, Stethoscope, Scissors } from 'lucide-react';
+import { BookOpen, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, PlayCircle, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Bot, Stethoscope, Scissors } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -19784,81 +19784,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 
                 if (hasExistingScenes || hasExistingStageOutputs) {
                     const ok = await confirmUiMessage(t(
-                        '检测到已存在剧本分析各阶段结果或场景数据。重新分析将清空并覆盖原结果，是否继续重新生成？（选择“取消”则保留原结果并自动续跑未完成阶段）',
-                        'Existing stage analysis outputs or scenes detected. Regenerating will clear and overwrite previous results. Continue? (Choose Cancel to keep existing results and auto-continue unfinished stages)'
+                        '检测到已存在剧本分析各阶段结果或场景数据。重新分析将清空并覆盖原结果，是否继续重新生成？未完成的阶段请改用“继续分析”。',
+                        'Existing stage analysis outputs or scenes detected. Regenerating will clear and overwrite previous results. Continue? Use “Continue analysis” for unfinished stages.'
                     ));
                     if (!ok) {
-                        // Keep artifacts: resume from the first incomplete stage through storyboard.
-                        if (onLog) {
-                            onLog(
-                                t(
-                                    '已选择保留原结果，正在检查并续跑未完成的分析阶段…',
-                                    'Keeping existing results; checking and continuing unfinished analysis stages...'
-                                ),
-                                'process'
-                            );
-                        }
-                        beginAnalysisRestartUi(Date.now());
-                        const claimToken = String(analysisClaimTokenRef.current || '').trim();
-                        const resumePromise = (async () => {
-                            const resumeState = await prepareSceneAnalysisResumeState();
-                            if (resumeState?.decision === 'phase2' || resumeState?.decision === 'completed') {
-                                const resumed = await tryResumeAnalysisFromExistingArtifacts(resumeState, 0);
-                                if (resumed) return;
-                            }
-                            const hasAdaptation = Boolean(String(
-                                activeEpisode?.ai_scene_analysis_adaptation
-                                || activeEpisode?.ai_scene_analysis_result
-                                || ''
-                            ).trim());
-                            if (hasAdaptation) {
-                                const continueFn = resumeIncompleteAnalysisPipelineRef.current;
-                                if (typeof continueFn === 'function') {
-                                    await continueFn({
-                                        hasAdaptation: true,
-                                        continueFromStage1: true,
-                                        markerPhase: '1',
-                                    });
-                                    return;
-                                }
-                                await handleRestartStage2({
-                                    allowWhileAnalyzing: true,
-                                    reuseExistingSubjectIndex: true,
-                                });
-                                return;
-                            }
-                            setAnalysisFlowStatus({
-                                phase: 'warning',
-                                message: t(
-                                    '未发现可续跑的中间产物（缺少资产清单或第一阶段成稿）。请选择重新生成，或先完成更早阶段。',
-                                    'No resumable mid-pipeline artifacts found (missing asset index or Stage 1 output). Choose regenerate, or finish earlier stages first.'
-                                ),
-                            });
-                            setAnalysisUiReport((prev) => ({
-                                ...(prev && typeof prev === 'object' ? prev : {}),
-                                status: 'warning',
-                                error: '',
-                                warning: t(
-                                    '保留原结果时无可续跑阶段。',
-                                    'Nothing left to continue when keeping existing results.'
-                                ),
-                            }));
-                            setIsAnalyzing(false);
-                            analysisRunInFlightRef.current = false;
-                        })();
-                        trackEpisodeAnalysisRun(episodeId, resumePromise, {
-                            startedAt: Date.now(),
-                            kind: 'resume_keep_existing',
-                            claimToken,
-                        });
-                        analysisEntryLockRef.current = false;
-                        try {
-                            await resumePromise;
-                        } finally {
-                            if (analysisClaimTokenRef.current === claimToken) {
-                                analysisClaimTokenRef.current = '';
-                            }
-                        }
+                        releaseAnalysisClickClaim();
                         return;
                     }
                 }
@@ -19918,6 +19848,152 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             alert(t(
                 `启动剧本分析失败：${prepErr?.message || prepErr}`,
                 `Failed to start script analysis: ${prepErr?.message || prepErr}`
+            ));
+        }
+    };
+
+    const handleContinueAnalysisClick = async () => {
+        const actualContent = getAnalysisScriptContent();
+        if (!actualContent || actualContent.trim().length < 10) {
+            reportAnalysisPanelNotice(t('剧本内容过短，无法分析。', 'Script content is too short for analysis.'), 'warning');
+            return;
+        }
+        const episodeId = Number(activeEpisode?.id || 0);
+        if (!episodeId) {
+            reportAnalysisPanelNotice(t('请先选择分集。', 'No active episode selected.'), 'warning');
+            return;
+        }
+
+        if (
+            isAnalyzing
+            || analysisRunInFlightRef?.current
+            || analysisResumeInFlightRef?.current
+            || analysisEntryLockRef?.current
+            || isEpisodeAnalysisClaimed(episodeId)
+        ) {
+            onLog?.("Already analyzing, duplicate continue click prevented.");
+            setIsAnalyzing(true);
+            return;
+        }
+
+        const claim = tryClaimEpisodeAnalysis(episodeId, 'continue_analysis_click');
+        if (!claim.ok) {
+            onLog?.("Already analyzing (module claim), duplicate continue click prevented.");
+            setIsAnalyzing(true);
+            return;
+        }
+
+        analysisEntryLockRef.current = true;
+        analysisClaimTokenRef.current = claim.token;
+        analysisProgressDismissedRef.current = false;
+        setIsAnalyzing(true);
+        beginAnalysisRestartUi(
+            Date.now(),
+            t('正在检查当前分析断点并续跑未完成阶段…', 'Checking the current analysis breakpoint and continuing unfinished stages...')
+        );
+
+        const releaseContinueClaim = () => {
+            releaseEpisodeAnalysisClaim(episodeId, analysisClaimTokenRef.current);
+            analysisClaimTokenRef.current = '';
+            analysisEntryLockRef.current = false;
+            setIsAnalyzing(false);
+            setAnalysisFlowStatus({ phase: 'idle', message: '' });
+            setAnalysisUiReport(null);
+        };
+
+        try {
+            await autoSaveScriptBeforeAnalysis();
+            beginAnalysisRestartUi(
+                Date.now(),
+                t('正在检查当前分析断点并续跑未完成阶段…', 'Checking the current analysis breakpoint and continuing unfinished stages...')
+            );
+            if (onLog) {
+                onLog(
+                    t(
+                        '继续分析：按流程检查当前断点，保留已有结果并续跑未完成阶段。',
+                        'Continue analysis: inspect the current breakpoint, keep existing results, and resume unfinished stages.'
+                    ),
+                    'process'
+                );
+            }
+
+            const persistedIndex = String(
+                latestStage2_1TextRef.current
+                || subjectIndexText
+                || activeEpisode?.ai_scene_analysis_subject_index
+                || ''
+            ).trim();
+            if (persistedIndex && !String(latestStage2_1TextRef.current || '').trim()) {
+                latestStage2_1TextRef.current = persistedIndex;
+            }
+
+            const resumeState = await prepareSceneAnalysisResumeState();
+            const resolvedIndex = String(resumeState?.resolvedSubjectIndexText || persistedIndex || '').trim();
+            if (resolvedIndex && !String(latestStage2_1TextRef.current || '').trim()) {
+                latestStage2_1TextRef.current = resolvedIndex;
+            }
+            const hasAdaptation = Boolean(String(
+                activeEpisode?.ai_scene_analysis_adaptation
+                || activeEpisode?.ai_scene_analysis_result
+                || ''
+            ).trim());
+            const claimToken = String(analysisClaimTokenRef.current || '').trim();
+            analysisEntryLockRef.current = false;
+
+            if (resumeState?.decision === 'phase2' || resumeState?.decision === 'completed') {
+                const resumePromise = tryResumeAnalysisFromExistingArtifacts(resumeState, 0);
+                trackEpisodeAnalysisRun(episodeId, resumePromise, {
+                    startedAt: Date.now(),
+                    kind: 'continue_from_breakpoint',
+                    claimToken,
+                });
+                try {
+                    const resumed = await resumePromise;
+                    if (resumed) return;
+                } finally {
+                    if (analysisClaimTokenRef.current === claimToken) {
+                        analysisClaimTokenRef.current = '';
+                    }
+                }
+            }
+
+            if (hasAdaptation) {
+                const continueFn = resumeIncompleteAnalysisPipelineRef.current;
+                if (typeof continueFn === 'function') {
+                    await continueFn({
+                        hasAdaptation: true,
+                        continueFromStage1: true,
+                        markerPhase: '1',
+                        ignoreClaim: true,
+                    });
+                    return;
+                }
+                await handleRestartStage2({
+                    allowWhileAnalyzing: true,
+                    reuseExistingSubjectIndex: true,
+                });
+                return;
+            }
+
+            // First incomplete node is scene_split: continue from the start without wiping.
+            analysisEntryLockRef.current = false;
+            analysisRunInFlightRef.current = false;
+            forceRegenerateRef.current = false;
+            const stage1Input = ensureStage1ProjectContextInjected(actualContent, selectedReuseSubjectAssets);
+            try {
+                const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
+                await executeAdvancedAnalysis(stage1Input, res.content, 0, true);
+            } catch (e) {
+                console.error("Failed to fetch system prompt", e);
+                await executeAnalysis(stage1Input, null, true);
+            }
+        } catch (prepErr) {
+            console.error('Continue analysis prep failed', prepErr);
+            analysisRunInFlightRef.current = false;
+            releaseContinueClaim();
+            alert(t(
+                `继续分析失败：${prepErr?.message || prepErr}`,
+                `Failed to continue analysis: ${prepErr?.message || prepErr}`
             ));
         }
     };
@@ -20899,13 +20975,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }, []);
 
-    const beginAnalysisRestartUi = useCallback((startedAt = Date.now()) => {
+    const beginAnalysisRestartUi = useCallback((startedAt = Date.now(), message = '') => {
         analysisProgressDismissedRef.current = false;
         resetAnalysisRunProgressLogs();
         beginAnalysisTimer(startedAt);
         setAnalysisFlowStatus({
             phase: 'script_opt',
-            message: t('正在准备重新分析，请稍候...', 'Preparing to rerun analysis...'),
+            message: String(message || '').trim()
+                || t('正在准备重新分析，请稍候...', 'Preparing to rerun analysis...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -24078,12 +24155,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         hasSubjectIndex = false,
         markerPhase = '',
         continueFromStage1 = false,
+        ignoreClaim = false,
     } = {}) => {
         const episodeId = activeEpisode?.id;
         const liveTrackedAnalysis = Boolean(
             analysisRunInFlightRef.current
             || getEpisodeAnalysisRun(episodeId)?.promise
-            || isEpisodeAnalysisClaimed(episodeId)
+            || (!ignoreClaim && isEpisodeAnalysisClaimed(episodeId))
         );
         if (liveTrackedAnalysis) {
             onLog?.(
@@ -28633,7 +28711,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 onClick={handleAnalysisClick} 
                                 disabled={analysisProgressDisplay.isLive || isSplittingEpisode}
                                 className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-colors ${analysisProgressDisplay.isLive || isSplittingEpisode ? 'bg-purple-900/50 text-purple-200 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-500'}`}
-                                title={t('分析原始剧本并生成结构', 'Analyze raw script to generate structure')}
+                                title={t('从头重新分析剧本并覆盖已有结果', 'Restart script analysis from the beginning and overwrite existing results')}
                             >
                                 {analysisProgressDisplay.isLive ? (
                                     <>
@@ -28642,6 +28720,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 ) : (
                                     <>
                                         <Wand2 className="w-4 h-4" /> {t('AI 剧本分析', 'AI Script Analysis')}
+                                    </>
+                                )}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleContinueAnalysisClick}
+                                disabled={analysisProgressDisplay.isLive || isSplittingEpisode}
+                                className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-bold border transition-colors ${
+                                    analysisProgressDisplay.isLive || isSplittingEpisode
+                                        ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed'
+                                        : 'bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-100 border-cyan-400/35'
+                                }`}
+                                title={t('按流程检查当前断点并续跑未完成阶段，不会清空已有结果', 'Inspect the current breakpoint and continue unfinished stages without clearing existing results')}
+                            >
+                                {analysisProgressDisplay.isLive ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 animate-spin" /> {t('分析中...', 'Analyzing...')}
+                                    </>
+                                ) : (
+                                    <>
+                                        <PlayCircle className="w-4 h-4" /> {t('继续分析', 'Continue analysis')}
                                     </>
                                 )}
                             </button>
@@ -29871,10 +29970,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     {showRetryButton && (
                                         <button
                                             type="button"
-                                            onClick={handleAnalysisClick}
-                                            className="rounded-xl border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-bold text-white hover:bg-white/20 transition-colors"
+                                            onClick={handleContinueAnalysisClick}
+                                            className="rounded-xl border border-cyan-400/30 bg-cyan-500/15 px-3 py-1.5 text-xs font-bold text-cyan-100 hover:bg-cyan-500/25 transition-colors"
                                         >
-                                            {t('重试', 'Retry')}
+                                            {t('继续分析', 'Continue analysis')}
                                         </button>
                                     )}
                                     {!analysisLive || ['completed', 'warning', 'failed'].includes(progressPhase) ? (

@@ -132,9 +132,65 @@ _SHOT_VIDEO_ANCHOR_RE = re.compile(
     r"全局动态风格|运镜与动作流|动态连续光影|光线连动弧光|人物面部稳定不变形"
 )
 _SHOT_LOGIC_ANCHOR_RE = re.compile(
-    r"Beat-Shot映射|节奏需求|内容继承核销|镜头逻辑总规划|时间预估|建置角色覆盖|可剪辑合镜核销"
+    r"Beat-Shot映射|节奏需求|^节奏:|内容继承核销|镜头逻辑总规划|场结果|"
+    r"时间预估|建置角色覆盖|可剪辑合镜核销|"
+    r"光影锚定|^光影:|^运镜:|^取景:|^衔接:|^实体:|^P链:|^ENV:|"
+    r"光影继承|摄影综合表达|运镜递进与组合|运镜选用依据|P段时序链|"
+    r"本镜出场实体|防穿帮|表情正背面核销|收束落幅判定|上游放大应答|"
+    r"环境切换运镜|Beat衔接运镜|分镜衔接|前接说明|360度转角继承"
 )
 _SHOT_ENTITY_TOKEN_RE = re.compile(r"(?:CHAR|ENV|PROP)\s*:\s*\[", re.IGNORECASE)
+
+
+def _looks_like_shot_logic_prefix(text: Any) -> bool:
+    """True when the cell starts as Shot Logic tags, not a video prompt."""
+    head = str(text or "").strip()[:200]
+    if not head:
+        return False
+    if _SHOT_VIDEO_ANCHOR_RE.search(head[:40]):
+        return False
+    if _SHOT_LOGIC_ANCHOR_RE.search(head):
+        return True
+    # Tag-dense planning cell (键=值｜键=值) without a video-section opener.
+    if head.count("｜") >= 3 and ":" in head:
+        return True
+    return False
+
+
+def _starts_like_shot_video_prompt(text: Any) -> bool:
+    return bool(_SHOT_VIDEO_ANCHOR_RE.search(str(text or "").strip()[:40]))
+
+
+def _extract_embedded_shot_video_prompt(text: Any) -> str:
+    """If Logic and Video were merged into one cell, return only the video section."""
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    match = _SHOT_VIDEO_ANCHOR_RE.search(value)
+    if not match or match.start() <= 0:
+        return ""
+    prefix = value[: match.start()].strip()
+    if not prefix:
+        return ""
+    if not (_looks_like_shot_logic_prefix(prefix) or _SHOT_LOGIC_ANCHOR_RE.search(prefix)):
+        return ""
+    video = value[match.start() :].strip()
+    return re.sub(r"^(?:<br\s*/?>|\||\n)+", "", video, flags=re.IGNORECASE).strip()
+
+
+def _clean_shot_video_prompt_cell(text: Any) -> str:
+    """Return a video prompt with any leading Shot Logic stripped."""
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    extracted = _extract_embedded_shot_video_prompt(value)
+    if extracted:
+        return extracted
+    if _looks_like_shot_logic_prefix(value) and not _starts_like_shot_video_prompt(value):
+        return ""
+    if _looks_like_shot_video_prompt(value):
+        return value
+    return ""
 
 
 def _looks_like_shot_video_prompt(text: Any) -> bool:
@@ -143,13 +199,29 @@ def _looks_like_shot_video_prompt(text: Any) -> bool:
         return False
     if _SHOT_VIDEO_ANCHOR_RE.search(value):
         return True
+    if _looks_like_shot_logic_prefix(value):
+        return False
     # Fallback: long prose video cell with P-segments, not Logic-tag dense.
     if len(value) >= 80 and re.search(r"\bP\d+\b", value) and (
         "ENV:" in value or "CHAR:" in value or "PROP:" in value
     ):
-        if not _SHOT_LOGIC_ANCHOR_RE.search(value[:120]):
-            return True
+        return True
     return False
+
+
+def _rank_shot_video_cell(cell: Any) -> Tuple[int, int]:
+    """Prefer cells that *start* as video over Logic+Video merges or logic fragments."""
+    value = str(cell or "").strip()
+    if not _looks_like_shot_video_prompt(value):
+        return (0, 0)
+    if _starts_like_shot_video_prompt(value):
+        return (3, len(value))
+    extracted = _extract_embedded_shot_video_prompt(value)
+    if extracted:
+        return (2, len(extracted))
+    if _looks_like_shot_logic_prefix(value):
+        return (0, 0)
+    return (1, len(value))
 
 
 def _looks_like_duration_cell(text: Any) -> bool:
@@ -171,7 +243,7 @@ def _looks_like_entities_cell(text: Any) -> bool:
         return True
     if _looks_like_shot_video_prompt(value):
         return False
-    if _SHOT_LOGIC_ANCHOR_RE.search(value):
+    if _looks_like_shot_logic_prefix(value) or _SHOT_LOGIC_ANCHOR_RE.search(value):
         return False
     return bool(_SHOT_ENTITY_TOKEN_RE.search(value))
 
@@ -193,7 +265,7 @@ def _try_realign_shot_row_by_anchors(vals: List[str], header_count: int) -> Opti
     if not video_indices:
         return None
 
-    video_idx = max(video_indices, key=lambda i: len(cells[i]))
+    video_idx = max(video_indices, key=lambda i: _rank_shot_video_cell(cells[i]))
     duration_indices = [i for i, cell in enumerate(cells) if _looks_like_duration_cell(cell)]
     duration_idx: Optional[int] = None
     for idx in reversed(duration_indices):
@@ -222,9 +294,21 @@ def _try_realign_shot_row_by_anchors(vals: List[str], header_count: int) -> Opti
             if video_en_ok and not video_cn_ok:
                 out[10] = out[5]
                 out[5] = ""
+            cleaned_video = _clean_shot_video_prompt_cell(out[10])
+            if cleaned_video:
+                raw_video = out[10]
+                if cleaned_video != raw_video and _looks_like_shot_logic_prefix(raw_video):
+                    prefix = raw_video[: raw_video.find(cleaned_video)].strip()
+                    prefix = re.sub(r"(?:<br\s*/?>|\||\n)+$", "", prefix, flags=re.IGNORECASE).strip()
+                    if prefix and not str(out[3] or "").strip():
+                        out[3] = prefix
+                out[10] = cleaned_video
             return out
 
     logic_end = duration_idx if duration_idx is not None else video_idx
+    if duration_idx is not None and video_idx < duration_idx:
+        # Video landed inside the Logic region (merged/split). Stop Logic before it.
+        logic_end = video_idx
     if logic_end < 3:
         return None
 
@@ -232,13 +316,22 @@ def _try_realign_shot_row_by_anchors(vals: List[str], header_count: int) -> Opti
     if not logic and len(cells) > 3:
         logic = cells[3]
 
+    raw_video = cells[video_idx]
+    extracted_video = _extract_embedded_shot_video_prompt(raw_video)
+    video_val = extracted_video or raw_video
+    if extracted_video:
+        prefix = raw_video[: raw_video.find(extracted_video)].strip()
+        prefix = re.sub(r"(?:<br\s*/?>|\||\n)+$", "", prefix, flags=re.IGNORECASE).strip()
+        if prefix:
+            logic = prefix if not logic or logic in prefix else (logic if prefix in logic else f"{logic}\n{prefix}")
+
     out = [""] * header_count
     out[0] = cells[0] if len(cells) > 0 else ""
     out[1] = cells[1] if len(cells) > 1 else ""
     out[2] = cells[2] if len(cells) > 2 else ""
     out[3] = logic
     out[6] = cells[duration_idx] if duration_idx is not None else ""
-    out[10] = cells[video_idx]
+    out[10] = video_val
     out[13] = cells[entities_idx] if entities_idx is not None else ""
     return out
 
@@ -343,6 +436,28 @@ def _normalize_markdown_table_cells(
     if header_count <= 0:
         return []
     vals = _reconcile_shot_markdown_row_cells(cells, header_count, merge_column_indices)
+    if header_count >= 14 and len(vals) >= 11:
+        raw_video = str(vals[10] or "").strip()
+        cleaned_video = _clean_shot_video_prompt_cell(raw_video)
+        if cleaned_video:
+            if cleaned_video != raw_video and _looks_like_shot_logic_prefix(raw_video):
+                prefix = raw_video[: raw_video.find(cleaned_video)].strip()
+                prefix = re.sub(r"(?:<br\s*/?>|\||\n)+$", "", prefix, flags=re.IGNORECASE).strip()
+                if prefix and not str(vals[3] or "").strip():
+                    vals[3] = prefix
+            vals[10] = cleaned_video
+        elif raw_video and _looks_like_shot_logic_prefix(raw_video):
+            extracted = _extract_embedded_shot_video_prompt(vals[3])
+            if extracted:
+                vals[10] = extracted
+                logic_prefix = str(vals[3] or "")
+                cut = logic_prefix.find(extracted)
+                if cut > 0:
+                    vals[3] = logic_prefix[:cut].strip()
+            else:
+                if not str(vals[3] or "").strip():
+                    vals[3] = raw_video
+                vals[10] = ""
     import re
     normalized: List[str] = []
     for c in vals:
@@ -802,12 +917,13 @@ def _pick_shot_video_prompt_cell(row: Dict[str, Any]) -> str:
         "prompt_preview_cn",
     ]
     direct_value = _pick_shot_cell(row, preferred_aliases, "")
-    if _looks_like_shot_video_prompt(direct_value):
-        return direct_value
+    cleaned_direct = _clean_shot_video_prompt_cell(direct_value)
+    if cleaned_direct:
+        return cleaned_direct
 
     candidates: List[str] = []
-    if direct_value:
-        candidates.append(direct_value)
+    if cleaned_direct:
+        candidates.append(cleaned_direct)
 
     for source in (row, _shot_row_technical_notes_dict(row)):
         if not isinstance(source, dict):
@@ -818,11 +934,11 @@ def _pick_shot_video_prompt_cell(row: Dict[str, Any]) -> str:
                 continue
             key_text = str(raw_key or "").strip().lower()
             normalized_key = _normalize_shot_markdown_col_key(raw_key)
-            # Never treat Shot Logic as the video prompt source unless it truly
-            # embeds a video-looking payload (mis-merge recovery).
+            cleaned_value = _clean_shot_video_prompt_cell(value)
+            # Shot Logic may only contribute an embedded video section after a mis-merge.
             if "logic" in key_text or "镜头逻辑" in str(raw_key or ""):
-                if _looks_like_shot_video_prompt(value):
-                    candidates.append(value)
+                if cleaned_value:
+                    candidates.append(cleaned_value)
                 continue
             if (
                 ("video" in key_text and "cn" in key_text)
@@ -830,24 +946,23 @@ def _pick_shot_video_prompt_cell(row: Dict[str, Any]) -> str:
                 or "videocontentcn" in normalized_key
                 or ("视频" in str(raw_key or "") and ("中文" in str(raw_key or "") or "提示词" in str(raw_key or "") or "内容" in str(raw_key or "")))
             ):
-                if _looks_like_shot_video_prompt(value) or value:
-                    candidates.append(value)
+                if cleaned_value or value:
+                    candidates.append(cleaned_value or value)
                 continue
-            if _looks_like_shot_video_prompt(value):
-                candidates.append(value)
+            if cleaned_value:
+                candidates.append(cleaned_value)
 
-    video_like = [c for c in candidates if _looks_like_shot_video_prompt(c)]
+    video_like = [c for c in candidates if _clean_shot_video_prompt_cell(c)]
     if video_like:
-        return max(video_like, key=len)
+        cleaned_like = [_clean_shot_video_prompt_cell(c) for c in video_like]
+        cleaned_like = [c for c in cleaned_like if c]
+        if cleaned_like:
+            return max(cleaned_like, key=lambda item: _rank_shot_video_cell(item))
     # Legacy non-empty CN/EN: accept only when it is not clearly Logic tags or Entities.
-    legacy = str(direct_value or "").strip()
-    if not legacy:
-        return ""
-    if _looks_like_entities_cell(legacy):
-        return ""
-    if _SHOT_LOGIC_ANCHOR_RE.search(legacy[:120] or ""):
-        return ""
-    return legacy
+    legacy = _clean_shot_video_prompt_cell(direct_value)
+    if legacy:
+        return legacy
+    return ""
 
 
 def _coerce_shot_row_video_prompt_columns(row: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
@@ -857,10 +972,14 @@ def _coerce_shot_row_video_prompt_columns(row: Dict[str, Any]) -> Tuple[bool, Op
     current_cn = _pick_shot_cell(row, [
         "Video Content (CN)", "video_content_cn", "video_prompt_cn", "视频内容（中文）",
     ], "")
-    if _looks_like_shot_video_prompt(current_cn):
+    cleaned_current = _clean_shot_video_prompt_cell(current_cn)
+    if cleaned_current and cleaned_current == current_cn.strip() and not _looks_like_shot_logic_prefix(current_cn):
         return False, None
-    recovered = _pick_shot_video_prompt_cell(row)
-    if not _looks_like_shot_video_prompt(recovered):
+    recovered = cleaned_current or _pick_shot_video_prompt_cell(row)
+    recovered = _clean_shot_video_prompt_cell(recovered)
+    if not recovered:
+        return False, None
+    if recovered == current_cn.strip():
         return False, None
     row["Video Content (CN)"] = recovered
     # Clear English video slot when it only held the shifted CN payload.

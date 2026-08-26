@@ -296,14 +296,33 @@ export function normalizeShotTableHeaderKey(header) {
     return String(header || '').toLowerCase().replace(/[\s_\-./()（）:：]/g, '');
 }
 
+const SHOT_VIDEO_ANCHOR_RE = /全局动态风格|运镜与动作流|动态连续光影|光线连动弧光|人物面部稳定不变形/;
+const SHOT_LOGIC_ANCHOR_RE = /Beat-Shot映射|节奏需求|镜头逻辑总规划|场结果|光影锚定|摄影综合表达|P段时序链|^节奏:|^光影:|^运镜:|^取景:|^衔接:|^实体:|^P链:/;
+
+export function stripShotLogicPrefixFromVideoPrompt(text) {
+    const value = String(text || '').trim();
+    if (!value) return '';
+    if (SHOT_VIDEO_ANCHOR_RE.test(value.slice(0, 40))) return value;
+    const head = value.slice(0, 200);
+    const isLogicHead = SHOT_LOGIC_ANCHOR_RE.test(head)
+        || ((head.match(/｜/g) || []).length >= 3 && head.includes(':'));
+    if (!isLogicHead) return value;
+    const match = value.match(SHOT_VIDEO_ANCHOR_RE);
+    if (!match || match.index == null || match.index <= 0) return '';
+    return value.slice(match.index).trim();
+}
+
 export function findShotTableColIdx(headers, aliases) {
     const normalizedHeaders = (headers || []).map((header) => normalizeShotTableHeaderKey(header));
-    const aliasSet = new Set((aliases || []).map((alias) => normalizeShotTableHeaderKey(alias)));
+    const aliasList = (aliases || []).map((alias) => normalizeShotTableHeaderKey(alias)).filter(Boolean);
     for (let idx = 0; idx < normalizedHeaders.length; idx += 1) {
         const normalized = normalizedHeaders[idx];
-        for (const alias of aliasSet) {
-            if (!alias) continue;
-            if (normalized === alias || normalized.includes(alias) || alias.includes(normalized)) {
+        if (aliasList.includes(normalized)) return idx;
+    }
+    for (let idx = 0; idx < normalizedHeaders.length; idx += 1) {
+        const normalized = normalizedHeaders[idx];
+        for (const alias of aliasList) {
+            if (normalized.includes(alias) || alias.includes(normalized)) {
                 return idx;
             }
         }
@@ -344,7 +363,38 @@ export function reconcileShotTableRowCells(cells, headers) {
     }
 
     while (row.length < headerCount) row.push('');
-    return row.slice(0, headerCount);
+    row = row.slice(0, headerCount);
+
+    const logicIdx = findShotTableColIdx(headers, ['shot logic (cn)', 'shot_logic_cn', '镜头逻辑']);
+    const videoIdx = findShotTableColIdx(headers, ['video content (cn)', 'video_prompt_cn', '视频内容（中文）']);
+    if (logicIdx >= 0 && videoIdx >= 0 && logicIdx < row.length && videoIdx < row.length) {
+        const rawVideo = String(row[videoIdx] || '').trim();
+        const extractedVideo = stripShotLogicPrefixFromVideoPrompt(rawVideo);
+        if (extractedVideo && extractedVideo !== rawVideo) {
+            const prefix = rawVideo.slice(0, rawVideo.indexOf(extractedVideo)).trim();
+            row[videoIdx] = extractedVideo;
+            if (prefix) {
+                const existingLogic = String(row[logicIdx] || '').trim();
+                row[logicIdx] = existingLogic && !prefix.includes(existingLogic)
+                    ? `${existingLogic}\n${prefix}`
+                    : (prefix || existingLogic);
+            }
+        } else if (!extractedVideo && rawVideo && SHOT_LOGIC_ANCHOR_RE.test(rawVideo.slice(0, 200))) {
+            const fromLogic = stripShotLogicPrefixFromVideoPrompt(String(row[logicIdx] || ''));
+            if (!String(row[logicIdx] || '').trim()) row[logicIdx] = rawVideo;
+            row[videoIdx] = fromLogic;
+        } else if (!rawVideo) {
+            const logicText = String(row[logicIdx] || '');
+            const fromLogic = stripShotLogicPrefixFromVideoPrompt(logicText);
+            if (fromLogic) {
+                row[videoIdx] = fromLogic;
+                const cut = logicText.indexOf(fromLogic);
+                if (cut > 0) row[logicIdx] = logicText.slice(0, cut).trim();
+            }
+        }
+    }
+
+    return row;
 }
 
 export function buildShotTableHeaderMap(headers) {

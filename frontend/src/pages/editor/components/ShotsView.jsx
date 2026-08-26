@@ -11,6 +11,7 @@ import {
     buildShotTableHeaderMap,
     dedupeShotsForDisplay,
     dedupeShotRowsForImport,
+    stripShotLogicPrefixFromVideoPrompt,
 } from '../../../lib/sceneTableParser';
 import {
     buildShotWritePayloadFromRow,
@@ -501,15 +502,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const cnCandidates = [
             compactCnPreview,
-            shot.shot_logic_cn,
             tech.video_prompt_cn,
+            shot.video_prompt_cn,
             shot.prompt_cn,
             shot.video_content_cn,
             shot.video_content,
             shot.prompt,
             shot.start_frame,
             shot.end_frame,
-        ];
+        ].map(stripShotLogicPrefixFromVideoPrompt);
         const enCandidates = [
             compactEnPreview,
             shot.video_content,
@@ -519,8 +520,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             tech.video_prompt_cn,
             shot.prompt_cn,
             shot.video_content_cn,
-            shot.shot_logic_cn,
-        ];
+        ].map(stripShotLogicPrefixFromVideoPrompt);
 
         const pickFirstNonEmpty = (items) => {
             for (const item of items) {
@@ -3702,7 +3702,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             shot.prompt_cn,
             shot.video_content,
             shot.prompt,
-        ];
+        ].map(stripShotLogicPrefixFromVideoPrompt);
         const enCandidates = [
             shot.video_content,
             shot.prompt,
@@ -3766,19 +3766,25 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (!shot || typeof shot !== 'object') return shot;
 
         const techObj = parseTechnicalNotesSafe(shot.technical_notes);
-        const videoPromptCn = String(
+        const rawVideoPromptCn = String(
             techObj.video_prompt_cn ||
             shot.video_prompt_cn ||
             shot.video_content_cn ||
             shot.prompt_cn ||
             ''
         ).trim();
+        const videoPromptCn = stripShotLogicPrefixFromVideoPrompt(rawVideoPromptCn);
 
         if (!videoPromptCn) return shot;
 
         const next = { ...shot };
         let changed = false;
         let techChanged = false;
+
+        if (techObj.video_prompt_cn && videoPromptCn !== String(techObj.video_prompt_cn || '').trim()) {
+            techObj.video_prompt_cn = videoPromptCn;
+            techChanged = true;
+        }
 
         if (!String(next.start_frame || '').trim()) {
             next.start_frame = videoPromptCn;

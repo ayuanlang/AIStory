@@ -21,6 +21,7 @@ from app.services.shot_markdown import (
     _find_active_shot_by_business_id,
     _normalize_shot_business_id,
     _normalize_shot_markdown_col_key,
+    _clean_shot_video_prompt_cell,
     _pick_shot_cell,
     _soft_delete_duplicate_active_shots_in_db,
 )
@@ -278,7 +279,9 @@ def _import_scene_shot_rows_to_db(
             "",
         )
         start_frame_cn_text = _pick_shot_cell(s_data, ["Start Frame (CN)", "start_frame_cn", "起始帧（中文）"], "")
-        video_prompt_cn_text = _pick_shot_cell(s_data, ["Video Content (CN)", "video_prompt_cn", "视频内容（中文）"], "")
+        video_prompt_cn_text = _clean_shot_video_prompt_cell(
+            _pick_shot_cell(s_data, ["Video Content (CN)", "video_prompt_cn", "视频内容（中文）"], "")
+        )
         keyframes_cn_text = _pick_shot_cell(s_data, ["Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文"], "")
         end_frame_cn_text = _pick_shot_cell(s_data, ["End Frame (CN)", "end_frame_cn", "结束帧（中文）"], "")
 

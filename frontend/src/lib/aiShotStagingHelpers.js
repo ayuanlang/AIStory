@@ -1,4 +1,4 @@
-import { parseShotsFromMarkdownTable } from './sceneTableParser';
+import { parseShotsFromMarkdownTable, stripShotLogicPrefixFromVideoPrompt } from './sceneTableParser';
 
 export const getStagingShotField = (shot, field) => {
     if (!shot) return '';
@@ -111,7 +111,8 @@ export const buildShotWritePayloadFromRow = (shot, options = {}) => {
     const existingTechnicalNotes = String(options?.existingTechnicalNotes || '').trim();
     const promptCnRaw = String(shot?.['Prompt (CN)'] || shot?.prompt_cn || '').trim();
     const startFrameCnRaw = getStagingShotField(shot, 'start_frame_cn');
-    const videoPromptCnRaw = getStagingShotField(shot, 'video_content_cn');
+    const videoPromptCnRaw = stripShotLogicPrefixFromVideoPrompt(getStagingShotField(shot, 'video_content_cn'))
+        || stripShotLogicPrefixFromVideoPrompt(getStagingShotField(shot, 'shot_logic_cn'));
     const keyframesCnRaw = getStagingShotField(shot, 'keyframes_cn');
     const endFrameCnRaw = getStagingShotField(shot, 'end_frame_cn');
     const combinedFallback = splitCombinedCnPrompt(promptCnRaw);
