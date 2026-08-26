@@ -2325,6 +2325,7 @@ const probeEpisodeAnalysisCompleteness = async ({
             ok: false,
             gaps: ['missing_episode'],
             hasAdaptation: false,
+            hasEnvironmentPlan: false,
             hasSubjectIndex: false,
             hasSceneMarkdown: false,
             dbSceneCount: 0,
@@ -2348,6 +2349,19 @@ const probeEpisodeAnalysisCompleteness = async ({
     ).trim();
     const hasSubjectIndex = Boolean(subjectIndex);
     const hasAdaptation = Boolean(String(fresh?.ai_scene_analysis_adaptation || '').trim());
+    const hasEnvironmentPlan = (() => {
+        try {
+            const stageOutputs = JSON.parse(String(fresh?.ai_stage_outputs || '').trim() || '{}');
+            const planned = String(stageOutputs?.stages?.stage1?.outputs?.environment_plan?.content || '').trim();
+            if (planned) return true;
+        } catch (_) {
+            // Ignore malformed stage outputs and fall back to adaptation markers.
+        }
+        const adaptation = String(fresh?.ai_scene_analysis_adaptation || '').trim();
+        return /\[SCENE_ENV_IDENT_START/i.test(adaptation)
+            || /\[ENV_SCENE_PATCH_START/i.test(adaptation)
+            || /\[ENVIRONMENT_PLAN_OUTPUT_END/i.test(adaptation);
+    })();
     const hasSceneMarkdownByScene = (() => {
         try {
             const stageOutputs = JSON.parse(String(fresh?.ai_stage_outputs || '').trim() || '{}');
@@ -2459,6 +2473,7 @@ const probeEpisodeAnalysisCompleteness = async ({
     }
 
     if (!hasAdaptation) gaps.push('script_optimization');
+    if (hasAdaptation && !hasEnvironmentPlan && !hasSubjectIndex) gaps.push('environment_plan');
     if (!hasSubjectIndex) gaps.push('assets_extraction');
     if (!scenesOk) gaps.push('scene_markdown');
     if (pendingAssetTargets.length > 0) {
@@ -2470,6 +2485,7 @@ const probeEpisodeAnalysisCompleteness = async ({
         ok: gaps.length === 0,
         gaps,
         hasAdaptation,
+        hasEnvironmentPlan,
         hasSubjectIndex,
         hasSceneMarkdown,
         dbSceneCount,
@@ -2826,6 +2842,9 @@ const resolveSupervisorProgressPhase = (probe = {}) => {
 const formatSupervisorGapLabels = (probe = {}, tFn = (zh) => zh) => {
     const t = typeof tFn === 'function' ? tFn : (zh) => zh;
     const labels = [];
+    if (probe?.hasAdaptation && !probe?.hasEnvironmentPlan && !probe?.hasSubjectIndex) {
+        labels.push(t('环境规划', 'environment plan'));
+    }
     if (!probe?.hasSubjectIndex) labels.push(t('资产清单', 'asset inventory'));
     if (probe?.needsScenes) labels.push(t('场景编排入库', 'scene import'));
     if (probe?.needsAssets) {
@@ -18260,7 +18279,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const canSkipToExistingIndex = Boolean(hasSubjectIndex && (!fromStage1 || extractionAlreadyDone));
                         if (typeof continueFn === 'function' && (canSkipToExistingIndex || hasAdaptation)) {
                             setAnalysisFlowStatus({
-                                phase: canSkipToExistingIndex ? 'scene_beats' : 'extract_assets',
+                                phase: canSkipToExistingIndex ? 'scene_beats' : 'parallel_prepare',
                                 message: t(
                                     '检测到上一阶段已完成但后续未跑完，正在自动继续分析…',
                                     'Previous stage finished but later stages did not; auto-continuing analysis...'
@@ -19793,6 +19812,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 || ''
                             ).trim());
                             if (hasAdaptation) {
+                                const continueFn = resumeIncompleteAnalysisPipelineRef.current;
+                                if (typeof continueFn === 'function') {
+                                    await continueFn({
+                                        hasAdaptation: true,
+                                        continueFromStage1: true,
+                                        markerPhase: '1',
+                                    });
+                                    return;
+                                }
                                 await handleRestartStage2({
                                     allowWhileAnalyzing: true,
                                     reuseExistingSubjectIndex: true,
@@ -22107,7 +22135,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         await executeAnalysis(supplementInput, supplementPrompt, false);
     };
 
-    const executeAdvancedAnalysis = async (userInput, customSystemPrompt, retryCount = 0, skipMetadata = false) => {
+    const executeAdvancedAnalysis = async (userInput, customSystemPrompt, retryCount = 0, skipMetadata = false, options = {}) => {
+        const skipSceneSplit = Boolean(options?.skipSceneSplit);
         if (!activeEpisode?.id) {
             reportAnalysisPanelNotice(t('请先选择分集。', 'No active episode selected.'), 'warning');
             return;
@@ -22115,7 +22144,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         resetAutoSubjectsImportCache();
 
-        const forceRegenerate = forceRegenerateRef.current;
+        const forceRegenerate = skipSceneSplit ? false : forceRegenerateRef.current;
         forceRegenerateRef.current = false;
         const episodeId = activeEpisode.id;
         const claimToken = String(analysisClaimTokenRef.current || '').trim();
@@ -22132,7 +22161,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Block parallel pipelines for this instance. Module claim already covers remount/double-click;
         // forceRegenerate must still not stack a second Stage-1 call while local in-flight is true
         // from the same click handoff (analysisRunInFlightRef set in handleAnalysisClick).
-        if (!forceRegenerate && (analysisRunInFlightRef.current || analysisResumeInFlightRef.current || analysisEntryLockRef.current)) {
+        if (!skipSceneSplit && !forceRegenerate && (analysisRunInFlightRef.current || analysisResumeInFlightRef.current || analysisEntryLockRef.current)) {
             if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
         }
@@ -22160,10 +22189,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phase2AutoCompletedEpisodeRef.current = null;
         }
 
-        const resumeState = (forceRegenerate || clearedBeforeRun)
+        const resumeState = (forceRegenerate || clearedBeforeRun || skipSceneSplit)
             ? null
             : await prepareSceneAnalysisResumeState();
-        if (!forceRegenerate && !clearedBeforeRun && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
+        if (!skipSceneSplit && !forceRegenerate && !clearedBeforeRun && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
             return;
         }
         const preflightSceneSyncNotice = (forceRegenerate || clearedBeforeRun) ? '' : (resumeState?.preflightSceneSyncNotice || '');
@@ -22174,8 +22203,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         analysisRunInFlightRef.current = true;
         phase2AutoCompletedEpisodeRef.current = null;
-        clearAnalysisTaskMarker(activeEpisode?.id);
-        resetAnalysisFallbackRetryCounts(activeEpisode?.id);
+        if (!skipSceneSplit) {
+            clearAnalysisTaskMarker(activeEpisode?.id);
+            resetAnalysisFallbackRetryCounts(activeEpisode?.id);
+        }
 
         const startedAt = Date.now();
         const runAnalysisPipeline = async () => {
@@ -22234,15 +22265,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'script_opt',
-                message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能会花几分钟时间，请喝杯水稍等~', 'LLM submitted. Waiting for response. Total wait can take up to about 10 mins.'),
+                message: skipSceneSplit
+                    ? t('全局统筹已就绪，正在启动环境规划与文戏增强…', 'Global orchestration is ready; starting environment planning and drama enhancement...')
+                    : t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能会花几分钟时间，请喝杯水稍等~', 'LLM submitted. Waiting for response. Total wait can take up to about 10 mins.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
-            onLog?.(
-                t('[全局统筹] 已提交 AI（场景识别与场际衔接）...', '[Global orchestration] Submitted to AI...'),
-                'info'
-            );
-            logSelectedScriptAnalysisApi('scene_split');
-
             const baselineAnalysisText = clearedBeforeRun
                 ? ''
                 : String(activeEpisode?.ai_scene_analysis_result || '').trim();
@@ -22250,21 +22277,43 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // 1) whole-episode environment_plan (main env only)
             // 2) per-scene drama (+ optional VFX/Xian) → derived framing → staging.
             const splitStage1Flow = true;
-            const result = await runScriptOptimizationNode({
-                scriptText: userInput,
-                systemPrompt: customSystemPrompt,
-                metadata,
-                startedAt,
-                baselineText: baselineAnalysisText,
-                includeEnvironmentPlan: false,
-                onTaskCreated: (taskId) => {
-                    const stableTaskId = String(taskId || '').trim();
-                    setActiveAnalysisTaskId(stableTaskId);
-                    saveAnalysisTaskMarker(activeEpisode?.id, { taskId: stableTaskId, startedAt, phase: 1 });
-                    updateEpisodeAnalysisRun(episodeId, { taskId: stableTaskId, phase: 1 });
-                },
-            });
-            const analyzedText = extractAnalysisTextFromResult(result);
+            let result = null;
+            let analyzedText = '';
+            if (skipSceneSplit) {
+                analyzedText = String(userInput || '').trim();
+                if (!analyzedText) {
+                    throw new Error(t(
+                        '缺少全局统筹产物，无法继续环境规划与逐场优化。',
+                        'Global orchestration output is missing; cannot continue environment planning and per-scene refinement.'
+                    ));
+                }
+                result = { result: analyzedText, meta: { saved_to_episode: true } };
+                onLog?.(
+                    t('[全局统筹] 已复用落库结果，跳过重复统筹，继续环境规划与文戏增强。', '[Global orchestration] Reusing persisted output; skipping a second orchestration call and continuing to environment planning and drama enhancement.'),
+                    'info'
+                );
+            } else {
+                onLog?.(
+                    t('[全局统筹] 已提交 AI（场景识别与场际衔接）...', '[Global orchestration] Submitted to AI...'),
+                    'info'
+                );
+                logSelectedScriptAnalysisApi('scene_split');
+                result = await runScriptOptimizationNode({
+                    scriptText: userInput,
+                    systemPrompt: customSystemPrompt,
+                    metadata,
+                    startedAt,
+                    baselineText: baselineAnalysisText,
+                    includeEnvironmentPlan: false,
+                    onTaskCreated: (taskId) => {
+                        const stableTaskId = String(taskId || '').trim();
+                        setActiveAnalysisTaskId(stableTaskId);
+                        saveAnalysisTaskMarker(activeEpisode?.id, { taskId: stableTaskId, startedAt, phase: 1 });
+                        updateEpisodeAnalysisRun(episodeId, { taskId: stableTaskId, phase: 1 });
+                    },
+                });
+                analyzedText = extractAnalysisTextFromResult(result);
+            }
             const stage1Raw = String(analyzedText || '').trim();
             if (stage1Raw) {
                 latestStage1RawTextRef.current = stage1Raw;
@@ -22436,6 +22485,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     {
                         startedAt: phaseMarks.llmReturnedAt || startedAt,
                         baselineText: sceneSplitText,
+                        // Scene-split persist must not be mistaken for environment_plan success.
+                        disableEpisodeRecovery: true,
                     }
                 );
 
@@ -22470,6 +22521,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     {
                         startedAt: phaseMarks.llmReturnedAt || startedAt,
                         baselineText: baselineAnalysisText,
+                        // Empty/cleared baseline would otherwise recover the just-saved scene_split.
+                        disableEpisodeRecovery: true,
                     }
                 );
                 sceneSubskillPipelinePromise.catch(() => {});
@@ -23489,6 +23542,59 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return String(currentStageOutputs?.stages?.[stageKey]?.outputs?.[outputKey]?.content || '').trim();
     }, [currentStageOutputs]);
 
+    const resolveSceneSplitSourceText = useCallback(() => String(
+        getStageOutputContent('stage1', 'scene_split')
+        || latestStage1RawTextRef.current
+        || activeEpisode?.ai_scene_analysis_result
+        || activeEpisode?.ai_scene_analysis_adaptation
+        || ''
+    ).trim(), [
+        activeEpisode?.ai_scene_analysis_adaptation,
+        activeEpisode?.ai_scene_analysis_result,
+        getStageOutputContent,
+    ]);
+
+    const hasPersistedEnvironmentPlan = useCallback(() => {
+        if (String(getStageOutputContent('stage1', 'environment_plan') || '').trim()) return true;
+        const text = String(
+            getStageOutputContent('stage1', 'adapted_script')
+            || activeEpisode?.ai_scene_analysis_adaptation
+            || latestStage1RawTextRef.current
+            || ''
+        );
+        return /\[SCENE_ENV_IDENT_START/i.test(text)
+            || /\[ENV_SCENE_PATCH_START/i.test(text)
+            || /\[ENVIRONMENT_PLAN_OUTPUT_END/i.test(text);
+    }, [activeEpisode?.ai_scene_analysis_adaptation, getStageOutputContent]);
+
+    const continueAfterSceneSplit = async () => {
+        const sceneSplitText = resolveSceneSplitSourceText();
+        if (!sceneSplitText) {
+            throw new Error(t(
+                '缺少全局统筹产物，无法继续环境规划与逐场优化。',
+                'Global orchestration output is missing; cannot continue environment planning and per-scene refinement.'
+            ));
+        }
+        onLog?.(
+            t(
+                '全局统筹已就绪，正在按新拓扑继续：环境规划 ∥ 逐场优化。不会直接抽资产清单。',
+                'Global orchestration is ready; continuing with environment plan ∥ per-scene refinement. Asset extraction will not start yet.'
+            ),
+            'info'
+        );
+        let customSystemPrompt = '';
+        try {
+            const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
+            customSystemPrompt = String(res?.content || '').trim();
+        } catch (promptErr) {
+            onLog?.(t(
+                `读取全局统筹提示词失败（继续）：${promptErr?.message || promptErr}`,
+                `Failed to load the orchestration prompt (continue): ${promptErr?.message || promptErr}`
+            ), 'warning');
+        }
+        await executeAdvancedAnalysis(sceneSplitText, customSystemPrompt, 0, true, { skipSceneSplit: true });
+    };
+
     const getStageInputContent = useCallback((stageKey, inputKey) => {
         return String(currentStageOutputs?.stages?.[stageKey]?.inputs?.[inputKey]?.content || '').trim();
     }, [currentStageOutputs]);
@@ -23589,6 +23695,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 t('已有资产清单，已跳过重复抽取。请用场景编排/资产设计重跑补齐缺项。', 'Subject Index already exists; skipped duplicate extraction. Use scene/asset rerun for remaining gaps.'),
                 'warning'
             );
+            return;
+        }
+        if (!hasPersistedEnvironmentPlan() && resolveSceneSplitSourceText()) {
+            onLog?.(
+                '[Stage 2 restart] Environment plan is missing; continuing from scene_split trunks instead of jumping to asset extraction.',
+                'info'
+            );
+            await continueAfterSceneSplit();
             return;
         }
         logSelectedScriptAnalysisApi('Stage 2 restart');
@@ -24012,6 +24126,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 '[Analysis Resume] Artifact resume did not take over; leaving remaining gaps to the persistence supervisor instead of re-extracting.',
                 'warning'
             );
+            return;
+        }
+        if (!hasPersistedEnvironmentPlan() && resolveSceneSplitSourceText()) {
+            onLog?.(
+                '[Analysis Resume] Scene split is ready; continuing environment plan ∥ per-scene refinement instead of jumping to asset extraction.',
+                'info'
+            );
+            await continueAfterSceneSplit();
             return;
         }
         await handleRestartStage2({ allowWhileAnalyzing: true });
@@ -26521,8 +26643,103 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             if (!probe.hasSubjectIndex) {
                 throwIfAnalysisStopped();
+                if (!hasPersistedEnvironmentPlan()) {
+                    const sceneSplitText = String(
+                        resolveSceneSplitSourceText()
+                        || stage1SourceText
+                        || activeEpisode?.ai_scene_analysis_adaptation
+                        || activeEpisode?.ai_scene_analysis_result
+                        || ''
+                    ).trim();
+                    if (!sceneSplitText) {
+                        throw new Error(t(
+                            '落库缺少资产清单，且全局统筹产物不可用，无法先补环境规划。请重新执行剧本分析。',
+                            'Subject Index is missing and global orchestration output is unusable; cannot run environment planning first. Re-run script analysis.'
+                        ));
+                    }
+                    onLog?.('[Pipeline Supervisor] Environment plan is missing; running it before asset extraction.', 'process');
+                    const environmentPromptRes = await fetchPrompt(
+                        'skills/scene_analysis_feature_stack/scene_planning_1_subskill_environment.md'
+                    );
+                    const environmentPlanResult = await awaitAnalyzeSceneWithRecovery(
+                        () => runScriptAnalysisFlowAnalyzeNode(
+                            'environment_plan',
+                            sceneSplitText,
+                            environmentPromptRes?.content || '',
+                            null,
+                            activeEpisode?.id || null,
+                            analysisAttentionNotes,
+                            selectedReuseSubjectAssets,
+                            {
+                                onTaskCreated: (taskId) => {
+                                    registerActiveAnalysisTask(taskId);
+                                    saveAnalysisTaskMarker(activeEpisode?.id, {
+                                        taskId,
+                                        startedAt: Date.now(),
+                                        phase: 'environment_plan',
+                                    });
+                                },
+                            },
+                            projectId,
+                            'script_analysis',
+                            resolveSelectedScriptAnalysisApiId()
+                        ),
+                        { startedAt: Date.now(), baselineText: sceneSplitText, disableEpisodeRecovery: true }
+                    );
+                    const environmentPlanText = String(
+                        extractAnalysisTextFromResult(environmentPlanResult) || ''
+                    ).trim();
+                    if (!environmentPlanText) {
+                        throw new Error(t(
+                            '自动补跑环境规划未返回内容。请先重跑环境规划。',
+                            'Supervisor environment planning returned no content. Rerun environment planning first.'
+                        ));
+                    }
+                    latestStage1RawTextRef.current = environmentPlanText;
+                    try {
+                        await persistLlmResultContent(environmentPlanText, 'ai_scene_analysis_result', {
+                            source: 'pipeline-supervisor-environment-plan',
+                            stage1RawText: environmentPlanText,
+                            stage1NodeOutputs: { environment_plan: environmentPlanText },
+                        });
+                    } catch (persistErr) {
+                        onLog?.(t(
+                            `保存环境规划失败：${persistErr?.message || persistErr}`,
+                            `Failed to save environment plan: ${persistErr?.message || persistErr}`
+                        ), 'warning');
+                    }
+                    void runScriptAnalysisFlowAnalyzeNode(
+                        'scene_subskill_pipeline',
+                        sceneSplitText,
+                        '',
+                        null,
+                        activeEpisode?.id || null,
+                        analysisAttentionNotes,
+                        selectedReuseSubjectAssets,
+                        {
+                            onTaskCreated: (taskId) => {
+                                registerActiveAnalysisTask(taskId);
+                                saveAnalysisTaskMarker(activeEpisode?.id, {
+                                    taskId,
+                                    startedAt: Date.now(),
+                                    phase: 'scene_subskills',
+                                });
+                            },
+                        },
+                        projectId,
+                        'script_analysis',
+                        resolveSelectedScriptAnalysisApiId()
+                    ).catch((subskillErr) => {
+                        onLog?.(t(
+                            `齐套补跑逐场优化启动失败（继续抽资产）：${subskillErr?.message || subskillErr}`,
+                            `Supervisor failed to start per-scene refinement (asset extraction continues): ${subskillErr?.message || subskillErr}`
+                        ), 'warning');
+                    });
+                    didWork = true;
+                }
                 const stage1Text = String(
                     stage1SourceText
+                    || latestStage1RawTextRef.current
                     || activeEpisode?.ai_scene_analysis_adaptation
                     || activeEpisode?.ai_scene_analysis_result
                     || ''
@@ -26758,6 +26975,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         buildStage2_2UserInputFromStage1,
         ensureStage3AutoStartCache,
         extractPureSubjectIndexText,
+        hasPersistedEnvironmentPlan,
         importScenesFromPerScenePatchMap,
         isStoryboardAutoStartEnabled,
         onLog,
@@ -26767,6 +26985,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         persistSceneMarkdownPatch,
         projectId,
         registerActiveAnalysisTask,
+        resolveSceneSplitSourceText,
         resolveSelectedScriptAnalysisApiId,
         runAutoImportAndSwitchToScenes,
         runPostImportSceneSubjectPipeline,
