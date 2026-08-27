@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from app.services.script_analysis_flow.derived_env_ingest import (
+    build_derived_env_frame_anchor_injection,
     collect_derived_environment_jsons,
     extract_derived_environment_names_from_scene_text,
     parse_derived_env_extract_items,
@@ -14,9 +15,9 @@ B2=景别=MS｜构图=中心｜ENV:180度客栈大堂｜[DERIVED_ENV:180度客�
 B3=景别=WS｜构图=三分｜ENV:0度客栈大堂_沙尘｜[DERIVED_ENV:0度客栈大堂_沙尘]
 【景别构图综合】Beat=全量
 [DERIVED_ENV_EXTRACT_START]
-[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=第一刀｜触发=Master｜lens_profile=Wide｜axis_crossing=None｜spatial_axis=门—柜台｜同角切割父=无｜状态Delta=无
-[DERIVED_ENV] 名称=180度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=180｜类型=第一刀｜触发=反打｜lens_profile=Standard｜axis_crossing=PlannedReverse｜spatial_axis=门—柜台｜同角切割父=无｜状态Delta=无
-[DERIVED_ENV] 名称=0度客栈大堂_沙尘｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=衍生的衍生｜触发=状态｜lens_profile=Wide｜axis_crossing=None｜spatial_axis=门—柜台｜同角切割父=0度客栈大堂｜状态Delta=地面沙尘加厚
+[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=第一刀｜触发=Master｜lens_profile=Wide｜axis_crossing=None｜spatial_axis=门—柜台｜同角切割父=无｜状态Delta=无｜背景=柜台｜画左=楼梯口｜画右=账房窗
+[DERIVED_ENV] 名称=180度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=180｜类型=第一刀｜触发=反打｜lens_profile=Standard｜axis_crossing=PlannedReverse｜spatial_axis=门—柜台｜同角切割父=无｜状态Delta=无｜背景=正门｜画左=账房窗｜画右=楼梯口
+[DERIVED_ENV] 名称=0度客栈大堂_沙尘｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=衍生的衍生｜触发=状态｜lens_profile=Wide｜axis_crossing=None｜spatial_axis=门—柜台｜同角切割父=0度客栈大堂｜状态Delta=地面沙尘加厚｜背景=柜台｜画左=楼梯口｜画右=账房窗
 [DERIVED_ENV_EXTRACT_END]
 """
 
@@ -29,6 +30,44 @@ def test_parse_derived_env_tags_and_extract_block():
     assert by_name["180度客栈大堂"]["angle"] == 180
     assert by_name["180度客栈大堂"]["main"] == "客栈大堂"
     assert by_name["0度客栈大堂_沙尘"]["kind"] == "衍生的衍生"
+    assert by_name["0度客栈大堂"]["background"] == "柜台"
+    assert by_name["0度客栈大堂"]["frame_left"] == "楼梯口"
+    assert by_name["0度客栈大堂"]["frame_right"] == "账房窗"
+    assert by_name["180度客栈大堂"]["background"] == "正门"
+    assert by_name["180度客栈大堂"]["frame_left"] == "账房窗"
+    assert by_name["180度客栈大堂"]["frame_right"] == "楼梯口"
+
+
+def test_frame_anchor_injection_lists_named_sides():
+    block = build_derived_env_frame_anchor_injection(SAMPLE)
+    assert block.startswith("【衍生环境画幅锚】")
+    assert (
+        "ENV:[0度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0｜"
+        "背景=柜台｜画左=楼梯口｜画右=账房窗"
+    ) in block
+    assert (
+        "ENV:[180度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=180｜"
+        "背景=正门｜画左=账房窗｜画右=楼梯口"
+    ) in block
+    assert (
+        "ENV:[0度客栈大堂_沙尘]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0｜"
+        "背景=柜台｜画左=楼梯口｜画右=账房窗"
+    ) in block
+
+
+def test_frame_anchor_injection_keeps_main_when_sides_missing():
+    text = (
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=第一刀\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+    )
+    block = build_derived_env_frame_anchor_injection(text)
+    assert "ENV:[0度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0" in block
+    assert "背景=无｜画左=无｜画右=无" in block
+
+
+def test_frame_anchor_injection_empty_when_no_derived():
+    assert build_derived_env_frame_anchor_injection("无衍生") == ""
 
 
 def test_first_cut_json_matches_environment_design_template():
@@ -51,6 +90,24 @@ def test_first_cut_json_matches_environment_design_template():
     assert item["description_cn"] == ""
     assert item["dependency_strategy"]["type"] == "Type A"
     assert "截取宫格=右下180度格" in item["dependency_strategy"]["logic"]
+
+
+def test_build_item_persists_frame_anchors():
+    item = build_derived_environment_item(
+        {
+            "name": "0度客栈大堂",
+            "main": "客栈大堂",
+            "angle": 0,
+            "kind": "第一刀",
+            "background": "柜台",
+            "frame_left": "楼梯口",
+            "frame_right": "账房窗",
+        }
+    )
+    attrs = item["custom_attributes"]
+    assert attrs["background"] == "柜台"
+    assert attrs["frame_left"] == "楼梯口"
+    assert attrs["frame_right"] == "账房窗"
 
 
 def test_state_cut_json_hangs_same_angle_parent():

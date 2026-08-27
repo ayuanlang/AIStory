@@ -327,6 +327,9 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
                     "parent": fields.get("同角切割父") or fields.get("parent"),
                     "state_delta": fields.get("状态Delta") or fields.get("state_delta"),
                     "special_note": fields.get("特别表述") or fields.get("special_note"),
+                    "background": fields.get("背景") or fields.get("background"),
+                    "frame_left": fields.get("画左") or fields.get("frame_left"),
+                    "frame_right": fields.get("画右") or fields.get("frame_right"),
                 },
             )
 
@@ -435,6 +438,9 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
             "special_kind": special_kind,
             "special_note": special_note,
             "negative_prompt_en": negative,
+            "background": _clean(item.get("background") or item.get("背景")),
+            "frame_left": _clean(item.get("frame_left") or item.get("画左")),
+            "frame_right": _clean(item.get("frame_right") or item.get("画右")),
         },
     }
 
@@ -471,6 +477,137 @@ def group_derived_environment_jsons(items: Sequence[Dict[str, Any]]) -> List[Dic
 
 def collect_derived_environment_jsons(text: str) -> List[Dict[str, Any]]:
     return group_derived_environment_jsons(parse_derived_env_extract_items(text))
+
+
+def _angle_text(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    try:
+        return str(int(value))
+    except (TypeError, ValueError):
+        return str(value).strip()
+
+
+def format_derived_env_info_line(
+    name: str,
+    *,
+    main: str = "",
+    background: str = "",
+    frame_left: str = "",
+    frame_right: str = "",
+    view_angle: Any = None,
+) -> str:
+    """One derived-ENV row: this camera's 背景/画左/画右 entity map."""
+    parts = [f"ENV:[{_clean(name)}]"]
+    main_name = _clean(main)
+    if main_name:
+        parts.append(f"所属主环境=ENV:[{main_name}]")
+    angle = _angle_text(view_angle)
+    if angle:
+        parts.append(f"view_angle_from_main={angle}")
+    parts.append(f"背景={_clean(background) or '无'}")
+    parts.append(f"画左={_clean(frame_left) or '无'}")
+    parts.append(f"画右={_clean(frame_right) or '无'}")
+    return "｜".join(parts)
+
+
+def derived_env_info_fields_from_mapping(item: Dict[str, Any]) -> Dict[str, Any]:
+    view_angle = item.get("view_angle_from_main")
+    if view_angle is None:
+        view_angle = item.get("angle")
+    if view_angle is None:
+        view_angle = item.get("view_angle")
+    return {
+        "name": _clean(item.get("name")),
+        "main": _clean(item.get("main") or item.get("所属主环境") or item.get("main_environment")),
+        "background": _clean(item.get("background") or item.get("背景")),
+        "frame_left": _clean(item.get("frame_left") or item.get("画左")),
+        "frame_right": _clean(item.get("frame_right") or item.get("画右")),
+        "view_angle": view_angle,
+    }
+
+
+def derived_env_info_fields_from_entity(ent: Any, *, fallback_main: str = "") -> Dict[str, Any]:
+    attrs = getattr(ent, "custom_attributes", None)
+    if not isinstance(attrs, dict):
+        attrs = {}
+    return {
+        "name": _clean(getattr(ent, "name", None) or getattr(ent, "name_en", None)),
+        "main": _clean(
+            attrs.get("main_environment")
+            or attrs.get("所属主环境")
+            or getattr(ent, "base_name_en", None)
+            or fallback_main
+        ),
+        "background": _clean(attrs.get("background") or attrs.get("背景")),
+        "frame_left": _clean(attrs.get("frame_left") or attrs.get("画左")),
+        "frame_right": _clean(attrs.get("frame_right") or attrs.get("画右")),
+        "view_angle": attrs.get("view_angle_from_main"),
+    }
+
+
+def build_derived_env_info_block(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    heading: str = "【衍生环境信息】",
+) -> str:
+    lines: List[str] = []
+    seen: Set[str] = set()
+    for row in rows:
+        fields = derived_env_info_fields_from_mapping(row)
+        name = _clean(fields.get("name"))
+        if not name or name in seen:
+            continue
+        main = _clean(fields.get("main"))
+        background = _clean(fields.get("background"))
+        frame_left = _clean(fields.get("frame_left"))
+        frame_right = _clean(fields.get("frame_right"))
+        if not (main or background or frame_left or frame_right):
+            continue
+        seen.add(name)
+        lines.append(
+            format_derived_env_info_line(
+                name,
+                main=main,
+                background=background,
+                frame_left=frame_left,
+                frame_right=frame_right,
+                view_angle=fields.get("view_angle"),
+            )
+        )
+    if not lines:
+        return ""
+    return (
+        f"{heading}\n"
+        "每行=该镜头下的画左/画右对应实体（切角须改查新 ENV，左右会换）。"
+        "建置仍按相对/绝对/封闭写，只把「画左」「画右」换成该行实体。\n"
+        + "\n".join(lines)
+    )
+
+
+def build_derived_env_frame_anchor_injection(text: str) -> str:
+    """Compact derived-ENV table for staging: 所属主环境 + 背景/画左/画右."""
+    return build_derived_env_info_block(
+        parse_derived_env_extract_items(text),
+        heading="【衍生环境画幅锚】",
+    )
+
+
+def build_derived_env_info_injection_from_entities(
+    entities: Sequence[Any],
+    *,
+    main_by_name: Optional[Dict[str, str]] = None,
+    heading: str = "【衍生环境信息】",
+) -> str:
+    """Same contract as framing extract, built from persisted ENV entities."""
+    rows: List[Dict[str, Any]] = []
+    for ent in entities:
+        name = _clean(getattr(ent, "name", None) or getattr(ent, "name_en", None))
+        fallback = ""
+        if main_by_name and name:
+            fallback = _clean(main_by_name.get(name))
+        rows.append(derived_env_info_fields_from_entity(ent, fallback_main=fallback))
+    return build_derived_env_info_block(rows, heading=heading)
 
 
 _DERIVED_ENV_SECTION_PATTERN = re.compile(

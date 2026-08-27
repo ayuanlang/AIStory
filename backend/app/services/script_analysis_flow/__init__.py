@@ -49,6 +49,8 @@ from .registry import (
     normalize_script_analysis_flow_config,
 )
 from .derived_env_ingest import (
+    build_derived_env_frame_anchor_injection,
+    build_derived_env_info_injection_from_entities,
     canonicalize_derived_environment_name,
     collect_derived_environment_jsons,
     collect_framing_texts_from_results_map,
@@ -3067,6 +3069,8 @@ __all__ = [
     "build_scene_table_markdown_from_staging",
     "build_workspace_scene_payload_from_staging",
     "upsert_workspace_scene_from_staging",
+    "build_derived_env_frame_anchor_injection",
+    "build_derived_env_info_injection_from_entities",
     "canonicalize_derived_environment_name",
     "collect_derived_environment_jsons",
     "collect_framing_texts_from_results_map",

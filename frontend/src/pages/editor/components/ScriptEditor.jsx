@@ -1988,6 +1988,22 @@ const isMainEnvironmentCompletenessAsset = (entity) => {
     return isReusableMainEnvironmentAsset(typed);
 };
 
+const isCoverPosterCompletenessEntry = (entry) => {
+    const type = String(entry?.type || '').trim().toLowerCase();
+    const name = String(entry?.name || '').trim();
+    return (
+        ['cover_poster', 'poster', 'cover', 'covers'].includes(type)
+        || name === '封面海报'
+        || /^cover\s*poster$/i.test(name)
+    );
+};
+
+const isMainEnvironmentCompletenessEntry = (entry) => (
+    entry?.category === 'environments'
+    && !isCoverPosterCompletenessEntry(entry)
+    && !isDerivedEnvironmentName(entry?.name)
+);
+
 const countDbMainEnvironmentEntities = (dbEntities) => (
     (Array.isArray(dbEntities) ? dbEntities : []).filter(isMainEnvironmentCompletenessAsset).length
 );
@@ -17045,9 +17061,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const promptKeyToLiveAssetKey = (key) => (
             key === 'characters' ? 'character' : (key === 'props' ? 'prop' : (key === 'environments' ? 'environment' : ''))
         );
-        setLiveAssetDesignTaskKeys(
-            promptFiles.map((item) => promptKeyToLiveAssetKey(item.key)).filter(Boolean)
-        );
+        // Merge, do not replace: character/prop and environment start in separate
+        // invocations. Replacing (or finally-clearing all keys) hides the other
+        // category's processing / completion node.
+        const launchedLiveKeys = promptFiles
+            .map((item) => promptKeyToLiveAssetKey(item.key))
+            .filter(Boolean);
+        setLiveAssetDesignTaskKeys((prev) => {
+            const next = new Set(Array.isArray(prev) ? prev : []);
+            launchedLiveKeys.forEach((key) => next.add(key));
+            return [...next];
+        });
 
 
 
@@ -18246,7 +18270,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             throw error;
         } finally {
             releaseIncomingAssetLock();
-            setLiveAssetDesignTaskKeys([]);
+            setLiveAssetDesignTaskKeys((prev) => (
+                (Array.isArray(prev) ? prev : []).filter((key) => !launchedLiveKeys.includes(key))
+            ));
             if (options?.isRetryPhase2) {
                 setIsRetryingPhase2(false);
             }
@@ -23846,6 +23872,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     if (isPromptInjectionRiskError(persistErr)) throw persistErr;
                     if (onLog) onLog(`Immediate environment plan save warning: ${persistErr?.message || persistErr}`, 'warning');
                 }
+                setDiagnosticsRefreshNonce((value) => value + 1);
                 if (onLog) onLog(
                     t(
                         '环境规划已完成，正在并行启动主环境设计（封面简报随环境设计注入；角色/道具设计已从全局统筹启动，逐场优化继续并行）…',
@@ -29638,11 +29665,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const subjectEntriesByCategory = {
             characters: subjectEntries.filter((entry) => entry?.category === 'characters'),
             props: subjectEntries.filter((entry) => entry?.category === 'props'),
-            environments: subjectEntries.filter((entry) => (
-                entry?.category === 'environments'
-                && !isDerivedEnvironmentName(entry?.name)
+            environments: subjectEntries.filter((entry) => isMainEnvironmentCompletenessEntry(entry)),
+            posters: subjectEntries.filter((entry) => (
+                entry?.category === 'posters'
+                || isCoverPosterCompletenessEntry(entry)
             )),
-            posters: subjectEntries.filter((entry) => entry?.category === 'posters'),
         };
         const subjectIndexCounts = {
             character: subjectEntriesByCategory.characters.length,
@@ -30563,9 +30590,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 ? (sceneSplitState.active || sceneSplitState.failed)
                                 : sceneSplitState.failed
                         );
+                        const envDesignInFlight = liveAssetDesignTaskKeys.includes('environment')
+                            || environmentAssetDesignPendingRef.current;
                         const environmentPlanState = blockDownstreamFromSceneSplit
                             ? { ...environmentPlanBaseState, ready: false, active: false }
-                            : environmentPlanBaseState;
+                            : envDesignInFlight
+                                ? { ...environmentPlanBaseState, ready: true, active: false, failed: false }
+                                : (
+                                    !environmentPlanBaseState.active
+                                    && !environmentPlanBaseState.failed
+                                    && (environmentPlanBaseState.ready || hasEnvironmentPlanForAssetDesign())
+                                )
+                                    ? { ...environmentPlanBaseState, ready: true, active: false }
+                                    : environmentPlanBaseState;
                         const sceneSubskillsBaseState = resolveNodeState(
                             'scene_subskill_pipeline',
                             scriptOptReady,
@@ -30610,7 +30647,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 number: 5,
                             },
                         ];
-                        const runningAssetTargets = Array.isArray(phase2RetryOptionsRef.current?.targetEntityTypes)
+                        const runningAssetTargets = (
+                            isRetryingPhase2
+                            && Array.isArray(phase2RetryOptionsRef.current?.targetEntityTypes)
+                        )
                             ? phase2RetryOptionsRef.current.targetEntityTypes.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
                             : null;
                         const resolveAssetCategoryState = (spec) => {
@@ -30656,7 +30696,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 );
                             const targeted = !runningAssetTargets?.length
                                 || spec.targets.some((target) => runningAssetTargets.includes(target));
-                            const thisRunLaunched = liveAssetDesignTaskKeys.includes(spec.key);
+                            const thisRunLaunched = liveAssetDesignTaskKeys.includes(spec.key)
+                                || (spec.key === 'environment' && environmentAssetDesignPendingRef.current);
                             const settledThisRun = Boolean(analysisFlowStatus?.assetsGenSettled) && !isRetryingPhase2;
                             const waitingForLibrary = Boolean(isLoadingSubjectAssets || assetLibrarySyncing);
                             // Running/queued pipeline nodes are honest only when this run

@@ -28,8 +28,32 @@ def _keys(*names):
 
 def test_merge_derived_envs_that_share_one_main():
     main = _env(id=1, name="客栈大堂", generation_prompt_cn="四宫格：左上大门 右上柜台")
-    d0 = _env(id=2, name="0度客栈大堂", visual_dependencies=["ENV:[客栈大堂]"], base_name_en="客栈大堂")
-    d180 = _env(id=3, name="180度客栈大堂", visual_dependencies=["ENV:[客栈大堂]"], base_name_en="客栈大堂")
+    d0 = _env(
+        id=2,
+        name="0度客栈大堂",
+        visual_dependencies=["ENV:[客栈大堂]"],
+        base_name_en="客栈大堂",
+        custom_attributes={
+            "main_environment": "客栈大堂",
+            "view_angle_from_main": 0,
+            "background": "柜台",
+            "frame_left": "楼梯口",
+            "frame_right": "账房窗",
+        },
+    )
+    d180 = _env(
+        id=3,
+        name="180度客栈大堂",
+        visual_dependencies=["ENV:[客栈大堂]"],
+        base_name_en="客栈大堂",
+        custom_attributes={
+            "main_environment": "客栈大堂",
+            "view_angle_from_main": 180,
+            "background": "正门",
+            "frame_left": "账房窗",
+            "frame_right": "楼梯口",
+        },
+    )
     other_main = _env(id=4, name="后巷", generation_prompt_cn="窄巷夜灯")
     d_other = _env(id=5, name="0度后巷", visual_dependencies=["ENV:[后巷]"], base_name_en="后巷")
 
@@ -47,6 +71,16 @@ def test_merge_derived_envs_that_share_one_main():
     assert "当前场景使用的衍生环境=ENV:[0度后巷]" in text
     assert "对应主环境=ENV:[后巷]" in text
     assert "同一主环境族：主环境=ENV:[后巷]" not in text
+    assert "【衍生环境信息】" in text
+    assert (
+        "ENV:[0度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0｜"
+        "背景=柜台｜画左=楼梯口｜画右=账房窗"
+    ) in text
+    assert (
+        "ENV:[180度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=180｜"
+        "背景=正门｜画左=账房窗｜画右=楼梯口"
+    ) in text
+    assert "ENV:[0度后巷]｜所属主环境=ENV:[后巷]" in text
 
 
 def test_main_plus_derived_still_injects_prompt_once():
@@ -81,3 +115,4 @@ def test_standalone_main_keeps_single_row():
     assert "当前场景环境=ENV:[机库]（主环境）" in text
     assert "同一主环境族" not in text
     assert "金属舱壁冷白" in text
+    assert "【衍生环境信息】" not in text

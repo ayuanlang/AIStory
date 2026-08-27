@@ -39,6 +39,9 @@ from app.services.shot_markdown import (
     parse_shots_markdown_table,
     sanitize_shots_markdown_table_text,
 )
+from app.services.script_analysis_flow.derived_env_ingest import (
+    build_derived_env_info_injection_from_entities,
+)
 from app.services.soft_delete import _active_episode_clause, _active_entity_clause, _active_scene_clause
 
 logger = logging.getLogger("api_logger")
@@ -623,6 +626,7 @@ def _build_scene_subject_image_prompts_cn_section(
                 "main_env_name": main_env_name,
                 "prompt_cn": prompt_cn,
                 "derived_refs": [],
+                "derived_ents": [],
                 "includes_main": False,
             }
             families[family_key] = family
@@ -632,6 +636,7 @@ def _build_scene_subject_image_prompts_cn_section(
             family["includes_main"] = True
         else:
             family["derived_refs"].append(used_env_ref)
+            family["derived_ents"].append(ent)
 
     prompt_lines: List[str] = []
     for family_key in family_order:
@@ -674,7 +679,22 @@ def _build_scene_subject_image_prompts_cn_section(
         )
         return ""
 
-    body = (
+    derived_ents: List[Any] = []
+    main_by_name: Dict[str, str] = {}
+    for family_key in family_order:
+        family = families[family_key]
+        main_name = str(family["main_env_name"])
+        for ent in family.get("derived_ents") or []:
+            derived_ents.append(ent)
+            used_name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
+            if used_name:
+                main_by_name[used_name] = main_name
+    derived_info_block = build_derived_env_info_injection_from_entities(
+        derived_ents,
+        main_by_name=main_by_name,
+    )
+
+    body_parts = [
         "# Scene Subject Image Prompts (CN)\n"
         "Authoritative Chinese image-generation prompts for the MAIN ENVIRONMENT assets that "
         "scene-linked ENVIRONMENT assets depend on (main-ENV generation_prompt_cn for optical anchoring). "
@@ -682,6 +702,10 @@ def _build_scene_subject_image_prompts_cn_section(
         "they are merged into a single row that explicitly states they correspond to that same main ENV; "
         "inject that main prompt once and do not treat those derivatives as unrelated spaces. "
         "Preserve each derivative's declared view/state while using only the mapped main ENV prompt as its visual base. "
+        "When a derived-environment info block is present, each used derivative lists 所属主环境 / view_angle "
+        "and this camera's 背景 / 画左 / 画右 entity map (left/right flip after a cut — look up the new ENV row). "
+        "Copy staging's relative/absolute/enclosed placement; keep the structure and use those entities "
+        "in place of the words 画左/画右. "
         "For every shot using a derivative ENV, design lighting direction, light color, color palette, and "
         "background-object micro-motion from that derivative's corresponding directional panel in the mapped "
         "main ENV four-panel reference, together with the derivative's declared visible-content boundary. "
@@ -692,9 +716,11 @@ def _build_scene_subject_image_prompts_cn_section(
         "Translate ENV optics into dynamic video language; do not paste static framing/canvas instructions verbatim. "
         "Entity naming authority remains Scene Subject Index. "
         "Do not replace the used derivative with its main ENV name in shot output.\n"
-        + "\n".join(prompt_lines)
-        + "\n"
-    )
+    ]
+    if derived_info_block:
+        body_parts.append(derived_info_block + "\n")
+    body_parts.append("\n".join(prompt_lines) + "\n")
+    body = "\n".join(body_parts)
     logger.info(
         "[_build_shot_prompts] injected scene ENV image prompts scene_id=%s keys=%s rows=%s",
         scene_id,

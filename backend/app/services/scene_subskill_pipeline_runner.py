@@ -44,6 +44,7 @@ from app.services.script_analysis_flow import (
 from app.services.script_analysis_flow.derived_env_ingest import (
     DERIVED_ENV_EXTRACT_BLOCK_PATTERN,
     DERIVED_ENV_TAG_PATTERN,
+    build_derived_env_frame_anchor_injection,
     ingest_derived_environments_from_framing,
     rewrite_merged_derived_environment_names,
 )
@@ -643,6 +644,13 @@ def _wrap_single_scene_input(
     if str(project_tail or "").strip():
         parts.append(str(project_tail).strip())
     return "\n".join(part for part in parts if part)
+
+
+def _with_derived_env_frame_anchors(scene_input: str, scene_block: str) -> str:
+    anchor_block = build_derived_env_frame_anchor_injection(scene_block)
+    if not anchor_block:
+        return scene_input
+    return f"{anchor_block}\n\n{scene_input}"
 
 
 _BEAT_STREAM_START_RE = re.compile(r"`?\[BEAT_STREAM_START\]`?", re.IGNORECASE)
@@ -1310,11 +1318,14 @@ async def _run_derived_framing_then_staging(
         current_block = assert_derived_framing_ready_for_staging(enhance_block, scene_id)
         if "derived_framing" not in called:
             called.append("derived_framing")
-        current_input = _wrap_single_scene_input(
+        current_input = _with_derived_env_frame_anchors(
+            _wrap_single_scene_input(
+                current_block,
+                comprehensive_info,
+                project_tail,
+                entity_token_brief,
+            ),
             current_block,
-            comprehensive_info,
-            project_tail,
-            entity_token_brief,
         )
         prompt_file = STAGING_PROMPT
         _mark_scene_subskill_step(
@@ -1384,11 +1395,14 @@ async def _run_derived_framing_then_staging(
             )
         if step_name == "staging":
             current_block = assert_derived_framing_ready_for_staging(current_block, scene_id)
-            current_input = _wrap_single_scene_input(
+            current_input = _with_derived_env_frame_anchors(
+                _wrap_single_scene_input(
+                    current_block,
+                    comprehensive_info,
+                    project_tail,
+                    entity_token_brief,
+                ),
                 current_block,
-                comprehensive_info,
-                project_tail,
-                entity_token_brief,
             )
         _mark_scene_subskill_step(
             task_db,
@@ -1440,11 +1454,14 @@ async def _run_derived_framing_then_staging(
                     step_label=_subskill_action_label(FRAMING_PROMPT),
                     extra_meta={"derived_env_ingest": _slim_derived_env_ingest_meta(ingest_meta)},
                 )
-            current_input = _wrap_single_scene_input(
+            current_input = _with_derived_env_frame_anchors(
+                _wrap_single_scene_input(
+                    current_block,
+                    comprehensive_info,
+                    project_tail,
+                    entity_token_brief,
+                ),
                 current_block,
-                comprehensive_info,
-                project_tail,
-                entity_token_brief,
             )
         called.append(step_name)
     return current_block
