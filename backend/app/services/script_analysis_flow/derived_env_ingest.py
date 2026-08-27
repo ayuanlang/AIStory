@@ -44,8 +44,8 @@ PLAN_ENV_NAME_PATTERN = re.compile(
 GRID_BY_ANGLE = {
     0: "左上0度格",
     90: "右上90度格",
-    270: "左下270度格",
     180: "右下180度格",
+    270: "左下270度格",
 }
 
 FIRST_CUT_PROMPT = (

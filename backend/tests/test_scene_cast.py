@@ -13,15 +13,27 @@ def _script() -> str:
 [SCENE_START:EP01_SC01]
 【场景名称】客栈对峙
 [SCENE_CAST_START:EP01_SC01]
-【本场角色】在场=CHAR:[@沈青]，CHAR:[@林岳]｜待入画=无｜群演=无
+【本场角色】在场=CHAR:[@沈青]，CHAR:[@林岳]｜待入画=无｜群演=CHAR:[@围观百姓]
 【本场道具】在场=PROP:[银打火机]｜待入画=无
 [SCENE_CAST_END:EP01_SC01]
 body
 [SCENE_END:EP01_SC01]
 [CHAR_EXTRACT_START]
-[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=女主｜适用场=EP01_SC01
+[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=女主｜适用场=EP01_SC01|EP01_SC02
+身份=江湖侠客
+标签=江湖侠客
+标签_en=Jianghu Knight
 对白声线=江湖黑话夹杂霸气直球
-[CHAR] 名称=林岳｜名称_en=Lin Yue
+[CHAR] 名称=林岳｜名称_en=Lin Yue｜番位=男主｜适用场=EP01_SC01
+身份=客栈掌柜
+标签=客栈掌柜
+标签_en=Innkeeper
+[CHAR] 名称=林岳_礼服版｜名称_en=Lin Yue Formal｜番位=男主｜适用场=EP01_SC02
+基名=林岳
+标签=客栈掌柜
+[CHAR] 名称=围观百姓｜名称_en=Onlookers｜番位=群演簇｜适用场=EP01_SC01
+标签=无
+标签_en=无
 [CHAR_EXTRACT_END]
 [PROP_EXTRACT_START]
 [PROP] 名称=银打火机｜名称_en=Silver Lighter
@@ -41,7 +53,7 @@ def test_extract_scene_cast_block():
 
 def test_scene_cast_token_names():
     names = scene_cast_token_names(extract_scene_cast_block(_script(), "EP01_SC01"))
-    assert names["characters"] == ["沈青", "林岳"]
+    assert names["characters"] == ["沈青", "林岳", "围观百姓"]
     assert names["props"] == ["银打火机"]
 
 
@@ -56,6 +68,12 @@ def test_build_scene_entity_token_brief():
     assert "【本场对白声线】" in brief
     assert "CHAR:[@沈青]｜对白声线=江湖黑话夹杂霸气直球" in brief
     assert "voice_identity" in brief
+    assert "【本场角色标签】" in brief
+    assert "CHAR:[@沈青]｜标签=江湖侠客｜标签_en=Jianghu Knight｜裸名=沈青｜裸名_en=Shen Qing｜字幕=待落" in brief
+    assert "CHAR:[@林岳]｜标签=客栈掌柜｜标签_en=Innkeeper｜裸名=林岳｜裸名_en=Lin Yue｜字幕=待落" in brief
+    assert "CHAR:[@围观百姓]｜标签=无｜标签_en=无｜裸名=围观百姓｜裸名_en=Onlookers｜字幕=无" in brief
+    assert "中文项目用 裸名+标签" in brief
+    assert "画面打出字幕" in brief
 
 
 def test_build_scene_entity_token_brief_empty():
@@ -64,6 +82,22 @@ def test_build_scene_entity_token_brief_empty():
 
 def test_parse_char_extract_records_keeps_voice_profile():
     records = parse_char_extract_records(_script())
-    assert [item["name"] for item in records] == ["沈青", "林岳"]
+    assert [item["name"] for item in records] == ["沈青", "林岳", "林岳_礼服版", "围观百姓"]
     shen = records[0]["text"]
     assert "对白声线=江湖黑话夹杂霸气直球" in shen
+    assert "标签=江湖侠客" in shen
+
+
+def test_character_intro_tag_later_scene_and_variants():
+    script = _script() + """
+[SCENE_START:EP01_SC02]
+[SCENE_CAST_START:EP01_SC02]
+【本场角色】在场=CHAR:[@沈青]，CHAR:[@林岳_礼服版]｜待入画=无｜群演=无
+【本场道具】在场=无｜待入画=无
+[SCENE_CAST_END:EP01_SC02]
+[SCENE_END:EP01_SC02]
+"""
+    later = build_scene_entity_token_brief(script, "EP01_SC02")
+    assert "CHAR:[@沈青]｜标签=江湖侠客｜标签_en=Jianghu Knight｜裸名=沈青｜裸名_en=Shen Qing｜字幕=已过" in later
+    assert "CHAR:[@林岳_礼服版]｜标签=客栈掌柜｜标签_en=Innkeeper｜裸名=林岳｜裸名_en=Lin Yue｜字幕=无" in later
+    assert "CHAR:[@围观百姓]" not in later

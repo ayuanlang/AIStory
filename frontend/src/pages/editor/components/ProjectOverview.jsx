@@ -3264,7 +3264,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         value={info.music_recommendation}
                         onChange={v => updateField('music_recommendation', v)}
                         multi={true}
-                        placeholder={t('配乐风格、情绪基调、参考曲目/作曲家及主要使用场景', 'Score style, mood, reference tracks/composers, and key usage scenes')}
+                        placeholder={t('最多5件乐器协作、风格、情绪、节奏、音量、质量、混响空间、参考及适用场景', 'Up to 5 cooperating instruments, style, mood, rhythm, volume, timbre, reverb space, references, and usage scenes')}
                     />
                                 </div>
                             </motion.div>

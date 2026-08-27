@@ -342,6 +342,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     tone = get_context_val(["tone", "mood", "atmosphere"])
     lighting = get_context_val(["lighting", "light_style", "light"])
     color_spectrum = get_context_val(["color_spectrum", "colorSpectrum", "色系光谱", "color_temperature_direction"])
+    music_recommendation = get_context_val(["music_recommendation", "score_recommendation", "配乐推荐"])
     character_relationships = get_context_val(["character_relationships"])
     project_notes = get_context_val(["notes"])
     region_culture = get_context_val(["region_culture", "region", "country", "culture", "country_region"])
@@ -408,6 +409,8 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         project_context_lines.append(f"Lighting: {lighting}")
     if color_spectrum:
         project_context_lines.append(f"Color Spectrum: {color_spectrum}")
+    if music_recommendation:
+        project_context_lines.append(f"Music Recommendation: {music_recommendation}")
     if era_setting:
         project_context_lines.append(f"Era / Period (年代): {era_setting}")
     if region_culture:
@@ -466,6 +469,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         "tone": tone,
         "lighting": lighting,
         "color_spectrum": color_spectrum,
+        "music_recommendation": music_recommendation,
         "region_culture": region_culture,
         "era_setting": era_setting,
         "broadcast_security_level": broadcast_security_level,
@@ -1057,6 +1061,9 @@ def _build_shot_prompts(
             f"景别构图与镜头角度：每镜只抄该拍【建置】拍摄键（缺则【取景锁定】）原文进Logic（景别继承/观察角度/构图规划）与Video落地句；合镜逐Beat抄各自锁档。禁止本层另选远近/构图/镜头角度。缺锁定标upstream_missing_framing回流。"
             f"影视语言：焦距/跟焦/帧率/曝光三角/光比/色温/柔硬/色调须可回指Video两光影段与运镜段；美术锚=ENV CN四宫格同方向格，不另起无锚光。"
             f"最终提示词镜头语言：Video五段须中英专业词并列点名（MCU/OTS/Eye-level/50mm Standard/Shallow DOF/Follow Focus/24fps/Key/Fill/Soft Light/Medium Contrast/Cool等），禁止口语冲淡（有光/推近一点/背景糊了/电影感）。"
+            f"P段描述逻辑：用Pn区分不同Beat，且必须按播放时间序一一对应（时序不可变，禁止因卖点/高潮倒排Pn）；同拍内CHAR/PROP按上游【卖点综合】【情绪峰谷综合】【叙事综合】的重点对象/峰谷承载/关键人物优先写到建置句序、主拍与Associated Entities前列，其余在场者仍须全覆盖；每个Pn必备本拍ENV:[…]；角色/道具建置只在P1写一次，建置抄完再写入戏；P2+先环境后入戏，禁止二次全员建置。"
+            f"配乐与音效：上游【配乐】【音效】嵌在对应动作或运镜句上，与锚=/配合=同一瞬间同拍同频；禁止堆到段末或光影段；禁止因品质收束「无背景音乐」删已写入的配乐/音效。"
+            f"光影两段（动态连续光影/焦点、光线连动弧光）不得省略。"
             f"上游放大应答：凡上游指导/峰值放大/低点放大/构图综合/运镜参考等要求下游加强放大的项，覆盖镜头须在已锁构图、运镜、俯仰视角三轴同时给出可核销应答（Logic填上游放大应答，Video有P段落点）；禁止为放大改锁档、禁止运镜参考推近却全程Static。"
             f"情节升格：是否升格认上游节奏(-/~)与情节源；本层只做帧率与时间测算差异化——升格段24fps+Slow Motion+Ramp，秒数按§三.5分项（~放、-只钉节点P）。禁止本层自判触发，禁止60fps冒充升格。"
             f"高级运镜：本场高潮/弧光/卖点揭示须从§四.5例举点名落地（如希区柯克变焦=机位推近同时变焦拉远或反向，主体画幅近似不变、背景透视膨胀或压缩，须写焦距变=）；禁止只写变焦或Push冒充，禁止Crash与Dolly Zoom同相，禁止无锚堆名。"
