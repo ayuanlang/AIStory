@@ -1425,7 +1425,7 @@ async def _run_generate_video(
         if resolved_video_image_size:
             video_provider_options["image_size"] = resolved_video_image_size
 
-        # DdiMatuo supplier contract: images/videos/audios + duration + ratio + mode + resolution.
+        # DdiMatuo supplier contract: upload /v1/assets then POST /v1/videos with references[].asset_id.
         try:
             from app.services.media_service import media_service as _ddi_media_svc
 

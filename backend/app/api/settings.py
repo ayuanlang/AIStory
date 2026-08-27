@@ -1923,7 +1923,7 @@ def _normalize_system_provider_name(provider: Any) -> str:
         "虾客漫sd2",
     }:
         return "shishikeji"
-    if raw in {"ddimatuo", "ddi matuo", "ddimatuo.top"}:
+    if raw in {"ddimatuo", "ddi matuo", "ddimatuo.top", "aiyrx", "aiyrx.xyz", "api.aiyrx.xyz"}:
         return "ddimatuo"
     if raw in {"dubai", "dubai3000", "dubai3000.xyz", "星耀"}:
         return "dubai"

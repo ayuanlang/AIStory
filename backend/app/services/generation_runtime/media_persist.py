@@ -926,6 +926,7 @@ _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
     re.compile(r"(^|.+\.)volces\.com$", re.IGNORECASE),
     # DdiMatuo media requires Authorization and is not durable for browsers.
     re.compile(r"(^|.+\.)ddimatuo\.top$", re.IGNORECASE),
+    re.compile(r"(^|.+\.)aiyrx\.xyz$", re.IGNORECASE),
     # Dubai / 星耀 /content downloads require the same API Key and expire.
     re.compile(r"(^|.+\.)dubai3000\.xyz$", re.IGNORECASE),
     re.compile(r"^64-81-112-180\.sslip\.io$", re.IGNORECASE),

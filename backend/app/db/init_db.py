@@ -2910,13 +2910,12 @@ def init_system_api_settings(db):
             cfg["watermark"] = False
             cfg["auto_retry_busy"] = True
             cfg["mode"] = str(cfg.get("mode") or "omni_reference")
-            cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos/generations"
+            cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos"
             cfg["query_endpoint"] = f"{ddimatuo_base_url}/v1/videos"
             cfg["notes"] = (
-                "DdiMatuo poll-only. POST /v1/videos/generations; model=SD_2.0; "
-                "mode=omni_reference|first_last; duration 4-15; ratio; "
-                "images/videos/audios; resolution 720P|1080P; watermark=false; "
-                "Idempotency-Key reuse on timeout."
+                "DdiMatuo poll-only. Upload POST /v1/assets then create POST /v1/videos "
+                "with references[].asset_id; model from system API; duration_seconds 4-15; "
+                "size from ratio×resolution; channel=auto; poll GET /v1/videos/{id}."
             )
             row.config = cfg
             ddi_model_migrated += 1
@@ -2945,7 +2944,7 @@ def init_system_api_settings(db):
                 "provider_api_key_strategy": "random",
                 "poll_interval_seconds": 5,
                 "poll_timeout_seconds": 600,
-                "endpoint": f"{ddimatuo_base_url}/v1/videos/generations",
+                "endpoint": f"{ddimatuo_base_url}/v1/videos",
                 "query_endpoint": f"{ddimatuo_base_url}/v1/videos",
                 "poll_only": True,
                 "auto_retry_busy": True,
@@ -2955,10 +2954,9 @@ def init_system_api_settings(db):
                 "aspect_ratios": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
                 "durations_seconds": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
                 "notes": (
-                    "DdiMatuo poll-only. POST /v1/videos/generations; model=SD_2.0; "
-                    "mode=omni_reference|first_last; duration 4-15; ratio; "
-                    "images/videos/audios; resolution 720P|1080P; watermark=false; "
-                    "Idempotency-Key reuse on timeout."
+                    "DdiMatuo poll-only. Upload POST /v1/assets then create POST /v1/videos "
+                    "with references[].asset_id; duration_seconds 4-15; size from ratio×resolution; "
+                    "channel=auto; poll GET /v1/videos/{id}."
                 ),
             },
             is_active=False,
@@ -2966,7 +2964,7 @@ def init_system_api_settings(db):
         existing_ddi_models.add(key)
         ddi_added += 1
 
-    # Force existing ddimatuo rows onto generations endpoint + 1080P default.
+    # Force existing ddimatuo rows onto /v1/videos + 1080P default.
     try:
         ddi_cfg_updated = 0
         for row in existing_ddi_rows:
@@ -2976,11 +2974,16 @@ def init_system_api_settings(db):
             cfg = dict(cfg)
             changed = False
             endpoint = str(cfg.get("endpoint") or "").strip().rstrip("/")
-            if not endpoint or endpoint.lower().endswith("/v1/videos"):
-                cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos/generations"
+            if not endpoint or endpoint.lower().endswith("/v1/videos/generations"):
+                cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos"
                 changed = True
-            elif "/v1/videos/generations" not in endpoint.lower() and "ddimatuo" in endpoint.lower():
-                cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos/generations"
+            elif "/v1/videos/generations" in endpoint.lower():
+                cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos"
+                changed = True
+            elif endpoint.lower().endswith("/v1/videos"):
+                pass
+            elif "ddimatuo" in endpoint.lower() or "aiyrx" in endpoint.lower():
+                cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos"
                 changed = True
             query_ep = str(cfg.get("query_endpoint") or "").strip().rstrip("/")
             if not query_ep or query_ep.lower().endswith("/generations"):
@@ -3001,7 +3004,7 @@ def init_system_api_settings(db):
                 ddi_cfg_updated += 1
         if ddi_cfg_updated > 0:
             db.commit()
-            logger.info("Updated %s ddimatuo rows to generations endpoint / 1080P", ddi_cfg_updated)
+            logger.info("Updated %s ddimatuo rows to /v1/videos endpoint / 1080P", ddi_cfg_updated)
     except Exception as ddi_res_err:
         logger.warning("Failed to backfill ddimatuo endpoint/resolution: %s", ddi_res_err)
 

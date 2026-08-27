@@ -814,7 +814,7 @@ class MediaGenerationService:
             "虾客漫sd2",
         }:
             return "shishikeji"
-        if normalized in {"ddimatuo", "ddi matuo", "ddimatuo.top"}:
+        if normalized in {"ddimatuo", "ddi matuo", "ddimatuo.top", "aiyrx", "aiyrx.xyz", "api.aiyrx.xyz"}:
             return "ddimatuo"
         if normalized in {"dubai", "dubai3000", "dubai3000.xyz", "星耀"}:
             return "dubai"
@@ -3077,6 +3077,7 @@ class MediaGenerationService:
         is_ddimatuo = (
             "ddimatuo" in provider_l
             or "ddimatuo.top" in str(endpoint or base or "").lower()
+            or "aiyrx.xyz" in str(endpoint or base or "").lower()
         )
         is_dubai = (
             "dubai" in provider_l
@@ -3089,13 +3090,8 @@ class MediaGenerationService:
             raw_payload: Dict[str, Any] = {}
 
             if is_ddimatuo:
-                root = (base or "https://api.ddimatuo.top").rstrip("/")
-                if not endpoint:
-                    endpoint = f"{root}/v1/videos" if not root.rstrip("/").lower().endswith("/v1/videos") else root
-                elif endpoint.startswith("/"):
-                    endpoint = f"{root}{endpoint}"
-                elif "ddimatuo.top" in endpoint.lower() and not endpoint.rstrip("/").lower().endswith("/v1/videos") and "/v1/videos/" not in endpoint.lower():
-                    endpoint = f"{endpoint.rstrip('/')}/v1/videos"
+                root = self._ddimatuo_api_root(base or "https://api.ddimatuo.top", endpoint)
+                endpoint = f"{root}/v1/videos"
                 headers = {
                     "Authorization": f"Bearer {stable_key}",
                     "Accept": "application/json",
@@ -5510,6 +5506,9 @@ class MediaGenerationService:
             "ddimatuo": "ddimatuo",
             "ddi matuo": "ddimatuo",
             "ddimatuo.top": "ddimatuo",
+            "aiyrx": "ddimatuo",
+            "aiyrx.xyz": "ddimatuo",
+            "api.aiyrx.xyz": "ddimatuo",
             "dubai": "dubai",
             "dubai3000": "dubai",
             "dubai3000.xyz": "dubai",
@@ -12697,6 +12696,264 @@ class MediaGenerationService:
             },
         }
 
+    def _ddimatuo_api_root(self, base_url: Any = None, endpoint: Any = None) -> str:
+        """Host root for DdiMatuo / aiyrx: strips /v1/videos[/generations] /v1/assets /v1."""
+        candidates = [str(endpoint or "").strip(), str(base_url or "").strip()]
+        for raw in candidates:
+            if not raw:
+                continue
+            text = raw.rstrip("/")
+            if text.startswith("/"):
+                continue
+            lower = text.lower()
+            for suffix in ("/v1/videos/generations", "/v1/videos", "/v1/assets", "/v1"):
+                if lower.endswith(suffix):
+                    text = text[: -len(suffix)].rstrip("/")
+                    lower = text.lower()
+                    break
+            if text.lower().startswith(("http://", "https://")):
+                return text
+        return "https://api.ddimatuo.top"
+
+    def _ddimatuo_extract_asset_id(self, data: Any) -> str:
+        if not isinstance(data, dict):
+            return ""
+        for key in ("id", "asset_id", "assetId"):
+            val = str(data.get(key) or "").strip()
+            if val:
+                return val
+        inner = data.get("data")
+        if isinstance(inner, dict):
+            for key in ("id", "asset_id", "assetId"):
+                val = str(inner.get(key) or "").strip()
+                if val:
+                    return val
+        asset = data.get("asset")
+        if isinstance(asset, dict):
+            for key in ("id", "asset_id", "assetId"):
+                val = str(asset.get(key) or "").strip()
+                if val:
+                    return val
+        return ""
+
+    def _ddimatuo_resolve_output_size(
+        self,
+        *,
+        ratio: str,
+        resolution: str,
+        model: str = "",
+        width: Any = None,
+        height: Any = None,
+        explicit_size: Any = None,
+    ) -> str:
+        size_text = str(explicit_size or "").strip().lower().replace(" ", "")
+        if re.fullmatch(r"\d{2,5}x\d{2,5}", size_text or ""):
+            return size_text
+        try:
+            w = int(width) if width is not None else 0
+            h = int(height) if height is not None else 0
+            if w > 0 and h > 0:
+                return f"{w}x{h}"
+        except Exception:
+            pass
+        try:
+            from app.services.billing_pricing import resolve_seedance_pixel_dims
+
+            dims = resolve_seedance_pixel_dims(
+                aspect_ratio=ratio,
+                resolution=resolution,
+                model=model,
+                provider="ddimatuo",
+            )
+            if dims:
+                return f"{int(dims[0])}x{int(dims[1])}"
+        except Exception:
+            pass
+        res = str(resolution or "").strip().upper().replace(" ", "")
+        if res in {"720", "720P"}:
+            mapping = {
+                "16:9": "1280x720",
+                "9:16": "720x1280",
+                "1:1": "960x960",
+                "4:3": "1112x834",
+                "3:4": "834x1112",
+                "21:9": "1470x630",
+            }
+            return mapping.get(str(ratio or "16:9").strip(), "1280x720")
+        mapping = {
+            "16:9": "1920x1080",
+            "9:16": "1080x1920",
+            "1:1": "1440x1440",
+            "4:3": "1664x1248",
+            "3:4": "1248x1664",
+            "21:9": "2206x946",
+        }
+        return mapping.get(str(ratio or "16:9").strip(), "1920x1080")
+
+    def _ddimatuo_load_asset_file(
+        self,
+        raw: Any,
+        *,
+        kind: str,
+        fallback_name: str,
+    ) -> Optional[Tuple[str, bytes, str]]:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        kind_l = str(kind or "image").strip().lower()
+        default_mime = {
+            "image": "image/png",
+            "video": "video/mp4",
+            "audio": "audio/mpeg",
+        }.get(kind_l, "application/octet-stream")
+
+        def _from_data_uri(value: str) -> Optional[Tuple[str, bytes, str]]:
+            if not value.lower().startswith("data:") or ";base64," not in value[:96]:
+                return None
+            idx = value.find(";base64,")
+            mime = value[5:idx].strip().lower() or default_mime
+            try:
+                binary = base64.b64decode(value[idx + len(";base64,"):].strip())
+            except Exception:
+                return None
+            if not binary:
+                return None
+            ext = mimetypes.guess_extension(mime) or ".bin"
+            if ext == ".jpe":
+                ext = ".jpg"
+            return (f"{fallback_name}{ext}", binary, mime)
+
+        def _from_path(path: str) -> Optional[Tuple[str, bytes, str]]:
+            if not path or not os.path.isfile(path):
+                return None
+            try:
+                with open(path, "rb") as handle:
+                    binary = handle.read()
+            except Exception:
+                return None
+            if not binary:
+                return None
+            name = os.path.basename(path) or fallback_name
+            mime = mimetypes.guess_type(name)[0] or default_mime
+            return (name, binary, mime)
+
+        def _from_http(url: str) -> Optional[Tuple[str, bytes, str]]:
+            http_ref = str(url or "").strip()
+            if not http_ref.lower().startswith(("http://", "https://")):
+                return None
+            try:
+                if oss_storage_service.is_managed_url(http_ref):
+                    http_ref = str(oss_storage_service.refresh_url(http_ref) or http_ref)
+            except Exception:
+                pass
+
+            def _get(use_proxy: bool = True):
+                kwargs = {"timeout": 60, "verify": False}
+                if not use_proxy:
+                    kwargs["proxies"] = {"http": None, "https": None}
+                return requests.get(http_ref, **kwargs)
+
+            resp = None
+            try:
+                resp = _get(True)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                try:
+                    resp = _get(False)
+                except Exception:
+                    return None
+            except Exception:
+                return None
+            if resp is None or getattr(resp, "status_code", None) != 200 or not resp.content:
+                return None
+            mime = str(resp.headers.get("Content-Type") or "").split(";")[0].strip().lower() or default_mime
+            if mime in {"application/octet-stream", "binary/octet-stream"}:
+                guessed = mimetypes.guess_type(http_ref.split("?")[0])[0]
+                mime = guessed or default_mime
+            path_name = os.path.basename(urllib.parse.urlparse(http_ref).path) or fallback_name
+            if "." not in path_name:
+                ext = mimetypes.guess_extension(mime) or ".bin"
+                if ext == ".jpe":
+                    ext = ".jpg"
+                path_name = f"{fallback_name}{ext}"
+            return (path_name, resp.content, mime)
+
+        parsed = _from_data_uri(text) or _from_path(text) or _from_http(text)
+        if parsed:
+            return parsed
+        try:
+            resolved = self._resolve_ref_for_api(
+                text,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+            )
+        except Exception:
+            resolved = None
+        resolved_text = str(resolved or "").strip()
+        if resolved_text and resolved_text != text:
+            return _from_data_uri(resolved_text) or _from_path(resolved_text) or _from_http(resolved_text)
+        return None
+
+    def _ddimatuo_upload_asset(
+        self,
+        *,
+        assets_url: str,
+        api_key: str,
+        kind: str,
+        filename: str,
+        binary: bytes,
+        mime: str,
+        idempotency_key: str,
+    ) -> Tuple[Optional[str], Dict[str, Any], str]:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "Idempotency-Key": str(idempotency_key or uuid.uuid4()).strip(),
+        }
+        files = {"file": (filename or "asset.bin", bytes(binary), mime or "application/octet-stream")}
+        data = {"kind": str(kind or "image").strip().lower()}
+
+        def _post(use_proxy: bool = True):
+            kwargs = {
+                "headers": headers,
+                "data": data,
+                "files": files,
+                "timeout": 120,
+                "verify": False,
+            }
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.post(assets_url, **kwargs)
+
+        resp = None
+        try:
+            resp = _post(True)
+        except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+            try:
+                resp = _post(False)
+            except Exception as exc:
+                return None, {}, str(exc)
+        except Exception as exc:
+            return None, {}, str(exc)
+
+        payload: Dict[str, Any] = {}
+        try:
+            parsed = resp.json() if resp is not None and resp.content else {}
+            payload = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            payload = {}
+        asset_id = self._ddimatuo_extract_asset_id(payload)
+        if resp is not None and getattr(resp, "status_code", None) in {200, 201} and asset_id:
+            return asset_id, payload, ""
+        err = str(
+            (payload.get("error") or {}).get("message")
+            if isinstance(payload.get("error"), dict)
+            else payload.get("error") or payload.get("message") or (resp.text if resp is not None else "") or "asset_upload_failed"
+        ).strip()
+        http_status = getattr(resp, "status_code", None) if resp is not None else None
+        if http_status:
+            err = f"HTTP {http_status}: {err}" if err else f"HTTP {http_status}"
+        return None, payload, err or "asset_upload_failed"
+
     async def _handle_ddimatuo_generation(
         self,
         gen_type,
@@ -12709,7 +12966,7 @@ class MediaGenerationService:
         negative_prompt: Optional[str] = None,
         keyframes: Optional[List[str]] = None,
     ):
-        """DdiMatuo video API: submit then poll only (no upstream webhook)."""
+        """DdiMatuo Seedance 2: upload refs to /v1/assets, then create /v1/videos with asset_id."""
         if str(gen_type or "").strip().lower() != "video":
             return {"error": "DdiMatuo currently supports video generation only", "submit_failed": True}
 
@@ -12726,22 +12983,21 @@ class MediaGenerationService:
             or tool_conf.get("base_url")
             or "https://api.ddimatuo.top"
         ).strip().rstrip("/")
-        # Create: POST /v1/videos/generations ; poll/cancel: /v1/videos/{task_id}[ /cancel ]
-        root_url = base_url
-        for _suffix in ("/v1/videos/generations", "/v1/videos"):
-            if root_url.lower().endswith(_suffix):
-                root_url = root_url[: -len(_suffix)].rstrip("/")
-                break
-        submit_url = str(
-            tool_conf.get("endpoint") or f"{root_url}/v1/videos/generations"
-        ).strip().rstrip("/")
-        if submit_url.lower().endswith("/v1/videos"):
-            submit_url = f"{submit_url}/generations"
-        elif "/v1/videos/generations" not in submit_url.lower():
-            if submit_url.lower().endswith("/v1"):
-                submit_url = f"{submit_url}/videos/generations"
-            else:
-                submit_url = f"{root_url}/v1/videos/generations"
+        root_url = self._ddimatuo_api_root(
+            base_url,
+            tool_conf.get("endpoint") or config.get("endpoint"),
+        )
+        submit_url = str(tool_conf.get("endpoint") or f"{root_url}/v1/videos").strip().rstrip("/")
+        if submit_url.startswith("/"):
+            submit_url = f"{root_url}{submit_url}"
+        submit_lower = submit_url.lower()
+        if submit_lower.endswith("/v1/videos/generations"):
+            submit_url = submit_url[: -len("/generations")].rstrip("/")
+        elif submit_lower.endswith("/v1"):
+            submit_url = f"{submit_url}/videos"
+        elif "/v1/videos" not in submit_lower:
+            submit_url = f"{root_url}/v1/videos"
+        assets_url = f"{root_url}/v1/assets"
         query_root = str(
             tool_conf.get("query_endpoint") or tool_conf.get("poll_endpoint") or f"{root_url}/v1/videos"
         ).strip()
@@ -12756,8 +13012,14 @@ class MediaGenerationService:
                 query_endpoint_base = f"{root_url}/v1/videos"
             poll_template = f"{query_endpoint_base}/{{task_id}}"
 
-        # Contract: model is fixed as SD_2.0.
-        model = "SD_2.0"
+        model = str(
+            config.get("model")
+            or tool_conf.get("model")
+            or config.get("base_model")
+            or tool_conf.get("base_model")
+            or "SD_2.0"
+        ).strip() or "SD_2.0"
+        channel = str(tool_conf.get("channel") or config.get("channel") or "auto").strip() or "auto"
 
         prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
         prompt_text = str(prompt_text or "").strip()
@@ -12833,23 +13095,22 @@ class MediaGenerationService:
         if normalized_ratio not in set(ddimatuo_ratios):
             normalized_ratio = "16:9"
 
-        def _https_public_only(urls: List[str]) -> List[str]:
+        def _collect_raw_list(raw_urls: Any, *, limit: int) -> List[str]:
+            items: List[str] = []
+            if isinstance(raw_urls, list):
+                items = [str(item).strip() for item in raw_urls if str(item or "").strip()]
+            elif str(raw_urls or "").strip():
+                items = [str(raw_urls).strip()]
             out: List[str] = []
-            for item in urls:
-                text = str(item or "").strip()
-                if not text.lower().startswith("https://"):
+            seen: set = set()
+            for item in items:
+                if item in seen:
                     continue
-                if self._is_public_http_url(text) and text not in out:
-                    out.append(text)
+                seen.add(item)
+                out.append(item)
+                if len(out) >= max(0, int(limit)):
+                    break
             return out
-
-        def _resolve_https_list(raw_urls: Any, *, limit: int) -> List[str]:
-            resolved = self._resolve_ref_list_for_api(
-                raw_urls,
-                force_data_uri_for_local=True,
-                prefer_public_upload_url=True,
-            )
-            return _https_public_only([u for u in (resolved or []) if u])[: max(0, int(limit))]
 
         # Contract: mode is omni_reference | first_last (native_reference = omni alias).
         raw_mode = str(
@@ -12870,7 +13131,6 @@ class MediaGenerationService:
         if raw_mode in first_last_aliases:
             mode = "first_last"
         else:
-            # native_reference / unset / entity_refs → omni_reference.
             mode = "omni_reference"
 
         keyframe_urls = []
@@ -12886,8 +13146,7 @@ class MediaGenerationService:
         audio_refs: List[str] = []
 
         if mode == "first_last":
-            # Exactly two images: images[0]=first, images[1]=last; no videos/audios.
-            first_candidates = _resolve_https_list(
+            first_candidates = _collect_raw_list(
                 self._collect_video_reference_image_urls(
                     ref_image,
                     tool_conf,
@@ -12899,24 +13158,24 @@ class MediaGenerationService:
                 limit=9,
             )
             if keyframe_urls:
-                kf_resolved = _resolve_https_list(keyframe_urls, limit=2)
+                kf_resolved = _collect_raw_list(keyframe_urls, limit=2)
                 if len(kf_resolved) >= 2:
                     first_candidates = [kf_resolved[0]] + [
                         u for u in first_candidates if u != kf_resolved[0]
                     ]
             first_url = first_candidates[0] if first_candidates else ""
-            last_candidates = _resolve_https_list(
+            last_candidates = _collect_raw_list(
                 [last_frame_url] if last_frame_url else [],
                 limit=1,
             )
             if not last_candidates and len(keyframe_urls) >= 2:
-                last_candidates = _resolve_https_list([keyframe_urls[1]], limit=1)
+                last_candidates = _collect_raw_list([keyframe_urls[1]], limit=1)
             if not last_candidates and len(first_candidates) >= 2:
                 last_candidates = [first_candidates[1]]
             last_url = last_candidates[0] if last_candidates else ""
             if not first_url or not last_url:
                 return {
-                    "error": "DdiMatuo first_last mode requires exactly two public HTTPS images (first + last)",
+                    "error": "DdiMatuo first_last mode requires exactly two reference images (first + last)",
                     "submit_failed": True,
                 }
             if first_url == last_url:
@@ -12928,8 +13187,7 @@ class MediaGenerationService:
             video_refs = []
             audio_refs = []
         else:
-            # omni_reference: ≥1 image or video; may mix images/videos/audios; audio-only rejected.
-            image_refs = _resolve_https_list(
+            image_refs = _collect_raw_list(
                 self._collect_video_reference_image_urls(
                     ref_image,
                     tool_conf,
@@ -12940,7 +13198,7 @@ class MediaGenerationService:
                 ),
                 limit=9,
             )
-            video_refs = _resolve_https_list(
+            video_refs = _collect_raw_list(
                 self._collect_video_reference_video_urls(
                     tool_conf,
                     extra_sources=config,
@@ -12958,15 +13216,10 @@ class MediaGenerationService:
                 or config.get("reference_audio_urls")
                 or []
             )
-            audio_refs = _resolve_https_list(audio_raw, limit=3)
-            if not image_refs and not video_refs:
-                if audio_refs:
-                    return {
-                        "error": "DdiMatuo omni_reference rejects audio-only input; need ≥1 image or video",
-                        "submit_failed": True,
-                    }
+            audio_refs = _collect_raw_list(audio_raw, limit=3)
+            if not image_refs and not video_refs and not audio_refs:
                 return {
-                    "error": "DdiMatuo omni_reference requires at least one public HTTPS image or video",
+                    "error": "DdiMatuo requires at least one reference image, video, or audio",
                     "submit_failed": True,
                 }
 
@@ -12998,15 +13251,12 @@ class MediaGenerationService:
             audios=len(audio_refs),
         )
 
-        # auto_retry_busy default true; useful for busy code 28023007.
         auto_retry_busy = tool_conf.get("auto_retry_busy")
         if auto_retry_busy is None:
             auto_retry_busy = True
         else:
             auto_retry_busy = bool(auto_retry_busy)
 
-        # Contract: resolution is 720P or 1080P (case-insensitive). Default 1080P.
-        # Ignore project/request video_resolution injection; only explicit quality may select 720P.
         def _normalize_ddimatuo_resolution(value: Any) -> Optional[str]:
             text = str(value or "").strip().lower().replace(" ", "")
             if not text:
@@ -13017,24 +13267,114 @@ class MediaGenerationService:
                 return "1080P"
             return None
 
-        resolution = _normalize_ddimatuo_resolution(tool_conf.get("quality")) or "1080P"
+        resolution = (
+            _normalize_ddimatuo_resolution(tool_conf.get("quality"))
+            or _normalize_ddimatuo_resolution(tool_conf.get("resolution"))
+            or "1080P"
+        )
         tool_conf["resolution"] = resolution
         tool_conf.pop("video_resolution", None)
+        output_size = self._ddimatuo_resolve_output_size(
+            ratio=normalized_ratio,
+            resolution=resolution,
+            model=model,
+            width=tool_conf.get("width") or config.get("width"),
+            height=tool_conf.get("height") or config.get("height"),
+            explicit_size=tool_conf.get("size") or config.get("size"),
+        )
 
-        # Match official curl body (always include images/videos/audios arrays).
+        pending_assets: List[Dict[str, Any]] = []
+        for idx, raw_ref in enumerate(image_refs, start=1):
+            role = "first_frame" if mode == "first_last" and idx == 1 else (
+                "last_frame" if mode == "first_last" and idx == 2 else "character"
+            )
+            pending_assets.append({
+                "kind": "image",
+                "raw": raw_ref,
+                "id": "first" if role == "first_frame" else ("last" if role == "last_frame" else f"image{idx}"),
+                "role": role,
+                "label": "首帧" if role == "first_frame" else ("尾帧" if role == "last_frame" else f"参考图{idx}"),
+                "instruction": (
+                    "作为视频首帧" if role == "first_frame"
+                    else ("作为视频尾帧" if role == "last_frame" else "保持面部和服装一致")
+                ),
+                "fallback_name": f"image{idx}",
+            })
+        for idx, raw_ref in enumerate(video_refs, start=1):
+            pending_assets.append({
+                "kind": "video",
+                "raw": raw_ref,
+                "id": f"video{idx}",
+                "role": "video",
+                "label": f"参考视频{idx}",
+                "instruction": "保持运动与主体一致",
+                "fallback_name": f"video{idx}",
+            })
+        for idx, raw_ref in enumerate(audio_refs, start=1):
+            pending_assets.append({
+                "kind": "audio",
+                "raw": raw_ref,
+                "id": f"audio{idx}",
+                "role": "audio",
+                "label": f"参考音频{idx}",
+                "instruction": "按参考音频节奏与音色",
+                "fallback_name": f"audio{idx}",
+            })
+
+        references: List[Dict[str, Any]] = []
+        uploaded_asset_ids: List[str] = []
+        for item in pending_assets:
+            loaded = self._ddimatuo_load_asset_file(
+                item["raw"],
+                kind=item["kind"],
+                fallback_name=str(item["fallback_name"]),
+            )
+            if not loaded:
+                return {
+                    "error": f"DdiMatuo failed to load {item['kind']} reference for upload",
+                    "submit_failed": True,
+                    "details": {"ref_preview": str(item.get("raw") or "")[:240]},
+                }
+            filename, binary, mime = loaded
+            asset_id, upload_raw, upload_err = await asyncio.to_thread(
+                self._ddimatuo_upload_asset,
+                assets_url=assets_url,
+                api_key=api_key,
+                kind=str(item["kind"]),
+                filename=filename,
+                binary=binary,
+                mime=mime,
+                idempotency_key=f"asset-{uuid.uuid4().hex}",
+            )
+            if not asset_id:
+                logger.warning(
+                    "DdiMatuo asset upload failed | kind=%s error=%s raw=%s",
+                    item["kind"],
+                    upload_err,
+                    _format_payload_for_log(upload_raw) if upload_raw else "",
+                )
+                return {
+                    "error": f"DdiMatuo asset upload failed: {upload_err}",
+                    "submit_failed": True,
+                    "details": upload_raw or upload_err,
+                }
+            uploaded_asset_ids.append(asset_id)
+            references.append({
+                "id": str(item["id"]),
+                "asset_id": asset_id,
+                "role": str(item["role"]),
+                "label": str(item["label"]),
+                "instruction": str(item["instruction"]),
+            })
+
         payload: Dict[str, Any] = {
             "model": model,
+            "channel": channel,
             "prompt": prompt_text,
-            "mode": mode,
-            "images": list(image_refs),
-            "videos": list(video_refs),
-            "audios": list(audio_refs),
-            "ratio": normalized_ratio,
-            "duration": int(duration_in),
-            "resolution": resolution,
-            # watermark: only false allowed (true rejected); curl always sends false.
-            "watermark": False,
-            "auto_retry_busy": bool(auto_retry_busy),
+            "duration_seconds": int(duration_in),
+            "seconds": int(duration_in),
+            "size": output_size,
+            "references": list(references),
         }
 
         poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
@@ -13056,16 +13396,22 @@ class MediaGenerationService:
             "model": model,
             "prompt": prompt_text,
             "submit_url": submit_url,
+            "assets_url": assets_url,
             "query_endpoint": query_endpoint_base,
             "poll_only": True,
             "mode": mode,
+            "channel": channel,
             "duration": int(duration_in),
+            "duration_seconds": int(duration_in),
             "ratio": normalized_ratio,
             "resolution": resolution,
+            "size": output_size,
             "auto_retry_busy": bool(auto_retry_busy),
             "image_count": len(image_refs),
             "video_count": len(video_refs),
             "audio_count": len(audio_refs),
+            "asset_ids": list(uploaded_asset_ids),
+            "references": list(references),
         }
 
         async def _emit_ddimatuo_combined_payload(**extra: Any) -> None:
@@ -13087,6 +13433,7 @@ class MediaGenerationService:
                 "method": "POST",
                 "url": submit_url,
                 "submit_url": submit_url,
+                "assets_url": assets_url,
                 "query_endpoint": query_endpoint_base,
                 "payload": dict(payload),
                 **extra,
@@ -13416,11 +13763,11 @@ class MediaGenerationService:
 
         max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
         logger.info(
-            "DdiMatuo poll-only generation started | task_id=%s model=%s duration=%s ratio=%s resolution=%s poll_interval=%ss poll_timeout=%ss max_attempts=%s poll_url=%s",
+            "DdiMatuo poll-only generation started | task_id=%s model=%s duration=%s size=%s resolution=%s poll_interval=%ss poll_timeout=%ss max_attempts=%s poll_url=%s",
             task_id,
             model,
             duration_in,
-            normalized_ratio,
+            output_size,
             resolution,
             poll_interval_seconds,
             poll_timeout_seconds,
@@ -20314,7 +20661,7 @@ class MediaGenerationService:
         text = str(url or "").strip().lower()
         if not text:
             return False
-        return "ddimatuo.top" in text
+        return "ddimatuo.top" in text or "aiyrx.xyz" in text
 
     def _looks_like_dubai_media_url(self, url: Any) -> bool:
         text = str(url or "").strip().lower()
