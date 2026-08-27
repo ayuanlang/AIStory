@@ -2869,8 +2869,8 @@ const ANALYSIS_STAGE_LABELS = {
     combat_opt: { zh: '武戏优化（含特效与仙攻）', en: 'Action Refinement (VFX + Xian)' },
     framing_opt: { zh: '场景现场编排', en: 'Floor Staging' },
     staging_opt: { zh: '建置入戏', en: 'Staging' },
-    extract_assets: { zh: '资产清单（已取消）', en: 'Asset Inventory (Retired)' },
-    scene_beats: { zh: '场景编排（已取消）', en: 'Scene Orchestration (Retired)' },
+    extract_assets: { zh: '资产清单', en: 'Asset Inventory' },
+    scene_beats: { zh: '场景编排', en: 'Scene Orchestration' },
     assets_gen: { zh: '资产设计（并行）', en: 'Asset Design (Parallel)' },
     assets_gen_character: { zh: '角色生成', en: 'Character Gen' },
     assets_gen_prop: { zh: '道具生成', en: 'Prop Gen' },
@@ -2882,6 +2882,52 @@ const getAnalysisStageLabel = (stepKey, tFn) => {
     const meta = ANALYSIS_STAGE_LABELS[String(stepKey || '').trim()] || null;
     if (!meta) return String(stepKey || '');
     return typeof tFn === 'function' ? tFn(meta.zh, meta.en) : meta.zh;
+};
+
+const RETIRED_DIAGNOSTIC_PHASES = new Set([
+    'extract_assets',
+    'assets_extraction',
+    'scene_beats',
+    'scene_markdown',
+    'subject_index',
+]);
+
+const isRetiredDiagnosticContent = (phase, message = '') => {
+    const key = String(phase || '').trim().toLowerCase();
+    if (RETIRED_DIAGNOSTIC_PHASES.has(key)) return true;
+    return /资产清单（已取消）|场景编排（已取消）|资产清单已取消|场景编排已取消|Asset Inventory \(Retired\)|Scene Orchestration \(Retired\)|asset inventory is retired|scene orchestration is retired/i.test(
+        String(message || '')
+    );
+};
+
+const formatDiagnosticSceneNo = (sceneId, sceneOrder) => {
+    const id = String(sceneId || '').trim();
+    const scMatch = /SC\d+[A-Z]?/i.exec(id);
+    if (scMatch) return String(scMatch[0] || '').toUpperCase();
+    const order = Number(sceneOrder) || deriveSceneOrderFromSceneId(id);
+    if (Number.isFinite(order) && order > 0) return String(order);
+    return id;
+};
+
+const cleanDiagnosticSceneName = (sceneId, rawName) => {
+    const id = String(sceneId || '').trim();
+    let name = String(rawName || '').trim();
+    if (!name) return '';
+    if (id && (name === id || name.startsWith(`${id} · `) || name.startsWith(`${id} ·`))) {
+        name = name.slice(id.length).replace(/^\s*[·.]\s*/, '').trim();
+    }
+    const sceneNo = formatDiagnosticSceneNo(id);
+    if (sceneNo && (name === sceneNo || name.startsWith(`${sceneNo} · `))) {
+        name = name.slice(sceneNo.length).replace(/^\s*[·.]\s*/, '').trim();
+    }
+    return name;
+};
+
+const formatDiagnosticSceneLabel = (sceneId, sceneOrder, sceneName) => {
+    const sceneNo = formatDiagnosticSceneNo(sceneId, sceneOrder);
+    const name = cleanDiagnosticSceneName(sceneId, sceneName);
+    if (sceneNo && name) return `${sceneNo} · ${name}`;
+    return name || sceneNo || String(sceneId || '').trim();
 };
 
 const SCENE_MATRIX_CHAIN = ['drama_opt', 'combat_opt', 'framing_opt', 'staging_opt', 'storyboard'];
@@ -3812,6 +3858,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [assetLibrarySyncing, setAssetLibrarySyncing] = useState(false);
     const assetLibrarySyncSeqRef = useRef(0);
     const [diagnosticsEpisodeSceneCount, setDiagnosticsEpisodeSceneCount] = useState(0);
+    const [diagnosticsEpisodeScenes, setDiagnosticsEpisodeScenes] = useState([]);
     const [diagnosticsEpisodeShotStats, setDiagnosticsEpisodeShotStats] = useState({
         shotCount: 0,
         sceneCountWithShots: 0,
@@ -5169,7 +5216,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             })
             .filter((item) => item.message && !historyMessages.has(item.message));
         return [...historyItems, ...detailItems]
-            .filter((item) => item.message)
+            .filter((item) => item.message && !isRetiredDiagnosticContent(item.phase, item.message))
             .sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0));
     }, [analysisDetailLogs, analysisFlowStatusHistory, toBusinessHistoryMessage]);
 
@@ -12193,15 +12240,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const epoch = diagnosticsEpochRef.current;
         const loadEpisodeSceneCount = async () => {
             if (!activeEpisode?.id) {
-                if (mounted && epoch === diagnosticsEpochRef.current) setDiagnosticsEpisodeSceneCount(0);
+                if (mounted && epoch === diagnosticsEpochRef.current) {
+                    setDiagnosticsEpisodeSceneCount(0);
+                    setDiagnosticsEpisodeScenes([]);
+                }
                 return;
             }
             try {
                 const scenes = await fetchScenes(activeEpisode.id);
                 if (!mounted || epoch !== diagnosticsEpochRef.current) return;
-                setDiagnosticsEpisodeSceneCount(Array.isArray(scenes) ? scenes.length : 0);
+                const rows = Array.isArray(scenes) ? scenes : [];
+                setDiagnosticsEpisodeSceneCount(rows.length);
+                setDiagnosticsEpisodeScenes(rows);
             } catch (_) {
-                if (mounted && epoch === diagnosticsEpochRef.current) setDiagnosticsEpisodeSceneCount(0);
+                if (mounted && epoch === diagnosticsEpochRef.current) {
+                    setDiagnosticsEpisodeSceneCount(0);
+                    setDiagnosticsEpisodeScenes([]);
+                }
             }
         };
         loadEpisodeSceneCount();
@@ -14493,6 +14548,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setDiagnosticsPipelineNodes([]);
         setDiagnosticsSceneUnits([]);
         setDiagnosticsEpisodeSceneCount(0);
+        setDiagnosticsEpisodeScenes([]);
         setDiagnosticsEpisodeShotStats({ shotCount: 0, sceneCountWithShots: 0 });
         setDiagnosticsRefreshNonce((value) => value + 1);
     }, []);
@@ -21792,6 +21848,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             await purgeEpisodeWorkspaceScenes(`${reason}-scenes`);
             diagnosticsEpochRef.current += 1;
             setDiagnosticsEpisodeSceneCount(0);
+            setDiagnosticsEpisodeScenes([]);
             setDiagnosticsEpisodeShotStats({ shotCount: 0, sceneCountWithShots: 0 });
             setDiagnosticsRefreshNonce((value) => value + 1);
         } else if (sceneBeatsPartial) {
@@ -30495,8 +30552,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <span className="font-bold text-sm">{t('进度诊断面板', 'Workflow Diagnostics')}</span>
                             <span className="text-[9px] leading-4 text-white/40 max-w-[520px]">
                                 {t(
-                                    '全文节点与分场节点分行展示。分场优化细分为文戏、武戏（特效/仙攻）、场景现场编排、建置入戏，建置稿程序入库后接分镜。资产清单与场景编排已取消。',
-                                    'Episode-wide and per-scene nodes are shown in separate sections. Per-scene refinement splits into drama, action (VFX/Xian), floor staging, and blocking; staging imports the workspace scene, then storyboards. Asset inventory and scene orchestration are retired.'
+                                    '全局节点与分场节点分行展示。分场优化细分为文戏、武戏（特效/仙攻）、场景现场编排、建置入戏，建置稿程序入库后接分镜。',
+                                    'Global and per-scene nodes are shown in separate sections. Per-scene refinement splits into drama, action (VFX/Xian), floor staging, and blocking; staging imports the workspace scene, then storyboards.'
                                 )}
                             </span>
                         </div>
@@ -30982,7 +31039,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         };
                         const collectDiagnosticSceneRows = () => {
                             const byId = new Map();
-                            const add = (raw, orderHint) => {
+                            const rememberName = (canonical, rawName) => {
+                                const name = cleanDiagnosticSceneName(canonical, rawName);
+                                if (!name) return;
+                                const prev = byId.get(canonical);
+                                if (!prev) return;
+                                if (!prev.sceneName) prev.sceneName = name;
+                            };
+                            const add = (raw, orderHint, rawName = '') => {
                                 const id = String(raw || '').trim();
                                 if (!id) return;
                                 const canonical = canonicalizeSceneUnitId(
@@ -30994,15 +31058,62 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 const order = Number(orderHint) || deriveSceneOrderFromSceneId(canonical) || 0;
                                 const prev = byId.get(canonical);
                                 if (!prev || (order > 0 && !(prev.order > 0))) {
-                                    byId.set(canonical, { sceneId: canonical, order });
+                                    byId.set(canonical, {
+                                        sceneId: canonical,
+                                        order,
+                                        sceneName: cleanDiagnosticSceneName(canonical, rawName) || prev?.sceneName || '',
+                                    });
+                                } else {
+                                    rememberName(canonical, rawName);
                                 }
                             };
-                            (diagnosticsSceneUnits || []).forEach((unit) => add(unit?.scene_id, unit?.scene_order));
-                            (diagnosticsPipelineNodes || []).forEach((node) => add(node?.scene_id));
-                            Object.keys(stage2SceneMarkdownByScene || {}).forEach((id) => add(id));
+                            const addFromText = (raw, orderHint, text) => {
+                                add(raw, orderHint, extractSceneNameValueForTable(text));
+                            };
+                            (diagnosticsEpisodeScenes || []).forEach((scene) => {
+                                const marker = scene?.scene_no || scene?.scene_id || scene?.scene_code;
+                                add(marker, deriveSceneOrderFromSceneId(marker), scene?.scene_name);
+                            });
+                            (diagnosticsSceneUnits || []).forEach((unit) => {
+                                addFromText(unit?.scene_id, unit?.scene_order, unit?.scene_markdown);
+                            });
+                            (diagnosticsPipelineNodes || []).forEach((node) => {
+                                addFromText(node?.scene_id, null, node?.runtime_meta?.scene_block);
+                            });
+                            Object.entries(stage2SceneMarkdownByScene || {}).forEach(([id, entry]) => {
+                                const text = typeof entry === 'string'
+                                    ? entry
+                                    : (entry?.markdown || entry?.scene_markdown || '');
+                                add(id, null, extractSceneNameValueForTable(text) || entry?.scene_name);
+                            });
                             if (liveSceneMarkdownByScene && typeof liveSceneMarkdownByScene === 'object') {
-                                Object.keys(liveSceneMarkdownByScene).forEach((id) => add(id));
+                                Object.entries(liveSceneMarkdownByScene).forEach(([id, entry]) => {
+                                    const text = typeof entry === 'string'
+                                        ? entry
+                                        : (entry?.markdown || entry?.scene_markdown || '');
+                                    add(id, null, extractSceneNameValueForTable(text) || entry?.scene_name);
+                                });
                             }
+                            try {
+                                const splitText = String(resolveSceneSplitSourceText?.() || '').trim();
+                                if (splitText) {
+                                    parseSceneUnitsFromScriptMarkersText(splitText).forEach((unit) => {
+                                        addFromText(unit.sceneId, unit.sceneOrder, unit.sceneText);
+                                    });
+                                }
+                            } catch (_) {
+                                // Scene-split text may not be marker-wrapped yet.
+                            }
+                            const subskillMap = parseSceneSubskillResultsMap(
+                                getStageOutputContent('stage1', 'scene_subskill_results')
+                            );
+                            Object.entries(subskillMap).forEach(([id, scene]) => {
+                                const text = [scene?.drama, scene?.framing, scene?.staging]
+                                    .map((part) => String(part || '').trim())
+                                    .filter(Boolean)
+                                    .join('\n');
+                                addFromText(id, null, text);
+                            });
                             Object.keys(progress?.items || {}).forEach((id) => add(id));
                             [...(orchestrationCanonicalSceneIdsRef.current || [])].forEach((id) => add(id));
                             [...(orchestrationLiveImportedScenesRef.current || [])].forEach((id) => add(id));
@@ -31186,16 +31297,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     <div className="w-full flex flex-col gap-4">
                         <div className="w-full overflow-x-auto">
                             <div className="mb-1.5">
-                                <div className="text-xs font-bold text-white/85">{t('全文节点', 'Episode-wide nodes')}</div>
+                                <div className="text-xs font-bold text-white/85">{t('全局节点', 'Global nodes')}</div>
                                 <div className="text-[10px] text-white/35">
-                                    {t('按整集剧本处理：全局统筹、环境规划、角色生成、道具生成、主环境生成。资产清单已取消。', 'Runs on the full episode: global orchestration, environment planning, then character, prop, and main-environment generation. Asset inventory is retired.')}
+                                    {t('按整集剧本处理：全局统筹、环境规划、角色生成、道具生成、主环境生成。', 'Runs on the full episode: global orchestration, environment planning, then character, prop, and main-environment generation.')}
                                 </div>
                             </div>
                         <div
                             className="min-w-[720px] grid gap-x-1 gap-y-0 items-stretch"
                             style={{ gridTemplateColumns: '6.5rem repeat(5, minmax(5.5rem, 1fr))' }}
                         >
-                            <div className="px-1 pb-2 text-[10px] font-semibold text-white/35">{t('全文', 'Episode')}</div>
+                            <div className="px-1 pb-2 text-[10px] font-semibold text-white/35">{t('全局', 'Global')}</div>
                             {episodeMatrixColumns.map((col) => (
                                 <div key={`episode-head-${col.key}`} className="px-1 pb-2 text-[10px] font-semibold text-white/55 text-center leading-tight">
                                     {getAnalysisStageLabel(col.key, t)}
@@ -31203,7 +31314,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ))}
 
                             <div className="flex items-center px-1 py-2 text-xs font-bold text-white/80 border-t border-white/10">
-                                {t('整集', 'All')}
+                                {t('美术指导', 'Art Direction')}
                             </div>
                             <div className="border-t border-white/10">{renderPipelineNodeStep('scene_split', sceneSplitState, 1, 'scene_split')}</div>
                             <div className="border-t border-white/10">{renderPipelineNodeStep('environment_plan', environmentPlanState, 2, 'environment_plan')}</div>
@@ -31220,7 +31331,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <div className="text-xs font-bold text-white/85">{t('分场节点', 'Per-scene nodes')}</div>
                                     <div className="text-[10px] text-white/35">
-                                        {t('每场一行：文戏、武戏（特效/仙攻）、场景现场编排、建置入戏、分镜生成。建置稿程序入库后即可分镜。重跑某一节点会按序自动带起该场后续节点。场景编排已取消。', 'One row per scene: drama, action (VFX/Xian), floor staging, blocking, and storyboards. Staging imports the workspace scene before storyboard. Rerunning a node automatically continues through later nodes for that scene. Scene orchestration is retired.')}
+                                        {t('每场一行：文戏、武戏（特效/仙攻）、场景现场编排、建置入戏、分镜生成。建置稿程序入库后即可分镜。重跑某一节点会按序自动带起该场后续节点。', 'One row per scene: drama, action (VFX/Xian), floor staging, blocking, and storyboards. Staging imports the workspace scene before storyboard. Rerunning a node automatically continues through later nodes for that scene.')}
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">
@@ -31237,7 +31348,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </div>
                         <div
                             className="min-w-[760px] grid gap-x-1 gap-y-0 items-stretch"
-                            style={{ gridTemplateColumns: '6.5rem repeat(5, minmax(7rem, 1fr))' }}
+                            style={{ gridTemplateColumns: 'minmax(8.5rem, 12rem) repeat(5, minmax(7rem, 1fr))' }}
                         >
                             <div className="px-1 pb-2 text-[10px] font-semibold text-white/35">{t('场次', 'Scene')}</div>
                             {sceneMatrixColumns.map((col) => (
@@ -31267,8 +31378,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 });
                                 return (
                                     <div key={`scene-row-${row.sceneId}`} className="contents">
-                                        <div className="flex items-center px-1 py-2 text-[11px] font-semibold text-white/75 border-t border-white/5 truncate" title={row.sceneId}>
-                                            {row.sceneId}
+                                        <div
+                                            className="flex items-center px-1 py-2 text-[11px] font-semibold text-white/75 border-t border-white/5"
+                                            title={formatDiagnosticSceneLabel(row.sceneId, row.order, row.sceneName)}
+                                        >
+                                            <span className="line-clamp-2 leading-tight">
+                                                {formatDiagnosticSceneLabel(row.sceneId, row.order, row.sceneName)}
+                                            </span>
                                         </div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(dramaState, cellProps('drama_opt', dramaState))}</div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(combatState, cellProps('combat_opt', combatState))}</div>
@@ -31430,8 +31546,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const startedClock = formatHistoryClock(analysisProgressStartedAt);
                     const currentRawMessage = String(analysisFlowStatus?.message || '').trim();
                     const currentBusinessMessage = String(toBusinessHistoryMessage(currentRawMessage) || '').trim();
-                    const currentMessage = currentBusinessMessage
+                    const currentMessageRaw = currentBusinessMessage
                         || (isSystemOnlyAnalysisLogMessage(currentRawMessage) ? '' : currentRawMessage);
+                    const currentMessage = isRetiredDiagnosticContent(analysisFlowStatus?.phase, currentMessageRaw)
+                        ? ''
+                        : currentMessageRaw;
                     const statusTone = progressPhase === 'failed'
                         ? 'text-red-200'
                         : progressPhase === 'warning'

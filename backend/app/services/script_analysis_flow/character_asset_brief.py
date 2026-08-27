@@ -103,7 +103,7 @@ def build_character_asset_design_brief(adapted_script: str) -> str:
         "耳环/胸针等已并入衣着的配饰只画进定妆，不得另造道具依赖；"
         "已标 detachable=是 或进入道具提取的件不进角色定妆。"
         "禁止重做切场或环境落点；禁止另起同义角色名；外形/衣着/评价原样服务四视图。"
-        "对白声线与上屏标签不进生图词。"
+        "对白声线与上屏物理文字标签（含字体/字色）不进生图词。"
         "Subject Index 若仍含 character 行只作旧稿兼容，不得压过本块。"
     )
     return wrap_injection_section("全局统筹角色提取", f"{preface}\n\n{body}")

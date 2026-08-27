@@ -188,6 +188,19 @@ def _character_tag_en(record_text: str, base_text: str = "") -> str:
     return "无"
 
 
+def _character_label_style(record_text: str, field_name: str, base_text: str = "", tag: str = "") -> str:
+    value = extract_char_field(record_text, field_name)
+    if value and value != "无":
+        return value
+    if base_text:
+        inherited = extract_char_field(base_text, field_name)
+        if inherited and inherited != "无":
+            return inherited
+    if tag == "无":
+        return "无"
+    return "待补"
+
+
 def _same_scene_id(left: str, right: str) -> bool:
     return bool(left) and bool(right) and _clean(left).lower() == _clean(right).lower()
 
@@ -236,8 +249,11 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         "设置 voice_identity 必须先读【本场对白声线】：有声线则写入该角色 voice_identity；"
         "禁把声线标签写入台词。"
         "建置入戏须读【本场角色标签】：字幕=待落 且本拍该人首次正面/¾可读时，"
-        "按项目语言选一侧字样写入戏 画面打出字幕：【{裸名}】{标签}】。"
+        "按项目语言选一侧字样写入戏 画面打出物理文字标签：【{裸名}】{标签}】｜字体={标签字体}｜字色={标签字色}。"
+        "此为片内图形名牌（物理文字），不是对白硬字幕；禁写成画幅底部白字黑边。"
+        "剧本或提取块已写的字样/字体/字色原样服从，禁改写。"
         "中文项目用 裸名+标签；英文项目用 裸名_en+标签_en；禁中英并列、禁用错语种上屏。"
+        "字体/字色为无或待补则跟 Global_Style 补一书体+具名色。"
         "字幕=已过|无 则不写。"
     )
     body = (
@@ -265,11 +281,15 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         )
         base_text = _record_by_name(records, base_name).get("text") or ""
         tag_en = _character_tag_en(text, base_text)
+        font = _character_label_style(text, "标签字体", base_text, tag)
+        color = _character_label_style(text, "标签字色", base_text, tag)
         plot_role = _header_field(text, "番位")
         display_name = _subtitle_display_name(name, text)
         display_name_en = _subtitle_display_name_en(name, text, records)
         if plot_role in CROWD_ROLE_TOKENS or tag == "无":
             subtitle = "无"
+            font = "无"
+            color = "无"
         elif _is_outfit_variant(name, text, all_record_names):
             subtitle = "无"
         else:
@@ -282,6 +302,7 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
                 subtitle = "待落"
         tag_rows.append(
             f"CHAR:[@{name}]｜标签={tag}｜标签_en={tag_en}｜"
+            f"标签字体={font}｜标签字色={color}｜"
             f"裸名={display_name}｜裸名_en={display_name_en}｜字幕={subtitle}"
         )
     if voice_rows:
