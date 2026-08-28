@@ -33,6 +33,7 @@ def test_parse_derived_env_tags_and_extract_block():
     assert by_name["0度客栈大堂"]["background"] == "柜台"
     assert by_name["0度客栈大堂"]["frame_left"] == "楼梯口"
     assert by_name["0度客栈大堂"]["frame_right"] == "账房窗"
+    assert "柜台" in str(by_name["0度客栈大堂"].get("references") or "")
     assert by_name["180度客栈大堂"]["background"] == "正门"
     assert by_name["180度客栈大堂"]["frame_left"] == "账房窗"
     assert by_name["180度客栈大堂"]["frame_right"] == "楼梯口"
@@ -108,6 +109,39 @@ def test_build_item_persists_frame_anchors():
     assert attrs["background"] == "柜台"
     assert attrs["frame_left"] == "楼梯口"
     assert attrs["frame_right"] == "账房窗"
+    assert item["anchor_description"] == (
+        "背景=柜台｜画左=楼梯口｜画右=账房窗｜参照物=柜台、楼梯口、账房窗"
+    )
+    assert "只切割，不要改画" in item["generation_prompt_cn"]
+    assert "背景=柜台" not in item["generation_prompt_cn"]
+
+
+def test_first_cut_anchor_description_empty_slots():
+    item = build_derived_environment_item(
+        {
+            "name": "180度客栈大堂",
+            "main": "客栈大堂",
+            "angle": 180,
+            "kind": "第一刀",
+        }
+    )
+    assert item["anchor_description"] == "背景=无｜画左=无｜画右=无"
+
+
+def test_sample_ingest_writes_frame_and_reference_anchors():
+    groups = collect_derived_environment_jsons(SAMPLE)
+    by_name = {
+        row["name"]: row
+        for group in groups
+        for row in group["payload"]["environments"]
+    }
+    zero = by_name["0度客栈大堂"]["anchor_description"]
+    assert "背景=柜台" in zero
+    assert "画左=楼梯口" in zero
+    assert "画右=账房窗" in zero
+    assert "参照物=" in zero
+    assert "柜台" in zero
+    assert by_name["0度客栈大堂"]["generation_prompt_cn"].startswith("所属主环境=客栈大堂")
 
 
 def test_state_cut_json_hangs_same_angle_parent():

@@ -90,10 +90,63 @@ USAGE_MERGE_TOKENS = (
     "ms", "mcu", "cu", "ecu",
 )
 _EMPTY_FIELD_MARKERS = {"", "无", "n/a", "na", "none", "-"}
+_XOR_ANCHOR_PATTERN = re.compile(r"(?:^|[｜|\s])锚\s*=\s*([^｜|\r\n]+)")
 
 
 def _clean(value: Any) -> str:
     return str(value or "").strip().strip("`\"'“”‘’[]")
+
+
+def _anchor_slot(value: Any) -> str:
+    text = _clean(value)
+    return "无" if text.lower() in _EMPTY_FIELD_MARKERS else text
+
+
+def _split_named_objects(*values: Any) -> List[str]:
+    names: List[str] = []
+    seen: Set[str] = set()
+    for raw in values:
+        text = _clean(raw)
+        if not text or text.lower() in _EMPTY_FIELD_MARKERS:
+            continue
+        for part in re.split(r"[,，、+/＋]|以及|和", text):
+            name = _clean(part)
+            if not name or name.lower() in _EMPTY_FIELD_MARKERS:
+                continue
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+    return names
+
+
+def collect_reference_objects_from_text(text: str) -> List[str]:
+    """Named XOR 参照物 (`锚=`) from framing / 主体定位."""
+    names: List[str] = []
+    seen: Set[str] = set()
+    for match in _XOR_ANCHOR_PATTERN.finditer(str(text or "")):
+        for name in _split_named_objects(match.group(1)):
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+    return names
+
+
+def format_derived_anchor_description(
+    *,
+    background: str = "",
+    frame_left: str = "",
+    frame_right: str = "",
+    references: Optional[Sequence[str]] = None,
+) -> str:
+    """Asset Anchor Description: 背景 / 画左 / 画右 main subjects, plus 参照物."""
+    bg = _anchor_slot(background)
+    left = _anchor_slot(frame_left)
+    right = _anchor_slot(frame_right)
+    refs = _split_named_objects(*(references or []), background, frame_left, frame_right)
+    parts = [f"背景={bg}", f"画左={left}", f"画右={right}"]
+    if refs:
+        parts.append(f"参照物={'、'.join(refs)}")
+    return "｜".join(parts)
 
 
 def _parse_field_line(raw: str) -> Dict[str, str]:
@@ -332,6 +385,7 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
                     "background": fields.get("背景") or fields.get("background"),
                     "frame_left": fields.get("画左") or fields.get("frame_left"),
                     "frame_right": fields.get("画右") or fields.get("frame_right"),
+                    "references": fields.get("参照物") or fields.get("references"),
                 },
             )
 
@@ -341,6 +395,19 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
     for plan_match in FRAMING_ENV_FIELD_PATTERN.finditer(source):
         for env_match in PLAN_ENV_NAME_PATTERN.finditer(plan_match.group(1) or ""):
             _upsert(env_match.group(1) or env_match.group(2))
+
+    scene_refs = collect_reference_objects_from_text(source)
+    if scene_refs:
+        for row in by_name.values():
+            existing = _split_named_objects(row.get("references"))
+            merged = existing[:]
+            seen = set(existing)
+            for name in scene_refs:
+                if name not in seen:
+                    seen.add(name)
+                    merged.append(name)
+            if merged:
+                row["references"] = "、".join(merged)
 
     return list(by_name.values())
 
@@ -370,6 +437,16 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
     )
     suffix = _state_suffix(name, main)
     name_en = f"{angle}deg {main}" + (f" {suffix}" if suffix else "")
+    background = _clean(item.get("background") or item.get("背景"))
+    frame_left = _clean(item.get("frame_left") or item.get("画左"))
+    frame_right = _clean(item.get("frame_right") or item.get("画右"))
+    references = _split_named_objects(item.get("references") or item.get("参照物"))
+    anchor = format_derived_anchor_description(
+        background=background,
+        frame_left=frame_left,
+        frame_right=frame_right,
+        references=references,
+    )
     if is_state:
         prompt = STATE_CUT_PROMPT.format(main=main, angle=angle, parent=parent or _same_angle_parent(name, main, angle))
         if delta:
@@ -387,7 +464,6 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
         negative = STATE_CUT_NEGATIVE
         atmosphere = f"Same {angle}deg crop with state delta"
         visual_params = f"{lens}/Derived/State"
-        anchor = f"same-angle crop of {main}, {grid}, empty plate"
     elif special_note:
         prompt = SPECIAL_CUT_PROMPT.format(main=main, angle=angle, grid=grid, note=special_note)
         logic = (
@@ -398,7 +474,6 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
         negative = FIRST_CUT_NEGATIVE
         atmosphere = f"Special {special_kind or 'plate'} from {grid}"
         visual_params = f"{lens}/Derived/Special/{special_kind or angle}"
-        anchor = f"{grid} of {main} as spatial base; {special_note}"
     else:
         prompt = FIRST_CUT_PROMPT.format(main=main, angle=angle, grid=grid)
         logic = (
@@ -409,7 +484,6 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
         negative = FIRST_CUT_NEGATIVE
         atmosphere = f"{'Master' if angle == 0 else 'Angle'} empty plate crop"
         visual_params = f"{lens}/Derived/{angle}"
-        anchor = f"crop {grid} from {main} four-direction grid, empty plate, eye-level"
     if special_kind == "变形":
         negative = negative.replace("dutch angle, tilted horizon, ", "").replace("dutch angle, ", "")
     return {
@@ -439,9 +513,10 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
             "special_kind": special_kind,
             "special_note": special_note,
             "negative_prompt_en": negative,
-            "background": _clean(item.get("background") or item.get("背景")),
-            "frame_left": _clean(item.get("frame_left") or item.get("画左")),
-            "frame_right": _clean(item.get("frame_right") or item.get("画右")),
+            "background": background,
+            "frame_left": frame_left,
+            "frame_right": frame_right,
+            "references": "、".join(references),
         },
     }
 
