@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.models.all_models import Episode, LLMCallLog, ScriptProgressPipelineNode, User
+from app.models.all_models import Episode, LLMCallLog, Project, ScriptProgressPipelineNode, User
 from app.schemas.agent import AnalyzeSceneRequest
 from app.schemas.user_auth import (
     USER_ACTIVE_LEVEL_DEFAULT,
@@ -22,7 +22,7 @@ from app.schemas.user_auth import (
 )
 from app.services.db_session_utils import _release_db_connection, _snapshot_user_principal
 from app.services.scene_markdown_orchestration import _extract_analysis_text_from_result
-from app.core.prompt_injection import strip_injection_section
+from app.core.prompt_injection import strip_injection_section, wrap_injection_section
 from app.services.script_analysis_flow import (
     COMPREHENSIVE_INFO_PATTERN,
     SCENES_BLOCK_END_TOKEN,
@@ -1073,6 +1073,69 @@ def _extract_project_tail(script_text: str) -> str:
     if not match:
         return ""
     return strip_project_visual_backfill_sections(source[match.end():]).strip()
+
+
+_ASPECT_RATIO_LINE_RE = re.compile(r"Aspect Ratio:\s*([^\n]+)", re.IGNORECASE)
+
+
+def _pick_aspect_ratio_from_mapping(src: Any) -> str:
+    if not isinstance(src, dict):
+        return ""
+    for key in ("aspect_ratio", "aspectRatio"):
+        value = str(src.get(key) or "").strip()
+        if value:
+            return value
+    tech = src.get("tech_params") if isinstance(src.get("tech_params"), dict) else {}
+    visual = tech.get("visual_standard") if isinstance(tech.get("visual_standard"), dict) else {}
+    for key in ("aspect_ratio", "aspectRatio"):
+        value = str(visual.get(key) or "").strip()
+        if value:
+            return value
+    defaults = src.get("project_generation_defaults") if isinstance(src.get("project_generation_defaults"), dict) else {}
+    for key in ("aspect_ratio", "aspectRatio"):
+        value = str(defaults.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _classify_aspect_strategy(ratio: str) -> str:
+    text = str(ratio or "").strip().lower().replace("：", ":")
+    match = re.match(r"(\d+(?:\.\d+)?)\s*[:/x×]\s*(\d+(?:\.\d+)?)", text)
+    if match:
+        width = float(match.group(1))
+        height = float(match.group(2))
+        if height > 0 and width / height <= 1.0:
+            return "竖屏"
+        return "横屏"
+    if any(token in text for token in ("9:16", "3:4", "4:5", "竖")):
+        return "竖屏"
+    return "横屏"
+
+
+def _subskill_aspect_ratio_injection(
+    script_text: str,
+    db: Optional[Session] = None,
+    project_id: int = 0,
+) -> str:
+    ratio = ""
+    match = _ASPECT_RATIO_LINE_RE.search(str(script_text or ""))
+    if match:
+        ratio = str(match.group(1) or "").strip()
+    if not ratio and db is not None and int(project_id or 0) > 0:
+        try:
+            row = db.query(Project).filter(Project.id == int(project_id)).first()
+            info = row.global_info if row and isinstance(row.global_info, dict) else {}
+            ratio = _pick_aspect_ratio_from_mapping(info)
+        except Exception:
+            ratio = ""
+    if not ratio:
+        return ""
+    strategy = _classify_aspect_strategy(ratio)
+    return wrap_injection_section(
+        "项目画幅",
+        f"Aspect Ratio: {ratio}\n策略={strategy}\n景别侧重=见现场编排 §4.5.2",
+    )
 
 
 def _subskill_visual_backfill_injection(
@@ -2183,6 +2246,7 @@ async def run_scene_subskill_pipeline(
     project_tail = "\n\n".join(
         part
         for part in (
+            _subskill_aspect_ratio_injection(script_text, db, project_id),
             _subskill_visual_backfill_injection(script_text, db, node_episode_id),
             leftover_tail,
         )

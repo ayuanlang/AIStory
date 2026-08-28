@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 from app.services.scene_subskill_pipeline_runner import (
+    _classify_aspect_strategy,
+    _pick_aspect_ratio_from_mapping,
+    _subskill_aspect_ratio_injection,
     filter_subskill_tasks_by_target_ids,
     is_timeout_like_error,
     merge_scene_blocks_into_script,
@@ -268,3 +271,21 @@ def test_merge_scene_blocks_keeps_other_scenes_and_tail():
     assert "Project Visual Backfill" in merged
     assert merged.count("[SCENE_START:EP01_SC01]") == 1
     assert merged.count("[SCENE_START:EP01_SC02]") == 1
+
+
+def test_classify_aspect_strategy_portrait_and_landscape():
+    assert _classify_aspect_strategy("9:16") == "竖屏"
+    assert _classify_aspect_strategy("3:4") == "竖屏"
+    assert _classify_aspect_strategy("1:1") == "竖屏"
+    assert _classify_aspect_strategy("16:9") == "横屏"
+    assert _classify_aspect_strategy("21:9") == "横屏"
+    assert _classify_aspect_strategy("4:3") == "横屏"
+
+
+def test_subskill_aspect_ratio_injection_reads_script_line():
+    block = _subskill_aspect_ratio_injection("Project Context\nAspect Ratio: 9:16\n")
+    assert "Aspect Ratio: 9:16" in block
+    assert "策略=竖屏" in block
+    assert _pick_aspect_ratio_from_mapping(
+        {"tech_params": {"visual_standard": {"aspect_ratio": "16:9"}}}
+    ) == "16:9"

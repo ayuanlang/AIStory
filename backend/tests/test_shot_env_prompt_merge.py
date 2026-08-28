@@ -75,6 +75,7 @@ def test_merge_derived_envs_that_share_one_main():
     assert "对应主环境=ENV:[后巷]" in text
     assert "同一主环境族：主环境=ENV:[后巷]" not in text
     assert "【衍生环境信息】" in text
+    assert "must not restate the environment plate" in text
     assert (
         "ENV:[0度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0｜"
         "背景=柜台｜画左=楼梯口｜画右=账房窗"
