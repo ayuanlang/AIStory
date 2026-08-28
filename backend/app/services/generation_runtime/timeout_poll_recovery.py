@@ -190,8 +190,8 @@ def _resolve_poll_credentials(job: Dict[str, Any]) -> Tuple[str, str, str, str]:
         root = (base_url or "https://api.shishikeji.com").rstrip("/")
         query_endpoint = f"{root}/api/task" if not root.lower().endswith("/api/task") else root
     if "ddimatuo" in provider_l or "aiyrx" in provider_l:
-        root = (base_url or "https://api.ddimatuo.top").rstrip("/")
-        for _suffix in ("/v1/videos/generations", "/v1/videos", "/v1/assets", "/v1"):
+        root = (base_url or "https://api.aiyrx.xyz").rstrip("/")
+        for _suffix in ("/v1/videos/generations", "/v1/videos", "/v1/media-assets", "/v1/assets", "/v1"):
             if root.lower().endswith(_suffix):
                 root = root[: -len(_suffix)].rstrip("/")
                 break

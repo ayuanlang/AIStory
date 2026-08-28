@@ -263,10 +263,44 @@ def _extract_callback_status(payload: Dict[str, Any]) -> str:
                 return value
         return ""
 
+    for event_key in ("type", "event", "event_type", "eventType"):
+        event_type = str(payload.get(event_key) or "").strip().lower()
+        if event_type == "video.completed":
+            return "completed"
+        if event_type == "video.failed":
+            return "failed"
+        if event_type in {"video.cancelled", "video.canceled"}:
+            return "cancelled"
+
     # Check exactly root.status first without triggering nested matches yet, 
     # to prioritize authoritative top-level success/running over nested failure indicators.
     root_val = _first_status(payload, "root", log_matches=True)
-    if root_val and root_val.lower() in {"success", "succeeded", "completed", "done", "running", "queued", "pending", "in_progress", "in-progress", "storing_asset"}:
+    if root_val and root_val.lower() in {
+        "success",
+        "succeeded",
+        "completed",
+        "done",
+        "running",
+        "queued",
+        "pending",
+        "in_progress",
+        "in-progress",
+        "storing_asset",
+        "created",
+        "leasing",
+        "submitting",
+        "provider_queued",
+        "generating",
+        "downloading",
+        "reconcile_pending",
+        "retry_wait",
+        "cancelling",
+        "failed",
+        "cancelled",
+        "canceled",
+        "manual_review",
+        "expired",
+    }:
         return root_val
 
     for candidate, path in (
@@ -582,6 +616,196 @@ def _verify_kie_webhook_request(request: Request, payload: Dict[str, Any]) -> No
         WEBHOOK_REPLAY_STORE[replay_key] = time.time()
 
 
+def _is_ddimatuo_webhook_event(request: Request, payload: Dict[str, Any]) -> bool:
+    event_type = str(
+        request.headers.get("x-event-type")
+        or (payload.get("type") if isinstance(payload, dict) else "")
+        or (payload.get("event") if isinstance(payload, dict) else "")
+        or (payload.get("event_type") if isinstance(payload, dict) else "")
+        or ""
+    ).strip().lower()
+    return event_type in {"video.completed", "video.failed", "video.cancelled", "video.canceled"}
+
+
+def _resolve_ddimatuo_webhook_api_key(ticket: str, payload: Dict[str, Any]) -> str:
+    from app.services.media_service import media_service
+
+    preferred = ""
+    if isinstance(payload, dict):
+        meta = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        for candidate in (
+            payload.get("download_api_key"),
+            payload.get("api_key"),
+            meta.get("download_api_key"),
+            meta.get("api_key"),
+        ):
+            text = str(candidate or "").strip()
+            if text:
+                preferred = text
+                break
+
+    for job_id, job in _find_video_jobs_by_provider_callback_ticket(ticket):
+        if not isinstance(job, dict):
+            continue
+        result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        result_meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        payload_snap = job.get("final_provider_payload") if isinstance(job.get("final_provider_payload"), dict) else {}
+        for candidate in (
+            job.get("download_api_key"),
+            result_meta.get("download_api_key"),
+            payload_snap.get("download_api_key"),
+            preferred,
+        ):
+            text = str(candidate or "").strip()
+            if text:
+                return text
+        _ = job_id
+
+    return str(media_service._resolve_ddimatuo_download_api_key(preferred) or "").strip()
+
+
+def _enrich_ddimatuo_webhook_payload(
+    payload: Dict[str, Any],
+    request: Request,
+    *,
+    ticket: str,
+    api_key: str,
+) -> Dict[str, Any]:
+    from app.services.media_service import media_service
+
+    enriched = dict(payload) if isinstance(payload, dict) else {"raw": payload}
+    event_type = str(
+        request.headers.get("x-event-type")
+        or enriched.get("type")
+        or enriched.get("event")
+        or ""
+    ).strip().lower()
+    status_map = {
+        "video.completed": "completed",
+        "video.failed": "failed",
+        "video.cancelled": "cancelled",
+        "video.canceled": "cancelled",
+    }
+    status = status_map.get(event_type) or _extract_callback_status(enriched)
+    task_id = _extract_callback_task_id(enriched)
+    jobs = _find_video_jobs_by_provider_callback_ticket(ticket)
+    job = jobs[0][1] if jobs else {}
+    payload_snap = job.get("final_provider_payload") if isinstance(job.get("final_provider_payload"), dict) else {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    result_meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    api_root = str(
+        payload_snap.get("api_root")
+        or result_meta.get("api_root")
+        or job.get("api_root")
+        or media_service.DDIMATUO_DEFAULT_API_ROOT
+    ).strip()
+    root = media_service._ddimatuo_api_root(api_root)
+    result_url = media_service._ddimatuo_resolve_result_url(
+        enriched,
+        root_url=root,
+        task_id=task_id if status == "completed" else None,
+    )
+    media_asset_id = media_service._ddimatuo_extract_media_asset_id(enriched)
+    event_id = str(request.headers.get("x-event-id") or enriched.get("id") or "").strip()
+    if event_type:
+        enriched["type"] = event_type
+    if status:
+        enriched["status"] = status
+    if task_id:
+        enriched["task_id"] = task_id
+        enriched["taskId"] = task_id
+    if result_url:
+        enriched["url"] = result_url
+        enriched["result_url"] = result_url
+        enriched["video_url"] = result_url
+    if media_asset_id:
+        enriched["media_asset_id"] = media_asset_id
+    if event_id:
+        enriched["event_id"] = event_id
+    enriched["provider"] = "ddimatuo"
+    enriched.setdefault("metadata", {})
+    if isinstance(enriched.get("metadata"), dict):
+        meta = dict(enriched["metadata"])
+        meta["provider"] = "ddimatuo"
+        meta["requires_auth_download"] = True
+        if api_key:
+            meta["download_api_key"] = api_key
+        if api_root:
+            meta["api_root"] = root
+        if media_asset_id:
+            meta["media_asset_id"] = media_asset_id
+        if task_id:
+            meta["task_id"] = task_id
+            meta["taskId"] = task_id
+        enriched["metadata"] = meta
+    return enriched
+
+
+def _verify_ddimatuo_webhook_request(
+    request: Request,
+    payload: Dict[str, Any],
+    *,
+    ticket: str,
+    raw_body: bytes,
+) -> str:
+    event_type = str(request.headers.get("x-event-type") or "").strip().lower()
+    if event_type and event_type not in {"video.completed", "video.failed", "video.cancelled", "video.canceled"}:
+        raise HTTPException(status_code=400, detail="Unsupported DdiMatuo event type")
+
+    timestamp_raw = str(request.headers.get("x-timestamp") or "").strip()
+    received_signature = _normalize_webhook_signature_header(request.headers.get("x-signature"))
+    event_id = str(request.headers.get("x-event-id") or "").strip()
+    if not timestamp_raw or not received_signature:
+        raise HTTPException(status_code=401, detail="Missing DdiMatuo webhook signature headers")
+
+    try:
+        timestamp_seconds = int(timestamp_raw)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid webhook timestamp")
+
+    now_seconds = int(time.time())
+    max_skew = max(30, int(settings.WEBHOOK_TIMESTAMP_MAX_SKEW_SECONDS))
+    if timestamp_seconds <= 0 or abs(now_seconds - timestamp_seconds) > max_skew:
+        raise HTTPException(status_code=401, detail="Webhook timestamp expired")
+
+    api_key = _resolve_ddimatuo_webhook_api_key(ticket, payload)
+    if not api_key:
+        raise HTTPException(status_code=503, detail="DdiMatuo webhook API key not available")
+
+    from app.services.media_service import media_service
+
+    expected = media_service._ddimatuo_webhook_signature_candidates(
+        api_key,
+        timestamp_raw,
+        raw_body if isinstance(raw_body, (bytes, bytearray)) else b"",
+    )
+    received_l = received_signature.strip()
+    matched = any(
+        hmac.compare_digest(candidate, received_l)
+        if len(candidate) == len(received_l)
+        else False
+        for candidate in expected
+    )
+    if not matched:
+        received_lower = received_l.lower()
+        matched = any(
+            hmac.compare_digest(candidate.lower(), received_lower)
+            if len(candidate) == len(received_l)
+            else False
+            for candidate in expected
+        )
+    if not matched:
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    replay_key = f"ddimatuo:{event_id or _extract_callback_task_id(payload)}:{timestamp_seconds}:{received_l}"
+    with WEBHOOK_REPLAY_LOCK:
+        _prune_webhook_replay_locked()
+        if replay_key in WEBHOOK_REPLAY_STORE:
+            return "duplicate"
+        WEBHOOK_REPLAY_STORE[replay_key] = time.time()
+    return "ok"
+
+
 def _is_stale_running_payload(payload: Dict[str, Any], stale_minutes: int = 10) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -715,18 +939,44 @@ def _is_ambiguous_image_submit_detail(detail: Any) -> bool:
 
 def _normalize_generation_status(value: Any) -> str:
     status = str(value or "").strip().lower()
-    if status in {"success", "succeeded", "completed", "done"}:
+    if status in {"success", "succeeded", "completed", "done", "video.completed"}:
         return "succeeded"
     # KIE / playground callbacks use "fail" (not "failed"); treat abort/timeout as terminal fail.
-    if status in {"failed", "fail", "failure", "error", "expired", "abort", "aborted", "timeout"}:
+    if status in {
+        "failed",
+        "fail",
+        "failure",
+        "error",
+        "expired",
+        "abort",
+        "aborted",
+        "timeout",
+        "manual_review",
+        "video.failed",
+    }:
         return "failed"
-    if status in {"canceled", "cancelled"}:
+    if status in {"canceled", "cancelled", "video.cancelled", "video.canceled"}:
         return "canceled"
     # Keep queue lifecycle distinct: queued must NOT collapse to running, or
     # compensation/timeout treat never-submitted jobs as in-flight / callback-wait.
     if status == "queued":
         return "queued"
-    if status in {"pending", "running", "processing", "in_progress", "in-progress"}:
+    if status in {
+        "pending",
+        "running",
+        "processing",
+        "in_progress",
+        "in-progress",
+        "created",
+        "leasing",
+        "submitting",
+        "provider_queued",
+        "generating",
+        "downloading",
+        "reconcile_pending",
+        "retry_wait",
+        "cancelling",
+    }:
         return "running"
     return status
 

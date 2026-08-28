@@ -3090,7 +3090,7 @@ class MediaGenerationService:
             raw_payload: Dict[str, Any] = {}
 
             if is_ddimatuo:
-                root = self._ddimatuo_api_root(base or "https://api.ddimatuo.top", endpoint)
+                root = self._ddimatuo_api_root(base or self.DDIMATUO_DEFAULT_API_ROOT, endpoint)
                 endpoint = f"{root}/v1/videos"
                 headers = {
                     "Authorization": f"Bearer {stable_key}",
@@ -3118,35 +3118,42 @@ class MediaGenerationService:
                     return {"error": "ddimatuo_invalid_payload"}
 
                 err = raw_payload.get("error") if isinstance(raw_payload.get("error"), dict) else {}
-                status = _normalize_status(
+                status_raw = (
                     raw_payload.get("status")
                     or raw_payload.get("state")
                     or (err.get("code") if err else None)
                 )
-                url = self._absolutize_ddimatuo_video_url(
-                    raw_payload.get("video_url") or raw_payload.get("videoUrl"),
-                    root,
+                status_norm = self._ddimatuo_normalize_status(status_raw)
+                status = _normalize_status(status_norm)
+                url = self._ddimatuo_resolve_result_url(
+                    raw_payload,
+                    root_url=root,
+                    task_id=stable_task_id if status_norm == "completed" else None,
                 )
-                if not url:
-                    url = self._absolutize_ddimatuo_video_url(_pick_url(raw_payload), root)
-                # Only treat as succeeded when provider reports completed (or normalized succeeded).
-                if url and status in {"succeeded", "completed", "success"}:
+                media_asset_id = self._ddimatuo_extract_media_asset_id(raw_payload)
+                if url and status_norm == "completed":
                     packed = _pack(raw_payload, status="succeeded", url=url)
+                    packed_meta = packed.get("metadata") if isinstance(packed.get("metadata"), dict) else {}
+                    packed_meta["media_asset_id"] = media_asset_id or None
+                    packed_meta["requires_auth_download"] = True
+                    packed_meta["download_api_key"] = stable_key
+                    packed_meta["api_root"] = root
                     packed["metadata"] = _attach_provider_usage_metadata(
-                        packed.get("metadata") if isinstance(packed.get("metadata"), dict) else {},
+                        packed_meta,
                         task_payload=raw_payload,
                         source="ddimatuo_task_query",
                     )
                     return packed
-                if status in {"failed", "canceled"} or err:
+                if status_norm in {"failed", "cancelled", "manual_review", "expired"} or err:
                     err_msg = str(
                         err.get("message")
                         or err.get("code")
                         or raw_payload.get("message")
-                        or status
+                        or status_norm
                         or "ddimatuo_query_failed"
                     ).strip()
-                    return _pack(raw_payload, status="failed", error=err_msg)
+                    packed_status = "canceled" if status_norm == "cancelled" else "failed"
+                    return _pack(raw_payload, status=packed_status, error=err_msg)
                 return _pack(raw_payload, status=status or "running", pending=True)
 
             if is_dubai:
@@ -6216,7 +6223,7 @@ class MediaGenerationService:
             "pixelmove": {"base_url": "https://portal.pixelmove.ai", "model": "seedance-2.0"},
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
-            "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "SD_2.0"},
+            "ddimatuo": {"base_url": "https://api.aiyrx.xyz", "model": "SD_2.0"},
             "dubai": {"base_url": "https://dubai3000.xyz", "model": "sd-2-fast"},
         }
 
@@ -7229,7 +7236,7 @@ class MediaGenerationService:
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
             "nukoai": {"base_url": "https://www.nukoai.com/api/ext/v1", "model": ""},
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
-            "ddimatuo": {"base_url": "https://api.ddimatuo.top", "model": "SD_2.0"},
+            "ddimatuo": {"base_url": "https://api.aiyrx.xyz", "model": "SD_2.0"},
             "dubai": {"base_url": "https://dubai3000.xyz", "model": "sd-2-fast"},
         }
 
@@ -12696,8 +12703,21 @@ class MediaGenerationService:
             },
         }
 
+    DDIMATUO_DEFAULT_API_ROOT = "https://api.aiyrx.xyz"
+    DDIMATUO_WEBHOOK_EVENT_TYPES = frozenset({"video.completed", "video.failed", "video.cancelled"})
+    DDIMATUO_TERMINAL_STATUSES = frozenset({
+        "completed", "success", "succeeded", "done", "finished",
+        "failed", "error", "cancelled", "canceled", "rejected",
+        "manual_review", "expired",
+    })
+    DDIMATUO_INFLIGHT_STATUSES = frozenset({
+        "created", "queued", "leasing", "submitting", "provider_queued",
+        "generating", "downloading", "reconcile_pending", "retry_wait", "cancelling",
+        "running", "pending", "processing", "in_progress", "in-progress",
+    })
+
     def _ddimatuo_api_root(self, base_url: Any = None, endpoint: Any = None) -> str:
-        """Host root for DdiMatuo / aiyrx: strips /v1/videos[/generations] /v1/assets /v1."""
+        """Host root for DdiMatuo / aiyrx: strips /v1/videos[/generations] /v1/assets /v1/media-assets /v1."""
         candidates = [str(endpoint or "").strip(), str(base_url or "").strip()]
         for raw in candidates:
             if not raw:
@@ -12706,14 +12726,20 @@ class MediaGenerationService:
             if text.startswith("/"):
                 continue
             lower = text.lower()
-            for suffix in ("/v1/videos/generations", "/v1/videos", "/v1/assets", "/v1"):
+            for suffix in (
+                "/v1/videos/generations",
+                "/v1/videos",
+                "/v1/media-assets",
+                "/v1/assets",
+                "/v1",
+            ):
                 if lower.endswith(suffix):
                     text = text[: -len(suffix)].rstrip("/")
                     lower = text.lower()
                     break
             if text.lower().startswith(("http://", "https://")):
                 return text
-        return "https://api.ddimatuo.top"
+        return self.DDIMATUO_DEFAULT_API_ROOT
 
     def _ddimatuo_extract_asset_id(self, data: Any) -> str:
         if not isinstance(data, dict):
@@ -12734,6 +12760,209 @@ class MediaGenerationService:
                 val = str(asset.get(key) or "").strip()
                 if val:
                     return val
+        return ""
+
+    def _ddimatuo_normalize_status(self, value: Any) -> str:
+        text = str(value or "").strip().lower().replace("-", "_")
+        if text in {"video.completed"}:
+            return "completed"
+        if text in {"video.failed"}:
+            return "failed"
+        if text in {"video.cancelled", "video.canceled"}:
+            return "cancelled"
+        if text in {"success", "succeeded", "completed", "done", "finished", "complete"}:
+            return "completed"
+        if text in {"fail", "failed", "error", "rejected"}:
+            return "failed"
+        if text in {"canceled", "cancelled"}:
+            return "cancelled"
+        if text in {"manual_review", "expired"}:
+            return text
+        if text in self.DDIMATUO_INFLIGHT_STATUSES:
+            return text if text in {
+                "created", "queued", "leasing", "submitting", "provider_queued",
+                "generating", "downloading", "reconcile_pending", "retry_wait", "cancelling",
+            } else "queued"
+        return text
+
+    def _ddimatuo_is_terminal_status(self, value: Any) -> bool:
+        status = self._ddimatuo_normalize_status(value)
+        return status in {
+            "completed", "failed", "cancelled", "manual_review", "expired",
+        }
+
+    def _ddimatuo_extract_media_asset_id(self, data: Any) -> str:
+        """Output media-asset id for GET /v1/media-assets/{id}/download — not upload asset_id."""
+        if not isinstance(data, dict):
+            return ""
+
+        def _from_url(raw: Any) -> str:
+            text = str(raw or "").strip()
+            if not text:
+                return ""
+            match = re.search(r"/v1/media-assets/([^/?#]+)", text, flags=re.IGNORECASE)
+            return urllib.parse.unquote(match.group(1)).strip() if match else ""
+
+        for key in (
+            "media_asset_id",
+            "mediaAssetId",
+            "output_media_asset_id",
+            "outputMediaAssetId",
+        ):
+            val = str(data.get(key) or "").strip()
+            if val:
+                return val
+
+        for key in (
+            "download_url",
+            "downloadUrl",
+            "video_url",
+            "videoUrl",
+            "preview_url",
+            "previewUrl",
+            "url",
+        ):
+            found = _from_url(data.get(key))
+            if found:
+                return found
+
+        for nest_key in ("output", "result", "media", "media_asset", "mediaAsset", "asset"):
+            nested = data.get(nest_key)
+            if not isinstance(nested, dict):
+                continue
+            for key in ("media_asset_id", "mediaAssetId", "id", "asset_id", "assetId"):
+                val = str(nested.get(key) or "").strip()
+                if val and nest_key != "asset":
+                    return val
+                if val and nest_key == "asset" and str(nested.get("kind") or nested.get("type") or "").strip().lower() in {"video", "output", ""}:
+                    # Avoid mistaking uploaded reference assets for the finished clip.
+                    if nested.get("role") or nested.get("instruction"):
+                        continue
+                    return val
+            found = _from_url(nested.get("download_url") or nested.get("url") or nested.get("video_url"))
+            if found:
+                return found
+
+        outputs = data.get("outputs") or data.get("media_assets") or data.get("assets")
+        if isinstance(outputs, list):
+            for item in outputs:
+                if not isinstance(item, dict):
+                    found = _from_url(item)
+                    if found:
+                        return found
+                    continue
+                kind = str(item.get("kind") or item.get("type") or item.get("role") or "").strip().lower()
+                if kind in {"image", "audio", "reference", "character", "first_frame", "last_frame"}:
+                    continue
+                for key in ("media_asset_id", "mediaAssetId", "id", "asset_id", "assetId"):
+                    val = str(item.get(key) or "").strip()
+                    if val:
+                        return val
+                found = _from_url(item.get("download_url") or item.get("url"))
+                if found:
+                    return found
+
+        inner = data.get("data")
+        if isinstance(inner, dict):
+            nested_id = self._ddimatuo_extract_media_asset_id(inner)
+            if nested_id:
+                return nested_id
+        return ""
+
+    def _ddimatuo_media_download_url(self, media_asset_id: Any, root_url: Any = None) -> str:
+        asset_id = str(media_asset_id or "").strip()
+        if not asset_id:
+            return ""
+        root = str(root_url or self.DDIMATUO_DEFAULT_API_ROOT).rstrip("/")
+        return f"{root}/v1/media-assets/{urllib.parse.quote(asset_id, safe='')}/download"
+
+    def _ddimatuo_public_webhook_url(self, raw: Any) -> str:
+        text = str(raw or "").strip()
+        if not text or text == "-1":
+            return ""
+        parsed = urllib.parse.urlparse(text)
+        if parsed.scheme.lower() != "https":
+            return ""
+        host = str(parsed.hostname or "").strip().lower()
+        if not host or host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
+            return ""
+        return text
+
+    def _ddimatuo_hmac_key_from_api_key(self, api_key: Any) -> bytes:
+        return hashlib.sha256(str(api_key or "").encode("utf-8")).digest()
+
+    def _ddimatuo_webhook_signature_candidates(
+        self,
+        api_key: Any,
+        timestamp: Any,
+        raw_body: bytes,
+    ) -> List[str]:
+        key = self._ddimatuo_hmac_key_from_api_key(api_key)
+        ts = str(timestamp or "").strip()
+        body = raw_body if isinstance(raw_body, (bytes, bytearray)) else str(raw_body or "").encode("utf-8")
+        messages = [
+            f"{ts}.".encode("utf-8") + bytes(body),
+            ts.encode("utf-8") + bytes(body),
+            bytes(body),
+        ]
+        out: List[str] = []
+        seen: Set[str] = set()
+        for message in messages:
+            digest = hmac.new(key, message, hashlib.sha256).digest()
+            for encoded in (
+                digest.hex(),
+                base64.b64encode(digest).decode("ascii"),
+                f"sha256={digest.hex()}",
+            ):
+                if encoded not in seen:
+                    seen.add(encoded)
+                    out.append(encoded)
+        return out
+
+    def _ddimatuo_resolve_result_url(
+        self,
+        data: Any,
+        *,
+        root_url: Any = None,
+        task_id: Any = None,
+    ) -> str:
+        """Prefer platform media-assets download; fall back to video_url / /content."""
+        root = self._ddimatuo_api_root(root_url)
+        media_asset_id = self._ddimatuo_extract_media_asset_id(data)
+        if media_asset_id:
+            return self._ddimatuo_media_download_url(media_asset_id, root)
+
+        if isinstance(data, dict):
+            candidates = [
+                data.get("download_url"),
+                data.get("downloadUrl"),
+                data.get("video_url"),
+                data.get("videoUrl"),
+                data.get("url"),
+                data.get("result_url"),
+                data.get("resultUrl"),
+            ]
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            output = data.get("output") if isinstance(data.get("output"), dict) else {}
+            candidates.extend(
+                [
+                    inner.get("download_url"),
+                    inner.get("video_url"),
+                    inner.get("videoUrl"),
+                    inner.get("url"),
+                    output.get("download_url"),
+                    output.get("video_url"),
+                    output.get("url"),
+                ]
+            )
+            for item in candidates:
+                resolved = self._absolutize_ddimatuo_video_url(item, root)
+                if resolved:
+                    return resolved
+
+        task = str(task_id or "").strip()
+        if task:
+            return f"{root}/v1/videos/{urllib.parse.quote(task, safe='')}/content"
         return ""
 
     def _ddimatuo_resolve_output_size(
@@ -12975,13 +13204,33 @@ class MediaGenerationService:
             return {"error": "No DdiMatuo API Key", "submit_failed": True}
 
         tool_conf = config.get("config", {}) or {}
-        if tool_conf.get("_pure_callback_mode"):
-            logger.info("DdiMatuo ignoring pure_callback_mode | reason=poll_only_provider")
+        raw_callback_url = str(
+            tool_conf.get("_provider_callback_url")
+            or tool_conf.get("webhook")
+            or tool_conf.get("webhookUrl")
+            or tool_conf.get("webhook_url")
+            or tool_conf.get("webHook")
+            or tool_conf.get("callback_url")
+            or tool_conf.get("callbackUrl")
+            or ""
+        ).strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or "ddimatuo-video"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url:
+            callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        resolved_callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        webhook_url = self._ddimatuo_public_webhook_url(resolved_callback_url)
+        callback_enabled = bool(webhook_url)
+        pure_callback_mode = bool(
+            str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"}
+        )
+        if tool_conf.get("_pure_callback_mode") and not callback_enabled:
+            logger.info("DdiMatuo ignoring pure_callback_mode | reason=webhook_not_public_https")
 
         base_url = str(
             config.get("base_url")
             or tool_conf.get("base_url")
-            or "https://api.ddimatuo.top"
+            or self.DDIMATUO_DEFAULT_API_ROOT
         ).strip().rstrip("/")
         root_url = self._ddimatuo_api_root(
             base_url,
@@ -13376,6 +13625,8 @@ class MediaGenerationService:
             "size": output_size,
             "references": list(references),
         }
+        if webhook_url:
+            payload["webhook"] = webhook_url
 
         poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
         # Docs: poll every 5 seconds.
@@ -13398,7 +13649,11 @@ class MediaGenerationService:
             "submit_url": submit_url,
             "assets_url": assets_url,
             "query_endpoint": query_endpoint_base,
-            "poll_only": True,
+            "poll_only": not callback_enabled,
+            "webhook": webhook_url or None,
+            "callback_ticket": callback_ticket if callback_enabled else None,
+            "download_api_key": api_key,
+            "api_root": root_url,
             "mode": mode,
             "channel": channel,
             "duration": int(duration_in),
@@ -13499,31 +13754,17 @@ class MediaGenerationService:
         def _extract_status(data: Any) -> str:
             if not isinstance(data, dict):
                 return ""
-            return str(data.get("status") or data.get("state") or "").strip().lower()
-
-        def _extract_video_url(data: Any) -> Optional[str]:
-            if not isinstance(data, dict):
-                return None
-            candidates = [
-                data.get("video_url"),
-                data.get("videoUrl"),
-                data.get("url"),
-                data.get("result_url"),
-                data.get("resultUrl"),
-            ]
-            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
-            candidates.extend(
-                [
-                    inner.get("video_url"),
-                    inner.get("videoUrl"),
-                    inner.get("url"),
-                ]
+            return self._ddimatuo_normalize_status(
+                data.get("status") or data.get("state") or data.get("type") or data.get("event")
             )
-            for item in candidates:
-                resolved = self._absolutize_ddimatuo_video_url(item, root_url)
-                if resolved:
-                    return resolved
-            return None
+
+        def _extract_video_url(data: Any, *, task_id_value: Any = None) -> Optional[str]:
+            resolved = self._ddimatuo_resolve_result_url(
+                data,
+                root_url=root_url,
+                task_id=task_id_value,
+            )
+            return resolved or None
 
         submit_timeouts = _media_submit_timeout_pair(
             connect_timeout=20,
@@ -13687,8 +13928,46 @@ class MediaGenerationService:
             final_submit=True,
             task_id=str(task_id),
             provider_task_id=str(task_id),
+            download_api_key=api_key,
+            api_root=root_url,
+            webhook=webhook_url or None,
             submit_raw=submit_data,
         )
+
+        if callback_enabled and webhook_url:
+            logger.info(
+                "DdiMatuo webhook attached | task_id=%s ticket=%s webhook=%s pure_callback=%s",
+                task_id,
+                callback_ticket,
+                webhook_url,
+                pure_callback_mode,
+            )
+
+        if callback_enabled and pure_callback_mode:
+            logger.info(
+                "DdiMatuo pending webhook | task_id=%s callback_ticket=%s webhook=%s",
+                task_id,
+                callback_ticket,
+                webhook_url,
+            )
+            return {
+                "pending_callback": True,
+                "provider_task_id": str(task_id),
+                "metadata": {
+                    **base_metadata,
+                    "raw": submit_data,
+                    "submit_raw": submit_data,
+                    "task_id": str(task_id),
+                    "taskId": str(task_id),
+                    "pending_callback": True,
+                    "callback_ticket": callback_ticket,
+                    "callback_url": webhook_url,
+                    "webhook": webhook_url,
+                    "download_api_key": api_key,
+                    "api_root": root_url,
+                    "requires_auth_download": True,
+                },
+            }
 
         poll_url = (
             poll_template.replace("{taskId}", urllib.parse.quote(task_id))
@@ -13702,7 +13981,7 @@ class MediaGenerationService:
         cancel_url = f"{query_endpoint_base.rstrip('/')}/{urllib.parse.quote(str(task_id))}/cancel"
 
         async def _cancel_remote_task(reason: str) -> Dict[str, Any]:
-            """Best-effort cancel to release freeze / stop auto-retry on timeout or failure."""
+            """POST /cancel returns 202; keep polling until a terminal status."""
             cancel_meta: Dict[str, Any] = {
                 "cancel_requested": True,
                 "cancel_reason": str(reason or "")[:300] or None,
@@ -13737,6 +14016,27 @@ class MediaGenerationService:
                 )
             return cancel_meta
 
+        def _success_from_poll(poll_data: Dict[str, Any], *, source: str) -> Dict[str, Any]:
+            media_asset_id = self._ddimatuo_extract_media_asset_id(poll_data)
+            result_url = _extract_video_url(poll_data, task_id_value=task_id)
+            result_metadata = _attach_provider_usage_metadata(
+                {
+                    **base_metadata,
+                    "raw": poll_data,
+                    "task_id": task_id,
+                    "provider_task_id": task_id,
+                    "taskId": task_id,
+                    "media_asset_id": media_asset_id or None,
+                    "oss_persist_pending": True,
+                    "requires_auth_download": True,
+                    "download_api_key": api_key,
+                    "api_root": root_url,
+                },
+                task_payload=poll_data,
+                source=source,
+            )
+            return {"url": result_url, "metadata": result_metadata}
+
         async def _fail_and_cancel(
             error: str,
             *,
@@ -13745,6 +14045,64 @@ class MediaGenerationService:
             reason: Optional[str] = None,
         ) -> Dict[str, Any]:
             cancel_meta = await _cancel_remote_task(reason or error)
+            # 202 accepted: keep polling until cancelled / completed / other terminal.
+            cancel_http = cancel_meta.get("cancel_http_status")
+            if cancel_http in {200, 201, 202}:
+                await_deadline = time.time() + min(90, max(15, poll_interval_seconds * 6))
+                last_status = "cancelling"
+                last_poll: Dict[str, Any] = {}
+                while time.time() < await_deadline:
+                    await asyncio.sleep(poll_interval_seconds)
+                    try:
+                        await_resp = await asyncio.to_thread(
+                            requests.get,
+                            poll_url,
+                            headers=poll_headers,
+                            timeout=30,
+                            verify=False,
+                        )
+                    except Exception:
+                        continue
+                    if getattr(await_resp, "status_code", None) not in {200, 201}:
+                        continue
+                    try:
+                        last_poll = await_resp.json() if await_resp.text else {}
+                    except Exception:
+                        last_poll = {}
+                    last_status = _extract_status(last_poll)
+                    if last_status == "completed":
+                        result_url = _extract_video_url(last_poll, task_id_value=task_id)
+                        if result_url:
+                            logger.info(
+                                "DdiMatuo completed after cancel | task_id=%s status=%s",
+                                task_id,
+                                last_status,
+                            )
+                            return _success_from_poll(last_poll, source="ddimatuo_cancel_await")
+                    if last_status in {"cancelled", "failed", "manual_review", "expired"}:
+                        err_msg = _extract_error_message(
+                            last_poll,
+                            fallback=f"DdiMatuo generation {last_status}",
+                        )
+                        return {
+                            "error": f"DdiMatuo generation failed: {err_msg}",
+                            "submit_failed": False,
+                            "details": last_poll or details,
+                            "metadata": {
+                                **base_metadata,
+                                "task_id": task_id,
+                                "provider_task_id": task_id,
+                                "taskId": task_id,
+                                "raw": last_poll,
+                                **(extra_meta or {}),
+                                **cancel_meta,
+                            },
+                        }
+                extra_meta = {
+                    **(extra_meta or {}),
+                    "last_status": last_status,
+                    "cancel_await_exhausted": True,
+                }
             out: Dict[str, Any] = {
                 "error": error,
                 "submit_failed": False,
@@ -13763,12 +14121,13 @@ class MediaGenerationService:
 
         max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
         logger.info(
-            "DdiMatuo poll-only generation started | task_id=%s model=%s duration=%s size=%s resolution=%s poll_interval=%ss poll_timeout=%ss max_attempts=%s poll_url=%s",
+            "DdiMatuo generation started | task_id=%s model=%s duration=%s size=%s resolution=%s webhook=%s poll_interval=%ss poll_timeout=%ss max_attempts=%s poll_url=%s",
             task_id,
             model,
             duration_in,
             output_size,
             resolution,
+            bool(webhook_url),
             poll_interval_seconds,
             poll_timeout_seconds,
             max_attempts,
@@ -13869,10 +14228,10 @@ class MediaGenerationService:
                 )
 
             status_val = _extract_status(poll_data)
-            result_url = _extract_video_url(poll_data)
+            result_url = _extract_video_url(poll_data, task_id_value=task_id if status_val == "completed" else None)
             if status_val != last_logged_status or attempt == 1 or attempt % 5 == 0 or attempt == max_attempts:
                 logger.info(
-                    "DdiMatuo poll | task_id=%s attempt=%s/%s elapsed=%ss status=%s has_video_url=%s",
+                    "DdiMatuo poll | task_id=%s attempt=%s/%s elapsed=%ss status=%s has_result_url=%s",
                     task_id,
                     attempt,
                     max_attempts,
@@ -13882,31 +14241,18 @@ class MediaGenerationService:
                 )
                 last_logged_status = status_val
 
-            if status_val in {"completed", "success", "succeeded", "done", "finished"} or (
-                result_url and status_val in {"", "completed", "success", "succeeded", "done", "finished"}
-            ):
+            if status_val == "completed" or (result_url and status_val in {"", "completed"}):
                 if result_url:
-                    result_metadata = _attach_provider_usage_metadata(
-                        {
-                            **base_metadata,
-                            "raw": poll_data,
-                            "task_id": task_id,
-                            "provider_task_id": task_id,
-                            "taskId": task_id,
-                            "oss_persist_pending": True,
-                            # video_url requires Authorization on download (resolved server-side).
-                            "requires_auth_download": True,
-                        },
-                        task_payload=poll_data,
-                        source="ddimatuo_poll",
-                    )
+                    packed = _success_from_poll(poll_data, source="ddimatuo_poll")
+                    result_metadata = packed.get("metadata") if isinstance(packed.get("metadata"), dict) else {}
                     logger.info(
-                        "DdiMatuo poll completed | task_id=%s attempt=%s/%s elapsed=%ss url=%s cost_total_cents=%s",
+                        "DdiMatuo poll completed | task_id=%s attempt=%s/%s elapsed=%ss url=%s media_asset_id=%s cost_total_cents=%s",
                         task_id,
                         attempt,
                         max_attempts,
                         elapsed_s,
-                        str(result_url).split("?", 1)[0],
+                        str(packed.get("url") or "").split("?", 1)[0],
+                        result_metadata.get("media_asset_id"),
                         (result_metadata.get("provider_usage") or {}).get("cost_total_cents")
                         if isinstance(result_metadata.get("provider_usage"), dict)
                         else None,
@@ -13916,7 +14262,7 @@ class MediaGenerationService:
                         try:
                             cb_result = result_callback(
                                 {
-                                    "url": result_url,
+                                    "url": packed.get("url"),
                                     "metadata": result_metadata,
                                     "provider": "ddimatuo",
                                     "task_id": str(task_id),
@@ -13930,17 +14276,20 @@ class MediaGenerationService:
                                 task_id,
                                 result_cb_err,
                             )
-                    return {"url": result_url, "metadata": result_metadata}
+                    return packed
                 return await _fail_and_cancel(
-                    "DdiMatuo generation completed without video_url",
+                    "DdiMatuo generation completed without media asset",
                     details=poll_data,
-                    reason="completed_without_video_url",
+                    reason="completed_without_media_asset",
                 )
 
-            if status_val in {"failed", "error", "cancelled", "canceled", "rejected"}:
-                err_msg = _extract_error_message(poll_data, fallback="DdiMatuo generation failed")
+            if status_val in {"failed", "cancelled", "manual_review", "expired"}:
+                err_msg = _extract_error_message(
+                    poll_data,
+                    fallback=f"DdiMatuo generation {status_val}",
+                )
                 logger.error(
-                    "DdiMatuo poll failed | task_id=%s attempt=%s/%s elapsed=%ss status=%s error=%s",
+                    "DdiMatuo poll terminal | task_id=%s attempt=%s/%s elapsed=%ss status=%s error=%s",
                     task_id,
                     attempt,
                     max_attempts,
@@ -13948,14 +14297,21 @@ class MediaGenerationService:
                     status_val,
                     err_msg,
                 )
-                return await _fail_and_cancel(
-                    f"DdiMatuo generation failed: {err_msg}",
-                    details=poll_data,
-                    extra_meta={"raw": poll_data},
-                    reason=f"provider_status_{status_val or 'failed'}",
-                )
+                return {
+                    "error": f"DdiMatuo generation failed: {err_msg}",
+                    "submit_failed": False,
+                    "details": poll_data,
+                    "metadata": {
+                        **base_metadata,
+                        "task_id": task_id,
+                        "provider_task_id": task_id,
+                        "taskId": task_id,
+                        "raw": poll_data,
+                    },
+                }
 
-            # queued / submitting / running — keep polling
+            # created / queued / leasing / submitting / provider_queued /
+            # generating / downloading / reconcile_pending / retry_wait / cancelling
 
         logger.error(
             "DdiMatuo poll timeout exhausted | task_id=%s attempts=%s elapsed=%ss timeout=%ss last_status=%s",
@@ -20681,7 +21037,7 @@ class MediaGenerationService:
             return ""
         if text.lower().startswith(("http://", "https://")):
             return text
-        root = str(base_url or "https://api.ddimatuo.top").strip() or "https://api.ddimatuo.top"
+        root = str(base_url or self.DDIMATUO_DEFAULT_API_ROOT).strip() or self.DDIMATUO_DEFAULT_API_ROOT
         # urljoin mirrors WHATWG URL resolution used by `new URL(relative, base)`.
         return urllib.parse.urljoin(root if root.endswith("/") else (root + "/"), text)
 

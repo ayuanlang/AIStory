@@ -1357,7 +1357,6 @@ async def _run_generate_video(
             if _media_svc._normalize_provider_name(resolved_video_provider, "Video") not in {
                 "nukoai",
                 "shishikeji",
-                "ddimatuo",
                 "dubai",
             }:
                 video_provider_options["_pure_callback_mode"] = True
@@ -2599,6 +2598,12 @@ async def _run_generate_video_job(
         query_endpoint = str(payload_snapshot.get("query_endpoint") or payload_snapshot.get("queryEndpoint") or "").strip()
         if query_endpoint:
             patch_fields["query_endpoint"] = query_endpoint
+        download_api_key = str(payload_snapshot.get("download_api_key") or "").strip()
+        if download_api_key:
+            patch_fields["download_api_key"] = download_api_key
+        api_root = str(payload_snapshot.get("api_root") or "").strip()
+        if api_root:
+            patch_fields["api_root"] = api_root
         # Persist provider payload markers onto the video job itself (not only the queue row),
         # so re-download can recover provider_task_id after workers restart.
         try:
@@ -2612,6 +2617,12 @@ async def _run_generate_video_job(
                 job_patch["taskId"] = nested_task_id
             if query_endpoint:
                 job_patch["query_endpoint"] = query_endpoint
+            download_api_key = str(payload_snapshot.get("download_api_key") or "").strip()
+            if download_api_key:
+                job_patch["download_api_key"] = download_api_key
+            api_root = str(payload_snapshot.get("api_root") or "").strip()
+            if api_root:
+                job_patch["api_root"] = api_root
             _set_video_job(job_id, **job_patch)
         except Exception:
             logger.exception(

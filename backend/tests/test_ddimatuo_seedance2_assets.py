@@ -16,6 +16,50 @@ def test_ddimatuo_api_root_strips_generations():
     assert svc._ddimatuo_api_root("https://api.ddimatuo.top/v1/videos/generations") == "https://api.ddimatuo.top"
     assert svc._ddimatuo_api_root("https://api.aiyrx.xyz/v1/videos") == "https://api.aiyrx.xyz"
     assert svc._ddimatuo_api_root("https://api.aiyrx.xyz", "/v1/videos") == "https://api.aiyrx.xyz"
+    assert svc._ddimatuo_api_root("https://api.aiyrx.xyz/v1/media-assets") == "https://api.aiyrx.xyz"
+    assert svc._ddimatuo_api_root() == "https://api.aiyrx.xyz"
+
+
+def test_ddimatuo_media_asset_download_url():
+    svc = MediaGenerationService()
+    assert svc._ddimatuo_extract_media_asset_id({
+        "status": "completed",
+        "media_asset_id": "ma-1",
+    }) == "ma-1"
+    assert svc._ddimatuo_extract_media_asset_id({
+        "output": {"id": "ma-2"},
+    }) == "ma-2"
+    assert svc._ddimatuo_extract_media_asset_id({
+        "video_url": "https://api.aiyrx.xyz/v1/media-assets/ma-3/download",
+    }) == "ma-3"
+    assert svc._ddimatuo_media_download_url("ma-1", "https://api.aiyrx.xyz") == (
+        "https://api.aiyrx.xyz/v1/media-assets/ma-1/download"
+    )
+    assert svc._ddimatuo_resolve_result_url(
+        {"status": "completed", "media_asset_id": "ma-9"},
+        root_url="https://api.aiyrx.xyz",
+        task_id="task-1",
+    ) == "https://api.aiyrx.xyz/v1/media-assets/ma-9/download"
+
+
+def test_ddimatuo_status_and_webhook_helpers():
+    svc = MediaGenerationService()
+    assert svc._ddimatuo_normalize_status("provider_queued") == "provider_queued"
+    assert svc._ddimatuo_normalize_status("video.completed") == "completed"
+    assert svc._ddimatuo_normalize_status("video.cancelled") == "cancelled"
+    assert svc._ddimatuo_is_terminal_status("manual_review")
+    assert svc._ddimatuo_is_terminal_status("expired")
+    assert not svc._ddimatuo_is_terminal_status("cancelling")
+    assert svc._ddimatuo_public_webhook_url("https://app.example.com/api/v1/generate/callback/t1")
+    assert not svc._ddimatuo_public_webhook_url("http://app.example.com/cb")
+    assert not svc._ddimatuo_public_webhook_url("https://localhost/cb")
+    sigs = svc._ddimatuo_webhook_signature_candidates("sk-test", "1710000000", b'{"id":"task-1"}')
+    assert sigs
+    import hmac
+    import hashlib
+    key = hashlib.sha256(b"sk-test").digest()
+    expected = hmac.new(key, b'1710000000.{"id":"task-1"}', hashlib.sha256).hexdigest()
+    assert expected in sigs
 
 
 def test_ddimatuo_extract_asset_id_shapes():
@@ -69,7 +113,7 @@ def test_ddimatuo_uploads_asset_then_creates_video_with_references():
         return _FakeResp({
             "id": "task-1",
             "status": "completed",
-            "video_url": "https://api.ddimatuo.top/v1/videos/task-1/content",
+            "media_asset_id": "ma-clip-1",
         })
 
     async def _no_sleep(*_args, **_kwargs):
@@ -118,14 +162,113 @@ def test_ddimatuo_uploads_asset_then_creates_video_with_references():
     assert "images" not in body
     assert "videos" not in body
     assert "audios" not in body
-    assert result.get("url")
+    assert result.get("url") == "https://api.aiyrx.xyz/v1/media-assets/ma-clip-1/download"
+    assert result.get("metadata", {}).get("media_asset_id") == "ma-clip-1"
     assert not result.get("submit_failed")
     assert not result.get("error")
+
+
+def test_ddimatuo_submit_includes_webhook_and_can_pending_callback():
+    svc = MediaGenerationService()
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, "json": kwargs.get("json"), "data": kwargs.get("data")})
+        if str(url).rstrip("/").endswith("/v1/assets"):
+            return _FakeResp({"id": "asset-1"})
+        if str(url).rstrip("/").endswith("/v1/videos"):
+            return _FakeResp({"id": "task-wh", "status": "created"})
+        return _FakeResp({"error": "unexpected"}, status_code=404)
+
+    with patch("app.services.media_service.requests.post", fake_post):
+        result = asyncio.run(svc._handle_ddimatuo_generation(
+            "video",
+            "人物走向镜头",
+            {
+                "api_key": "sk-test",
+                "model": "SD_2.0",
+                "base_url": "https://api.aiyrx.xyz",
+                "config": {
+                    "quality": "720P",
+                    "ratio": "16:9",
+                    "images": [PNG_1PX],
+                    "_provider_callback_url": "https://app.example.com/api/v1/generate/callback/video-job-abc",
+                    "_provider_callback_ticket": "video-job-abc",
+                    "_pure_callback_mode": True,
+                },
+            },
+            PNG_1PX,
+            duration=5,
+            aspect_ratio="16:9",
+        ))
+
+    video_calls = [c for c in calls if str(c["url"]).rstrip("/").endswith("/v1/videos")]
+    assert video_calls
+    assert video_calls[0]["json"]["webhook"] == (
+        "https://app.example.com/api/v1/generate/callback/video-job-abc"
+    )
+    assert result.get("pending_callback") is True
+    assert result.get("provider_task_id") == "task-wh"
+    assert result.get("metadata", {}).get("webhook")
+
+
+def test_ddimatuo_cancel_202_keeps_polling_until_cancelled():
+    svc = MediaGenerationService()
+    gets = {"n": 0}
+
+    def fake_post(url, **kwargs):
+        if str(url).rstrip("/").endswith("/v1/assets"):
+            return _FakeResp({"id": "asset-1"})
+        if str(url).rstrip("/").endswith("/v1/videos"):
+            return _FakeResp({"id": "task-c", "status": "queued"})
+        if str(url).endswith("/cancel"):
+            return _FakeResp({"status": "cancelling"}, status_code=202)
+        return _FakeResp({"error": "unexpected"}, status_code=404)
+
+    def fake_get(url, **kwargs):
+        gets["n"] += 1
+        if gets["n"] <= 2:
+            return _FakeResp({"id": "task-c", "status": "generating"})
+        return _FakeResp({"id": "task-c", "status": "cancelled", "error": {"message": "user cancelled"}})
+
+    async def _no_sleep(*_args, **_kwargs):
+        return None
+
+    with patch("app.services.media_service.requests.post", fake_post), \
+         patch("app.services.media_service.requests.get", fake_get), \
+         patch("app.services.media_service.asyncio.sleep", _no_sleep):
+        result = asyncio.run(svc._handle_ddimatuo_generation(
+            "video",
+            "人物走向镜头",
+            {
+                "api_key": "sk-test",
+                "model": "SD_2.0",
+                "base_url": "https://api.aiyrx.xyz",
+                "config": {
+                    "quality": "720P",
+                    "ratio": "16:9",
+                    "images": [PNG_1PX],
+                    "poll_timeout_seconds": 60,
+                    "poll_interval_seconds": 3,
+                },
+            },
+            PNG_1PX,
+            duration=5,
+            aspect_ratio="16:9",
+        ))
+
+    assert result.get("error")
+    assert "cancelled" in str(result.get("error") or "").lower() or "user cancelled" in str(result.get("error") or "").lower()
+    assert gets["n"] >= 3
 
 
 if __name__ == "__main__":
     test_ddimatuo_api_root_strips_generations()
     test_ddimatuo_extract_asset_id_shapes()
     test_ddimatuo_resolve_output_size()
+    test_ddimatuo_media_asset_download_url()
+    test_ddimatuo_status_and_webhook_helpers()
     test_ddimatuo_uploads_asset_then_creates_video_with_references()
+    test_ddimatuo_submit_includes_webhook_and_can_pending_callback()
+    test_ddimatuo_cancel_202_keeps_polling_until_cancelled()
     print("ok")

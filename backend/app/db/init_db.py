@@ -2869,9 +2869,9 @@ def init_system_api_settings(db):
     else:
         logger.info("System shishikeji video settings already initialized")
 
-    # Seed DdiMatuo video adapter models — poll-only Bearer auth.
+    # Seed DdiMatuo video adapter models — webhook + poll Bearer auth.
     ddimatuo_provider = "ddimatuo"
-    ddimatuo_base_url = "https://api.ddimatuo.top"
+    ddimatuo_base_url = "https://api.aiyrx.xyz"
     ddimatuo_model_items = [
         ("DdiMatuo SD 2.0", "SD_2.0"),
     ]
@@ -2913,10 +2913,12 @@ def init_system_api_settings(db):
             cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos"
             cfg["query_endpoint"] = f"{ddimatuo_base_url}/v1/videos"
             cfg["notes"] = (
-                "DdiMatuo poll-only. Upload POST /v1/assets then create POST /v1/videos "
-                "with references[].asset_id; model from system API; duration_seconds 4-15; "
-                "size from ratio×resolution; channel=auto; poll GET /v1/videos/{id}."
+                "DdiMatuo webhook+poll. Base URL https://api.aiyrx.xyz only. "
+                "Upload POST /v1/assets then create POST /v1/videos with references[].asset_id "
+                "and webhook; download GET /v1/media-assets/{id}/download; "
+                "poll GET /v1/videos/{id} until terminal."
             )
+            cfg.pop("poll_only", None)
             row.config = cfg
             ddi_model_migrated += 1
             existing_ddi_models.add("sd_2.0")
@@ -2946,7 +2948,6 @@ def init_system_api_settings(db):
                 "poll_timeout_seconds": 600,
                 "endpoint": f"{ddimatuo_base_url}/v1/videos",
                 "query_endpoint": f"{ddimatuo_base_url}/v1/videos",
-                "poll_only": True,
                 "auto_retry_busy": True,
                 "mode": "omni_reference",
                 "resolution": "1080P",
@@ -2954,9 +2955,9 @@ def init_system_api_settings(db):
                 "aspect_ratios": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
                 "durations_seconds": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
                 "notes": (
-                    "DdiMatuo poll-only. Upload POST /v1/assets then create POST /v1/videos "
-                    "with references[].asset_id; duration_seconds 4-15; size from ratio×resolution; "
-                    "channel=auto; poll GET /v1/videos/{id}."
+                    "DdiMatuo webhook+poll. Base URL https://api.aiyrx.xyz only. "
+                    "Upload POST /v1/assets then create POST /v1/videos with webhook; "
+                    "download GET /v1/media-assets/{id}/download; poll GET /v1/videos/{id}."
                 ),
             },
             is_active=False,
@@ -2980,13 +2981,22 @@ def init_system_api_settings(db):
             elif "/v1/videos/generations" in endpoint.lower():
                 cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos"
                 changed = True
+            elif "ddimatuo.top" in endpoint.lower():
+                cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos"
+                changed = True
             elif endpoint.lower().endswith("/v1/videos"):
                 pass
             elif "ddimatuo" in endpoint.lower() or "aiyrx" in endpoint.lower():
                 cfg["endpoint"] = f"{ddimatuo_base_url}/v1/videos"
                 changed = True
+            if "ddimatuo.top" in str(getattr(row, "base_url", "") or "").lower():
+                row.base_url = ddimatuo_base_url
+                changed = True
+            if cfg.get("poll_only") is True:
+                cfg.pop("poll_only", None)
+                changed = True
             query_ep = str(cfg.get("query_endpoint") or "").strip().rstrip("/")
-            if not query_ep or query_ep.lower().endswith("/generations"):
+            if not query_ep or query_ep.lower().endswith("/generations") or "ddimatuo.top" in query_ep.lower():
                 cfg["query_endpoint"] = f"{ddimatuo_base_url}/v1/videos"
                 changed = True
             raw_res = str(cfg.get("resolution") or "").strip()

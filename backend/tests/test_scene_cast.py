@@ -81,6 +81,8 @@ def test_build_scene_entity_token_brief():
     assert "中文项目用 裸名+标签" in brief
     assert "物理文字标签" in brief
     assert "不是对白硬字幕" in brief
+    assert "紧跟该人【建置】可见面整句" in brief
+    assert "禁把多名牌攒到建置段末或入戏一起写" in brief
 
 
 def test_build_scene_entity_token_brief_empty():

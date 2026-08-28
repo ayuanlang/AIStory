@@ -120,6 +120,7 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
     if not stable_ticket:
         raise HTTPException(status_code=400, detail="Invalid callback ticket")
     _apply_no_store_headers(response)
+    body_bytes = b""
 
     try:
         payload = await request.json()
@@ -167,6 +168,8 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
                 "x-kie-timestamp",
                 "x-signature",
                 "x-timestamp",
+                "x-event-id",
+                "x-event-type",
                 "x-forwarded-for",
                 "user-agent",
             }
@@ -189,8 +192,47 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
         logger.error(f"Failed to log webhook payload: {e}")
 
     try:
-        _verify_kie_webhook_request(request, payload if isinstance(payload, dict) else {})
-        logger.info("[WebhookVerify] accepted | ticket=%s", stable_ticket)
+        from app.services.generation_runtime.callbacks import (
+            _enrich_ddimatuo_webhook_payload,
+            _is_ddimatuo_webhook_event,
+            _verify_ddimatuo_webhook_request,
+        )
+
+        if _is_ddimatuo_webhook_event(request, payload if isinstance(payload, dict) else {}):
+            verify_state = _verify_ddimatuo_webhook_request(
+                request,
+                payload if isinstance(payload, dict) else {},
+                ticket=stable_ticket,
+                raw_body=body_bytes or b"",
+            )
+            if verify_state == "duplicate":
+                logger.info(
+                    "[WebhookVerify] ddimatuo duplicate ignored | ticket=%s event_id=%s",
+                    stable_ticket,
+                    str(request.headers.get("x-event-id") or "").strip() or None,
+                )
+                return {"ok": True, "ticket": stable_ticket, "accepted": True, "duplicate": True}
+            from app.services.generation_runtime.callbacks import _resolve_ddimatuo_webhook_api_key
+
+            payload = _enrich_ddimatuo_webhook_payload(
+                payload if isinstance(payload, dict) else {},
+                request,
+                ticket=stable_ticket,
+                api_key=_resolve_ddimatuo_webhook_api_key(
+                    stable_ticket,
+                    payload if isinstance(payload, dict) else {},
+                ),
+            )
+            logger.info(
+                "[WebhookVerify] ddimatuo accepted | ticket=%s event=%s task_id=%s has_url=%s",
+                stable_ticket,
+                str(request.headers.get("x-event-type") or "").strip() or None,
+                payload.get("task_id") or payload.get("taskId"),
+                bool(payload.get("url") or payload.get("result_url")),
+            )
+        else:
+            _verify_kie_webhook_request(request, payload if isinstance(payload, dict) else {})
+            logger.info("[WebhookVerify] accepted | ticket=%s", stable_ticket)
     except HTTPException as verify_exc:
         logger.warning(
             "[WebhookVerify] rejected | ticket=%s detail=%s has_timestamp=%s has_signature=%s",

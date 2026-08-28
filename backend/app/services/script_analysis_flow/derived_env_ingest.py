@@ -33,7 +33,9 @@ EVIDENCE_NAME_PATTERN = re.compile(
     re.IGNORECASE,
 )
 FRAMING_ENV_FIELD_PATTERN = re.compile(
-    r"【Beat景别构图方案】(.*?)(?:【景别构图综合】|\[DERIVED_ENV_EXTRACT_START\]|\[BEAT_STREAM_START\])",
+    r"【(?:Beat景别构图方案|取景锁定|Beat主体定位)】(.*?)(?:"
+    r"【(?:景别构图综合|主体定位方案|取景锁定|Beat主体定位|实体覆盖)】|"
+    r"\[DERIVED_ENV_EXTRACT_START\]|\[BEAT_STREAM_START\])",
     re.IGNORECASE | re.DOTALL,
 )
 PLAN_ENV_NAME_PATTERN = re.compile(
@@ -336,8 +338,7 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
     for match in DERIVED_ENV_TAG_PATTERN.finditer(source):
         _upsert(match.group(1))
 
-    plan_match = FRAMING_ENV_FIELD_PATTERN.search(source)
-    if plan_match:
+    for plan_match in FRAMING_ENV_FIELD_PATTERN.finditer(source):
         for env_match in PLAN_ENV_NAME_PATTERN.finditer(plan_match.group(1) or ""):
             _upsert(env_match.group(1) or env_match.group(2))
 

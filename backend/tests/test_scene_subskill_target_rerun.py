@@ -59,7 +59,7 @@ DRAMA_STRIPPED = (
 )
 FRAMING_STRIPPED = (
     "[SCENE_START:EP01_SC01]\n"
-    "【Beat景别构图方案】现场编排已完成。\n"
+    "【Beat主体定位】B1=甲=可见性=V｜组=无\n"
     "【取景锁定】当前环境=主环境 景别=MS 构图=中景 镜头角度=平视 选择证据=原文\n"
     "[DERIVED_ENV:0度沙漠]\n"
     "[SCENE_END:EP01_SC01]"

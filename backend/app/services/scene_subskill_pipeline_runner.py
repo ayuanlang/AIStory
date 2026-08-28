@@ -95,6 +95,7 @@ _SUBSKILL_STEP_PROGRESS = {
     "staging": 82.0,
 }
 _BEAT_FRAMING_PLAN_PATTERN = re.compile(r"【Beat景别构图方案】")
+_BEAT_PLACEMENT_PATTERN = re.compile(r"【Beat主体定位】")
 _SUBSKILL_COMPLETION_MARKERS = {
     DRAMA_PROMPT: "[DRAMA_STANDARDIZATION_OUTPUT_END]",
     VFX_PROMPT: "[VFX_SUBSKILL_OUTPUT_END]",
@@ -186,9 +187,10 @@ def persisted_subskill_step_usable(step_key: str, text: str) -> bool:
         return True
     if key == "framing":
         return (
-            "【Beat景别构图方案】" in body
-            or "[DERIVED_ENV" in body
+            "【Beat主体定位】" in body
             or "【取景锁定】" in body
+            or "[DERIVED_ENV" in body
+            or "【Beat景别构图方案】" in body
         )
     if key == "staging":
         return (
@@ -433,7 +435,11 @@ def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> s
     sid = str(scene_id or "").strip()
     if not source:
         raise HTTPException(status_code=422, detail=f"STAGING_BLOCKED_FRAMING_EMPTY:{sid}")
-    has_plan = bool(_BEAT_FRAMING_PLAN_PATTERN.search(source))
+    has_plan = bool(
+        _BEAT_PLACEMENT_PATTERN.search(source)
+        or _FRAMING_LOCK_HEADING in source
+        or _BEAT_FRAMING_PLAN_PATTERN.search(source)
+    )
     has_extract = bool(
         DERIVED_ENV_EXTRACT_BLOCK_PATTERN.search(source) or DERIVED_ENV_TAG_PATTERN.search(source)
     )

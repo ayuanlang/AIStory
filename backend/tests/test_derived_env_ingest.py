@@ -9,11 +9,11 @@ from app.services.script_analysis_flow.derived_env_ingest import (
 )
 
 
-SAMPLE = """【Beat景别构图方案】
-B1=景别=WS｜构图=三分｜ENV:0度客栈大堂｜[DERIVED_ENV:0度客栈大堂]
-B2=景别=MS｜构图=中心｜ENV:180度客栈大堂｜[DERIVED_ENV:180度客栈大堂]
-B3=景别=WS｜构图=三分｜ENV:0度客栈大堂_沙尘｜[DERIVED_ENV:0度客栈大堂_沙尘]
-【景别构图综合】Beat=全量
+SAMPLE = """【主体定位方案】掌柜=方式=相对｜锚=柜台｜组=无
+【Beat主体定位】
+B1=掌柜=方式=相对｜可见性=V｜组=无｜锚=柜台｜ENV:0度客栈大堂｜[DERIVED_ENV:0度客栈大堂]
+B2=客人=方式=相对｜可见性=V｜组=无｜锚=客位｜ENV:180度客栈大堂｜[DERIVED_ENV:180度客栈大堂]
+B3=掌柜=方式=相对｜可见性=V｜组=无｜锚=柜台｜ENV:0度客栈大堂_沙尘｜[DERIVED_ENV:0度客栈大堂_沙尘]
 [DERIVED_ENV_EXTRACT_START]
 [DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=第一刀｜触发=Master｜lens_profile=Wide｜axis_crossing=None｜spatial_axis=门—柜台｜同角切割父=无｜状态Delta=无｜背景=柜台｜画左=楼梯口｜画右=账房窗
 [DERIVED_ENV] 名称=180度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=180｜类型=第一刀｜触发=反打｜lens_profile=Standard｜axis_crossing=PlannedReverse｜spatial_axis=门—柜台｜同角切割父=无｜状态Delta=无｜背景=正门｜画左=账房窗｜画右=楼梯口
@@ -228,7 +228,7 @@ def test_staging_gate_requires_framing_plan_and_tags():
     )
 
     ready = assert_derived_framing_ready_for_staging(SAMPLE, "EP01_SC02")
-    assert "【Beat景别构图方案】" in ready
+    assert "【Beat主体定位】" in ready
     assert "[DERIVED_ENV:" in ready
 
     try:
@@ -238,10 +238,19 @@ def test_staging_gate_requires_framing_plan_and_tags():
         assert "STAGING_BLOCKED_FRAMING_INCOMPLETE" in str(exc.detail)
 
     try:
-        assert_derived_framing_ready_for_staging("【Beat景别构图方案】B1=ENV:0度客栈大堂", "EP01_SC02")
+        assert_derived_framing_ready_for_staging("【Beat主体定位】B1=掌柜=可见性=V", "EP01_SC02")
         raise AssertionError("expected missing extract tags to block staging")
     except HTTPException as exc:
         assert "STAGING_BLOCKED_FRAMING_INCOMPLETE" in str(exc.detail)
+
+    legacy = (
+        "【Beat景别构图方案】B1=景别=WS｜ENV:0度客栈大堂｜[DERIVED_ENV:0度客栈大堂]\n"
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+    )
+    legacy_ready = assert_derived_framing_ready_for_staging(legacy, "EP01_SC02")
+    assert "【Beat景别构图方案】" in legacy_ready
 
 
 def test_staging_gate_requires_per_beat_framing_lock():
