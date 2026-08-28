@@ -2,6 +2,7 @@
 from app.services.script_analysis_flow.character_asset_brief import (
     build_character_asset_design_brief,
     char_extract_has_items,
+    current_world_identity,
     parse_char_extract_records,
     splice_char_extract_into_script,
 )
@@ -206,9 +207,19 @@ def test_char_brief_uses_extract_and_excludes_beats():
     assert "沈青" in brief
     assert "右耳银环" in brief
     assert "对白声线=江湖黑话夹杂霸气直球" in brief
+    assert "现时/轨迹/曾经" in brief
     assert "不该进入角色设计简报" not in brief
     assert "客栈大堂" not in brief
     assert char_extract_has_items(script) is True
+
+
+def test_current_world_identity_strips_trajectory():
+    assert current_world_identity(
+        "现时=落寞寒门女眷｜轨迹=曾经富贵后落寞｜曾经=世家嫡女"
+    ) == "落寞寒门女眷"
+    assert current_world_identity("江湖侠客") == "江湖侠客"
+    assert current_world_identity("无") == ""
+    assert current_world_identity("") == ""
 
 
 def test_char_brief_empty_when_extract_is_none():

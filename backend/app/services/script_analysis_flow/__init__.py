@@ -70,6 +70,7 @@ from .environment_asset_brief import (
 from .character_asset_brief import (
     build_character_asset_design_brief,
     char_extract_has_items,
+    current_world_identity,
     extract_char_extract_blocks,
     extract_char_field,
     first_text_with_char_extract,
@@ -3092,6 +3093,7 @@ __all__ = [
     "environment_plan_has_ident",
     "build_character_asset_design_brief",
     "char_extract_has_items",
+    "current_world_identity",
     "extract_char_extract_blocks",
     "extract_char_field",
     "first_text_with_char_extract",

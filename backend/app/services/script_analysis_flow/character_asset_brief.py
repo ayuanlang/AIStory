@@ -32,6 +32,19 @@ def extract_char_field(record_text: str, field_name: str) -> str:
     return _clean(match.group(1)) if match else ""
 
 
+def current_world_identity(identity: str) -> str:
+    """Public current identity; strip trajectory so nameplates stay short."""
+    text = _clean(identity)
+    if not text or text == "无":
+        return ""
+    match = re.search(r"现时\s*=\s*([^｜|]+)", text)
+    if match:
+        return _clean(match.group(1))
+    if "轨迹=" in text:
+        return _clean(re.split(r"[｜|]\s*轨迹\s*=", text, maxsplit=1)[0])
+    return text
+
+
 def parse_char_extract_records(script_text: str) -> List[Dict[str, str]]:
     """Split `[CHAR]` items; each dict has name + full record text."""
     body = extract_char_extract_blocks(script_text) or _clean(script_text)
@@ -103,6 +116,7 @@ def build_character_asset_design_brief(adapted_script: str) -> str:
         "耳环/胸针等已并入衣着的配饰只画进定妆，不得另造道具依赖；"
         "已标 detachable=是 或进入道具提取的件不进角色定妆。"
         "禁止重做切场或环境落点；禁止另起同义角色名；外形/衣着/评价原样服务四视图。"
+        "须读各条身份=的现时/轨迹/曾经：原富贵后落寞与一直贫困须在定妆上可目视区分，禁压成现时贫困快照。"
         "对白声线与上屏物理文字标签（含字体/字色）不进生图词。"
         "Subject Index 若仍含 character 行只作旧稿兼容，不得压过本块。"
     )

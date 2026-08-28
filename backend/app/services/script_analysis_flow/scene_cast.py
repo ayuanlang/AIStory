@@ -8,6 +8,7 @@ from typing import Dict, List
 from app.core.prompt_injection import wrap_injection_section
 from app.services.script_analysis_flow.character_asset_brief import (
     CHAR_ITEM_PATTERN,
+    current_world_identity,
     extract_char_extract_blocks,
     extract_char_field,
     parse_char_extract_records,
@@ -171,8 +172,8 @@ def _character_tag(record_text: str) -> str:
     tag = extract_char_field(record_text, "标签")
     if tag and tag != "无":
         return tag
-    identity = extract_char_field(record_text, "身份")
-    if identity and identity != "无":
+    identity = current_world_identity(extract_char_field(record_text, "身份"))
+    if identity:
         return identity
     return "无"
 

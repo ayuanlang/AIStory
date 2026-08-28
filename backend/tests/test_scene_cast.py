@@ -97,6 +97,26 @@ def test_parse_char_extract_records_keeps_voice_profile():
     assert "标签=江湖侠客" in shen
 
 
+def test_identity_fallback_uses_current_not_trajectory():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+[SCENE_CAST_START:EP01_SC01]
+【本场角色】在场=CHAR:[@沈青]｜待入画=无｜群演=无
+【本场道具】在场=无｜待入画=无
+[SCENE_CAST_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=女主｜适用场=EP01_SC01
+身份=现时=落寞寒门女眷｜轨迹=曾经富贵后落寞｜曾经=世家嫡女
+标签_en=Fallen Heiress
+[CHAR_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    brief = build_scene_entity_token_brief(script, "EP01_SC01")
+    assert "标签=落寞寒门女眷" in brief
+    assert "曾经富贵后落寞" not in brief.split("【本场角色标签】")[-1]
+
+
 def test_character_label_style_pending_when_missing():
     script = """[SCENES_BLOCK_START]
 [SCENE_START:EP01_SC01]
