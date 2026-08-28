@@ -144,6 +144,48 @@ def test_sample_ingest_writes_frame_and_reference_anchors():
     assert by_name["0度客栈大堂"]["generation_prompt_cn"].startswith("所属主环境=客栈大堂")
 
 
+def test_derived_env_anchors_drop_character_and_prop_content():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        format_derived_anchor_description,
+        parse_derived_env_extract_items,
+    )
+
+    dirty = (
+        "【主体定位方案】CHAR:[@金镶玉]=方式=相对｜锚=二楼客房木门\n"
+        "CHAR:[@金镶玉]右手挥出气刃。PROP:[皇家暗纹玉佩]脱落。"
+        "CHAR:[@金镶玉]冷冷逼视。CHAR:[@李玄]死死抿住唇线。"
+        "CHAR:[@金镶玉]双手猛然合拢结印。CHAR:[@李玄]后背撞上木门。"
+        "CHAR:[@金镶玉]双掌齐出。\n"
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜"
+        "类型=第一刀｜背景=二楼雕花栏杆｜画左=客栈大门｜画右=柜台｜"
+        "参照物=二楼客房木门、二楼雕花栏杆、CHAR:[@金镶玉]右手挥出气刃、"
+        "PROP:[皇家暗纹玉佩]脱落、CHAR:[@金镶玉]冷冷逼视、CHAR:[@李玄]死死抿住唇线、"
+        "CHAR:[@金镶玉]双手猛然合拢结印、CHAR:[@李玄]后背撞上木门、"
+        "CHAR:[@金镶玉]双掌齐出、客栈大门、柜台\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+    )
+    item = parse_derived_env_extract_items(dirty)[0]
+    built = build_derived_environment_item(item)
+    anchor = built["anchor_description"]
+    assert "背景=二楼雕花栏杆" in anchor
+    assert "画左=客栈大门" in anchor
+    assert "画右=柜台" in anchor
+    assert "二楼客房木门" in anchor
+    assert "CHAR:" not in anchor
+    assert "PROP:" not in anchor
+    assert "金镶玉" not in anchor
+    assert "李玄" not in anchor
+    assert "玉佩" not in anchor
+    assert "挥出气刃" not in anchor
+    assert format_derived_anchor_description(
+        background="CHAR:[@金镶玉]冷冷逼视",
+        frame_left="客栈大门",
+        frame_right="柜台",
+        references=["PROP:[皇家暗纹玉佩]脱落", "二楼雕花栏杆"],
+    ) == "背景=无｜画左=客栈大门｜画右=柜台｜参照物=二楼雕花栏杆、客栈大门、柜台"
+
+
 def test_state_cut_json_hangs_same_angle_parent():
     item = build_derived_environment_item(
         {

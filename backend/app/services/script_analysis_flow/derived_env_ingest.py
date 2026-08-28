@@ -91,18 +91,56 @@ USAGE_MERGE_TOKENS = (
 )
 _EMPTY_FIELD_MARKERS = {"", "无", "n/a", "na", "none", "-"}
 _XOR_ANCHOR_PATTERN = re.compile(r"(?:^|[｜|\s])锚\s*=\s*([^｜|\r\n]+)")
+_TYPED_SUBJECT_PATTERN = re.compile(r"(?:CHAR|PROP)\s*:\s*|\[@", re.IGNORECASE)
+_CHAR_TOKEN_NAME_PATTERN = re.compile(
+    r"CHAR\s*:\s*\[\s*@?\s*([^\]\r\n]+)\s*\]",
+    re.IGNORECASE,
+)
+_PROP_TOKEN_NAME_PATTERN = re.compile(
+    r"PROP\s*:\s*\[\s*([^\]\r\n]+)\s*\]",
+    re.IGNORECASE,
+)
 
 
 def _clean(value: Any) -> str:
     return str(value or "").strip().strip("`\"'“”‘’[]")
 
 
-def _anchor_slot(value: Any) -> str:
+def collect_subject_names_from_text(text: str) -> Set[str]:
+    """CHAR / PROP display names that must never enter derived-env anchors."""
+    names: Set[str] = set()
+    blob = str(text or "")
+    for match in _CHAR_TOKEN_NAME_PATTERN.finditer(blob):
+        name = _clean(match.group(1))
+        if name:
+            names.add(name)
+    for match in _PROP_TOKEN_NAME_PATTERN.finditer(blob):
+        name = _clean(match.group(1))
+        if name:
+            names.add(name)
+    return names
+
+
+def _is_env_fixture_name(name: str, forbidden: Optional[Set[str]] = None) -> bool:
+    text = _clean(name)
+    if not text or text.lower() in _EMPTY_FIELD_MARKERS:
+        return False
+    if _TYPED_SUBJECT_PATTERN.search(text):
+        return False
+    for bad in forbidden or ():
+        if bad and len(bad) >= 2 and bad in text:
+            return False
+    return True
+
+
+def _anchor_slot(value: Any, forbidden: Optional[Set[str]] = None) -> str:
     text = _clean(value)
-    return "无" if text.lower() in _EMPTY_FIELD_MARKERS else text
+    if text.lower() in _EMPTY_FIELD_MARKERS:
+        return "无"
+    return text if _is_env_fixture_name(text, forbidden) else "无"
 
 
-def _split_named_objects(*values: Any) -> List[str]:
+def _split_named_objects(*values: Any, forbidden: Optional[Set[str]] = None) -> List[str]:
     names: List[str] = []
     seen: Set[str] = set()
     for raw in values:
@@ -113,18 +151,25 @@ def _split_named_objects(*values: Any) -> List[str]:
             name = _clean(part)
             if not name or name.lower() in _EMPTY_FIELD_MARKERS:
                 continue
+            if not _is_env_fixture_name(name, forbidden):
+                continue
             if name not in seen:
                 seen.add(name)
                 names.append(name)
     return names
 
 
-def collect_reference_objects_from_text(text: str) -> List[str]:
-    """Named XOR 参照物 (`锚=`) from framing / 主体定位."""
+def collect_reference_objects_from_text(
+    text: str,
+    forbidden: Optional[Set[str]] = None,
+) -> List[str]:
+    """Named XOR 参照物 (`锚=`) from framing / 主体定位; fixtures only."""
+    blob = str(text or "")
+    blocked = set(forbidden or ()) | collect_subject_names_from_text(blob)
     names: List[str] = []
     seen: Set[str] = set()
-    for match in _XOR_ANCHOR_PATTERN.finditer(str(text or "")):
-        for name in _split_named_objects(match.group(1)):
+    for match in _XOR_ANCHOR_PATTERN.finditer(blob):
+        for name in _split_named_objects(match.group(1), forbidden=blocked):
             if name not in seen:
                 seen.add(name)
                 names.append(name)
@@ -137,12 +182,28 @@ def format_derived_anchor_description(
     frame_left: str = "",
     frame_right: str = "",
     references: Optional[Sequence[str]] = None,
+    forbidden: Optional[Set[str]] = None,
 ) -> str:
-    """Asset Anchor Description: 背景 / 画左 / 画右 main subjects, plus 参照物."""
-    bg = _anchor_slot(background)
-    left = _anchor_slot(frame_left)
-    right = _anchor_slot(frame_right)
-    refs = _split_named_objects(*(references or []), background, frame_left, frame_right)
+    """Asset Anchor Description: 背景 / 画左 / 画右 / 参照物 — env fixtures only."""
+    blob = "｜".join(
+        [
+            str(background or ""),
+            str(frame_left or ""),
+            str(frame_right or ""),
+            "、".join(str(item or "") for item in (references or ())),
+        ]
+    )
+    blocked = set(forbidden or ()) | collect_subject_names_from_text(blob)
+    bg = _anchor_slot(background, blocked)
+    left = _anchor_slot(frame_left, blocked)
+    right = _anchor_slot(frame_right, blocked)
+    refs = _split_named_objects(
+        *(references or []),
+        background,
+        frame_left,
+        frame_right,
+        forbidden=blocked,
+    )
     parts = [f"背景={bg}", f"画左={left}", f"画右={right}"]
     if refs:
         parts.append(f"参照物={'、'.join(refs)}")
@@ -396,18 +457,23 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
         for env_match in PLAN_ENV_NAME_PATTERN.finditer(plan_match.group(1) or ""):
             _upsert(env_match.group(1) or env_match.group(2))
 
-    scene_refs = collect_reference_objects_from_text(source)
-    if scene_refs:
-        for row in by_name.values():
-            existing = _split_named_objects(row.get("references"))
-            merged = existing[:]
-            seen = set(existing)
-            for name in scene_refs:
-                if name not in seen:
-                    seen.add(name)
-                    merged.append(name)
-            if merged:
-                row["references"] = "、".join(merged)
+    forbidden = collect_subject_names_from_text(source)
+    scene_refs = collect_reference_objects_from_text(source, forbidden=forbidden)
+    for row in by_name.values():
+        row["background"] = _anchor_slot(row.get("background"), forbidden)
+        row["frame_left"] = _anchor_slot(row.get("frame_left"), forbidden)
+        row["frame_right"] = _anchor_slot(row.get("frame_right"), forbidden)
+        existing = _split_named_objects(row.get("references"), forbidden=forbidden)
+        merged = existing[:]
+        seen = set(existing)
+        for name in scene_refs:
+            if name not in seen:
+                seen.add(name)
+                merged.append(name)
+        if merged:
+            row["references"] = "、".join(merged)
+        elif "references" in row:
+            row["references"] = ""
 
     return list(by_name.values())
 
@@ -440,12 +506,30 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
     background = _clean(item.get("background") or item.get("背景"))
     frame_left = _clean(item.get("frame_left") or item.get("画左"))
     frame_right = _clean(item.get("frame_right") or item.get("画右"))
-    references = _split_named_objects(item.get("references") or item.get("参照物"))
+    forbidden = collect_subject_names_from_text(
+        "｜".join(
+            [
+                background,
+                frame_left,
+                frame_right,
+                str(item.get("references") or item.get("参照物") or ""),
+                str(item.get("name") or ""),
+            ]
+        )
+    )
+    background = _anchor_slot(background, forbidden)
+    frame_left = _anchor_slot(frame_left, forbidden)
+    frame_right = _anchor_slot(frame_right, forbidden)
+    references = _split_named_objects(
+        item.get("references") or item.get("参照物"),
+        forbidden=forbidden,
+    )
     anchor = format_derived_anchor_description(
         background=background,
         frame_left=frame_left,
         frame_right=frame_right,
         references=references,
+        forbidden=forbidden,
     )
     if is_state:
         prompt = STATE_CUT_PROMPT.format(main=main, angle=angle, parent=parent or _same_angle_parent(name, main, angle))
