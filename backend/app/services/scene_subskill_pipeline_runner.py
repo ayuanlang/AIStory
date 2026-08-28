@@ -1393,7 +1393,7 @@ def _ensure_reused_main_env_block(
     if not env_block:
         return source
     ident_end = re.search(
-        rf"`?\[SCENE_ENV_IDENT_END:{re.escape(str(scene_id or ""))}\]`?",
+        rf"`?\[SCENE_ENV_IDENT_END:{re.escape(str(scene_id or ''))}\]`?",
         source,
         flags=re.IGNORECASE,
     )
