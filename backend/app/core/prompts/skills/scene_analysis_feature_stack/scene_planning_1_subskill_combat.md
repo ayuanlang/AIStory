@@ -1,6 +1,5 @@
-# Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_subskill_xian_attack.md
-# Compatibility alias → scene_planning_1_subskill_combat.md（武戏增强）
-# Prompt Updated At: 2026-08-28 16:20:00 +08:00
+# Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md
+# Prompt Updated At: 2026-08-28 15:30:00 +08:00
 # Skill 1-1-COMBAT: 武戏增强
 # Parent: scene_planning_1_script_optimization.md（只读基线，本文件不改原文）
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]

@@ -91,6 +91,7 @@ from app.services.script_analysis_flow import (
     should_require_subject_index,
     validate_analyze_scene_llm_finish_reason,
 )
+from app.services.subject_index_resolve import _script_optimization_has_project_visual_backfill
 from app.services.script_analysis_flow.subject_index_name_align import (
     align_scene_markdown_names_with_subject_index,
     align_subjects_json_names_with_subject_index,
@@ -247,6 +248,14 @@ async def execute_analyze_scene(
             prompt_filename = request.prompt_file or "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md"
             if feature_bundle.get("enabled") and not request.prompt_file:
                 prompt_filename = str(feature_bundle.get("base_prompt_file") or "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md")
+            prompt_filename = {
+                "skills/scene_analysis_feature_stack/scene_planning_1_subskill_vfx.md": (
+                    "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md"
+                ),
+                "skills/scene_analysis_feature_stack/scene_planning_1_subskill_xian_attack.md": (
+                    "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md"
+                ),
+            }.get(str(prompt_filename or "").replace("\\", "/"), prompt_filename)
             try:
                 system_instruction = _resolve_prompt_text(prompt_filename)
             except FileNotFoundError:
@@ -1835,6 +1844,17 @@ async def execute_analyze_scene(
         # Step 3: persist staging fields only (no scenes/entities/shots import).
         saved_to_episode = False
         persist_skipped = bool(getattr(request, "skip_episode_persist", False))
+        if (
+            not persist_skipped
+            and (is_scene_split_stage or is_script_optimization_stage)
+            and not _script_optimization_has_project_visual_backfill(result_content)
+        ):
+            persist_skipped = True
+            debug_meta["persist_skipped_incomplete_visual_backfill"] = True
+            logger.warning(
+                "[analyze_scene] skip persist: scene_split missing project_visual_backfill episode_id=%s",
+                getattr(request, "episode_id", None),
+            )
         persisted_field_name = None
         persisted_chars_readback = None
         if getattr(request, "episode_id", None) and not persist_skipped:

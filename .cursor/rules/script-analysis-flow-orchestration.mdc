@@ -15,7 +15,7 @@ alwaysApply: false
 Stage 1 先执行 `scene_split`（全局统筹），然后**两条主线同时开始**：
 
 1. `environment_plan`（环境规划）：执行前注入项目原有主环境（未删除）。LLM 据全局统筹做场景勘探，识别明示与隐藏的主环境需求（闪回、环境实质改写、舱内外等），只返回按 `scene_id` 包裹的逐场**主环境**补丁；可复用则锁名并由程序继承原定义回填。衍生环境不在此节点。
-2. `scene_subskill_pipeline`：Scene 之间并发，单 Scene 内先执行 drama（文戏增强：场级评估 + 特效宽松评估）→ 程序提取 `SPECIAL_SCENE_ANALYSIS` → VFX? → XIAN?。**场景现场编排必须等本轮 `environment_plan` 节点成功**，再按场注入主环境，然后 derived_framing → staging。分场旧稿或上轮 adaptation 里的环境块不得提前开闸。建置 LLM **禁止**在该场现场编排 LLM 成功（含【Beat主体定位】【取景锁定】与 `[DERIVED_ENV…]` 提取标签）之前发出。
+2. `scene_subskill_pipeline`：Scene 之间并发，单 Scene 内先执行 drama（文戏增强：场级评估 + 特效宽松评估）→ 程序提取 `SPECIAL_SCENE_ANALYSIS` → combat?（武戏增强；VFX 或 XIAN 任一行命中即调用一次，通读全部输入）。**场景现场编排必须等本轮 `environment_plan` 节点成功**，再按场注入主环境，然后 derived_framing → staging。分场旧稿或上轮 adaptation 里的环境块不得提前开闸。建置 LLM **禁止**在该场现场编排 LLM 成功（含【Beat主体定位】【取景锁定】与 `[DERIVED_ENV…]` 提取标签）之前发出。
 
 `scene_split` 完成后立即并行：`asset_design_character`（只消费 `[CHAR_EXTRACT]`）、`asset_design_prop`（只消费 `[PROP_EXTRACT]`）、`environment_plan`、`scene_subskill_pipeline`。`environment_plan` 只读 CHAR/PROP 提取做衔接，**禁止**再输出 `[PROP_EXTRACT]`；完成后立即启动 `asset_design_environment`（**只设计主环境**，封面读程序「封面海报简报」，不等待逐场分析）。该场 `derived_framing` 成功后立即程序提取衍生环境并写入资产库提示词（特别行把`特别表述=`注入该行 `generation_prompt_cn`），不等待建置或其它场次。该场 `staging` 成功后程序从建置稿直接写入工作区场景表。`assets_extraction` 与 `scene_markdown` 已退役，禁止再走 LLM。
 
@@ -26,8 +26,8 @@ scene_split（切场 + CHAR_EXTRACT + PROP_EXTRACT + 【本场角色】）
   ├─ environment_plan（只读 CHAR/PROP 提取做衔接；只出主环境）
   │    └─ asset_design_environment（主环境 + 程序封面简报 → posters[]）
   └─ scene_subskill_pipeline
-       ├─ SC01: drama → VFX? → XIAN? → derived_framing → staging → workspace Scene
-       ├─ SC02: drama → VFX? → XIAN? → derived_framing → staging → workspace Scene
+       ├─ SC01: drama → combat? → derived_framing → staging → workspace Scene
+       ├─ SC02: drama → combat? → derived_framing → staging → workspace Scene
        └─ ...
 
 per-scene staging import + linked ENV visual assets ready
@@ -42,19 +42,19 @@ Storyboard 只等待当前 Scene 的工作区导入与 `asset_design_environment
 
 | 环节 | 产出 |
 | :--- | :--- |
-| `scene_split` 全局统筹 | 多线叙事、按播放顺序切 Scene（穿插多线/回切各成一场，不按线归堆）、场际衔接（音画/同型/OT/轴锚/状态差）、闪回分档、场号配对、每场 `[SCENE_CAST]`（【本场角色】【本场道具】，标准表达）、每场【本场服化道】（按人/按件：入场/变化/离场）、整集 `[CHAR_EXTRACT]`/`[PROP_EXTRACT]`（XOR：可归衣着进 CHAR、可归陈设留给环境规划、明文全局/极严/载具外部本体进 PROP；CHAR 含短 `标签=`/`标签_en=`/`标签字体=`/`标签字色=`，上屏物理文字名牌跟项目语言，不是对白字幕；剧本已写名牌则服从原文，缺项才补）、整集【服化道连续性】、`project_visual_backfill`（继承项目全局风格、光线风格与配乐推荐；`music_recommendation` 含乐器/风格/情绪/节奏/拍型指导，供文戏 `-`/`~` 对齐；场外综合信息总结进 `comprehensive_plot` / `comprehensive_assets`） |
+| `scene_split` 全局统筹 | 多线叙事、按播放顺序切 Scene（穿插多线/回切各成一场，不按线归堆）、场际衔接（音画/同型/OT/轴锚/状态差）、闪回分档、场号配对、每场 `[SCENE_CAST]`（【本场角色】【本场道具】，标准表达）、每场【本场服化道】（按人/按件：入场/变化/离场）、整集 `[CHAR_EXTRACT]`/`[PROP_EXTRACT]`（**只抽本集出场**，台账全局角色未出场不提；XOR：可归衣着进 CHAR、可归陈设留给环境规划、明文全局/极严/载具外部本体进 PROP；CHAR 含短 `标签=`/`标签_en=`/`标签字体=`/`标签字色=`，上屏物理文字名牌跟项目语言，不是对白字幕；剧本已写名牌则服从原文，缺项才补）、整集【服化道连续性】、`project_visual_backfill`（继承项目全局风格、光线风格与配乐推荐；`music_recommendation` 含乐器/风格/情绪/节奏/拍型指导，供文戏 `-`/`~` 对齐；场外综合信息总结进 `comprehensive_plot` / `comprehensive_assets`） |
 | `environment_plan` 环境规划 | `SCENE_ENV_IDENT`（识别 + 定位/目标/情绪表达）、新建主环境骨架与实体落点（【主环境】四向/固定清单 +【未落清单】开场在场\|待入画）；可选 `背景微动件=`（至多一具细小陈设，不占舞台/动线，供建置/入戏写背景微动；无则`无`）；门窗类锁初始开闭/开向/门轴/把手位；可固定参照物无剧情不摊多件；参考图/原定义已锁落位者不重写位置；只读全局统筹 CHAR/PROP 提取做衔接，**禁止**再输出 `[PROP_EXTRACT]`；复用骨架由程序按识别结果继承原定义回填，复用场仍写本场三属性 |
-| drama 文戏增强 | 改编剧本与细节优化（文学视角加厚后落到道具特写/表情特写/宏观场面/音效/空镜 Beat；奇观过程归 VFX/XIAN；左右手脚、手机类取用、对白/动作朝向、门开闭（手+接触点+推拉+开向+人站侧+扇展侧））；**动作规范**（操作链/因果链/位移始末/障物评估与绕过（挂物件画左|画右）/投射命中/全员姿态与受力/亮屏界面链）；**对话内容**（语气层八键、方言原文、OS/自白闭嘴、听者微表情、音效）；场核 `承接=`、`SPECIAL_SCENE_ANALYSIS`、最终 Beat（每拍 `节拍=`）；**快慢节奏**只读 `music_recommendation` 的 `节奏=`/`拍型指导=` 调 `-`/`~` 配额；**【声画综合】**+每拍【配乐】【音效】（`锚=`/`配合=` 用 CHAR/PROP 标准表达，对齐 `Global_Style`+总谱）；**叙述层 CHAR/PROP 标准表达**（口径同 Stage 2.2；禁 ENV）。不输出 `project_visual_backfill` |
-| VFX / XIAN | 仅对 drama 命中段做过程加密；继承 CHAR/PROP 标准表达，禁拆前缀、禁 ENV；命中段按总谱加密【配乐】【音效】，`配合=` 对准出手/结印/受击动作，拆并后回填【声画综合】B 号 |
-| derived_framing 场景现场编排 | **先锁本拍实现**：据剧情+经典拍法锁卖点/情绪/情节如何落地 → `主拍对象` + 后景 `{N}度{主名}` + 景别（机位/构图随本文件）。**再锁起始帧**：已入场全员角色/可移动道具的相对或绝对挂靠；近身组内 `序=`/`朝向=`/`距=` 写在【主体定位方案】/【Beat主体定位】行上；每拍 `可见性=V|D|待入画`（已入场禁暂不可见/X：锚在本角则 V 且建置必写，不在本角则换衍生或拆拍）；画内具名/有戏≤4，超则按组拆挂不同后景。选锚优先唯一件；多件先锁 `远镜头第N排｜画左起第K/M个`。一拍一衍生；盖不住则拆拍。每衍生行锁 `背景=`/`画左=`/`画右=` 并写入提取块。拍摄键+选择证据+跨度写【取景锁定】。仰天特别行写`特别表述=`。衍生确认后套 `ENV:[原样]` 并对 CHAR/PROP 做一次格式复查。不成稿覆盖矩阵 / 独立【角色组】 / 【Beat景别构图方案】 / 拍内【场记分析】 |
-| staging | 在已锁起始帧上写朝向 / 走位 / 落点变化（不改 XOR，除非出入封闭或离开锚）；**建置名单=本拍【Beat主体定位】`可见性=V`**（执行定位行序/朝向/距；禁补未锁 V、禁漏 V、禁写 X）；跨拍对照已锁可见性：**不缺、不矛盾、不多出**。**建置仍按相对/绝对/封闭**，只用该 ENV `画左=`/`画右=`/`背景=` 替换裸「画左/画右」。轴位连续（默认不越轴）。拍摄键写入【建置】，过程写入【入戏】，连续性写入场级【场记分析】（`B{n}=`，并入取景锁定推导键）；承接文戏动作（不重写左右手脚/取用/朝向对象/门开闭合同；有开关则写接触点+开向）；逐拍出入画闭环；正反/OTS 建置；ENV 背景微动；首登名牌紧跟该人建置句。场头只写短【实体覆盖】+ 场级场记 |
+| drama 文戏增强 | 改编剧本与细节优化（文学视角加厚后落到道具特写/表情特写/宏观场面/音效/空镜 Beat；奇观过程归武戏增强；左右手脚、手机类取用、对白/动作朝向、门开闭（手+接触点+推拉+开向+人站侧+扇展侧））；**动作规范**（操作链/因果链/位移始末/障物评估与绕过（挂物件画左|画右）/投射命中/全员姿态与受力/亮屏界面链）；**对话内容**（语气层八键、方言原文、OS/自白闭嘴、听者微表情、音效）；场核 `承接=`、`SPECIAL_SCENE_ANALYSIS`、最终 Beat（每拍 `节拍=`）；**快慢节奏**只读 `music_recommendation` 的 `节奏=`/`拍型指导=` 调 `-`/`~` 配额；**【声画综合】**+每拍【配乐】【音效】（`锚=`/`配合=` 用 CHAR/PROP 标准表达，对齐 `Global_Style`+总谱）；**叙述层 CHAR/PROP 标准表达**（口径同 Stage 2.2；禁 ENV）。不输出 `project_visual_backfill` |
+| combat 武戏增强 | 通读文戏后的全部输入做打斗/法攻/仙攻/宏观/宏大特效过程加密；不按路由短引提取。继承 CHAR/PROP 标准表达，禁拆前缀、禁 ENV；加密段按总谱加密【配乐】【音效】，`配合=` 对准出手/结印/受击动作，拆并后回填【声画综合】B 号 |
+| derived_framing 场景现场编排 | **总序**：落点三级（明示>分析>避难点）+ XOR → 以 `0度{主}` 画 3×3 宫格（仅剧情近距同格）→ 每人 `背对=` 锁 `主拍ENV=` → 据景别/距离/`对打=正反|并排` 挂本拍衍生 → §4 机位构图 → §0.5 可见性（相对跟锚、绝对跟层位；`CU|ECU` 仅主拍 V）。R=本拍必见集，已入场非 R 可 `暂不可见`，不为他改挂。【宫格草稿】+【主体定位方案】+【Beat主体定位】+【取景锁定】。画内 V≤4。一拍一衍生。不成稿覆盖矩阵 / 独立【角色组】 / 【Beat景别构图方案】 / 拍内【场记分析】 |
+| staging | 在已锁起始帧上写朝向 / 走位 / 落点变化（不改 XOR，除非出入封闭或离开锚）；**建置名单=本拍【Beat主体定位】`可见性=V`**（执行定位行序/朝向/距；禁补未锁 V、禁漏 V、不得自造 X）；跨拍对照已锁可见性：**不缺、不矛盾、不多出**。**建置仍按相对/绝对/封闭**，只用该 ENV `画左=`/`画右=`/`背景=` 替换裸「画左/画右」。轴位连续（默认不越轴）。拍摄键写入【建置】，过程写入【入戏】，连续性写入场级【场记分析】（`B{n}=`，并入取景锁定推导键）；承接文戏动作（不重写左右手脚/取用/朝向对象/门开闭合同；有开关则写接触点+开向）；逐拍出入画闭环；正反/OTS 建置；ENV 背景微动；首登名牌紧跟该人建置句。场头只写短【实体覆盖】+ 场级场记 |
 | `assets_extraction` | **已退役**。封面改由环境设计读程序「封面海报简报」 |
 | `scene_markdown` | **已退役**。staging 成稿由程序提取后直接写入工作区场景表 |
 | `asset_design_character` | 全局统筹 `[CHAR_EXTRACT]` → `characters[]`；全局统筹一完成即可开写；不等待资产清单、环境规划或逐场分析；Index `character` 行只作旧稿兼容 |
 | `asset_design_environment` | 环境规划 IDENT/【主环境】→ 主环境 `environments[]`；封面读程序「封面海报简报」写 `posters[]`；不等待逐场分析；衍生由现场编排后程序入库 |
 | `asset_design_prop` | 全局统筹 `[PROP_EXTRACT]` → `props[]`；全局统筹一完成即可开写；不等待资产清单、环境规划或逐场分析；Index `prop` 行只作旧稿兼容 |
 
-程序接口：drama 完成后提取 `SPECIAL_SCENE_ANALYSIS` 再决定 VFX/XIAN；`SCENE_ENV_IDENT`（含定位/目标/情绪表达）与主环境实体落点只由环境规划产出；CHAR/PROP XOR 与提取只由全局统筹完成。
+程序接口：drama 完成后提取 `SPECIAL_SCENE_ANALYSIS`；`[VFX]` 或 `[XIAN]` 任一行命中则调用一次武戏增强。`SCENE_ENV_IDENT`（含定位/目标/情绪表达）与主环境实体落点只由环境规划产出；CHAR/PROP XOR 与提取只由全局统筹完成。
 
 ## Registry source of truth
 
@@ -91,11 +91,11 @@ Storyboard 只等待当前 Scene 的工作区导入与 `asset_design_environment
 2. main / restart / resume 路径的并发拓扑必须一致。
 3. `explicitSubjectIndexText` / `parallelWithScenes:true` 不得依赖 Scene 已导入。
 4. 并行分支启动前先置 `environmentAssetDesignPendingRef`，防止早到 Scene 读取陈旧 episode JSON。
-5. 每个 Scene 导入后进入 storyboard queue；仅当其关联 ENV 已成功/导入、无 ENV 行或 ENV auto-start 关闭时开闸。等待态=`waiting_env`。
+5. 每个 Scene 导入后进入 storyboard queue；必须等本场所属**主环境**已入库且 `generation_prompt_cn` 非空后才能开闸，再注入该主环境提示词。仅有衍生环境提示词、库里残留主环境行、或本轮尚未规划环境，都不得开闸。无环境需求且 ENV auto-start 关闭时才可跳过。等待态=`waiting_env`。
 6. character/prop 完成不得打开 ENV gate；流水线末尾只 residual-kick 尚未启动且 ENV gate 已开的 Scene。
 7. Storyboard 注入 `# Scene Subject Image Prompts (CN)` 仅含当前 Scene 关联 ENV 的 `generation_prompt_cn`；Subject Index 可继续列 CHAR/PROP/ENV 供命名。
-8. 手动 force storyboard 仍须验证关联 ENV 已在实体库且 `generation_prompt_cn` 非空。
-9. Scene marker parser 与 Stage 1/2.1/2.2 同步：接受成对 `[SCENE_START:EPxx_SCyy]` / `[SCENE_END:EPxx_SCyy]`；`SPECIAL_SCENE_ANALYSIS` 由文戏增强产出并写在 Scene 前，程序在 drama 之后提取以决定 VFX/XIAN。场外综合信息由全局统筹总结进 `project_visual_backfill.comprehensive_plot` / `comprehensive_assets`，经项目尾注入各场；若旧稿仍含 `COMPREHENSIVE_INFO` 则继续当作只读全局上下文。`SCENE_ENV_IDENT` 由环境规划产出。CHAR/PROP 提取由全局统筹完成；封面清单不再落 CHAR/ENV/PROP 行。
+8. 手动 force storyboard 仍须验证本场所属主环境已在实体库且 `generation_prompt_cn` 非空；禁止只凭衍生行开闸。
+9. Scene marker parser 与 Stage 1/2.1/2.2 同步：接受成对 `[SCENE_START:EPxx_SCyy]` / `[SCENE_END:EPxx_SCyy]`；`SPECIAL_SCENE_ANALYSIS` 由文戏增强产出并写在 Scene 前，程序在 drama 之后提取；`[VFX]` 或 `[XIAN]` 任一行命中则调用一次武戏增强。场外综合信息由全局统筹总结进 `project_visual_backfill.comprehensive_plot` / `comprehensive_assets`，经项目尾注入各场；若旧稿仍含 `COMPREHENSIVE_INFO` 则继续当作只读全局上下文。`SCENE_ENV_IDENT` 由环境规划产出。CHAR/PROP 提取由全局统筹完成；封面清单不再落 CHAR/ENV/PROP 行。
 10. 注入 Stage 2.1/2.2 前只剥离成对 `────【场记分析】────`…`────【场记分析结束】────`（兼容旧稿 `────【Beat切换说明】────`…`────【Beat切换说明结束】────`）；禁止无结束标记的贪婪剥离。
 
 ## Prompt interface invariants
@@ -110,7 +110,7 @@ Storyboard 只等待当前 Scene 的工作区导入与 `asset_design_environment
 ## Canonical prompt map
 
 - Stage 1 只读基线：`scene_planning_1_script_optimization.md`
-- Stage 1 子技能链：`scene_planning_1_subskill_cut_transition.md`（全局统筹：切场+CHAR/PROP 提取+短标签+字体字色物理文字名牌+【本场角色】） → `scene_planning_1_subskill_environment.md`（环境规划：场景勘探+识别+定位/目标/情绪+实体落点+主环境；只读 CHAR/PROP） → per-scene `drama_standardization`（文戏增强：改编+细节优化+场核承接+特效路由+节拍类型） → `vfx?` → `xian_attack?` → `derived_framing` → `staging_env`
+- Stage 1 子技能链：`scene_planning_1_subskill_cut_transition.md`（全局统筹：切场+CHAR/PROP 提取+短标签+字体字色物理文字名牌+【本场角色】） → `scene_planning_1_subskill_environment.md`（环境规划：场景勘探+识别+定位/目标/情绪+实体落点+主环境；只读 CHAR/PROP） → per-scene `drama_standardization`（文戏增强：改编+细节优化+场核承接+特效路由+节拍类型） → `combat?`（武戏增强） → `derived_framing` → `staging_env`
 - Stage 2.1 Subject Index/XOR/衍生字段：`scene_planning_2_1_assets_extraction.md`
 - Stage 2.2 Beat 落表：`scene_planning_2_2_beats_generation.md`
 - Stage 3 共通：`entity_design_common.md`

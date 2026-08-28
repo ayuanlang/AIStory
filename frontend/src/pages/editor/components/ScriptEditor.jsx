@@ -1849,6 +1849,39 @@ const normalizeAssetReportType = (value) => {
     return key;
 };
 
+const ENV_POSTER_TARGET_KEYS = ['environments', 'posters', 'covers'];
+
+const isEnvPosterTargetKey = (value) => ENV_POSTER_TARGET_KEYS.includes(String(value || '').trim().toLowerCase());
+
+const coupleEnvPosterTargetFilters = (filters) => {
+    const list = Array.isArray(filters)
+        ? Array.from(new Set(filters.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)))
+        : [];
+    if (!list.some(isEnvPosterTargetKey)) return list;
+    ENV_POSTER_TARGET_KEYS.forEach((key) => {
+        if (!list.includes(key)) list.push(key);
+    });
+    return list;
+};
+
+const countDesignedCoverPosterItems = (payload) => {
+    if (!payload || typeof payload !== 'object') return 0;
+    const posters = Array.isArray(payload.posters) ? payload.posters : [];
+    const covers = Array.isArray(payload.covers) ? payload.covers : [];
+    const seen = new Set();
+    [...posters, ...covers].forEach((item) => {
+        if (!item || typeof item !== 'object') return;
+        const key = [
+            String(item.subject_no || '').trim().toLowerCase(),
+            String(item.name || item.subject_name_exact || '').trim().toLowerCase(),
+            String(item.name_en || '').trim().toLowerCase(),
+        ].join('|');
+        if (seen.has(key)) return;
+        seen.add(key);
+    });
+    return seen.size;
+};
+
 const toPositiveCount = (value) => {
     const count = Number(value);
     return Number.isFinite(count) && count > 0 ? count : 0;
@@ -1859,6 +1892,13 @@ const countAssetItemsByType = (items, type) => {
     return items.reduce((count, item) => (
         count + (normalizeAssetReportType(item?.type || item?.entity_type || item?.subject_type) === type ? 1 : 0)
     ), 0);
+};
+
+const reportImportedPosterCount = (report) => {
+    const counts = report?.importedSubjectCounts || {};
+    const created = countAssetItemsByType(report?.createdSubjectItems, 'poster');
+    const skipped = countAssetItemsByType(report?.skippedSubjectItems, 'poster');
+    return Math.max(toPositiveCount(counts.poster), created, skipped);
 };
 
 const resolveImportReportAssetInsertedCount = (importReport, type) => {
@@ -2006,6 +2046,13 @@ const isMainEnvironmentCompletenessEntry = (entry) => (
 
 const countDbMainEnvironmentEntities = (dbEntities) => (
     (Array.isArray(dbEntities) ? dbEntities : []).filter(isMainEnvironmentCompletenessAsset).length
+);
+
+const countDbMainEnvironmentEntitiesWithPrompt = (dbEntities) => (
+    (Array.isArray(dbEntities) ? dbEntities : []).filter((entity) => (
+        isMainEnvironmentCompletenessAsset(entity)
+        && Boolean(String(entity?.generation_prompt_cn || '').trim())
+    )).length
 );
 
 const countMainEnvironmentDesignItems = (items) => (
@@ -2644,7 +2691,12 @@ const probeEpisodeAnalysisCompleteness = async ({
         || /【主环境】/.test(adaptationText);
     const envEntities = (entities || []).filter(isMainEnvironmentCompletenessAsset);
     const hasEnvDesign = envEntities.length > 0;
-    if (envAutoOn && hasPlanSource && !hasEnvDesign && !pendingAssetTargets.includes('environments')) {
+    const designRaw = String(fresh?.ai_entity_design_result || '');
+    const designedCoverPosterPending = (
+        /"(?:posters|covers)"\s*:\s*\[\s*\{/i.test(designRaw)
+        && !(entities || []).some((entity) => normalizeAssetReportType(entity?.type) === 'poster')
+    );
+    if (envAutoOn && hasPlanSource && (!hasEnvDesign || designedCoverPosterPending) && !pendingAssetTargets.includes('environments')) {
         ['environments', 'posters', 'covers'].forEach((target) => {
             if (!pendingAssetTargets.includes(target)) pendingAssetTargets.push(target);
         });
@@ -2866,7 +2918,7 @@ const ANALYSIS_STAGE_LABELS = {
     scene_subskills: { zh: '逐场优化', en: 'Per-Scene Refinement' },
     script_opt: { zh: '逐场优化', en: 'Per-Scene Refinement' },
     drama_opt: { zh: '文戏优化', en: 'Drama Refinement' },
-    combat_opt: { zh: '武戏优化（含特效与仙攻）', en: 'Action Refinement (VFX + Xian)' },
+    combat_opt: { zh: '武戏增强', en: 'Action Enhancement' },
     framing_opt: { zh: '场景现场编排', en: 'Floor Staging' },
     staging_opt: { zh: '建置入戏', en: 'Staging' },
     extract_assets: { zh: '资产清单', en: 'Asset Inventory' },
@@ -3380,19 +3432,26 @@ const collectStage1SlotTexts = (stageOutputsRaw) => {
     return texts;
 };
 
-const readStage1EnvironmentPlanContent = (stageOutputsRaw) => {
+const readStage1OutputSlotContent = (stageOutputsRaw, outputKey) => {
     const raw = String(stageOutputsRaw || '').trim();
-    if (!raw) return '';
+    const key = String(outputKey || '').trim();
+    if (!raw || !key) return '';
     try {
         const payload = JSON.parse(raw);
-        const slot = ((payload?.stages || {}).stage1 || {}).outputs?.environment_plan;
-        if (slot && typeof slot === 'object') return String(slot.content || '').trim();
+        const slot = ((payload?.stages || {}).stage1 || {}).outputs?.[key];
+        if (slot && typeof slot === 'object' && !Array.isArray(slot)) {
+            return String(slot.content || '').trim();
+        }
         if (typeof slot === 'string') return slot.trim();
     } catch (_) {
         // Ignore malformed stage outputs and fall back to marker scans.
     }
     return '';
 };
+
+const readStage1EnvironmentPlanContent = (stageOutputsRaw) => (
+    readStage1OutputSlotContent(stageOutputsRaw, 'environment_plan')
+);
 
 const textHasEnvironmentPlanSignals = (text) => {
     const source = String(text || '');
@@ -4577,12 +4636,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const rootKeys = ['project_visual_backfill', 'Project_Visual_Backfill', 'projectVisualBackfill'];
             for (const key of rootKeys) {
                 const inner = parsed[key];
-                if (inner && typeof inner === 'object' && !Array.isArray(inner) && Object.keys(inner).length > 0) {
-                    return JSON.stringify({ project_visual_backfill: inner }, null, 2);
+                if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
+                    const style = String(inner.Global_Style || inner.global_style || '').trim();
+                    if (style) {
+                        return JSON.stringify({ project_visual_backfill: inner }, null, 2);
+                    }
                 }
             }
-            const contentKeys = ['Global_Style', 'global_style', 'borrowed_films', 'tone', 'lighting', 'color_spectrum', 'plot_summary', 'music_recommendation'];
-            if (contentKeys.some((key) => Object.prototype.hasOwnProperty.call(parsed, key))) {
+            const style = String(parsed.Global_Style || parsed.global_style || '').trim();
+            if (style) {
                 return JSON.stringify({ project_visual_backfill: parsed }, null, 2);
             }
             return '';
@@ -4634,15 +4696,57 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return '';
     }, []);
 
+    const parseVisualBackfillGlobalStyle = useCallback((jsonText) => {
+        try {
+            const parsed = JSON.parse(String(jsonText || '').trim());
+            const inner = parsed?.project_visual_backfill && typeof parsed.project_visual_backfill === 'object'
+                ? parsed.project_visual_backfill
+                : parsed;
+            return String(inner?.Global_Style || inner?.global_style || '').trim();
+        } catch {
+            return '';
+        }
+    }, []);
+
+    const hasVisualBackfillInText = useCallback((text) => (
+        Boolean(parseVisualBackfillGlobalStyle(extractProjectVisualBackfillJsonText(text)))
+    ), [extractProjectVisualBackfillJsonText, parseVisualBackfillGlobalStyle]);
+
+    const readPersistedStage1Slot = useCallback((outputKey) => (
+        readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, outputKey)
+    ), [activeEpisode?.ai_stage_outputs]);
+
+    const withPersistedVisualBackfill = useCallback((text) => {
+        const source = String(text || '').trim();
+        if (hasVisualBackfillInText(source)) return source;
+        // Restart live-only: never substitute the previous run's scene_split body
+        // (that resurrected leftover 分场 titles such as 龙门风月客栈).
+        if (analysisTrustLiveDownstreamOnlyRef.current) return source;
+        const persistedSplit = readPersistedStage1Slot('scene_split');
+        if (hasVisualBackfillInText(persistedSplit)) return persistedSplit;
+        const persistedRaw = readPersistedStage1Slot('raw_text');
+        if (hasVisualBackfillInText(persistedRaw)) return persistedRaw;
+        const slot = String(readPersistedStage1Slot('project_visual_backfill') || '').trim();
+        const slotJson = extractProjectVisualBackfillJsonText(slot) || slot;
+        if (!parseVisualBackfillGlobalStyle(slotJson)) return source;
+        if (!source) return slotJson;
+        return `${source}\n\n### Project Visual Backfill\n\n\`\`\`json\n${slotJson}\n\`\`\``.trim();
+    }, [
+        extractProjectVisualBackfillJsonText,
+        hasVisualBackfillInText,
+        parseVisualBackfillGlobalStyle,
+        readPersistedStage1Slot,
+    ]);
+
     const assertStage1VisualBackfillJson = useCallback((stage1Text, { logPrefix = '[Stage 1]' } = {}) => {
         const jsonText = extractProjectVisualBackfillJsonText(stage1Text);
-        if (jsonText) {
+        if (jsonText && parseVisualBackfillGlobalStyle(jsonText)) {
             onLog?.(`${logPrefix} ${t('已检测到全局风格 JSON。', 'Detected global-style JSON.')}`, 'success');
             return jsonText;
         }
         onLog?.(`${logPrefix} ${t('未检测到可解析的全局风格 JSON。', 'No parseable global-style JSON detected.')}`, 'warning');
         throw new Error('SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING');
-    }, [extractProjectVisualBackfillJsonText, onLog, t]);
+    }, [extractProjectVisualBackfillJsonText, onLog, parseVisualBackfillGlobalStyle, t]);
 
     const buildStage2UserInputFromStage1 = useCallback((stage1Text, reuseSubjectAssets = []) => {
         // Stage 2.1: one whole-episode call on Stage-1 script after main-env splice.
@@ -6128,7 +6232,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const getMergedEntitiesPayloadFromText = (inputText) => {
         const text = String(inputText || '');
         const sanitizedText = sanitizeLlmTextForJsonImport(text);
-        const emptyPayload = { characters: [], props: [], environments: [] };
+        const emptyPayload = { characters: [], props: [], environments: [], posters: [], covers: [] };
 
         const getEntitiesPayloadFromSubjectIndexTableLocal = (sourceText) => {
             const raw = String(sourceText || '');
@@ -6184,6 +6288,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 characters: Array.isArray(base?.characters) ? [...base.characters] : [],
                 props: Array.isArray(base?.props) ? [...base.props] : [],
                 environments: Array.isArray(base?.environments) ? [...base.environments] : [],
+                posters: Array.isArray(base?.posters) ? [...base.posters] : [],
+                covers: Array.isArray(base?.covers) ? [...base.covers] : [],
             };
             const mergeList = (target, incoming) => {
                 const seen = new Set(target.map((x) => normalizeName(x) || JSON.stringify(x || {})));
@@ -6198,17 +6304,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const canMergeCharacters = !onlyMissingTypes || out.characters.length === 0;
             const canMergeProps = !onlyMissingTypes || out.props.length === 0;
             const canMergeEnvironments = !onlyMissingTypes || out.environments.length === 0;
+            const canMergePosters = !onlyMissingTypes || (out.posters.length === 0 && out.covers.length === 0);
 
             if (canMergeCharacters) mergeList(out.characters, Array.isArray(patch?.characters) ? patch.characters : []);
             if (canMergeProps) mergeList(out.props, Array.isArray(patch?.props) ? patch.props : []);
             if (canMergeEnvironments) mergeList(out.environments, Array.isArray(patch?.environments) ? patch.environments : []);
+            if (canMergePosters) {
+                mergeList(out.posters, Array.isArray(patch?.posters) ? patch.posters : []);
+                mergeList(out.covers, Array.isArray(patch?.covers) ? patch.covers : []);
+                mergeList(out.posters, Array.isArray(patch?.covers) ? patch.covers : []);
+                mergeList(out.covers, Array.isArray(patch?.posters) ? patch.posters : []);
+            }
             return out;
         };
 
         const hasAny = (payload) =>
             (Array.isArray(payload?.characters) && payload.characters.length > 0)
             || (Array.isArray(payload?.props) && payload.props.length > 0)
-            || (Array.isArray(payload?.environments) && payload.environments.length > 0);
+            || (Array.isArray(payload?.environments) && payload.environments.length > 0)
+            || (Array.isArray(payload?.posters) && payload.posters.length > 0)
+            || (Array.isArray(payload?.covers) && payload.covers.length > 0);
 
         let merged = { ...emptyPayload };
         const sources = [];
@@ -6231,6 +6346,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             characters: extractNamedJsonArrayFromRawText(text, 'characters'),
             props: extractNamedJsonArrayFromRawText(text, 'props'),
             environments: extractNamedJsonArrayFromRawText(text, 'environments'),
+            posters: extractNamedJsonArrayFromRawText(text, 'posters'),
+            covers: extractNamedJsonArrayFromRawText(text, 'covers'),
         };
         if (hasAny(fragmentPayload)) {
             merged = mergePayload(merged, fragmentPayload);
@@ -6242,6 +6359,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 characters: extractNamedJsonArrayFromRawText(sanitizedText, 'characters'),
                 props: extractNamedJsonArrayFromRawText(sanitizedText, 'props'),
                 environments: extractNamedJsonArrayFromRawText(sanitizedText, 'environments'),
+                posters: extractNamedJsonArrayFromRawText(sanitizedText, 'posters'),
+                covers: extractNamedJsonArrayFromRawText(sanitizedText, 'covers'),
             };
             if (hasAny(sanitizedFragmentPayload)) {
                 merged = mergePayload(merged, sanitizedFragmentPayload);
@@ -6320,6 +6439,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const backendCount = countSubjectsPayloadItems(normalizedBackend);
         const textCount = countSubjectsPayloadItems(normalizedText);
 
+        if (backendCount > 0 && textCount > 0) {
+            const merged = {
+                characters: Array.isArray(normalizedBackend.characters) && normalizedBackend.characters.length
+                    ? normalizedBackend.characters
+                    : (normalizedText.characters || []),
+                props: Array.isArray(normalizedBackend.props) && normalizedBackend.props.length
+                    ? normalizedBackend.props
+                    : (normalizedText.props || []),
+                environments: Array.isArray(normalizedBackend.environments) && normalizedBackend.environments.length
+                    ? normalizedBackend.environments
+                    : (normalizedText.environments || []),
+                posters: countDesignedCoverPosterItems(normalizedBackend) > 0
+                    ? (normalizedBackend.posters || normalizedBackend.covers || [])
+                    : (normalizedText.posters || normalizedText.covers || []),
+                covers: countDesignedCoverPosterItems(normalizedBackend) > 0
+                    ? (normalizedBackend.covers || normalizedBackend.posters || [])
+                    : (normalizedText.covers || normalizedText.posters || []),
+            };
+            return normalizePosterBucketsInSubjectsPayload(merged);
+        }
         if (backendCount > 0) return normalizedBackend;
         if (textCount > 0) return normalizedText;
         return normalizedBackend || normalizedText || {};
@@ -8691,10 +8830,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [activeEpisode?.ai_scene_analysis_subject_index]);
 
     const hasEnvironmentPlanForAssetDesign = useCallback(() => {
+        const livePlan = String(latestStage1NodeOutputsRef.current?.environment_plan || '').trim();
+        if (textHasEnvironmentPlanSignals(livePlan) || textHasEnvironmentPlanSignals(latestStage1RawTextRef.current)) {
+            return true;
+        }
+        if (analysisTrustLiveDownstreamOnlyRef.current) return false;
         if (readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs)) return true;
         const sources = [
             activeEpisode?.ai_scene_analysis_adaptation,
-            latestStage1RawTextRef.current,
             activeEpisode?.ai_scene_analysis_result,
             ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
         ];
@@ -8713,11 +8856,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const sources = [
             extraText,
             latestStage1RawTextRef.current,
+            latestStage1NodeOutputsRef.current?.scene_split,
             adaptationText,
-            activeEpisode?.ai_scene_analysis_adaptation,
-            activeEpisode?.ai_scene_analysis_result,
-            ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
         ];
+        if (!analysisTrustLiveDownstreamOnlyRef.current) {
+            sources.push(
+                activeEpisode?.ai_scene_analysis_adaptation,
+                activeEpisode?.ai_scene_analysis_result,
+                ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
+            );
+        }
         return sources.some((text) => textHasTaggedExtractItems(text, 'PROP'));
     }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, adaptationText]);
 
@@ -8725,11 +8873,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const sources = [
             extraText,
             latestStage1RawTextRef.current,
+            latestStage1NodeOutputsRef.current?.scene_split,
             adaptationText,
-            activeEpisode?.ai_scene_analysis_adaptation,
-            activeEpisode?.ai_scene_analysis_result,
-            ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
         ];
+        if (!analysisTrustLiveDownstreamOnlyRef.current) {
+            sources.push(
+                activeEpisode?.ai_scene_analysis_adaptation,
+                activeEpisode?.ai_scene_analysis_result,
+                ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
+            );
+        }
         return sources.some((text) => textHasTaggedExtractItems(text, 'CHAR'));
     }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, adaptationText]);
 
@@ -8795,6 +8948,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         llmAssetRawResultContent,
     ]);
 
+    const hasPersistedCoverPosterAsset = useCallback(() => (
+        (Array.isArray(episodeOwnedEntities) ? episodeOwnedEntities : []).some(
+            (entity) => normalizeAssetReportType(entity?.type) === 'poster'
+        )
+    ), [episodeOwnedEntities]);
+
+    const hasUnimportedDesignedCoverPoster = useCallback(() => {
+        if (hasPersistedCoverPosterAsset()) return false;
+        const assetRaw = String(
+            activeEpisode?.ai_entity_design_result
+            || llmAssetRawResultContent
+            || ''
+        ).trim();
+        if (!assetRaw) return false;
+        try {
+            const payload = getAnalysisEntitiesPayloadFromJsonText(assetRaw) || {};
+            return countDesignedCoverPosterItems(payload) > 0;
+        } catch (_) {
+            return false;
+        }
+    }, [
+        activeEpisode?.ai_entity_design_result,
+        getAnalysisEntitiesPayloadFromJsonText,
+        hasPersistedCoverPosterAsset,
+        llmAssetRawResultContent,
+    ]);
+
     /** Arm ENV gate before scene imports can race ahead of asset_design_environment. */
     const armEnvironmentAssetDesignGate = useCallback((reason = '') => {
         environmentAssetReadyRef.current = false;
@@ -8819,29 +8999,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             environmentAssetDesignPendingRef.current = false;
             return true;
         }
-        // No planned / Index environments → nothing to wait for.
-        if (!hasEnvironmentsToDesign()) {
-            environmentAssetReadyRef.current = true;
-            environmentAssetDesignPendingRef.current = false;
-            return true;
-        }
-        // Main ENV already in the workspace library: this scene can start shots now.
-        // Do not keep the in-flight analysis lock closed after 建置入戏.
-        if (countDbMainEnvironmentEntities(episodeOwnedEntities) > 0) {
-            environmentAssetReadyRef.current = true;
-            environmentAssetDesignPendingRef.current = false;
-            return true;
-        }
-        // This run's asset_design_environment is still in flight, or analysis is active
-        // but ENV has not been explicitly marked ready yet — never treat leftover episode
-        // JSON / character/prop completion as opening the storyboard gate.
+        // This-run ENV design still in flight: leftover library rows / empty plan
+        // must not open the gate before 主环境 generation_prompt_cn is written.
         if (
             environmentAssetDesignPendingRef.current
             || (analysisRunInFlightRef.current && !environmentAssetReadyRef.current)
         ) {
             return false;
         }
-        // Idle resume / residual after env settled: persisted ENV design opens the gate.
+        if (countDbMainEnvironmentEntitiesWithPrompt(episodeOwnedEntities) > 0) {
+            environmentAssetReadyRef.current = true;
+            environmentAssetDesignPendingRef.current = false;
+            return true;
+        }
+        // Idle only: no planned environments and none in flight.
+        if (!hasEnvironmentsToDesign()) {
+            environmentAssetReadyRef.current = true;
+            environmentAssetDesignPendingRef.current = false;
+            return true;
+        }
         if (hasPersistedEnvironmentAssetDesign()) {
             environmentAssetReadyRef.current = true;
             return true;
@@ -9027,24 +9203,70 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         const required = collectSceneLinkedEnvironmentNames(scene);
-        if (!required.length) {
-            return { ok: true, required: [], missing: [], scene };
-        }
-
         const entities = Array.isArray(envEntities)
             ? envEntities
             : await loadEnvironmentEntitiesForStoryboardGate();
-        const missing = [];
-        for (const envName of required) {
+        const waitForThisRunMainEnv = Boolean(
+            !environmentAssetReadyRef.current
+            && (
+                environmentAssetDesignPendingRef.current
+                || analysisRunInFlightRef.current
+                || hasEnvironmentsToDesign()
+            )
+        );
+        if (!required.length) {
+            if (waitForThisRunMainEnv) {
+                return {
+                    ok: false,
+                    required: [],
+                    missing: [t('主环境', 'main environment')],
+                    scene,
+                    reason: 'main_env_prompt_pending',
+                };
+            }
+            return { ok: true, required: [], missing: [], scene };
+        }
+
+        const resolveMainEnvName = (envName) => {
             const matched = findMatchingEntityByType(entities, 'environment', envName);
-            const hasPrompt = Boolean(String(matched?.generation_prompt_cn || '').trim());
-            if (!matched || !hasPrompt) {
-                missing.push(envName);
+            if (matched && isReusableMainEnvironmentAsset({ ...matched, type: matched.type || 'environment' })) {
+                return normalizeSubjectName(matched.name || envName);
+            }
+            const depNames = (parseVisualDependencies(matched?.visual_dependencies) || [])
+                .map((item) => normalizeSubjectName(item?.name || item))
+                .filter(Boolean);
+            const attrs = matched?.custom_attributes && typeof matched.custom_attributes === 'object'
+                ? matched.custom_attributes
+                : {};
+            return normalizeSubjectName(
+                depNames[0]
+                || attrs.main_environment
+                || attrs.main_environment_name
+                || matched?.base_name_en
+                || getMainEnvironmentName(envName)
+                || envName
+            );
+        };
+
+        const missing = [];
+        const requiredMains = [];
+        for (const envName of required) {
+            const mainName = resolveMainEnvName(envName);
+            if (mainName && !requiredMains.includes(mainName)) requiredMains.push(mainName);
+            const mainEntity = findMatchingEntityByType(entities, 'environment', mainName)
+                || (
+                    !isDerivedEnvironmentName(envName)
+                        ? findMatchingEntityByType(entities, 'environment', envName)
+                        : null
+                );
+            const hasPrompt = Boolean(String(mainEntity?.generation_prompt_cn || '').trim());
+            if (!mainEntity || !hasPrompt) {
+                missing.push(mainName || envName);
             }
         }
         return {
             ok: missing.length === 0,
-            required,
+            required: requiredMains.length > 0 ? requiredMains : required,
             missing,
             scene,
         };
@@ -9052,7 +9274,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.id,
         collectSceneLinkedEnvironmentNames,
         ensureStage3AutoStartCache,
+        hasEnvironmentsToDesign,
         loadEnvironmentEntitiesForStoryboardGate,
+        t,
     ]);
 
     const enqueuePendingStoryboardKickoff = useCallback((item = {}) => {
@@ -11296,8 +11520,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || (!resolvedStage1RawText && !trustLiveDownstreamOnly ? safePersistedAdaptationText : '')
             || ''
         ).trim();
-        const stage1VisualBackfillJson = String(
+        const persistedVisualSlot = readStage1OutputSlotContent(
+            activeEpisode?.ai_stage_outputs,
+            'project_visual_backfill'
+        );
+        const extractedVisual = String(
             extractProjectVisualBackfillJsonText(resolvedStage1RawText || resolvedAnalysisRawText) || ''
+        ).trim();
+        const persistedVisualJson = String(
+            extractProjectVisualBackfillJsonText(persistedVisualSlot) || persistedVisualSlot || ''
+        ).trim();
+        const stage1VisualBackfillJson = String(
+            extractedVisual
+            || (!trustLiveDownstreamOnly && parseVisualBackfillGlobalStyle(persistedVisualJson) ? persistedVisualJson : '')
+            || ''
         ).trim();
 
         const explicitSubjectIndex = String(stage2_1Text || '').trim();
@@ -11341,6 +11577,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         const persistedBySceneRaw = (() => {
+            if (trustLiveDownstreamOnly) return '';
             try {
                 const raw = String(activeEpisode?.ai_stage_outputs || '').trim();
                 if (!raw) return '';
@@ -11373,6 +11610,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             : resolvedAssetRawText;
 
         const persistedStage1Outputs = (() => {
+            if (trustLiveDownstreamOnly) return {};
             try {
                 const raw = String(activeEpisode?.ai_stage_outputs || '').trim();
                 if (!raw) return {};
@@ -11527,7 +11765,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 },
             },
         };
-    }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, activeEpisode?.script_content, extractAnalysisSections, extractProjectVisualBackfillJsonText, extractPureSubjectIndexText, extractStage1AdaptedScriptBody, getAnalysisEntitiesPayloadFromJsonText, mergeSceneMarkdownBySceneMaps, normalizeLlmMarkdownTable, parseSceneMarkdownBySceneMap, project?.global_info, rawContent, splitSceneMarkdownTableBySceneId]);
+    }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, activeEpisode?.script_content, extractAnalysisSections, extractProjectVisualBackfillJsonText, extractPureSubjectIndexText, extractStage1AdaptedScriptBody, getAnalysisEntitiesPayloadFromJsonText, mergeSceneMarkdownBySceneMaps, normalizeLlmMarkdownTable, parseSceneMarkdownBySceneMap, parseVisualBackfillGlobalStyle, project?.global_info, rawContent, splitSceneMarkdownTableBySceneId]);
 
     const parseStageOutputsObject = useCallback((rawValue) => {
         if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue) && rawValue.stages && typeof rawValue.stages === 'object') {
@@ -11668,13 +11906,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (liveRaw) {
                     ensureOutputSlot(outputs, 'raw_text', { kind: 'text', title: '第一阶段完整结果' }).content = liveRaw;
                     const liveVisualBackfill = extractProjectVisualBackfillJsonText(liveRaw);
-                    ensureOutputSlot(outputs, 'project_visual_backfill', { kind: 'json', title: '全局风格' }).content = liveVisualBackfill;
+                    if (parseVisualBackfillGlobalStyle(liveVisualBackfill)) {
+                        ensureOutputSlot(outputs, 'project_visual_backfill', { kind: 'json', title: '全局风格' }).content = liveVisualBackfill;
+                    }
                 }
             } else if (trustLiveDownstreamOnly && persisted.stages?.stage1?.outputs) {
                 const outputs = persisted.stages.stage1.outputs;
                 ensureOutputSlot(outputs, 'adapted_script', { kind: 'markdown', title: '优化后剧本' }).content = '';
                 ensureOutputSlot(outputs, 'raw_text', { kind: 'text', title: '第一阶段完整结果' }).content = '';
                 ensureOutputSlot(outputs, 'project_visual_backfill', { kind: 'json', title: '全局风格' }).content = '';
+            }
+            if (trustLiveDownstreamOnly && persisted.stages?.stage1?.outputs) {
+                const outputs = persisted.stages.stage1.outputs;
+                const liveNodeKeys = new Set(
+                    Object.entries(latestStage1NodeOutputsRef.current || {})
+                        .filter(([, content]) => String(content || '').trim())
+                        .map(([key]) => key)
+                );
+                Object.keys(outputs).forEach((key) => {
+                    if (['adapted_script', 'raw_text', 'project_visual_backfill'].includes(key)) return;
+                    if (!liveNodeKeys.has(key)) delete outputs[key];
+                });
             }
             if (persisted.stages?.stage2?.outputs) {
                 if (liveSubjectIndex) {
@@ -11740,7 +11992,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return { version: 1, stages: {} };
             }
         }
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, subjectIndexText]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, diagnosticsRefreshNonce, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, parseVisualBackfillGlobalStyle, subjectIndexText]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -12419,7 +12671,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } else if (status === 'running' && (previous?.status !== 'running' || (currentStep && currentStep !== String(previous?.currentStep || '')))) {
                 onLog?.(t(`${label}已开始。`, `${label} started.`), 'process');
             } else if (['success', 'warning'].includes(status) && !['success', 'warning'].includes(previous?.status)) {
-                onLog?.(t(`${label}已完成。`, `${label} completed.`), 'success');
+                const partialEvent = String(node?.runtime_meta?.business_event || '').trim();
+                if (status === 'warning' && ['partial_failure', 'all_failed'].includes(partialEvent)) {
+                    const failedIds = Array.isArray(node?.runtime_meta?.failed_scene_ids)
+                        ? node.runtime_meta.failed_scene_ids.filter(Boolean).join('、')
+                        : '';
+                    onLog?.(
+                        t(
+                            `${label}未全部完成${failedIds ? `：失败场次 ${failedIds}` : ''}。`,
+                            `${label} did not fully complete${failedIds ? `: failed ${failedIds}` : ''}.`
+                        ),
+                        'warning'
+                    );
+                } else {
+                    onLog?.(t(`${label}已完成。`, `${label} completed.`), 'success');
+                }
             } else if (['failed', 'blocked'].includes(status) && !['failed', 'blocked'].includes(previous?.status)) {
                 const rawFailure = String(node?.last_error_message || node?.last_error_code || '').trim();
                 const errorCode = String(node?.last_error_code || '').trim().toUpperCase();
@@ -13435,6 +13701,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const existingSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
         const visualBackfillJson = String(
             extractProjectVisualBackfillJsonText(persistedStage1RawText)
+            || readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'project_visual_backfill')
             || currentStageOutputs?.stages?.stage1?.outputs?.project_visual_backfill?.content
             || ''
         ).trim();
@@ -13710,7 +13977,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             const labels = {
                 drama_opt: ['文戏优化', 'Drama Refinement'],
-                combat_opt: ['武戏优化', 'Action Refinement'],
+                combat_opt: ['武戏增强', 'Action Enhancement'],
                 framing_opt: ['场景现场编排', 'Floor Staging'],
                 staging_opt: ['建置入戏', 'Staging'],
             };
@@ -14659,11 +14926,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     setIsAnalyzing(nextAnalyzing);
                 }
             }
-            if (Array.isArray(snapshot.pipelineNodes)) {
+            const hasThisRunStage1 = Boolean(
+                String(latestStage1NodeOutputsRef.current?.scene_split || '').trim()
+                || String(latestStage1RawTextRef.current || '').trim()
+            );
+            const skipLeftoverProgressRows = Boolean(
+                analysisTrustLiveDownstreamOnlyRef.current && !hasThisRunStage1
+            );
+            if (Array.isArray(snapshot.pipelineNodes) && !skipLeftoverProgressRows) {
                 diagnosticsPipelineNodesRef.current = snapshot.pipelineNodes;
                 setDiagnosticsPipelineNodes(snapshot.pipelineNodes);
             }
-            if (Array.isArray(snapshot.sceneUnits)) {
+            if (Array.isArray(snapshot.sceneUnits) && !skipLeftoverProgressRows) {
                 diagnosticsSceneUnitsRef.current = snapshot.sceneUnits;
                 setDiagnosticsSceneUnits(snapshot.sceneUnits);
             }
@@ -15434,7 +15708,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 'script_analysis',
                 resolveSelectedScriptAnalysisApiId()
             ),
-            { startedAt, baselineText, disableEpisodeRecovery }
+            { startedAt, baselineText, disableEpisodeRecovery: true }
         );
         const cutText = String(extractAnalysisTextFromResult(cutResult) || '').trim();
         if (!cutText) {
@@ -16808,7 +17082,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const envStillNeededFromPlan = (
                     wantsEnvironments
                     && hasEnvironmentsToDesign()
-                    && !(skipExistingAssets && !options?.forceAssetDesign && hasPersistedEnvironmentAssetDesign())
+                    && !(
+                        skipExistingAssets
+                        && !options?.forceAssetDesign
+                        && hasPersistedEnvironmentAssetDesign()
+                        && !hasUnimportedDesignedCoverPoster()
+                    )
                 );
                 const charStillNeededFromExtract = (
                     wantsCharacters
@@ -17046,16 +17325,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let targetFilters = Array.isArray(options.targetEntityTypes)
             ? Array.from(new Set(options.targetEntityTypes.map(normalizeTargetEntityTypeKey).filter(Boolean)))
             : null;
-        const requestedTargetFilters = targetFilters ? [...targetFilters] : null;
-
-
-        if (targetFilters && (targetFilters.includes('posters') || targetFilters.includes('covers')) && !targetFilters.includes('environments')) {
-
-
-            targetFilters = [...targetFilters, 'environments'];
-
-
+        if (targetFilters && targetFilters.some(isEnvPosterTargetKey)) {
+            targetFilters = coupleEnvPosterTargetFilters(targetFilters);
         }
+        const requestedTargetFilters = targetFilters ? [...targetFilters] : null;
 
 
 
@@ -17274,15 +17547,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     payload.covers = Array.isArray(input.covers) ? input.covers : [];
                 }
 
-                const payloadTargetFilters = Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0
-                    ? requestedTargetFilters
-                    : targetFilters;
+                const payloadTargetFilters = coupleEnvPosterTargetFilters(
+                    Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0
+                        ? requestedTargetFilters
+                        : targetFilters
+                );
                 if (Array.isArray(payloadTargetFilters) && payloadTargetFilters.length > 0) {
                     const filtered = { characters: [], environments: [], props: [], posters: [], covers: [] };
                     if (payloadTargetFilters.includes('characters')) filtered.characters = payload.characters;
                     if (payloadTargetFilters.includes('props')) filtered.props = payload.props;
-                    if (payloadTargetFilters.includes('environments')) filtered.environments = payload.environments;
-                    if (payloadTargetFilters.includes('posters') || payloadTargetFilters.includes('covers')) {
+                    if (payloadTargetFilters.includes('environments') || payloadTargetFilters.some(isEnvPosterTargetKey)) {
+                        filtered.environments = payload.environments;
+                    }
+                    if (payloadTargetFilters.some(isEnvPosterTargetKey)) {
                         filtered.posters = payload.posters;
                         filtered.covers = payload.covers;
                     }
@@ -17332,6 +17609,67 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         && hasCharExtractForAssetDesign(extractSourceText)
                         && !(skipExistingAssets && !options?.forceAssetDesign && hasPersistedCharacterAssetDesign());
                     if (filteredSubjectIndex.keptRows <= 0 && !envDesignHasPlanSource && !propDesignHasPlanSource && !charDesignHasPlanSource) {
+                        if (pData.key === 'environments' && hasUnimportedDesignedCoverPoster()) {
+                            const persistedPayload = getAnalysisEntitiesPayloadFromJsonText(
+                                activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || ''
+                            ) || {};
+                            const posterPayload = buildSubtaskSubjectsPayload('environments', persistedPayload);
+                            if (countDesignedCoverPosterItems(posterPayload) > 0) {
+                                onLog?.(
+                                    t(
+                                        '[Stage 3 Asset Design] 主环境已入库，正在补导入已生成的封面海报。',
+                                        '[Stage 3 Asset Design] Main environment already exists; importing the designed cover poster.'
+                                    ),
+                                    'info'
+                                );
+                                try {
+                                    const posterImportReport = await importSubjectsJsonWithDedupe(
+                                        JSON.stringify(posterPayload, null, 2),
+                                        {
+                                            reason: `phase2-subtask-environments-poster-backfill`,
+                                            subjectsJson: posterPayload,
+                                            forceRetry: true,
+                                            importOptions: {
+                                                onLog,
+                                                projectId,
+                                                episodeId: activeEpisode?.id,
+                                                importSessionId: `${subtaskImportSessionId}-poster-backfill`,
+                                                targetEntityTypes: [...ENV_POSTER_TARGET_KEYS],
+                                                overwriteExistingSubjects,
+                                                suppressAlerts: true,
+                                                forceRetry: true,
+                                            },
+                                        }
+                                    );
+                                    if (reportImportedPosterCount(posterImportReport) > 0) {
+                                        if (pData.key && !assetsLlmDoneKeys.includes(pData.key)) {
+                                            assetsLlmDoneKeys.push(pData.key);
+                                        }
+                                        markAssetCategoryPersisted(pData.key, {
+                                            highlightHint: buildAssetReadyHint(pData.key),
+                                        });
+                                        markEnvironmentAssetDesignReady(`env-poster-backfill:${subtaskTraceId}`);
+                                        return {
+                                            key: pData.key,
+                                            traceId: subtaskTraceId,
+                                            importSessionId: subtaskImportSessionId,
+                                            result: null,
+                                            analysisText: '',
+                                            subjectsJson: posterPayload,
+                                            hasImportableSubjects: true,
+                                            subtaskImportReport: posterImportReport,
+                                            subtaskImportError: '',
+                                            skippedExisting: false,
+                                        };
+                                    }
+                                } catch (posterBackfillErr) {
+                                    onLog?.(
+                                        `[Stage 3 Asset Design] Cover poster backfill failed: ${posterBackfillErr?.message || posterBackfillErr}`,
+                                        'warning'
+                                    );
+                                }
+                            }
+                        }
                         const skippedLiveKey = promptKeyToLiveAssetKey(pData.key);
                         if (skippedLiveKey) {
                             setLiveAssetDesignTaskKeys((prev) => prev.filter((item) => item !== skippedLiveKey));
@@ -17445,9 +17783,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 if (pData.key === 'characters') return ['characters'];
                                 if (pData.key === 'props') return ['props'];
                                 if (pData.key === 'environments' && Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0) {
-                                    return requestedTargetFilters.filter((item) => ['environments', 'posters', 'covers'].includes(item));
+                                    return coupleEnvPosterTargetFilters(
+                                        requestedTargetFilters.filter((item) => ENV_POSTER_TARGET_KEYS.includes(item))
+                                    );
                                 }
-                                if (pData.key === 'environments') return ['environments', 'posters', 'covers'];
+                                if (pData.key === 'environments') return [...ENV_POSTER_TARGET_KEYS];
                                 if (pData.key === 'posters') return ['posters', 'covers'];
                                 return undefined;
                             })();
@@ -17487,6 +17827,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         + Number(counts.environment || 0)
                                         + Number(counts.poster || 0)
                                     );
+                                    const designedPosters = countDesignedCoverPosterItems(subtaskPayload);
+                                    const importedPosters = reportImportedPosterCount(subtaskImportReport);
                                     if (subCreated <= 0 && subSkipped <= 0 && countedImported <= 0) {
                                         subtaskImportError = String(
                                             subtaskImportReport?.reason
@@ -17499,6 +17841,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             subjectsPayload: subtaskPayload,
                                             phase: 'import',
                                         });
+                                    } else if (
+                                        (pData.key === 'environments' || pData.key === 'posters')
+                                        && designedPosters > 0
+                                        && importedPosters <= 0
+                                    ) {
+                                        subtaskImportError = 'cover_poster_not_imported';
+                                        logAssetImportFailureDiagnostic(pData.key, {
+                                            traceId: subtaskTraceId,
+                                            importReport: subtaskImportReport,
+                                            importError: subtaskImportError,
+                                            subjectsPayload: subtaskPayload,
+                                            phase: 'import',
+                                        });
+                                        onLog?.(
+                                            `[Stage 3 Asset Design] Environment imported but cover poster was not persisted key=${pData.key} trace_id=${subtaskTraceId} designed_posters=${designedPosters}`,
+                                            'warning'
+                                        );
                                     } else {
                                         onLog?.(`[Stage 3 Asset Design] Subtask import done key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} created=${subCreated} skipped=${subSkipped} counted=${countedImported}`, 'success');
                                     }
@@ -17616,7 +17975,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const importErr = String(settled.value?.subtaskImportError || '').trim();
                 // Category completes independently only when that category actually landed in DB
                 // (created or skipped-as-existing). LLM-returned JSON alone is not enough.
-                return !importErr && (created > 0 || skipped > 0 || countedImported > 0);
+                if (importErr || !(created > 0 || skipped > 0 || countedImported > 0)) return false;
+                const key = String(settled.value?.key || '').trim();
+                if (key === 'environments' || key === 'posters') {
+                    const designedPosters = countDesignedCoverPosterItems(settled.value?.subjectsJson);
+                    if (designedPosters > 0 && reportImportedPosterCount(report) <= 0) return false;
+                }
+                return true;
             };
             const importCachedCategorySubjects = async (pData, roundTag = '') => {
                 const key = String(pData.key || '');
@@ -17630,9 +17995,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     if (key === 'characters') return ['characters'];
                     if (key === 'props') return ['props'];
                     if (key === 'environments' && Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0) {
-                        return requestedTargetFilters.filter((item) => ['environments', 'posters', 'covers'].includes(item));
+                        return coupleEnvPosterTargetFilters(
+                            requestedTargetFilters.filter((item) => ENV_POSTER_TARGET_KEYS.includes(item))
+                        );
                     }
-                    if (key === 'environments') return ['environments', 'posters', 'covers'];
+                    if (key === 'environments') return [...ENV_POSTER_TARGET_KEYS];
                     if (key === 'posters') return ['posters', 'covers'];
                     return undefined;
                 })();
@@ -17678,6 +18045,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 subtaskImportReport?.reason
                                 || 'import produced zero created/skipped rows'
                             );
+                        } else if (
+                            (key === 'environments' || key === 'posters')
+                            && countDesignedCoverPosterItems(subtaskPayload) > 0
+                            && reportImportedPosterCount(subtaskImportReport) <= 0
+                        ) {
+                            subtaskImportError = 'cover_poster_not_imported';
                         }
                     }
                 } catch (subImportErr) {
@@ -17950,8 +18323,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 pData.key,
                                 requestedTargetFilters
                             );
-                            if (Number(filtered?.keptRows || 0) <= 0) continue;
                             const cachedPayload = cachedSubjectsByKey.get(String(pData.key || ''));
+                            if (Number(filtered?.keptRows || 0) <= 0 && countDesignedCoverPosterItems(cachedPayload) <= 0) {
+                                continue;
+                            }
                             const designedEntries = collectDesignedSubjectEntries(
                                 pData,
                                 cachedPayload,
@@ -23607,36 +23982,58 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 : String(activeEpisode?.ai_scene_analysis_result || '').trim();
             // Stage 1 trunks after scene_split:
             // 1) whole-episode environment_plan (main env only)
-            // 2) per-scene drama (+ optional VFX/Xian) → derived framing → staging.
+            // 2) per-scene drama (+ optional combat) → derived framing → staging.
             const splitStage1Flow = true;
             let result = null;
             let analyzedText = '';
-            if (skipSceneSplit) {
-                analyzedText = String(userInput || '').trim();
+            let reusePersistedSceneSplit = skipSceneSplit;
+            let stage1UserInput = String(userInput || '');
+            if (reusePersistedSceneSplit) {
+                analyzedText = withPersistedVisualBackfill(stage1UserInput);
                 if (!analyzedText) {
                     throw new Error(t(
                         '缺少全局统筹产物，无法继续环境规划与逐场优化。',
                         'Global orchestration output is missing; cannot continue environment planning and per-scene refinement.'
                     ));
                 }
-                result = { result: analyzedText, meta: { saved_to_episode: true } };
-                onLog?.(
-                    t('[全局统筹] 已复用落库结果，跳过重复统筹，继续环境规划与文戏增强。', '[Global orchestration] Reusing persisted output; skipping a second orchestration call and continuing to environment planning and drama enhancement.'),
-                    'info'
-                );
-            } else {
+                if (!hasVisualBackfillInText(analyzedText)) {
+                    onLog?.(
+                        t('[全局统筹] 落库结果缺少可解析的全局风格，不能复用，将重新统筹。', '[Global orchestration] Persisted output is missing parseable global style; re-running orchestration instead of reuse.'),
+                        'warning'
+                    );
+                    reusePersistedSceneSplit = false;
+                    stage1UserInput = ensureStage1ProjectContextInjected(
+                        getAnalysisScriptContent(),
+                        selectedReuseSubjectAssets
+                    );
+                    if (!String(stage1UserInput || '').trim()) {
+                        throw new Error(t(
+                            '缺少剧本正文，无法重新全局统筹。',
+                            'Original script is missing; cannot rerun global orchestration.'
+                        ));
+                    }
+                } else {
+                    result = { result: analyzedText, meta: { saved_to_episode: true } };
+                    onLog?.(
+                        t('[全局统筹] 已复用落库结果，跳过重复统筹，继续环境规划与文戏增强。', '[Global orchestration] Reusing persisted output; skipping a second orchestration call and continuing to environment planning and drama enhancement.'),
+                        'info'
+                    );
+                }
+            }
+            if (!reusePersistedSceneSplit) {
                 onLog?.(
                     t('[全局统筹] 已提交 AI（场景识别与场际衔接）...', '[Global orchestration] Submitted to AI...'),
                     'info'
                 );
                 logSelectedScriptAnalysisApi('scene_split');
                 result = await runScriptOptimizationNode({
-                    scriptText: userInput,
+                    scriptText: stage1UserInput,
                     systemPrompt: customSystemPrompt,
                     metadata,
                     startedAt,
                     baselineText: baselineAnalysisText,
                     includeEnvironmentPlan: false,
+                    disableEpisodeRecovery: true,
                     onTaskCreated: (taskId) => {
                         const stableTaskId = String(taskId || '').trim();
                         setActiveAnalysisTaskId(stableTaskId);
@@ -23645,6 +24042,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     },
                 });
                 analyzedText = extractAnalysisTextFromResult(result);
+            }
+            if (splitStage1Flow) {
+                assertStage1VisualBackfillJson(analyzedText, { logPrefix: '[Stage 1]' });
             }
             const stage1Raw = String(analyzedText || '').trim();
             if (stage1Raw) {
@@ -23796,9 +24196,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         {
                             targetEntityTypes: afterSplitTargets,
                             extractSourceText: sceneSplitText,
-                            forceAssetDesign: !skipSceneSplit,
-                            skipExistingAssets: skipSceneSplit,
-                            overwriteExistingSubjects: !skipSceneSplit,
+                            forceAssetDesign: !reusePersistedSceneSplit,
+                            skipExistingAssets: reusePersistedSceneSplit,
+                            overwriteExistingSubjects: !reusePersistedSceneSplit,
                             allowWithoutSubjectIndex: true,
                             parallelWithScenes: true,
                         }
@@ -24894,16 +25294,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ));
     }, [diagnosticsPipelineNodes, getStageOutputContent]);
 
-    const resolveSceneSplitSourceText = useCallback(() => String(
-        getStageOutputContent('stage1', 'scene_split')
-        || latestStage1RawTextRef.current
-        || activeEpisode?.ai_scene_analysis_result
-        || activeEpisode?.ai_scene_analysis_adaptation
-        || ''
-    ).trim(), [
+    const resolveSceneSplitSourceText = useCallback(() => {
+        const liveSplit = String(
+            latestStage1NodeOutputsRef.current?.scene_split
+            || getStageOutputContent('stage1', 'scene_split')
+            || latestStage1RawTextRef.current
+            || ''
+        ).trim();
+        if (analysisTrustLiveDownstreamOnlyRef.current) {
+            return withPersistedVisualBackfill(liveSplit);
+        }
+        const raw = String(
+            liveSplit
+            || readPersistedStage1Slot('scene_split')
+            || activeEpisode?.ai_scene_analysis_result
+            || activeEpisode?.ai_scene_analysis_adaptation
+            || ''
+        ).trim();
+        return withPersistedVisualBackfill(raw);
+    }, [
         activeEpisode?.ai_scene_analysis_adaptation,
         activeEpisode?.ai_scene_analysis_result,
         getStageOutputContent,
+        readPersistedStage1Slot,
+        withPersistedVisualBackfill,
     ]);
 
     const hasPersistedEnvironmentPlan = useCallback(() => {
@@ -24925,13 +25339,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 'Global orchestration output is missing; cannot continue environment planning and per-scene refinement.'
             ));
         }
-        onLog?.(
-            t(
-                '全局统筹已就绪，正在按新拓扑继续：环境规划 ∥ 逐场优化。不会直接抽资产清单。',
-                'Global orchestration is ready; continuing with environment plan ∥ per-scene refinement. Asset extraction will not start yet.'
-            ),
-            'info'
-        );
         let customSystemPrompt = '';
         try {
             const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
@@ -24942,6 +25349,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 `Failed to load the orchestration prompt (continue): ${promptErr?.message || promptErr}`
             ), 'warning');
         }
+        if (!hasVisualBackfillInText(sceneSplitText)) {
+            onLog?.(
+                t(
+                    '落库全局统筹缺少全局风格，不能跳过统筹。将用原剧本重新全局统筹。',
+                    'Persisted global orchestration is missing global style; cannot skip. Rerunning orchestration from the original script.'
+                ),
+                'warning'
+            );
+        } else {
+            onLog?.(
+                t(
+                    '全局统筹已就绪，正在按新拓扑继续：环境规划 ∥ 逐场优化。不会直接抽资产清单。',
+                    'Global orchestration is ready; continuing with environment plan ∥ per-scene refinement. Asset extraction will not start yet.'
+                ),
+                'info'
+            );
+        }
+        // Keep skipSceneSplit so the in-flight guard does not drop this continue.
+        // executeAdvancedAnalysis re-runs scene_split if global style is missing.
         await executeAdvancedAnalysis(sceneSplitText, customSystemPrompt, 0, true, { skipSceneSplit: true });
     };
 
@@ -24966,7 +25392,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ).trim().toLowerCase();
         const envNodeLive = ['running', 'queued'].includes(envNodeStatus);
         const shouldStartEnvDesign = envAutoStartOn
-            && !envImported
+            && (!envImported || hasUnimportedDesignedCoverPoster())
             && !envNodeLive
             && (hasPersistedEnvironmentPlan() || hasEnvironmentsToDesign());
         onLog?.(
@@ -25002,7 +25428,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     '',
                     {
                         targetEntityTypes: ['environments', 'posters', 'covers'],
-                        forceAssetDesign: true,
+                        forceAssetDesign: !envImported,
                         skipExistingAssets: true,
                         allowWithoutSubjectIndex: true,
                         parallelWithScenes: true,
@@ -25013,7 +25439,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         `Main-environment design failed to start; persistence supervisor will auto-repair: ${envErr?.message || envErr}`
                     ), 'warning');
                 });
-            } else if (envAutoStartOn && envImported) {
+            } else if (envAutoStartOn && envImported && !hasUnimportedDesignedCoverPoster()) {
                 markEnvironmentAssetDesignReady('continue-env-already-persisted');
             } else if (!envAutoStartOn) {
                 markEnvironmentAssetDesignReady('continue-env-auto-start-off');
@@ -25097,7 +25523,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const envNode = nodes.find((node) => String(node?.node_name || '').trim() === 'asset_design_environment');
         const envNodeLive = isLiveNode(envNode);
         const shouldStartEnvDesign = envAutoStartOn
-            && !envImported
+            && (!envImported || hasUnimportedDesignedCoverPoster())
             && !envNodeLive
             && (hasPersistedEnvironmentPlan() || hasEnvironmentsToDesign());
         if (shouldStartEnvDesign) {
@@ -25108,7 +25534,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 '',
                 {
                     targetEntityTypes: ['environments', 'posters', 'covers'],
-                    forceAssetDesign: true,
+                    forceAssetDesign: !envImported,
                     skipExistingAssets: true,
                     allowWithoutSubjectIndex: true,
                     parallelWithScenes: true,
@@ -25828,7 +26254,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const envAutoStartOn = stage3Config?.asset_design_environment !== false;
         const subjectHasEnvRows = /(?:^|\n)\s*\|[^|\n]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(stage2_1SubjectIndexText)
             || /(?:^|\n)\s*S\d+[^\n|]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(stage2_1SubjectIndexText);
-        const envDesignMissing = !hasPersistedEnvironmentAssetDesign();
+        const envDesignMissing = !hasPersistedEnvironmentAssetDesign() || hasUnimportedDesignedCoverPoster();
         const shouldRunEnvAssetDesign = envAutoStartOn && (hasEnvironmentsToDesign() || subjectHasEnvRows) && envDesignMissing;
 
         const startedAt = Date.now();
@@ -26298,6 +26724,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         extractStage1AdaptedScriptBody,
         getStageOutputContent,
         hasPersistedEnvironmentAssetDesign,
+        hasUnimportedDesignedCoverPoster,
         hasUsableSubjectIndexRows,
         importScenesFromPerScenePatchMap,
         kickoffStoryboardsAfterOrchestrationSuccess,
@@ -28556,7 +28983,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (
                 (probe.hasEnvironmentPlan || hasPersistedEnvironmentPlan())
                 && envPendingTargets.length > 0
-                && !hasPersistedEnvironmentAssetDesign()
+                && (!hasPersistedEnvironmentAssetDesign() || hasUnimportedDesignedCoverPoster())
             ) {
                 throwIfAnalysisStopped();
                 onLog?.(t(
@@ -28569,7 +28996,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     '',
                     {
                         targetEntityTypes: ['environments', 'posters', 'covers'],
-                        forceAssetDesign: true,
+                        forceAssetDesign: !hasPersistedEnvironmentAssetDesign(),
                         skipExistingAssets: true,
                         allowWithoutSubjectIndex: true,
                         parallelWithScenes: true,
@@ -28771,6 +29198,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         extractPureSubjectIndexText,
         armEnvironmentAssetDesignGate,
         hasPersistedEnvironmentAssetDesign,
+        hasUnimportedDesignedCoverPoster,
         hasPersistedEnvironmentPlan,
         importScenesFromPerScenePatchMap,
         isStoryboardAutoStartEnabled,
@@ -30552,8 +30980,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <span className="font-bold text-sm">{t('进度诊断面板', 'Workflow Diagnostics')}</span>
                             <span className="text-[9px] leading-4 text-white/40 max-w-[520px]">
                                 {t(
-                                    '全局节点与分场节点分行展示。分场优化细分为文戏、武戏（特效/仙攻）、场景现场编排、建置入戏，建置稿程序入库后接分镜。',
-                                    'Global and per-scene nodes are shown in separate sections. Per-scene refinement splits into drama, action (VFX/Xian), floor staging, and blocking; staging imports the workspace scene, then storyboards.'
+                                    '全局节点与分场节点分行展示。分场优化细分为文戏、武戏增强、场景现场编排、建置入戏，建置稿程序入库后接分镜。',
+                                    'Global and per-scene nodes are shown in separate sections. Per-scene refinement splits into drama, action enhancement, floor staging, and blocking; staging imports the workspace scene, then storyboards.'
                                 )}
                             </span>
                         </div>
@@ -31031,11 +31459,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             started: 0,
                             drama: 1,
                             vfx: 2,
-                            xian: 3,
-                            wait_env: 4,
-                            derived_framing: 5,
-                            staging: 6,
-                            completed: 7,
+                            xian: 2,
+                            combat: 2,
+                            wait_env: 3,
+                            derived_framing: 4,
+                            staging: 5,
+                            completed: 6,
                         };
                         const collectDiagnosticSceneRows = () => {
                             const byId = new Map();
@@ -31094,10 +31523,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     add(id, null, extractSceneNameValueForTable(text) || entry?.scene_name);
                                 });
                             }
+                            const trustLiveOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current);
+                            const thisRunSplit = String(
+                                latestStage1NodeOutputsRef.current?.scene_split
+                                || resolveSceneSplitSourceText?.()
+                                || ''
+                            ).trim();
                             try {
-                                const splitText = String(resolveSceneSplitSourceText?.() || '').trim();
-                                if (splitText) {
-                                    parseSceneUnitsFromScriptMarkersText(splitText).forEach((unit) => {
+                                if (thisRunSplit) {
+                                    parseSceneUnitsFromScriptMarkersText(thisRunSplit).forEach((unit) => {
                                         addFromText(unit.sceneId, unit.sceneOrder, unit.sceneText);
                                     });
                                 }
@@ -31105,10 +31539,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 // Scene-split text may not be marker-wrapped yet.
                             }
                             const subskillMap = parseSceneSubskillResultsMap(
-                                getStageOutputContent('stage1', 'scene_subskill_results')
+                                trustLiveOnly && !latestStage1NodeOutputsRef.current?.scene_subskill_results
+                                    ? ''
+                                    : getStageOutputContent('stage1', 'scene_subskill_results')
                             );
                             Object.entries(subskillMap).forEach(([id, scene]) => {
-                                const text = [scene?.drama, scene?.framing, scene?.staging]
+                                const text = [scene?.drama, scene?.combat, scene?.framing, scene?.staging]
                                     .map((part) => String(part || '').trim())
                                     .filter(Boolean)
                                     .join('\n');
@@ -31170,11 +31606,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const failed = status === 'failed' || status === 'blocked';
                             const groupActiveStep = {
                                 drama: ['drama'],
-                                combat: ['vfx', 'xian'],
+                                combat: ['vfx', 'xian', 'combat'],
                                 framing: ['wait_env', 'derived_framing'],
                                 staging: ['staging'],
                             }[group] || [];
-                            const doneAfter = { drama: 1, combat: 3, framing: 5, staging: 6 }[group] || 0;
+                            const doneAfter = { drama: 1, combat: 2, framing: 4, staging: 5 }[group] || 0;
                             if (failed && groupActiveStep.includes(step)) {
                                 return {
                                     ready: false,
@@ -31187,7 +31623,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
                             if (failed) return waiting;
-                            if (group === 'combat' && rank > 3 && called.length > 0 && !called.includes('vfx') && !called.includes('xian')) {
+                            if (group === 'combat' && rank > 2 && called.length > 0 && !called.includes('vfx') && !called.includes('xian') && !called.includes('combat')) {
                                 return { ready: true, active: false, failed: false, detail: t('跳过', 'Skipped') };
                             }
                             if (rank > doneAfter) return { ready: true, active: false, failed: false, detail: '' };
@@ -31331,7 +31767,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <div className="text-xs font-bold text-white/85">{t('分场节点', 'Per-scene nodes')}</div>
                                     <div className="text-[10px] text-white/35">
-                                        {t('每场一行：文戏、武戏（特效/仙攻）、场景现场编排、建置入戏、分镜生成。建置稿程序入库后即可分镜。重跑某一节点会按序自动带起该场后续节点。', 'One row per scene: drama, action (VFX/Xian), floor staging, blocking, and storyboards. Staging imports the workspace scene before storyboard. Rerunning a node automatically continues through later nodes for that scene.')}
+                                        {t('每场一行：文戏、武戏增强、场景现场编排、建置入戏、分镜生成。建置稿程序入库后即可分镜。重跑某一节点会按序自动带起该场后续节点。', 'One row per scene: drama, action enhancement, floor staging, blocking, and storyboards. Staging imports the workspace scene before storyboard. Rerunning a node automatically continues through later nodes for that scene.')}
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">

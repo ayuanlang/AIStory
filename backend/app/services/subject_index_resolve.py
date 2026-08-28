@@ -234,6 +234,12 @@ _VISUAL_BACKFILL_CONTENT_KEYS = (
 )
 
 
+def _visual_backfill_global_style(obj: Any) -> str:
+    if not isinstance(obj, dict):
+        return ""
+    return str(obj.get("Global_Style") or obj.get("global_style") or "").strip()
+
+
 def _coerce_project_visual_backfill_obj(parsed: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(parsed, dict):
         return None
@@ -241,7 +247,9 @@ def _coerce_project_visual_backfill_obj(parsed: Any) -> Optional[Dict[str, Any]]
         inner = parsed.get(key)
         if isinstance(inner, dict) and inner:
             return inner
-    if any(key in parsed for key in _VISUAL_BACKFILL_CONTENT_KEYS):
+    # Unwrapped objects must carry 全局风格. A stray {tone/lighting} blob in
+    # scene body or prompt echo must not count as the completeness trailer.
+    if _visual_backfill_global_style(parsed):
         return parsed
     return None
 
@@ -304,8 +312,69 @@ def extract_project_visual_backfill_object(result_text: Any) -> Optional[Dict[st
 
 
 def _script_optimization_has_project_visual_backfill(result_text: Any) -> bool:
-    """True only when a parseable project_visual_backfill object is present."""
-    return extract_project_visual_backfill_object(result_text) is not None
+    """True only when a parseable backfill object has a non-empty Global_Style."""
+    obj = extract_project_visual_backfill_object(result_text)
+    return bool(_visual_backfill_global_style(obj))
+
+
+def _first_json_object_span(text: str, start: int = 0) -> Optional[Tuple[int, int]]:
+    brace_depth = 0
+    start_index = -1
+    in_string = False
+    escape = False
+    source = str(text or "")
+    for index in range(max(0, int(start)), len(source)):
+        char = source[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            if brace_depth == 0:
+                start_index = index
+            brace_depth += 1
+        elif char == "}":
+            if brace_depth <= 0:
+                continue
+            brace_depth -= 1
+            if brace_depth == 0 and start_index >= 0:
+                return start_index, index + 1
+    return None
+
+
+def _strip_leading_visual_backfill_block(result_text: Any) -> str:
+    source = str(result_text or "").replace("\r\n", "\n")
+    stripped = source.lstrip()
+    if not stripped:
+        return ""
+    fence = re.match(r"^```(?:json)?[ \t]*\n", stripped, flags=re.IGNORECASE)
+    body_start = fence.end() if fence else 0
+    body = stripped[body_start:]
+    if not body.lstrip().startswith("{"):
+        return source
+    span = _first_json_object_span(stripped, body_start)
+    if span is None:
+        return source
+    obj_start, obj_end = span
+    try:
+        parsed = json.loads(stripped[obj_start:obj_end])
+    except Exception:
+        return source
+    if not _coerce_project_visual_backfill_obj(parsed):
+        return source
+    after = stripped[obj_end:].lstrip()
+    if after.startswith("```"):
+        after = after[3:]
+        if after.startswith("\n"):
+            after = after[1:]
+    return after.lstrip()
 
 
 def strip_trailing_project_visual_backfill_section(result_text: Any) -> str:
@@ -324,6 +393,42 @@ def strip_trailing_project_visual_backfill_section(result_text: Any) -> str:
     if last_idx >= 0 and last_idx >= int(len(text) * 0.4):
         return text[:last_idx].rstrip()
     return text
+
+
+def strip_project_visual_backfill_sections(result_text: Any) -> str:
+    """Drop echoed visual-backfill JSON; scene_split already owns the canonical copy."""
+    return strip_trailing_project_visual_backfill_section(
+        _strip_leading_visual_backfill_block(result_text)
+    )
+
+
+def build_project_visual_backfill_readonly_injection(backfill_obj: Any) -> str:
+    """Compact read-only context. Downstream LLMs must not rewrite or re-emit the JSON."""
+    from app.core.prompt_injection import wrap_injection_section
+
+    obj = _coerce_project_visual_backfill_obj(backfill_obj)
+    if not obj and isinstance(backfill_obj, dict):
+        obj = backfill_obj
+    if not obj:
+        return ""
+    lines: List[str] = []
+    for key in (
+        "Global_Style",
+        "tone",
+        "lighting",
+        "music_recommendation",
+        "comprehensive_plot",
+        "comprehensive_assets",
+    ):
+        value = obj.get(key)
+        if value is None or value == "":
+            continue
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
+        lines.append(f"{key}={value}")
+    if not lines:
+        return ""
+    return wrap_injection_section("项目视觉回填", "\n".join(lines))
 
 
 def merge_project_visual_backfill_into_result_text(result_text: Any, backfill_obj: Any) -> str:

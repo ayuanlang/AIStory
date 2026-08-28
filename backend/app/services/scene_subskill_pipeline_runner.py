@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.models.all_models import Episode, ScriptProgressPipelineNode, User
+from app.models.all_models import Episode, LLMCallLog, ScriptProgressPipelineNode, User
 from app.schemas.agent import AnalyzeSceneRequest
 from app.schemas.user_auth import (
     USER_ACTIVE_LEVEL_DEFAULT,
@@ -35,6 +35,7 @@ from app.services.script_analysis_flow import (
     parse_scene_units_from_markers,
     parse_special_scene_analysis_blocks,
     load_scene_subskill_results_map,
+    load_stage1_output_text,
     lookup_persisted_scene_subskill_steps,
     persist_scene_subskill_named_step,
     persist_script_optimization_stage,
@@ -48,21 +49,29 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     ingest_derived_environments_from_framing,
     rewrite_merged_derived_environment_names,
 )
+from app.core.time_utils import now_bj_iso
 from app.services.script_analysis_flow.environment_reuse import (
     SCENE_ENV_IDENT_PATTERN,
     build_reused_derived_environment_injection,
+    build_reused_environment_patch,
     collect_episode_env_blocks_by_name,
     collect_project_main_environment_catalog,
     extract_scene_env_ident_block,
     parse_scene_env_ident_items,
+    script_has_environment_plan_payload,
 )
 from app.services.soft_delete import _active_episode_clause
+from app.services.subject_index_resolve import (
+    build_project_visual_backfill_readonly_injection,
+    extract_project_visual_backfill_object,
+    merge_project_visual_backfill_into_result_text,
+    strip_project_visual_backfill_sections,
+)
 
 logger = logging.getLogger("api_logger")
 
 DRAMA_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_drama_standardization.md"
-VFX_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_vfx.md"
-XIAN_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_xian_attack.md"
+COMBAT_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md"
 FRAMING_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_derived_framing.md"
 STAGING_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_staging_env.md"
 # Hard contract: after enhance + main-env splice, these LLM steps are serial and complete.
@@ -74,35 +83,46 @@ SCENE_SUBSKILL_POST_ENV_STEPS: Tuple[Tuple[str, str], ...] = (
 
 _SUBSKILL_ACTION_LABELS = {
     DRAMA_PROMPT: "文戏增强",
-    VFX_PROMPT: "特效增强",
-    XIAN_PROMPT: "仙攻增强",
+    COMBAT_PROMPT: "武戏增强",
     FRAMING_PROMPT: "场景现场编排",
     STAGING_PROMPT: "建置与入戏",
 }
 _SUBSKILL_FUNCTION_NAMES = {
     DRAMA_PROMPT: "script_analysis_scene_subskill_drama",
-    VFX_PROMPT: "script_analysis_scene_subskill_vfx",
-    XIAN_PROMPT: "script_analysis_scene_subskill_xian",
+    COMBAT_PROMPT: "script_analysis_scene_subskill_combat",
     FRAMING_PROMPT: "script_analysis_scene_subskill_derived_framing",
     STAGING_PROMPT: "script_analysis_scene_subskill_staging",
 }
 _SUBSKILL_STEP_PROGRESS = {
     "drama": 12.0,
-    "vfx": 28.0,
-    "xian": 40.0,
+    "combat": 34.0,
+    "vfx": 34.0,
+    "xian": 34.0,
     "wait_env": 48.0,
     "derived_framing": 58.0,
     "staging": 82.0,
 }
 _BEAT_FRAMING_PLAN_PATTERN = re.compile(r"【Beat景别构图方案】")
 _BEAT_PLACEMENT_PATTERN = re.compile(r"【Beat主体定位】")
+_LEGACY_COMBAT_PROMPTS = {
+    "skills/scene_analysis_feature_stack/scene_planning_1_subskill_vfx.md": COMBAT_PROMPT,
+    "skills/scene_analysis_feature_stack/scene_planning_1_subskill_xian_attack.md": COMBAT_PROMPT,
+}
+_COMBAT_COMPLETION_MARKERS = (
+    "[COMBAT_SUBSKILL_OUTPUT_END]",
+    "[VFX_SUBSKILL_OUTPUT_END]",
+    "[XIAN_ATTACK_OUTPUT_END]",
+)
 _SUBSKILL_COMPLETION_MARKERS = {
     DRAMA_PROMPT: "[DRAMA_STANDARDIZATION_OUTPUT_END]",
-    VFX_PROMPT: "[VFX_SUBSKILL_OUTPUT_END]",
-    XIAN_PROMPT: "[XIAN_ATTACK_OUTPUT_END]",
+    COMBAT_PROMPT: "[COMBAT_SUBSKILL_OUTPUT_END]",
     FRAMING_PROMPT: "[DERIVED_FRAMING_OUTPUT_END]",
     STAGING_PROMPT: "[STAGING_ENV_OUTPUT_END]",
 }
+for _legacy_prompt, _combat_prompt in _LEGACY_COMBAT_PROMPTS.items():
+    _SUBSKILL_ACTION_LABELS[_legacy_prompt] = _SUBSKILL_ACTION_LABELS[_combat_prompt]
+    _SUBSKILL_FUNCTION_NAMES[_legacy_prompt] = _SUBSKILL_FUNCTION_NAMES[_combat_prompt]
+    _SUBSKILL_COMPLETION_MARKERS[_legacy_prompt] = _SUBSKILL_COMPLETION_MARKERS[_combat_prompt]
 _ENV_BLOCK_WITH_COVERAGE_PATTERN = re.compile(
     r"\s*`?\[ENV_BLOCK_START(?:\:[^\]]+)?\]`?.*?"
     r"`?\[ENV_BLOCK_END(?:\:[^\]]+)?\]`?"
@@ -111,6 +131,7 @@ _ENV_BLOCK_WITH_COVERAGE_PATTERN = re.compile(
 )
 _ENV_PLAN_WAIT_SECONDS = 1200.0
 _ENV_PLAN_POLL_SECONDS = 1.5
+_ENV_PLAN_EMPTY_GRACE_POLLS = 3
 _SUBSKILL_START_ALIASES = {
     "drama": "drama",
     "drama_opt": "drama",
@@ -162,7 +183,11 @@ class SceneSubskillResume:
 
 _PERSISTED_STEP_MARKERS = {
     "drama": ("[DRAMA_STANDARDIZATION_OUTPUT_END]",),
-    "combat": ("[VFX_SUBSKILL_OUTPUT_END]", "[XIAN_ATTACK_OUTPUT_END]"),
+    "combat": (
+        "[COMBAT_SUBSKILL_OUTPUT_END]",
+        "[VFX_SUBSKILL_OUTPUT_END]",
+        "[XIAN_ATTACK_OUTPUT_END]",
+    ),
     "framing": ("[DERIVED_FRAMING_OUTPUT_END]",),
     "staging": ("[STAGING_ENV_OUTPUT_END]",),
 }
@@ -204,6 +229,71 @@ def persisted_subskill_step_usable(step_key: str, text: str) -> bool:
     return False
 
 
+_DRAMA_OUTPUT_HINTS = (
+    "[DRAMA_STANDARDIZATION_OUTPUT_END]",
+    "[SPECIAL_SCENE_ANALYSIS",
+    "【场景综合】",
+    "节拍=",
+)
+
+
+def _looks_like_completed_drama(text: str) -> bool:
+    body = str(text or "")
+    return persisted_subskill_step_usable("drama", body) and any(hint in body for hint in _DRAMA_OUTPUT_HINTS)
+
+
+def extract_scene_block_from_script(script_text: str, scene_id: str) -> str:
+    sid = str(scene_id or "").strip()
+    source = str(script_text or "").strip()
+    if not sid or not source:
+        return ""
+    try:
+        units = parse_scene_units_from_markers(source)
+    except SceneMarkerParseError:
+        return ""
+    matches = [unit for unit in units if str(unit.scene_id).lower() == sid.lower()]
+    if len(matches) != 1:
+        return ""
+    unit = matches[0]
+    return "\n".join(
+        part
+        for part in (
+            str(getattr(unit, "special_analysis_text", "") or "").strip(),
+            unit.marker_start_token,
+            unit.scene_text,
+            unit.marker_end_token,
+        )
+        if str(part or "").strip()
+    )
+
+
+def hydrate_persisted_subskill_steps(
+    scene_id: str,
+    steps: Optional[Dict[str, str]] = None,
+    *scripts: str,
+) -> Dict[str, str]:
+    """Fill missing drama/framing from the last saved scene script when step slots were wiped."""
+    hydrated = {
+        str(key): str(value or "")
+        for key, value in (steps or {}).items()
+        if str(key or "").strip()
+    }
+    if _looks_like_completed_drama(hydrated.get("drama")):
+        return hydrated
+    for script in scripts:
+        block = extract_scene_block_from_script(script, scene_id)
+        if not block:
+            continue
+        if persisted_subskill_step_usable("framing", block) and not persisted_subskill_step_usable(
+            "framing", hydrated.get("framing")
+        ):
+            hydrated["framing"] = block
+        if _looks_like_completed_drama(block):
+            hydrated["drama"] = block
+            break
+    return hydrated
+
+
 def resolve_scene_subskill_resume(
     *,
     scene_id: str,
@@ -222,6 +312,8 @@ def resolve_scene_subskill_resume(
     staging = str(scene_steps.get("staging") or "").strip()
     status = str(pipeline_status or "").strip().lower()
     node_block = str(pipeline_scene_block or "").strip()
+    # Scene-split input often has no SPECIAL_SCENE_ANALYSIS yet. After drama,
+    # read the persisted block so combat is not skipped on continue/resume.
 
     if status == "success" and (persisted_subskill_step_usable("staging", staging) or len(node_block) >= 40):
         return SceneSubskillResume(
@@ -252,13 +344,20 @@ def resolve_scene_subskill_resume(
             skipped_reason="resume_staging",
         )
 
-    needs_combat = bool(call_vfx or call_xian)
+    needs_combat = _combat_route_needed(
+        sid,
+        drama,
+        combat,
+        node_block,
+        call_vfx=call_vfx,
+        call_xian=call_xian,
+    )
     combat_ready = persisted_subskill_step_usable("combat", combat)
     drama_ready = persisted_subskill_step_usable("drama", drama)
     if drama_ready and (combat_ready or not needs_combat):
         called = ["drama"]
         if combat_ready:
-            called.append("vfx" if call_vfx else "xian")
+            called.append("combat")
         return SceneSubskillResume(
             start_group="framing",
             current_block=combat if combat_ready else drama,
@@ -423,10 +522,119 @@ def _beat_has_framing_lock(body: str) -> bool:
     text = str(body or "")
     if _FRAMING_LOCK_HEADING not in text:
         return False
-    compact = text.replace(" ", "")
+    compact = text.replace(" ", "").replace("＝", "=")
     return all(field in compact for field in _FRAMING_LOCK_REQUIRED_FIELDS) and (
         _FRAMING_EVIDENCE_FIELD in compact
     )
+
+
+def _normalize_beat_id(raw: str) -> str:
+    text = str(raw or "").strip()
+    text = re.sub(r"^[Bb](?=\d)", "", text)
+    text = text.lstrip("0")
+    return text or "0"
+
+
+def _framing_lock_bodies_by_id(source: str) -> Dict[str, Tuple[str, str]]:
+    """Last copy of each beat wins so echoed drama beats do not shadow locks."""
+    found: Dict[str, Tuple[str, str]] = {}
+    for beat_id, body in _iter_beat_bodies(source):
+        found[_normalize_beat_id(beat_id)] = (beat_id, body)
+    return found
+
+
+_FRAMING_PLAN_HEADINGS = ("【主体定位方案】", "【宫格草稿】", "【Beat主体定位】")
+
+
+def _last_beat_stream_block(text: str) -> str:
+    starts = list(_BEAT_STREAM_START_RE.finditer(text))
+    if not starts:
+        return ""
+    start = starts[-1]
+    end_match = _BEAT_STREAM_END_RE.search(text, start.end())
+    end = end_match.end() if end_match else len(text)
+    return text[start.start() : end].strip()
+
+
+def _locked_beat_stream_from_text(text: str) -> str:
+    stream = _last_beat_stream_block(text)
+    if stream and _FRAMING_LOCK_HEADING in stream:
+        return stream
+    chunks = [
+        f"[BEAT_START:{beat_id}]\n{body.strip()}\n[BEAT_END:{beat_id}]"
+        for beat_id, body in _iter_beat_bodies(text)
+        if _beat_has_framing_lock(body)
+    ]
+    if not chunks:
+        return ""
+    return "[BEAT_STREAM_START]\n" + "\n".join(chunks) + "\n[BEAT_STREAM_END]"
+
+
+def _framing_plan_block(text: str) -> str:
+    source = str(text or "")
+    starts = [source.find(heading) for heading in _FRAMING_PLAN_HEADINGS if heading in source]
+    if not starts:
+        return ""
+    rest = source[min(starts) :]
+    end_at = len(rest)
+    for pattern in (
+        _BEAT_STREAM_START_RE,
+        re.compile(r"`?\[SCENE_END", re.IGNORECASE),
+        re.compile(r"`?\[SCENES_BLOCK_END", re.IGNORECASE),
+    ):
+        match = pattern.search(rest)
+        if match:
+            end_at = min(end_at, match.start())
+    return rest[:end_at].strip()
+
+
+def _splice_trailing_framing_payload(raw_text: str, scene_text: str) -> str:
+    """Keep plan/extract/locks the model wrote after SCENE_END or SCENES_BLOCK_END."""
+    raw = str(raw_text or "")
+    scene = str(scene_text or "").strip()
+    if not raw.strip():
+        return scene
+    extras: List[str] = []
+    if not any(heading in scene for heading in _FRAMING_PLAN_HEADINGS):
+        plan = _framing_plan_block(raw)
+        if plan:
+            extras.append(plan)
+    if not (
+        DERIVED_ENV_EXTRACT_BLOCK_PATTERN.search(scene)
+        or DERIVED_ENV_TAG_PATTERN.search(scene)
+    ):
+        extract = DERIVED_ENV_EXTRACT_BLOCK_PATTERN.search(raw)
+        if extract:
+            extras.append(str(extract.group(0) or "").strip())
+    scene_has_lock = any(_beat_has_framing_lock(body) for _, body in _iter_beat_bodies(scene))
+    if not scene_has_lock and _FRAMING_LOCK_HEADING in raw:
+        locked_stream = _locked_beat_stream_from_text(raw)
+        if locked_stream and locked_stream not in scene:
+            extras.append(locked_stream)
+    if not extras:
+        return scene
+    logger.info(
+        "[scene_subskill_pipeline] spliced framing payload written outside SCENE_END chunks=%s",
+        len(extras),
+    )
+    return "\n\n".join(part for part in (scene, *extras) if part)
+
+
+def _framing_has_plan_and_extract(source: str) -> bool:
+    text = str(source or "")
+    has_plan = bool(
+        _BEAT_PLACEMENT_PATTERN.search(text)
+        or _FRAMING_LOCK_HEADING in text
+        or _BEAT_FRAMING_PLAN_PATTERN.search(text)
+        or "【主体定位方案】" in text
+        or "【宫格草稿】" in text
+    )
+    has_extract = bool(
+        DERIVED_ENV_EXTRACT_BLOCK_PATTERN.search(text)
+        or DERIVED_ENV_TAG_PATTERN.search(text)
+        or "[DERIVED_ENV]" in text
+    )
+    return has_plan and has_extract
 
 
 def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> str:
@@ -435,22 +643,14 @@ def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> s
     sid = str(scene_id or "").strip()
     if not source:
         raise HTTPException(status_code=422, detail=f"STAGING_BLOCKED_FRAMING_EMPTY:{sid}")
-    has_plan = bool(
-        _BEAT_PLACEMENT_PATTERN.search(source)
-        or _FRAMING_LOCK_HEADING in source
-        or _BEAT_FRAMING_PLAN_PATTERN.search(source)
-    )
-    has_extract = bool(
-        DERIVED_ENV_EXTRACT_BLOCK_PATTERN.search(source) or DERIVED_ENV_TAG_PATTERN.search(source)
-    )
-    if not has_plan or not has_extract:
+    if not _framing_has_plan_and_extract(source):
         raise HTTPException(
             status_code=422,
             detail=f"STAGING_BLOCKED_FRAMING_INCOMPLETE:{sid}",
         )
     missing_locks = [
         beat_id
-        for beat_id, body in _iter_beat_bodies(source)
+        for _norm_id, (beat_id, body) in _framing_lock_bodies_by_id(source).items()
         if not _beat_has_framing_lock(body)
     ]
     if missing_locks:
@@ -468,6 +668,127 @@ def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> s
             detail=f"STAGING_BLOCKED_ILLEGAL_DERIVED_ENV:{sid}",
         )
     return source
+
+
+def _coerce_ready_framing_block(extracted: str, candidate: str, scene_id: str) -> str:
+    """Accept extracted scene, spliced trailing payload, or the raw LLM body."""
+    sources = []
+    extracted_text = str(extracted or "").strip()
+    candidate_text = str(candidate or "").strip()
+    if extracted_text:
+        sources.append(extracted_text)
+        if candidate_text:
+            sources.append(_splice_trailing_framing_payload(candidate_text, extracted_text))
+    if candidate_text:
+        sources.append(candidate_text)
+        recovered = _try_extract_subskill_scene_block(candidate_text, scene_id, "")
+        if recovered:
+            sources.append(recovered)
+    seen = set()
+    for source in sources:
+        key = source.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        try:
+            return assert_derived_framing_ready_for_staging(source, scene_id)
+        except HTTPException:
+            continue
+    return ""
+
+
+def _text_from_stored_llm_response(raw: Any) -> str:
+    text = str(raw or "")
+    if not text.strip():
+        return ""
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return text
+    if isinstance(parsed, dict):
+        for key in ("content", "result", "text", "response"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        inner = parsed.get("data")
+        if isinstance(inner, dict):
+            for key in ("content", "result", "text"):
+                value = inner.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+    if isinstance(parsed, str) and parsed.strip():
+        return parsed
+    return text
+
+
+def _load_latest_subskill_llm_text(
+    db: Session,
+    *,
+    project_id: int,
+    scene_id: str,
+    prompt_file: str,
+) -> str:
+    if int(project_id or 0) <= 0 or not str(scene_id or "").strip():
+        return ""
+    action_name = f"{_subskill_action_label(prompt_file)} · {scene_id}"
+    try:
+        row = (
+            db.query(LLMCallLog)
+            .filter(
+                LLMCallLog.project_id == int(project_id),
+                LLMCallLog.tag == "LLM_RESPONSE",
+                LLMCallLog.action == action_name,
+            )
+            .order_by(LLMCallLog.id.desc())
+            .first()
+        )
+    except Exception:
+        return ""
+    if row is None:
+        return ""
+    return _text_from_stored_llm_response(getattr(row, "response_json", ""))
+
+
+def should_recover_framing_from_llm_log(plan: SceneSubskillResume, persist_drama: str) -> bool:
+    """Reuse a prior framing LLM only when this-run drama is already persisted.
+
+    Recovering on ``start_group=drama`` skipped 文戏增强 after 重新分析, because
+    leftover project logs for the same ``EP01_SCxx`` still looked ready.
+    """
+    if plan is None or str(getattr(plan, "start_group", "") or "") != "framing":
+        return False
+    return persisted_subskill_step_usable("drama", persist_drama)
+
+
+def _recover_ready_framing_from_llm_log(
+    db: Session,
+    *,
+    project_id: int,
+    scene_id: str,
+) -> str:
+    raw = _load_latest_subskill_llm_text(
+        db,
+        project_id=project_id,
+        scene_id=scene_id,
+        prompt_file=FRAMING_PROMPT,
+    )
+    if not raw.strip():
+        return ""
+    cleaned = strip_injection_section(
+        strip_project_visual_backfill_sections(raw),
+        "项目视觉回填",
+    ).strip()
+    stripped = _strip_subskill_completion_marker(cleaned, FRAMING_PROMPT) if cleaned else ""
+    candidate = stripped or cleaned
+    extracted = _try_extract_subskill_scene_block(candidate, scene_id, "") if candidate else ""
+    ready = _coerce_ready_framing_block(extracted, candidate, scene_id)
+    if ready:
+        logger.info(
+            "[scene_subskill_pipeline] recovered framing from llm log scene=%s chars=%s",
+            scene_id,
+            len(ready),
+        )
+    return ready
 
 
 def _mark_scene_subskill_step(
@@ -506,7 +827,90 @@ def _mark_scene_subskill_step(
         ),
         runtime_meta=meta,
     )
+    _touch_running_pipeline_node(
+        task_db,
+        project_id=int(project_id),
+        episode_id=int(episode_id),
+        node_name="scene_subskill_pipeline",
+    )
     task_db.commit()
+
+
+def _touch_running_pipeline_node(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    node_name: str,
+    scene_id: Optional[str] = None,
+    extra_meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    if int(project_id or 0) <= 0 or int(episode_id or 0) <= 0:
+        return
+    scene_id_norm = str(scene_id or "").strip() or None
+    row = (
+        db.query(ScriptProgressPipelineNode)
+        .filter(
+            ScriptProgressPipelineNode.project_id == int(project_id),
+            ScriptProgressPipelineNode.episode_id == int(episode_id),
+            ScriptProgressPipelineNode.node_name == str(node_name or "").strip(),
+            ScriptProgressPipelineNode.scene_id == scene_id_norm,
+        )
+        .first()
+    )
+    if row is None:
+        return
+    if str(getattr(row, "status", "") or "").strip().lower() not in {"running", "queued"}:
+        return
+    if extra_meta:
+        meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
+        meta.update(extra_meta)
+        row.runtime_meta = meta
+    row.updated_at = now_bj_iso()
+
+
+def _heartbeat_environment_wait(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene_ids: Optional[List[str]] = None,
+) -> None:
+    if int(project_id or 0) <= 0 or int(episode_id or 0) <= 0:
+        return
+    _touch_running_pipeline_node(
+        db,
+        project_id=int(project_id),
+        episode_id=int(episode_id),
+        node_name="scene_subskill_pipeline",
+    )
+    for raw_sid in scene_ids or []:
+        sid = str(raw_sid or "").strip()
+        if not sid:
+            continue
+        row = (
+            db.query(ScriptProgressPipelineNode)
+            .filter(
+                ScriptProgressPipelineNode.project_id == int(project_id),
+                ScriptProgressPipelineNode.episode_id == int(episode_id),
+                ScriptProgressPipelineNode.node_name == "scene_subskill_scene",
+                ScriptProgressPipelineNode.scene_id == sid,
+            )
+            .first()
+        )
+        if row is None:
+            continue
+        meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
+        if str(meta.get("current_step") or "").strip() != "wait_env":
+            continue
+        _mark_scene_subskill_step(
+            db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            scene_id=sid,
+            step_name="wait_env",
+            step_label="等待主环境注入",
+        )
 
 
 def _slim_derived_env_ingest_meta(ingest_meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -574,7 +978,8 @@ def is_timeout_like_error(exc: Any) -> bool:
 
 
 def _scene_subskill_failure_reason(exc: Exception) -> str:
-    text = str(exc or "")
+    detail = getattr(exc, "detail", None)
+    text = str(detail if detail is not None else exc or "")
     if is_timeout_like_error(exc):
         return "节点超时，已标记失败并将自动补跑"
     if "COMPLETION_MARKER_MISSING" in text:
@@ -585,12 +990,34 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
         return "子技能返回的场景结构无法解析"
     if "OUTPUT_SCENE_MISMATCH" in text:
         return "子技能返回了错误的场景编号"
+    if "STAGING_BLOCKED_FRAMING_BEAT_LOCK" in text:
+        beat_ids = ""
+        marker = "STAGING_BLOCKED_FRAMING_BEAT_LOCK:"
+        if marker in text:
+            rest = text.split(marker, 1)[1]
+            parts = rest.split(":", 1)
+            beat_ids = parts[1].split()[0].rstrip(")'\"") if len(parts) > 1 else ""
+        if beat_ids:
+            return f"场景现场编排已返回，但拍 {beat_ids} 缺少取景锁定，不能进入建置与入戏"
+        return "场景现场编排已返回，但部分拍缺少取景锁定，不能进入建置与入戏"
+    if "STAGING_BLOCKED_FRAMING_INCOMPLETE" in text:
+        return "场景现场编排已返回，但缺少主体定位或衍生环境提取，不能进入建置与入戏"
+    if "STAGING_BLOCKED_ILLEGAL_DERIVED_ENV" in text:
+        return "场景现场编排衍生环境名不合法，不能进入建置与入戏"
     if "STAGING_BLOCKED_FRAMING" in text:
         return "场景现场编排未完成，不能进入建置与入戏"
     if "ROUTING_MISSING" in text:
         return "文戏增强未产出特效宽松评估"
     if "NO_SCENES" in text:
         return "未解析到可执行的场景"
+    if "STAGING_ENVIRONMENT_PLAN_EMPTY" in text:
+        return "环境规划节点已完成，但本轮主环境稿缺失，不能进入现场编排"
+    if "STAGING_ENVIRONMENT_PLAN_TIMEOUT" in text:
+        return "等待本轮环境规划超时，不能进入现场编排"
+    if "STAGING_ENVIRONMENT_PLAN_FAILED" in text:
+        return "本轮环境规划失败，不能进入现场编排"
+    if "STAGING_ENV_SCENE_MISSING" in text:
+        return "本场缺少主环境注入，不能进入现场编排"
     return "逐场子技能执行失败"
 
 
@@ -599,14 +1026,28 @@ def _completion_marker_pattern(marker: str):
 
 
 def _strip_subskill_completion_marker(text: str, prompt_file: str) -> str:
-    marker = _SUBSKILL_COMPLETION_MARKERS[prompt_file]
     source = str(text or "").replace("\r\n", "\n").strip()
     if not source:
         return ""
-    matches = list(_completion_marker_pattern(marker).finditer(source))
-    if not matches:
-        return ""
-    return source[: matches[-1].start()].rstrip()
+    markers = [_SUBSKILL_COMPLETION_MARKERS.get(prompt_file) or ""]
+    if (
+        prompt_file in _LEGACY_COMBAT_PROMPTS
+        or prompt_file == COMBAT_PROMPT
+        or "subskill_vfx" in prompt_file
+        or "subskill_xian" in prompt_file
+        or "subskill_combat" in prompt_file
+    ):
+        markers.extend(_COMBAT_COMPLETION_MARKERS)
+    seen = set()
+    for marker in markers:
+        key = str(marker or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        matches = list(_completion_marker_pattern(key).finditer(source))
+        if matches:
+            return source[: matches[-1].start()].rstrip()
+    return ""
 
 
 def _try_extract_subskill_scene_block(
@@ -631,7 +1072,24 @@ def _extract_project_tail(script_text: str) -> str:
     match = re.search(r"`?\[SCENES_BLOCK_END\]`?", source, flags=re.IGNORECASE)
     if not match:
         return ""
-    return source[match.end():].strip()
+    return strip_project_visual_backfill_sections(source[match.end():]).strip()
+
+
+def _subskill_visual_backfill_injection(
+    script_text: str,
+    db: Optional[Session] = None,
+    episode_id: int = 0,
+) -> str:
+    persisted = ""
+    if db is not None and int(episode_id or 0) > 0:
+        try:
+            persisted = load_stage1_output_text(db, int(episode_id), "project_visual_backfill")
+        except Exception:
+            persisted = ""
+    obj = extract_project_visual_backfill_object(persisted) or extract_project_visual_backfill_object(
+        script_text
+    )
+    return build_project_visual_backfill_readonly_injection(obj)
 
 
 def _wrap_single_scene_input(
@@ -793,20 +1251,49 @@ def _special_block_from_text(text: str, scene_id: str) -> str:
     return ""
 
 
+_LOOSE_COMBAT_ROUTE_HIT = re.compile(
+    r"\[(VFX|XIAN)\][^\n]*命中\s*=\s*是",
+    re.IGNORECASE,
+)
+
+
 def _routes_from_special_text(special: str, scene_id: str) -> Tuple[bool, bool]:
-    try:
-        parsed = parse_special_scene_analysis_blocks(special)
-    except SceneMarkerParseError:
+    text = str(special or "").strip()
+    if not text:
         return False, False
-    sid = str(scene_id or "").strip().lower()
     routes: Dict[str, Any] = {}
+    try:
+        parsed = parse_special_scene_analysis_blocks(text)
+    except SceneMarkerParseError:
+        parsed = {}
+    sid = str(scene_id or "").strip().lower()
     for key, value in parsed.items():
         if str(key).strip().lower() == sid:
             routes = dict(value.get("routes") or {})
             break
     if not routes and parsed:
         routes = dict(next(iter(parsed.values())).get("routes") or {})
-    return bool((routes.get("VFX") or {}).get("hit")), bool((routes.get("XIAN") or {}).get("hit"))
+    call_vfx = bool((routes.get("VFX") or {}).get("hit"))
+    call_xian = bool((routes.get("XIAN") or {}).get("hit"))
+    if call_vfx or call_xian:
+        return call_vfx, call_xian
+    loose = {str(match.group(1) or "").strip().upper() for match in _LOOSE_COMBAT_ROUTE_HIT.finditer(text)}
+    return "VFX" in loose, "XIAN" in loose
+
+
+def _combat_route_needed(
+    scene_id: str,
+    *texts: str,
+    call_vfx: bool = False,
+    call_xian: bool = False,
+) -> bool:
+    if call_vfx or call_xian:
+        return True
+    for raw in texts:
+        routed_vfx, routed_xian = _routes_from_special_text(str(raw or ""), scene_id)
+        if routed_vfx or routed_xian:
+            return True
+    return False
 
 
 def _extract_single_scene_block(
@@ -818,8 +1305,8 @@ def _extract_single_scene_block(
     text = str(result_text or "").strip()
     # COMPREHENSIVE_INFO is read-only global metadata and must not stay in the
     # per-scene block. SPECIAL_SCENE_ANALYSIS is authoritative from fallback
-    # (VFX/XIAN after 文戏增强) or, when fallback is empty, from this output
-    # (文戏增强 newly wrote the loose VFX/XIAN routing).
+    # (武戏增强 after 文戏增强) or, when fallback is empty, from this output
+    # (文戏增强 newly wrote the loose combat routing).
     sanitized_text = SPECIAL_SCENE_ANALYSIS_PATTERN.sub("", text)
     sanitized_text = COMPREHENSIVE_INFO_PATTERN.sub("", sanitized_text)
     sanitized_text = strip_injection_section(sanitized_text, "本场角色道具白名单")
@@ -851,12 +1338,13 @@ def _extract_single_scene_block(
         )
     unit = matches[0]
     special = str(fallback_special or "").strip() or _special_block_from_text(text, scene_id)
+    scene_text = _splice_trailing_framing_payload(sanitized_text, unit.scene_text)
     return "\n".join(
         part
         for part in (
             special,
             unit.marker_start_token,
-            unit.scene_text,
+            scene_text,
             unit.marker_end_token,
         )
         if str(part or "").strip()
@@ -864,7 +1352,8 @@ def _extract_single_scene_block(
 
 
 def script_has_environment_blocks(script_text: str) -> bool:
-    return "[ENV_BLOCK_START]" in str(script_text or "").upper()
+    """Reuse-only scenes may persist IDENT + inherited 【主环境】 without a new ENV_BLOCK."""
+    return script_has_environment_plan_payload(script_text)
 
 
 def environment_plan_ready_for_framing(status: str, persisted_text: str) -> bool:
@@ -872,6 +1361,45 @@ def environment_plan_ready_for_framing(status: str, persisted_text: str) -> bool
     return str(status or "").strip().lower() in {"success", "warning"} and script_has_environment_blocks(
         persisted_text
     )
+
+
+def environment_plan_terminal_without_payload(
+    status: str,
+    persisted_text: str,
+    explicit_text: str = "",
+) -> bool:
+    """True when this-run environment_plan finished but left nothing framing can consume."""
+    if str(status or "").strip().lower() not in {"success", "warning"}:
+        return False
+    return not (
+        script_has_environment_blocks(persisted_text) or script_has_environment_blocks(explicit_text)
+    )
+
+
+def _ensure_reused_main_env_block(
+    env_scene: str,
+    scene_id: str,
+    catalog: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    source = str(env_scene or "").strip()
+    if not source or "[ENV_BLOCK_START" in source.upper():
+        return source
+    items = parse_scene_env_ident_items(source, scene_id)
+    reused = [item for item in items if item.get("reuse")]
+    if not reused:
+        return source
+    patch = build_reused_environment_patch(scene_id, reused, catalog or [])
+    env_block = extract_env_block_from_scene_text(patch)
+    if not env_block:
+        return source
+    ident_end = re.search(
+        rf"`?\[SCENE_ENV_IDENT_END:{re.escape(str(scene_id or ""))}\]`?",
+        source,
+        flags=re.IGNORECASE,
+    )
+    if ident_end:
+        return f"{source[:ident_end.end()]}\n{env_block}{source[ident_end.end():]}"
+    return f"{source}\n{env_block}"
 
 
 def extract_environment_planning_sections(scene_text: str) -> str:
@@ -975,24 +1503,21 @@ def _scene_block_from_script(script_text: str, scene_id: str) -> str:
 def load_environment_planned_script(db: Session, episode_id: int) -> str:
     if int(episode_id or 0) <= 0:
         return ""
+    for key in ("environment_plan", "adapted_script"):
+        try:
+            content = load_stage1_output_text(db, int(episode_id), key)
+        except Exception:
+            content = ""
+        if script_has_environment_blocks(content):
+            return content.strip()
     episode = (
         db.query(Episode)
         .filter(Episode.id == int(episode_id), _active_episode_clause())
+        .populate_existing()
         .first()
     )
     if episode is None:
         return ""
-    raw = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
-    try:
-        obj = json.loads(raw) if raw else {}
-        node = (
-            ((obj.get("stages") or {}).get("stage1") or {}).get("outputs") or {}
-        ).get("environment_plan")
-        content = str((node or {}).get("content") or "") if isinstance(node, dict) else ""
-        if script_has_environment_blocks(content):
-            return content.strip()
-    except Exception:
-        pass
     adaptation = str(getattr(episode, "ai_scene_analysis_adaptation", "") or "")
     if script_has_environment_blocks(adaptation):
         return adaptation.strip()
@@ -1020,6 +1545,8 @@ async def await_environment_planned_script(
     explicit_text: str = "",
     fallback_text: str = "",
     timeout_seconds: float = _ENV_PLAN_WAIT_SECONDS,
+    project_id: int = 0,
+    scene_ids: Optional[List[str]] = None,
 ) -> str:
     """Wait for the environment_plan node of this episode, then return its merged script.
 
@@ -1035,6 +1562,7 @@ async def await_environment_planned_script(
 
     deadline = time.monotonic() + float(timeout_seconds)
     last_status = ""
+    empty_polls = 0
     logger.info(
         "[scene_subskill_pipeline] waiting for environment_plan before framing episode_id=%s",
         episode_id,
@@ -1063,6 +1591,23 @@ async def await_environment_planned_script(
                     last_status,
                 )
                 return persisted
+            if environment_plan_terminal_without_payload(last_status, persisted, explicit):
+                empty_polls += 1
+                if empty_polls >= _ENV_PLAN_EMPTY_GRACE_POLLS:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"STAGING_ENVIRONMENT_PLAN_EMPTY:{last_status}",
+                    )
+            else:
+                empty_polls = 0
+            _heartbeat_environment_wait(
+                poll_db,
+                project_id=int(project_id or 0),
+                episode_id=int(episode_id),
+                scene_ids=scene_ids,
+            )
+            if int(project_id or 0) > 0:
+                poll_db.commit()
         finally:
             _release_db_connection(poll_db)
         await asyncio.sleep(_ENV_PLAN_POLL_SECONDS)
@@ -1135,6 +1680,8 @@ async def _call_scene_subskill(
     from app.api.routers.prompts.analyze_scene import analyze_scene  # noqa: WPS433
     from app.services.script_analysis_flow_runner import build_script_analysis_retry_api_attempts
 
+    prompt_file = _LEGACY_COMBAT_PROMPTS.get(str(prompt_file or "").replace("\\", "/"), prompt_file)
+
     _original_api_id, api_attempts = build_script_analysis_retry_api_attempts(
         task_db,
         base_payload.get("function_name") or "script_analysis",
@@ -1199,7 +1746,10 @@ async def _call_scene_subskill(
                     task_db.commit()
                 continue
             raise
-        text = _extract_analysis_text_from_result(result).strip()
+        text = strip_project_visual_backfill_sections(
+            _extract_analysis_text_from_result(result)
+        ).strip()
+        text = strip_injection_section(text, "项目视觉回填")
         stripped = _strip_subskill_completion_marker(text, prompt_file) if text else ""
         candidate = stripped or text
         extracted = (
@@ -1213,7 +1763,17 @@ async def _call_scene_subskill(
             else ""
         )
         require_marker = prompt_file in {FRAMING_PROMPT, STAGING_PROMPT}
-        if extracted and (stripped or not require_marker):
+        if prompt_file == FRAMING_PROMPT:
+            ready = _coerce_ready_framing_block(extracted, candidate, scene_id)
+            if ready and (stripped or extracted):
+                if not stripped:
+                    logger.warning(
+                        "[scene_subskill_pipeline] accepted complete scene without end marker scene=%s prompt=%s",
+                        scene_id,
+                        prompt_file,
+                    )
+                return ready
+        elif extracted and (stripped or not require_marker):
             if not stripped:
                 logger.warning(
                     "[scene_subskill_pipeline] accepted complete scene without end marker scene=%s prompt=%s",
@@ -1434,13 +1994,6 @@ async def _run_derived_framing_then_staging(
             fallback_special=special,
             previous_block=current_block,
         )
-        persist_scene_subskill_named_step(
-            db=task_db,
-            episode_id=episode_id,
-            scene_id=scene_id,
-            step_name=step_name,
-            result_text=current_block,
-        )
         if step_name == "derived_framing":
             current_block = assert_derived_framing_ready_for_staging(current_block, scene_id)
             ingest_meta = _ingest_derived_environments_after_framing(
@@ -1469,6 +2022,13 @@ async def _run_derived_framing_then_staging(
                 ),
                 current_block,
             )
+        persist_scene_subskill_named_step(
+            db=task_db,
+            episode_id=episode_id,
+            scene_id=scene_id,
+            step_name=step_name,
+            result_text=current_block,
+        )
         called.append(step_name)
     return current_block
 
@@ -1480,7 +2040,7 @@ async def run_scene_subskill_pipeline(
     db: Session,
     node_episode_id: int,
 ) -> Dict[str, Any]:
-    """Drama/VFX/Xian from scene-split; framing then staging after main-env splice."""
+    """Drama then combat from scene-split; framing then staging after main-env splice."""
     script_text = str(raw_payload.get("text") or "").strip()
     start_group = resolve_subskill_start_group(raw_payload)
     explicit_start = payload_has_explicit_subskill_start(raw_payload)
@@ -1509,6 +2069,7 @@ async def run_scene_subskill_pipeline(
     project_id = int(raw_payload.get("project_id") or 0)
     persist_map: Dict[str, Dict[str, str]] = {}
     pipeline_rows: Dict[str, Dict[str, str]] = {}
+    fallback_scripts: List[str] = []
     if not explicit_start and node_episode_id > 0:
         persist_map = load_scene_subskill_results_map(db, node_episode_id)
         pipeline_rows = _load_scene_pipeline_rows(
@@ -1516,26 +2077,86 @@ async def run_scene_subskill_pipeline(
             project_id=project_id,
             episode_id=node_episode_id,
         )
+        resume_episode = (
+            db.query(Episode)
+            .filter(Episode.id == int(node_episode_id), _active_episode_clause())
+            .populate_existing()
+            .first()
+        )
+        fallback_scripts = [
+            load_stage1_output_text(db, node_episode_id, "scene_subskills"),
+            str(getattr(resume_episode, "ai_scene_analysis_adaptation", "") or ""),
+        ]
     resume_plans: Dict[str, SceneSubskillResume] = {}
     if not explicit_start:
         for task in tasks:
             scene_id = str(task.get("scene_id") or "").strip()
             node_row = _lookup_scene_pipeline_row(pipeline_rows, scene_id)
-            plan = resolve_scene_subskill_resume(
-                scene_id=scene_id,
-                steps=lookup_persisted_scene_subskill_steps(persist_map, scene_id),
-                pipeline_status=str(node_row.get("status") or ""),
-                pipeline_scene_block=str(node_row.get("scene_block") or ""),
+            raw_steps = lookup_persisted_scene_subskill_steps(persist_map, scene_id) or {}
+            has_persisted_step = any(
+                str(raw_steps.get(key) or "").strip()
+                for key in ("drama", "combat", "framing", "staging")
+            )
+            persist_steps = (
+                hydrate_persisted_subskill_steps(
+                    scene_id,
+                    raw_steps,
+                    str((_lookup_scene_pipeline_row(pipeline_rows, scene_id) or {}).get("scene_block") or ""),
+                    *fallback_scripts,
+                )
+                if has_persisted_step
+                else raw_steps
+            )
+            persist_drama = str((persist_steps or {}).get("drama") or "")
+            persist_combat = str((persist_steps or {}).get("combat") or "")
+            needs_combat = _combat_route_needed(
+                scene_id,
+                str(task.get("special_analysis") or ""),
+                persist_drama,
+                persist_combat,
+                str(node_row.get("scene_block") or ""),
                 call_vfx=bool(task.get("call_vfx")),
                 call_xian=bool(task.get("call_xian")),
             )
+            plan = resolve_scene_subskill_resume(
+                scene_id=scene_id,
+                steps=persist_steps,
+                pipeline_status=str(node_row.get("status") or ""),
+                pipeline_scene_block=str(node_row.get("scene_block") or ""),
+                call_vfx=needs_combat or bool(task.get("call_vfx")),
+                call_xian=bool(task.get("call_xian")),
+            )
+            if should_recover_framing_from_llm_log(plan, persist_drama):
+                recovered = _recover_ready_framing_from_llm_log(
+                    db,
+                    project_id=int(project_id or 0),
+                    scene_id=scene_id,
+                )
+                if recovered:
+                    persist_scene_subskill_named_step(
+                        db=db,
+                        episode_id=int(node_episode_id),
+                        scene_id=scene_id,
+                        step_name="derived_framing",
+                        result_text=recovered,
+                    )
+                    persist_steps["framing"] = recovered
+                    plan = SceneSubskillResume(
+                        start_group="staging",
+                        current_block=recovered,
+                        called=("drama", "derived_framing"),
+                        skipped_reason="resume_staging_from_llm_log",
+                    )
             resume_plans[scene_id] = plan
             resume_plans[scene_id.lower()] = plan
             logger.info(
-                "[scene_subskill_pipeline] resume scene=%s from=%s reason=%s",
+                "[scene_subskill_pipeline] resume scene=%s from=%s reason=%s steps=%s drama=%s framing=%s",
                 scene_id,
                 plan.start_group,
                 plan.skipped_reason,
+                sorted(str(key) for key in (persist_steps or {}) if persist_steps.get(key)),
+                persisted_subskill_step_usable("drama", persist_drama),
+                persisted_subskill_step_usable("framing", str((persist_steps or {}).get("framing") or "")),
             )
     if project_id > 0 and node_episode_id > 0:
         for task in tasks:
@@ -1558,7 +2179,15 @@ async def run_scene_subskill_pipeline(
             )
         db.commit()
     semaphore = asyncio.Semaphore(max(1, int(max_concurrency or 1)))
-    project_tail = _extract_project_tail(script_text)
+    leftover_tail = _extract_project_tail(script_text)
+    project_tail = "\n\n".join(
+        part
+        for part in (
+            _subskill_visual_backfill_injection(script_text, db, node_episode_id),
+            leftover_tail,
+        )
+        if part
+    )
     user_principal = _snapshot_user_principal(current_user)
     env_catalog = []
     if project_id > 0:
@@ -1574,6 +2203,8 @@ async def run_scene_subskill_pipeline(
         await_environment_planned_script(
             episode_id=int(node_episode_id or 0),
             explicit_text=str(raw_payload.get("environment_planned_text") or ""),
+            project_id=int(project_id or 0),
+            scene_ids=[str(task.get("scene_id") or "") for task in tasks],
         )
     )
 
@@ -1686,17 +2317,28 @@ async def run_scene_subskill_pipeline(
                         call_vfx, call_xian = routed_vfx, routed_xian
                 if scene_start == "combat":
                     special = special or _special_block_from_text(current_block, scene_id)
-                    call_vfx, call_xian = _routes_from_special_text(special, scene_id)
                     if not call_vfx and not call_xian:
-                        raise HTTPException(
-                            status_code=422,
-                            detail=f"SCENE_SUBSKILL_COMBAT_NOT_ROUTED:{scene_id}",
+                        call_vfx, call_xian = _routes_from_special_text(
+                            special or current_block,
+                            scene_id,
                         )
                 if scene_start not in {"framing", "staging"}:
-                    if call_vfx:
-                        await _run_enhance_step(VFX_PROMPT, "vfx")
-                    if call_xian:
-                        await _run_enhance_step(XIAN_PROMPT, "xian")
+                    run_combat = bool(
+                        call_vfx
+                        or call_xian
+                        or scene_start == "combat"
+                        or _combat_route_needed(scene_id, special, current_block)
+                    )
+                    logger.info(
+                        "[scene_subskill_pipeline] combat_gate scene=%s start=%s vfx=%s xian=%s run=%s",
+                        scene_id,
+                        scene_start,
+                        call_vfx,
+                        call_xian,
+                        run_combat,
+                    )
+                    if run_combat:
+                        await _run_enhance_step(COMBAT_PROMPT, "combat")
 
                 env_script = ""
                 env_scene = ""
@@ -1710,8 +2352,12 @@ async def run_scene_subskill_pipeline(
                         step_label="等待主环境注入",
                     )
                     env_script = await env_plan_task
-                    env_scene = _scene_block_from_script(env_script, scene_id)
-                    if not env_scene:
+                    env_scene = _ensure_reused_main_env_block(
+                        _scene_block_from_script(env_script, scene_id),
+                        scene_id,
+                        env_catalog,
+                    )
+                    if not env_scene or not extract_environment_planning_sections(env_scene):
                         raise HTTPException(
                             status_code=422,
                             detail=f"STAGING_ENV_SCENE_MISSING:{scene_id}",
@@ -1812,6 +2458,8 @@ async def run_scene_subskill_pipeline(
                         runtime_meta={
                             "business_event": "timeout" if timed_out else "failed",
                             "business_reason": _scene_subskill_failure_reason(exc),
+                            "scene_block": str(locals().get("current_block") or ""),
+                            "current_step": str((locals().get("called") or [""])[-1] if locals().get("called") else ""),
                         },
                         error_code="SCENE_SUBSKILL_TIMEOUT" if timed_out else "SCENE_SUBSKILL_SCENE_FAILED",
                         error_message=str(exc),
@@ -1886,8 +2534,6 @@ async def run_scene_subskill_pipeline(
         aggregate_parts.append(comprehensive)
     aggregate_parts.extend(str(item.get("scene_block") or "").strip() for item in ordered)
     aggregate_parts.append(SCENES_BLOCK_END_TOKEN)
-    if project_tail:
-        aggregate_parts.append(project_tail)
     aggregate_text = "\n".join(part for part in aggregate_parts if part)
 
     if node_episode_id > 0:
@@ -1903,6 +2549,14 @@ async def run_scene_subskill_pipeline(
                 if not base_script:
                     base_script = load_environment_planned_script(db, int(node_episode_id)) or script_text
                 persist_text = merge_scene_blocks_into_script(base_script, ordered)
+            backfill_obj = extract_project_visual_backfill_object(
+                load_stage1_output_text(db, int(node_episode_id), "project_visual_backfill")
+            ) or extract_project_visual_backfill_object(script_text)
+            if backfill_obj:
+                persist_text = merge_project_visual_backfill_into_result_text(
+                    persist_text,
+                    backfill_obj,
+                )
             persist_script_optimization_stage(
                 db=db,
                 episode=episode,

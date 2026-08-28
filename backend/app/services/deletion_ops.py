@@ -295,6 +295,30 @@ def _hard_purge_episode_scenes(db: Session, episode_id: int) -> int:
     return int(deleted or 0)
 
 
+EPISODE_ANALYSIS_ARTIFACT_FIELDS = (
+    "ai_scene_analysis_result",
+    "ai_scene_analysis_adaptation",
+    "ai_scene_analysis_subject_index",
+    "ai_scene_analysis_scene_markdown",
+    "ai_entity_design_result",
+    "ai_stage_outputs",
+)
+
+
+def clear_episode_analysis_artifacts(episode) -> int:
+    """Blank persisted Stage 1–3 episode fields so a full restart cannot hydrate leftovers."""
+    if episode is None:
+        return 0
+    cleared = 0
+    for name in EPISODE_ANALYSIS_ARTIFACT_FIELDS:
+        if not hasattr(episode, name):
+            continue
+        if str(getattr(episode, name, "") or "").strip():
+            cleared += 1
+        setattr(episode, name, "")
+    return cleared
+
+
 def reset_episode_analysis_progress(db: Session, *, project_id: int, episode_id: int) -> Dict[str, int]:
     """Clear diagnosis-panel progress: all pipeline nodes, scene units, and issues."""
     removed_units = 0

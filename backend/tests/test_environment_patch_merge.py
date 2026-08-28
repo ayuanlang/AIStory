@@ -291,17 +291,48 @@ original one
 def test_framing_waits_for_environment_plan_node_success():
     from app.services.scene_subskill_pipeline_runner import (
         environment_plan_ready_for_framing,
+        environment_plan_terminal_without_payload,
         script_has_environment_blocks,
     )
 
     planned = "[ENV_BLOCK_START]\n【主环境】客栈大堂\n[ENV_BLOCK_END]"
+    ident_only = (
+        "[SCENE_ENV_IDENT_START:EP01_SC01]\n"
+        "[ENV] 名称=龙门风月客栈内部｜复用=是｜来源=项目库｜匹配主环境=龙门风月客栈内部｜依据=复用\n"
+        "[SCENE_ENV_IDENT_END:EP01_SC01]"
+    )
     assert script_has_environment_blocks(planned)
+    assert script_has_environment_blocks(ident_only)
     assert environment_plan_ready_for_framing("success", planned) is True
     assert environment_plan_ready_for_framing("warning", planned) is True
+    assert environment_plan_ready_for_framing("success", ident_only) is True
     assert environment_plan_ready_for_framing("running", planned) is False
     assert environment_plan_ready_for_framing("queued", planned) is False
     assert environment_plan_ready_for_framing("", planned) is False
     assert environment_plan_ready_for_framing("success", "[SCENE_START:EP01_SC01]") is False
+    assert environment_plan_terminal_without_payload("success", "", "") is True
+    assert environment_plan_terminal_without_payload("running", "", "") is False
+    assert environment_plan_terminal_without_payload("success", ident_only, "") is False
+
+
+def test_reuse_ident_backfills_inherited_main_env_block():
+    from app.services.scene_subskill_pipeline_runner import _ensure_reused_main_env_block
+
+    ident_only = (
+        "[SCENE_START:EP01_SC01]\n"
+        "[SCENE_ENV_IDENT_START:EP01_SC01]\n"
+        "[ENV] 名称=龙门风月客栈内部｜复用=是｜来源=项目库｜匹配主环境=龙门风月客栈内部｜依据=复用\n"
+        "[SCENE_ENV_IDENT_END:EP01_SC01]\n"
+        "[SCENE_CONTENT_START:EP01_SC01]\n"
+        "对峙\n"
+        "[SCENE_CONTENT_END:EP01_SC01]\n"
+        "[SCENE_END:EP01_SC01]"
+    )
+    filled = _ensure_reused_main_env_block(ident_only, "EP01_SC01", [])
+    assert "[ENV_BLOCK_START]" in filled
+    assert "【主环境】龙门风月客栈内部" in filled
+    assert filled.index("[SCENE_ENV_IDENT_END:EP01_SC01]") < filled.index("[ENV_BLOCK_START]")
+    assert filled.index("[ENV_BLOCK_END]") < filled.index("[SCENE_CONTENT_START:EP01_SC01]")
 
 
 def test_staging_splices_env_plan_scene_onto_drama_enhance():

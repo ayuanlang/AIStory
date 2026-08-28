@@ -2,7 +2,10 @@
 import json
 from types import SimpleNamespace
 
-from app.services.deletion_ops import reset_episode_analysis_progress
+from app.services.deletion_ops import (
+    clear_episode_analysis_artifacts,
+    reset_episode_analysis_progress,
+)
 from app.services.script_analysis_flow.analyze_scene_stages import (
     persist_assets_extraction_stage,
     persist_scene_subskill_step_result,
@@ -94,6 +97,58 @@ def test_persist_subskill_step_merges_by_scene_and_step():
     assert db.committed
 
 
+def test_load_subskill_results_accepts_object_content():
+    from app.services.script_analysis_flow.analyze_scene_stages import (
+        load_scene_subskill_results_map,
+        merge_ai_stage_outputs_preserving_subskills,
+    )
+
+    episode = SimpleNamespace(
+        id=9,
+        ai_stage_outputs=json.dumps(
+            {
+                "version": 1,
+                "stages": {
+                    "stage1": {
+                        "outputs": {
+                            "scene_subskill_results": {
+                                "key": "scene_subskill_results",
+                                "content": {
+                                    "EP01_SC01": {
+                                        "drama": "[SCENE_START:EP01_SC01]\n文戏增强已完成的正文足够长\n[SCENE_END:EP01_SC01]"
+                                    }
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+    )
+    result_map = load_scene_subskill_results_map(_DummyDb(episode=episode), 9)
+    assert "文戏增强已完成的正文足够长" in result_map["EP01_SC01"]["drama"]
+
+    incoming = json.dumps(
+        {
+            "version": 1,
+            "stages": {
+                "stage1": {
+                    "outputs": {
+                        "scene_split": {"key": "scene_split", "content": "new split"}
+                    }
+                }
+            },
+        },
+        ensure_ascii=False,
+    )
+    merged = json.loads(merge_ai_stage_outputs_preserving_subskills(episode.ai_stage_outputs, incoming))
+    kept = json.loads(merged["stages"]["stage1"]["outputs"]["scene_subskill_results"]["content"])
+    assert "文戏增强已完成的正文足够长" in kept["EP01_SC01"]["drama"]
+    assert merge_ai_stage_outputs_preserving_subskills(episode.ai_stage_outputs, "") == ""
+    assert merge_ai_stage_outputs_preserving_subskills(episode.ai_stage_outputs, "   ") == ""
+
+
 def test_persist_assets_extraction_writes_stage2_slots():
     episode = SimpleNamespace(
         id=3,
@@ -127,3 +182,18 @@ def test_reset_episode_analysis_progress_deletes_all_progress_rows():
     assert summary["removed_scene_units"] == 4
     assert summary["removed_pipeline_nodes"] == 9
     assert summary["removed_issues"] == 1
+
+
+def test_clear_episode_analysis_artifacts_blanks_stage_fields():
+    episode = SimpleNamespace(
+        ai_scene_analysis_result="old split",
+        ai_scene_analysis_adaptation="old adapt",
+        ai_scene_analysis_subject_index="old si",
+        ai_scene_analysis_scene_markdown="old md",
+        ai_entity_design_result="old assets",
+        ai_stage_outputs='{"stages":{"stage1":{}}}',
+    )
+    assert clear_episode_analysis_artifacts(episode) == 6
+    assert episode.ai_stage_outputs == ""
+    assert episode.ai_scene_analysis_adaptation == ""
+    assert clear_episode_analysis_artifacts(episode) == 0

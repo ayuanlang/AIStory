@@ -192,10 +192,12 @@ def _script_analysis_action_label(
         return "建置与入戏"
     if "subskill_drama" in fn:
         return "文戏增强"
+    if "subskill_combat" in fn:
+        return "武戏增强"
     if "subskill_vfx" in fn:
-        return "特效增强"
+        return "武戏增强"
     if "subskill_xian" in fn:
-        return "仙攻增强"
+        return "武戏增强"
     if "stage_1" in fn or "script_optimization" in fn:
         return "剧本优化"
     if "stage_2_1" in fn or "assets_extraction" in fn:

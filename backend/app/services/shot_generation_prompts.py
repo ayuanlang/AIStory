@@ -730,6 +730,54 @@ def _build_scene_subject_image_prompts_cn_section(
     return wrap_injection_section("实体中文生图提示词", body)
 
 
+def collect_missing_main_env_prompt_names(
+    project_entities: List[Any],
+    subject_match_keys: set,
+) -> List[str]:
+    """Return main-ENV names used by the scene that still lack generation_prompt_cn."""
+    if not subject_match_keys:
+        return []
+
+    def _entity_matches(ent: Any) -> bool:
+        for alias in (getattr(ent, "name", None), getattr(ent, "name_en", None)):
+            alias_text = str(alias or "").strip()
+            if not alias_text:
+                continue
+            if subject_compare_key(alias_text) in subject_match_keys:
+                return True
+            if subject_match_keys.intersection(subject_compare_key_variants(alias_text)):
+                return True
+        return False
+
+    environment_entities = [
+        ent for ent in (project_entities or [])
+        if not bool(getattr(ent, "is_deleted", False))
+        and _normalize_subject_entity_type(getattr(ent, "type", None)) == "environment"
+    ]
+    matched = [ent for ent in environment_entities if _entity_matches(ent)]
+    if not matched:
+        return []
+
+    missing: List[str] = []
+    seen: set = set()
+    injected = _build_scene_subject_image_prompts_cn_section(
+        project_entities,
+        subject_match_keys,
+    )
+    if str(injected or "").strip():
+        return []
+    for ent in matched:
+        name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
+        if not name:
+            continue
+        key = subject_compare_key(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        missing.append(name)
+    return missing or ["主环境"]
+
+
 def _build_shot_prompts(
     db: Session,
     scene: Scene,
@@ -1058,6 +1106,18 @@ def _build_shot_prompts(
         subject_match_keys,
         scene_id=getattr(scene, "id", None),
     )
+    missing_main_prompts = collect_missing_main_env_prompt_names(
+        project_entities,
+        subject_match_keys,
+    )
+    if missing_main_prompts:
+        missing_label = "、".join(missing_main_prompts)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"本场关联环境尚未写入主环境 generation_prompt_cn，不能启动分镜：{missing_label}"
+            ),
+        )
 
     # 3. Prepare System Prompt
     system_prompt = ""

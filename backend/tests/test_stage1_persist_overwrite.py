@@ -122,6 +122,133 @@ def test_persist_overwrites_old_adaptation_and_stage_outputs():
     assert "新剧本正文" in outputs["stages"]["stage1"]["outputs"]["scene_split"]["content"]
 
 
+def test_persist_keeps_existing_scene_subskill_results():
+    drama_block = (
+        "[SCENE_START:EP01_SC01]\n"
+        "[SPECIAL_SCENE_ANALYSIS_START:EP01_SC01]\n"
+        "[VFX] 命中=否\n"
+        "[SPECIAL_SCENE_ANALYSIS_END:EP01_SC01]\n"
+        "文戏增强已完成的正文\n"
+        "[SCENE_END:EP01_SC01]"
+    )
+    episode = SimpleNamespace(
+        id=1,
+        ai_scene_analysis_adaptation=OLD_SCRIPT,
+        ai_stage_outputs=json.dumps(
+            {
+                "version": 1,
+                "stages": {
+                    "stage1": {
+                        "key": "stage1",
+                        "outputs": {
+                            "scene_subskill_results": {
+                                "key": "scene_subskill_results",
+                                "kind": "json",
+                                "content": json.dumps(
+                                    {"EP01_SC01": {"drama": drama_block}},
+                                    ensure_ascii=False,
+                                ),
+                            }
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+    )
+    persist_script_optimization_stage(
+        db=_DummyDb(),
+        episode=episode,
+        result_content=NEW_SCRIPT,
+        node_output_key="scene_subskills",
+    )
+    outputs = json.loads(episode.ai_stage_outputs)["stages"]["stage1"]["outputs"]
+    result_map = json.loads(outputs["scene_subskill_results"]["content"])
+    assert "文戏增强已完成的正文" in result_map["EP01_SC01"]["drama"]
+    assert "新剧本正文" in outputs["scene_subskills"]["content"]
+
+
+def test_scene_subskills_persist_keeps_environment_bearing_adaptation():
+    env_script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=龙门风月客栈内部｜复用=是｜来源=项目库｜匹配主环境=龙门风月客栈内部｜依据=复用
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+【主环境】龙门风月客栈内部
+[ENV_BLOCK_END]
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]"""
+    episode = SimpleNamespace(
+        id=1,
+        ai_scene_analysis_adaptation=env_script,
+        ai_stage_outputs=json.dumps(
+            {
+                "version": 1,
+                "stages": {
+                    "stage1": {
+                        "key": "stage1",
+                        "outputs": {
+                            "environment_plan": {
+                                "key": "environment_plan",
+                                "content": env_script,
+                            }
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+    )
+    persist_script_optimization_stage(
+        db=_DummyDb(),
+        episode=episode,
+        result_content=NEW_SCRIPT,
+        node_output_key="scene_subskills",
+    )
+    outputs = json.loads(episode.ai_stage_outputs)["stages"]["stage1"]["outputs"]
+    assert "【主环境】龙门风月客栈内部" in episode.ai_scene_analysis_adaptation
+    assert "【主环境】龙门风月客栈内部" in outputs["adapted_script"]["content"]
+    assert "【主环境】龙门风月客栈内部" in outputs["environment_plan"]["content"]
+    assert "新剧本正文" in outputs["scene_subskills"]["content"]
+
+
+def test_scene_subskills_persist_keeps_existing_visual_backfill():
+    existing_visual = json.dumps(
+        {"project_visual_backfill": {"Global_Style": "全局统筹风格"}},
+        ensure_ascii=False,
+    )
+    episode = SimpleNamespace(
+        id=1,
+        ai_scene_analysis_adaptation=OLD_SCRIPT,
+        ai_stage_outputs=json.dumps(
+            {
+                "version": 1,
+                "stages": {
+                    "stage1": {
+                        "key": "stage1",
+                        "outputs": {
+                            "project_visual_backfill": {
+                                "key": "project_visual_backfill",
+                                "content": existing_visual,
+                            }
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+    )
+    persist_script_optimization_stage(
+        db=_DummyDb(),
+        episode=episode,
+        result_content="[SCENES_BLOCK_START]\n[SCENE_START:EP01_SC01]\n现场编排正文\n[SCENE_END:EP01_SC01]\n[SCENES_BLOCK_END]",
+        node_output_key="scene_subskills",
+    )
+    outputs = json.loads(episode.ai_stage_outputs)["stages"]["stage1"]["outputs"]
+    assert "全局统筹风格" in outputs["project_visual_backfill"]["content"]
+
+
 def test_persist_clears_stale_visual_backfill_when_json_missing():
     episode = SimpleNamespace(
         id=1,

@@ -94,7 +94,10 @@ from app.services.script_progress_orchestration import (  # noqa: E402,F401
     execute_auto_orchestrate_scene_progress,
     execute_reconcile_progress_status,
 )
-from app.services.deletion_ops import reset_episode_analysis_progress  # noqa: E402,F401
+from app.services.deletion_ops import (  # noqa: E402,F401
+    clear_episode_analysis_artifacts,
+    reset_episode_analysis_progress,
+)
 
 
 @router.post("/prompts/scene-analysis/progress/sync-scene-units")
@@ -244,6 +247,7 @@ async def reset_episode_progress(
         project_id=int(episode.project_id),
         episode_id=int(request.episode_id),
     )
+    summary["cleared_artifact_fields"] = clear_episode_analysis_artifacts(episode)
     db.commit()
     return {
         "status": "ok",

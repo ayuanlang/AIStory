@@ -31,6 +31,18 @@ SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS = 0
 def _extract_analysis_text_from_result(result: Any) -> str:
     if isinstance(result, str):
         return result
+    if hasattr(result, "model_dump"):
+        try:
+            result = result.model_dump()
+        except Exception:
+            result = result
+    elif hasattr(result, "dict") and callable(getattr(result, "dict")):
+        try:
+            result = result.dict()
+        except Exception:
+            result = result
+    if not isinstance(result, dict):
+        result = getattr(result, "__dict__", None) or {}
     if not isinstance(result, dict):
         return ""
     for key in ("result", "content", "adapted_script", "scenes_markdown"):

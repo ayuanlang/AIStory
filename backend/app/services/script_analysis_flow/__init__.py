@@ -32,7 +32,9 @@ from .analyze_scene_stages import (
     persist_generic_analyze_scene_stage,
     persist_scene_markdown_stage,
     load_scene_subskill_results_map,
+    load_stage1_output_text,
     lookup_persisted_scene_subskill_steps,
+    merge_ai_stage_outputs_preserving_subskills,
     persist_scene_subskill_named_step,
     persist_scene_subskill_step_result,
     persist_script_optimization_stage,
@@ -2522,6 +2524,15 @@ def upsert_pipeline_node_status(
     return row
 
 
+_COORDINATOR_PIPELINE_NODES = {
+    "scene_subskill_pipeline",
+    "script_optimization",
+    "storyboard_generation",
+    "shot_generation",
+}
+_WAIT_ENV_STALE_BUDGET_SECONDS = 1200
+
+
 def finalize_stale_pipeline_nodes(
     db: Session,
     *,
@@ -2541,20 +2552,49 @@ def finalize_stale_pipeline_nodes(
         query = query.filter(ScriptProgressPipelineNode.episode_id == int(episode_id))
     finalized = 0
     now_iso = now_bj_iso()
-    for row in query.limit(300).all():
+    rows = list(query.limit(300).all())
+    fresh_child_episodes = set()
+    for row in rows:
+        node_name = str(getattr(row, "node_name", "") or "").strip()
+        if node_name in _COORDINATOR_PIPELINE_NODES:
+            continue
         stamp = (
             str(getattr(row, "updated_at", "") or "").strip()
             or str(getattr(row, "started_at", "") or "").strip()
             or str(getattr(row, "created_at", "") or "").strip()
         )
-        if not is_stale_llm_request_timestamp(stamp, budget):
-            continue
+        row_episode_id = int(getattr(row, "episode_id", 0) or 0)
         meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
+        row_budget = (
+            _WAIT_ENV_STALE_BUDGET_SECONDS
+            if str(meta.get("current_step") or "").strip() == "wait_env"
+            else budget
+        )
+        if row_episode_id > 0 and not is_stale_llm_request_timestamp(stamp, row_budget):
+            fresh_child_episodes.add(row_episode_id)
+    for row in rows:
+        stamp = (
+            str(getattr(row, "updated_at", "") or "").strip()
+            or str(getattr(row, "started_at", "") or "").strip()
+            or str(getattr(row, "created_at", "") or "").strip()
+        )
+        meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
+        node_name = str(getattr(row, "node_name", "") or "").strip()
+        row_episode_id = int(getattr(row, "episode_id", 0) or 0)
+        row_budget = (
+            _WAIT_ENV_STALE_BUDGET_SECONDS
+            if str(meta.get("current_step") or "").strip() == "wait_env"
+            else budget
+        )
+        if node_name in _COORDINATOR_PIPELINE_NODES and row_episode_id in fresh_child_episodes:
+            continue
+        if not is_stale_llm_request_timestamp(stamp, row_budget):
+            continue
         meta["business_event"] = "timeout"
-        meta["business_reason"] = f"超过 {budget}s 无进展，已标记超时"
+        meta["business_reason"] = f"超过 {row_budget}s 无进展，已标记超时"
         row.status = "failed"
         row.last_error_code = "NODE_TIMEOUT"
-        row.last_error_message = f"Node timed out after {budget}s with no progress"
+        row.last_error_message = f"Node timed out after {row_budget}s with no progress"
         row.runtime_meta = meta
         row.ended_at = now_iso
         row.updated_at = now_iso
@@ -3088,7 +3128,9 @@ __all__ = [
     "persist_generic_analyze_scene_stage",
     "persist_scene_markdown_stage",
     "load_scene_subskill_results_map",
+    "load_stage1_output_text",
     "lookup_persisted_scene_subskill_steps",
+    "merge_ai_stage_outputs_preserving_subskills",
     "persist_scene_subskill_named_step",
     "persist_scene_subskill_step_result",
     "persist_script_optimization_stage",

@@ -2,7 +2,10 @@
 from types import SimpleNamespace
 
 from app.core.entity_token import subject_compare_key
-from app.services.shot_generation_prompts import _build_scene_subject_image_prompts_cn_section
+from app.services.shot_generation_prompts import (
+    _build_scene_subject_image_prompts_cn_section,
+    collect_missing_main_env_prompt_names,
+)
 
 
 def _env(**kwargs):
@@ -116,3 +119,20 @@ def test_standalone_main_keeps_single_row():
     assert "同一主环境族" not in text
     assert "金属舱壁冷白" in text
     assert "【衍生环境信息】" not in text
+
+
+def test_missing_main_prompt_blocks_storyboard_injection():
+    derived = _env(
+        id=31,
+        name="0度客栈大堂",
+        visual_dependencies=["ENV:[客栈大堂]"],
+        generation_prompt_cn="只切割宫格",
+    )
+    main_empty = _env(id=30, name="客栈大堂", generation_prompt_cn="")
+    assert _build_scene_subject_image_prompts_cn_section(
+        [main_empty, derived],
+        _keys("0度客栈大堂"),
+        scene_id=21,
+    ) == ""
+    missing = collect_missing_main_env_prompt_names([main_empty, derived], _keys("0度客栈大堂"))
+    assert missing

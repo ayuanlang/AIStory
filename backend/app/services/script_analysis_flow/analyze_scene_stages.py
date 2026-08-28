@@ -215,6 +215,8 @@ def _trim_stage1_adapted_script_body(candidate_text: str) -> str:
         return scenes_block
 
     if re.search(r"\[SCENE_START:", candidate, flags=re.IGNORECASE):
+        scene_at = re.search(r"\[SCENE_START:", candidate, flags=re.IGNORECASE)
+        scene_at_idx = scene_at.start() if scene_at else -1
         end_marker = re.search(
             r"(?:^|\n)\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|\[Project Metadata\]|\[Reusable Subject Assets)",
             candidate,
@@ -225,9 +227,9 @@ def _trim_stage1_adapted_script_body(candidate_text: str) -> str:
             candidate,
             flags=re.IGNORECASE | re.MULTILINE,
         )
-        if end_marker and end_marker.start() > 0:
+        if end_marker and end_marker.start() > max(0, scene_at_idx):
             candidate = candidate[: end_marker.start()].strip()
-        elif fallback_end_marker and fallback_end_marker.start() > 0:
+        elif fallback_end_marker and fallback_end_marker.start() > max(0, scene_at_idx):
             candidate = candidate[: fallback_end_marker.start()].strip()
         return candidate.strip()
 
@@ -251,7 +253,9 @@ def _trim_stage1_adapted_script_body(candidate_text: str) -> str:
 
 
 def extract_stage1_adapted_script_body(stage1_text: str) -> str:
-    text = str(stage1_text or "").replace("\r\n", "\n").strip()
+    from app.services.subject_index_resolve import strip_project_visual_backfill_sections
+
+    text = strip_project_visual_backfill_sections(stage1_text).replace("\r\n", "\n").strip()
     if not text:
         return ""
 
@@ -287,6 +291,7 @@ _STAGE_OUTPUT_PATCH_LOCKS_GUARD = threading.Lock()
 SCENE_SUBSKILL_RESULTS_OUTPUT_KEY = "scene_subskill_results"
 _SUBSKILL_RESULT_STEP_KEYS = {
     "drama": "drama",
+    "combat": "combat",
     "vfx": "combat",
     "xian": "combat",
     "derived_framing": "framing",
@@ -360,6 +365,87 @@ def patch_episode_stage_output_slot(
     _dump_stage_outputs_obj(episode, obj)
 
 
+def _parse_subskill_results_content(raw: Any) -> Dict[str, Dict[str, str]]:
+    if isinstance(raw, dict):
+        parsed = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return {}
+    if not isinstance(parsed, dict):
+        return {}
+    result: Dict[str, Dict[str, str]] = {}
+    for scene_id, steps in parsed.items():
+        sid = str(scene_id or "").strip()
+        if not sid or not isinstance(steps, dict):
+            continue
+        result[sid] = {
+            str(step_key or "").strip(): str(step_text or "")
+            for step_key, step_text in steps.items()
+            if str(step_key or "").strip()
+        }
+    return result
+
+
+def _stage1_slot_content(obj: Dict[str, Any], output_key: str) -> Any:
+    stages = obj.get("stages") if isinstance(obj, dict) else {}
+    stage1 = stages.get("stage1") if isinstance(stages, dict) else {}
+    outputs = stage1.get("outputs") if isinstance(stage1, dict) else {}
+    slot = outputs.get(output_key) if isinstance(outputs, dict) else {}
+    if isinstance(slot, dict):
+        return slot.get("content")
+    return slot
+
+
+def merge_ai_stage_outputs_preserving_subskills(existing: Any, incoming: Any) -> str:
+    """Keep per-scene drama/framing/staging steps when a stale full-document write omits them.
+
+    An explicit empty string is a restart wipe, not an omitted payload. Returning
+    ``existing`` here left 全局统筹 / 环境规划 / 分场节点 on screen after 重新分析.
+    """
+    incoming_text = incoming if isinstance(incoming, str) else json.dumps(incoming or {}, ensure_ascii=False)
+    if not str(incoming_text or "").strip():
+        return ""
+    try:
+        new_obj = json.loads(incoming_text) if isinstance(incoming_text, str) else incoming
+        if not isinstance(new_obj, dict):
+            return incoming_text
+    except Exception:
+        return incoming_text
+    try:
+        old_obj = json.loads(existing) if isinstance(existing, str) else existing
+        if not isinstance(old_obj, dict):
+            old_obj = {}
+    except Exception:
+        old_obj = {}
+    old_map = _parse_subskill_results_content(_stage1_slot_content(old_obj, SCENE_SUBSKILL_RESULTS_OUTPUT_KEY))
+    new_map = _parse_subskill_results_content(_stage1_slot_content(new_obj, SCENE_SUBSKILL_RESULTS_OUTPUT_KEY))
+    if not old_map:
+        return incoming_text
+    merged = {sid: dict(steps) for sid, steps in old_map.items()}
+    for sid, steps in new_map.items():
+        scene = dict(merged.get(sid) or {})
+        for key, value in steps.items():
+            if str(value or "").strip():
+                scene[key] = value
+        merged[sid] = scene
+    outputs = _ensure_stage_outputs(new_obj, "stage1")
+    slot = outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
+    slot = slot if isinstance(slot, dict) else {}
+    outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = {
+        **slot,
+        "key": SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
+        "kind": "json",
+        "title": slot.get("title") or "逐场优化分步结果",
+        "content": json.dumps(merged, ensure_ascii=False, indent=2),
+    }
+    return json.dumps(new_obj, ensure_ascii=False, indent=2)
+
+
 def persist_scene_subskill_step_result(
     *,
     db: Session,
@@ -400,13 +486,7 @@ def persist_scene_subskill_step_result(
             if isinstance(outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY), dict)
             else {}
         )
-        raw_map = str(slot.get("content") or "").strip() or "{}"
-        try:
-            result_map = json.loads(raw_map)
-            if not isinstance(result_map, dict):
-                result_map = {}
-        except Exception:
-            result_map = {}
+        result_map = _parse_subskill_results_content(slot.get("content"))
         scene_map = result_map.get(sid) if isinstance(result_map.get(sid), dict) else {}
         scene_map[key] = text
         result_map[sid] = scene_map
@@ -463,24 +543,28 @@ def load_scene_subskill_results_map(db: Session, episode_id: int) -> Dict[str, D
         if isinstance(outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY), dict)
         else {}
     )
-    raw = str(slot.get("content") or "").strip() or "{}"
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    result: Dict[str, Dict[str, str]] = {}
-    for scene_id, steps in parsed.items():
-        sid = str(scene_id or "").strip()
-        if not sid or not isinstance(steps, dict):
-            continue
-        result[sid] = {
-            str(step_key or "").strip(): str(step_text or "")
-            for step_key, step_text in steps.items()
-            if str(step_key or "").strip()
-        }
-    return result
+    return _parse_subskill_results_content(slot.get("content"))
+
+
+def load_stage1_output_text(db: Session, episode_id: int, output_key: str) -> str:
+    from app.services.soft_delete import _active_episode_clause
+
+    eid = int(episode_id or 0)
+    key = str(output_key or "").strip()
+    if eid <= 0 or not key:
+        return ""
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == eid, _active_episode_clause())
+        .populate_existing()
+        .first()
+    )
+    if episode is None:
+        return ""
+    content = _stage1_slot_content(_load_stage_outputs_obj(episode), key)
+    if isinstance(content, dict):
+        return json.dumps(content, ensure_ascii=False)
+    return str(content or "").strip()
 
 
 def lookup_persisted_scene_subskill_steps(
@@ -575,16 +659,49 @@ def persist_script_optimization_stage(
     _assert_safe_persist(raw_text, source="persist.script_optimization", db=db, episode=episode)
     adapted_script = extract_stage1_adapted_script_body(raw_text) or raw_text
     visual_backfill_json = _format_project_visual_backfill_json(raw_text)
-    # Always overwrite prior Stage 1 artifacts so a successful rerun cannot keep a stale copy.
-    episode.ai_scene_analysis_adaptation = adapted_script
-    _patch_episode_stage1_outputs(
-        episode,
-        raw_text=raw_text,
-        adapted_script=adapted_script,
-        visual_backfill_json=visual_backfill_json,
-        node_output_key=node_output_key,
-    )
-    db.commit()
+    eid = int(getattr(episode, "id", 0) or 0)
+    lock = _get_stage_output_patch_lock(eid) if eid > 0 else threading.Lock()
+    with lock:
+        query = getattr(db, "query", None)
+        if eid > 0 and callable(query):
+            from app.services.soft_delete import _active_episode_clause
+
+            fresh = (
+                query(Episode)
+                .filter(Episode.id == eid, _active_episode_clause())
+                .populate_existing()
+                .first()
+            )
+            if fresh is not None:
+                episode = fresh
+        # Refresh first so a stale request-session copy cannot wipe
+        # scene_subskill_results written by a sibling session.
+        persist_key = str(node_output_key or "").strip()
+        if persist_key in {"scene_subskills", "scene_subskill_results"}:
+            from app.services.script_analysis_flow.environment_reuse import (
+                script_has_environment_plan_payload,
+            )
+
+            existing_adapt = str(getattr(episode, "ai_scene_analysis_adaptation", "") or "")
+            if (
+                not script_has_environment_plan_payload(adapted_script)
+                and script_has_environment_plan_payload(existing_adapt)
+            ):
+                adapted_script = existing_adapt
+            existing_visual = str(
+                _stage1_slot_content(_load_stage_outputs_obj(episode), "project_visual_backfill") or ""
+            ).strip()
+            if not visual_backfill_json and existing_visual:
+                visual_backfill_json = existing_visual
+        episode.ai_scene_analysis_adaptation = adapted_script
+        _patch_episode_stage1_outputs(
+            episode,
+            raw_text=raw_text,
+            adapted_script=adapted_script,
+            visual_backfill_json=visual_backfill_json,
+            node_output_key=node_output_key,
+        )
+        db.commit()
     try:
         db.refresh(episode)
     except Exception:

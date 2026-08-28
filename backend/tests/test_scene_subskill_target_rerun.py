@@ -7,6 +7,7 @@ from app.services.scene_subskill_pipeline_runner import (
     persisted_subskill_step_usable,
     resolve_scene_subskill_resume,
     resolve_subskill_start_group,
+    should_recover_framing_from_llm_log,
 )
 
 
@@ -75,6 +76,18 @@ STAGING_STRIPPED = (
     "【建置】【入戏】入戏状态=站立 出场状态=离开 ENV氛围微=风沙\n"
     "[SCENE_END:EP01_SC01]"
 )
+COMBAT_OK = (
+    "[SCENE_START:EP01_SC02]\n"
+    "武戏增强已完成的正文，足够长以便续跑时识别为可用落库。\n"
+    "[COMBAT_SUBSKILL_OUTPUT_END]\n"
+    "[SCENE_END:EP01_SC02]"
+)
+COMBAT_LEGACY = (
+    "[SCENE_START:EP01_SC02]\n"
+    "旧特效增强落库仍应识别为武戏完成。足够长以便续跑识别。\n"
+    "[VFX_SUBSKILL_OUTPUT_END]\n"
+    "[SCENE_END:EP01_SC02]"
+)
 
 
 def test_resolve_subskill_start_group_aliases():
@@ -109,6 +122,41 @@ def test_resume_starts_combat_when_drama_done_and_vfx_needed():
     assert plan.skipped_reason == "resume_combat"
 
 
+def test_resume_reads_combat_route_from_persisted_drama_when_task_flags_false():
+    drama_with_route = (
+        "[SPECIAL_SCENE_ANALYSIS_START:EP01_SC02]\n"
+        "[VFX] 命中=是｜类型=近身打斗｜证据=原文：“挥拳”\n"
+        "[XIAN] 命中=否｜类型=无｜证据=无\n"
+        "[SPECIAL_SCENE_ANALYSIS_END:EP01_SC02]\n"
+        "[SCENE_START:EP01_SC02]\n"
+        "文戏增强已完成的正文，足够长以便续跑时识别为可用落库。\n"
+        "[DRAMA_STANDARDIZATION_OUTPUT_END]\n"
+        "[SCENE_END:EP01_SC02]"
+    )
+    plan = resolve_scene_subskill_resume(
+        scene_id="EP01_SC02",
+        steps={"drama": drama_with_route},
+        call_vfx=False,
+        call_xian=False,
+    )
+    assert plan.start_group == "combat"
+    assert plan.skipped_reason == "resume_combat"
+
+
+def test_resume_skips_combat_when_merged_or_legacy_marker_persisted():
+    assert persisted_subskill_step_usable("combat", COMBAT_OK)
+    assert persisted_subskill_step_usable("combat", COMBAT_LEGACY)
+    plan = resolve_scene_subskill_resume(
+        scene_id="EP01_SC02",
+        steps={"drama": DRAMA_OK, "combat": COMBAT_OK},
+        call_vfx=True,
+        call_xian=True,
+    )
+    assert plan.start_group == "framing"
+    assert plan.skipped_reason == "resume_framing"
+    assert "combat" in plan.called
+
+
 def test_resume_skips_scene_when_pipeline_already_success():
     plan = resolve_scene_subskill_resume(
         scene_id="EP01_SC01",
@@ -120,10 +168,63 @@ def test_resume_skips_scene_when_pipeline_already_success():
     assert plan.skipped_reason in {"pipeline_success", "staging_persisted"}
 
 
+def test_hydrate_recovers_drama_from_saved_script():
+    from app.services.scene_subskill_pipeline_runner import hydrate_persisted_subskill_steps
+
+    script = """[SCENES_BLOCK_START]
+[SPECIAL_SCENE_ANALYSIS_START:EP01_SC01]
+[VFX] 命中=否｜类型=无｜证据=无
+[XIAN] 命中=否｜类型=无｜证据=无
+[SPECIAL_SCENE_ANALYSIS_END:EP01_SC01]
+[SCENE_START:EP01_SC01]
+【场景综合】本场卖点=对峙
+- Beat 1：节拍=铺垫
+掌柜拨算盘。
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+"""
+    steps = hydrate_persisted_subskill_steps("EP01_SC01", {}, script)
+    plan = resolve_scene_subskill_resume(scene_id="EP01_SC01", steps=steps)
+    assert plan.start_group == "framing"
+    assert plan.skipped_reason == "resume_framing"
+
+
+def test_hydrate_ignores_scene_split_without_drama_signals():
+    from app.services.scene_subskill_pipeline_runner import hydrate_persisted_subskill_steps
+
+    scene_split_only = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+【场景名称】旧茶馆｜日·内
+SC01旧正文，没有文戏增强场核。
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+"""
+    steps = hydrate_persisted_subskill_steps("EP01_SC01", {}, scene_split_only)
+    plan = resolve_scene_subskill_resume(scene_id="EP01_SC01", steps=steps)
+    assert plan.start_group == "drama"
+    assert plan.skipped_reason == "start_drama"
+
+
 def test_resume_starts_from_drama_when_nothing_persisted():
     plan = resolve_scene_subskill_resume(scene_id="EP01_SC03", steps={})
     assert plan.start_group == "drama"
     assert plan.skipped_reason == "start_drama"
+
+
+def test_framing_log_recovery_does_not_skip_fresh_drama():
+    fresh = resolve_scene_subskill_resume(scene_id="EP01_SC01", steps={})
+    assert fresh.start_group == "drama"
+    assert should_recover_framing_from_llm_log(fresh, "") is False
+    assert should_recover_framing_from_llm_log(fresh, DRAMA_OK) is False
+
+    after_drama = resolve_scene_subskill_resume(
+        scene_id="EP01_SC01",
+        steps={"drama": DRAMA_OK},
+        call_vfx=False,
+    )
+    assert after_drama.start_group == "framing"
+    assert should_recover_framing_from_llm_log(after_drama, DRAMA_OK) is True
+    assert should_recover_framing_from_llm_log(after_drama, "") is False
 
 
 def test_resume_uses_stripped_persisted_blocks_without_end_markers():

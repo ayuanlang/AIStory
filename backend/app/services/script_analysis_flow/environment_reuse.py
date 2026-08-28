@@ -78,6 +78,17 @@ def _normalize_source(value: Any) -> str:
     return text or "新建"
 
 
+def script_has_environment_plan_payload(script_text: str) -> bool:
+    """True when this-run environment planning left IDENT and/or a main-env block."""
+    text = str(script_text or "")
+    upper = text.upper()
+    return (
+        "[ENV_BLOCK_START" in upper
+        or "[SCENE_ENV_IDENT_START" in upper
+        or "【主环境】" in text
+    )
+
+
 def extract_scene_env_ident_block(text: str, scene_id: str = "") -> str:
     """Return the first matching [SCENE_ENV_IDENT_*] block, or empty."""
     source = str(text or "")

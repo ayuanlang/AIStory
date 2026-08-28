@@ -19,6 +19,105 @@ def test_is_llm_timeout_error_detects_transport_and_message():
     assert not is_llm_timeout_error(Exception("upstream 500"))
 
 
+def test_finalize_stale_pipeline_nodes_skips_wait_env_inside_budget():
+    from types import SimpleNamespace
+    from app.core.time_utils import now_bj
+    from app.services.script_analysis_flow import finalize_stale_pipeline_nodes
+
+    wait_ts = (now_bj() - timedelta(seconds=1000)).isoformat(timespec="microseconds")
+    row = SimpleNamespace(
+        status="running",
+        node_name="scene_subskill_scene",
+        episode_id=1,
+        updated_at=wait_ts,
+        started_at=wait_ts,
+        created_at=wait_ts,
+        runtime_meta={"current_step": "wait_env"},
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+    )
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return [row]
+
+    class _Session:
+        committed = False
+
+        def query(self, *_args, **_kwargs):
+            return _Query()
+
+        def commit(self):
+            self.committed = True
+
+    assert finalize_stale_pipeline_nodes(_Session(), episode_id=1, timeout_seconds=900) == 0
+    assert row.status == "running"
+
+
+def test_finalize_stale_pipeline_nodes_skips_coordinator_with_fresh_child():
+    from types import SimpleNamespace
+    from app.core.time_utils import now_bj
+    from app.services.script_analysis_flow import finalize_stale_pipeline_nodes
+
+    now = now_bj()
+    parent_ts = (now - timedelta(seconds=1200)).isoformat(timespec="microseconds")
+    child_ts = (now - timedelta(seconds=10)).isoformat(timespec="microseconds")
+    parent = SimpleNamespace(
+        status="running",
+        node_name="scene_subskill_pipeline",
+        episode_id=1,
+        updated_at=parent_ts,
+        started_at=parent_ts,
+        created_at=parent_ts,
+        runtime_meta={},
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+    )
+    child = SimpleNamespace(
+        status="running",
+        node_name="scene_subskill_scene",
+        episode_id=1,
+        updated_at=child_ts,
+        started_at=child_ts,
+        created_at=child_ts,
+        runtime_meta={"current_step": "combat"},
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+    )
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return [parent, child]
+
+    class _Session:
+        committed = False
+
+        def query(self, *_args, **_kwargs):
+            return _Query()
+
+        def commit(self):
+            self.committed = True
+
+    assert finalize_stale_pipeline_nodes(_Session(), episode_id=1, timeout_seconds=900) == 0
+    assert parent.status == "running"
+    assert child.status == "running"
+
+
 def test_finalize_stale_pipeline_nodes_marks_old_running_row():
     from types import SimpleNamespace
     from app.core.time_utils import now_bj

@@ -332,6 +332,158 @@ def test_staging_gate_requires_per_beat_framing_lock():
         assert "STAGING_BLOCKED_FRAMING_BEAT_LOCK" in str(exc.detail)
 
 
+def test_staging_gate_uses_rewritten_beat_lock():
+    from app.services.scene_subskill_pipeline_runner import (
+        assert_derived_framing_ready_for_staging,
+    )
+
+    echoed = (
+        SAMPLE
+        + "\n[BEAT_START:1]\n掌柜拨算盘。\n[BEAT_END:1]\n"
+        + "[BEAT_STREAM_START]\n"
+        + "[BEAT_START:1]\n"
+        + "【取景锁定】当前环境=0度客栈大堂｜景别=WS｜构图=三分｜镜头角度=平拍｜选择证据＝ENV:文戏:开场｜[DERIVED_ENV:0度客栈大堂]\n"
+        + "掌柜拨算盘。\n[BEAT_END:1]\n"
+        + "[BEAT_STREAM_END]\n"
+    )
+    ready = assert_derived_framing_ready_for_staging(echoed, "EP01_SC01")
+    assert "【取景锁定】当前环境=0度客栈大堂" in ready
+
+
+def test_extract_keeps_framing_payload_after_scene_end():
+    from app.services.scene_subskill_pipeline_runner import (
+        _extract_single_scene_block,
+        assert_derived_framing_ready_for_staging,
+    )
+
+    raw = (
+        "[SCENES_BLOCK_START]\n"
+        "[SCENE_START:EP01_SC01]\n"
+        "【场景名称】客栈\n"
+        "[SCENE_END:EP01_SC01]\n"
+        "[SCENES_BLOCK_END]\n"
+        f"{SAMPLE}"
+        "[BEAT_STREAM_START]\n"
+        "[BEAT_START:1]\n"
+        "【取景锁定】当前环境=ENV:[0度客栈大堂]｜景别=WS｜构图=三分｜镜头角度=平拍｜"
+        "选择证据=ENV:文戏:开场｜机位:Beat:柜台｜景别:文戏:开场｜构图:场级三分｜"
+        "[DERIVED_ENV:0度客栈大堂]\n"
+        "掌柜拨算盘。\n"
+        "[BEAT_END:1]\n"
+        "[BEAT_STREAM_END]\n"
+        "[DERIVED_FRAMING_OUTPUT_END]\n"
+    )
+    extracted = _extract_single_scene_block(raw, "EP01_SC01", "")
+    assert "[DERIVED_ENV_EXTRACT_START]" in extracted
+    assert "【Beat主体定位】" in extracted
+    assert "【取景锁定】" in extracted
+    ready = assert_derived_framing_ready_for_staging(extracted, "EP01_SC01")
+    assert "【取景锁定】" in ready
+
+
+def test_extract_keeps_framing_payload_before_scenes_block_end():
+    from app.services.scene_subskill_pipeline_runner import (
+        _extract_single_scene_block,
+        _scene_subskill_failure_reason,
+        assert_derived_framing_ready_for_staging,
+    )
+    from fastapi import HTTPException
+
+    raw = (
+        "[SCENES_BLOCK_START]\n"
+        "[SCENE_START:EP01_SC01]\n"
+        "【场景名称】客栈\n"
+        "[SCENE_END:EP01_SC01]\n"
+        f"{SAMPLE}"
+        "[BEAT_STREAM_START]\n"
+        "[BEAT_START:1]\n"
+        "【取景锁定】当前环境=ENV:[0度客栈大堂]｜景别=WS｜构图=三分｜镜头角度=平拍｜"
+        "选择证据=ENV:文戏:开场｜[DERIVED_ENV:0度客栈大堂]\n"
+        "掌柜拨算盘。\n"
+        "[BEAT_END:1]\n"
+        "[BEAT_STREAM_END]\n"
+        "[SCENES_BLOCK_END]\n"
+        "[DERIVED_FRAMING_OUTPUT_END]\n"
+    )
+    extracted = _extract_single_scene_block(raw, "EP01_SC01", "")
+    assert "[DERIVED_ENV_EXTRACT_START]" in extracted
+    assert "【取景锁定】" in extracted
+    assert_derived_framing_ready_for_staging(extracted, "EP01_SC01")
+
+    reason = _scene_subskill_failure_reason(
+        HTTPException(status_code=422, detail="STAGING_BLOCKED_FRAMING_BEAT_LOCK:EP01_SC01:1,3")
+    )
+    assert "拍 1,3" in reason
+    assert "已返回" in reason
+
+
+def test_framing_gate_accepts_markdown_fence_and_scene_content_markers():
+    from app.services.scene_subskill_pipeline_runner import (
+        _coerce_ready_framing_block,
+        _scene_subskill_failure_reason,
+        _strip_subskill_completion_marker,
+        _try_extract_subskill_scene_block,
+        FRAMING_PROMPT,
+        assert_derived_framing_ready_for_staging,
+    )
+    from fastapi import HTTPException
+
+    raw = """```markdown
+[SCENE_START:EP01_SC03]
+【场景名称】水墨苍岭山道
+[SCENE_CONTENT_START:EP01_SC03]
+林昭被围。
+[SCENE_CONTENT_END:EP01_SC03]
+【主体定位方案】CHAR:[@林昭]=方式=绝对｜宫格=中
+【宫格草稿】
+B1=中:{林昭}
+【Beat主体定位】
+B1=ENV:0度水墨苍岭山道｜CHAR:[@林昭]=可见性=V
+[DERIVED_ENV_EXTRACT_START]
+[DERIVED_ENV] 名称=0度水墨苍岭山道｜所属主环境=水墨苍岭山道｜view_angle_from_main=0
+[DERIVED_ENV_EXTRACT_END]
+[BEAT_STREAM_START]
+[BEAT_START:1]
+【取景锁定】当前环境=ENV:[0度水墨苍岭山道]｜景别=WS｜构图=中心｜镜头角度=平拍｜选择证据=ENV:Beat:包抄｜[DERIVED_ENV:0度水墨苍岭山道]
+林昭被围。
+[BEAT_END:1]
+[BEAT_STREAM_END]
+[SCENE_END:EP01_SC03]
+[SCENES_BLOCK_END]
+[DERIVED_FRAMING_OUTPUT_END]
+```
+"""
+    stripped = _strip_subskill_completion_marker(raw, FRAMING_PROMPT)
+    extracted = _try_extract_subskill_scene_block(stripped or raw, "EP01_SC03", "")
+    ready = _coerce_ready_framing_block(extracted, stripped or raw, "EP01_SC03")
+    assert ready
+    assert "【取景锁定】" in ready
+    assert_derived_framing_ready_for_staging(ready, "EP01_SC03")
+
+    reason = _scene_subskill_failure_reason(
+        HTTPException(status_code=422, detail="STAGING_BLOCKED_FRAMING_INCOMPLETE:EP01_SC03")
+    )
+    assert "主体定位或衍生环境提取" in reason
+
+
+def test_framing_coerce_uses_raw_candidate_when_extract_is_header_only():
+    from app.services.scene_subskill_pipeline_runner import _coerce_ready_framing_block
+
+    extracted = "[SCENE_START:EP01_SC03]\n【场景名称】山道\n[SCENE_END:EP01_SC03]"
+    candidate = (
+        extracted
+        + "\n【主体定位方案】林昭=中\n【宫格草稿】B1=中:{林昭}\n"
+        + SAMPLE
+        + "[BEAT_STREAM_START]\n[BEAT_START:1]\n"
+        + "【取景锁定】当前环境=ENV:[0度客栈大堂]｜景别=WS｜构图=三分｜镜头角度=平拍｜"
+        + "选择证据=ENV:文戏:开场｜[DERIVED_ENV:0度客栈大堂]\n"
+        + "掌柜拨算盘。\n[BEAT_END:1]\n[BEAT_STREAM_END]\n"
+    )
+    ready = _coerce_ready_framing_block(extracted, candidate, "EP01_SC03")
+    assert "【取景锁定】" in ready
+    assert "[DERIVED_ENV_EXTRACT_START]" in ready
+
+
 def test_strip_beat_notes_removes_analysis_and_legacy_transition():
     from app.services.script_analysis_flow import strip_beat_transition_notes_from_script
 

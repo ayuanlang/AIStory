@@ -30,7 +30,24 @@ _PROMPT_SKILL_ALIAS = {
     "image_style_extractor.txt": "skill:image_style_extraction/image_style_extractor.txt",
     "voice_tts_planner_system.txt": "voice_tts_planner_system.txt",
     "voice_tts_planner_user.txt": "voice_tts_planner_user.txt",
+    "skills/scene_analysis_feature_stack/scene_planning_1_subskill_vfx.md": (
+        "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md"
+    ),
+    "skills/scene_analysis_feature_stack/scene_planning_1_subskill_xian_attack.md": (
+        "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md"
+    ),
+    "scene_planning_1_subskill_vfx.md": "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md",
+    "scene_planning_1_subskill_xian_attack.md": "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md",
 }
+
+def _prompt_alias(prompt_ref: str) -> str:
+    ref = str(prompt_ref or "").strip()
+    return str(
+        _PROMPT_SKILL_ALIAS.get(ref)
+        or _PROMPT_SKILL_ALIAS.get(Path(ref.replace("\\", "/")).name)
+        or ""
+    ).strip()
+
 
 def _resolve_prompt_text(prompt_ref: str) -> str:
     ref = str(prompt_ref or "").strip()
@@ -38,7 +55,7 @@ def _resolve_prompt_text(prompt_ref: str) -> str:
         raise FileNotFoundError("prompt ref is empty")
 
     candidates = [ref]
-    alias = _PROMPT_SKILL_ALIAS.get(ref)
+    alias = _prompt_alias(ref)
     if alias:
         candidates.append(alias)
 
@@ -73,7 +90,7 @@ def _resolve_prompt_file_path(prompt_ref: str) -> Path:
     prompt_root = Path(settings.BASE_DIR) / "app" / "core" / "prompts"
     skill_root = prompt_root / "skills"
     candidates = [ref]
-    alias = _PROMPT_SKILL_ALIAS.get(ref)
+    alias = _prompt_alias(ref)
     if alias:
         candidates.append(alias)
 
@@ -125,7 +142,7 @@ def _resolve_prompt_file_path(prompt_ref: str) -> Path:
 
 def _build_prompt_resolution_debug(prompt_ref: str) -> Dict[str, Any]:
     ref = str(prompt_ref or "").strip()
-    alias = _PROMPT_SKILL_ALIAS.get(ref)
+    alias = _prompt_alias(ref)
     prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
     skill_root = os.path.join(prompt_dir, "skills")
 

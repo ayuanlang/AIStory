@@ -1858,11 +1858,16 @@ const Editor = ({
                 if (!payload || typeof payload !== 'object' || !targetTypeFilters || targetTypeFilters.length === 0) {
                     return payload;
                 }
+                const wantsEnvOrPoster = targetTypeFilters.some((item) => (
+                    ['environments', 'posters', 'covers', 'environment', 'poster', 'cover', 'cover_poster'].includes(item)
+                ));
                 const filtered = { characters: [], props: [], environments: [], posters: [], covers: [] };
                 if (targetTypeFilters.includes('characters')) filtered.characters = Array.isArray(payload.characters) ? payload.characters : [];
                 if (targetTypeFilters.includes('props')) filtered.props = Array.isArray(payload.props) ? payload.props : [];
-                if (targetTypeFilters.includes('environments')) filtered.environments = Array.isArray(payload.environments) ? payload.environments : [];
-                if (targetTypeFilters.includes('posters') || targetTypeFilters.includes('covers')) {
+                if (targetTypeFilters.includes('environments') || wantsEnvOrPoster) {
+                    filtered.environments = Array.isArray(payload.environments) ? payload.environments : [];
+                }
+                if (wantsEnvOrPoster) {
                     filtered.posters = Array.isArray(payload.posters) ? payload.posters : [];
                     filtered.covers = Array.isArray(payload.covers) ? payload.covers : [];
                 }

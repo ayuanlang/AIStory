@@ -377,7 +377,9 @@ async def execute_scene_analysis_flow_node(
             # Scene split returns the authoritative full script. Environment planning is
             # one whole-episode LLM call; code then injects reuse patches per scene.
             raw_payload["scene_analysis_mode"] = "stage1"
-            raw_payload["skip_episode_persist"] = node_key == "environment_plan"
+            # Do not persist an incomplete first scene_split attempt. Resume/reuse
+            # would otherwise treat that draft as finished and skip the completeness gate.
+            raw_payload["skip_episode_persist"] = True
         
         logger.info(
             "[剧本分析流程] 准备执行节点 %s | prompt=%s | function=%s | system_api_id=%s | project_id=%s | episode_id=%s",
@@ -769,23 +771,35 @@ async def execute_scene_analysis_flow_node(
                     if isinstance(result, dict)
                     else []
                 )
+                scene_count = int((result or {}).get("scene_count") or 0) if isinstance(result, dict) else 0
+                all_failed = bool(
+                    failed_scene_ids
+                    and (scene_count <= 0 or scene_count <= len(failed_scene_ids))
+                )
                 upsert_pipeline_node_status(
                     db,
                     project_id=node_project_id,
                     episode_id=node_episode_id,
                     script_id=f"episode:{node_episode_id}",
                     node_name=node_key,
-                    status="warning" if partial_failure else "success",
+                    status="failed" if all_failed else ("warning" if partial_failure else "success"),
                     progress_percent=100.0,
-                    error_code="SCENE_SUBSKILL_PARTIAL_FAILURE" if partial_failure else None,
+                    error_code=(
+                        "SCENE_SUBSKILL_ALL_FAILED"
+                        if all_failed
+                        else ("SCENE_SUBSKILL_PARTIAL_FAILURE" if partial_failure else None)
+                    ),
                     error_message=(
                         f"timed out or failed: {', '.join(failed_scene_ids)}"
-                        if partial_failure
+                        if failed_scene_ids
                         else None
                     ),
                     runtime_meta=(
-                        {"business_event": "partial_failure", "failed_scene_ids": failed_scene_ids}
-                        if partial_failure
+                        {
+                            "business_event": "all_failed" if all_failed else "partial_failure",
+                            "failed_scene_ids": failed_scene_ids,
+                        }
+                        if failed_scene_ids
                         else None
                     ),
                 )

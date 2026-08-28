@@ -201,7 +201,14 @@ def update_episode(
     # (empty subject_index + empty stage_outputs in one PUT) do not resurrect
     # the pre-update stage_outputs Subject Index.
     if hasattr(episode_in, 'ai_stage_outputs') and episode_in.ai_stage_outputs is not None:
-        episode.ai_stage_outputs = episode_in.ai_stage_outputs
+        from app.services.script_analysis_flow.analyze_scene_stages import (
+            merge_ai_stage_outputs_preserving_subskills,
+        )
+
+        episode.ai_stage_outputs = merge_ai_stage_outputs_preserving_subskills(
+            getattr(episode, "ai_stage_outputs", "") or "",
+            episode_in.ai_stage_outputs,
+        )
     if hasattr(episode_in, 'ai_scene_analysis_subject_index') and episode_in.ai_scene_analysis_subject_index is not None:
         from app.services.subject_index_resolve import (
             _subject_index_has_usable_content,

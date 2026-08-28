@@ -100,6 +100,12 @@ def test_attach_watermarks_is_idempotent_and_detectable():
     assert find_prompt_injection_risks("## 目标\n正文") == []
 
 
+def test_attach_watermarks_resolves_combat_skill():
+    attached = attach_skill_watermarks("## 目标\n正文", "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md")
+    assert "[AIS-WM:CBT:W8QN]" in attached
+    assert "[AIS-WM:CBT:K5HD]" in attached
+
+
 def test_assert_records_incident_before_raise(monkeypatch):
     captured = {}
 
