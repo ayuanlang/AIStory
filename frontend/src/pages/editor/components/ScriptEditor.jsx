@@ -3472,6 +3472,223 @@ const textHasTaggedExtractItems = (text, tag) => {
     return Boolean(body) && !/^\s*无\s*$/.test(body) && /名称\s*[=：:]/.test(body);
 };
 
+const CHAR_EXTRACT_FIELD_KEYS = [
+    '名称', '名称_en', '番位', '适用场',
+    '定位', '外形', '衣着', '性情', '特定动作', '身份',
+    '标签', '标签_en', '标签字体', '标签字色',
+    '对白声线', '评价', '形态连续', '衍生',
+];
+
+const PROP_EXTRACT_FIELD_KEYS = [
+    '名称', '名称_en', '全局性道具', '挂场ENV',
+    '定位', '作用', '外形', '尺度', '材质', '形态',
+    '情绪', '宿主', '形态连续', '适用场',
+];
+
+const EXTRACT_HEADER_KEYS = {
+    CHAR: ['名称', '名称_en', '番位', '适用场'],
+    PROP: ['名称', '名称_en', '全局性道具', '挂场ENV'],
+};
+
+const EXTRACT_LONG_TEXT_FIELDS = new Set([
+    '定位', '外形', '衣着', '性情', '特定动作', '身份', '对白声线', '评价', '形态连续', '衍生',
+    '作用', '尺度', '材质', '形态', '情绪', '宿主',
+]);
+
+const EXTRACT_FIELD_LABELS = {
+    名称: { zh: '名称', en: 'Name' },
+    名称_en: { zh: '英文名', en: 'Name (EN)' },
+    番位: { zh: '番位', en: 'Billing' },
+    适用场: { zh: '适用场', en: 'Scenes' },
+    定位: { zh: '定位', en: 'Positioning' },
+    外形: { zh: '外形', en: 'Appearance' },
+    衣着: { zh: '衣着', en: 'Costume' },
+    性情: { zh: '性情', en: 'Temperament' },
+    特定动作: { zh: '特定动作', en: 'Signature Action' },
+    身份: { zh: '身份', en: 'Identity' },
+    标签: { zh: '标签', en: 'Label' },
+    标签_en: { zh: '标签英文', en: 'Label (EN)' },
+    标签字体: { zh: '标签字体', en: 'Label Font' },
+    标签字色: { zh: '标签字色', en: 'Label Color' },
+    对白声线: { zh: '对白声线', en: 'Voice' },
+    评价: { zh: '评价', en: 'Appraisal' },
+    形态连续: { zh: '形态连续', en: 'Form Continuity' },
+    衍生: { zh: '衍生', en: 'Derivatives' },
+    全局性道具: { zh: '全局性道具', en: 'Global Prop' },
+    挂场ENV: { zh: '挂场环境', en: 'Host Environment' },
+    作用: { zh: '作用', en: 'Function' },
+    尺度: { zh: '尺度', en: 'Scale' },
+    材质: { zh: '材质', en: 'Material' },
+    形态: { zh: '形态', en: 'Form' },
+    情绪: { zh: '情绪', en: 'Mood' },
+    宿主: { zh: '宿主', en: 'Host' },
+};
+
+const takeTaggedExtractInner = (text, tag) => {
+    const source = String(text || '');
+    const startRe = new RegExp(`\\[${tag}_EXTRACT_START[^\\]]*\\]`, 'i');
+    const endRe = new RegExp(`\\[${tag}_EXTRACT_END[^\\]]*\\]`, 'i');
+    const startMatch = startRe.exec(source);
+    if (!startMatch) return '';
+    const afterStart = startMatch.index + startMatch[0].length;
+    endRe.lastIndex = afterStart;
+    const endMatch = endRe.exec(source);
+    if (!endMatch) return '';
+    return source.slice(afterStart, endMatch.index).trim();
+};
+
+const takeTaggedExtractBlock = (text, tag) => {
+    const source = String(text || '');
+    if (!new RegExp(`\\[${tag}_EXTRACT_START`, 'i').test(source) && !new RegExp(`\\[${tag}\\][\\s\\S]{0,80}名称\\s*[=：:]`, 'i').test(source)) {
+        return '';
+    }
+    const inner = takeTaggedExtractInner(source, tag);
+    if (inner) return `[${tag}_EXTRACT_START]\n${inner}\n[${tag}_EXTRACT_END]`;
+    const items = splitTaggedExtractItems(source, tag);
+    if (!items.length) return '';
+    return `[${tag}_EXTRACT_START]\n${items.map((item) => item.block).join('\n\n')}\n[${tag}_EXTRACT_END]`;
+};
+
+const normalizeExtractReplacementInner = (content, tag) => {
+    const raw = String(content || '').trim();
+    if (!raw) return '无';
+    const wrappedInner = takeTaggedExtractInner(raw, tag);
+    if (wrappedInner) return wrappedInner;
+    return raw.replace(new RegExp(`\\[${tag}_EXTRACT_(START|END)[^\\]]*\\]`, 'gi'), '').trim() || '无';
+};
+
+const replaceTaggedExtractBlock = (text, tag, nextInner) => {
+    const source = String(text || '');
+    const inner = String(nextInner || '').trim() || '无';
+    const replacement = `[${tag}_EXTRACT_START]\n${inner}\n[${tag}_EXTRACT_END]`;
+    const startRe = new RegExp(`\\[${tag}_EXTRACT_START[^\\]]*\\]`, 'i');
+    const endRe = new RegExp(`\\[${tag}_EXTRACT_END[^\\]]*\\]`, 'i');
+    const startMatch = startRe.exec(source);
+    if (!startMatch) {
+        const endBlockRe = /\[SCENES_BLOCK_END[^\]]*\]/i;
+        const endBlock = endBlockRe.exec(source);
+        if (endBlock) {
+            return `${source.slice(0, endBlock.index).trimEnd()}\n\n${replacement}\n${source.slice(endBlock.index)}`;
+        }
+        return source ? `${source.trimEnd()}\n\n${replacement}` : replacement;
+    }
+    const afterStart = startMatch.index + startMatch[0].length;
+    endRe.lastIndex = afterStart;
+    const endMatch = endRe.exec(source);
+    if (!endMatch) {
+        return `${source.slice(0, startMatch.index)}${replacement}${source.slice(afterStart)}`;
+    }
+    return `${source.slice(0, startMatch.index)}${replacement}${source.slice(endMatch.index + endMatch[0].length)}`;
+};
+
+const parseTaggedExtractItemFields = (block, tag) => {
+    const source = String(block || '').replace(/\r\n/g, '\n').trim();
+    const fields = {};
+    const fieldOrder = [];
+    const remember = (key, value) => {
+        const stable = String(key || '').trim();
+        if (!stable) return;
+        if (!fieldOrder.includes(stable)) fieldOrder.push(stable);
+        fields[stable] = String(value ?? '').trim();
+    };
+    const lines = source.split('\n').map((line) => String(line || '').trim()).filter(Boolean);
+    if (!lines.length) return { fields, fieldOrder };
+    const first = lines[0].replace(new RegExp(`^\\[${tag}\\]\\s*`, 'i'), '');
+    first.split(/[｜|]/).forEach((part) => {
+        const eq = String(part || '').match(/^([^＝=:]+)[=：:]([\s\S]*)$/);
+        if (eq) remember(eq[1], eq[2]);
+    });
+    lines.slice(1).forEach((line) => {
+        const eq = String(line || '').match(/^([^＝=:]+)[=：:]([\s\S]*)$/);
+        if (eq) remember(eq[1], eq[2]);
+    });
+    return { fields, fieldOrder };
+};
+
+const getExtractEditableFieldKeys = (tag, fields = {}, fieldOrder = []) => {
+    const preferred = tag === 'PROP' ? PROP_EXTRACT_FIELD_KEYS : CHAR_EXTRACT_FIELD_KEYS;
+    const keys = [];
+    [...preferred, ...(Array.isArray(fieldOrder) ? fieldOrder : []), ...Object.keys(fields || {})].forEach((key) => {
+        const stable = String(key || '').trim();
+        if (stable && !keys.includes(stable)) keys.push(stable);
+    });
+    return keys;
+};
+
+const serializeTaggedExtractItem = (tag, fields = {}, fieldOrder = []) => {
+    const headerKeys = EXTRACT_HEADER_KEYS[tag] || ['名称'];
+    const preferred = tag === 'PROP' ? PROP_EXTRACT_FIELD_KEYS : CHAR_EXTRACT_FIELD_KEYS;
+    const order = [];
+    [...headerKeys, ...preferred, ...(Array.isArray(fieldOrder) ? fieldOrder : []), ...Object.keys(fields || {})].forEach((key) => {
+        const stable = String(key || '').trim();
+        if (stable && !order.includes(stable)) order.push(stable);
+    });
+    const header = `[${tag}] ${headerKeys.map((key) => `${key}=${String(fields?.[key] ?? '').trim()}`).join('｜')}`;
+    const body = order
+        .filter((key) => !headerKeys.includes(key))
+        .map((key) => `${key}=${String(fields?.[key] ?? '').trim()}`)
+        .join('\n');
+    return [header, body].filter(Boolean).join('\n');
+};
+
+const replaceTaggedExtractItemInSource = (source, tag, oldName, newBlock) => {
+    const items = splitTaggedExtractItems(source, tag);
+    const wanted = normalizeSubjectKey(oldName);
+    let found = false;
+    const nextItems = items.map((item) => {
+        if (wanted && normalizeSubjectKey(item.name) === wanted) {
+            found = true;
+            return { ...item, block: String(newBlock || '').trim() };
+        }
+        return item;
+    }).filter((item) => String(item?.block || '').trim());
+    if (!found && String(newBlock || '').trim()) {
+        nextItems.push({
+            name: extractTaggedItemName(newBlock, tag),
+            block: String(newBlock || '').trim(),
+        });
+    }
+    const inner = nextItems.map((item) => item.block).filter(Boolean).join('\n\n') || '无';
+    return replaceTaggedExtractBlock(source, tag, inner);
+};
+
+const removeTaggedExtractItemInSource = (source, tag, name) => {
+    const wanted = normalizeSubjectKey(name);
+    const nextItems = splitTaggedExtractItems(source, tag).filter((item) => (
+        !wanted || normalizeSubjectKey(item.name) !== wanted
+    ));
+    const inner = nextItems.map((item) => item.block).filter(Boolean).join('\n\n') || '无';
+    return replaceTaggedExtractBlock(source, tag, inner);
+};
+
+const extractTagForRerunEntry = (entry) => {
+    const type = String(entry?.type || '').trim().toLowerCase();
+    if (type === 'character' || entry?.category === 'characters') return 'CHAR';
+    if (type === 'prop' || entry?.category === 'props') return 'PROP';
+    return '';
+};
+
+const applyExtractEntryPatchesToSource = (source, displayEntries, deletedSubjectKeys, originalEntries) => {
+    let next = String(source || '');
+    const deletedMap = (deletedSubjectKeys && typeof deletedSubjectKeys === 'object') ? deletedSubjectKeys : {};
+    (originalEntries || []).forEach((original) => {
+        if (original?.sourceKind !== 'extract') return;
+        const tag = extractTagForRerunEntry(original);
+        if (!tag || !deletedMap[original.key]) return;
+        next = removeTaggedExtractItemInSource(next, tag, original.name);
+    });
+    (displayEntries || []).forEach((entry) => {
+        if (entry?.sourceKind !== 'extract') return;
+        const tag = extractTagForRerunEntry(entry);
+        if (!tag) return;
+        const original = (originalEntries || []).find((item) => item?.key === entry.key);
+        const newBlock = serializeTaggedExtractItem(tag, entry.fields, entry.fieldOrder);
+        if (!newBlock) return;
+        next = replaceTaggedExtractItemInSource(next, tag, original?.name || entry.name, newBlock);
+    });
+    return next;
+};
+
 const filterTaggedExtractByNames = (text, tag, names) => {
     const wanted = new Set(
         (Array.isArray(names) ? names : [names])
@@ -13762,6 +13979,100 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         t,
     ]);
 
+    const persistSceneSplitExtractSource = useCallback(async (nextSceneSplitText) => {
+        const next = String(nextSceneSplitText || '').trim();
+        if (!next) {
+            throw new Error(t('全局统筹提取内容不能为空。', 'Scene-split extract content cannot be empty.'));
+        }
+        abortIfPromptInjectionRisk(next);
+        if (!activeEpisode?.id || !onUpdateEpisodeInfo) return next;
+
+        const stageOutputs = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
+        const stages = (
+            stageOutputs.stages
+            && typeof stageOutputs.stages === 'object'
+            && !Array.isArray(stageOutputs.stages)
+        ) ? stageOutputs.stages : {};
+        const stage1 = (
+            stages.stage1
+            && typeof stages.stage1 === 'object'
+            && !Array.isArray(stages.stage1)
+        ) ? stages.stage1 : { key: 'stage1', outputs: {} };
+        const outputs = (
+            stage1.outputs
+            && typeof stage1.outputs === 'object'
+            && !Array.isArray(stage1.outputs)
+        ) ? stage1.outputs : {};
+        outputs.scene_split = {
+            ...(outputs.scene_split && typeof outputs.scene_split === 'object' ? outputs.scene_split : {}),
+            key: 'scene_split',
+            kind: 'markdown',
+            content: next,
+        };
+        stage1.outputs = outputs;
+        stages.stage1 = stage1;
+        stageOutputs.stages = stages;
+
+        latestStage1NodeOutputsRef.current = {
+            ...latestStage1NodeOutputsRef.current,
+            scene_split: next,
+        };
+
+        const patchExtractsInText = (text) => {
+            let out = String(text || '');
+            if (!out.trim()) return out;
+            if (/\[CHAR_EXTRACT_START/i.test(out) || /\[CHAR\]/i.test(out)) {
+                out = replaceTaggedExtractBlock(out, 'CHAR', takeTaggedExtractInner(next, 'CHAR') || '无');
+            }
+            if (/\[PROP_EXTRACT_START/i.test(out) || /\[PROP\]/i.test(out)) {
+                out = replaceTaggedExtractBlock(out, 'PROP', takeTaggedExtractInner(next, 'PROP') || '无');
+            }
+            return out;
+        };
+
+        let nextAdaptation = String(adaptationText || activeEpisode?.ai_scene_analysis_adaptation || '');
+        if (hasAssetRerunExtractSignals(nextAdaptation)) {
+            nextAdaptation = patchExtractsInText(nextAdaptation);
+        }
+
+        let nextRaw = String(latestStage1RawTextRef.current || '');
+        if (hasAssetRerunExtractSignals(nextRaw)) {
+            latestStage1RawTextRef.current = patchExtractsInText(nextRaw);
+        } else if (hasAssetRerunExtractSignals(next)) {
+            latestStage1RawTextRef.current = next;
+        }
+
+        let nextResult = String(activeEpisode?.ai_scene_analysis_result || '');
+        if (hasAssetRerunExtractSignals(nextResult)) {
+            nextResult = patchExtractsInText(nextResult);
+        }
+
+        const payload = {
+            ai_stage_outputs: JSON.stringify(stageOutputs, null, 2),
+        };
+        if (nextAdaptation.trim()) {
+            payload.ai_scene_analysis_adaptation = nextAdaptation.trim();
+            setAdaptationText(nextAdaptation.trim());
+        }
+        if (nextResult.trim() && nextResult !== String(activeEpisode?.ai_scene_analysis_result || '')) {
+            payload.ai_scene_analysis_result = nextResult.trim();
+        }
+        await onUpdateEpisodeInfo(activeEpisode.id, payload);
+        onLog?.(t('已保存角色/道具提取描述。', 'Saved character/prop extract descriptions.'), 'success');
+        return next;
+    }, [
+        abortIfPromptInjectionRisk,
+        activeEpisode?.ai_scene_analysis_adaptation,
+        activeEpisode?.ai_scene_analysis_result,
+        activeEpisode?.ai_stage_outputs,
+        activeEpisode?.id,
+        adaptationText,
+        onLog,
+        onUpdateEpisodeInfo,
+        parseStageOutputsObject,
+        t,
+    ]);
+
     const hasUsableSubjectIndexRows = useCallback((candidateText) => {
         const candidate = String(candidateText || '').trim();
         if (!candidate) return false;
@@ -14000,6 +14311,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             return;
         }
+        if (stableKind === 'char_extract' || stableKind === 'prop_extract') {
+            const tag = stableKind === 'char_extract' ? 'CHAR' : 'PROP';
+            const source = String(
+                currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content
+                || latestStage1NodeOutputsRef.current?.scene_split
+                || activeEpisode?.ai_scene_analysis_result
+                || adaptationText
+                || ''
+            ).trim();
+            const content = takeTaggedExtractBlock(source, tag)
+                || `[${tag}_EXTRACT_START]\n无\n[${tag}_EXTRACT_END]`;
+            setStageArtifactEditModal({
+                open: true,
+                kind: stableKind,
+                titleZh: tag === 'CHAR' ? '角色提取描述' : '道具提取描述',
+                titleEn: tag === 'CHAR' ? 'Character Extract' : 'Prop Extract',
+                hintZh: '编辑全局统筹角色/道具提取描述后保存，再重跑对应资产生成。名称须与提取块 `名称=` 保持一致。',
+                hintEn: 'Edit scene-split character/prop extract descriptions, save, then rerun that asset category. Keep `名称=` identical to the extract name.',
+                content,
+                editing: false,
+                saving: false,
+                sceneId: '',
+                scenes: [],
+                headers: [],
+                fields: {},
+            });
+            return;
+        }
         if (['scene_split', 'environment_plan', 'scene_subskills'].includes(stableKind)) {
             const content = String(
                 currentStageOutputs?.stages?.stage1?.outputs?.[stableKind]?.content
@@ -14115,6 +14454,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }, [
         activeEpisode,
+        adaptationText,
         buildSceneBeatsEditScenes,
         currentStageOutputs,
         parseSceneBeatsFieldsFromMarkdown,
@@ -14185,6 +14525,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             if (kind === 'script_opt') {
                 await persistAdaptedScriptEdit(content);
+            } else if (kind === 'char_extract' || kind === 'prop_extract') {
+                const tag = kind === 'char_extract' ? 'CHAR' : 'PROP';
+                const base = String(
+                    latestStage1NodeOutputsRef.current?.scene_split
+                    || currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content
+                    || activeEpisode?.ai_scene_analysis_result
+                    || adaptationText
+                    || content
+                    || ''
+                ).trim();
+                const nextSceneSplit = replaceTaggedExtractBlock(
+                    base,
+                    tag,
+                    normalizeExtractReplacementInner(content, tag)
+                );
+                await persistSceneSplitExtractSource(nextSceneSplit);
             } else if (['scene_split', 'environment_plan', 'scene_subskills'].includes(kind)) {
                 const stageOutputs = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
                 const stages = (
@@ -14312,14 +14668,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }, [
         abortIfPromptInjectionRisk,
+        adaptationText,
         buildSceneBeatsMarkdownFromFields,
         activeEpisode?.ai_stage_outputs,
         activeEpisode?.id,
+        currentStageOutputs,
         extractPureSubjectIndexText,
         parseSceneBeatsFieldsFromMarkdown,
         parseStageOutputsObject,
         persistAdaptedScriptEdit,
         persistSceneMarkdownPatch,
+        persistSceneSplitExtractSource,
         persistSubjectIndexEdit,
         onUpdateEpisodeInfo,
         resolveScriptOptBeatsContent,
@@ -27896,7 +28255,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const resolveAssetRerunSourceText = useCallback(() => {
         const liveRaw = String(latestStage1RawTextRef.current || '').trim();
         const sceneSplit = String(
-            getStageOutputContent('stage1', 'scene_split')
+            latestStage1NodeOutputsRef.current?.scene_split
+            || getStageOutputContent('stage1', 'scene_split')
             || activeEpisode?.ai_scene_analysis_result
             || (textHasTaggedExtractItems(liveRaw, 'CHAR') || textHasTaggedExtractItems(liveRaw, 'PROP') ? liveRaw : '')
             || ''
@@ -28454,12 +28814,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!source) return [];
         const entries = [];
         const seen = new Set();
-        const pushEntry = ({ name, type, category, targetEntityTypes, sourceLine, sourceBlock, subjectNo }) => {
+        const pushEntry = ({ name, type, category, targetEntityTypes, sourceLine, sourceBlock, subjectNo, fields, fieldOrder }) => {
             const displayName = String(name || '').trim();
             if (!displayName || isDummySubject(displayName)) return;
             const key = `${category}:${normalizeSubjectKey(displayName) || displayName}`;
             if (seen.has(key)) return;
             seen.add(key);
+            const parsedFields = (fields && typeof fields === 'object') ? { ...fields } : {};
+            if (!parsedFields.名称) parsedFields.名称 = displayName;
             entries.push({
                 key,
                 subjectNo: String(subjectNo || '').trim(),
@@ -28467,18 +28829,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 type,
                 category,
                 targetEntityTypes,
-                fields: {
-                    subject_type: type,
-                    subject_name_exact: displayName,
-                },
-                fieldOrder: ['subject_type', 'subject_name_exact'],
+                fields: parsedFields,
+                fieldOrder: Array.isArray(fieldOrder) && fieldOrder.length
+                    ? fieldOrder
+                    : getExtractEditableFieldKeys(category === 'props' ? 'PROP' : 'CHAR', parsedFields),
                 sourceText: String(sourceBlock || sourceLine || '').trim(),
                 sourceLine: String(sourceLine || displayName).trim(),
                 sourceKind: 'extract',
+                sourceBlock: String(sourceBlock || sourceLine || '').trim(),
             });
         };
 
         splitTaggedExtractItems(source, 'CHAR').forEach((item, idx) => {
+            const parsed = parseTaggedExtractItemFields(item.block, 'CHAR');
             pushEntry({
                 name: item.name,
                 type: 'character',
@@ -28487,9 +28850,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 sourceLine: item.block.split('\n')[0],
                 sourceBlock: item.block,
                 subjectNo: `C${idx + 1}`,
+                fields: parsed.fields,
+                fieldOrder: parsed.fieldOrder,
             });
         });
         splitTaggedExtractItems(source, 'PROP').forEach((item, idx) => {
+            const parsed = parseTaggedExtractItemFields(item.block, 'PROP');
             pushEntry({
                 name: item.name,
                 type: 'prop',
@@ -28498,6 +28864,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 sourceLine: item.block.split('\n')[0],
                 sourceBlock: item.block,
                 subjectNo: `P${idx + 1}`,
+                fields: parsed.fields,
+                fieldOrder: parsed.fieldOrder,
             });
         });
         collectMainEnvironmentNames(source).forEach((name, idx) => {
@@ -29311,6 +29679,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const nextFields = (patch.fields && typeof patch.fields === 'object')
                 ? patch.fields
                 : ((originalEntry.fields && typeof originalEntry.fields === 'object') ? originalEntry.fields : {});
+            if (originalEntry.sourceKind === 'extract') {
+                const tag = extractTagForRerunEntry(originalEntry);
+                const nextName = String(nextFields.名称 || originalEntry.name || '').trim();
+                if (!tag || !nextName) return acc;
+                const fieldOrder = Array.isArray(patch.fieldOrder) && patch.fieldOrder.length
+                    ? patch.fieldOrder
+                    : (Array.isArray(originalEntry.fieldOrder) ? originalEntry.fieldOrder : getExtractEditableFieldKeys(tag, nextFields));
+                const sourceText = serializeTaggedExtractItem(tag, nextFields, fieldOrder)
+                    || String(originalEntry.sourceBlock || originalEntry.sourceLine || '').trim();
+                if (!sourceText) return acc;
+                acc.push({
+                    ...originalEntry,
+                    name: nextName,
+                    fields: nextFields,
+                    fieldOrder,
+                    sourceText,
+                    sourceBlock: sourceText,
+                    sourceLine: sourceText.split('\n')[0] || originalEntry.sourceLine,
+                    sourceKind: 'extract',
+                });
+                return acc;
+            }
             const nextType = String(getSubjectFieldValueByAliases(nextFields, ['subject_type', 'type', '类型', '类别']) || originalEntry.type || '').trim();
             const nextSubjectNo = String(getSubjectFieldValueByAliases(nextFields, ['subject_no', 'id', '编号']) || originalEntry.subjectNo || '').trim();
             const nextName = String(
@@ -29411,7 +29801,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return phase2RerunDisplayEntries.filter((item) => {
             if ((mode === 'category' || mode === 'single') && category && item.category !== category) return false;
             if (!query) return true;
-            return [item.subjectNo, item.name, item.type, item.sourceLine]
+            return [item.subjectNo, item.name, item.type, item.sourceLine, item.fields?.外形, item.fields?.定位, item.fields?.衣着]
                 .some((value) => String(value || '').toLowerCase().includes(query));
         });
     }, [phase2RerunDisplayEntries, phase2RerunModal.category, phase2RerunModal.mode, phase2RerunModal.query]);
@@ -29556,15 +29946,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const beginEditPhase2RerunEntry = useCallback((entry) => {
         if (!entry?.key) return;
         let fields = (entry?.fields && typeof entry.fields === 'object') ? { ...entry.fields } : {};
-        const sourceSnippet = String(entry?.sourceBlock || entry?.sourceLine || '').trim();
-        if (sourceSnippet) {
+        let fieldOrder = Array.isArray(entry?.fieldOrder) ? [...entry.fieldOrder] : [];
+        const sourceSnippet = String(entry?.sourceBlock || entry?.sourceText || entry?.sourceLine || '').trim();
+        if (entry?.sourceKind === 'extract') {
+            const tag = extractTagForRerunEntry(entry);
+            if (tag && sourceSnippet) {
+                const parsed = parseTaggedExtractItemFields(sourceSnippet, tag);
+                fields = { ...parsed.fields, ...fields };
+                fieldOrder = getExtractEditableFieldKeys(tag, fields, parsed.fieldOrder.length ? parsed.fieldOrder : fieldOrder);
+            }
+        } else if (sourceSnippet) {
             const reparsedEntries = parseSubjectIndexEntriesForAssetRerun(sourceSnippet);
             const reparsed = reparsedEntries.find((item) => item.key === entry.key) || reparsedEntries[0];
             if (reparsed?.fields && typeof reparsed.fields === 'object') {
                 fields = { ...reparsed.fields, ...fields };
             }
+            fieldOrder = [...SUBJECT_INDEX_STANDARD_HEADERS];
+            fields = normalizeSubjectIndexEntryFields(fields, entry);
         }
-        const normalizedFields = normalizeSubjectIndexEntryFields(fields, entry);
         setPhase2RerunModal((prev) => ({
             ...prev,
             // Keep single-mode selection in sync with the entry being edited.
@@ -29573,8 +29972,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             subjectEdits: {
                 ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}),
                 [entry.key]: {
-                    fields: normalizedFields,
-                    fieldOrder: [...SUBJECT_INDEX_STANDARD_HEADERS],
+                    fields,
+                    fieldOrder,
                 },
             },
         }));
@@ -29606,6 +30005,50 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!entryKey) return;
         const draft = phase2RerunModal?.subjectEdits?.[entryKey] || {};
         const fields = (draft.fields && typeof draft.fields === 'object') ? draft.fields : {};
+        const displayEntry = (phase2RerunDisplayEntries || []).find((item) => item.key === entryKey);
+        const originalEntry = (phase2RerunSubjectEntries || []).find((item) => item.key === entryKey);
+        if (displayEntry?.sourceKind === 'extract' || originalEntry?.sourceKind === 'extract') {
+            const tag = extractTagForRerunEntry(displayEntry || originalEntry);
+            const nextName = String(fields.名称 || displayEntry?.name || originalEntry?.name || '').trim();
+            if (!nextName) {
+                alert(t('实体名称不能为空。', 'Entity name cannot be empty.'));
+                return;
+            }
+            if (!tag) {
+                alert(t('实体类型无效，请选择可识别类型。', 'Invalid entity type. Please choose a supported type.'));
+                return;
+            }
+            setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }));
+            setIsSavingPhase2RerunSubjectIndex(true);
+            try {
+                const sceneSplitBase = String(
+                    latestStage1NodeOutputsRef.current?.scene_split
+                    || getStageOutputContent('stage1', 'scene_split')
+                    || resolveAssetRerunSourceText()
+                    || ''
+                ).trim();
+                const newBlock = serializeTaggedExtractItem(tag, fields, draft.fieldOrder || displayEntry?.fieldOrder);
+                const patched = replaceTaggedExtractItemInSource(
+                    sceneSplitBase,
+                    tag,
+                    originalEntry?.name || displayEntry?.name || nextName,
+                    newBlock
+                );
+                await persistSceneSplitExtractSource(patched);
+                setPhase2RerunModal((prev) => {
+                    const nextEdits = { ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}) };
+                    delete nextEdits[entryKey];
+                    return { ...prev, subjectEdits: nextEdits, editingSubjectKey: '' };
+                });
+            } catch (error) {
+                console.error('Failed to persist extract edit from asset rerun modal:', error);
+                onLog?.(t(`保存提取描述失败：${error?.message || error}`, `Failed to save extract description: ${error?.message || error}`), 'error');
+                alert(t('保存失败，请重试。', 'Save failed. Please try again.'));
+            } finally {
+                setIsSavingPhase2RerunSubjectIndex(false);
+            }
+            return;
+        }
         const nextName = String(getSubjectFieldValueByAliases(fields, ['subject_name_zh', 'subject_name_exact', 'subject_name_en', 'subject_name', 'name', '名称', '名字'])).trim();
         const nextType = String(getSubjectFieldValueByAliases(fields, ['subject_type', 'type', '类型', '类别'])).trim();
         if (!nextName) {
@@ -29630,7 +30073,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } finally {
             setIsSavingPhase2RerunSubjectIndex(false);
         }
-    }, [getSubjectFieldValueByAliases, mapSubjectIndexTypeToRerunTarget, onLog, persistPhase2RerunSubjectIndexChanges, phase2RerunModal?.subjectEdits, t]);
+    }, [
+        getStageOutputContent,
+        getSubjectFieldValueByAliases,
+        mapSubjectIndexTypeToRerunTarget,
+        onLog,
+        persistPhase2RerunSubjectIndexChanges,
+        persistSceneSplitExtractSource,
+        phase2RerunDisplayEntries,
+        phase2RerunModal?.subjectEdits,
+        phase2RerunSubjectEntries,
+        resolveAssetRerunSourceText,
+        t,
+    ]);
 
     const beginAddPhase2RerunEntry = useCallback(() => {
         const category = String(phase2RerunModal.category || 'characters').trim() || 'characters';
@@ -29839,7 +30294,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         const mode = String(phase2RerunModal.mode || 'all');
-        const extractSourceText = String(resolveAssetRerunSourceText() || '').trim();
+        let extractSourceText = String(resolveAssetRerunSourceText() || '').trim();
         const legacyIndexText = String(resolveSubjectIndexTextForAssetRerun() || '').trim();
         const isExtractDriven = (phase2RerunDisplayEntries || []).some((item) => item.sourceKind === 'extract')
             || Boolean(extractSourceText);
@@ -29852,6 +30307,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const hasEdits = Object.keys(phase2RerunModal?.subjectEdits || {}).length > 0;
         const hasDeletions = Object.keys(phase2RerunModal?.deletedSubjectKeys || {}).length > 0;
         const resolvedEditedText = editedSubjectIndexText || legacyIndexText;
+
+        if (isExtractDriven && (hasEdits || hasDeletions)) {
+            const sceneSplitBase = String(
+                latestStage1NodeOutputsRef.current?.scene_split
+                || getStageOutputContent('stage1', 'scene_split')
+                || extractSourceText
+                || ''
+            ).trim();
+            const patchedSplit = applyExtractEntryPatchesToSource(
+                sceneSplitBase,
+                phase2RerunDisplayEntries,
+                phase2RerunModal?.deletedSubjectKeys,
+                phase2RerunSubjectEntries,
+            );
+            const patchedMerged = applyExtractEntryPatchesToSource(
+                extractSourceText || patchedSplit,
+                phase2RerunDisplayEntries,
+                phase2RerunModal?.deletedSubjectKeys,
+                phase2RerunSubjectEntries,
+            );
+            try {
+                await persistSceneSplitExtractSource(patchedSplit);
+            } catch (error) {
+                console.warn('Failed to persist extract edits before asset rerun:', error);
+                onLog?.(t(`保存提取描述失败：${error?.message || error}`, `Failed to save extract descriptions: ${error?.message || error}`), 'warning');
+            }
+            extractSourceText = patchedMerged;
+        }
 
         let retryOptions = {
             extractSourceText,
@@ -29912,9 +30395,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         buildFullSubjectIndexTextFromEntries,
         filterExtractSourceForSingleEntity,
         filteredPhase2RerunSubjectEntries,
+        getStageOutputContent,
         handleRetryPhase2,
         onLog,
+        persistSceneSplitExtractSource,
         persistSubjectIndexEdit,
+        phase2RerunSubjectEntries,
         phase2RerunDisplayEntries,
         phase2RerunModal.category,
         phase2RerunModal.deletedSubjectKeys,
@@ -30677,6 +31163,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         disabled: !catJson,
                         loading: false,
                     },
+                    ...((cat.key === 'characters' || cat.key === 'props') ? [{
+                        key: `edit-stage3-${cat.key}`,
+                        label: t('编辑描述', 'Edit Description'),
+                        icon: 'edit',
+                        onClick: () => openStageArtifactEditModal(cat.key === 'characters' ? 'char_extract' : 'prop_extract'),
+                        disabled: isRetryingPhase2,
+                        loading: false,
+                    }] : []),
                     {
                         key: `restart-stage3-${cat.key}`,
                         label: t(cat.btnZh, cat.btnEn),
@@ -30691,9 +31185,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         }),
                         disabled: isRetryingPhase2 || (
                             cat.key === 'characters'
-                                ? !hasCharExtractForAssetDesign()
+                                ? !(hasCharExtractForAssetDesign() || hasPersistedCharacterAssetDesign())
                                 : cat.key === 'props'
-                                    ? !hasPropExtractForAssetDesign()
+                                    ? !(hasPropExtractForAssetDesign() || hasPersistedPropAssetDesign())
                                     : !(hasEnvironmentPlanForAssetDesign() || /\[SCENE_ENV_IDENT_START/i.test(String(resolveAssetRerunSourceText() || '')) || /【主环境】/.test(String(resolveAssetRerunSourceText() || '')))
                         ),
                         loading: isRetryingPhase2 && (
@@ -30708,7 +31202,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
 
         return cards;
-    }, [activeEpisode?.ai_entity_design_result, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, hasAssetGenerationPrerequisite, hasCharExtractForAssetDesign, hasEnvironmentPlanForAssetDesign, hasPropExtractForAssetDesign, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, openPhase2RerunModal, reportAnalysisPanelNotice, resolveAssetRerunSourceText, t]);
+    }, [activeEpisode?.ai_entity_design_result, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, hasAssetGenerationPrerequisite, hasCharExtractForAssetDesign, hasEnvironmentPlanForAssetDesign, hasPersistedCharacterAssetDesign, hasPersistedPropAssetDesign, hasPropExtractForAssetDesign, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, openPhase2RerunModal, openStageArtifactEditModal, reportAnalysisPanelNotice, resolveAssetRerunSourceText, t]);
 
     void stage1StageCards;
     void stage2StageCards;
@@ -31279,16 +31773,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 unlocked: false,
                                 waitingInventory: true,
                             };
+                            const importedCount = Number(state.completeness?.importedCount || 0);
+                            const hasExtractForCategory = spec.key === 'character'
+                                ? hasCharExtractForAssetDesign()
+                                : spec.key === 'prop'
+                                    ? hasPropExtractForAssetDesign()
+                                    : (hasEnvironmentPlanForAssetDesign() || hasAssetGenerationPrerequisite);
                             const canRerunCategory = Boolean(
                                 (
                                     spec.key === 'character'
-                                        ? hasCharExtractForAssetDesign()
+                                        ? (hasExtractForCategory || importedCount > 0 || hasPersistedCharacterAssetDesign() || sceneSplitDone)
                                         : spec.key === 'prop'
-                                            ? hasPropExtractForAssetDesign()
-                                            : (hasEnvironmentPlanForAssetDesign() || hasAssetGenerationPrerequisite)
+                                            ? (hasExtractForCategory || importedCount > 0 || hasPersistedPropAssetDesign() || sceneSplitDone)
+                                            : (hasExtractForCategory || environmentPlanDone)
                                 )
                                 && !state.active
                                 && !isRetryingPhase2
+                            );
+                            const canEditExtract = Boolean(
+                                (spec.key === 'character' || spec.key === 'prop')
+                                && !state.active
+                                && (
+                                    hasExtractForCategory
+                                    || sceneSplitDone
+                                    || String(
+                                        latestStage1NodeOutputsRef.current?.scene_split
+                                        || getStageOutputContent('stage1', 'scene_split')
+                                        || ''
+                                    ).trim()
+                                )
                             );
                             const canImportCategory = Boolean(canImportAssets && !state.active);
                             const statusLabel = state.active
@@ -31342,27 +31855,40 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         </span>
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
                                             {renderImportButton('assets', canImportCategory)}
-                                            {state.waitingInventory ? null : (
+                                            {(spec.key === 'character' || spec.key === 'prop') ? (
                                                 <button
                                                     type="button"
-                                                    onClick={() => openPhase2RerunModal({
-                                                        mode: 'category',
-                                                        category: spec.category,
-                                                    })}
-                                                    disabled={!canRerunCategory}
-                                                    className={state.failed
-                                                        ? 'text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50'
-                                                        : diagnosticBtnClass}
-                                                    title={spec.key === 'environment'
-                                                        ? t('重生主环境（保留衍生环境和分镜）', 'Regenerate main environments; keep derived ENVs and storyboards')
-                                                        : t(
-                                                            `重跑${getAnalysisStageLabel(spec.stepKey, t)}`,
-                                                            `Rerun ${getAnalysisStageLabel(spec.stepKey, t)}`
-                                                        )}
+                                                    onClick={() => openStageArtifactEditModal(
+                                                        spec.key === 'character' ? 'char_extract' : 'prop_extract'
+                                                    )}
+                                                    disabled={!canEditExtract}
+                                                    className={diagnosticBtnClass}
+                                                    title={spec.key === 'character'
+                                                        ? t('编辑角色提取描述，保存后再生成资产', 'Edit character extract descriptions, then generate assets')
+                                                        : t('编辑道具提取描述，保存后再生成资产', 'Edit prop extract descriptions, then generate assets')}
                                                 >
-                                                    {t('重跑', 'Rerun')}
+                                                    {t('编辑', 'Edit')}
                                                 </button>
-                                            )}
+                                            ) : null}
+                                            <button
+                                                type="button"
+                                                onClick={() => openPhase2RerunModal({
+                                                    mode: 'category',
+                                                    category: spec.category,
+                                                })}
+                                                disabled={!canRerunCategory}
+                                                className={state.failed
+                                                    ? 'text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50'
+                                                    : diagnosticBtnClass}
+                                                title={spec.key === 'environment'
+                                                    ? t('重生主环境（保留衍生环境和分镜）', 'Regenerate main environments; keep derived ENVs and storyboards')
+                                                    : t(
+                                                        `重跑${getAnalysisStageLabel(spec.stepKey, t)}`,
+                                                        `Rerun ${getAnalysisStageLabel(spec.stepKey, t)}`
+                                                    )}
+                                            >
+                                                {t('重跑', 'Rerun')}
+                                            </button>
                                             {spec.key === 'environment' && !state.waitingInventory ? (
                                                 <button
                                                     type="button"
@@ -32911,7 +33437,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         {t('将仅重跑所选分类', 'Only the selected category will be regenerated')}
                                     </div>
                                     <div className="mt-1 text-xs text-sky-100/75">
-                                        {t('将按所选分类，从全局统筹提取或环境规划重跑资产设计。', 'The selected category will be regenerated from scene-split extracts or the environment plan.')}
+                                        {t('将按所选分类，从全局统筹提取或环境规划重跑资产设计。可先点编辑修改角色/道具描述，再确认重跑。', 'The selected category will be regenerated from scene-split extracts or the environment plan. Edit character/prop descriptions first, then confirm rerun.')}
                                     </div>
                                 </div>
                             )}
@@ -33016,10 +33542,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             const active = isEditing
                                                 || (isSingleMode && phase2RerunModal.subjectKey === item.key);
                                             const draft = phase2RerunModal.subjectEdits?.[item.key] || {};
+                                            const isExtractEntry = item.sourceKind === 'extract';
+                                            const extractTag = isExtractEntry ? extractTagForRerunEntry(item) : '';
                                             const draftFields = (draft.fields && typeof draft.fields === 'object')
                                                 ? draft.fields
-                                                : normalizeSubjectIndexEntryFields(item.fields, item);
-                                            const editableFieldKeys = SUBJECT_INDEX_STANDARD_HEADERS;
+                                                : (isExtractEntry
+                                                    ? (item.fields || {})
+                                                    : normalizeSubjectIndexEntryFields(item.fields, item));
+                                            const editableFieldKeys = isExtractEntry
+                                                ? getExtractEditableFieldKeys(extractTag, draftFields, draft.fieldOrder || item.fieldOrder)
+                                                : SUBJECT_INDEX_STANDARD_HEADERS;
                                             return (
                                                 <div
                                                     key={item.key}
@@ -33042,17 +33574,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                             </div>
                                                         </button>
                                                         <div className="flex items-center gap-1">
-                                                            {item.sourceKind !== 'extract' && (
                                                             <button
                                                                 type="button"
                                                                 onClick={() => beginEditPhase2RerunEntry(item)}
                                                                 className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-amber-400/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
-                                                                title={t('编辑 Subject Index 字段', 'Edit Subject Index fields')}
+                                                                title={isExtractEntry
+                                                                    ? t('编辑提取描述后重跑资产生成', 'Edit extract description, then regenerate the asset')
+                                                                    : t('编辑 Subject Index 字段', 'Edit Subject Index fields')}
                                                             >
                                                                 <Edit3 className="w-3.5 h-3.5" />
                                                                 <span className="text-[11px] font-semibold">{t('编辑', 'Edit')}</span>
                                                             </button>
-                                                            )}
                                                             <button
                                                                 type="button"
                                                                 onClick={() => handleDeletePhase2RerunEntry(item)}
@@ -33064,23 +33596,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                             </button>
                                                         </div>
                                                     </div>
-                                                    <div className="mt-1 text-[11px] text-white/45 truncate">{item.sourceLine}</div>
+                                                    <div className="mt-1 text-[11px] text-white/45 truncate">
+                                                        {isExtractEntry
+                                                            ? (String(item.fields?.外形 || item.fields?.定位 || item.sourceLine || '').trim() || item.sourceLine)
+                                                            : item.sourceLine}
+                                                    </div>
                                                     {isEditing && (
                                                         <div className="mt-2 rounded-md border border-white/10 bg-black/20 p-2 space-y-2">
                                                             <div className="text-[11px] text-white/55">
-                                                                {t('可编辑 Subject Index 标准字段（编号、类型、中英文名、基准实体、依赖引用、实体属性、剧本覆盖）。', 'Edit standard Subject Index fields: no, type, names, base entity, dependency, attributes, coverage.')}
+                                                                {isExtractEntry
+                                                                    ? t('可编辑全局统筹提取描述（外形、衣着、定位等）。保存后写入提取块，再确认重跑即可按新描述生成资产。', 'Edit scene-split extract fields (appearance, costume, positioning). Saving writes the extract; confirm rerun to generate assets from the new description.')
+                                                                    : t('可编辑 Subject Index 标准字段（编号、类型、中英文名、基准实体、依赖引用、实体属性、剧本覆盖）。', 'Edit standard Subject Index fields: no, type, names, base entity, dependency, attributes, coverage.')}
                                                             </div>
                                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                                                 {editableFieldKeys.map((fieldKey) => {
                                                                     const stableKey = String(fieldKey || '').trim();
                                                                     if (!stableKey) return null;
                                                                     const rawValue = String(draftFields[stableKey] ?? '');
-                                                                    const fieldLabel = SUBJECT_INDEX_FIELD_LABELS[stableKey];
+                                                                    const fieldLabel = isExtractEntry
+                                                                        ? EXTRACT_FIELD_LABELS[stableKey]
+                                                                        : SUBJECT_INDEX_FIELD_LABELS[stableKey];
                                                                     const labelText = fieldLabel ? t(fieldLabel.zh, fieldLabel.en) : stableKey;
                                                                     const isLongText = rawValue.length > 80
-                                                                        || SUBJECT_INDEX_LONG_TEXT_FIELDS.has(stableKey)
+                                                                        || (isExtractEntry
+                                                                            ? EXTRACT_LONG_TEXT_FIELDS.has(stableKey)
+                                                                            : SUBJECT_INDEX_LONG_TEXT_FIELDS.has(stableKey))
                                                                         || /attributes|coverage|dependency/i.test(stableKey);
-                                                                    const spanClass = (stableKey === 'entity_attributes' || stableKey === 'script_entity_coverage')
+                                                                    const spanClass = (stableKey === 'entity_attributes' || stableKey === 'script_entity_coverage' || EXTRACT_LONG_TEXT_FIELDS.has(stableKey))
                                                                         ? 'sm:col-span-2'
                                                                         : '';
                                                                     return (
