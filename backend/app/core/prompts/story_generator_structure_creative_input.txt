@@ -1,7 +1,7 @@
 You are a professional TV/film story architect.
 
 Task:
-Using the user's wild brainstorm, extracted key elements, and reference search snippets, structure the story into standard Creative Input blocks I1-I9 for story framework generation. The PRIMARY deliverable quality bar is climax and iconic scenes (高潮与名场面): I7a and related beats must feel cinematic, specific, and production-ready.
+Using the user's wild brainstorm, extracted key elements, and reference search snippets, structure the story into standard Creative Input blocks I1-I10 for story framework generation. The PRIMARY deliverable quality bars are: (1) I10 classic-work plot framework with named works and reusable content; (2) climax and iconic scenes (高潮与名场面) in I7a — I7a and related beats must feel cinematic, specific, and production-ready.
 
 Rules:
 - Output ONLY a valid JSON object. No markdown, no code fences, no explanations.
@@ -13,10 +13,13 @@ Rules:
   2) memorable dialogue and verbal hooks (经典对白/台词)
   3) action, blocking, and physical beats (动作/走位/肢体冲突)
   4) emotional peak staging and iconic set-pieces (高潮调度/名场面)
-- Prioritize filling I7a (climax), I6c (turning_points), and I6b (development) with vivid, shootable detail drawn from references + brainstorm.
+  5) a named classic work as the **plot-logic** spine (cross-style transfer allowed), plus auxiliary classics (文学/影视/游戏)
+- Prioritize filling I10 (classic framework), I7a (climax), I6c (turning_points), and I6b (development) with vivid, shootable detail drawn from references + brainstorm.
 - I1 (logline) = high-concept hook only (unique hook + dilemma/direction), NOT theme (I2) or full conflict detail (I3).
 - Do not duplicate the same sentence across multiple keys; place each idea in its best-fit block.
 - If a block is missing in the input, infer conservatively from context + references; use "" only when truly unknowable.
+- I10 is required whenever the brainstorm has enough conflict/beat signal. Never write only a genre label ("像悬疑片"). Name real works.
+- **Cross-style transfer (硬约束)**：I10 借的是剧情逻辑，不是原作皮相。鼓励跨时代/跨类型/跨媒介（现代剧逻辑用于古代剧、职场用于宫廷、科幻用于仙侠、游戏任务链用于连续剧）。须写清「原作逻辑 → 本剧转译」。禁止因风格不同而弃用强骨架；禁止把原作服装/时代/特效原样搬进本剧。
 
 The JSON object MUST contain exactly these keys (all string values):
 - "logline": I1 Logline / high concept hook.
@@ -27,13 +30,14 @@ The JSON object MUST contain exactly these keys (all string values):
 - "setup": I6a Opening and inciting incident.
 - "development": I6b Mid escalation (build pressure toward iconic scenes).
 - "turning_points": I6c Turning points and midpoint (cite reference-style reversals when useful).
-- "climax": I7a Climax and must-have iconic scenes. Must integrate visual framing, key dialogue lines, and action beats where relevant. This is the most important field.
+- "climax": I7a Climax and must-have iconic scenes. Must integrate visual framing, key dialogue lines, and action beats where relevant. This is a primary field.
 - "resolution": I7b Ending and resolution.
 - "suspense": I8a Core suspense questions.
 - "foreshadowing": I8b Must-keep foreshadowing and constraints.
+- "classic_framework": I10 Classic works framework. MUST (a) pick ONE primary classic (literature / film / TV / game) as the **plot-logic spine** — may differ in era/genre/style from this story; (b) list 2–4 auxiliary classics for complementary set-piece / VFX / action / dialogue **functions**; (c) for EVERY named work write: 剧情逻辑 + 桥段功能 + 可转译的特效/风格/动作/对白机制 + **转译到本剧**. Format: 主框架：《作品》（原媒介/原风格）— 剧情逻辑：…；桥段：…；特效机制：…；动作机制：…；对白机制：…；转译：原风格→本剧风格，例「日记误导→密折绣谱 / 媒体对质→朝堂当众对质」。辅助：同格式。Forbidden: unnamed tropes; same-style-only picks; copying source costumes/era/VFX literally; "类似某某类型".
 - "extra_notes": I9 leftover uncategorized fragments (may be empty).
 
-Keep each value concise but vivid (1-5 sentences). I7a may be slightly longer when needed to capture名场面细节.
+Keep each value concise but vivid (1-5 sentences). I7a and I10 may be slightly longer when needed to capture名场面细节 and named-work mappings.
 
 Input:
 {creative_text}

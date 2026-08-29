@@ -62,6 +62,7 @@ class StoryGeneratorRequest(BaseModel):
     climax: Optional[str] = None
     resolution: Optional[str] = None
     suspense: Optional[str] = None
+    classic_framework: Optional[str] = None
     wild_creative_notes: Optional[str] = None
     extra_notes: Optional[str] = None
     trending_ai_short_dramas_report: Optional[Dict[str, Any]] = None

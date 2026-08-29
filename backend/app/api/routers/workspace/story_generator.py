@@ -113,6 +113,7 @@ async def generate_project_story_dna_global(
         f"I8a Core Suspense / 核心悬念: {(req.suspense or '').strip()}\n"
         f"I8b Foreshadowing & Must-Keep / 伏笔与必留元素: {(req.foreshadowing or '').strip()}\n"
         f"I9 Raw Fragments / 自由脑洞补充: {(req.extra_notes or '').strip()}\n"
+        f"I10 Classic Framework / 经典作品框架: {(getattr(req, 'classic_framework', None) or '').strip()}\n"
         f"Wild Creative Notes (天马行空原文，保留溯源): {(getattr(req, 'wild_creative_notes', None) or '').strip()}\n"
     )
 
@@ -745,7 +746,9 @@ async def structure_project_creative_input_to_story_fields(
     extract_user_prompt = (
         f"{project_context}\n"
         f"Wild Creative Brainstorm:\n{creative_text}\n\n"
-        "Extract searchable key elements from the brainstorm, with emphasis on climax moments and iconic scenes."
+        "Extract searchable key elements from the brainstorm, with emphasis on "
+        "(1) a classic plot-LOGIC framework (literature / film / TV / game) that can transfer across era/genre/style, plus auxiliary classics, "
+        "and (2) climax moments and iconic scenes."
     )
     extract_raw = await _run_structure_llm_call(
         db=db,
@@ -785,7 +788,12 @@ async def structure_project_creative_input_to_story_fields(
     user_prompt = (
         f"{project_context}\n"
         f"Wild Creative Brainstorm:\n{creative_text}\n\n"
-        "Use the extracted key elements and reference search snippets to structure I1-I9. Prioritize climax and iconic scenes (I7a) using visual, dialogue, and action reference angles."
+        "Use the extracted key elements and reference search snippets to structure I1-I10. "
+        "I10 must name one primary classic work (literature / film / TV / game) as the PLOT-LOGIC framework, "
+        "plus auxiliary classics. Cross-style transfer is required: keep causal/beat/set-piece logic, "
+        "transcode era/genre/skin (e.g. modern workplace engine → ancient palace drama). "
+        "For each work write reusable logic (core plot, set pieces, VFX function, action, dialogue) and 转译. "
+        "Prioritize climax and iconic scenes (I7a) using visual, dialogue, and action reference angles."
     )
     raw = await _run_structure_llm_call(
         db=db,

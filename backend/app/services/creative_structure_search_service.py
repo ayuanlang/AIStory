@@ -46,6 +46,26 @@ def build_creative_structure_search_queries(key_elements: Dict[str, Any]) -> Lis
         add(f"{term} 动作场面 走位 冲突 影视")
         add(f"{term} iconic climax scene film drama")
 
+    def add_classic_work_pack(work: str) -> None:
+        add(f"{work} 核心剧情 经典桥段 名场面")
+        add(f"{work} 特效 视觉风格 动作场面 经典对白")
+        add(f"{work} plot summary iconic scene style dialogue")
+
+    for work in _as_str_list(key_elements.get("plot_framework_candidates"), limit=3):
+        add_classic_work_pack(work)
+    for work in _as_str_list(key_elements.get("auxiliary_reference_works"), limit=3):
+        add(f"{work} 经典桥段 风格 对白 动作")
+        add(f"{work} iconic set piece style dialogue action")
+    for term in _as_str_list(key_elements.get("plot_framework_search_terms"), limit=4):
+        add(f"{term} 经典小说 电影 电视剧 游戏 剧情框架")
+        add(f"{term} 跨类型 古代 宫廷 仙侠 改编 剧情逻辑")
+        add(f"{term} classic novel film tv game plot framework")
+        add(f"{term} plot structure transplanted period palace xianxia")
+    for term in _as_str_list(key_elements.get("classic_content_search_terms"), limit=3):
+        add(f"{term} 经典作品 核心剧情 桥段 特效 风格")
+        add(f"{term} 剧情逻辑 桥段功能 跨风格转译")
+        add(f"{term} classic work plot set piece vfx style dialogue")
+
     for term in _as_str_list(key_elements.get("iconic_scene_search_terms"), limit=5):
         add_iconic_climax_pack(term)
     for term in _as_str_list(key_elements.get("climax_search_terms"), limit=5):
@@ -120,8 +140,8 @@ def build_creative_structure_search_user_prompt(
     language: str = "",
 ) -> str:
     lines = [
-        "Reference Research Focus: climax and iconic scenes (高潮与名场面) first; then classic visuals, dialogue, action blocking, and trope patterns relevant to the brainstorm.",
-        "When structuring I7a/I6c, synthesize references from multiple angles: image composition, dialogue lines, physical action, emotional peak staging.",
+        "Reference Research Focus: first lock ONE primary classic work as the PLOT-LOGIC framework (literature / film / TV / game). Cross-style transfer is required: modern logic may serve an ancient/palace/xianxia story; do not require same era or visual style. Then auxiliary classics with transferable functions (core plot engine, set-piece function, VFX function, action grammar, dialogue mechanism). Then climax and iconic scenes; then visuals, dialogue, action blocking, and tropes.",
+        "When structuring I10, name real works, extract plot logic (not costumes/era), and write 转译 (source logic → this story's era/style). When structuring I7a/I6c, synthesize image composition, dialogue lines, physical action, emotional peak staging — transcoded to this story, not copied from the source skin.",
         "Consume evidence in priority order: P0 first, then P1, then P2. Prefer Evidence body over URLs.",
         f"Project Title: {project_title or '(none)'}",
         f"Preferred Language: {language or 'zh'}",
@@ -136,6 +156,10 @@ def build_creative_structure_search_user_prompt(
         "climax_moments",
         "tone_style",
         "reference_works",
+        "plot_framework_candidates",
+        "auxiliary_reference_works",
+        "plot_framework_search_terms",
+        "classic_content_search_terms",
         "iconic_scene_search_terms",
         "climax_search_terms",
         "dialogue_search_terms",

@@ -59,6 +59,7 @@ _CREATIVE_INPUT_STRUCTURE_KEYS = [
     "resolution",
     "suspense",
     "foreshadowing",
+    "classic_framework",
     "extra_notes",
 ]
 

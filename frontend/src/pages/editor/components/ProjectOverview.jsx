@@ -285,6 +285,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             resolution: "",
             suspense: "",
             foreshadowing: "",
+            classic_framework: "",
             wild_creative_notes: "",
             extra_notes: "",
         },
@@ -320,6 +321,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         resolution: "",
         suspense: "",
         foreshadowing: "",
+        classic_framework: "",
         wild_creative_notes: "",
         extra_notes: "",
     });
@@ -1365,6 +1367,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     resolution: globalStoryInput.resolution,
                     suspense: globalStoryInput.suspense,
                     foreshadowing: globalStoryInput.foreshadowing,
+                    classic_framework: globalStoryInput.classic_framework,
                     wild_creative_notes: globalStoryInput.wild_creative_notes,
                     extra_notes: globalStoryInput.extra_notes,
                 };
@@ -1691,6 +1694,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             resolution: globalStoryInput.resolution,
             suspense: globalStoryInput.suspense,
             foreshadowing: globalStoryInput.foreshadowing,
+            classic_framework: globalStoryInput.classic_framework,
             wild_creative_notes: globalStoryInput.wild_creative_notes,
             extra_notes: globalStoryInput.extra_notes,
             trending_ai_short_dramas_report: trendingDramasReport,
@@ -1902,7 +1906,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             const structureFields = [
                 'logline', 'theme', 'core_conflict', 'background', 'characters',
                 'setup', 'development', 'turning_points', 'climax', 'resolution',
-                'suspense', 'foreshadowing', 'extra_notes',
+                'suspense', 'foreshadowing', 'classic_framework', 'extra_notes',
             ];
             setGlobalStoryInput(prev => {
                 const next = { ...prev, wild_creative_notes: prev.wild_creative_notes };
@@ -1918,7 +1922,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 ? t(`（已参考 ${snippetCount} 条高潮/名场面/画面/对白/动作检索素材）`, ` (informed by ${snippetCount} climax/iconic-scene reference snippets)`)
                 : '';
             setStoryGenFocusStep('structure_prefill');
-            alert(t('已提取关键要素、检索高潮与名场面参考素材并预填 I1–I9 字段，请重点核对 I7a 高潮名场面。', 'Key elements extracted, climax/iconic references searched, and I1–I9 prefilled. Review I7a climax scenes carefully.') + searchNote);
+            alert(t('已提取关键要素、检索可跨风格转译的经典剧情逻辑与高潮名场面并预填 I1–I10，请重点核对 I10 的作品名、剧情逻辑与转译，以及 I7a 高潮名场面。', 'Key elements extracted, cross-style-transferable plot logic and climax/iconic references searched, and I1–I10 prefilled. Review I10 work names, plot logic + transfer, and I7a climax scenes.') + searchNote);
         } catch (e) {
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
@@ -1961,6 +1965,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 resolution: globalStoryInput.resolution,
                 suspense: globalStoryInput.suspense,
                 foreshadowing: globalStoryInput.foreshadowing,
+                classic_framework: globalStoryInput.classic_framework,
                 wild_creative_notes: globalStoryInput.wild_creative_notes,
                 extra_notes: globalStoryInput.extra_notes,
             };
@@ -3869,7 +3874,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             />
                         </div>
 
-                        {/* Step 2: Structure & Prefill (I1–I9) */}
+                        {/* Step 2: Structure & Prefill (I1–I10) */}
                         <div
                             ref={(el) => { storyGenStepRefs.current.structure_prefill = el; }}
                             className={`sm:col-span-2 rounded-xl border p-4 space-y-4 transition-colors ${storyGenFocusStep === 'structure_prefill' ? 'border-purple-500/40 bg-purple-500/5' : 'border-white/10 bg-white/[0.02]'}`}
@@ -3878,10 +3883,10 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 <div>
                                     <div className="flex items-center gap-2">
                                         <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${structurePrefillReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>2</span>
-                                        <div className="text-sm font-semibold text-white">{t('脑洞标准输入（I1–I9）', 'Creative Input (I1–I9)')}</div>
+                                        <div className="text-sm font-semibold text-white">{t('脑洞标准输入（I1–I10）', 'Creative Input (I1–I10)')}</div>
                                     </div>
                                     <div className="text-xs text-muted-foreground mt-1">
-                                        {t('点「结构化预填」从天马行空自动提取并检索名场面参考，再核对 I1–I9；也可手工填写。', 'Use Structure & Prefill to extract from wild ideas and search iconic references, then review I1–I9; or fill manually.')}
+                                        {t('点「结构化预填」从天马行空自动提取，检索一部经典的剧情逻辑作骨架（可跨风格，如现代逻辑用于古代剧）并配辅助经典，再核对 I1–I10；也可手工填写。', 'Use Structure & Prefill to extract from wild ideas, lock one classic plot-logic spine (cross-style OK, e.g. modern engine → period drama) plus auxiliaries, then review I1–I10; or fill manually.')}
                                     </div>
                                 </div>
                                 <button
@@ -3889,7 +3894,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     onClick={handleStructureCreativeInput}
                                     disabled={isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady}
                                     className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
-                                    title={t('提取关键要素 → 搜索高潮/名场面参考（画面·对白·动作）→ 预填 I1–I9', 'Extract key elements → search climax/iconic references (visual/dialogue/action) → prefill I1–I9')}
+                                    title={t('提取关键要素 → 搜索可跨风格转译的经典剧情逻辑（文学/影视/游戏）与高潮/名场面 → 预填 I1–I10', 'Extract key elements → search cross-style-transferable classic plot logic (lit/film/TV/game) and climax/iconic references → prefill I1–I10')}
                                 >
                                     {isStructuringCreativeInput
                                         ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('检索分析中...', 'Researching...')}</>
@@ -3965,6 +3970,23 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     />
                                 </div>
                             ))}
+                            <div>
+                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('I10 经典作品框架', 'I10 Classic Works Framework')}</label>
+                                <div className="text-[11px] text-muted-foreground/80 mb-0.5">
+                                    {t('一部主框架经典的剧情逻辑（文学/影视/游戏，鼓励跨风格：现代可用于古代）+ 若干辅助作品。须写作品名、剧情逻辑/桥段功能，以及转译到本剧的对应（时代/类型/声口换皮，不搬原作皮相）。', 'One primary classic as plot LOGIC (lit/film/TV/game; cross-style OK: modern engine → period drama) plus auxiliaries. Name each work, extract beat/set-piece functions, and write the transfer into this story — do not copy the source skin.')}
+                                </div>
+                                <div className="text-[11px] text-primary/70 mb-1.5 italic">
+                                    {t('例：主框架：《消失的爱人》（现代电影）— 剧情逻辑：表象恩爱下的证据战与身份反转；桥段功能：日记误导、媒体对质；转译→古代宫斗：密折/绣谱误导、朝堂当众对质。辅助：《肖申克的救赎》— 体制内暗中凿洞式取证 → 转译为冷宫暗藏物证。', 'e.g. Spine: Gone Girl (modern) — logic: evidence war + identity reversal; set-piece functions: diary mislead, media confrontation; transfer → palace drama: secret memorial / embroidery-code mislead, public court confrontation. Aux: Shawshank — covert proof-gathering → hidden evidence in cold palace.')}
+                                </div>
+                                <textarea
+                                    className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                    rows={5}
+                                    value={globalStoryInput.classic_framework || ''}
+                                    onFocus={() => setStoryGenFocusStep('structure_prefill')}
+                                    onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, classic_framework: e.target.value }))}
+                                    placeholder={t('例：主框架：《消失的爱人》（现代）— 剧情逻辑：…；转译→古代宫斗：密折误导 / 朝堂对质。辅助：…', 'e.g. Spine: Gone Girl (modern) — plot logic: …; transfer → palace: secret memorial / court confrontation. Aux: …')}
+                                />
+                            </div>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                 {[
                                     {
