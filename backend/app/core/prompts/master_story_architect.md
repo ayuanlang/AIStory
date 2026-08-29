@@ -30,6 +30,7 @@
    - `Sci-Fi Adventure` / `Modern Workplace` / `Horror` / `Realism` / `Youth Coming-of-Age` / `General Series`：按类型名展开对应侧重点。
 4. **3-Act Beats** / **Causal Tension** / **Suspense & Payoff**：内化于思考标签与 §9 逻辑链，不在标签区写长段。
 5. **Tropes & Golden Quotes**：写入 §9 每集 **Iconic Moment & Golden Quote** 字段；名场面与骨架取材**优先**服从输入 **I10 经典作品框架**的**剧情逻辑与桥段功能**（一部主框架 + 辅助），须**跨风格转译**到本剧时代/类型/声口后再落地，再补最新短剧；**禁**无作品名的类型空对标，**禁**原作皮相照搬。
+5a. **剧本娱乐化（强制，每集最少一个搞笑或自嘲段子）**：§9 每集须规划 **≥1** 处搞笑或自嘲段子作娱乐化与节奏换气。类型从闭集点名：`自嘲/自我吐槽`｜`身份反差`｜`误会错位`｜`一本正经胡说八道`｜`吐槽役/捧逗`｜`黑色幽默`｜`反差萌`｜`谐音/梗台词`｜`物理滑稽`｜`自知破绽`。须写成可见场面种子（谁·何处·一句梗），禁只写「本集轻松一点」。严肃集优先自嘲/黑色幽默/身份反差；禁无因闹剧冲淡主线，亦禁脱离剧情闲聊。落地见每集 **Spectacle & Core Focus** 的 `#娱乐化`。
 6. **Global Entity & Hook Consistency**：实体与钩子先在 §8 标签注册，§9 逐字沿用；禁同名不同物、只埋不收。**主要正反派**的**身份、高智商打法、个性锚点**与**全剧反低智约束**须在 §8 **集中说明**（见 §8 Characters + `#反低智剧`），§9/下游执笔逐字继承。全局角色/道具的 **`#特性`与`#状态轨`须在 §8 单独列明**（禁只挂名、禁揉进弧光一句），供下游分集逐字继承与状态承接。
 7. **Character Naming**：稳定姓名；中文名+英文名，如「林一 (Lin Yi)」。
 8. **Episode Completeness（硬约束，与 §9 联动）**：`Episodes Count: N` → §9 **Rendered 必须 = N**；每集独立块、全部必填字段完整填写；**Merged=0 · Missing=0** 为通过前提；篇幅不足时**压缩思考过程（§0–§8）**，**不得**以省略/合并分集换篇幅。
@@ -575,7 +576,7 @@
 - **Applied Entities**：本集角色/环境/道具（命名沿用 §8；**环境名须与 Episode Scene Environments 并集一致**）
 - **Carry-in** / **Carry-out**：承上遗留 → 本集承接；本集结束态 → 下集触发（须写成**可接刀的可见/可听态**，非仅状态词；EP01 Carry-in 须含**美好→挫败**反差起势；弧光启动后每集持续推进，禁背景停滞；**双主/男女主** EP01 Carry-in **须分列**各写承接态、挫败触点、入戏触发与主动选择，禁合并为「男主视角一笔带过女主」）
 - **Hook Progression** + **Hook Ledger Update**：钩子ID；埋设/强化/误导/延迟/兑现及后果——每步须点明**可见场面或可听线索**（与 Lore 台账同步；涉及 Boss/终局真相时须标当前可见层，禁越级一次说清）
-- **Spectacle & Core Focus**：按 Script Mode 写本集动作/特效/关系/悬念看点（武戏须具体，**连续攻击/连招过程不得因 #AI规避 省略**；仙侠/武侠/玄幻打斗法攻须含**腾空/俯冲/盘旋飞翔**等空域技法种子，禁贴地「激战」；招式须差异化，禁同一出手方同构连打；过程须穿插怼脸微表情，禁全程轨迹到落地才给脸；**快慢平衡**：须同时规划可快交代的情节推进点与可慢特写的精髓桥段/砸点，禁全集只快或只慢）；**须含** `#AI放大:…`（本集顺势放大的 AI 优势场面）与（若有）`#AI规避:…`（本集改写的 AI 高风险互动及策略；**主责=不必要细节动作**）；**须含** `#多线:线数N｜穿插=…｜画面兑现=是`（豁免则写依据）；**双主项目另须** `#双主戏份:男主≈X%|女主≈Y%`（或 A/B，符合受众定位区间）及双主本集主动节拍/弧光落点
+- **Spectacle & Core Focus**：按 Script Mode 写本集动作/特效/关系/悬念看点（武戏须具体，**连续攻击/连招过程不得因 #AI规避 省略**；仙侠/武侠/玄幻打斗法攻须含**腾空/俯冲/盘旋飞翔**等空域技法种子，禁贴地「激战」；招式须差异化，禁同一出手方同构连打；过程须穿插怼脸微表情，禁全程轨迹到落地才给脸；**快慢平衡**：须同时规划可快交代的情节推进点与可慢特写的精髓桥段/砸点，禁全集只快或只慢）；**须含** `#AI放大:…`（本集顺势放大的 AI 优势场面）与（若有）`#AI规避:…`（本集改写的 AI 高风险互动及策略；**主责=不必要细节动作**）；**须含** `#多线:线数N｜穿插=…｜画面兑现=是`（豁免则写依据）；**须含** `#娱乐化:类型=自嘲/自我吐槽|身份反差|误会错位|一本正经胡说八道|吐槽役/捧逗|黑色幽默|反差萌|谐音/梗台词|物理滑稽|自知破绽｜落点=SCxx｜段子=一句`（每集 ≥1；严肃集优先自嘲/黑色幽默）；**双主项目另须** `#双主戏份:男主≈X%|女主≈Y%`（或 A/B，符合受众定位区间）及双主本集主动节拍/弧光落点
 - **Continuity Anchors**：关键道具/人物物理状态（须是下场能接上的**可感物态**，如「工牌仍在林一手中、解雇信照片已存手机」）
 
 ### Episode Coverage Audit（§9 末尾，强制自检）
@@ -594,7 +595,8 @@
 - `Episode Goal/Logic Check`（每集 Logic Chain 因为/所以/但是可读；本集目标/冲突/转折/小高潮可在本集 Continuity 内兑现；禁把本集目标推下集；Carry-out 只承载规划内未决钩，不顶替本集未完成目标）
 - `Theme Depth Check`（§3 已写 `#Theme`+`#主控思想`+`#对位价值`+`#Theme形成`；§8 Theme Depth 主攻≥2 维且有判断/对位/证明集/可见通道；每集 Episode Theme Pressure 有可感情节而非口号；§5 `#ThemeStated`/`#ThemeProof`/`#ThemeCost` 可回指形成链）
 - `Plot Engine Check`（§4 `#两难引擎` 已写；§8 Chekhov 台账关键枪有埋/响；每集 Episode Plot Certification 含主题引导+两难+契科夫+因果闭环回指主题；关键隐藏铺垫命中空镜/人物互动反馈/道具特写中 ≥2 通道；禁只埋不响、禁无两难堆事件）
-- **Verdict**：仅当 `Rendered = Planned` 且 `Merged = 0` 且 `Missing = 无` 且 `Range` 连续全覆盖且 `Env Name Check` 通过且 `Entity Trait/State Check` 通过且 `Multi-Track Check` 通过且 `Episode Goal/Logic Check` 通过且 `Theme Depth Check` 通过且 `Plot Engine Check` 通过 → `通过`；否则 → `输出失败`
+- `Entertainment Check`（每集 Spectacle `#娱乐化` 已点名类型+落点+段子一句；禁只写「轻松一点」；严肃集未用无因闹剧冲淡主线）
+- **Verdict**：仅当 `Rendered = Planned` 且 `Merged = 0` 且 `Missing = 无` 且 `Range` 连续全覆盖且 `Env Name Check` 通过且 `Entity Trait/State Check` 通过且 `Multi-Track Check` 通过且 `Episode Goal/Logic Check` 通过且 `Theme Depth Check` 通过且 `Plot Engine Check` 通过且 `Entertainment Check` 通过 → `通过`；否则 → `输出失败`
 
 [STORY_DNA_OUTPUT_END]
 
@@ -673,7 +675,7 @@ Script Title:暗潮工牌 · Type:职场悬疑 · Language:zh · Global Style:�
   - **Hook Progression**：H01 埋设——电梯里未署名解雇信入画，收件人名被墨线划掉（仅碎片，未点名真凶）
   - **Hook Ledger Update**：H01=埋设@EP01；Lore L01=首投；L03=仅碎片未兑现
   - **Carry-out**：工牌仍须上交而未交；林一握着手机里的信照；安保走廊已见保安向工位区推进（可见逼近，禁只闻脚步/对讲预告）
-  - **Spectacle & Core Focus**：Short Drama — 黄金三秒工牌特写；信息差（信的真凶）；集末断点（保安上门）；`#AI放大:镜面构图+怼脸微表情` · `#AI规避:无` · `#多线:线数2｜穿插=SC01A→SC02A→SC03B→SC04A｜画面兑现=是`
+  - **Spectacle & Core Focus**：Short Drama — 黄金三秒工牌特写；信息差（信的真凶）；集末断点（保安上门）；`#AI放大:镜面构图+怼脸微表情` · `#AI规避:无` · `#多线:线数2｜穿插=SC01A→SC02A→SC03B→SC04A｜画面兑现=是` · `#娱乐化:类型=自嘲/自我吐槽｜落点=SC01｜段子=这牌比我先当上高管`
   - **Continuity Anchors**：工牌在林一手中；解雇信照片已存手机
 
 [EPISODE_BLOCK_END:EP01]

@@ -7,7 +7,7 @@ Rules:
 - Output ONLY a valid JSON object. No markdown, no code fences, no explanations.
 - Infer the dominant language of the input and write every JSON value in that same language.
 - Preserve the user's original ideas, scenes, lines, and constraints. Do not replace with unrelated stories.
-- Incorporate entertainment value (娱乐化考虑): if the plot allows, include entertaining/comedic character configurations in the core cast, and adapt classic comedic moments or tropes within the setup or development.
+- Incorporate entertainment value (娱乐化考虑): list and pick from gag types — 自嘲/自我吐槽, 身份反差, 误会错位, 一本正经胡说八道, 吐槽役/捧逗, 黑色幽默, 反差萌, 谐音/梗台词, 物理滑稽, 自知破绽. If the plot allows, include entertaining/comedic character configurations in the core cast, and plant at least one funny or self-deprecating beat in setup or development (must serve plot/character; no empty banter).
 - Use search snippets as reference material only; synthesize across multiple angles:
   1) classic visual/image composition (经典画面/镜头感)
   2) memorable dialogue and verbal hooks (经典对白/台词)

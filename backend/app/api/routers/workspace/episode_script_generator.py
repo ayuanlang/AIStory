@@ -34,6 +34,12 @@ from app.services.emergency_recovery_block import (  # noqa: E402,F401
     build_previous_episode_handoff_prompt_block,
     format_emergency_recovery_reject_message,
 )
+from app.services.episode_script_output import (  # noqa: E402,F401
+    EPISODE_SCRIPT_OUTPUT_END,
+    EPISODE_SCRIPT_OUTPUT_START,
+    extract_episode_script_output_between_markers,
+    extract_official_episode_script,
+)
 from app.services.script_analysis_llm_config import (  # noqa: E402,F401
     sanitize_script_generation_llm_config_text_only,
 )
@@ -1526,6 +1532,14 @@ async def generate_project_episode_scripts_from_global_framework(
             content = str((generated_payload or {}).get("content") or "").strip()
             if not content:
                 raise RuntimeError("LLM returned empty content")
+            official_content = extract_official_episode_script(content)
+            if official_content:
+                if extract_episode_script_output_between_markers(content).get("found"):
+                    content = (
+                        f"{EPISODE_SCRIPT_OUTPUT_START}\n{official_content}\n{EPISODE_SCRIPT_OUTPUT_END}"
+                    )
+                else:
+                    content = official_content
 
             content_first_line = ""
             for _line in content.splitlines():

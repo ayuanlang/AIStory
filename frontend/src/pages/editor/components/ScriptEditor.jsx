@@ -1023,6 +1023,71 @@ const ENTITY_PROFILE_START_TOKEN = '[ENTITY_PROFILE_START]';
 const ENTITY_PROFILE_END_TOKEN = '[ENTITY_PROFILE_END]';
 const BLOCK_MARKER_LINE_PATTERN = /^\s*`?\[(?:SCENES?_BLOCK_(?:START|END))\]`?\s*$/gim;
 
+const extractBetweenEpisodeScriptMarkers = (raw, kind) => {
+    const source = String(raw || '');
+    const startRe = new RegExp(`\\[\\s*EPISODE_SCRIPT_${kind}_START\\s*\\]`, 'gi');
+    const endRe = new RegExp(`\\[\\s*EPISODE_SCRIPT_${kind}_END\\s*\\]`, 'gi');
+    let best = '';
+    let startMatch;
+    while ((startMatch = startRe.exec(source))) {
+        endRe.lastIndex = startMatch.index + startMatch[0].length;
+        const endMatch = endRe.exec(source);
+        if (!endMatch || endMatch.index < startMatch.index + startMatch[0].length) break;
+        const inner = source.slice(startMatch.index + startMatch[0].length, endMatch.index).trim();
+        if (inner.length >= best.length) best = inner;
+        startRe.lastIndex = endMatch.index + endMatch[0].length;
+    }
+    return best;
+};
+
+const stripEpisodeScriptThinkingBlocks = (raw) => {
+    let cleaned = String(raw || '');
+    cleaned = cleaned.replace(
+        /\[\s*EPISODE_SCRIPT_THINKING_START\s*\][\s\S]*?\[\s*EPISODE_SCRIPT_THINKING_END\s*\]/gi,
+        ''
+    );
+    const orphan = /\[\s*EPISODE_SCRIPT_THINKING_START\s*\]/i.exec(cleaned);
+    if (orphan) {
+        const after = cleaned.slice(orphan.index);
+        const nextOutput = /\[\s*EPISODE_SCRIPT_OUTPUT_START\s*\]/i.exec(after);
+        cleaned = nextOutput
+            ? `${cleaned.slice(0, orphan.index)}${after.slice(nextOutput.index)}`
+            : `${cleaned.slice(0, orphan.index)}${cleaned.slice(orphan.index + orphan[0].length)}`;
+    }
+    return cleaned
+        .replace(/\[\s*EPISODE_SCRIPT_OUTPUT_(?:START|END)\s*\]/gi, '')
+        .replace(/\[\s*EPISODE_SCRIPT_THINKING_END\s*\]/gi, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+};
+
+const stripLegacyEpisodeAnalysisSections = (raw) => {
+    let source = String(raw || '').trim();
+    if (!source) return '';
+    source = source.replace(
+        /^(?:#{1,6}\s*)?-?1\)\s*类型执行摘要\b[\s\S]*?(?=^(?:#{1,6}\s*)?(?:核心内容纲要|本集卖点|娱乐化段子|场景列表|剧情一句话)|\[SCENES_BLOCK_START\]|\[EPISODE_SCRIPT_OUTPUT_START\])/gim,
+        ''
+    );
+    source = source.replace(
+        /^(?:#{1,6}\s*)?类型执行摘要\b[\s\S]*?(?=^(?:#{1,6}\s*)?(?:核心内容纲要|本集卖点|娱乐化段子|场景列表|剧情一句话)|\[SCENES_BLOCK_START\])/gim,
+        ''
+    );
+    source = source.replace(
+        /^(?:#{1,6}\s*)?剧情连贯自检\b[\s\S]*?(?=^(?:#{1,6}\s*)?(?:剧情一句话|结尾钩子)|\[EMERGENCY_RECOVERY_BLOCK_START\]|\[BRIDGE_BLOCK_START\]|\s*$)/gim,
+        ''
+    );
+    return source.replace(/\n{3,}/g, '\n\n').trim();
+};
+
+const extractOfficialEpisodeScript = (raw) => {
+    const source = String(raw || '');
+    if (!source.trim()) return '';
+    const marked = extractBetweenEpisodeScriptMarkers(source, 'OUTPUT');
+    if (marked) return marked;
+    const cleaned = stripLegacyEpisodeAnalysisSections(stripEpisodeScriptThinkingBlocks(source));
+    return cleaned || source.trim();
+};
+
 /**
  * Extract Part 2【角色设定】block (`[ENTITY_PROFILE_START]…[ENTITY_PROFILE_END]`)
  * from Stage 1 adapted script. Falls back to bare 【角色设定】… before first SCENE_START.
@@ -11703,7 +11768,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ? (stage2RawText || '')
                 : (stage2RawText || activeEpisode?.ai_scene_analysis_scene_markdown || '')
         ).trim();
-        const stage1ScriptInput = String(activeEpisode?.script_content || rawContent || '').trim();
+        const stage1ScriptInput = extractOfficialEpisodeScript(activeEpisode?.script_content || rawContent || '');
         const projectContextJson = (() => {
             try {
                 return project?.global_info ? JSON.stringify(project.global_info, null, 2) : '';
@@ -12395,20 +12460,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         lastEpisodeSyncScriptKeyRef.current = scriptContentKey;
 
-        const trimScriptForInputDisplay = (raw) => {
-            const text = String(raw || '');
-            if (!text.trim()) return '';
-            const startMatch = /`?\[SCENES_BLOCK_START\]`?/i.exec(text);
-            if (!startMatch) return text;
-            const startIdx = startMatch.index;
-            const afterStart = text.slice(startIdx + startMatch[0].length);
-            const endMatch = /`?\[SCENES_BLOCK_END\]`?/i.exec(afterStart);
-            if (!endMatch) {
-                return text.slice(startIdx).trim();
-            }
-            const endAbs = startIdx + startMatch[0].length + endMatch.index + endMatch[0].length;
-            return text.slice(startIdx, endAbs).trim();
-        };
+        const trimScriptForInputDisplay = (raw) => extractOfficialEpisodeScript(raw);
 
         const normalizedScriptContent = trimScriptForInputDisplay(activeEpisode?.script_content);
         const hasAuthoritativeScriptContent = Object.prototype.hasOwnProperty.call(activeEpisode, 'script_content')

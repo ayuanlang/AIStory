@@ -32,7 +32,7 @@ Required JSON keys:
 - "classic_scene_search_terms": array of terms to search classic iconic scenes (broader)
 - "trope_search_terms": array of terms to search popular drama tropes/plot beats (including comedic and entertaining tropes)
 - "hot_topic_search_terms": array of terms to search current hot topics/trending hooks
-- "entertainment_search_terms": array of terms to search comedic character configurations and classic funny/entertaining plot setups, if the plot allows for lighthearted or entertaining moments
+- "entertainment_search_terms": array of terms to search comedic character configurations and classic funny/entertaining plot setups (gag types: 自嘲/自我吐槽, 身份反差, 误会错位, 一本正经胡说八道, 吐槽役/捧逗, 黑色幽默, 反差萌, 谐音/梗台词, 物理滑稽, 自知破绽), if the plot allows for lighthearted or entertaining moments
 
 Input Text:
 {creative_text}

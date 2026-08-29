@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+from app.services.episode_script_output import (
+    extract_official_episode_script,
+    is_acceptable_episode_script_markdown,
+)
 from app.services.episode_script_reference_service import (
     extract_story_dna_output_for_validation,
     is_acceptable_story_dna_markdown,
@@ -70,7 +74,7 @@ def is_valid_markdown_output(text: str, require_h1: bool = True) -> bool:
 
 
 def _parse_episode_heading_from_markdown(text: str) -> Dict[str, Any]:
-    content = str(text or "").strip()
+    content = extract_official_episode_script(text) or str(text or "").strip()
     if not content:
         return {}
 
@@ -92,7 +96,11 @@ def _parse_episode_heading_from_markdown(text: str) -> Dict[str, Any]:
         re.match(r"^(?:#\s*)?(?:(?:EP(?:ISODE)?\s*)?0*\d+|第\s*\d+\s*[集话章回]|0*\d+)(?:\s*[-:：|｜]\s*|\s+).+$", first_line, flags=re.IGNORECASE)
     )
     looks_like_script_structure = bool(
-        second_line and re.match(r"^(?:##\s*)?-?1\)|^##\s+Logline\b|^##\s+Scenes\b|^##\s+Ending Hook\b", second_line, flags=re.IGNORECASE)
+        second_line and re.match(
+            r"^(?:##\s*)?(?:-?1\)|核心内容纲要|本集卖点|娱乐化段子|Logline|Scenes|Ending Hook)\b",
+            second_line,
+            flags=re.IGNORECASE,
+        )
     )
     if not has_markdown_h1 and not (looks_like_episode_heading and looks_like_script_structure):
         return {}
@@ -197,7 +205,10 @@ async def generate_markdown_with_retry(
         return reason == "length"
 
     def _validation_view(content: str, tag: str) -> str:
-        """Prefer STORY_DNA_OUTPUT (truncate THINKING) so reasoning cannot fail validation."""
+        """Prefer STORY_DNA_OUTPUT / episode-script OUTPUT so reasoning cannot fail validation."""
+        episode_official = extract_official_episode_script(content)
+        if episode_official and is_acceptable_episode_script_markdown(content):
+            return episode_official
         info = extract_story_dna_output_for_validation(content)
         view = str(info.get("content") or content or "").strip()
         if info.get("had_output_markers") or info.get("truncated_thinking") or info.get("output_source"):
@@ -221,6 +232,17 @@ async def generate_markdown_with_retry(
     def _passes_markdown(content: str, tag: str) -> bool:
         if not content or _looks_like_error_text(content):
             return False
+        # Official episode script: OUTPUT markers (or extractable official body) pass.
+        if is_acceptable_episode_script_markdown(content):
+            view = _validation_view(content, tag)
+            logger.info(
+                "[generate_markdown_with_retry] episode_script_output_markers_accept tag=%s "
+                "view_len=%s full_len=%s",
+                tag,
+                len(view),
+                len(content),
+            )
+            return True
         # Story DNA hard rule: both OUTPUT_START and OUTPUT_END → middle slice passes.
         if is_acceptable_story_dna_markdown(content):
             view = _validation_view(content, tag)
@@ -274,6 +296,9 @@ async def generate_markdown_with_retry(
         "Do NOT output code fences.\n"
         "If this is Story DNA: wrap Part 1 in [STORY_DNA_THINKING_START]/[STORY_DNA_THINKING_END], "
         "and wrap §0–§9 (including [SCRIPT_TITLE:…]) in [STORY_DNA_OUTPUT_START]/[STORY_DNA_OUTPUT_END]. "
+        "If this is an episode script: wrap analysis in [EPISODE_SCRIPT_THINKING_START]/[EPISODE_SCRIPT_THINKING_END], "
+        "and wrap the official script (H1 + 核心内容纲要 + 卖点 + scenes + hooks) in "
+        "[EPISODE_SCRIPT_OUTPUT_START]/[EPISODE_SCRIPT_OUTPUT_END]. "
         "OUTPUT block first non-empty line must be [SCRIPT_TITLE:…] or a markdown header starting with '# '.\n"
         "Otherwise: the first non-empty line must be an H1 markdown header starting with '# '."
     )
@@ -281,7 +306,7 @@ async def generate_markdown_with_retry(
         f"{user_prompt}\n\n"
         "[RETRY INSTRUCTION]\n"
         "Only return corrected final markdown now. Put any reasoning inside THINKING markers; "
-        "formal deliverable must be inside OUTPUT markers when Story DNA applies."
+        "formal deliverable must be inside OUTPUT markers when Story DNA or episode-script tags apply."
     )
     raw_2, content_2, meta_2 = await _call_once("strict_retry", retry_user_prompt, retry_sys_prompt)
     if _is_prohibited_marker(raw_2) or _is_prohibited_marker(content_2):
@@ -300,6 +325,9 @@ async def generate_markdown_with_retry(
         "If this is Story DNA: include [STORY_DNA_THINKING_START]/[STORY_DNA_THINKING_END] and "
         "[STORY_DNA_OUTPUT_START]/[STORY_DNA_OUTPUT_END]; OUTPUT must begin with [SCRIPT_TITLE:…] "
         "or a markdown header starting with '# '.\n"
+        "If this is an episode script: include [EPISODE_SCRIPT_THINKING_START]/[EPISODE_SCRIPT_THINKING_END] and "
+        "[EPISODE_SCRIPT_OUTPUT_START]/[EPISODE_SCRIPT_OUTPUT_END]; OUTPUT must begin with `# {n}-{title}` "
+        "and include 核心内容纲要, 卖点, and [SCENES_BLOCK_START].\n"
         "Otherwise: the first non-empty line must be an H1 markdown header starting with '# '."
     )
     final_retry_user_prompt = (
