@@ -42,6 +42,9 @@ def test_parse_derived_env_tags_and_extract_block():
 def test_frame_anchor_injection_lists_named_sides():
     block = build_derived_env_frame_anchor_injection(SAMPLE)
     assert block.startswith("【衍生环境画幅锚】")
+    assert "画外=镜头后对向主体，明确不可见" in block
+    assert "选角与建置/入戏禁止点名画外主体" in block
+    assert "宫格参照=画外时，落位改写为离镜头近处中间主体" in block
     assert (
         "ENV:[0度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0｜"
         "背景=柜台｜画左=楼梯口｜画右=账房窗"
@@ -54,6 +57,8 @@ def test_frame_anchor_injection_lists_named_sides():
         "ENV:[0度客栈大堂_沙尘]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0｜"
         "背景=柜台｜画左=楼梯口｜画右=账房窗"
     ) in block
+    assert "画外=柜台" not in block
+    assert "画外=正门" not in block
 
 
 def test_frame_anchor_injection_keeps_main_when_sides_missing():
@@ -103,13 +108,15 @@ def test_build_item_persists_frame_anchors():
             "background": "柜台",
             "frame_left": "楼梯口",
             "frame_right": "账房窗",
+            "offscreen": "大门",
         }
     )
     attrs = item["custom_attributes"]
     assert attrs["background"] == "柜台"
     assert attrs["frame_left"] == "楼梯口"
     assert attrs["frame_right"] == "账房窗"
-    assert item["anchor_description"] == "背景=柜台｜画左=楼梯口｜画右=账房窗"
+    assert attrs["offscreen"] == "大门"
+    assert item["anchor_description"] == "背景=柜台｜画左=楼梯口｜画右=账房窗｜画外=大门（不可见）"
     assert "只切割，不要改画" in item["generation_prompt_cn"]
     assert "背景=柜台" not in item["generation_prompt_cn"]
 
@@ -160,22 +167,49 @@ def test_derived_anchors_copy_matching_main_env_angle_subjects():
     assert zero["background"] == "客栈大门"
     assert zero["frame_left"] == "贴墙木楼梯"
     assert zero["frame_right"] == "雕花窗格"
+    assert zero["offscreen"] == "红木柜台与酒架"
     assert not zero.get("references")
     reverse = by_name["180度客栈大堂"]
     assert reverse["background"] == "红木柜台与酒架"
     assert reverse["frame_left"] == "雕花窗格"
     assert reverse["frame_right"] == "贴墙木楼梯"
+    assert reverse["offscreen"] == "客栈大门"
     look_up = by_name["0度客栈大堂_仰天"]
     assert look_up["background"] == "通高梁架"
     assert look_up["frame_left"] == "贴墙木楼梯"
     assert look_up["frame_right"] == "雕花窗格"
+    assert look_up["offscreen"] == "红木柜台与酒架"
 
     built = build_derived_environment_item(zero)
-    assert built["anchor_description"] == "背景=客栈大门｜画左=贴墙木楼梯｜画右=雕花窗格"
+    assert (
+        built["anchor_description"]
+        == "背景=客栈大门｜画左=贴墙木楼梯｜画右=雕花窗格｜画外=红木柜台与酒架（不可见）"
+    )
+    assert built["custom_attributes"]["offscreen"] == "红木柜台与酒架"
     assert "无" not in built["anchor_description"]
-    assert "柜台" not in built["anchor_description"]
+    assert "背景=柜台" not in built["anchor_description"]
+    assert "背景=红木柜台" not in built["anchor_description"]
     assert "八仙桌" not in built["anchor_description"]
-    assert format_derived_anchor_description(background="无", frame_left="无", frame_right="无") == ""
+    reverse_built = build_derived_environment_item(reverse)
+    assert reverse_built["anchor_description"] == (
+        "背景=红木柜台与酒架｜画左=雕花窗格｜画右=贴墙木楼梯｜画外=客栈大门（不可见）"
+    )
+    look_up_built = build_derived_environment_item(look_up)
+    assert look_up_built["anchor_description"].startswith("背景=通高梁架")
+    assert "画外=红木柜台与酒架（不可见）" in look_up_built["anchor_description"]
+    assert format_derived_anchor_description(
+        background="无", frame_left="无", frame_right="无", offscreen="无"
+    ) == ""
+    assert format_derived_anchor_description(offscreen="红木柜台") == "画外=红木柜台（不可见）"
+    assert (
+        format_derived_anchor_description(offscreen="红木柜台（不可见）")
+        == "画外=红木柜台（不可见）"
+    )
+
+    injection = build_derived_env_frame_anchor_injection(text)
+    assert "画外=红木柜台与酒架（不可见）" in injection
+    assert "画外=客栈大门（不可见）" in injection
+    assert "选角与建置/入戏禁止点名画外主体" in injection
 
 
 def test_sample_ingest_writes_frame_and_reference_anchors():

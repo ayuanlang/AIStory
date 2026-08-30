@@ -261,7 +261,7 @@ def derived_frame_anchors_from_main(
     *,
     look_up: bool = False,
 ) -> Dict[str, str]:
-    """Copy 背景/画左/画右 from the matching main-env sector. No invention, no 无."""
+    """Copy 背景/画左/画右/画外 from the matching main-env sector. No invention, no 无."""
     sectors = (mains or {}).get(_clean(main)) or {}
     if not sectors:
         return {}
@@ -275,7 +275,27 @@ def derived_frame_anchors_from_main(
         "background": background,
         "frame_left": sectors.get(str((resolved + 270) % 360), ""),
         "frame_right": sectors.get(str((resolved + 90) % 360), ""),
+        "offscreen": sectors.get(str((resolved + 180) % 360), ""),
     }
+
+
+_OFFSCREEN_MARK = "（不可见）"
+
+
+def _strip_offscreen_mark(value: Any) -> str:
+    text = _clean(value)
+    for mark in ("（不可见）", "(不可见)", "｜可见=否", "|可见=否"):
+        text = text.replace(mark, "")
+    return _clean(text)
+
+
+def format_offscreen_anchor(value: Any, forbidden: Optional[Set[str]] = None) -> str:
+    text = _anchor_slot(_strip_offscreen_mark(value), forbidden)
+    if not text:
+        return ""
+    if "不可见" in text:
+        return text
+    return f"{text}{_OFFSCREEN_MARK}"
 
 
 def format_derived_anchor_description(
@@ -283,16 +303,18 @@ def format_derived_anchor_description(
     background: str = "",
     frame_left: str = "",
     frame_right: str = "",
+    offscreen: str = "",
     references: Optional[Sequence[str]] = None,
     forbidden: Optional[Set[str]] = None,
 ) -> str:
-    """Asset Anchor Description: 背景 / 画左 / 画右 only — copied fixtures, never 无."""
+    """Asset Anchor Description: 背景 / 画左 / 画右 / 画外（不可见）. Never 无."""
     del references
     blob = "｜".join(
         [
             str(background or ""),
             str(frame_left or ""),
             str(frame_right or ""),
+            str(offscreen or ""),
         ]
     )
     blocked = set(forbidden or ()) | collect_subject_names_from_text(blob)
@@ -300,12 +322,15 @@ def format_derived_anchor_description(
     bg = _anchor_slot(background, blocked)
     left = _anchor_slot(frame_left, blocked)
     right = _anchor_slot(frame_right, blocked)
+    off = format_offscreen_anchor(offscreen, blocked)
     if bg:
         parts.append(f"背景={bg}")
     if left:
         parts.append(f"画左={left}")
     if right:
         parts.append(f"画右={right}")
+    if off:
+        parts.append(f"画外={off}")
     return "｜".join(parts)
 
 
@@ -562,6 +587,9 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
                     "background": fields.get("背景") or fields.get("background"),
                     "frame_left": fields.get("画左") or fields.get("frame_left"),
                     "frame_right": fields.get("画右") or fields.get("frame_right"),
+                    "offscreen": _strip_offscreen_mark(
+                        fields.get("画外") or fields.get("offscreen")
+                    ),
                     "references": fields.get("参照物") or fields.get("references"),
                 },
             )
@@ -591,10 +619,13 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
                 row["frame_left"] = copied["frame_left"]
             if copied.get("frame_right"):
                 row["frame_right"] = copied["frame_right"]
+            if copied.get("offscreen"):
+                row["offscreen"] = copied["offscreen"]
             row["references"] = ""
         row["background"] = _anchor_slot(row.get("background"), forbidden)
         row["frame_left"] = _anchor_slot(row.get("frame_left"), forbidden)
         row["frame_right"] = _anchor_slot(row.get("frame_right"), forbidden)
+        row["offscreen"] = _strip_offscreen_mark(_anchor_slot(row.get("offscreen"), forbidden))
         if "references" in row:
             row["references"] = ""
 
@@ -629,12 +660,14 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
     background = _clean(item.get("background") or item.get("背景"))
     frame_left = _clean(item.get("frame_left") or item.get("画左"))
     frame_right = _clean(item.get("frame_right") or item.get("画右"))
+    offscreen = _strip_offscreen_mark(item.get("offscreen") or item.get("画外"))
     forbidden = collect_subject_names_from_text(
         "｜".join(
             [
                 background,
                 frame_left,
                 frame_right,
+                offscreen,
                 str(item.get("references") or item.get("参照物") or ""),
                 str(item.get("name") or ""),
             ]
@@ -643,6 +676,7 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
     background = _anchor_slot(background, forbidden)
     frame_left = _anchor_slot(frame_left, forbidden)
     frame_right = _anchor_slot(frame_right, forbidden)
+    offscreen = _strip_offscreen_mark(_anchor_slot(offscreen, forbidden))
     references = _split_named_objects(
         item.get("references") or item.get("参照物"),
         forbidden=forbidden,
@@ -651,6 +685,7 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
         background=background,
         frame_left=frame_left,
         frame_right=frame_right,
+        offscreen=offscreen,
         references=references,
         forbidden=forbidden,
     )
@@ -723,6 +758,7 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
             "background": background,
             "frame_left": frame_left,
             "frame_right": frame_right,
+            "offscreen": offscreen,
             "references": "、".join(references),
         },
     }
@@ -778,9 +814,10 @@ def format_derived_env_info_line(
     background: str = "",
     frame_left: str = "",
     frame_right: str = "",
+    offscreen: str = "",
     view_angle: Any = None,
 ) -> str:
-    """One derived-ENV row: this camera's 背景/画左/画右 entity map."""
+    """One derived-ENV row: this camera's 背景/画左/画右 + 画外（不可见）."""
     parts = [f"ENV:[{_clean(name)}]"]
     main_name = _clean(main)
     if main_name:
@@ -794,6 +831,9 @@ def format_derived_env_info_line(
         parts.append(f"画左={_clean(frame_left)}")
     if _clean(frame_right):
         parts.append(f"画右={_clean(frame_right)}")
+    off = format_offscreen_anchor(offscreen)
+    if off:
+        parts.append(f"画外={off}")
     return "｜".join(parts)
 
 
@@ -809,6 +849,7 @@ def derived_env_info_fields_from_mapping(item: Dict[str, Any]) -> Dict[str, Any]
         "background": _clean(item.get("background") or item.get("背景")),
         "frame_left": _clean(item.get("frame_left") or item.get("画左")),
         "frame_right": _clean(item.get("frame_right") or item.get("画右")),
+        "offscreen": _strip_offscreen_mark(item.get("offscreen") or item.get("画外")),
         "view_angle": view_angle,
     }
 
@@ -828,6 +869,7 @@ def derived_env_info_fields_from_entity(ent: Any, *, fallback_main: str = "") ->
         "background": _clean(attrs.get("background") or attrs.get("背景")),
         "frame_left": _clean(attrs.get("frame_left") or attrs.get("画左")),
         "frame_right": _clean(attrs.get("frame_right") or attrs.get("画右")),
+        "offscreen": _strip_offscreen_mark(attrs.get("offscreen") or attrs.get("画外")),
         "view_angle": attrs.get("view_angle_from_main"),
     }
 
@@ -848,7 +890,8 @@ def build_derived_env_info_block(
         background = _clean(fields.get("background"))
         frame_left = _clean(fields.get("frame_left"))
         frame_right = _clean(fields.get("frame_right"))
-        if not (main or background or frame_left or frame_right):
+        offscreen = _clean(fields.get("offscreen"))
+        if not (main or background or frame_left or frame_right or offscreen):
             continue
         seen.add(name)
         lines.append(
@@ -858,6 +901,7 @@ def build_derived_env_info_block(
                 background=background,
                 frame_left=frame_left,
                 frame_right=frame_right,
+                offscreen=offscreen,
                 view_angle=fields.get("view_angle"),
             )
         )
@@ -866,13 +910,15 @@ def build_derived_env_info_block(
     return (
         f"{heading}\n"
         "每行=该镜头下的画左/画右对应实体（切角须改查新 ENV，左右会换）。"
-        "建置仍按相对/绝对/封闭写，只把「画左」「画右」换成该行实体。\n"
+        "画外=镜头后对向主体，明确不可见；选角与建置/入戏禁止点名画外主体。"
+        "建置仍按相对/绝对/封闭写，只把「画左」「画右」换成该行可见实体，禁止把画外实体写入画面句。"
+        "宫格参照=画外时，落位改写为离镜头近处中间主体（优先四周=中）的某侧旁。\n"
         + "\n".join(lines)
     )
 
 
 def build_derived_env_frame_anchor_injection(text: str) -> str:
-    """Compact derived-ENV table for staging: 所属主环境 + 背景/画左/画右."""
+    """Compact derived-ENV table for staging: 所属主环境 + 背景/画左/画右 + 画外（不可见）."""
     return build_derived_env_info_block(
         parse_derived_env_extract_items(text),
         heading="【衍生环境画幅锚】",
