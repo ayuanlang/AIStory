@@ -1105,6 +1105,24 @@ export const isReusableMainEnvironmentAsset = (asset) => {
     if (!asset) return false;
     if (!isEnvironmentAssetType(asset?.type)) return false;
 
+    const attrsRaw = asset?.custom_attributes ?? asset?.customAttributes ?? asset?.extra;
+    let attrs = {};
+    if (attrsRaw && typeof attrsRaw === 'object' && !Array.isArray(attrsRaw)) attrs = attrsRaw;
+    else if (typeof attrsRaw === 'string') {
+        try {
+            const parsed = JSON.parse(attrsRaw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) attrs = parsed;
+        } catch (_) { /* ignore */ }
+    }
+    if (
+        attrs.source === 'programmatic_derived_framing'
+        || attrs.derived_kind
+        || attrs['所属主环境']
+        || attrs.owning_main_environment
+    ) {
+        return false;
+    }
+
     const nameCandidates = [asset?.name, asset?.name_en, asset?.name_zh, asset?.subject_name];
     if (nameCandidates.some((value) => isAngleDerivativeEnvironmentName(value))) {
         return false;
@@ -1114,6 +1132,13 @@ export const isReusableMainEnvironmentAsset = (asset) => {
     if (/^baseline\s*definition$/i.test(depType)) return true;
     // Stage-3 angle/state derivatives are Type A / Type B.
     if (/^type\s*[ab]$/i.test(depType)) return false;
+
+    let deps = asset?.visual_dependencies ?? asset?.visualDependencies;
+    if (typeof deps === 'string') {
+        try { deps = JSON.parse(deps); } catch (_) { deps = String(deps || '').split(/[,，;；\n]+/); }
+    }
+    const hasEnvDep = (Array.isArray(deps) ? deps : []).some((item) => /^ENV\s*[:：[]/i.test(String(item || '').trim()));
+    if (hasEnvDep && !/^style\s*reference$/i.test(depType)) return false;
 
     // Original / empty strategy: keep only if name is not angled (already checked).
     return true;

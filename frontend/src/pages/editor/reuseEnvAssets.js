@@ -48,9 +48,47 @@ const parseDependencyStrategyType = (value) => {
  * Only main/baseline ENV for Global Assets dropdown.
  * Hide angle derivatives (`0度云渊仙境`) and Type A/B derivatives.
  */
+const readCustomAttributes = (asset) => {
+    const raw = asset?.custom_attributes ?? asset?.customAttributes ?? asset?.extra;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+        try {
+            const parsed = JSON.parse(raw);
+            return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+        } catch (_) {
+            return {};
+        }
+    }
+    return {};
+};
+
+const environmentHasEnvDependency = (asset) => {
+    let deps = asset?.visual_dependencies ?? asset?.visualDependencies;
+    if (typeof deps === 'string') {
+        try {
+            deps = JSON.parse(deps);
+        } catch (_) {
+            deps = String(deps || '').split(/[,，;；\n]+/);
+        }
+    }
+    return (Array.isArray(deps) ? deps : []).some((item) => (
+        /^ENV\s*[:：[]/i.test(String(item || '').trim())
+    ));
+};
+
 export const isReusableMainEnvironmentAsset = (asset) => {
     if (!asset) return false;
     if (!isEnvironmentAssetType(asset?.type)) return false;
+
+    const attrs = readCustomAttributes(asset);
+    if (
+        attrs.source === 'programmatic_derived_framing'
+        || attrs.derived_kind
+        || attrs['所属主环境']
+        || attrs.owning_main_environment
+    ) {
+        return false;
+    }
 
     const nameCandidates = [
         asset?.name,
@@ -66,6 +104,9 @@ export const isReusableMainEnvironmentAsset = (asset) => {
     const depType = parseDependencyStrategyType(asset?.dependency_strategy);
     if (/^baseline\s*definition$/i.test(depType)) return true;
     if (/^type\s*[ab]$/i.test(depType)) return false;
+    if (environmentHasEnvDependency(asset) && !/^style\s*reference$/i.test(depType)) {
+        return false;
+    }
     return true;
 };
 

@@ -9117,13 +9117,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || /(?:^|\n)\s*S\d+[^\n|]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(subjectIndexText);
     }, [activeEpisode?.ai_scene_analysis_subject_index]);
 
-    const hasEnvironmentPlanForAssetDesign = useCallback(() => {
+    const hasEnvironmentPlanForAssetDesign = useCallback((extraText = '') => {
+        if (textHasEnvironmentPlanSignals(extraText) || collectMainEnvironmentNames(extraText).length > 0) {
+            return true;
+        }
         const livePlan = String(latestStage1NodeOutputsRef.current?.environment_plan || '').trim();
         if (textHasEnvironmentPlanSignals(livePlan) || textHasEnvironmentPlanSignals(latestStage1RawTextRef.current)) {
             return true;
         }
+        // Asset-clear flips trustLiveOnly so leftover Stage 2/3 cannot look like this-run
+        // success. The dedicated environment_plan slot is Stage 1 truth and must stay visible.
+        const persistedPlan = readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs);
+        if (textHasEnvironmentPlanSignals(persistedPlan)) return true;
         if (analysisTrustLiveDownstreamOnlyRef.current) return false;
-        if (readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs)) return true;
         const sources = [
             activeEpisode?.ai_scene_analysis_adaptation,
             activeEpisode?.ai_scene_analysis_result,
@@ -17498,7 +17504,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     || Boolean(options?.deferEnvironmentDesign);
                 const envStillNeededFromPlan = (
                     wantsEnvironments
-                    && hasEnvironmentsToDesign()
+                    && hasEnvironmentPlanForAssetDesign(extractSourceText)
                     && !(
                         skipExistingAssets
                         && !options?.forceAssetDesign
@@ -18017,7 +18023,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         || String(options?.extractSourceText || explicitText || latestStage1RawTextRef.current || '').trim();
                     const nodeInputText = String(extractSourceText || specificSubjectIndexText || '').trim();
                     const envDesignHasPlanSource = pData.key === 'environments'
-                        && hasEnvironmentsToDesign()
+                        && hasEnvironmentPlanForAssetDesign(extractSourceText)
                         && !(skipExistingAssets && !options?.forceAssetDesign && hasPersistedEnvironmentAssetDesign());
                     const propDesignHasPlanSource = pData.key === 'props'
                         && hasPropExtractForAssetDesign(extractSourceText)
@@ -18098,14 +18104,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ),
                             'info'
                         );
-                        if (pData.key && !assetsLlmDoneKeys.includes(pData.key)) {
+                        const envSkipHasMain = pData.key !== 'environments'
+                            || hasPersistedEnvironmentAssetDesign();
+                        if (envSkipHasMain && pData.key && !assetsLlmDoneKeys.includes(pData.key)) {
                             assetsLlmDoneKeys.push(pData.key);
                         }
-                        markAssetCategoryPersisted(pData.key, {
-                            highlightHint: buildAssetReadyHint(pData.key),
-                        });
-                        if (pData.key === 'environments') {
+                        if (envSkipHasMain) {
+                            markAssetCategoryPersisted(pData.key, {
+                                highlightHint: buildAssetReadyHint(pData.key),
+                            });
+                        }
+                        if (pData.key === 'environments' && envSkipHasMain) {
                             markEnvironmentAssetDesignReady(`env-skip-existing:${subtaskTraceId}`);
+                        } else if (pData.key === 'environments') {
+                            onLog?.(
+                                t(
+                                    '[Stage 3 Asset Design] 库中只有衍生环境、没有主环境，不能把环境设计标为完成。',
+                                    '[Stage 3 Asset Design] Only derived environments exist; main-environment design is not complete.'
+                                ),
+                                'warning'
+                            );
                         }
                         return {
                             key: pData.key,
@@ -28626,8 +28644,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ));
             const hasCharSource = hasCharExtractForAssetDesign(extractSourceText);
             const hasPropSource = hasPropExtractForAssetDesign(extractSourceText);
-            const hasEnvSource = hasEnvironmentPlanForAssetDesign()
+            const hasEnvSource = hasEnvironmentPlanForAssetDesign(extractSourceText)
                 || /\[SCENE_ENV_IDENT_START/i.test(extractSourceText)
+                || /\[ENV_SCENE_PATCH_START/i.test(extractSourceText)
                 || /【主环境】/.test(extractSourceText);
             const requestedHasAnySource = (
                 (wantsCharacters && hasCharSource)
