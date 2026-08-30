@@ -796,7 +796,9 @@ async def structure_project_creative_input_to_story_fields(
         "For each work write reusable logic (core plot, set pieces, VFX function, action, dialogue, "
         "and how distance/comms/blocking actually work on screen) and 转译. "
         "I6-I8 beats must be physically shootable: no long-distance conversation without a comms tool or same-space staging. "
-        "Prioritize climax and iconic scenes (I7a) using visual, dialogue, and action reference angles."
+        "Do NOT casually copy scene/environment names from the brainstorm or from reference works. "
+        "Name a location only if the plot hard-needs that space, it matches character status/access (prisons/monitor rooms/vaults are restricted), and arrival is logical; otherwise omit place and write the event only — later nodes will plan environments. "
+        "Prioritize climax and iconic beats (I7a) using visual, dialogue, and action reference angles — not copied sets."
     )
     raw = await _run_structure_llm_call(
         db=db,

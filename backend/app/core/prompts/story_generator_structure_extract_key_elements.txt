@@ -19,8 +19,8 @@ Required JSON keys:
 - "themes": array of theme/controlling-idea hints
 - "character_archetypes": array of protagonist/supporting archetypes
 - "conflict_hooks": array of core conflict / stakes / dilemma hooks
-- "signature_scenes": array of memorable scene images or beats from the brainstorm
-- "climax_moments": array of climax / peak-tension / must-shoot iconic moments from the brainstorm
+- "signature_scenes": array of memorable **events/beats** from the brainstorm (who does what / what is seen or heard). Do **not** harvest location names as required sets; omit place unless the user event is inseparable from that space function.
+- "climax_moments": array of climax / peak-tension / must-shoot iconic **moments** from the brainstorm (event + dialogue/action). Same rule: do not copy place names from references or casual user scenery.
 - "tone_style": string, tone/style in one sentence
 - "reference_works": array of films/dramas/novels/games the brainstorm echoes (may be empty)
 - "plot_framework_candidates": array of 1-3 PRIMARY works whose **plot logic** could serve as this story's framework; **must prefer modern/contemporary** titles first (may differ in genre/style from this story; do not default to pre-modern classics)

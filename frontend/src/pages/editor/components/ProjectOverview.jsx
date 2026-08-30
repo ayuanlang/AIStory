@@ -3896,7 +3896,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         <div className="text-sm font-semibold text-white">{t('脑洞标准输入（I1–I10）', 'Creative Input (I1–I10)')}</div>
                                     </div>
                                     <div className="text-xs text-muted-foreground mt-1">
-                                        {t('点「结构化预填」从天马行空自动提取，检索一部现代/当代作品作主骨架，并至少配 5 部辅助（拆开主框架、避免整段翻拍），核对 I1–I10；也可手工填写。', 'Use Structure & Prefill to extract from wild ideas, lock a modern/contemporary plot-logic spine plus at least 5 auxiliaries (to avoid remaking the primary), then review I1–I10; or fill manually.')}
+                                        {t('点「结构化预填」从天马行空自动提取，检索一部现代/当代作品作主骨架，并至少配 5 部辅助（拆开主框架、避免整段翻拍），核对 I1–I10；也可手工填写。预填不要随便抄场景：地点须匹配身份、符合逻辑且剧情真正需要；拿不准可不写环境，留给后续大纲规划。', 'Use Structure & Prefill to extract from wild ideas, lock a modern/contemporary plot-logic spine plus at least 5 auxiliaries (to avoid remaking the primary), then review I1–I10; or fill manually. Do not casually copy locations: a place must match status, stay logical, and be plot-required; otherwise omit environment and let later outline nodes plan it.')}
                                     </div>
                                 </div>
                                 <button
@@ -3904,7 +3904,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     onClick={handleStructureCreativeInput}
                                     disabled={isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady}
                                     className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
-                                    title={t('提取关键要素 → 优先搜索现代/当代作品的剧情逻辑（可跨风格转译）与高潮/名场面 → 预填 I1–I10', 'Extract key elements → search modern/contemporary plot-logic spines first (cross-style transferable) and climax/iconic references → prefill I1–I10')}
+                                    title={t('提取关键要素 → 优先搜索现代/当代作品的剧情逻辑（可跨风格转译）与高潮/名场面 → 预填 I1–I10（场景须匹配且可省略）', 'Extract key elements → search modern/contemporary plot-logic spines first (cross-style transferable) and climax/iconic references → prefill I1–I10 (locations optional, must match)')}
                                 >
                                     {isStructuringCreativeInput
                                         ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('检索分析中...', 'Researching...')}</>
@@ -4002,7 +4002,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     {
                                         id: 'setup',
                                         label: t('I6a 开局与激励', 'I6a Opening & Inciting'),
-                                        hint: t('开场画面 + 激励事件 + 打破日常', 'Opening image + inciting incident'),
+                                        hint: t('激励事件 + 打破日常；地点仅在剧情需要且身份/准入说得通时才写，否则不写环境', 'Inciting incident; name a place only if plot-required and access is logical, otherwise omit environment'),
                                         example: t(
                                             '例：晨会送文件误拿卡套→总裁电梯开门→看见未署名解雇信。',
                                             'e.g. Wrong badge case at morning handoff → CEO elevator opens → unsigned termination letter.'
@@ -4012,7 +4012,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     {
                                         id: 'development',
                                         label: t('I6b 中段升级', 'I6b Mid Arc Escalation'),
-                                        hint: t('受挫、加码、副线、压力升级', 'Setbacks, escalation, B-story'),
+                                        hint: t('受挫、加码、副线、压力升级；优先写事件，不要从参考作抄场景', 'Setbacks, escalation, B-story; write events first — do not copy reference locations'),
                                         example: t(
                                             '例：人事约谈假配合→暗中比对信纸→周薇暗中观察。',
                                             'e.g. HR interview feigned compliance → secret paper match → Zhou Wei watches.'
@@ -4022,7 +4022,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     {
                                         id: 'turning_points',
                                         label: t('I6c 转折与中点', 'I6c Turning Points'),
-                                        hint: t('中点反转、真相揭露、局势失控', 'Midpoint reversal, reveal, loss of control'),
+                                        hint: t('中点反转、真相揭露、局势失控；环境可留空给后续规划', 'Midpoint reversal, reveal, loss of control; environment may be left for later nodes'),
                                         example: t(
                                             '例：中点：信纸来自总裁办；信任崩塌；保安搜身逼近。',
                                             'e.g. Midpoint: letter paper from CEO office; trust breaks; security search closes in.'
@@ -4050,7 +4050,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     {
                                         id: 'climax',
                                         label: t('I7a 高潮与名场面', 'I7a Climax & Must-Have Scenes'),
-                                        hint: t('必须拍出的高潮名场面：画面构图、关键对白、动作走位', 'Must-have climax/iconic scenes: visuals, key lines, action blocking'),
+                                        hint: t('必须拍出的高潮事件：对白与动作；地点须匹配身份/准入且剧情需要，否则不写环境', 'Must-have climax beats: lines and action; name a place only if it matches access and is plot-required, otherwise omit'),
                                         example: t(
                                             '例：雨夜天台对峙，工牌作钥，当众播放偷拍视频换生存。',
                                             'e.g. Rainy rooftop standoff; badge as key; plays hidden video publicly to survive.'
