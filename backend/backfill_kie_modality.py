@@ -52,6 +52,7 @@ MODALITY_MAP = {
     "bytedance/v1-lite-text-to-video": "text-to-video",
     "hailuo/02-text-to-video-pro": "text-to-video",
     "hailuo/02-text-to-video-standard": "text-to-video",
+    "wan/3-0-video": "text-to-video,image-to-video,video-to-video",
     "wan/2-6-text-to-video": "text-to-video",
     "wan/2-2-a14b-text-to-video-turbo": "text-to-video",
     "sora-2-text-to-video": "text-to-video",

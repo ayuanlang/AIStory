@@ -4657,8 +4657,13 @@ class MediaGenerationService:
                     active_config.get("base_model") or tool_conf.get("base_model"),
                 )
             )
+            is_wan30_auto_duration = (
+                effective_duration == -1
+                and "wan/3-0" in model_hint
+            )
             if (
                 not is_seedance2_auto_duration
+                and not is_wan30_auto_duration
                 and isinstance(allowed_durations, list)
                 and allowed_durations
                 and effective_duration is not None
@@ -4673,6 +4678,7 @@ class MediaGenerationService:
             max_duration = runtime_enum_catalog.get("max_duration")
             if (
                 not is_seedance2_auto_duration
+                and not is_wan30_auto_duration
                 and effective_duration is not None
                 and max_duration is not None
             ):
@@ -18089,6 +18095,10 @@ class MediaGenerationService:
             "wan-turbo": "wan/2-6-text-to-video",
             "wan-i2v": "wan/2-6-image-to-video",
             "wan-v2v": "wan/2-6-video-to-video",
+            "wan-3": "wan/3-0-video",
+            "wan-3-0": "wan/3-0-video",
+            "wan/3-0": "wan/3-0-video",
+            "wan-3-0-video": "wan/3-0-video",
             "wan-a14b-t2v": "wan/2-2-a14b-text-to-video-turbo",
             "wan-a14b-i2v": "wan/2-2-a14b-image-to-video-turbo",
             "wan-a14b-s2v": "wan/2-2-a14b-speech-to-video-turbo",
@@ -18204,11 +18214,18 @@ class MediaGenerationService:
         is_kling_3_video = bool(gen_type == "video" and ("kling-3.0" in model_lower or model_lower == "kling3"))
         is_kling_26_i2v_model = bool(gen_type == "video" and model_lower == "kling-2.6/image-to-video")
         is_seedance_video_model = bool(gen_type == "video" and model_lower.startswith("bytedance/seedance"))
+        is_wan30_video_model = bool(
+            gen_type == "video"
+            and model_lower in {"wan/3-0-video", "wan/3-0", "wan-3-0-video", "wan-3-0"}
+        )
         is_gemini_omni_video_model = bool(gen_type == "video" and model_lower == "gemini-omni-video")
         is_topaz_video_upscale = bool(gen_type == "video" and str(model_lower or "").strip() == "topaz/video-upscale")
         is_flux2_image_model = bool(gen_type == "image" and str(model_lower or "").startswith("flux-2/"))
         # KIE market video endpoints require duration as string for compatibility across models.
-        duration_string_required_model = bool(gen_type == "video" and not is_topaz_video_upscale)
+        # Wan 3.0 documents duration as integer (including -1 for intelligent duration).
+        duration_string_required_model = bool(
+            gen_type == "video" and not is_topaz_video_upscale and not is_wan30_video_model
+        )
 
         base_url = (config.get("base_url") or tool_conf.get("base_url") or "https://api.kie.ai").strip().rstrip("/")
         if "/api/v1/jobs" in base_url:
@@ -18642,10 +18659,15 @@ class MediaGenerationService:
                 except Exception:
                     duration_value = 5
                 allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
-                if duration_value <= 0:
+                is_wan30_auto_duration = bool(is_wan30_video_model and duration_value == -1)
+                if duration_value <= 0 and not is_wan30_auto_duration:
                     normalized_allowed = self._normalize_duration_enum_values(allowed_durations)
                     duration_value = int(normalized_allowed[0]) if normalized_allowed else 5
-                if isinstance(allowed_durations, list) and allowed_durations:
+                if (
+                    not is_wan30_auto_duration
+                    and isinstance(allowed_durations, list)
+                    and allowed_durations
+                ):
                     mapped_duration = self._map_duration_nearest(
                         duration_value,
                         allowed_durations,
@@ -18656,12 +18678,15 @@ class MediaGenerationService:
 
                 max_duration = runtime_enum_catalog.get("max_duration")
                 try:
-                    if max_duration is not None:
+                    if max_duration is not None and not is_wan30_auto_duration:
                         duration_value = min(int(duration_value), int(max_duration))
                 except Exception:
                     pass
-                duration_normalized = int(max(1, duration_value))
-                payload_input["duration"] = str(duration_normalized) if duration_string_required_model else duration_normalized
+                if is_wan30_auto_duration:
+                    payload_input["duration"] = -1
+                else:
+                    duration_normalized = int(max(1, duration_value))
+                    payload_input["duration"] = str(duration_normalized) if duration_string_required_model else duration_normalized
 
                 # Propagate project/request-level sound setting to all video models.
                 # Previously only kling 2.6 explicitly consumed this flag.
@@ -19060,6 +19085,135 @@ class MediaGenerationService:
                 payload_input["generate_audio"] = bool(payload_input.get("sound"))
             elif "generate_audio" in tool_conf:
                 payload_input["generate_audio"] = bool(tool_conf.get("generate_audio"))
+
+        if is_wan30_video_model:
+            wan30_allowed_res = {"480P", "720P", "1080P"}
+            wan30_allowed_ar = {"adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"}
+
+            raw_res = self._normalize_kie_video_p_resolution(
+                payload_input.get("resolution")
+                or tool_conf.get("resolution")
+                or tool_conf.get("video_resolution")
+            )
+            if self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft")):
+                payload_input["resolution"] = "480P"
+            elif raw_res in wan30_allowed_res:
+                payload_input["resolution"] = raw_res
+            else:
+                payload_input["resolution"] = "720P"
+
+            ar_text = str(payload_input.get("aspect_ratio") or normalized_ar or "").strip()
+            if ar_text.lower() in {"auto", "adaptive"}:
+                payload_input["aspect_ratio"] = "adaptive"
+            elif ar_text in wan30_allowed_ar:
+                payload_input["aspect_ratio"] = ar_text
+            else:
+                payload_input["aspect_ratio"] = "adaptive"
+
+            try:
+                wan30_duration = int(float(payload_input.get("duration")))
+            except Exception:
+                wan30_duration = 5
+            if wan30_duration == -1:
+                payload_input["duration"] = -1
+            else:
+                payload_input["duration"] = int(min(30, max(2, wan30_duration)))
+
+            audio_raw = tool_conf.get("audio")
+            if audio_raw is None:
+                audio_raw = payload_input.get("audio")
+            if audio_raw is None:
+                audio_raw = payload_input.get("sound")
+            if audio_raw is None:
+                audio_raw = tool_conf.get("sound")
+            if audio_raw is None:
+                audio_raw = tool_conf.get("generate_audio")
+            if audio_raw is None:
+                payload_input["audio"] = True
+            elif isinstance(audio_raw, bool):
+                payload_input["audio"] = audio_raw
+            else:
+                payload_input["audio"] = str(audio_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+            payload_input.pop("sound", None)
+            payload_input.pop("generate_audio", None)
+
+            wan_images: List[str] = []
+            if isinstance(payload_input.get("image_urls"), list):
+                wan_images.extend([str(x).strip() for x in payload_input.get("image_urls") or [] if str(x).strip()])
+            single_image = str(payload_input.get("image_url") or payload_input.get("first_frame_url") or "").strip()
+            if single_image:
+                wan_images.append(single_image)
+            wan_images = [x for x in dict.fromkeys(wan_images) if x][:10]
+
+            def _collect_public_media_urls(raw_value: Any, *, limit: int) -> List[str]:
+                items = raw_value if isinstance(raw_value, list) else ([raw_value] if raw_value else [])
+                out: List[str] = []
+                for item in items:
+                    raw_ref = str(item or "").strip()
+                    if not raw_ref:
+                        continue
+                    resolved_ref = self._resolve_public_media_url(raw_ref) or raw_ref
+                    if self._is_public_http_url(resolved_ref):
+                        out.append(resolved_ref)
+                return [x for x in dict.fromkeys(out) if x][:limit]
+
+            wan_videos = _collect_public_media_urls(
+                tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls"),
+                limit=5,
+            )
+            wan_audios = _collect_public_media_urls(
+                tool_conf.get("reference_audio_urls") or tool_conf.get("ref_audio_urls"),
+                limit=5,
+            )
+            wan_files = _collect_public_media_urls(
+                tool_conf.get("reference_file_urls") or tool_conf.get("ref_file_urls"),
+                limit=1,
+            )
+            wan_links = _collect_public_media_urls(
+                tool_conf.get("reference_link_urls") or tool_conf.get("ref_link_urls"),
+                limit=1,
+            )
+            last_frame_text = str(payload_input.get("last_frame_url") or "").strip()
+            has_ref_bundle = bool(wan_videos or wan_audios or wan_files or wan_links)
+
+            payload_input.pop("image_urls", None)
+            payload_input.pop("image_url", None)
+            payload_input.pop("input_urls", None)
+            payload_input.pop("reference_image_urls", None)
+            payload_input.pop("reference_video_urls", None)
+            payload_input.pop("reference_audio_urls", None)
+            payload_input.pop("reference_file_urls", None)
+            payload_input.pop("reference_link_urls", None)
+
+            if has_ref_bundle:
+                if wan_images:
+                    payload_input["reference_image_urls"] = wan_images
+                if wan_videos:
+                    payload_input["reference_video_urls"] = wan_videos
+                if wan_audios:
+                    payload_input["reference_audio_urls"] = wan_audios
+                if wan_files:
+                    payload_input["reference_file_urls"] = wan_files
+                if wan_links:
+                    payload_input["reference_link_urls"] = wan_links
+                payload_input.pop("first_frame_url", None)
+                payload_input.pop("last_frame_url", None)
+            elif last_frame_text and wan_images:
+                payload_input["first_frame_url"] = wan_images[0]
+                payload_input["last_frame_url"] = last_frame_text
+            elif len(wan_images) == 1:
+                payload_input["first_frame_url"] = wan_images[0]
+                payload_input.pop("last_frame_url", None)
+            elif len(wan_images) == 2:
+                payload_input["first_frame_url"] = wan_images[0]
+                payload_input["last_frame_url"] = wan_images[1]
+            elif len(wan_images) >= 3:
+                payload_input["reference_image_urls"] = wan_images
+                payload_input.pop("first_frame_url", None)
+                payload_input.pop("last_frame_url", None)
+            else:
+                payload_input.pop("first_frame_url", None)
+                payload_input.pop("last_frame_url", None)
 
         if not use_veo_api and gen_type == "video":
             model_lower = str(model or "").strip().lower()
@@ -19806,9 +19960,12 @@ class MediaGenerationService:
             allowed_aspect_ratios = [str(item or "").strip() for item in runtime_enum_catalog.get("aspect_ratio") or [] if str(item or "").strip()]
             current_ar = str(payload_input_obj.get("aspect_ratio") or "").strip()
             if current_ar and allowed_aspect_ratios:
-                mapped_ar = self._map_aspect_ratio_to_allowed(current_ar, runtime_enum_catalog.get("aspect_ratio"))
-                if mapped_ar:
-                    payload_input_obj["aspect_ratio"] = str(mapped_ar).strip()
+                if is_wan30_video_model and current_ar.lower() in {"adaptive", "auto"}:
+                    payload_input_obj["aspect_ratio"] = "adaptive"
+                else:
+                    mapped_ar = self._map_aspect_ratio_to_allowed(current_ar, runtime_enum_catalog.get("aspect_ratio"))
+                    if mapped_ar:
+                        payload_input_obj["aspect_ratio"] = str(mapped_ar).strip()
 
             allowed_image_sizes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("image_size") or [] if str(item or "").strip()]
             current_image_size = str(payload_input_obj.get("image_size") or "").strip().lower()
@@ -19836,20 +19993,23 @@ class MediaGenerationService:
             if current_duration_text:
                 try:
                     current_duration_int = int(float(current_duration_text))
-                    allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
-                    if isinstance(allowed_durations, list) and allowed_durations:
-                        mapped_duration = self._map_duration_nearest(
-                            current_duration_int,
-                            allowed_durations,
-                            prefer_higher_on_tie=is_seedance_video_model,
-                        )
-                        if mapped_duration is not None:
-                            current_duration_int = int(mapped_duration)
-                    max_duration = runtime_enum_catalog.get("max_duration")
-                    if max_duration is not None:
-                        current_duration_int = min(int(current_duration_int), int(max_duration))
-                    normalized_duration_int = int(max(1, int(current_duration_int)))
-                    payload_input_obj["duration"] = str(normalized_duration_int) if duration_string_required_model else normalized_duration_int
+                    if is_wan30_video_model and current_duration_int == -1:
+                        payload_input_obj["duration"] = -1
+                    else:
+                        allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+                        if isinstance(allowed_durations, list) and allowed_durations:
+                            mapped_duration = self._map_duration_nearest(
+                                current_duration_int,
+                                allowed_durations,
+                                prefer_higher_on_tie=is_seedance_video_model,
+                            )
+                            if mapped_duration is not None:
+                                current_duration_int = int(mapped_duration)
+                        max_duration = runtime_enum_catalog.get("max_duration")
+                        if max_duration is not None:
+                            current_duration_int = min(int(current_duration_int), int(max_duration))
+                        normalized_duration_int = int(max(1, int(current_duration_int)))
+                        payload_input_obj["duration"] = str(normalized_duration_int) if duration_string_required_model else normalized_duration_int
                 except Exception:
                     pass
 

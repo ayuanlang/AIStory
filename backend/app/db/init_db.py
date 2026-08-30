@@ -2471,6 +2471,7 @@ def init_system_api_settings(db):
         _kie_item("Kie Hailuo Standard I2V (Canonical)", "Video", "hailuo/02-image-to-video-standard", "image-to-video"),
         _kie_item("Kie Hailuo 2.3 Pro I2V", "Video", "hailuo/2-3-image-to-video-pro", "image-to-video"),
         _kie_item("Kie Hailuo 2.3 Standard I2V", "Video", "hailuo/2-3-image-to-video-standard", "image-to-video"),
+        _kie_item("Kie Wan 3.0 Video", "Video", "wan/3-0-video", "text-to-video,image-to-video,video-to-video"),
         _kie_item("Kie Wan 2.6 T2V (Canonical)", "Video", "wan/2-6-text-to-video", "text-to-video"),
         _kie_item("Kie Wan 2.6 I2V (Canonical)", "Video", "wan/2-6-image-to-video", "image-to-video"),
         _kie_item("Kie Wan 2.6 V2V (Canonical)", "Video", "wan/2-6-video-to-video", "video-to-video"),
@@ -2563,6 +2564,30 @@ def init_system_api_settings(db):
         logger.info("Seeded %s kie models into system_api_settings", kie_added)
     else:
         logger.info("System kie models already initialized")
+
+    # Enrich Wan 3.0 runtime enum catalog (480P / adaptive / integer duration).
+    wan30_row = db.query(SystemAPISetting).filter(
+        SystemAPISetting.provider == kie_provider,
+        SystemAPISetting.model == "wan/3-0-video",
+    ).first()
+    if wan30_row is not None:
+        wan30_cfg = dict(wan30_row.config or {}) if isinstance(wan30_row.config, dict) else {}
+        wan30_enum = wan30_cfg.get("enum_catalog") if isinstance(wan30_cfg.get("enum_catalog"), dict) else {}
+        wan30_enum_updated = False
+        if not wan30_enum.get("resolution"):
+            wan30_enum["resolution"] = ["480P", "720P", "1080P"]
+            wan30_enum_updated = True
+        if not wan30_enum.get("aspect_ratio"):
+            wan30_enum["aspect_ratio"] = ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"]
+            wan30_enum_updated = True
+        if not wan30_enum.get("duration"):
+            wan30_enum["duration"] = [2, 5, 8, 10, 15, 20, 30, -1]
+            wan30_enum_updated = True
+        if wan30_enum_updated:
+            wan30_cfg["enum_catalog"] = wan30_enum
+            wan30_row.config = wan30_cfg
+            db.commit()
+            logger.info("Updated kie wan/3-0-video enum_catalog")
 
     # Seed baseline Vidu models for system-level configuration.
     vidu_provider = "vidu"

@@ -3703,6 +3703,36 @@
       "tags": null
     },
     {
+      "name": "Kie Wan 3.0 Video",
+      "category": "Video",
+      "provider": "kie",
+      "base_url": "https://api.kie.ai",
+      "model": "wan/3-0-video",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v",
+          "v2v"
+        ]
+      },
+      "config": {
+        "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
+        "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
+        "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
+        "credits_endpoint_v2": "https://api.kie.ai/api/v1/chat/credit",
+        "deprecated": false,
+        "provider_api_key_strategy": "random",
+        "enum_catalog": {
+          "resolution": ["480P", "720P", "1080P"],
+          "aspect_ratio": ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"],
+          "duration": [2, 5, 8, 10, 15, 20, 30, -1]
+        }
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": null
+    },
+    {
       "name": "Kie Wan 2.6 T2V (Canonical)",
       "category": "Video",
       "provider": "kie",

@@ -4429,6 +4429,13 @@ def _ensure_builtin_system_settings(db: Session) -> None:
         _kie_item("Kie Hailuo Standard I2V (Canonical)", "Video", "hailuo/02-image-to-video-standard"),
         _kie_item("Kie Hailuo 2.3 Pro I2V", "Video", "hailuo/2-3-image-to-video-pro"),
         _kie_item("Kie Hailuo 2.3 Standard I2V", "Video", "hailuo/2-3-image-to-video-standard"),
+        _kie_item("Kie Wan 3.0 Video", "Video", "wan/3-0-video", {
+            "enum_catalog": {
+                "resolution": ["480P", "720P", "1080P"],
+                "aspect_ratio": ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"],
+                "duration": [2, 5, 8, 10, 15, 20, 30, -1],
+            }
+        }),
         _kie_item("Kie Wan 2.6 T2V (Canonical)", "Video", "wan/2-6-text-to-video"),
         _kie_item("Kie Wan 2.6 I2V (Canonical)", "Video", "wan/2-6-image-to-video"),
         _kie_item("Kie Wan 2.6 V2V (Canonical)", "Video", "wan/2-6-video-to-video"),
