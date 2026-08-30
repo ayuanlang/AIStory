@@ -97,7 +97,7 @@ def _parse_episode_heading_from_markdown(text: str) -> Dict[str, Any]:
     )
     looks_like_script_structure = bool(
         second_line and re.match(
-            r"^(?:##\s*)?(?:-?1\)|核心内容纲要|本集卖点|娱乐化段子|Logline|Scenes|Ending Hook)\b",
+            r"^(?:##\s*)?(?:-?1\)|核心重点|核心内容纲要|本集卖点|场景列表|剧情一句话|结尾钩子|Logline|Scenes|Ending Hook)\b",
             second_line,
             flags=re.IGNORECASE,
         )
@@ -297,7 +297,7 @@ async def generate_markdown_with_retry(
         "If this is Story DNA: wrap Part 1 in [STORY_DNA_THINKING_START]/[STORY_DNA_THINKING_END], "
         "and wrap §0–§9 (including [SCRIPT_TITLE:…]) in [STORY_DNA_OUTPUT_START]/[STORY_DNA_OUTPUT_END]. "
         "If this is an episode script: wrap analysis in [EPISODE_SCRIPT_THINKING_START]/[EPISODE_SCRIPT_THINKING_END], "
-        "and wrap the official script (H1 + 核心内容纲要 + 卖点 + scenes + hooks) in "
+        "and wrap the official script (H1 + 核心重点 + scenes + beats + emergency recovery) in "
         "[EPISODE_SCRIPT_OUTPUT_START]/[EPISODE_SCRIPT_OUTPUT_END]. "
         "OUTPUT block first non-empty line must be [SCRIPT_TITLE:…] or a markdown header starting with '# '.\n"
         "Otherwise: the first non-empty line must be an H1 markdown header starting with '# '."
@@ -327,7 +327,7 @@ async def generate_markdown_with_retry(
         "or a markdown header starting with '# '.\n"
         "If this is an episode script: include [EPISODE_SCRIPT_THINKING_START]/[EPISODE_SCRIPT_THINKING_END] and "
         "[EPISODE_SCRIPT_OUTPUT_START]/[EPISODE_SCRIPT_OUTPUT_END]; OUTPUT must begin with `# {n}-{title}` "
-        "and include 核心内容纲要, 卖点, and [SCENES_BLOCK_START].\n"
+        "and include 核心重点, [SCENES_BLOCK_START], and [EMERGENCY_RECOVERY_BLOCK_START].\n"
         "Otherwise: the first non-empty line must be an H1 markdown header starting with '# '."
     )
     final_retry_user_prompt = (

@@ -793,7 +793,9 @@ async def structure_project_creative_input_to_story_fields(
         "plus AT LEAST 5 auxiliaries (older classics OK only as auxiliaries; each a different dimension) so I6-I8 is not a remake of the primary. "
         "Cross-style transfer is required: keep causal/beat/set-piece logic, "
         "transcode genre/skin (e.g. modern workplace engine → ancient palace drama). Do not default a pre-modern classic as the primary spine. "
-        "For each work write reusable logic (core plot, set pieces, VFX function, action, dialogue) and 转译. "
+        "For each work write reusable logic (core plot, set pieces, VFX function, action, dialogue, "
+        "and how distance/comms/blocking actually work on screen) and 转译. "
+        "I6-I8 beats must be physically shootable: no long-distance conversation without a comms tool or same-space staging. "
         "Prioritize climax and iconic scenes (I7a) using visual, dialogue, and action reference angles."
     )
     raw = await _run_structure_llm_call(

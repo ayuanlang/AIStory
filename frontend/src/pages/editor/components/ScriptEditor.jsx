@@ -1061,19 +1061,45 @@ const stripEpisodeScriptThinkingBlocks = (raw) => {
         .trim();
 };
 
+const PAGE_KEEP_HEADING = '核心重点|核心内容纲要|本集卖点|场景列表|场景进入|剧情一句话|结尾钩子|紧急回收';
+const PAGE_DROP_HEADING = '-?1\\)\\s*类型执行摘要|类型执行摘要|剧情连贯自检|娱乐化段子|桥段凝聚汇总|分集开局规划|写后核销总表|框架核销清单|大纲逐字分析台账|核心卖点（制作指导）|AI 视频研判';
+
 const stripLegacyEpisodeAnalysisSections = (raw) => {
     let source = String(raw || '').trim();
     if (!source) return '';
     source = source.replace(
-        /^(?:#{1,6}\s*)?-?1\)\s*类型执行摘要\b[\s\S]*?(?=^(?:#{1,6}\s*)?(?:核心内容纲要|本集卖点|娱乐化段子|场景列表|剧情一句话)|\[SCENES_BLOCK_START\]|\[EPISODE_SCRIPT_OUTPUT_START\])/gim,
+        new RegExp(
+            `^(?:#{1,6}\\s*)?-?1\\)\\s*类型执行摘要\\b[\\s\\S]*?(?=^(?:#{1,6}\\s*)?(?:${PAGE_KEEP_HEADING})|\\[SCENES_BLOCK_START\\]|\\[EPISODE_SCRIPT_OUTPUT_START\\])`,
+            'gim'
+        ),
         ''
     );
     source = source.replace(
-        /^(?:#{1,6}\s*)?类型执行摘要\b[\s\S]*?(?=^(?:#{1,6}\s*)?(?:核心内容纲要|本集卖点|娱乐化段子|场景列表|剧情一句话)|\[SCENES_BLOCK_START\])/gim,
+        new RegExp(
+            `^(?:#{1,6}\\s*)?类型执行摘要\\b[\\s\\S]*?(?=^(?:#{1,6}\\s*)?(?:${PAGE_KEEP_HEADING})|\\[SCENES_BLOCK_START\\])`,
+            'gim'
+        ),
         ''
     );
     source = source.replace(
-        /^(?:#{1,6}\s*)?剧情连贯自检\b[\s\S]*?(?=^(?:#{1,6}\s*)?(?:剧情一句话|结尾钩子)|\[EMERGENCY_RECOVERY_BLOCK_START\]|\[BRIDGE_BLOCK_START\]|\s*$)/gim,
+        /^(?:#{1,6}\s*)?剧情连贯自检\b[\s\S]*?(?=^(?:#{1,6}\s*)?(?:剧情一句话|结尾钩子|紧急回收)|\[EMERGENCY_RECOVERY_BLOCK_START\]|\[BRIDGE_BLOCK_START\]|\s*$)/gim,
+        ''
+    );
+    return source.replace(/\n{3,}/g, '\n\n').trim();
+};
+
+const trimEpisodeScriptForPage = (raw) => {
+    let source = String(raw || '').trim();
+    if (!source) return '';
+    source = source.replace(
+        /(?:━{6,}\s*)?\[\s*BRIDGE_BLOCK_START\s*\][\s\S]*?\[\s*BRIDGE_BLOCK_END\s*\](?:\s*━{6,})?/gi,
+        ''
+    );
+    source = source.replace(
+        new RegExp(
+            `^(?:#{1,6}\\s*)?(?:${PAGE_DROP_HEADING})[\\s\\S]*?(?=^(?:#{1,6}\\s*)?(?:${PAGE_KEEP_HEADING})|\\[SCENES_BLOCK_START\\]|\\[EMERGENCY_RECOVERY_BLOCK_START\\]|\\s*$)`,
+            'gim'
+        ),
         ''
     );
     return source.replace(/\n{3,}/g, '\n\n').trim();
@@ -1083,8 +1109,10 @@ const extractOfficialEpisodeScript = (raw) => {
     const source = String(raw || '');
     if (!source.trim()) return '';
     const marked = extractBetweenEpisodeScriptMarkers(source, 'OUTPUT');
-    if (marked) return marked;
-    const cleaned = stripLegacyEpisodeAnalysisSections(stripEpisodeScriptThinkingBlocks(source));
+    if (marked) return trimEpisodeScriptForPage(stripLegacyEpisodeAnalysisSections(marked));
+    const cleaned = trimEpisodeScriptForPage(
+        stripLegacyEpisodeAnalysisSections(stripEpisodeScriptThinkingBlocks(source))
+    );
     return cleaned || source.trim();
 };
 

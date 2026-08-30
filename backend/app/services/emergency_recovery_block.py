@@ -114,11 +114,11 @@ def build_previous_episode_handoff_prompt_block(
         "  1) Previous EMERGENCY_RECOVERY_BLOCK = PENDING emergency items THIS episode must resolve "
         "in opening/early scenes (待本集紧急核销). Prove resolution in 类型执行摘要「上集紧急回收核销块」 "
         "with `兑现=scene_id@Beat` + `状态=已兑现`. Do NOT treat this footer block as 'already solved'.\n",
-        "  2) Previous BRIDGE_BLOCK: continue/contrast trope motifs; avoid mindless repeat; localize upgrades; "
-        "do NOT treat its `回收=` as this episode's emergency-recovery checklist.\n",
+        "  2) Previous BRIDGE_BLOCK (optional; newer drafts omit it from the script page): "
+        "if present, continue/contrast trope motifs; do NOT treat its `回收=` as emergency-recovery.\n",
         "- Then: (a) write resolved proof in 类型执行摘要; "
         "(b) write THIS episode's footer EMERGENCY_RECOVERY_BLOCK = NEW pending items for the NEXT episode "
-        "(`状态=待下集核销`); (c) write THIS episode's BRIDGE_BLOCK.\n",
+        "(`状态=待下集核销`). Do not write BRIDGE_BLOCK into the official script page.\n",
     ]
     if missing:
         parts.append(

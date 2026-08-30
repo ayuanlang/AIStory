@@ -81,6 +81,21 @@ def strip_episode_script_thinking_blocks(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
+_PAGE_KEEP_HEADING = (
+    r"核心重点|核心内容纲要|本集卖点|场景列表|场景进入|剧情一句话|结尾钩子|紧急回收"
+)
+_PAGE_DROP_HEADING = (
+    r"-?1\)\s*类型执行摘要|类型执行摘要|剧情连贯自检|娱乐化段子|桥段凝聚汇总|"
+    r"分集开局规划|写后核销总表|框架核销清单|大纲逐字分析台账|"
+    r"核心卖点（制作指导）|AI 视频研判"
+)
+
+_BRIDGE_BLOCK_RE = re.compile(
+    r"(?:━{6,}\s*)?\[\s*BRIDGE_BLOCK_START\s*\][\s\S]*?\[\s*BRIDGE_BLOCK_END\s*\](?:\s*━{6,})?",
+    flags=re.IGNORECASE,
+)
+
+
 def _strip_legacy_analysis_sections(text: str) -> str:
     """Drop 类型执行摘要 / 剧情连贯自检 from unmarked legacy drafts."""
     source = str(text or "").strip()
@@ -88,17 +103,36 @@ def _strip_legacy_analysis_sections(text: str) -> str:
         return ""
 
     source = re.sub(
-        r"(?ms)^(?:#{1,6}\s*)?-?1\)\s*类型执行摘要\b[\s\S]*?(?=^(?:#{1,6}\s*)?(?:核心内容纲要|本集卖点|娱乐化段子|场景列表|剧情一句话)|\[SCENES_BLOCK_START\]|\[EPISODE_SCRIPT_OUTPUT_START\])",
+        rf"(?ms)^(?:#{{1,6}}\s*)?-?1\)\s*类型执行摘要\b[\s\S]*?(?=^(?:#{{1,6}}\s*)?(?:{_PAGE_KEEP_HEADING})|\[SCENES_BLOCK_START\]|\[EPISODE_SCRIPT_OUTPUT_START\])",
         "",
         source,
     )
     source = re.sub(
-        r"(?ms)^(?:#{1,6}\s*)?类型执行摘要\b[\s\S]*?(?=^(?:#{1,6}\s*)?(?:核心内容纲要|本集卖点|娱乐化段子|场景列表|剧情一句话)|\[SCENES_BLOCK_START\])",
+        rf"(?ms)^(?:#{{1,6}}\s*)?类型执行摘要\b[\s\S]*?(?=^(?:#{{1,6}}\s*)?(?:{_PAGE_KEEP_HEADING})|\[SCENES_BLOCK_START\])",
         "",
         source,
     )
     source = re.sub(
-        r"(?ms)^(?:#{1,6}\s*)?剧情连贯自检\b[\s\S]*?(?=^(?:#{1,6}\s*)?(?:剧情一句话|结尾钩子)|\[EMERGENCY_RECOVERY_BLOCK_START\]|\[BRIDGE_BLOCK_START\]|\Z)",
+        rf"(?ms)^(?:#{{1,6}}\s*)?剧情连贯自检\b[\s\S]*?(?=^(?:#{{1,6}}\s*)?(?:剧情一句话|结尾钩子|紧急回收)|\[EMERGENCY_RECOVERY_BLOCK_START\]|\[BRIDGE_BLOCK_START\]|\Z)",
+        "",
+        source,
+    )
+    return re.sub(r"\n{3,}", "\n\n", source).strip()
+
+
+def trim_episode_script_for_page(text: str) -> str:
+    """Keep only script-page payload for scene_split / 分场.
+
+    Keeps: title, 核心重点 (or legacy 纲要/卖点), scenes + beats, handoff, emergency recovery.
+    Drops: entertainment ledger, BRIDGE / 桥段凝聚汇总, leftover process sections.
+    """
+    source = str(text or "").strip()
+    if not source:
+        return ""
+
+    source = _BRIDGE_BLOCK_RE.sub("", source)
+    source = re.sub(
+        rf"(?ms)^(?:#{{1,6}}\s*)?(?:{_PAGE_DROP_HEADING})[\s\S]*?(?=^(?:#{{1,6}}\s*)?(?:{_PAGE_KEEP_HEADING})|\[SCENES_BLOCK_START\]|\[EMERGENCY_RECOVERY_BLOCK_START\]|\Z)",
         "",
         source,
     )
@@ -110,7 +144,8 @@ def extract_official_episode_script(text: str) -> str:
 
     Prefer `[EPISODE_SCRIPT_OUTPUT_START]…[EPISODE_SCRIPT_OUTPUT_END]`.
     Fall back to stripping thinking + legacy analysis sections so title,
-    核心内容纲要, 卖点, scenes, logline, and hooks stay intact.
+    核心重点, scenes, logline, and emergency recovery stay intact.
+    Always trim process-analysis leftovers before persist / 剧本页.
     """
     source = str(text or "")
     if not source.strip():
@@ -118,10 +153,12 @@ def extract_official_episode_script(text: str) -> str:
 
     marked = extract_episode_script_output_between_markers(source)
     if marked.get("found") and str(marked.get("content") or "").strip():
-        return str(marked.get("content") or "").strip()
+        cleaned = _strip_legacy_analysis_sections(str(marked.get("content") or ""))
+        return trim_episode_script_for_page(cleaned)
 
     cleaned = strip_episode_script_thinking_blocks(source)
     cleaned = _strip_legacy_analysis_sections(cleaned)
+    cleaned = trim_episode_script_for_page(cleaned)
     return cleaned.strip() or source.strip()
 
 

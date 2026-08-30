@@ -23,6 +23,7 @@ Rules:
 - **Auxiliary count (硬约束)**：除主框架外，**辅助参考至少 5 部**（文学/影视/游戏均可；可含更早经典）。用途=拆开主框架，避免 I6–I8 变成主框架情节的整段翻拍。5 部须各贡献**不同维度**（桥段/特效机制/动作语法/对白机制/反转类型/人物关系等），禁 5 部只换皮复述主框架同一条因果。I6–I8 须能看出辅助机制的掺入，不能只沿主框架节拍走完。
 - **Cross-style transfer (硬约束)**：I10 借的是剧情逻辑，不是原作皮相。鼓励把**现代/当代骨架**转译到本剧时代/类型（现代→古代、职场→宫廷、科幻→仙侠、游戏任务链→连续剧）。须写清「原作逻辑 → 本剧转译」。禁止因本剧是古装/仙侠就改选古代原典当主框架；禁止把原作服装/时代/特效原样搬进本剧。
 - **AI-unfriendly plot vehicles (硬约束)**：I6a / I6b / I6c / I7a / I8b 等**主情节**（激励、升级、转折、高潮、名场面、钩子埋响、关键证物/密信/令牌转移、逃生或行刺成败）**禁止**挂靠藏入袖口、从袖中取出、塞怀/掏怀、掖腰、暗袋内袋掏摸、靴筒/袜筒藏取、发髻藏针、袖里传物、指尖夹取递密件等 AI 不友好衣腔/精细手部操作。须改挂可见载体：案上/桌上已具名物伸手取起、掌心握入/自手边取起、可见匣/函/托盘/包取出、当众出示、对白或 OS 交代已到手、对位线里柜匣已入画。用户脑洞若用藏袖等写主情节，**保留专名、对白与情节功能，只换兑现方式**。纯气氛、不承担转折/证据的此类动作直接删，勿写入 I 块。
+- **Shootable physical/comms logic (硬约束)**：I6a / I6b / I6c / I7a 的情节、动作、对白、站位须对标**真实经典作品**里已被拍过的物理/通讯/走位逻辑（信息如何跨距送达、人如何到场、对白如何被听见、对峙距离）。**禁止**概念空想：两人异地却像同场对谈且无通讯工具（电话/对讲/短信/传书/信使/可见传音符等已写机制）；隔街/隔城当面对讲无介质；未见走近却已贴身抓人。概念须写成可核销细节：谁在何处、信息通道=`当面同场|通讯|信使/传书|已设定超能传音`。I10 除剧情逻辑外须摘各部「通讯/距离/站位如何成立」。
 
 The JSON object MUST contain exactly these keys (all string values):
 - "logline": I1 Logline / high concept hook.
@@ -37,7 +38,7 @@ The JSON object MUST contain exactly these keys (all string values):
 - "resolution": I7b Ending and resolution.
 - "suspense": I8a Core suspense questions.
 - "foreshadowing": I8b Must-keep foreshadowing and constraints.
-- "classic_framework": I10 Classic works framework. MUST (a) pick ONE **modern/contemporary** primary work (literature / film / TV / game; 优先现代、当代) as the **plot-logic spine** — may differ in genre/style from this story; (b) list **at least 5 auxiliaries** (older classics OK as auxiliaries only) each contributing a **different** set-piece / VFX / action / dialogue / reversal **function**, so I6–I8 is not a remake of the primary; (c) for EVERY named work write: 剧情逻辑或可转译机制 + **转译到本剧**. Format: 主框架：《作品》（现代/当代·媒介）— 剧情逻辑：…；桥段：…；转译：…。辅助1–5+：《作品》— 贡献维度=桥段|特效|动作|对白|反转|关系；机制：…；转译：…。Forbidden: unnamed tropes; fewer than 5 auxiliaries; 5 auxiliaries that only retell the primary plot; using a pre-modern classic as default primary; copying source costumes/era/VFX literally; "类似某某类型".
+- "classic_framework": I10 Classic works framework. MUST (a) pick ONE **modern/contemporary** primary work (literature / film / TV / game; 优先现代、当代) as the **plot-logic spine** — may differ in genre/style from this story; (b) list **at least 5 auxiliaries** (older classics OK as auxiliaries only) each contributing a **different** set-piece / VFX / action / dialogue / reversal **function**, so I6–I8 is not a remake of the primary; (c) for EVERY named work write: 剧情逻辑或可转译机制 + **转译到本剧** + **可拍逻辑（通讯/距离/站位如何成立）**. Format: 主框架：《作品》（现代/当代·媒介）— 剧情逻辑：…；桥段：…；可拍逻辑：…；转译：…。辅助1–5+：《作品》— 贡献维度=桥段|特效|动作|对白|反转|关系；机制：…；可拍逻辑：…；转译：…。Forbidden: unnamed tropes; fewer than 5 auxiliaries; 5 auxiliaries that only retell the primary plot; using a pre-modern classic as default primary; copying source costumes/era/VFX literally; "类似某某类型"; 异地无通讯对谈等不可拍概念.
 - "extra_notes": I9 leftover uncategorized fragments (may be empty).
 
 Keep each value concise but vivid (1-5 sentences). I7a and I10 may be slightly longer when needed to capture名场面细节 and named-work mappings.

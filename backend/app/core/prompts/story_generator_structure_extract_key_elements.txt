@@ -8,7 +8,7 @@ Rules:
 - Infer the dominant language of the input and write every JSON value in that same language.
 - Preserve the user's original intent; do not invent a different story.
 - Search terms must be concrete and web-searchable (genre labels, trope names, conflict hooks, reference works, climax types, iconic scene types, dialogue hooks, action/visual beats).
-- Give extra weight to: a **modern/contemporary** plot-LOGIC skeleton (literature / film / TV / game; 优先现代、当代作品，非古典名著优先) that can be **cross-style transferred** (现代→古代、职场→宫廷、科幻→仙侠等)；then climax, confrontation, reversal, and memorable set-piece FUNCTIONS already present in the brainstorm.
+- Give extra weight to: a **modern/contemporary** plot-LOGIC skeleton (literature / film / TV / game; 优先现代、当代作品，非古典名著优先) that can be **cross-style transferred** (现代→古代、职场→宫廷、科幻→仙侠等)；then climax, confrontation, reversal, and memorable set-piece FUNCTIONS already present in the brainstorm. Also surface how those works handle **distance, comms tools, and blocking** (电话蒙太奇/传书/隔墙听/对峙距离) so I6–I8 stays shootable.
 - **Primary-framework era (硬约束)**：`plot_framework_candidates` 须**优先**现代/当代作品（约近几十年已被验证的影视/文学/游戏）。古典/古代原典只作辅助或主框架实在找不到当代对等逻辑时才用，并标原因。
 - **Auxiliary count (硬约束)**：`auxiliary_reference_works` **至少 5 部**（不含主框架），用来拆开主框架、避免整段照搬其情节。5 部须覆盖不同可转译维度（桥段/特效/动作/对白/反转/人物关系等），禁 5 部都复述主框架同一条因果链。
 - Do NOT limit candidates to the same genre or visual style as the brainstorm. Prefer a strong causal/beat engine even if the source medium differs. The SOURCE era should still prefer modern/contemporary.
@@ -26,11 +26,11 @@ Required JSON keys:
 - "plot_framework_candidates": array of 1-3 PRIMARY works whose **plot logic** could serve as this story's framework; **must prefer modern/contemporary** titles first (may differ in genre/style from this story; do not default to pre-modern classics)
 - "auxiliary_reference_works": array of **at least 5** supporting works (not counting the primary) that supply transferable set-piece/VFX/action/dialogue/reversal **functions** different from the primary spine; older classics OK as auxiliaries; purpose = prevent a beat-for-beat remake of the primary
 - "plot_framework_search_terms": array of plot-logic terms (inheritance, cover-up, false identity, revenge delay, etc.) to search **modern/contemporary** frameworks first across literature, film, TV, and games — then cross-genre phrasings
-- "classic_content_search_terms": array of terms to search those works' reusable **logic**: core plot engine, set-piece function, VFX function, action grammar, dialogue mechanism (not costume/era matching)
+- "classic_content_search_terms": array of terms to search those works' reusable **logic**: core plot engine, set-piece function, VFX function, action grammar, dialogue mechanism, **and how they handle distance/comms/blocking** (电话蒙太奇/对讲对切/传书驿骑/隔墙窃听/同场对峙距离 — not costume/era matching)
 - "iconic_scene_search_terms": array of terms to search famous/iconic scenes (名场面)
 - "climax_search_terms": array of terms to search climax/high-point scenes in similar works
 - "dialogue_search_terms": array of terms to search classic dialogue, lines, verbal confrontations
-- "action_visual_search_terms": array of terms to search iconic action blocking, visual composition, camera-worthy moments
+- "action_visual_search_terms": array of terms to search iconic action blocking, visual composition, camera-worthy moments, **plus shootable comms/distance staging** (谁在何处、如何说上话、如何走到可触达)
 - "classic_scene_search_terms": array of terms to search classic iconic scenes (broader)
 - "trope_search_terms": array of terms to search popular drama tropes/plot beats (including comedic and entertaining tropes)
 - "hot_topic_search_terms": array of terms to search current hot topics/trending hooks
