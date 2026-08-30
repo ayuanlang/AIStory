@@ -33,10 +33,51 @@ TOKEN_NAME_PATTERN = re.compile(
 APPLICABLE_SCENE_PATTERN = re.compile(r"适用场\s*=\s*([^\n]+)", re.IGNORECASE)
 SCENE_ID_TOKEN_PATTERN = re.compile(r"EP\d{2}_SC\d{2}[A-Za-z]*", re.IGNORECASE)
 CROWD_ROLE_TOKENS = {"群演簇", "群演"}
+_NAMEPLATE_PLOT_LEAK_CN = (
+    "落魄",
+    "落寞",
+    "败落",
+    "发迹",
+    "贬谪",
+    "卧底",
+    "伪装",
+    "假面",
+    "复仇",
+    "曾经",
+    "前任",
+    "女主",
+    "男主",
+    "反派",
+    "配角",
+    "主角",
+    "龙套",
+    "番位",
+    "揭穿",
+    "真身",
+    "即将",
+    "隐藏",
+)
+_NAMEPLATE_PLOT_LEAK_EN = re.compile(
+    r"\b(fallen|former|undercover|revenge|hidden|villain|protagonist|"
+    r"heroine|male\s+lead|female\s+lead|supporting\s+role)\b",
+    re.IGNORECASE,
+)
 
 
 def _clean(value: object) -> str:
     return str(value or "").strip()
+
+
+def _public_nameplate_label(value: str) -> str:
+    """Keep occupation/public identity only; empty if plot or positioning leaks."""
+    text = _clean(value)
+    if not text or text == "无":
+        return "无"
+    if any(token in text for token in _NAMEPLATE_PLOT_LEAK_CN):
+        return "无"
+    if _NAMEPLATE_PLOT_LEAK_EN.search(text):
+        return "无"
+    return text
 
 
 def _names_from_extract_items(block: str, item_pattern: re.Pattern[str]) -> List[str]:
@@ -169,27 +210,26 @@ def _subtitle_display_name_en(
 
 
 def _character_tag(record_text: str) -> str:
-    tag = extract_char_field(record_text, "标签")
-    if tag and tag != "无":
+    tag = _public_nameplate_label(extract_char_field(record_text, "标签"))
+    if tag != "无":
         return tag
-    identity = current_world_identity(extract_char_field(record_text, "身份"))
-    if identity:
-        return identity
-    return "无"
+    return _public_nameplate_label(
+        current_world_identity(extract_char_field(record_text, "身份"))
+    )
 
 
 def _character_tag_en(record_text: str, base_text: str = "") -> str:
-    tag_en = extract_char_field(record_text, "标签_en")
-    if tag_en and tag_en != "无":
+    tag_en = _public_nameplate_label(extract_char_field(record_text, "标签_en"))
+    if tag_en != "无":
         return tag_en
     if base_text:
-        inherited = extract_char_field(base_text, "标签_en")
-        if inherited and inherited != "无":
+        inherited = _public_nameplate_label(extract_char_field(base_text, "标签_en"))
+        if inherited != "无":
             return inherited
     return "无"
 
 
-def _character_label_style(record_text: str, field_name: str, base_text: str = "", tag: str = "") -> str:
+def _character_label_style(record_text: str, field_name: str, base_text: str = "") -> str:
     value = extract_char_field(record_text, field_name)
     if value and value != "无":
         return value
@@ -197,8 +237,6 @@ def _character_label_style(record_text: str, field_name: str, base_text: str = "
         inherited = extract_char_field(base_text, field_name)
         if inherited and inherited != "无":
             return inherited
-    if tag == "无":
-        return "无"
     return "待补"
 
 
@@ -256,6 +294,7 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         "此为片内图形名牌（物理文字），不是对白硬字幕；禁写成画幅底部白字黑边。"
         "剧本或提取块已写的字样/字体/字色原样服从，禁改写。"
         "中文项目用 裸名+标签；英文项目用 裸名_en+标签_en；禁中英并列、禁用错语种上屏。"
+        "标签仅职业/公开身份等明面信息，禁剧情发展与角色定位；为无则只打裸名，禁臆造。"
         "字体/字色为无或待补则跟 Global_Style 补一书体+具名色。"
         "字幕=已过|无 则不写。"
     )
@@ -284,12 +323,12 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         )
         base_text = _record_by_name(records, base_name).get("text") or ""
         tag_en = _character_tag_en(text, base_text)
-        font = _character_label_style(text, "标签字体", base_text, tag)
-        color = _character_label_style(text, "标签字色", base_text, tag)
+        font = _character_label_style(text, "标签字体", base_text)
+        color = _character_label_style(text, "标签字色", base_text)
         plot_role = _header_field(text, "番位")
         display_name = _subtitle_display_name(name, text)
         display_name_en = _subtitle_display_name_en(name, text, records)
-        if plot_role in CROWD_ROLE_TOKENS or tag == "无":
+        if plot_role in CROWD_ROLE_TOKENS:
             subtitle = "无"
             font = "无"
             color = "无"

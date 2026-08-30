@@ -24,13 +24,15 @@ Rules:
 - **Cross-style transfer (硬约束)**：I10 借的是剧情逻辑，不是原作皮相。鼓励把**现代/当代骨架**转译到本剧时代/类型（现代→古代、职场→宫廷、科幻→仙侠、游戏任务链→连续剧）。须写清「原作逻辑 → 本剧转译」。禁止因本剧是古装/仙侠就改选古代原典当主框架；禁止把原作服装/时代/特效原样搬进本剧。
 - **AI-unfriendly plot vehicles (硬约束)**：I6a / I6b / I6c / I7a / I8b 等**主情节**（激励、升级、转折、高潮、名场面、钩子埋响、关键证物/密信/令牌转移、逃生或行刺成败）**禁止**挂靠藏入袖口、从袖中取出、塞怀/掏怀、掖腰、暗袋内袋掏摸、靴筒/袜筒藏取、发髻藏针、袖里传物、指尖夹取递密件等 AI 不友好衣腔/精细手部操作。须改挂可见载体：案上/桌上已具名物伸手取起、掌心握入/自手边取起、可见匣/函/托盘/包取出、当众出示、对白或 OS 交代已到手、对位线里柜匣已入画。用户脑洞若用藏袖等写主情节，**保留专名、对白与情节功能，只换兑现方式**。纯气氛、不承担转折/证据的此类动作直接删，勿写入 I 块。
 - **Shootable physical/comms logic (硬约束)**：I6a / I6b / I6c / I7a 的情节、动作、对白、站位须对标**真实经典作品**里已被拍过的物理/通讯/走位逻辑（信息如何跨距送达、人如何到场、对白如何被听见、对峙距离）。**禁止**概念空想：两人异地却像同场对谈且无通讯工具（电话/对讲/短信/传书/信使/可见传音符等已写机制）；隔街/隔城当面对讲无介质；未见走近却已贴身抓人。概念须写成可核销细节：谁在何处、信息通道=`当面同场|通讯|信使/传书|已设定超能传音`。I10 除剧情逻辑外须摘各部「通讯/距离/站位如何成立」。
+- **Character names must not spoil plot (硬约束)**：I5 取名须用该时代/地域**日常人名**（中文名+英文名即可）。**禁止**按剧情功能、弧光、结局、隐藏身份、道德定性取名或把剧情词嵌进姓名。用户脑洞已写的姓名**逐字保留**。失败：复仇者/真凶/内鬼/叛徒/卧底/白莲/笑面虎/杀父仇人/幕后/必败 等作名或名中字。通过：林一、王启明——听名猜不出后事。
+- **Hidden villain not exposed early (硬约束；大纲将升为最高原则）**：I5 / I6 / I7 中**不是公开反派**的角色，禁止一出场就用行为或对白暴露。越大的反派（最终 Boss / 幕后）越晚才允许蛛丝马迹；前期只写手下、代理、事件后果，主角反查发现矛盾之后才近本尊。开场即公开的对手不受限。禁本人开场阴狠对白、亲手做脏、一眼可判。
 
 The JSON object MUST contain exactly these keys (all string values):
 - "logline": I1 Logline / high concept hook.
 - "theme": I2 Theme / controlling idea.
 - "core_conflict": I3 Core conflict, stakes, gap.
 - "background": I4 World and background.
-- "characters": I5 Characters and relationships.
+- "characters": I5 Characters and relationships. Names = ordinary personal names for the setting; do not encode plot function, twist, hidden identity, or ending. Keep user-given names verbatim.
 - "setup": I6a Opening and inciting incident.
 - "development": I6b Mid escalation (build pressure toward iconic scenes).
 - "turning_points": I6c Turning points and midpoint (cite reference-style reversals when useful).

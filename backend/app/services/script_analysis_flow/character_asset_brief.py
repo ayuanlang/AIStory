@@ -33,7 +33,7 @@ def extract_char_field(record_text: str, field_name: str) -> str:
 
 
 def current_world_identity(identity: str) -> str:
-    """Public current identity; strip trajectory so nameplates stay short."""
+    """Public current identity; strip trajectory. Nameplates still require a plot-safe occupation/identity."""
     text = _clean(identity)
     if not text or text == "无":
         return ""
