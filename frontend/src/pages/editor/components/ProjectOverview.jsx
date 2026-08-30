@@ -1922,7 +1922,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 ? t(`（已参考 ${snippetCount} 条高潮/名场面/画面/对白/动作检索素材）`, ` (informed by ${snippetCount} climax/iconic-scene reference snippets)`)
                 : '';
             setStoryGenFocusStep('structure_prefill');
-            alert(t('已提取关键要素、检索可跨风格转译的经典剧情逻辑与高潮名场面并预填 I1–I10，请重点核对 I10 的作品名、剧情逻辑与转译，以及 I7a 高潮名场面。', 'Key elements extracted, cross-style-transferable plot logic and climax/iconic references searched, and I1–I10 prefilled. Review I10 work names, plot logic + transfer, and I7a climax scenes.') + searchNote);
+            alert(t('已提取关键要素、优先搜索现代/当代作品的剧情逻辑并预填 I1–I10，请重点核对 I10 主框架是否为现代/当代作品，以及转译与 I7a 高潮名场面。', 'Key elements extracted, modern/contemporary plot-logic spines searched first, and I1–I10 prefilled. Review that I10 primary is modern/contemporary, plus transfer and I7a climax scenes.') + searchNote);
         } catch (e) {
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
@@ -3886,7 +3886,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         <div className="text-sm font-semibold text-white">{t('脑洞标准输入（I1–I10）', 'Creative Input (I1–I10)')}</div>
                                     </div>
                                     <div className="text-xs text-muted-foreground mt-1">
-                                        {t('点「结构化预填」从天马行空自动提取，检索一部经典的剧情逻辑作骨架（可跨风格，如现代逻辑用于古代剧）并配辅助经典，再核对 I1–I10；也可手工填写。', 'Use Structure & Prefill to extract from wild ideas, lock one classic plot-logic spine (cross-style OK, e.g. modern engine → period drama) plus auxiliaries, then review I1–I10; or fill manually.')}
+                                        {t('点「结构化预填」从天马行空自动提取，检索一部现代/当代作品的剧情逻辑作主骨架（可转译到古代等），再配辅助作品，核对 I1–I10；也可手工填写。', 'Use Structure & Prefill to extract from wild ideas, lock a modern/contemporary plot-logic spine (transferable to period etc.) plus auxiliaries, then review I1–I10; or fill manually.')}
                                     </div>
                                 </div>
                                 <button
@@ -3894,7 +3894,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     onClick={handleStructureCreativeInput}
                                     disabled={isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady}
                                     className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
-                                    title={t('提取关键要素 → 搜索可跨风格转译的经典剧情逻辑（文学/影视/游戏）与高潮/名场面 → 预填 I1–I10', 'Extract key elements → search cross-style-transferable classic plot logic (lit/film/TV/game) and climax/iconic references → prefill I1–I10')}
+                                    title={t('提取关键要素 → 优先搜索现代/当代作品的剧情逻辑（可跨风格转译）与高潮/名场面 → 预填 I1–I10', 'Extract key elements → search modern/contemporary plot-logic spines first (cross-style transferable) and climax/iconic references → prefill I1–I10')}
                                 >
                                     {isStructuringCreativeInput
                                         ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('检索分析中...', 'Researching...')}</>
@@ -3973,7 +3973,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             <div>
                                 <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('I10 经典作品框架', 'I10 Classic Works Framework')}</label>
                                 <div className="text-[11px] text-muted-foreground/80 mb-0.5">
-                                    {t('一部主框架经典的剧情逻辑（文学/影视/游戏，鼓励跨风格：现代可用于古代）+ 若干辅助作品。须写作品名、剧情逻辑/桥段功能，以及转译到本剧的对应（时代/类型/声口换皮，不搬原作皮相）。', 'One primary classic as plot LOGIC (lit/film/TV/game; cross-style OK: modern engine → period drama) plus auxiliaries. Name each work, extract beat/set-piece functions, and write the transfer into this story — do not copy the source skin.')}
+                                    {t('主框架优先选现代、当代作品（近几十年影视/文学/游戏）的剧情逻辑；古典原典不默认当主框架，只可作辅助。可跨风格转译到本剧（如现代逻辑→古代剧）。须写作品名、剧情逻辑/桥段功能与转译，不搬原作皮相。', 'Primary spine: prefer modern/contemporary works (recent decades). Pre-modern classics are auxiliaries only unless no modern equivalent exists. Cross-style transfer OK (modern engine → period drama). Name works, logic, set-piece functions, and the transfer — do not copy the source skin.')}
                                 </div>
                                 <div className="text-[11px] text-primary/70 mb-1.5 italic">
                                     {t('例：主框架：《消失的爱人》（现代电影）— 剧情逻辑：表象恩爱下的证据战与身份反转；桥段功能：日记误导、媒体对质；转译→古代宫斗：密折/绣谱误导、朝堂当众对质。辅助：《肖申克的救赎》— 体制内暗中凿洞式取证 → 转译为冷宫暗藏物证。', 'e.g. Spine: Gone Girl (modern) — logic: evidence war + identity reversal; set-piece functions: diary mislead, media confrontation; transfer → palace drama: secret memorial / embroidery-code mislead, public court confrontation. Aux: Shawshank — covert proof-gathering → hidden evidence in cold palace.')}

@@ -165,6 +165,7 @@ import { entityNameAppearsInText, entityTokenMatchesName, normalizeEntityToken }
 import SettingsPage from './Settings';
 import { confirmUiMessage, promptUiMessage, notifyUiMessage } from '../lib/uiMessage';
 import ErrorBoundary from '../components/ErrorBoundary';
+import { lazyWithChunkReload } from '../lib/lazyWithChunkReload';
 
 // Character Canon (Authoritative) generator (shared)
 
@@ -174,12 +175,12 @@ import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYS
 import { ImportModal } from './editor/components/ImportModal';
 
 // Lazy loaded heavy components
-const ProjectOverview = React.lazy(() => import('./editor/components/ProjectOverview').then(m => ({ default: m.ProjectOverview })));
-const EpisodeInfo = React.lazy(() => import('./editor/components/EpisodeInfo').then(m => ({ default: m.EpisodeInfo })));
-const ScriptEditor = React.lazy(() => import('./editor/components/ScriptEditor').then(m => ({ default: m.ScriptEditor })));
-const SubjectLibrary = React.lazy(() => import('./editor/components/SubjectLibrary').then(m => ({ default: m.SubjectLibrary })));
-const SceneManager = React.lazy(() => import('./editor/components/SceneManager').then(m => ({ default: m.SceneManager })));
-const ShotsView = React.lazy(() => import('./editor/components/ShotsView').then(m => ({ default: m.ShotsView })));
+const ProjectOverview = lazyWithChunkReload(() => import('./editor/components/ProjectOverview').then(m => ({ default: m.ProjectOverview })));
+const EpisodeInfo = lazyWithChunkReload(() => import('./editor/components/EpisodeInfo').then(m => ({ default: m.EpisodeInfo })));
+const ScriptEditor = lazyWithChunkReload(() => import('./editor/components/ScriptEditor').then(m => ({ default: m.ScriptEditor })));
+const SubjectLibrary = lazyWithChunkReload(() => import('./editor/components/SubjectLibrary').then(m => ({ default: m.SubjectLibrary })));
+const SceneManager = lazyWithChunkReload(() => import('./editor/components/SceneManager').then(m => ({ default: m.SceneManager })));
+const ShotsView = lazyWithChunkReload(() => import('./editor/components/ShotsView').then(m => ({ default: m.ShotsView })));
 
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
 const EPISODE_REQUIRED_TABS = new Set(['script', 'subjects', 'scenes', 'shots']);
@@ -4270,7 +4271,39 @@ const Editor = ({
                             )}
                             {shouldRenderShotsTab && (
                                 <div className={activeTab === 'shots' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'shots'}>
-                                    <ShotsView key={`shots-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} tabMediaRefreshSignal={tabMediaRefreshSignals.shots} isTabActive={activeTab === 'shots'} onMediaRefreshRequest={() => bumpTabMediaRefresh('shots')} />
+                                    <ErrorBoundary
+                                        onError={(error, errorInfo) => {
+                                            console.error('ShotsView crashed', error, errorInfo);
+                                            addLog?.(`分镜页渲染失败：${error?.message || error}`, 'error');
+                                        }}
+                                        fallbackRender={({ resetErrorBoundary }) => (
+                                            <div className="flex flex-col items-center justify-center h-[50vh] gap-3 p-6 text-center">
+                                                <AlertTriangle className="h-8 w-8 text-yellow-400" />
+                                                <div className="text-sm text-white/80">{t('分镜页加载失败', 'Failed to load Shots tab')}</div>
+                                                <div className="text-xs text-white/50">
+                                                    {t('若刚完成网站更新，请刷新页面后再试。', 'If the site was just updated, refresh the page and try again.')}
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        className="px-3 py-1.5 rounded-lg bg-white/10 text-sm hover:bg-white/20"
+                                                        onClick={resetErrorBoundary}
+                                                    >
+                                                        {t('重试', 'Retry')}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className="px-3 py-1.5 rounded-lg bg-white/10 text-sm hover:bg-white/20"
+                                                        onClick={() => window.location.reload()}
+                                                    >
+                                                        {t('刷新页面', 'Reload page')}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    >
+                                        <ShotsView key={`shots-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} tabMediaRefreshSignal={tabMediaRefreshSignals.shots} isTabActive={activeTab === 'shots'} onMediaRefreshRequest={() => bumpTabMediaRefresh('shots')} />
+                                    </ErrorBoundary>
                                 </div>
                             )}
                                 </>

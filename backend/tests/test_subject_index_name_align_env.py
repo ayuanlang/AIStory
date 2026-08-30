@@ -129,6 +129,20 @@ def test_text_replacements_refuses_derived_to_main_collapse():
     assert aligned == text
 
 
+def test_text_replacements_do_not_stack_english_aliases_inside_derived_env():
+    text = "ENV:[0度岚京高空交通层]"
+    aligned = apply_text_name_replacements(
+        text,
+        [
+            {
+                "from": "岚京高空交通层",
+                "to": "岚京高空交通层 (Lan-Jing Aerial Transit Layer)",
+            }
+        ],
+    )
+    assert aligned == text
+
+
 def test_subjects_json_derived_env_is_not_remapped_to_main():
     payload = {
         "characters": [],

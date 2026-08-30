@@ -8,8 +8,9 @@ Rules:
 - Infer the dominant language of the input and write every JSON value in that same language.
 - Preserve the user's original intent; do not invent a different story.
 - Search terms must be concrete and web-searchable (genre labels, trope names, conflict hooks, reference works, climax types, iconic scene types, dialogue hooks, action/visual beats).
-- Give extra weight to: a classic plot-LOGIC skeleton (literature / film / TV / game) that can be **cross-style transferred** (现代→古代、职场→宫廷、科幻→仙侠等)；then climax, confrontation, reversal, and memorable set-piece FUNCTIONS already present in the brainstorm.
-- Do NOT limit candidates to the same era, genre, or visual style as the brainstorm. Prefer a strong causal/beat engine even if the source is a different medium or period.
+- Give extra weight to: a **modern/contemporary** plot-LOGIC skeleton (literature / film / TV / game; 优先现代、当代作品，非古典名著优先) that can be **cross-style transferred** (现代→古代、职场→宫廷、科幻→仙侠等)；then climax, confrontation, reversal, and memorable set-piece FUNCTIONS already present in the brainstorm.
+- **Primary-framework era (硬约束)**：`plot_framework_candidates` 须**优先**现代/当代作品（约近几十年已被验证的影视/文学/游戏）。古典/古代原典只作辅助或主框架实在找不到当代对等逻辑时才用，并标原因。
+- Do NOT limit candidates to the same genre or visual style as the brainstorm. Prefer a strong causal/beat engine even if the source medium differs. The SOURCE era should still prefer modern/contemporary.
 - Provide 3-6 items per search list when possible; use [] only when truly absent.
 
 Required JSON keys:
@@ -21,9 +22,9 @@ Required JSON keys:
 - "climax_moments": array of climax / peak-tension / must-shoot iconic moments from the brainstorm
 - "tone_style": string, tone/style in one sentence
 - "reference_works": array of films/dramas/novels/games the brainstorm echoes (may be empty)
-- "plot_framework_candidates": array of 1-3 PRIMARY classic works whose **plot logic** (因果链/节拍骨架/对峙机制) could serve as this story's framework; may be a different era/genre/style than the brainstorm
-- "auxiliary_reference_works": array of supporting classics that can supply transferable set-piece/VFX/action/dialogue **functions** (not required to match this story's visual style)
-- "plot_framework_search_terms": array of plot-logic terms (inheritance, cover-up, false identity, revenge delay, etc.) to search classic frameworks across literature, film, TV, and games — include cross-era/cross-genre phrasings
+- "plot_framework_candidates": array of 1-3 PRIMARY works whose **plot logic** could serve as this story's framework; **must prefer modern/contemporary** titles first (may differ in genre/style from this story; do not default to pre-modern classics)
+- "auxiliary_reference_works": array of supporting works that can supply transferable set-piece/VFX/action/dialogue **functions**; auxiliaries may include older classics, but do not outrank a viable modern primary
+- "plot_framework_search_terms": array of plot-logic terms (inheritance, cover-up, false identity, revenge delay, etc.) to search **modern/contemporary** frameworks first across literature, film, TV, and games — then cross-genre phrasings
 - "classic_content_search_terms": array of terms to search those works' reusable **logic**: core plot engine, set-piece function, VFX function, action grammar, dialogue mechanism (not costume/era matching)
 - "iconic_scene_search_terms": array of terms to search famous/iconic scenes (名场面)
 - "climax_search_terms": array of terms to search climax/high-point scenes in similar works

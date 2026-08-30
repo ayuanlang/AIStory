@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from app.core.entity_token import strip_bilingual_name_aliases
 from app.models.all_models import Entity, Episode, ScriptProgressPipelineNode
 from app.services.soft_delete import _active_entity_clause, _active_episode_clause
 
@@ -269,6 +270,7 @@ def _normalize_angle(value: Any, name: str = "") -> int:
 def _main_from_name(name: str) -> str:
     angle, rest = _split_degree_prefix(name)
     text = _strip_usage_comma_tail(rest if angle is not None else _clean(name))
+    text = strip_bilingual_name_aliases(text)
     if _is_evidence_or_beat_title(text):
         return ""
     if "_" in text:
@@ -295,6 +297,10 @@ _TYPED_ENV_NAME_PATTERN = re.compile(
     r"^(?:ENV\s*:\s*)?\[([^\[\]]+)\]$",
     re.IGNORECASE,
 )
+_TYPED_ENV_NAME_IN_TEXT_PATTERN = re.compile(
+    r"ENV\s*:\s*\[([^\[\]]+)\]",
+    re.IGNORECASE,
+)
 
 
 def unwrap_typed_environment_name(name: str) -> str:
@@ -316,9 +322,9 @@ def canonicalize_derived_environment_name(
     Drop Beat:/文戏:/原文: evidence titles that leaked into ENV names.
     """
     extra = extra or {}
-    clean_name = unwrap_typed_environment_name(name)
+    clean_name = strip_bilingual_name_aliases(unwrap_typed_environment_name(name))
     angle, rest = _split_degree_prefix(clean_name)
-    main = _clean(extra.get("main") or extra.get("所属主环境"))
+    main = strip_bilingual_name_aliases(_clean(extra.get("main") or extra.get("所属主环境")))
     if _is_evidence_or_beat_title(clean_name) or _is_evidence_or_beat_title(rest):
         if not main:
             return ""
@@ -827,7 +833,7 @@ def extract_derived_environment_names_from_scene_text(scene_text: str) -> str:
         cleaned = unwrap_typed_environment_name(raw_name)
         cleaned = re.split(r"[｜|]", cleaned, maxsplit=1)[0].strip()
         cleaned = re.sub(r"^(名称|环境名|环境|ENV)\s*[=：:]\s*", "", cleaned).strip()
-        cleaned = unwrap_typed_environment_name(cleaned)
+        cleaned = strip_bilingual_name_aliases(unwrap_typed_environment_name(cleaned))
         if not cleaned or cleaned.startswith("─") or cleaned.startswith("-"):
             return
         if not _DERIVED_ENV_NAME_PATTERN.match(cleaned):
@@ -838,9 +844,9 @@ def extract_derived_environment_names_from_scene_text(scene_text: str) -> str:
             return
         if normalized in main_keys:
             return
-        if cleaned in seen:
+        if not cleaned or normalized in seen:
             return
-        seen.add(cleaned)
+        seen.add(normalized)
         names.append(cleaned)
 
     for item in parse_derived_env_extract_items(text):
@@ -941,6 +947,10 @@ def rewrite_merged_derived_environment_names(text: str) -> str:
     source = _CURRENT_ENV_FIELD_PATTERN.sub(_repl_current_env, source)
     source = _PLAN_ENV_FIELD_PATTERN.sub(
         lambda match: f"{match.group(1)}{_canon(match.group(2))}",
+        source,
+    )
+    source = _TYPED_ENV_NAME_IN_TEXT_PATTERN.sub(
+        lambda match: f"ENV:[{_canon(match.group(1))}]",
         source,
     )
 

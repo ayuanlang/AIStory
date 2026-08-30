@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-08-25 23:20:00 +08:00
+# Prompt Updated At: 2026-08-30 10:35:00 +08:00
 
 # Skill 1-2-2: 节拍工程映射（Beats-only）
 
@@ -126,7 +126,7 @@
 | :--- | :--- |
 | `Scene Name` | `{短名}·{日夜}·{内外}·{可选附加项}`；只保留值；无该行 → `None` |
 | `{Beats}` | 本场全部 Beat 块**完整透传**（仅叙述层名称标准表达） |
-| `{登场实体}` | 从本场 `{Beats}` 已合法标准表达的实体汇总；多个用 `，`；无则 `None`；禁止汇总白名单无名 |
+| `{登场实体}` | 从本场 `{Beats}` 已合法标准表达的实体汇总；多个用 `，`；无则 `None`；禁止汇总白名单无名。ENV 只写 `{N}度{主}` 中文完整名，禁止夹英文括号或 ` / English`；同角只列一次 |
 | `{剧情阶段}` | 闭集=`正常叙事`｜`闪回`｜`倒叙`｜`梦境`｜`想象`；默认 `正常叙事`。禁散文 |
 | `Entry State` / `Exit State` | Beat 首/末已写状态可摘录；未写→`None` |
 | `Adapted Script Excerpt` | 可摘本场 Beat 头尾短片段；禁改写续写 |

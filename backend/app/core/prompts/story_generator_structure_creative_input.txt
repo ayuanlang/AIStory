@@ -19,7 +19,8 @@ Rules:
 - Do not duplicate the same sentence across multiple keys; place each idea in its best-fit block.
 - If a block is missing in the input, infer conservatively from context + references; use "" only when truly unknowable.
 - I10 is required whenever the brainstorm has enough conflict/beat signal. Never write only a genre label ("像悬疑片"). Name real works.
-- **Cross-style transfer (硬约束)**：I10 借的是剧情逻辑，不是原作皮相。鼓励跨时代/跨类型/跨媒介（现代剧逻辑用于古代剧、职场用于宫廷、科幻用于仙侠、游戏任务链用于连续剧）。须写清「原作逻辑 → 本剧转译」。禁止因风格不同而弃用强骨架；禁止把原作服装/时代/特效原样搬进本剧。
+- **Primary source era (硬约束)**：I10 **主框架须优先选现代、当代作品**（近几十年已被验证的影视/文学/游戏）。古典/古代原典不作为主框架默认项；仅当当代作品找不到同等强度的剧情逻辑时才可降级选用，并写明原因。辅助作品可用更早经典。
+- **Cross-style transfer (硬约束)**：I10 借的是剧情逻辑，不是原作皮相。鼓励把**现代/当代骨架**转译到本剧时代/类型（现代→古代、职场→宫廷、科幻→仙侠、游戏任务链→连续剧）。须写清「原作逻辑 → 本剧转译」。禁止因本剧是古装/仙侠就改选古代原典当主框架；禁止把原作服装/时代/特效原样搬进本剧。
 
 The JSON object MUST contain exactly these keys (all string values):
 - "logline": I1 Logline / high concept hook.
@@ -34,7 +35,7 @@ The JSON object MUST contain exactly these keys (all string values):
 - "resolution": I7b Ending and resolution.
 - "suspense": I8a Core suspense questions.
 - "foreshadowing": I8b Must-keep foreshadowing and constraints.
-- "classic_framework": I10 Classic works framework. MUST (a) pick ONE primary classic (literature / film / TV / game) as the **plot-logic spine** — may differ in era/genre/style from this story; (b) list 2–4 auxiliary classics for complementary set-piece / VFX / action / dialogue **functions**; (c) for EVERY named work write: 剧情逻辑 + 桥段功能 + 可转译的特效/风格/动作/对白机制 + **转译到本剧**. Format: 主框架：《作品》（原媒介/原风格）— 剧情逻辑：…；桥段：…；特效机制：…；动作机制：…；对白机制：…；转译：原风格→本剧风格，例「日记误导→密折绣谱 / 媒体对质→朝堂当众对质」。辅助：同格式。Forbidden: unnamed tropes; same-style-only picks; copying source costumes/era/VFX literally; "类似某某类型".
+- "classic_framework": I10 Classic works framework. MUST (a) pick ONE **modern/contemporary** primary work (literature / film / TV / game; 优先现代、当代) as the **plot-logic spine** — may differ in genre/style from this story; (b) list 2–4 auxiliaries for complementary set-piece / VFX / action / dialogue **functions** (older classics OK as auxiliaries only); (c) for EVERY named work write: 剧情逻辑 + 桥段功能 + 可转译的特效/风格/动作/对白机制 + **转译到本剧**. Format: 主框架：《作品》（现代/当代·媒介）— 剧情逻辑：…；桥段：…；特效机制：…；动作机制：…；对白机制：…；转译：原风格→本剧风格，例「日记误导→密折绣谱 / 媒体对质→朝堂当众对质」。辅助：同格式。Forbidden: unnamed tropes; using a pre-modern classic as default primary; copying source costumes/era/VFX literally; "类似某某类型".
 - "extra_notes": I9 leftover uncategorized fragments (may be empty).
 
 Keep each value concise but vivid (1-5 sentences). I7a and I10 may be slightly longer when needed to capture名场面细节 and named-work mappings.

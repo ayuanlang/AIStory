@@ -15781,10 +15781,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [isRecoverableAnalysisError]);
 
     const canStopAnalysisTask = useMemo(() => {
-        if (isAnalyzing || isRetryingPhase2 || isStoppingAnalysisTask) return true;
+        if (isStoppingAnalysisTask) return true;
+        if (isAnalyzing || isRetryingPhase2 || isRerunningStoryboard) return true;
+        if (analysisProgressDisplay.isLive) return true;
         if (String(activeAnalysisTaskId || '').trim()) return true;
-        return Boolean(loadAnalysisTaskMarker(activeEpisode?.id)?.taskId);
-    }, [activeAnalysisTaskId, activeEpisode?.id, isAnalyzing, isRetryingPhase2, isStoppingAnalysisTask, loadAnalysisTaskMarker]);
+        if (loadAnalysisTaskMarker(activeEpisode?.id)?.taskId) return true;
+        if ((diagnosticsPipelineNodes || []).some((node) => (
+            ['running', 'queued'].includes(String(node?.status || '').trim().toLowerCase())
+        ))) return true;
+        return isEpisodeAnalysisTaskLive(activeEpisode?.id, {
+            loadAnalysisTaskMarker,
+            isAnalyzing,
+            isRetryingPhase2,
+            analysisRunInFlight: analysisRunInFlightRef.current,
+            analysisResumeInFlight: analysisResumeInFlightRef.current,
+            phase2GenerationInFlight: phase2GenerationInFlightRef.current,
+            analysisEntryLock: analysisEntryLockRef.current,
+        });
+    }, [
+        activeAnalysisTaskId,
+        activeEpisode?.id,
+        analysisProgressDisplay.isLive,
+        diagnosticsPipelineNodes,
+        isAnalyzing,
+        isRetryingPhase2,
+        isRerunningStoryboard,
+        isStoppingAnalysisTask,
+        loadAnalysisTaskMarker,
+    ]);
 
     const clearLocalAnalysisRunningStateAfterUserStop = useCallback((episodeId, {
         message = '',
@@ -15819,6 +15843,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setIsAnalyzing(false);
         setIsRetryingPhase2(false);
+        setIsRerunningStoryboard(false);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
             phase: 'warning',
@@ -15868,6 +15893,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisFlowStatus,
         setAnalysisFlowStatusHistory,
         setAnalysisUiReport,
+        setIsRerunningStoryboard,
         t,
     ]);
 
@@ -15883,10 +15909,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const hasLocalRun = Boolean(
             isAnalyzing
             || isRetryingPhase2
+            || isRerunningStoryboard
+            || analysisProgressDisplay.isLive
             || phase2GenerationInFlightRef.current
             || analysisRunInFlightRef.current
             || analysisResumeInFlightRef.current
             || analysisEntryLockRef.current
+            || sceneBeatsOnlyRerunInFlightRef.current
+            || (storyboardKickoffPromisesRef.current?.size || 0) > 0
             || getEpisodeAnalysisRun(activeEpisode.id)?.promise
             || isEpisodeAnalysisClaimed(activeEpisode.id)
         );
@@ -15930,13 +15960,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             latestIsAnalyzingRef.current = false;
             setIsAnalyzing(false);
             setIsRetryingPhase2(false);
+            setIsRerunningStoryboard(false);
         }
     }, [
         activeAnalysisTaskId,
         activeEpisode?.id,
+        analysisProgressDisplay.isLive,
         clearLocalAnalysisRunningStateAfterUserStop,
         isAnalyzing,
         isRetryingPhase2,
+        isRerunningStoryboard,
         loadAnalysisTaskMarker,
         onLog,
         t,
@@ -31358,6 +31391,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     >
                         <Stethoscope className="w-4 h-4" />
                     </button>
+                    {canStopAnalysisTask && (
+                        <button
+                            onClick={handleStopAnalysisTask}
+                            disabled={isStoppingAnalysisTask}
+                            className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-bold border transition-colors ${isStoppingAnalysisTask ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-red-500/15 hover:bg-red-500/25 text-red-100 border-red-400/35'}`}
+                            title={t('手动停止当前 AI 剧本分析任务', 'Stop the current AI script analysis task')}
+                        >
+                            {isStoppingAnalysisTask ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                            {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止', 'Stop')}
+                        </button>
+                    )}
                     {isRawMode && (
                         <>
                             <div className="relative" ref={reuseDropdownRef}>
@@ -31521,17 +31565,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 )}
                             </button>
                         </>
-                    )}
-                    {canStopAnalysisTask && (
-                        <button
-                            onClick={handleStopAnalysisTask}
-                            disabled={isStoppingAnalysisTask}
-                            className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-bold border transition-colors ${isStoppingAnalysisTask ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-red-500/15 hover:bg-red-500/25 text-red-100 border-red-400/35'}`}
-                            title={t('手动停止当前 AI 剧本分析任务', 'Stop the current AI script analysis task')}
-                        >
-                            {isStoppingAnalysisTask ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
-                            {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止', 'Stop')}
-                        </button>
                     )}
                     {!isRawMode && (
                         <button 
@@ -32644,6 +32677,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </div>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                    {canStopAnalysisTask && analysisLive ? (
+                                        <button
+                                            type="button"
+                                            onClick={handleStopAnalysisTask}
+                                            disabled={isStoppingAnalysisTask}
+                                            className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition-colors ${isStoppingAnalysisTask ? 'border-white/10 bg-white/5 text-white/40 cursor-not-allowed' : 'border-red-400/40 bg-red-500/20 text-red-100 hover:bg-red-500/30'}`}
+                                            title={t('停止当前剧本分析', 'Stop the current script analysis')}
+                                        >
+                                            {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止分析', 'Stop analysis')}
+                                        </button>
+                                    ) : null}
                                     {showRetryButton && (
                                         <button
                                             type="button"

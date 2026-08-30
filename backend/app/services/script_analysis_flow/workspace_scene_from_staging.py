@@ -8,9 +8,11 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.entity_token import strip_bilingual_name_aliases, subject_compare_key
 from app.services.scene_no_utils import _canonicalize_scene_no, _find_active_scene_by_scene_no
 from app.services.script_analysis_flow.derived_env_ingest import (
     extract_derived_environment_names_from_scene_text,
+    rewrite_merged_derived_environment_names,
 )
 from app.services.script_analysis_flow.scene_cast import (
     extract_legacy_scene_cast_lines,
@@ -52,12 +54,13 @@ def _join_unique(values: List[str]) -> str:
     seen = set()
     out: List[str] = []
     for raw in values:
-        text = _clean(raw)
+        text = strip_bilingual_name_aliases(_clean(raw))
         if not text or text in {"无", "None", "none", "N/A"}:
             continue
-        if text in seen:
+        key = subject_compare_key(text) or text
+        if key in seen:
             continue
-        seen.add(text)
+        seen.add(key)
         out.append(text)
     return "，".join(out)
 
@@ -85,10 +88,11 @@ def collect_character_tokens(scene_id: str, scene_text: str) -> List[str]:
     seen = set()
 
     def _add(name: str) -> None:
-        cleaned = _clean(name)
-        if not cleaned or cleaned in seen:
+        cleaned = strip_bilingual_name_aliases(_clean(name))
+        key = subject_compare_key(cleaned) or cleaned
+        if not cleaned or key in seen:
             return
-        seen.add(cleaned)
+        seen.add(key)
         names.append(cleaned)
 
     cast = extract_scene_cast_block(scene_text, scene_id) or extract_legacy_scene_cast_lines(scene_text)
@@ -104,10 +108,11 @@ def collect_prop_tokens(scene_id: str, scene_text: str) -> List[str]:
     seen = set()
 
     def _add(name: str) -> None:
-        cleaned = _clean(name)
-        if not cleaned or cleaned in seen:
+        cleaned = strip_bilingual_name_aliases(_clean(name))
+        key = subject_compare_key(cleaned) or cleaned
+        if not cleaned or key in seen:
             return
-        seen.add(cleaned)
+        seen.add(key)
         names.append(cleaned)
 
     cast = extract_scene_cast_block(scene_text, scene_id) or extract_legacy_scene_cast_lines(scene_text)
@@ -160,7 +165,9 @@ def build_workspace_scene_payload_from_staging(
         str(int(scene_order)) if scene_order else ""
     )
     scene_name = extract_scene_name_value_from_scene_text(source)
-    beats = strip_beat_transition_notes_from_script(extract_beat_blocks_from_scene_text(source))
+    beats = rewrite_merged_derived_environment_names(
+        strip_beat_transition_notes_from_script(extract_beat_blocks_from_scene_text(source))
+    )
     derived_envs = extract_derived_environment_names_from_scene_text(source)
     char_names = collect_character_tokens(scene_id_text, source)
     prop_names = collect_prop_tokens(scene_id_text, source)

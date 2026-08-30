@@ -741,6 +741,35 @@ def test_canonicalize_unwraps_typed_env_token():
     assert "180度客栈大堂" in names
 
 
+def test_canonicalize_strips_stacked_english_aliases():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        canonicalize_derived_environment_name,
+        extract_derived_environment_names_from_scene_text,
+    )
+
+    stacked = (
+        "0度岚京高空交通层 (Lan-Jing Aerial Transit Layer) "
+        "(Lan-Jing Aerial Transit Layer) (Lan-Jing Aerial Transit Layer)"
+    )
+    assert canonicalize_derived_environment_name(stacked) == "0度岚京高空交通层"
+    assert (
+        canonicalize_derived_environment_name(
+            stacked,
+            {"main": "岚京高空交通层 (Lan-Jing Aerial Transit Layer)"},
+        )
+        == "0度岚京高空交通层"
+    )
+    scene_text = (
+        "【本场衍生环境名】"
+        "ENV:[0度岚京高空交通层 (Lan-Jing Aerial Transit Layer) (Lan-Jing Aerial Transit Layer)]，"
+        "ENV:[90度岚京高空交通层 (Lan-Jing Aerial Transit Layer)]，"
+        "ENV:[0度岚京高空交通层 (Lan-Jing Aerial Transit Layer)]\n"
+    )
+    assert extract_derived_environment_names_from_scene_text(scene_text) == (
+        "0度岚京高空交通层，90度岚京高空交通层"
+    )
+
+
 def test_collect_framing_texts_prefers_scene_framing_output():
     from app.services.script_analysis_flow.derived_env_ingest import (
         collect_framing_texts_from_results_map,

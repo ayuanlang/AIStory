@@ -5,6 +5,12 @@ _TYPED_ENTITY_REF_RE = re.compile(
     r"CHAR\s*:\s*\[@([^\]]+)\]|ENV\s*:\s*\[([^\]]+)\]|PROP\s*:\s*\[([^\]]+)\]",
     flags=re.IGNORECASE,
 )
+_LATIN_ALIAS_PAREN_RE = re.compile(
+    r"(?:\s*[\(（]\s*[A-Za-z][A-Za-z0-9][A-Za-z0-9 \-''.]*\s*[\)）])+"
+)
+_LATIN_ALIAS_SLASH_RE = re.compile(
+    r"\s*/\s*[A-Za-z][A-Za-z0-9][A-Za-z0-9 \-''.]*\s*$"
+)
 
 
 def _normalize_ascii_word_separators(value: str) -> str:
@@ -49,6 +55,23 @@ def normalize_entity_token(value: Any) -> str:
     text = re.sub(r"\s+", " ", _normalize_ascii_word_separators(text)).strip()
 
     return text.lower()
+
+
+def strip_bilingual_name_aliases(value: Any) -> str:
+    """Drop stacked English parentheticals and trailing ` / English` aliases.
+
+    Token names stay Chinese (or the primary script). Repeated
+    `(Lan-Jing Aerial Transit Layer)` tails are collapsed away.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    prev = None
+    while prev != text:
+        prev = text
+        text = _LATIN_ALIAS_PAREN_RE.sub("", text).strip()
+        text = _LATIN_ALIAS_SLASH_RE.sub("", text).strip()
+    return text
 
 
 def subject_compare_key(value: Any) -> str:

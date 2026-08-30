@@ -1,4 +1,5 @@
 import React from 'react';
+import { isStaleChunkError, reloadOnceForStaleChunk } from '../lib/lazyWithChunkReload';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -13,6 +14,9 @@ class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, errorInfo) {
     try {
+      if (isStaleChunkError(error) && reloadOnceForStaleChunk()) {
+        return;
+      }
       if (typeof this.props.onError === 'function') {
         this.props.onError(error, errorInfo);
       } else {

@@ -57,9 +57,10 @@ def build_creative_structure_search_queries(key_elements: Dict[str, Any]) -> Lis
         add(f"{work} 经典桥段 风格 对白 动作")
         add(f"{work} iconic set piece style dialogue action")
     for term in _as_str_list(key_elements.get("plot_framework_search_terms"), limit=4):
-        add(f"{term} 经典小说 电影 电视剧 游戏 剧情框架")
+        add(f"{term} 当代 现代 电影 电视剧 小说 游戏 剧情框架")
+        add(f"{term} 近二十年 经典 影视 剧情逻辑")
         add(f"{term} 跨类型 古代 宫廷 仙侠 改编 剧情逻辑")
-        add(f"{term} classic novel film tv game plot framework")
+        add(f"{term} contemporary modern film tv novel game plot framework")
         add(f"{term} plot structure transplanted period palace xianxia")
     for term in _as_str_list(key_elements.get("classic_content_search_terms"), limit=3):
         add(f"{term} 经典作品 核心剧情 桥段 特效 风格")
@@ -140,7 +141,7 @@ def build_creative_structure_search_user_prompt(
     language: str = "",
 ) -> str:
     lines = [
-        "Reference Research Focus: first lock ONE primary classic work as the PLOT-LOGIC framework (literature / film / TV / game). Cross-style transfer is required: modern logic may serve an ancient/palace/xianxia story; do not require same era or visual style. Then auxiliary classics with transferable functions (core plot engine, set-piece function, VFX function, action grammar, dialogue mechanism). Then climax and iconic scenes; then visuals, dialogue, action blocking, and tropes.",
+        "Reference Research Focus: first lock ONE primary MODERN/CONTEMPORARY work as the PLOT-LOGIC framework (literature / film / TV / game; prefer recent decades, not pre-modern classics as default primary). Cross-style transfer is required: a modern/contemporary engine may serve an ancient/palace/xianxia story. Then auxiliary works (older classics OK only as auxiliaries) with transferable functions. Then climax and iconic scenes; then visuals, dialogue, action blocking, and tropes.",
         "When structuring I10, name real works, extract plot logic (not costumes/era), and write 转译 (source logic → this story's era/style). When structuring I7a/I6c, synthesize image composition, dialogue lines, physical action, emotional peak staging — transcoded to this story, not copied from the source skin.",
         "Consume evidence in priority order: P0 first, then P1, then P2. Prefer Evidence body over URLs.",
         f"Project Title: {project_title or '(none)'}",

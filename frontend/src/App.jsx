@@ -1,18 +1,19 @@
 
-import React, { lazy, Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { LogProvider } from './context/LogContext';
 import LogPanel from './components/LogPanel';
 import GlobalMessageHost from './components/GlobalMessageHost';
 import { getUiLang, tUI, UI_LANG_EVENT, UI_LANG_KEY } from './lib/uiLang';
+import { isRecentStaleChunkReload, lazyWithChunkReload } from './lib/lazyWithChunkReload';
 import { getMaintenanceStatus } from './services/api';
 
-const Home = lazy(() => import('./pages/Home'));
-const ProjectList = lazy(() => import('./pages/ProjectList'));
-const Editor = lazy(() => import('./pages/Editor'));
-const AdvancedAnalysisResult = lazy(() => import('./pages/AdvancedAnalysisResult'));
-const Auth = lazy(() => import('./pages/Auth'));
-const UserAdmin = lazy(() => import('./pages/UserAdmin'));
+const Home = lazyWithChunkReload(() => import('./pages/Home'));
+const ProjectList = lazyWithChunkReload(() => import('./pages/ProjectList'));
+const Editor = lazyWithChunkReload(() => import('./pages/Editor'));
+const AdvancedAnalysisResult = lazyWithChunkReload(() => import('./pages/AdvancedAnalysisResult'));
+const Auth = lazyWithChunkReload(() => import('./pages/Auth'));
+const UserAdmin = lazyWithChunkReload(() => import('./pages/UserAdmin'));
 
 // Helper component to protect routes that require authentication
 const PrivateRoute = ({ children }) => {
@@ -137,7 +138,7 @@ function App() {
         const pEntries = window.performance?.getEntriesByType("navigation") || [];
         const isReload = pEntries.length > 0 ? pEntries[0].type === "reload" : window.performance?.navigation?.type === 1;
         
-        if (isReload) {
+        if (isReload && !isRecentStaleChunkReload()) {
           const reloadSafePaths = new Set(['/projects', '/settings']);
           if (!reloadSafePaths.has(window.location.pathname) || (window.location.pathname === '/projects' && window.location.search)) {
              window.location.href = '/projects';

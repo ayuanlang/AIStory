@@ -22,7 +22,7 @@ def test_orchestration_names_from_asset_table_keep_zh_en_drop_main_env():
     assert compact == (
         "CHAR: 林岳 / Lin Yue，林岳_礼服版 / Lin Yue Formal\n"
         "PROP: 短刀 / Dagger\n"
-        "ENV: 0度客栈废墟外 / 0 Deg Inn Ruins Exterior，180度客栈废墟外 / 180 Deg Inn Ruins Exterior"
+        "ENV: 0度客栈废墟外，180度客栈废墟外"
     )
     assert "客栈废墟外 / Inn Ruins Exterior" not in compact
     assert "封面" not in compact
@@ -42,7 +42,7 @@ def test_orchestration_names_merge_scene_local_derived_env():
     assert compact == (
         "CHAR: 林岳 / Lin Yue，林岳_礼服版 / Lin Yue Formal\n"
         "PROP: 短刀 / Dagger\n"
-        "ENV: 0度客栈废墟外 / 0 Deg Inn Ruins Exterior，180度客栈废墟外 / 180 Deg Inn Ruins Exterior，90度客栈废墟外"
+        "ENV: 0度客栈废墟外，180度客栈废墟外，90度客栈废墟外"
     )
 
 
@@ -57,7 +57,7 @@ def test_legacy_index_formatter_also_emits_zh_en_pairs():
     compact = format_subject_index_names_for_orchestration(index_text)
     assert compact == (
         "CHAR: 林岳 / Lin Yue\n"
-        "ENV: 0度客栈废墟外 / 0 Deg Inn Ruins Exterior"
+        "ENV: 0度客栈废墟外"
     )
 
 
@@ -75,7 +75,7 @@ def test_orchestration_injects_form_continuity_with_names():
     assert compact == (
         "CHAR: 林岳 / Lin Yue，林岳_礼服版 / Lin Yue Formal\n"
         "PROP: 短刀 / Dagger\n"
-        "ENV: 0度客栈废墟外 / 0 Deg Inn Ruins Exterior\n"
+        "ENV: 0度客栈废墟外\n"
         "【服化道连续性】\n"
         "林岳｜初态至EP01_SC02 Beat2；变化见林岳_礼服版@EP01_SC02 Beat3\n"
         "林岳_礼服版｜EP01_SC02 Beat3起：便服→礼服；延续至EP01_SC03\n"

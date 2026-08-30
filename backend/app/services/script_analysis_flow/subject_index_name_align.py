@@ -16,7 +16,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.core.entity_token import subject_compare_key
+from app.core.entity_token import strip_bilingual_name_aliases, subject_compare_key
 from app.models.all_models import Entity
 from app.services.llm_service import llm_service
 from app.services.soft_delete import _active_entity_clause
@@ -258,8 +258,8 @@ def _split_extra_derived_environment_names(value: Any) -> List[str]:
 
 
 def _format_zh_en_name(name_zh: Any, name_en: Any = "") -> str:
-    zh = _normalize_display_name(name_zh)
-    en = _normalize_display_name(name_en)
+    zh = strip_bilingual_name_aliases(_normalize_display_name(name_zh))
+    en = strip_bilingual_name_aliases(_normalize_display_name(name_en))
     if zh and en and subject_compare_key(zh) != subject_compare_key(en):
         return f"{zh} / {en}"
     return zh or en
@@ -305,7 +305,7 @@ def format_entity_rows_for_orchestration(
     extra_derived_environment_names: Any = "",
     form_continuity_by_name: Optional[Dict[str, str]] = None,
 ) -> str:
-    """Format CHAR/PROP (all) + derived ENV names as 中文 / 英文 pairs.
+    """Format CHAR/PROP as 中文 / 英文 pairs; derived ENV as Chinese token names only.
 
     When CHAR/PROP continuity is available, append a 【服化道连续性】 block
     paired with the Chinese (or English) asset name for Stage 2.2 injection.
@@ -322,9 +322,10 @@ def format_entity_rows_for_orchestration(
 
     def _push(bucket: str, name_zh: Any, name_en: Any = "", form_continuity: Any = "") -> None:
         nonlocal has_real_continuity
-        zh = _normalize_display_name(name_zh)
-        en = _normalize_display_name(name_en)
-        display = _format_zh_en_name(zh, en)
+        zh = strip_bilingual_name_aliases(_normalize_display_name(name_zh))
+        en = strip_bilingual_name_aliases(_normalize_display_name(name_en))
+        # ENV tokens are `{N}度{主}`; do not inject English aliases into the name list.
+        display = zh or en if bucket == "environments" else _format_zh_en_name(zh, en)
         if not display or _is_placeholder_name(zh or en):
             return
         if bucket == "environments" and not (
@@ -1448,6 +1449,10 @@ def apply_text_name_replacements(text: Any, replacements: List[Dict[str, str]]) 
                 pairs.append((src, dst))
     pairs = sorted(set(pairs), key=lambda p: len(p[0]), reverse=True)
     for src, dst in pairs:
+        # dst already contains src → substring replace would stack aliases
+        # (岚京高空交通层 → 岚京高空交通层 (Lan-Jing …) inside 0度…).
+        if src in dst:
+            continue
         if src in out:
             out = out.replace(src, dst)
     return out
