@@ -18825,9 +18825,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 requestedTargetFilters
                             );
                             const cachedPayload = cachedSubjectsByKey.get(String(pData.key || ''));
-                            if (Number(filtered?.keptRows || 0) <= 0 && countDesignedCoverPosterItems(cachedPayload) <= 0) {
-                                continue;
-                            }
                             const designedEntries = collectDesignedSubjectEntries(
                                 pData,
                                 cachedPayload,
@@ -18835,6 +18832,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             );
                             const covered = countDesignedEntriesCovered(designedEntries);
                             const needed = designedEntries.length;
+                            // CHAR/PROP/ENV now come from extracts/plans, not Subject Index
+                            // rows. A parse miss leaves keptRows=0 and no cache — that must
+                            // stay in the retry queue so LLM can run again (3 total attempts).
+                            if (needed <= 0) {
+                                onLog?.(
+                                    t(
+                                        `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} 未解析到可入库结果，将重跑该类（第 ${assetRetryRound + 1} 轮）。`,
+                                        `[Stage 3 Asset Design] ${pData.key} has no importable result; will rerun this category (round ${assetRetryRound + 1}).`
+                                    ),
+                                    'warning'
+                                );
+                                stillMissing.push(pData);
+                                continue;
+                            }
                             if (needed > 0 && covered >= needed) {
                                 onLog?.(
                                     `[Stage 3 Asset Design] ${pData.key} already covered in DB by name (${covered}/${needed}); stop retrying this category.`,
@@ -23058,8 +23069,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalyzing = true,
         setRetryingPhase2 = false,
         runTag = '',
+        preserveLivePipeline = false,
     } = {}) => {
         analysisProgressDismissedRef.current = false;
+        if (setRetryingPhase2) setIsRetryingPhase2(true);
+        if (preserveLivePipeline) {
+            const hint = String(message || '').trim();
+            if (hint) {
+                setAnalysisFlowStatus((prev) => ({
+                    ...(prev && typeof prev === 'object' ? prev : {}),
+                    highlightHint: hint,
+                }));
+            }
+            return;
+        }
         analysisStopRequestedRef.current = false;
         // Block stale session/progress snapshots from overwriting this rerun's UI.
         analysisRunInFlightRef.current = true;
@@ -23067,7 +23090,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (resetLogs) resetAnalysisRunProgressLogs();
         beginAnalysisTimer(startedAt);
         if (setAnalyzing) setIsAnalyzing(true);
-        if (setRetryingPhase2) setIsRetryingPhase2(true);
         setAnalysisUiReport((prev) => ({
             ...(prev && typeof prev === 'object' ? prev : {}),
             status: 'running',
@@ -28722,6 +28744,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const handleRetryPhase2 = async (options = {}) => {
         if (!activeEpisode?.id) return;
         const autoZeroCaller = Boolean(options?.autoZeroReportRerun);
+        const overlayOnLiveRun = Boolean(
+            isAnalyzing
+            || isRerunningStoryboard
+            || analysisProgressDisplay?.isLive
+            || analysisRunInFlightRef.current
+        );
         if (phase2GenerationInFlightRef.current || (analysisFallbackRetryRef.current.running && !autoZeroCaller)) {
             onLog?.('[Stage 3 Asset Design] Skipped duplicate asset rerun while Stage 3 is already running.', 'warning');
             return;
@@ -28740,8 +28768,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             persistAnalysisSessionSnapshot(activeEpisode.id);
         }
         phase2RetryOptionsRef.current = options;
-        activeAnalysisTaskIdsRef.current.clear();
-        setActiveAnalysisTaskId('');
+        if (!overlayOnLiveRun) {
+            activeAnalysisTaskIdsRef.current.clear();
+            setActiveAnalysisTaskId('');
+        }
         beginStageRerunUi({
             phase: 'assets_gen',
             message: t('正在重跑资产设计...', 'Rerunning asset design...'),
@@ -28749,8 +28779,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setAnalyzing: false,
             setRetryingPhase2: true,
             runTag: 'phase2_retry',
+            preserveLivePipeline: overlayOnLiveRun,
         });
-        clearAnalysisTaskMarker(activeEpisode?.id);
+        if (!overlayOnLiveRun) {
+            clearAnalysisTaskMarker(activeEpisode?.id);
+        }
         logSelectedScriptAnalysisApi('Stage 3 asset rerun');
         try {
             resetAutoSubjectsImportCache();
@@ -28888,6 +28921,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ];
                 }
                 
+                if (overlayOnLiveRun) {
+                    setAnalysisUiReport((prev) => ({
+                        ...(prev && typeof prev === 'object' ? prev : {}),
+                        importReport: newImportReport,
+                    }));
+                    setAnalysisFlowStatus((prev) => ({
+                        ...(prev && typeof prev === 'object' ? prev : {}),
+                        highlightHint: t('所选资产已重跑完成，可前往资产库查看', 'Selected assets finished rerunning; open the Assets library to review'),
+                    }));
+                    onLog?.('Stage 3 asset design retry completed during live analysis.', 'success');
+                } else {
                 setAnalysisUiReport((prev) => buildCompletedAnalysisUiReport({
                     ...prev,
                     importReport: newImportReport,
@@ -28914,26 +28958,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
                 
                 onLog?.('Stage 3 asset design retry completed.', 'success');
+                }
             }
         } catch (error) {
             if (isTaskCanceledError(error) || analysisStopRequestedRef.current) {
-                setAnalysisFlowStatus({
-                    phase: 'warning',
-                    message: t('已中断资产重跑。', 'Asset rerun was stopped.'),
-                });
+                if (!overlayOnLiveRun) {
+                    setAnalysisFlowStatus({
+                        phase: 'warning',
+                        message: t('已中断资产重跑。', 'Asset rerun was stopped.'),
+                    });
+                }
                 onLog?.('Stage 3 asset design retry stopped by user.', 'warning');
                 return;
             }
             console.error("Retry Stage 3 asset design failed:", error);
-            setAnalysisFlowStatus({
-                phase: 'failed',
-                message: t(`重跑资产生成失败：${error.message || String(error)}`, `Retry Stage 3 asset design failed: ${error.message || String(error)}`),
-            });
+            if (overlayOnLiveRun) {
+                setAnalysisFlowStatus((prev) => ({
+                    ...(prev && typeof prev === 'object' ? prev : {}),
+                    highlightHint: t(`重跑资产生成失败：${error.message || String(error)}`, `Retry Stage 3 asset design failed: ${error.message || String(error)}`),
+                }));
+            } else {
+                setAnalysisFlowStatus({
+                    phase: 'failed',
+                    message: t(`重跑资产生成失败：${error.message || String(error)}`, `Retry Stage 3 asset design failed: ${error.message || String(error)}`),
+                });
+            }
             onLog?.(`Retry Stage 3 asset design failed: ${error.message || String(error)}`, 'error');
         } finally {
-            clearAnalysisTaskMarker(activeEpisode?.id);
             setIsRetryingPhase2(false);
-            analysisRunInFlightRef.current = false;
+            if (!overlayOnLiveRun) {
+                clearAnalysisTaskMarker(activeEpisode?.id);
+                analysisRunInFlightRef.current = false;
+            }
         }
     };
 
@@ -32000,6 +32056,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 : spec.key === 'prop'
                                     ? hasPropExtractForAssetDesign()
                                     : (hasEnvironmentPlanForAssetDesign() || hasAssetGenerationPrerequisite);
+                            const retryingTypes = Array.isArray(phase2RetryOptionsRef.current?.targetEntityTypes)
+                                ? phase2RetryOptionsRef.current.targetEntityTypes
+                                : null;
+                            const categoryRetrying = Boolean(isRetryingPhase2) && (
+                                !retryingTypes
+                                || (spec.key === 'character' && retryingTypes.includes('characters'))
+                                || (spec.key === 'prop' && retryingTypes.includes('props'))
+                                || (spec.key === 'environment' && retryingTypes.some((item) => (
+                                    ['environments', 'posters', 'covers'].includes(String(item || '').trim().toLowerCase())
+                                )))
+                            );
                             const canRerunCategory = Boolean(
                                 (
                                     spec.key === 'character'
@@ -32008,8 +32075,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             ? (hasExtractForCategory || importedCount > 0 || hasPersistedPropAssetDesign() || sceneSplitDone)
                                             : (hasExtractForCategory || environmentPlanDone)
                                 )
-                                && !state.active
-                                && !isRetryingPhase2
+                                && !categoryRetrying
                             );
                             const canEditExtract = Boolean(
                                 (spec.key === 'character' || spec.key === 'prop')
@@ -33943,8 +34009,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <button
                                     type="button"
                                     onClick={confirmPhase2RerunSelection}
-                                    disabled={isRetryingPhase2 || isAnalyzing || (!hasAssetGenerationPrerequisite && phase2RerunDisplayEntries.length <= 0) || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0)}
-                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isRetryingPhase2 || isAnalyzing || (!hasAssetGenerationPrerequisite && phase2RerunDisplayEntries.length <= 0) || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0) ? 'bg-white/5 text-white/35 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-500 text-white'}`}
+                                    disabled={isRetryingPhase2 || (!hasAssetGenerationPrerequisite && phase2RerunDisplayEntries.length <= 0) || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0)}
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isRetryingPhase2 || (!hasAssetGenerationPrerequisite && phase2RerunDisplayEntries.length <= 0) || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0) ? 'bg-white/5 text-white/35 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-500 text-white'}`}
                                 >
                                     {isRetryingPhase2 ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                                     {t('确认重跑', 'Confirm Rerun')}
