@@ -3984,6 +3984,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisStopRequestedRef = useRef(false);
     /** 'user' | 'timeout' | '' — why stop was armed (shared by manual stop + pipeline deadline). */
     const analysisStopReasonRef = useRef('');
+    const lastLoadedAnalysisRef = useRef(null);
+    const latestAssetRawTextRef = useRef('');
+    const latestAnalysisRawTextRef = useRef('');
+    const latestStage1RawTextRef = useRef('');
+    const latestStage2_1TextRef = useRef('');
 
     const publishLiveAnalysisProgressSnapshot = useCallback((patch = {}) => {
         if (applyingRemoteProgressRef.current) return;
@@ -14909,12 +14914,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     // Keep the "LLM 返回结果" box in sync with DB-saved ai_scene_analysis_result.
     // Important: don't clobber local edits while user is typing.
-    const lastLoadedAnalysisRef = useRef(null);
-    const latestAssetRawTextRef = useRef('');
-    const latestAnalysisRawTextRef = useRef('');
-    const latestStage1RawTextRef = useRef('');
-    const latestStage2_1TextRef = useRef('');
-
     const llmRawAutoSaveTimerRef = useRef(null);
     const llmRawAutoSaveArmedRef = useRef(false);
     const analysisResumeInFlightRef = useRef(false);
