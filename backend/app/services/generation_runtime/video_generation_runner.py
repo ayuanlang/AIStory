@@ -1421,6 +1421,12 @@ async def _run_generate_video(
             video_provider_options["height"] = int(resolved_video_height)
         if resolved_video_resolution:
             video_provider_options["resolution"] = resolved_video_resolution
+            # KIE video APIs expect uppercase-P literals (480P / 720P / 1080P).
+            if _provider_lower_for_billing == "kie" or _provider_lower_for_billing.startswith("kie/"):
+                res_text = str(resolved_video_resolution).strip().replace(" ", "")
+                res_lower = res_text.lower()
+                if res_lower.endswith("p") and res_lower[:-1].isdigit():
+                    video_provider_options["resolution"] = f"{res_lower[:-1]}P"
         if resolved_video_image_size:
             video_provider_options["image_size"] = resolved_video_image_size
 

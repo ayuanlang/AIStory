@@ -4709,12 +4709,12 @@ class MediaGenerationService:
                 "K1": "1k",
                 "K2": "2k",
                 "K4": "4k",
-                "P480": "480p",
-                "P512": "512p",
-                "P580": "580p",
-                "P720": "720p",
-                "P768": "768p",
-                "P1080": "1080p",
+                "P480": "480P",
+                "P512": "512P",
+                "P580": "580P",
+                "P720": "720P",
+                "P768": "768P",
+                "P1080": "1080P",
             }
             return reverse.get(value.upper(), value)
 
@@ -4747,6 +4747,16 @@ class MediaGenerationService:
             return str(num)
 
         return value
+
+    def _normalize_kie_video_p_resolution(self, value: Any) -> Optional[str]:
+        """KIE video APIs expect uppercase-P literals (480P / 720P / 1080P)."""
+        text = str(value or "").strip().replace(" ", "")
+        if not text:
+            return None
+        lower = text.lower()
+        if lower.endswith("p") and lower[:-1].isdigit():
+            return f"{lower[:-1]}P"
+        return None
 
     def _get_kie_standard_reverse_mapping(
         self,
@@ -19852,7 +19862,7 @@ class MediaGenerationService:
                 payload_input_obj["multi_shots"] = False
 
             if is_seedance_video_model and not is_gemini_omni_video_model:
-                seedance_default_resolution = "480p" if (tool_conf.get("draft") or tool_conf.get("draft_mode")) else "720p"
+                seedance_default_resolution = "480P" if (tool_conf.get("draft") or tool_conf.get("draft_mode")) else "720P"
                 if not str(payload_input_obj.get("resolution") or "").strip():
                     payload_input_obj["resolution"] = seedance_default_resolution
                 elif allowed_resolutions:
@@ -19865,7 +19875,7 @@ class MediaGenerationService:
 
             if tool_conf.get("draft") or tool_conf.get("draft_mode"):
                 if not is_gemini_omni_video_model and not is_flux2_image_model:
-                    payload_input_obj["resolution"] = "480p"
+                    payload_input_obj["resolution"] = "480P"
 
             if is_flux2_image_model:
                 flux2_resolution = str(payload_input_obj.get("resolution") or "").strip().upper()
@@ -19897,6 +19907,20 @@ class MediaGenerationService:
                     payload_input_obj["aspect_ratio"] = "16:9"
 
             payload["input"] = payload_input_obj
+
+        # KIE video p-suffix literals use uppercase P (480P / 720P / 1080P).
+        # Skip gemini-omni-video, which documents lowercase 720p | 1080p | 4k.
+        if (
+            isinstance(payload, dict)
+            and gen_type == "video"
+            and not is_gemini_omni_video_model
+        ):
+            final_input = payload.get("input")
+            if isinstance(final_input, dict):
+                kie_res = self._normalize_kie_video_p_resolution(final_input.get("resolution"))
+                if kie_res:
+                    final_input["resolution"] = kie_res
+                    payload["input"] = final_input
 
         if isinstance(payload, dict):
             payload = self._enforce_no_watermark_payload(payload)
