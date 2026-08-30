@@ -33,7 +33,7 @@ def test_parse_derived_env_tags_and_extract_block():
     assert by_name["0度客栈大堂"]["background"] == "柜台"
     assert by_name["0度客栈大堂"]["frame_left"] == "楼梯口"
     assert by_name["0度客栈大堂"]["frame_right"] == "账房窗"
-    assert "柜台" in str(by_name["0度客栈大堂"].get("references") or "")
+    assert not by_name["0度客栈大堂"].get("references")
     assert by_name["180度客栈大堂"]["background"] == "正门"
     assert by_name["180度客栈大堂"]["frame_left"] == "账房窗"
     assert by_name["180度客栈大堂"]["frame_right"] == "楼梯口"
@@ -64,7 +64,7 @@ def test_frame_anchor_injection_keeps_main_when_sides_missing():
     )
     block = build_derived_env_frame_anchor_injection(text)
     assert "ENV:[0度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0" in block
-    assert "背景=无｜画左=无｜画右=无" in block
+    assert "背景=" not in block.split("ENV:[0度客栈大堂]", 1)[1].split("\n", 1)[0]
 
 
 def test_frame_anchor_injection_empty_when_no_derived():
@@ -109,9 +109,7 @@ def test_build_item_persists_frame_anchors():
     assert attrs["background"] == "柜台"
     assert attrs["frame_left"] == "楼梯口"
     assert attrs["frame_right"] == "账房窗"
-    assert item["anchor_description"] == (
-        "背景=柜台｜画左=楼梯口｜画右=账房窗｜参照物=柜台、楼梯口、账房窗"
-    )
+    assert item["anchor_description"] == "背景=柜台｜画左=楼梯口｜画右=账房窗"
     assert "只切割，不要改画" in item["generation_prompt_cn"]
     assert "背景=柜台" not in item["generation_prompt_cn"]
 
@@ -125,7 +123,59 @@ def test_first_cut_anchor_description_empty_slots():
             "kind": "第一刀",
         }
     )
-    assert item["anchor_description"] == "背景=无｜画左=无｜画右=无"
+    assert item["anchor_description"] == ""
+
+
+def test_derived_anchors_copy_matching_main_env_angle_subjects():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        format_derived_anchor_description,
+        parse_derived_env_extract_items,
+        parse_main_environment_angle_subjects,
+    )
+
+    text = (
+        "────【主环境】────\n"
+        "【主环境】客栈大堂｜日夜内外=日/内\n"
+        "0度轴=大门｜四向+中心：0度=客栈大门｜扇型=单扇｜开闭=半开｜"
+        "90度=雕花窗格｜180度=红木柜台与酒架｜270度=贴墙木楼梯｜中心=八仙桌\n"
+        "空中=通高梁架\n"
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜"
+        "类型=第一刀｜背景=柜台｜画左=无｜画右=正门｜参照物=八仙桌、算盘\n"
+        "[DERIVED_ENV] 名称=180度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=180｜"
+        "类型=第一刀｜背景=正门｜画左=无｜画右=无\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂_仰天｜所属主环境=客栈大堂｜view_angle_from_main=0｜"
+        "类型=特别｜特别表述=仰天:梁架｜背景=无｜画左=无｜画右=无\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+    )
+    mains = parse_main_environment_angle_subjects(text)
+    assert mains["客栈大堂"]["0"] == "客栈大门"
+    assert mains["客栈大堂"]["90"] == "雕花窗格"
+    assert mains["客栈大堂"]["180"] == "红木柜台与酒架"
+    assert mains["客栈大堂"]["270"] == "贴墙木楼梯"
+    assert mains["客栈大堂"]["空中"] == "通高梁架"
+
+    by_name = {item["name"]: item for item in parse_derived_env_extract_items(text)}
+    zero = by_name["0度客栈大堂"]
+    assert zero["background"] == "客栈大门"
+    assert zero["frame_left"] == "贴墙木楼梯"
+    assert zero["frame_right"] == "雕花窗格"
+    assert not zero.get("references")
+    reverse = by_name["180度客栈大堂"]
+    assert reverse["background"] == "红木柜台与酒架"
+    assert reverse["frame_left"] == "雕花窗格"
+    assert reverse["frame_right"] == "贴墙木楼梯"
+    look_up = by_name["0度客栈大堂_仰天"]
+    assert look_up["background"] == "通高梁架"
+    assert look_up["frame_left"] == "贴墙木楼梯"
+    assert look_up["frame_right"] == "雕花窗格"
+
+    built = build_derived_environment_item(zero)
+    assert built["anchor_description"] == "背景=客栈大门｜画左=贴墙木楼梯｜画右=雕花窗格"
+    assert "无" not in built["anchor_description"]
+    assert "柜台" not in built["anchor_description"]
+    assert "八仙桌" not in built["anchor_description"]
+    assert format_derived_anchor_description(background="无", frame_left="无", frame_right="无") == ""
 
 
 def test_sample_ingest_writes_frame_and_reference_anchors():
@@ -139,7 +189,7 @@ def test_sample_ingest_writes_frame_and_reference_anchors():
     assert "背景=柜台" in zero
     assert "画左=楼梯口" in zero
     assert "画右=账房窗" in zero
-    assert "参照物=" in zero
+    assert "参照物=" not in zero
     assert "柜台" in zero
     assert by_name["0度客栈大堂"]["generation_prompt_cn"].startswith("所属主环境=客栈大堂")
 
@@ -171,7 +221,8 @@ def test_derived_env_anchors_drop_character_and_prop_content():
     assert "背景=二楼雕花栏杆" in anchor
     assert "画左=客栈大门" in anchor
     assert "画右=柜台" in anchor
-    assert "二楼客房木门" in anchor
+    assert "二楼客房木门" not in anchor
+    assert "参照物=" not in anchor
     assert "CHAR:" not in anchor
     assert "PROP:" not in anchor
     assert "金镶玉" not in anchor
@@ -183,7 +234,7 @@ def test_derived_env_anchors_drop_character_and_prop_content():
         frame_left="客栈大门",
         frame_right="柜台",
         references=["PROP:[皇家暗纹玉佩]脱落", "二楼雕花栏杆"],
-    ) == "背景=无｜画左=客栈大门｜画右=柜台｜参照物=二楼雕花栏杆、客栈大门、柜台"
+    ) == "画左=客栈大门｜画右=柜台"
 
 
 def test_state_cut_json_hangs_same_angle_parent():

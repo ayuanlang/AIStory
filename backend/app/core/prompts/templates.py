@@ -34,21 +34,17 @@ PROMPT_TEMPLATE_SYNTAX_RULES = {
 			"4-view prop sheet",
 			"16:9",
 			"Structure: 4-view layout",
-			"Close-up",
-			"Front",
+			"Scale-reference composite",
 			"Side",
 			"Back",
 			"Background: light gray",
-			"Strictly Object Only",
 		],
 		"cn_required": [
 			"道具",
 			"四视图",
-			"特写",
-			"正面",
+			"尺度对照",
 			"侧面",
 			"反面",
-			"仅物体",
 			"背景",
 			"浅灰",
 		],
@@ -103,32 +99,29 @@ Output: deliver a 16:9 4-panel composite asset sheet, or four source renders ass
 """
 
 PROP_PROMPT_TEMPLATE = """
-[Global Style] Prop: 【PropName (state)】, 4-view prop sheet — all four views must show the same object identity, proportions, material response, and anchor details consistently, in the strict order: Close-up, Front, Side, Back.
+[Global Style] Prop: 【PropName (state)】, 4-view prop sheet — all four views must show the same object identity, proportions, material response, and anchor details consistently, in the strict order: Scale-reference composite (near), Scale-reference composite (front), Side, Back.
 
-1. Close-up: macro close-up of key surface/material detail (texture, wear, marking, label).
-2. Full Front: full object front view with complete silhouette and readable major geometry.
-3. Full Side: true side profile showing thickness/depth and contour.
-4. Full Back: full object rear view with seams, back panel, and structure continuity.
+1. Scale-reference composite (near, first panel): the prop and ONE standardized scale-reference entity share the same cell but stay completely isolated — no touching, overlapping, holding, or wearing. Use the extracted linear-diagram name (adult female/male figure, palm, ear, neck, wrist; or ping-pong ball, basketball, standard truck, building) and the extracted length/height/width ratios vs that reference (e.g. L=1/2 palm length, H=2/3 palm width, T≈1/6 palm thickness). Annotate L=/H=/T= length and V= volume with English unit abbreviations (mm, cm, m, cm3, mL, L, m3).
+2. Scale-reference composite (front, second panel): the same prop and the SAME isolated reference entity share the same cell at full-front silhouette, with the same numeric annotations and a visible gray gap between them.
+3. Full Side: true side profile of the prop only (no reference, no people), showing thickness/depth and contour.
+4. Full Back: full object rear view of the prop only, with seams, back panel, and structure continuity.
 
-Structure: 4-view layout (Close-up, Front, Side, Back).
+Structure: 4-view layout (Scale-reference composite, Scale-reference composite front, Side, Back).
 Material: 【primary_material】; secondary materials: 【list】.
-Size: ~【dimensions cm or relative to reference】.
-Relative scale reference: 【reference_subject e.g., belt buckle, chair】.
+Size: 【number + English unit, e.g. L=86mm, H=54mm, V=18cm3】.
+Relative scale reference: 【standardized reference + L/H/W ratios vs that reference, e.g. adult-female-palm line drawing, L=1/2 palm length, H=2/3 palm width, T≈1/6 palm thickness】.
 Visible details: 【surface texture, wear, markings, seams, labels】.
 Lighting setup: key/fill/rim 【direction + intensity + color_temp + soft/hard】.
 Lens & focus: 【focal length / equivalent lens + DOF strategy】.
 Grain/noise strategy: 【clean digital / fine film grain / medium grain】 with readable texture in shadows.
 Style adaptation by script type: live-action/realistic drama must enforce physically plausible material response (metal specular, fabric fibers, roughness variation), true-to-scale wear, and avoid toy-like/plastic CGI look.
-anchor_description：【thumbnail_readability】.
+anchor_description：【Chinese L/H/W ratios vs reference + numeric units, e.g. 长=1/2掌长｜高=2/3掌宽｜宽≈1/6掌厚, 86mm L, 54mm H, 18cm3 V】 plus 1–3 English material/structure phrases.
 Background: light gray.
-Narrative-isolation rule: render the prop as a pure object asset only. Do not include any character interaction, holding, wearing, touching, carrying, using, or story-action context; do not imply hands, arms, faces, bodies, human reflections, or any other body-part involvement.
+Narrative-isolation rule: no story character, no photoreal holding/wearing/using. First two panels MUST include the standardized linear scale-reference entity as a second, fully isolated subject (visible gap, no contact); panels 3–4 are prop-only.
 Canvas rule: treat the prop sheet as a 16:9 horizontal asset canvas aligned to the system subject asset ratio; do not introduce any conflicting portrait or square sheet ratio.
-Layout rule: asymmetrical 4-panel sheet. The Close-up must sit in the FIRST panel on the LEFT as a large full-height panel occupying about 40% of the total canvas width. The remaining 60% on the RIGHT must be split into three equal stacked panels in the strict order Front, Side, Back. All four views must stay fully inside their own panels with complete silhouettes and zero cropping.
-Close-up crop rule: in the FIRST LEFT close-up panel, the key detail area should sit on the vertical centerline and remain vertically centered in the panel, occupying about 78% to 88% of the panel height and reading larger than the other three views without clipping outer edges or material contours.
-Right-panel framing rule: the three RIGHT panels must use the same framing scale and the same padding logic so the object reads as one unified sheet rather than three mismatched crops. Keep top and bottom whitespace as small and as uniform as possible, and keep side whitespace tighter as well, while preserving the full object contour in every panel.
+Layout rule: asymmetrical 4-panel sheet. The first scale-reference composite sits in the FIRST panel on the LEFT occupying about 35% of the total canvas width, vertically centered. The remaining 65% on the RIGHT holds Front composite, Side, Back. All four views must stay fully inside their own panels with complete silhouettes and zero cropping.
 Panel finish rule: zero gutter, zero blank spacing, no collage seam, no divider line, no white border, no black border, no framing bar; the panel boundaries may exist compositionally but must not render as visible lines.
-**Strictly Object Only: No characters, no hands, no body parts visible, no wearing/holding/using context, and no story-action residue.**
-Output: deliver a 16:9 4-panel composite asset sheet, or four source renders assembled to the same 16:9 sheet; include a simple, unobtrusive scale marker (no numbers/text); no labels, no captions, no watermark; End note: light gray background, high quality, large files, no text.
+Output: deliver a 16:9 4-panel composite asset sheet; first two panels show prop + scale reference with numeric L/H/V annotations; side and back are prop-only; no watermark; End note: light gray background, high quality, large files.
 """
 
 ENVIRONMENT_PROMPT_TEMPLATE = """

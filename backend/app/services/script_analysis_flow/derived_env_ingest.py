@@ -91,7 +91,26 @@ USAGE_MERGE_TOKENS = (
     "ms", "mcu", "cu", "ecu",
 )
 _EMPTY_FIELD_MARKERS = {"", "无", "n/a", "na", "none", "-"}
+_INHERIT_FIELD_MARKERS = {"继承项目库", "继承", "同上", "见上", "略"}
 _XOR_ANCHOR_PATTERN = re.compile(r"(?:^|[｜|\s])锚\s*=\s*([^｜|\r\n]+)")
+_MAIN_ENV_BLOCK_PATTERN = re.compile(
+    r"【主环境】\s*(?P<name>[^｜\|\r\n]+).*?(?=【主环境】|【未落清单】|【未落环境实体清单】|────【|$)",
+    re.DOTALL,
+)
+_DEGREE_SLOT_PATTERN = re.compile(
+    r"(?:^|[｜|\s;；:：])(?P<angle>0|90|180|270)\s*度(?!轴)\s*[=：]\s*",
+)
+_DEGREE_SLOT_STOP = re.compile(
+    r"[｜|]\s*(?:(?:0|90|180|270)\s*度(?!轴)\s*[=：]|中心\s*[=：]|固定清单|"
+    r"0度轴|地面\s*[=：]|空中\s*[=：]|屋顶\s*[=：]|天花\s*[=：]|背景微动件|活动空间)"
+)
+_SKY_SLOT_PATTERN = re.compile(
+    r"(?:空中|屋顶|天花)\s*[=：]\s*([^｜\|\r\n]+)",
+)
+_ANGLE_CONTRACT_KEYS = {
+    "扇型", "开闭", "开向", "门轴", "把手", "通行扇", "材质", "可见面",
+    "所属楼层", "左扇开闭", "右扇开闭", "门轴世界", "左扇", "右扇",
+}
 _TYPED_SUBJECT_PATTERN = re.compile(r"(?:CHAR|PROP)\s*:\s*|\[@", re.IGNORECASE)
 _CHAR_TOKEN_NAME_PATTERN = re.compile(
     r"CHAR\s*:\s*\[\s*@?\s*([^\]\r\n]+)\s*\]",
@@ -137,8 +156,8 @@ def _is_env_fixture_name(name: str, forbidden: Optional[Set[str]] = None) -> boo
 def _anchor_slot(value: Any, forbidden: Optional[Set[str]] = None) -> str:
     text = _clean(value)
     if text.lower() in _EMPTY_FIELD_MARKERS:
-        return "无"
-    return text if _is_env_fixture_name(text, forbidden) else "无"
+        return ""
+    return text if _is_env_fixture_name(text, forbidden) else ""
 
 
 def _split_named_objects(*values: Any, forbidden: Optional[Set[str]] = None) -> List[str]:
@@ -177,6 +196,88 @@ def collect_reference_objects_from_text(
     return names
 
 
+def _subjects_from_angle_value(value: Any) -> str:
+    """Keep named fixtures from a 四向 slot; drop 开闭/门轴 contracts. Never '无'."""
+    text = _clean(value)
+    if not text or text.lower() in _EMPTY_FIELD_MARKERS:
+        return ""
+    if text in _INHERIT_FIELD_MARKERS:
+        return ""
+    kept: List[str] = []
+    for part in re.split(r"[｜|]", text):
+        piece = _clean(part)
+        if not piece or piece.lower() in _EMPTY_FIELD_MARKERS:
+            continue
+        if piece in _INHERIT_FIELD_MARKERS:
+            continue
+        if "=" in piece:
+            key = _clean(piece.split("=", 1)[0])
+            if (
+                key in _ANGLE_CONTRACT_KEYS
+                or key.endswith("开闭")
+                or key.endswith("门轴")
+                or key.endswith("把手")
+            ):
+                continue
+        kept.append(piece)
+    return "、".join(kept)
+
+
+def parse_main_environment_angle_subjects(text: str) -> Dict[str, Dict[str, str]]:
+    """主环境名 → {0/90/180/270/空中} 该向已点名主体（逐字，不含合同键）。"""
+    source = str(text or "")
+    result: Dict[str, Dict[str, str]] = {}
+    for match in _MAIN_ENV_BLOCK_PATTERN.finditer(source):
+        name = _clean(match.group("name"))
+        body = str(match.group(0) or "")
+        if not name:
+            continue
+        slots: Dict[str, str] = {}
+        for slot_match in _DEGREE_SLOT_PATTERN.finditer(body):
+            try:
+                angle = int(slot_match.group("angle"))
+            except (TypeError, ValueError):
+                continue
+            raw = body[slot_match.end():]
+            stop = _DEGREE_SLOT_STOP.search("｜" + raw)
+            chunk = raw[: stop.start() - 1] if stop else raw
+            subjects = _subjects_from_angle_value(chunk.split("\n", 1)[0])
+            if subjects:
+                slots[str(angle)] = subjects
+        sky_match = _SKY_SLOT_PATTERN.search(body)
+        if sky_match:
+            sky = _subjects_from_angle_value(sky_match.group(1))
+            if sky:
+                slots["空中"] = sky
+        if slots:
+            result[name] = slots
+    return result
+
+
+def derived_frame_anchors_from_main(
+    main: str,
+    angle: int,
+    mains: Optional[Dict[str, Dict[str, str]]] = None,
+    *,
+    look_up: bool = False,
+) -> Dict[str, str]:
+    """Copy 背景/画左/画右 from the matching main-env sector. No invention, no 无."""
+    sectors = (mains or {}).get(_clean(main)) or {}
+    if not sectors:
+        return {}
+    resolved = int(angle) if angle in GRID_BY_ANGLE else 0
+    background = ""
+    if look_up and sectors.get("空中"):
+        background = sectors["空中"]
+    else:
+        background = sectors.get(str(resolved), "")
+    return {
+        "background": background,
+        "frame_left": sectors.get(str((resolved + 270) % 360), ""),
+        "frame_right": sectors.get(str((resolved + 90) % 360), ""),
+    }
+
+
 def format_derived_anchor_description(
     *,
     background: str = "",
@@ -185,29 +286,26 @@ def format_derived_anchor_description(
     references: Optional[Sequence[str]] = None,
     forbidden: Optional[Set[str]] = None,
 ) -> str:
-    """Asset Anchor Description: 背景 / 画左 / 画右 / 参照物 — env fixtures only."""
+    """Asset Anchor Description: 背景 / 画左 / 画右 only — copied fixtures, never 无."""
+    del references
     blob = "｜".join(
         [
             str(background or ""),
             str(frame_left or ""),
             str(frame_right or ""),
-            "、".join(str(item or "") for item in (references or ())),
         ]
     )
     blocked = set(forbidden or ()) | collect_subject_names_from_text(blob)
+    parts: List[str] = []
     bg = _anchor_slot(background, blocked)
     left = _anchor_slot(frame_left, blocked)
     right = _anchor_slot(frame_right, blocked)
-    refs = _split_named_objects(
-        *(references or []),
-        background,
-        frame_left,
-        frame_right,
-        forbidden=blocked,
-    )
-    parts = [f"背景={bg}", f"画左={left}", f"画右={right}"]
-    if refs:
-        parts.append(f"参照物={'、'.join(refs)}")
+    if bg:
+        parts.append(f"背景={bg}")
+    if left:
+        parts.append(f"画左={left}")
+    if right:
+        parts.append(f"画右={right}")
     return "｜".join(parts)
 
 
@@ -291,6 +389,18 @@ def _state_suffix(name: str, main_name: str) -> str:
 
 def _same_angle_parent(name: str, main_name: str, angle: int) -> str:
     return f"{int(angle)}度{main_name}"
+
+
+def _row_looks_up(row: Dict[str, Any]) -> bool:
+    name = _clean(row.get("name"))
+    suffix = _state_suffix(name, _clean(row.get("main") or row.get("所属主环境")))
+    kind = _clean(row.get("kind") or row.get("类型") or row.get("special_kind"))
+    note = _clean(row.get("special_note") or row.get("特别表述"))
+    return (
+        suffix in LOOK_UP_SUFFIXES
+        or kind in LOOK_UP_SUFFIXES
+        or any(token in note for token in LOOK_UP_SUFFIXES)
+    )
 
 
 _TYPED_ENV_NAME_PATTERN = re.compile(
@@ -464,21 +574,28 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
             _upsert(env_match.group(1) or env_match.group(2))
 
     forbidden = collect_subject_names_from_text(source)
-    scene_refs = collect_reference_objects_from_text(source, forbidden=forbidden)
+    mains = parse_main_environment_angle_subjects(source)
     for row in by_name.values():
+        main = _clean(row.get("main") or row.get("所属主环境")) or _main_from_name(row.get("name") or "")
+        angle = _normalize_angle(row.get("angle") or row.get("view_angle_from_main"), row.get("name") or "")
+        copied = derived_frame_anchors_from_main(
+            main,
+            angle,
+            mains,
+            look_up=_row_looks_up(row),
+        )
+        if copied:
+            if copied.get("background"):
+                row["background"] = copied["background"]
+            if copied.get("frame_left"):
+                row["frame_left"] = copied["frame_left"]
+            if copied.get("frame_right"):
+                row["frame_right"] = copied["frame_right"]
+            row["references"] = ""
         row["background"] = _anchor_slot(row.get("background"), forbidden)
         row["frame_left"] = _anchor_slot(row.get("frame_left"), forbidden)
         row["frame_right"] = _anchor_slot(row.get("frame_right"), forbidden)
-        existing = _split_named_objects(row.get("references"), forbidden=forbidden)
-        merged = existing[:]
-        seen = set(existing)
-        for name in scene_refs:
-            if name not in seen:
-                seen.add(name)
-                merged.append(name)
-        if merged:
-            row["references"] = "、".join(merged)
-        elif "references" in row:
+        if "references" in row:
             row["references"] = ""
 
     return list(by_name.values())
@@ -671,9 +788,12 @@ def format_derived_env_info_line(
     angle = _angle_text(view_angle)
     if angle:
         parts.append(f"view_angle_from_main={angle}")
-    parts.append(f"背景={_clean(background) or '无'}")
-    parts.append(f"画左={_clean(frame_left) or '无'}")
-    parts.append(f"画右={_clean(frame_right) or '无'}")
+    if _clean(background):
+        parts.append(f"背景={_clean(background)}")
+    if _clean(frame_left):
+        parts.append(f"画左={_clean(frame_left)}")
+    if _clean(frame_right):
+        parts.append(f"画右={_clean(frame_right)}")
     return "｜".join(parts)
 
 

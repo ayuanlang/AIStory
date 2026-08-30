@@ -177,7 +177,8 @@ def _script_with_prop_extract() -> str:
 定位=男主随身火机，掌心可握，冷峻金属
 作用=会谈时把玩
 外形=扁长方形银色金属机身
-尺度=约一掌可握
+尺度=长=1/2掌长｜高=1/3掌宽｜宽≈1/4掌厚
+参照主体=名=成人男性手掌线性图｜长=1/2掌长｜高=1/3掌宽｜宽≈1/4掌厚｜依据=掌心把玩｜隔离=是
 材质=银色金属
 形态=按压火轮
 情绪=主情绪=压迫｜挂场ENV=客栈大堂｜服化或材质响应=冷金属
@@ -193,7 +194,9 @@ def test_prop_brief_uses_extract_and_excludes_beats():
     assert "[全局统筹道具提取开始]" in brief
     assert "[全局统筹道具提取结束]" in brief
     assert "银打火机" in brief
-    assert "约一掌可握" in brief
+    assert "长=1/2掌长" in brief
+    assert "参照主体=名=成人男性手掌线性图" in brief
+    assert "长=/高=/宽=" in brief
     assert "客栈大堂" in brief
     assert "不该进入道具设计简报" not in brief
     assert "【主环境】客栈大堂" not in brief
