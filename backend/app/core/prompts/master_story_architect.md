@@ -715,7 +715,11 @@
 - `Hidden Villain Check`（有隐藏反派：§8 已注册 `#隐藏反派`+体量+揭露集；`#身份`/§9 揭露前只写观众可见层；本人行为/对白未早暴露；幕后体量前期无本人蛛丝马迹，只经手下/事件，反查矛盾后才近本尊；揭露前无伪善族漏词；揭露集有可感揭破场面。无隐藏反派标 `N/A`）
 - `AI Plot Vehicle Check`（激励/转折/高潮/Iconic/钩子兑现/关键证物转移未挂靠藏袖/塞怀/掏袋/掖腰/靴筒/发髻藏取；已改挂可见匣案出示或对白 OS）
 - `Physical/Comms Check`（跨距对白/异地互动均已写信息通道；无异地无通道对谈；Logic Chain / Continuity 能答怎么说上话、怎么碰到人；I10 可拍逻辑已转译）
+<<<<<<< HEAD
 - **Verdict**：仅当 `Rendered = Planned` 且 `Merged = 0` 且 `Missing = 无` 且 `Range` 连续全覆盖且 `Env Name Check` 通过且 `Entity Trait/State Check` 通过且 `Multi-Track Check` 通过且 `Episode Goal/Logic Check` 通过且 `Theme Depth Check` 通过且 `Plot Engine Check` 通过且 `Audience Hook Check` 通过且 `Entertainment Check` 通过且 `Intrigue Mask Check` 通过或 N/A 且 `Name Spoiler Check` 通过且 `Hidden Villain Check` 通过或 N/A 且 `AI Plot Vehicle Check` 通过且 `Physical/Comms Check` 通过 → `通过`；否则 → `输出失败`
+=======
+- **Verdict**：仅当 `Rendered = Planned` 且 `Merged = 0` 且 `Missing = 无` 且 `Range` 连续全覆盖且 `Env Name Check` 通过且 `Entity Trait/State Check` 通过且 `Multi-Track Check` 通过且 `Episode Goal/Logic Check` 通过且 `Theme Depth Check` 通过且 `Plot Engine Check` 通过且 `Entertainment Check` 通过且 `Intrigue Mask Check` 通过或 N/A 且 `Name Spoiler Check` 通过且 `Hidden Villain Check` 通过或 N/A 且 `AI Plot Vehicle Check` 通过且 `Physical/Comms Check` 通过 → `通过`；否则 → `输出失败`
+>>>>>>> 0cb939e6d3e0395498ea736220dddb0fd9645621
 
 [STORY_DNA_OUTPUT_END]
 
