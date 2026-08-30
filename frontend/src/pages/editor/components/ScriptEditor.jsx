@@ -3323,9 +3323,13 @@ const resolveAnalysisProgressDisplayState = ({
     reportStatus = '',
     storyboardProgress = null,
     hasOpenStoryboardWork = false,
+    userStopped = false,
 } = {}) => {
     const normalizedPhase = String(phase || '').trim().toLowerCase() || 'idle';
     const normalizedReport = String(reportStatus || '').trim().toLowerCase();
+    if (userStopped) {
+        return { isLive: false, displayPhase: 'warning' };
+    }
     const storyboardUnresolved = Boolean(hasOpenStoryboardWork)
         || isStoryboardProgressUnresolved(storyboardProgress);
     const isLive = Boolean(
@@ -4325,6 +4329,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const prev = storyboardTaskProgressRef.current;
         const next = typeof updater === 'function' ? updater(prev) : updater;
         const resolved = normalizeStoryboardTaskProgress(next);
+        if (
+            analysisStopRequestedRef.current
+            && String(analysisStopReasonRef.current || '').trim() === 'user'
+            && isStoryboardProgressUnresolved(resolved)
+        ) {
+            return;
+        }
         const prevNorm = normalizeStoryboardTaskProgress(prev);
         const countersUnchanged = (
             Number(prevNorm.started || 0) === Number(resolved.started || 0)
@@ -5433,11 +5444,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     /** Shared live/terminal flag for CTA, diagnostics step activity, and progress banner. */
     const analysisProgressDisplay = useMemo(() => {
-        const progress = pickRicherStoryboardTaskProgress(
-            storyboardTaskProgress,
-            storyboardTaskProgressRef.current,
-            analysisUiReport?.storyboardTaskProgress,
-        );
+        const userStopped = isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+            localStopRequested: analysisStopRequestedRef.current,
+            localStopReason: analysisStopReasonRef.current,
+        });
+        const progress = userStopped
+            ? EMPTY_STORYBOARD_TASK_PROGRESS
+            : pickRicherStoryboardTaskProgress(
+                storyboardTaskProgress,
+                storyboardTaskProgressRef.current,
+                analysisUiReport?.storyboardTaskProgress,
+            );
         return resolveAnalysisProgressDisplayState({
             isAnalyzing,
             isRetryingPhase2,
@@ -5447,14 +5464,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             storyboardProgress: progress,
             // Kickoff promise/queue refs are declared later; progress counters cover the settled case.
             hasOpenStoryboardWork: isStoryboardProgressUnresolved(progress),
+            userStopped,
         });
     }, [
+        activeEpisode?.id,
         analysisFlowStatus?.phase,
         analysisUiReport?.status,
         analysisUiReport?.storyboardTaskProgress,
         isAnalyzing,
         isRetryingPhase2,
         isRerunningStoryboard,
+        isStoppingAnalysisTask,
         storyboardTaskProgress,
     ]);
 
@@ -15782,6 +15802,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const canStopAnalysisTask = useMemo(() => {
         if (isStoppingAnalysisTask) return true;
+        const userStopped = isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+            localStopRequested: analysisStopRequestedRef.current,
+            localStopReason: analysisStopReasonRef.current,
+        });
+        if (userStopped) return false;
         if (isAnalyzing || isRetryingPhase2 || isRerunningStoryboard) return true;
         if (analysisProgressDisplay.isLive) return true;
         if (String(activeAnalysisTaskId || '').trim()) return true;
@@ -15818,7 +15843,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || t('已请求停止当前剧本分析任务。', 'Stop requested for the current scene analysis task.');
 
         analysisStopRequestedRef.current = true;
-        analysisStopReasonRef.current = analysisStopReasonRef.current || 'user';
+        analysisStopReasonRef.current = 'user';
         analysisAwaitingStoryboardRef.current = false;
         analysisPipelineSupervisorActiveRef.current = false;
         analysisRunInFlightRef.current = false;
@@ -15830,6 +15855,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisResumeCoordinatorRef.current = { running: false, episodeId: null };
         phase2InFlightCategoriesRef.current = new Set();
         activeAnalysisTaskIdsRef.current = new Set();
+        storyboardKickoffByMarkerRef.current = new Set();
+        storyboardKickoffByIdentityRef.current = new Set();
+        storyboardKickoffByDbIdRef.current = new Set();
+        storyboardKickoffPromisesRef.current = new Map();
+        pendingStoryboardKickoffsRef.current = [];
+        storyboardTaskProgressRef.current = EMPTY_STORYBOARD_TASK_PROGRESS;
         clearAnalysisPipelineDeadline();
 
         if (id) {
@@ -15864,7 +15895,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             durationMs: startedAt > 0
                 ? Math.max(0, Date.now() - startedAt)
                 : Number(analysisUiReportRef.current?.durationMs || 0) || 0,
+            storyboardTaskProgress: EMPTY_STORYBOARD_TASK_PROGRESS,
         };
+        setStoryboardTaskProgress(EMPTY_STORYBOARD_TASK_PROGRESS);
         setAnalysisUiReport(nextReport);
         setAnalysisFlowStatusHistory((prev) => {
             if (!Array.isArray(prev) || prev.length === 0) return prev;
@@ -15894,6 +15927,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisFlowStatusHistory,
         setAnalysisUiReport,
         setIsRerunningStoryboard,
+        setStoryboardTaskProgress,
         t,
     ]);
 
@@ -19785,7 +19819,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } finally {
             analysisResumeInFlightRef.current = false;
             const markerStillLive = Boolean(loadAnalysisTaskMarker(activeEpisode?.id)?.taskId);
-            if (analysisAwaitingStoryboardRef.current) {
+            const userStopped = isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+                localStopRequested: analysisStopRequestedRef.current,
+                localStopReason: analysisStopReasonRef.current,
+            });
+            if (userStopped) {
+                analysisAwaitingStoryboardRef.current = false;
+                latestIsAnalyzingRef.current = false;
+                setIsAnalyzing(false);
+                setIsRetryingPhase2(false);
+                setActiveAnalysisTaskId('');
+            } else if (analysisAwaitingStoryboardRef.current) {
                 setIsAnalyzing(true);
             } else if (!analysisRunInFlightRef.current && scriptEditorMountedRef.current && !markerStillLive) {
                 setIsAnalyzing(false);
@@ -23672,7 +23716,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
             }
         } finally {
-            if (analysisAwaitingStoryboardRef.current) {
+            if (isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+                localStopRequested: analysisStopRequestedRef.current,
+                localStopReason: analysisStopReasonRef.current,
+            })) {
+                analysisAwaitingStoryboardRef.current = false;
+                latestIsAnalyzingRef.current = false;
+                setIsAnalyzing(false);
+                setIsRetryingPhase2(false);
+                setIsRerunningStoryboard(false);
+                setActiveAnalysisTaskId('');
+                clearAnalysisTaskMarker(activeEpisode?.id);
+                clearAnalysisPipelineDeadline();
+            } else if (analysisAwaitingStoryboardRef.current) {
                 setIsAnalyzing(true);
             } else {
                 clearAnalysisTaskMarker(activeEpisode?.id);
@@ -24211,7 +24267,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             analysisRunInFlightRef.current = false;
             if (!scriptEditorMountedRef.current) return;
-            if (awaitingStoryboard) {
+            if (isEpisodeAnalysisUserStopRequested(episodeId, {
+                localStopRequested: analysisStopRequestedRef.current,
+                localStopReason: analysisStopReasonRef.current,
+            })) {
+                analysisAwaitingStoryboardRef.current = false;
+                latestIsAnalyzingRef.current = false;
+                setIsAnalyzing(false);
+                setIsRetryingPhase2(false);
+                setIsRerunningStoryboard(false);
+                setActiveAnalysisTaskId('');
+            } else if (awaitingStoryboard) {
                 setIsAnalyzing(true);
             } else if (!retainMarker) {
                 setIsAnalyzing(false);
@@ -25700,6 +25766,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             if (!scriptEditorMountedRef.current) {
                 // still allow registry.finally cleanup; skip UI-only resume kick
+            } else if (isEpisodeAnalysisUserStopRequested(episodeId, {
+                localStopRequested: analysisStopRequestedRef.current,
+                localStopReason: analysisStopReasonRef.current,
+            })) {
+                analysisAwaitingStoryboardRef.current = false;
+                latestIsAnalyzingRef.current = false;
+                setIsAnalyzing(false);
+                setIsRetryingPhase2(false);
+                setIsRerunningStoryboard(false);
+                setActiveAnalysisTaskId('');
             } else if (awaitingStoryboard) {
                 setIsAnalyzing(true);
             } else if (!retainMarker) {
@@ -26540,7 +26616,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             clearAnalysisTaskMarker(activeEpisode?.id);
             setIsAnalyzing(false);
             setActiveAnalysisTaskId('');
-            analysisStopRequestedRef.current = false;
+            if (!isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+                localStopRequested: analysisStopRequestedRef.current,
+                localStopReason: analysisStopReasonRef.current,
+            })) {
+                analysisStopRequestedRef.current = false;
+            }
             analysisRunInFlightRef.current = false;
         }
     };
@@ -27166,7 +27247,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 clearAnalysisTaskMarker(activeEpisode?.id);
                 setIsAnalyzing(false);
                 setActiveAnalysisTaskId('');
-                analysisStopRequestedRef.current = false;
+                if (!isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+                    localStopRequested: analysisStopRequestedRef.current,
+                    localStopReason: analysisStopReasonRef.current,
+                })) {
+                    analysisStopRequestedRef.current = false;
+                }
                 analysisRunInFlightRef.current = false;
             }
         }
@@ -27435,7 +27521,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setIsAnalyzing(false);
             analysisRunInFlightRef.current = false;
             setActiveAnalysisTaskId('');
-            analysisStopRequestedRef.current = false;
+            if (!isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+                localStopRequested: analysisStopRequestedRef.current,
+                localStopReason: analysisStopReasonRef.current,
+            })) {
+                analysisStopRequestedRef.current = false;
+            }
             clearAnalysisTaskMarker(activeEpisode?.id);
         }
     };
@@ -27573,7 +27664,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setIsAnalyzing(false);
             analysisRunInFlightRef.current = false;
             setActiveAnalysisTaskId('');
-            analysisStopRequestedRef.current = false;
+            if (!isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+                localStopRequested: analysisStopRequestedRef.current,
+                localStopReason: analysisStopReasonRef.current,
+            })) {
+                analysisStopRequestedRef.current = false;
+            }
             clearAnalysisTaskMarker(activeEpisode?.id);
         }
     };
@@ -28136,7 +28232,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setIsAnalyzing(false);
             analysisRunInFlightRef.current = false;
             setActiveAnalysisTaskId('');
-            analysisStopRequestedRef.current = false;
+            if (!isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+                localStopRequested: analysisStopRequestedRef.current,
+                localStopReason: analysisStopReasonRef.current,
+            })) {
+                analysisStopRequestedRef.current = false;
+            }
             clearAnalysisTaskMarker(activeEpisode?.id);
         }
     };

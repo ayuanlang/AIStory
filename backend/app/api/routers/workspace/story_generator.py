@@ -747,7 +747,7 @@ async def structure_project_creative_input_to_story_fields(
         f"{project_context}\n"
         f"Wild Creative Brainstorm:\n{creative_text}\n\n"
         "Extract searchable key elements from the brainstorm, with emphasis on "
-        "(1) a MODERN/CONTEMPORARY plot-LOGIC framework (literature / film / TV / game; prefer recent decades, not pre-modern classics as default primary) that can transfer across genre/style, plus auxiliary works, "
+        "(1) a MODERN/CONTEMPORARY plot-LOGIC framework (literature / film / TV / game; prefer recent decades, not pre-modern classics as default primary) plus AT LEAST 5 auxiliary works of different dimensions (to avoid copying the primary plot), "
         "and (2) climax moments and iconic scenes."
     )
     extract_raw = await _run_structure_llm_call(
@@ -790,7 +790,8 @@ async def structure_project_creative_input_to_story_fields(
         f"Wild Creative Brainstorm:\n{creative_text}\n\n"
         "Use the extracted key elements and reference search snippets to structure I1-I10. "
         "I10 must name one primary MODERN/CONTEMPORARY work (literature / film / TV / game; prefer recent decades) as the PLOT-LOGIC framework, "
-        "plus auxiliaries (older classics OK only as auxiliaries). Cross-style transfer is required: keep causal/beat/set-piece logic, "
+        "plus AT LEAST 5 auxiliaries (older classics OK only as auxiliaries; each a different dimension) so I6-I8 is not a remake of the primary. "
+        "Cross-style transfer is required: keep causal/beat/set-piece logic, "
         "transcode genre/skin (e.g. modern workplace engine → ancient palace drama). Do not default a pre-modern classic as the primary spine. "
         "For each work write reusable logic (core plot, set pieces, VFX function, action, dialogue) and 转译. "
         "Prioritize climax and iconic scenes (I7a) using visual, dialogue, and action reference angles."

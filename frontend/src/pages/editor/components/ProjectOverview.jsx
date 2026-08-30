@@ -1922,7 +1922,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 ? t(`（已参考 ${snippetCount} 条高潮/名场面/画面/对白/动作检索素材）`, ` (informed by ${snippetCount} climax/iconic-scene reference snippets)`)
                 : '';
             setStoryGenFocusStep('structure_prefill');
-            alert(t('已提取关键要素、优先搜索现代/当代作品的剧情逻辑并预填 I1–I10，请重点核对 I10 主框架是否为现代/当代作品，以及转译与 I7a 高潮名场面。', 'Key elements extracted, modern/contemporary plot-logic spines searched first, and I1–I10 prefilled. Review that I10 primary is modern/contemporary, plus transfer and I7a climax scenes.') + searchNote);
+            alert(t('已提取关键要素、优先搜索现代/当代主框架并预填 I1–I10，请重点核对：主框架是否现代/当代、辅助是否至少 5 部且维度不同、转译与 I7a 高潮名场面。', 'Key elements extracted, modern/contemporary primary searched first, and I1–I10 prefilled. Review: primary is modern/contemporary, at least 5 distinct auxiliaries, transfer, and I7a climax scenes.') + searchNote);
         } catch (e) {
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
@@ -3886,7 +3886,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         <div className="text-sm font-semibold text-white">{t('脑洞标准输入（I1–I10）', 'Creative Input (I1–I10)')}</div>
                                     </div>
                                     <div className="text-xs text-muted-foreground mt-1">
-                                        {t('点「结构化预填」从天马行空自动提取，检索一部现代/当代作品的剧情逻辑作主骨架（可转译到古代等），再配辅助作品，核对 I1–I10；也可手工填写。', 'Use Structure & Prefill to extract from wild ideas, lock a modern/contemporary plot-logic spine (transferable to period etc.) plus auxiliaries, then review I1–I10; or fill manually.')}
+                                        {t('点「结构化预填」从天马行空自动提取，检索一部现代/当代作品作主骨架，并至少配 5 部辅助（拆开主框架、避免整段翻拍），核对 I1–I10；也可手工填写。', 'Use Structure & Prefill to extract from wild ideas, lock a modern/contemporary plot-logic spine plus at least 5 auxiliaries (to avoid remaking the primary), then review I1–I10; or fill manually.')}
                                     </div>
                                 </div>
                                 <button
@@ -3973,10 +3973,10 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             <div>
                                 <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('I10 经典作品框架', 'I10 Classic Works Framework')}</label>
                                 <div className="text-[11px] text-muted-foreground/80 mb-0.5">
-                                    {t('主框架优先选现代、当代作品（近几十年影视/文学/游戏）的剧情逻辑；古典原典不默认当主框架，只可作辅助。可跨风格转译到本剧（如现代逻辑→古代剧）。须写作品名、剧情逻辑/桥段功能与转译，不搬原作皮相。', 'Primary spine: prefer modern/contemporary works (recent decades). Pre-modern classics are auxiliaries only unless no modern equivalent exists. Cross-style transfer OK (modern engine → period drama). Name works, logic, set-piece functions, and the transfer — do not copy the source skin.')}
+                                    {t('主框架优先选现代、当代作品的剧情逻辑；除主框架外至少再列 5 部辅助（各贡献不同维度：桥段/特效/动作/对白/反转/关系），用来拆开主框架、避免整段翻拍。古典原典只可作辅助。须写作品名、机制与转译，不搬原作皮相。', 'Primary spine: prefer modern/contemporary plot logic. Besides the primary, list at least 5 auxiliaries, each a different dimension (set piece / VFX / action / dialogue / reversal / relationship), so the story is not a remake. Pre-modern classics are auxiliaries only. Name works, mechanisms, and the transfer — do not copy the source skin.')}
                                 </div>
                                 <div className="text-[11px] text-primary/70 mb-1.5 italic">
-                                    {t('例：主框架：《消失的爱人》（现代电影）— 剧情逻辑：表象恩爱下的证据战与身份反转；桥段功能：日记误导、媒体对质；转译→古代宫斗：密折/绣谱误导、朝堂当众对质。辅助：《肖申克的救赎》— 体制内暗中凿洞式取证 → 转译为冷宫暗藏物证。', 'e.g. Spine: Gone Girl (modern) — logic: evidence war + identity reversal; set-piece functions: diary mislead, media confrontation; transfer → palace drama: secret memorial / embroidery-code mislead, public court confrontation. Aux: Shawshank — covert proof-gathering → hidden evidence in cold palace.')}
+                                    {t('例：主框架：《消失的爱人》— 证据战与身份反转；转译→宫斗密折/朝堂对质。辅助≥5：《肖申克的救赎》取证；《喜剧之王》身份反差；《无间道》双面身份；《寄生虫》阶层空间；《致命ID》封闭空间置换。各写机制+转译，禁五部复述主框架。', 'e.g. Spine: Gone Girl — evidence war + identity reversal; transfer → palace memorial / court confrontation. Aux≥5: Shawshank (covert proof); King of Comedy (status reversal); Infernal Affairs (double identity); Parasite (class space); Identity (closed-room swap). Each a different mechanism + transfer; do not retell the primary five times.')}
                                 </div>
                                 <textarea
                                     className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
@@ -3984,7 +3984,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     value={globalStoryInput.classic_framework || ''}
                                     onFocus={() => setStoryGenFocusStep('structure_prefill')}
                                     onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, classic_framework: e.target.value }))}
-                                    placeholder={t('例：主框架：《消失的爱人》（现代）— 剧情逻辑：…；转译→古代宫斗：密折误导 / 朝堂对质。辅助：…', 'e.g. Spine: Gone Girl (modern) — plot logic: …; transfer → palace: secret memorial / court confrontation. Aux: …')}
+                                    placeholder={t('例：主框架：《消失的爱人》— 剧情逻辑：…；转译→…。辅助≥5：《肖申克的救赎》…；《无间道》…；《寄生虫》…；…', 'e.g. Spine: Gone Girl — plot logic: …; transfer → …. Aux≥5: Shawshank …; Infernal Affairs …; Parasite …; …')}
                                 />
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

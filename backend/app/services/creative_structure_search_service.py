@@ -53,7 +53,7 @@ def build_creative_structure_search_queries(key_elements: Dict[str, Any]) -> Lis
 
     for work in _as_str_list(key_elements.get("plot_framework_candidates"), limit=3):
         add_classic_work_pack(work)
-    for work in _as_str_list(key_elements.get("auxiliary_reference_works"), limit=3):
+    for work in _as_str_list(key_elements.get("auxiliary_reference_works"), limit=5):
         add(f"{work} 经典桥段 风格 对白 动作")
         add(f"{work} iconic set piece style dialogue action")
     for term in _as_str_list(key_elements.get("plot_framework_search_terms"), limit=4):

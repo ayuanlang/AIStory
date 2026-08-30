@@ -10,8 +10,9 @@ Rules:
 - Search terms must be concrete and web-searchable (genre labels, trope names, conflict hooks, reference works, climax types, iconic scene types, dialogue hooks, action/visual beats).
 - Give extra weight to: a **modern/contemporary** plot-LOGIC skeleton (literature / film / TV / game; 优先现代、当代作品，非古典名著优先) that can be **cross-style transferred** (现代→古代、职场→宫廷、科幻→仙侠等)；then climax, confrontation, reversal, and memorable set-piece FUNCTIONS already present in the brainstorm.
 - **Primary-framework era (硬约束)**：`plot_framework_candidates` 须**优先**现代/当代作品（约近几十年已被验证的影视/文学/游戏）。古典/古代原典只作辅助或主框架实在找不到当代对等逻辑时才用，并标原因。
+- **Auxiliary count (硬约束)**：`auxiliary_reference_works` **至少 5 部**（不含主框架），用来拆开主框架、避免整段照搬其情节。5 部须覆盖不同可转译维度（桥段/特效/动作/对白/反转/人物关系等），禁 5 部都复述主框架同一条因果链。
 - Do NOT limit candidates to the same genre or visual style as the brainstorm. Prefer a strong causal/beat engine even if the source medium differs. The SOURCE era should still prefer modern/contemporary.
-- Provide 3-6 items per search list when possible; use [] only when truly absent.
+- Provide 3-6 items per search list when possible; `auxiliary_reference_works` must be ≥5; use [] only when truly absent (not allowed for auxiliaries).
 
 Required JSON keys:
 - "genres": array of genre/subgenre labels
@@ -23,7 +24,7 @@ Required JSON keys:
 - "tone_style": string, tone/style in one sentence
 - "reference_works": array of films/dramas/novels/games the brainstorm echoes (may be empty)
 - "plot_framework_candidates": array of 1-3 PRIMARY works whose **plot logic** could serve as this story's framework; **must prefer modern/contemporary** titles first (may differ in genre/style from this story; do not default to pre-modern classics)
-- "auxiliary_reference_works": array of supporting works that can supply transferable set-piece/VFX/action/dialogue **functions**; auxiliaries may include older classics, but do not outrank a viable modern primary
+- "auxiliary_reference_works": array of **at least 5** supporting works (not counting the primary) that supply transferable set-piece/VFX/action/dialogue/reversal **functions** different from the primary spine; older classics OK as auxiliaries; purpose = prevent a beat-for-beat remake of the primary
 - "plot_framework_search_terms": array of plot-logic terms (inheritance, cover-up, false identity, revenge delay, etc.) to search **modern/contemporary** frameworks first across literature, film, TV, and games — then cross-genre phrasings
 - "classic_content_search_terms": array of terms to search those works' reusable **logic**: core plot engine, set-piece function, VFX function, action grammar, dialogue mechanism (not costume/era matching)
 - "iconic_scene_search_terms": array of terms to search famous/iconic scenes (名场面)
