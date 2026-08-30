@@ -2114,11 +2114,52 @@ const countDbEntitiesByType = (entityType, dbEntities) => {
     ).length;
 };
 
+const readEntityCustomAttributes = (entity) => {
+    const raw = entity?.custom_attributes ?? entity?.customAttributes ?? entity?.extra;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+        try {
+            const parsed = JSON.parse(raw);
+            return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+        } catch (_) {
+            return {};
+        }
+    }
+    return {};
+};
+
+const readEntityDependencyStrategyType = (entity) => {
+    let dep = entity?.dependency_strategy ?? entity?.dependencyStrategy;
+    if (typeof dep === 'string') {
+        const raw = dep.trim();
+        if (!raw) return '';
+        try {
+            dep = JSON.parse(raw);
+        } catch (_) {
+            return raw;
+        }
+    }
+    if (!dep || typeof dep !== 'object') return String(dep || '').trim();
+    return String(dep.type || '').trim();
+};
+
+/** Completeness: any persisted main ENV counts. Cover posters and reuse-picker filters do not apply. */
 const isMainEnvironmentCompletenessAsset = (entity) => {
     if (!entity) return false;
     const typed = { ...entity, type: entity.type || 'environment' };
     if (normalizeAssetReportType(typed.type) !== 'environment') return false;
-    return isReusableMainEnvironmentAsset(typed);
+    const names = [typed.name, typed.name_en, typed.name_zh, typed.subject_name, typed.subject_name_exact];
+    if (names.some((value) => isDerivedEnvironmentName(value))) return false;
+    const attrs = readEntityCustomAttributes(typed);
+    if (
+        attrs.source === 'programmatic_derived_framing'
+        || attrs.derived_kind
+        || attrs['所属主环境']
+        || attrs.owning_main_environment
+    ) {
+        return false;
+    }
+    return !/^type\s*[ab]$/i.test(readEntityDependencyStrategyType(typed));
 };
 
 const isCoverPosterCompletenessEntry = (entry) => {
@@ -2149,12 +2190,24 @@ const countDbMainEnvironmentEntitiesWithPrompt = (dbEntities) => (
 );
 
 const countMainEnvironmentDesignItems = (items) => (
-    (Array.isArray(items) ? items : []).filter((item) => {
-        const name = item?.name || item?.name_zh || item?.subject_name || item?.subject_name_exact;
-        if (isDerivedEnvironmentName(name)) return false;
-        return isReusableMainEnvironmentAsset({ ...item, type: item?.type || 'environment' });
-    }).length
+    (Array.isArray(items) ? items : []).filter((item) => (
+        isMainEnvironmentCompletenessAsset({ ...item, type: item?.type || 'environment' })
+    )).length
 );
+
+const countMainEnvironmentAssetsFromDesignJson = (raw) => {
+    const text = String(raw || '').trim();
+    if (!text) return 0;
+    try {
+        const parsed = JSON.parse(text);
+        if (!parsed || typeof parsed !== 'object') return 0;
+        return countMainEnvironmentDesignItems(
+            parsed.environments || parsed.subjects?.environments || []
+        );
+    } catch (_) {
+        return 0;
+    }
+};
 
 const countSubjectIndexEntriesCoveredInDb = (entries, entityType, dbEntities) => {
     if (!Array.isArray(entries) || entries.length === 0) return 0;
@@ -2717,6 +2770,9 @@ const probeEpisodeAnalysisCompleteness = async ({
 
     const pendingAssetTargets = [];
     const pendingAssetLabels = [];
+    const envEntities = (entities || []).filter(isMainEnvironmentCompletenessAsset);
+    const hasEnvDesign = envEntities.length > 0
+        || countMainEnvironmentAssetsFromDesignJson(fresh?.ai_entity_design_result) > 0;
     const categorySpecs = [
         {
             key: 'characters',
@@ -2742,6 +2798,7 @@ const probeEpisodeAnalysisCompleteness = async ({
         },
     ];
     for (const spec of categorySpecs) {
+        if (spec.key === 'environments' && hasEnvDesign) continue;
         const categoryKeys = spec.categoryKeys || [spec.key];
         const categoryEntries = (entries || []).filter((entry) => {
             if (!categoryKeys.includes(entry?.category)) return false;
@@ -2782,14 +2839,7 @@ const probeEpisodeAnalysisCompleteness = async ({
     const hasPlanSource = hasEnvironmentPlan
         || /\[SCENE_ENV_IDENT_START/i.test(adaptationText)
         || /【主环境】/.test(adaptationText);
-    const envEntities = (entities || []).filter(isMainEnvironmentCompletenessAsset);
-    const hasEnvDesign = envEntities.length > 0;
-    const designRaw = String(fresh?.ai_entity_design_result || '');
-    const designedCoverPosterPending = (
-        /"(?:posters|covers)"\s*:\s*\[\s*\{/i.test(designRaw)
-        && !(entities || []).some((entity) => normalizeAssetReportType(entity?.type) === 'poster')
-    );
-    if (envAutoOn && hasPlanSource && (!hasEnvDesign || designedCoverPosterPending) && !pendingAssetTargets.includes('environments')) {
+    if (envAutoOn && hasPlanSource && !hasEnvDesign && !pendingAssetTargets.includes('environments')) {
         ['environments', 'posters', 'covers'].forEach((target) => {
             if (!pendingAssetTargets.includes(target)) pendingAssetTargets.push(target);
         });
@@ -9276,15 +9326,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         llmAssetRawResultContent,
     ]);
 
-    const hasPersistedEnvironmentAssetDesign = useCallback(() => {
-        const dbMainCount = countDbMainEnvironmentEntities(episodeOwnedEntities);
-        if (dbMainCount > 0) return true;
+    const hasPersistedEnvironmentAssetDesign = useCallback((dbEntities) => {
+        const entities = Array.isArray(dbEntities) ? dbEntities : episodeOwnedEntities;
+        if (countDbMainEnvironmentEntities(entities) > 0) return true;
         const assetRaw = String(
             activeEpisode?.ai_entity_design_result
             || llmAssetRawResultContent
             || ''
         ).trim();
         if (!assetRaw) return false;
+        if (countMainEnvironmentAssetsFromDesignJson(assetRaw) > 0) return true;
         try {
             const payload = getAnalysisEntitiesPayloadFromJsonText(assetRaw) || {};
             return countMainEnvironmentDesignItems(payload.environments) > 0;
@@ -12787,15 +12838,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [projectId, activeEpisode?.id, analysisUiReport?.importReport, isAnalyzing, isRetryingPhase2, analysisFlowStatus?.assetsGenSettled]);
 
     const refreshEpisodeOwnedEntities = useCallback(async () => {
-        if (!projectId || !activeEpisode?.id) return;
+        if (!projectId || !activeEpisode?.id) {
+            setEpisodeOwnedEntities([]);
+            return [];
+        }
         const seq = ++assetLibrarySyncSeqRef.current;
         setAssetLibrarySyncing(true);
         try {
             const owned = await fetchEntities(projectId, {
                 episode_id: Number(activeEpisode.id) || undefined,
             }).catch(() => []);
-            if (seq !== assetLibrarySyncSeqRef.current) return;
-            setEpisodeOwnedEntities(Array.isArray(owned) ? owned : []);
+            const list = Array.isArray(owned) ? owned : [];
+            if (seq === assetLibrarySyncSeqRef.current) {
+                setEpisodeOwnedEntities(list);
+            }
+            return list;
         } finally {
             if (seq === assetLibrarySyncSeqRef.current) {
                 setAssetLibrarySyncing(false);
@@ -17603,7 +17660,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         skipExistingAssets
                         && !options?.forceAssetDesign
                         && hasPersistedEnvironmentAssetDesign()
-                        && !hasUnimportedDesignedCoverPoster()
                     )
                 );
                 const charStillNeededFromExtract = (
@@ -22005,11 +22061,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             const dbScenes = Number(resumeState?.dbSceneCount || 0);
             const allScenesImported = expectedScenes > 0 && dbScenes >= expectedScenes;
-            const envDesignMissing = countDbMainEnvironmentEntities(episodeOwnedEntities) <= 0;
+            if (sceneSplitReady && !resumeState?.envDesignMissing) {
+                onLog?.(
+                    t(
+                        '继续分析：已检测到主环境资产，环境设计视为完成。',
+                        'Continue analysis: main environment assets exist; environment design is complete.'
+                    ),
+                    'info'
+                );
+            }
             const shouldContinuePipeline = sceneSplitReady && (
                 !allScenesImported
                 || resumeState?.hasEnvironmentPlan === false
-                || (Boolean(resumeState?.hasEnvironmentPlan) && envDesignMissing)
             );
 
             if (shouldContinuePipeline) {
@@ -23226,9 +23289,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const needsSceneOrchestration = expectedSceneCount > 0
             ? dbSceneCount < expectedSceneCount
             : dbSceneCount <= 0;
-        const envDesignMissing = countDbMainEnvironmentEntities(episodeOwnedEntities) <= 0;
+        const freshOwnedEntities = await refreshEpisodeOwnedEntities();
+        const envDesignMissing = !hasPersistedEnvironmentAssetDesign(freshOwnedEntities);
         const needsAssetDesign = Boolean(
-            (!hasCompleteSubjectsJson && (hasEnvironmentPlan || hasSubjectIndex || hasCharOrPropExtract))
+            (!hasCompleteSubjectsJson && (hasSubjectIndex || hasCharOrPropExtract))
             || (hasEnvironmentPlan && envDesignMissing)
         );
 
@@ -23274,6 +23338,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             hasSceneMarkdown,
             hasCompleteSubjectsJson,
             hasEnvironmentPlan,
+            envDesignMissing,
             dbSceneCount,
             expectedSceneCount,
             needsSceneOrchestration,
@@ -23287,7 +23352,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.ai_scene_analysis_subject_index,
         activeEpisode?.ai_stage_outputs,
         activeEpisode?.id,
-        episodeOwnedEntities,
+        hasPersistedEnvironmentAssetDesign,
+        refreshEpisodeOwnedEntities,
         buildSubjectConsistencyReport,
         ensureSceneTableConsistencyBeforePhase2,
         extractAnalysisSections,
@@ -23395,7 +23461,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     parallelWithScenes: needsSceneOrchestration,
                     skipExistingAssets: true,
                     allowWithoutSubjectIndex: true,
-                    forceAssetDesign: Boolean(resumeState?.hasEnvironmentPlan) && !hasPersistedEnvironmentAssetDesign(),
+                    forceAssetDesign: Boolean(resumeState?.hasEnvironmentPlan) && Boolean(resumeState?.envDesignMissing),
                 });
             };
 
@@ -23581,7 +23647,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         : null;
                 } else if (needsSceneOrchestration) {
                     // Assets already complete — open ENV gate so per-scene storyboard can start after import.
-                    if (hasPersistedEnvironmentAssetDesign()) {
+                    if (!resumeState?.envDesignMissing) {
                         markEnvironmentAssetDesignReady('resume-env-already-persisted');
                     } else {
                         markEnvironmentAssetDesignReady('resume-scene-only-no-env-rows-or-payload');
@@ -23591,7 +23657,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     armEnvironmentAssetDesignGate('resume-assets-only');
                     postImportSceneSubjectReport = await runAssetDesignResumeBranch();
                 }
-            } else if (hasPersistedEnvironmentAssetDesign()) {
+            } else if (!resumeState?.envDesignMissing) {
                 markEnvironmentAssetDesignReady('resume-completed-env-already-persisted');
             } else {
                 markEnvironmentAssetDesignReady('resume-completed-no-env-rows-or-payload');
@@ -25977,7 +26043,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         armAnalysisPipelineDeadline(Date.now());
         const stage3OnContinue = await ensureStage3AutoStartCache();
         const envAutoStartOn = stage3OnContinue?.asset_design_environment !== false;
-        const envImported = countDbMainEnvironmentEntities(episodeOwnedEntities) > 0;
+        const freshOwnedEntities = await refreshEpisodeOwnedEntities();
+        const envImported = hasPersistedEnvironmentAssetDesign(freshOwnedEntities);
         const envNodeStatus = String(
             (Array.isArray(diagnosticsPipelineNodesRef.current) ? diagnosticsPipelineNodesRef.current : [])
                 .find((node) => String(node?.node_name || '').trim() === 'asset_design_environment')
@@ -25985,7 +26052,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ).trim().toLowerCase();
         const envNodeLive = ['running', 'queued'].includes(envNodeStatus);
         const shouldStartEnvDesign = envAutoStartOn
-            && (!envImported || hasUnimportedDesignedCoverPoster())
+            && !envImported
             && !envNodeLive
             && (hasPersistedEnvironmentPlan() || hasEnvironmentsToDesign());
         onLog?.(
@@ -26032,7 +26099,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         `Main-environment design failed to start; persistence supervisor will auto-repair: ${envErr?.message || envErr}`
                     ), 'warning');
                 });
-            } else if (envAutoStartOn && envImported && !hasUnimportedDesignedCoverPoster()) {
+            } else if (envAutoStartOn && envImported) {
                 markEnvironmentAssetDesignReady('continue-env-already-persisted');
             } else if (!envAutoStartOn) {
                 markEnvironmentAssetDesignReady('continue-env-auto-start-off');
@@ -26112,11 +26179,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         const stage3OnEnsure = await ensureStage3AutoStartCache();
         const envAutoStartOn = stage3OnEnsure?.asset_design_environment !== false;
-        const envImported = countDbMainEnvironmentEntities(episodeOwnedEntities) > 0;
+        const freshOwnedEntities = await refreshEpisodeOwnedEntities();
+        const envImported = hasPersistedEnvironmentAssetDesign(freshOwnedEntities);
         const envNode = nodes.find((node) => String(node?.node_name || '').trim() === 'asset_design_environment');
         const envNodeLive = isLiveNode(envNode);
         const shouldStartEnvDesign = envAutoStartOn
-            && (!envImported || hasUnimportedDesignedCoverPoster())
+            && !envImported
             && !envNodeLive
             && (hasPersistedEnvironmentPlan() || hasEnvironmentsToDesign());
         if (shouldStartEnvDesign) {
@@ -26852,7 +26920,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const envAutoStartOn = stage3Config?.asset_design_environment !== false;
         const subjectHasEnvRows = /(?:^|\n)\s*\|[^|\n]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(stage2_1SubjectIndexText)
             || /(?:^|\n)\s*S\d+[^\n|]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(stage2_1SubjectIndexText);
-        const envDesignMissing = !hasPersistedEnvironmentAssetDesign() || hasUnimportedDesignedCoverPoster();
+        const freshOwnedEntities = await refreshEpisodeOwnedEntities();
+        const envDesignMissing = !hasPersistedEnvironmentAssetDesign(freshOwnedEntities);
         const shouldRunEnvAssetDesign = envAutoStartOn && (hasEnvironmentsToDesign() || subjectHasEnvRows) && envDesignMissing;
 
         const startedAt = Date.now();
@@ -29647,7 +29716,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (
                 (probe.hasEnvironmentPlan || hasPersistedEnvironmentPlan())
                 && envPendingTargets.length > 0
-                && (!hasPersistedEnvironmentAssetDesign() || hasUnimportedDesignedCoverPoster())
+                && !hasPersistedEnvironmentAssetDesign()
             ) {
                 throwIfAnalysisStopped();
                 onLog?.(t(
