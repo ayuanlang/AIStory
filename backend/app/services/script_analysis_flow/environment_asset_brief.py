@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import List
+from typing import List, Tuple
 
 from app.core.prompt_injection import wrap_injection_section
 from app.services.script_analysis_flow.environment_reuse import (
@@ -15,6 +15,12 @@ _DERIVED_ENV_SECTION_PATTERN = re.compile(
     r"(?:\r?\n)?(?:────【衍生环境】────|【衍生环境】).*?"
     r"(?=(?:\r?\n\[ENV_BLOCK_END)|(?:\r?\n────【)|$)",
     re.DOTALL,
+)
+_ENV_SCENE_PATCH_PATTERN = re.compile(
+    r"`?\[ENV_SCENE_PATCH_START:([^\s\]]+)\]`?"
+    r"(.*?)"
+    r"`?\[ENV_SCENE_PATCH_END:([^\s\]]+)\]`?",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -38,13 +44,41 @@ def extract_main_environment_block(scene_text: str) -> str:
 
 def _scene_brief_parts(scene_id: str, scene_text: str) -> List[str]:
     parts: List[str] = []
-    ident = extract_scene_env_ident_block(scene_text)
+    ident = extract_scene_env_ident_block(scene_text, scene_id)
     if ident:
         parts.append(ident)
     env_block = extract_main_environment_block(scene_text)
     if env_block:
         parts.append(env_block)
     return parts
+
+
+def _iter_env_scene_patches(script_text: str) -> List[Tuple[str, str]]:
+    """Lenient ENV_SCENE_PATCH walker; skip malformed pairs instead of raising."""
+    patches: List[Tuple[str, str]] = []
+    seen = set()
+    for match in _ENV_SCENE_PATCH_PATTERN.finditer(str(script_text or "")):
+        start_id = _clean(match.group(1))
+        end_id = _clean(match.group(3))
+        body = _clean(match.group(2))
+        if not start_id or not body:
+            continue
+        if end_id and start_id.lower() != end_id.lower():
+            continue
+        key = start_id.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        patches.append((start_id, body))
+    return patches
+
+
+def _append_scene_brief_chunk(scene_chunks: List[str], scene_id: str, scene_text: str) -> None:
+    parts = _scene_brief_parts(scene_id, scene_text)
+    if not parts:
+        return
+    header = f"[ENV_DESIGN_SCENE:{scene_id}]" if scene_id else "[ENV_DESIGN_SCENE]"
+    scene_chunks.append("\n".join([header, *parts]))
 
 
 def build_environment_asset_design_brief(adapted_script: str) -> str:
@@ -65,15 +99,16 @@ def build_environment_asset_design_brief(adapted_script: str) -> str:
         for unit in units:
             scene_id = _clean(getattr(unit, "scene_id", "") or "")
             scene_text = str(getattr(unit, "scene_text", "") or "")
-            parts = _scene_brief_parts(scene_id, scene_text)
-            if not parts:
-                continue
-            header = f"[ENV_DESIGN_SCENE:{scene_id}]" if scene_id else "[ENV_DESIGN_SCENE]"
-            scene_chunks.append("\n".join([header, *parts]))
-    else:
-        parts = _scene_brief_parts("", script)
-        if parts:
-            scene_chunks.append("\n".join(parts))
+            _append_scene_brief_chunk(scene_chunks, scene_id, scene_text)
+
+    # Asset rerun concatenates scene_split (SCENE markers, no plan) + environment_plan
+    # patches after SCENES_BLOCK_END. Scene units then have no IDENT/【主环境】.
+    if not scene_chunks:
+        for scene_id, body in _iter_env_scene_patches(script):
+            _append_scene_brief_chunk(scene_chunks, scene_id, body)
+
+    if not scene_chunks:
+        _append_scene_brief_chunk(scene_chunks, "", script)
 
     if not scene_chunks:
         return ""
@@ -86,3 +121,20 @@ def build_environment_asset_design_brief(adapted_script: str) -> str:
         "不要等待逐场分析。Subject Index 若仍含 environment 行只作旧稿兼容，不得压过本块。"
     )
     return wrap_injection_section("环境规划", f"{preface}\n\n{body}")
+
+
+def pick_environment_plan_source_and_brief(*sources: object) -> Tuple[str, str]:
+    """Return the first source that yields a main-env brief, plus that brief."""
+    fallback = ""
+    seen: set = set()
+    for source in sources:
+        cleaned = _clean(source)
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        if not fallback:
+            fallback = cleaned
+        brief = build_environment_asset_design_brief(cleaned)
+        if brief:
+            return cleaned, brief
+    return fallback, ""

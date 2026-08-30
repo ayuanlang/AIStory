@@ -66,6 +66,7 @@ from .environment_reuse import extract_scene_env_ident_block, parse_scene_env_id
 from .environment_asset_brief import (
     build_environment_asset_design_brief,
     environment_plan_has_ident,
+    pick_environment_plan_source_and_brief,
 )
 from .character_asset_brief import (
     build_character_asset_design_brief,
@@ -3091,6 +3092,7 @@ __all__ = [
     "resolve_assets_extraction_source_text",
     "build_environment_asset_design_brief",
     "environment_plan_has_ident",
+    "pick_environment_plan_source_and_brief",
     "build_character_asset_design_brief",
     "char_extract_has_items",
     "current_world_identity",

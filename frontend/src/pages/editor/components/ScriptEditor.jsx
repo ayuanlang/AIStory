@@ -3768,37 +3768,42 @@ const filterTaggedExtractByNames = (text, tag, names) => {
     return `${startToken}\n${matched.map((item) => item.block).join('\n\n')}\n${endToken}`;
 };
 
+const cleanCollectedMainEnvironmentName = (raw) => {
+    const cleaned = String(raw || '').trim().replace(/^[`'“”‘’"[\]]+|[`'“”‘’"[\]]+$/g, '');
+    const first = cleaned.split(/[｜|]/)[0].trim()
+        .replace(/^(名称|主环境|环境名|环境)\s*[=：:]\s*/, '')
+        .replace(/【活动空间】.*$/, '')
+        .trim();
+    if (!first || first.startsWith('─') || first.startsWith('-')) return '';
+    const normalized = first.replace(/[\s_*`'"]+/g, '').toLowerCase();
+    if (['none', 'null', 'nil', 'n/a', 'na', '无', '空'].includes(normalized)) return '';
+    if (/主环境角色|活动空间|未落/.test(first)) return '';
+    return first;
+};
+
 const collectMainEnvironmentNames = (text) => {
     const names = [];
     const seen = new Set();
+    const add = (raw) => {
+        const name = cleanCollectedMainEnvironmentName(raw);
+        const key = normalizeSubjectKey(name);
+        if (!name || !key || seen.has(key) || isDummySubject(name) || isDerivedEnvironmentName(name)) {
+            return;
+        }
+        seen.add(key);
+        names.push(name);
+    };
     const source = String(text || '');
-    const identRe = /^\s*\[ENV\]\s*名称\s*=\s*([^｜|\r\n]+)/gim;
+    const identRe = /^\s*`?\[ENV\]\s*名称\s*[=：:]\s*([^｜|\r\n]+)/gim;
     let match = identRe.exec(source);
     while (match) {
-        const name = String(match[1] || '').trim();
-        const key = normalizeSubjectKey(name);
-        if (name && key && !seen.has(key) && !isDummySubject(name) && !isDerivedEnvironmentName(name)) {
-            seen.add(key);
-            names.push(name);
-        }
+        add(match[1]);
         match = identRe.exec(source);
     }
-    const mainRe = /【主环境】\s*([^；;\n]{1,40})/g;
+    const mainRe = /^[ \t]*【主环境】[ \t]*(.+?)\s*$/gm;
     match = mainRe.exec(source);
     while (match) {
-        const name = String(match[1] || '').replace(/【活动空间】.*$/, '').trim();
-        const key = normalizeSubjectKey(name);
-        if (
-            name
-            && key
-            && !seen.has(key)
-            && !isDummySubject(name)
-            && !/主环境角色|活动空间|未落/.test(name)
-            && !isDerivedEnvironmentName(name)
-        ) {
-            seen.add(key);
-            names.push(name);
-        }
+        add(match[1]);
         match = mainRe.exec(source);
     }
     return names;
@@ -3809,6 +3814,7 @@ const hasAssetRerunExtractSignals = (text) => {
     return textHasTaggedExtractItems(source, 'CHAR')
         || textHasTaggedExtractItems(source, 'PROP')
         || /\[SCENE_ENV_IDENT_START/i.test(source)
+        || /\[ENV_SCENE_PATCH_START/i.test(source)
         || /【主环境】/.test(source);
 };
 
@@ -28314,7 +28320,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || ''
         ).trim();
         const envPlan = String(
-            getStageOutputContent('stage1', 'environment_plan')
+            latestStage1NodeOutputsRef.current?.environment_plan
+            || getStageOutputContent('stage1', 'environment_plan')
+            || readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs)
             || getStageOutputContent('stage1', 'adapted_script')
             || adaptationText
             || activeEpisode?.ai_scene_analysis_adaptation
@@ -29734,7 +29742,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (originalEntry.sourceKind === 'extract') {
                 const tag = extractTagForRerunEntry(originalEntry);
                 const nextName = String(nextFields.名称 || originalEntry.name || '').trim();
-                if (!tag || !nextName) return acc;
+                if (!nextName) return acc;
+                if (!tag) {
+                    acc.push({
+                        ...originalEntry,
+                        name: nextName,
+                        fields: nextFields,
+                        sourceKind: 'extract',
+                    });
+                    return acc;
+                }
                 const fieldOrder = Array.isArray(patch.fieldOrder) && patch.fieldOrder.length
                     ? patch.fieldOrder
                     : (Array.isArray(originalEntry.fieldOrder) ? originalEntry.fieldOrder : getExtractEditableFieldKeys(tag, nextFields));

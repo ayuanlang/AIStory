@@ -79,7 +79,7 @@ from app.services.scene_subject_helpers import (
 from app.services.script_analysis_flow import (
     build_character_asset_design_brief,
     build_cover_poster_brief,
-    build_environment_asset_design_brief,
+    pick_environment_plan_source_and_brief,
     build_prop_asset_design_brief,
     first_text_with_char_extract,
     first_text_with_prop_extract,
@@ -614,13 +614,8 @@ async def execute_analyze_scene(
         )
         if is_environment_asset_design:
             request_text = str(getattr(request, "text", "") or "").strip()
-            brief_source = episode_adaptation_for_scene_beats
-            if request_text and (
-                "[SCENE_ENV_IDENT_START" in request_text.upper()
-                or "【主环境】" in request_text
-            ):
-                brief_source = request_text
-            if not brief_source and getattr(request, "episode_id", None):
+            episode_plan_texts = []
+            if getattr(request, "episode_id", None):
                 try:
                     _ep_for_brief = (
                         db.query(Episode)
@@ -628,15 +623,35 @@ async def execute_analyze_scene(
                         .first()
                     )
                     if _ep_for_brief:
-                        brief_source = str(
-                            getattr(_ep_for_brief, "ai_scene_analysis_adaptation", "") or ""
-                        ).strip()
+                        episode_plan_texts.append(
+                            str(getattr(_ep_for_brief, "ai_scene_analysis_adaptation", "") or "")
+                        )
+                        raw_outputs = str(getattr(_ep_for_brief, "ai_stage_outputs", "") or "").strip()
+                        if raw_outputs:
+                            try:
+                                payload = json.loads(raw_outputs)
+                                outputs = ((payload.get("stages") or {}).get("stage1") or {}).get("outputs") or {}
+                                for key in ("environment_plan", "adapted_script", "raw_text"):
+                                    slot = outputs.get(key)
+                                    if isinstance(slot, dict):
+                                        episode_plan_texts.append(str(slot.get("content") or ""))
+                                    elif isinstance(slot, str):
+                                        episode_plan_texts.append(slot)
+                            except Exception:
+                                pass
+                        episode_plan_texts.append(
+                            str(getattr(_ep_for_brief, "ai_scene_analysis_result", "") or "")
+                        )
                 except Exception as brief_load_err:
                     logger.warning(
                         "[analyze_scene] failed loading adaptation for env design brief: %s",
                         brief_load_err,
                     )
-            env_brief = build_environment_asset_design_brief(brief_source)
+            brief_source, env_brief = pick_environment_plan_source_and_brief(
+                request_text,
+                episode_adaptation_for_scene_beats,
+                *episode_plan_texts,
+            )
             if env_brief and "环境规划开始" not in str(user_content or "") and "环境规划与场景分析开始" not in str(user_content or ""):
                 user_content = f"{env_brief}\n\n{user_content}".strip()
                 logger.info(

@@ -66,6 +66,56 @@ def test_environment_brief_empty_without_plan():
     assert environment_plan_has_ident("no ident here") is False
 
 
+def test_environment_brief_reads_patches_outside_scene_split():
+    merged = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+【场景名称】客栈对峙
+[BEAT_START:1]
+这是全局统筹正文，不应进入环境设计简报。
+[BEAT_END:1]
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+
+[ENV_SCENE_PATCH_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“大堂”
+定位=夜内对峙大厅
+目标=本场空镜须=建立压迫｜服务=无｜可见落点=大门与空椅
+情绪表达=主情绪=压迫｜空镜表达=灯下空堂｜光色倾向=暖灯压暗｜构图倾向=纵深压迫
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+────【主环境】────
+【主环境】客栈大堂｜日夜内外=夜·内｜主环境角色=当下主线
+────【未落环境实体清单】────
+【未落环境实体清单】空椅
+[ENV_BLOCK_END]
+[ENV_SCENE_PATCH_END:EP01_SC01]
+"""
+    brief = build_environment_asset_design_brief(merged)
+    assert "[环境规划开始]" in brief
+    assert "客栈大堂" in brief
+    assert "定位=夜内对峙大厅" in brief
+    assert "【主环境】客栈大堂" in brief
+    assert "这是全局统筹正文" not in brief
+    assert environment_plan_has_ident(merged) is True
+
+
+def test_environment_brief_reads_reuse_ident_patch_without_env_block():
+    patch = """[ENV_SCENE_PATCH_START:EP02_SC03]
+[SCENE_ENV_IDENT_START:EP02_SC03]
+[ENV] 名称=客栈大堂｜复用=是｜来源=项目库｜匹配主环境=客栈大堂｜依据=原文：“回客栈”
+定位=继承原定义
+目标=本场空镜须=复场承接｜服务=无｜可见落点=大门
+情绪表达=主情绪=疲惫｜空镜表达=空堂夜灯｜光色倾向=暖灯｜构图倾向=中景
+[SCENE_ENV_IDENT_END:EP02_SC03]
+[ENV_SCENE_PATCH_END:EP02_SC03]
+"""
+    brief = build_environment_asset_design_brief(patch)
+    assert "客栈大堂" in brief
+    assert "定位=继承原定义" in brief
+    assert environment_plan_has_ident(patch) is True
+
+
 def test_environment_design_starts_from_environment_plan_only():
     registry = get_script_analysis_flow_registry()
     nodes = {str(node.get("key")): node for node in (registry.get("nodes") or [])}
