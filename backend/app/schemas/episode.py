@@ -82,4 +82,5 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     overwrite_existing: bool = True
     retry_failed_only: bool = False
     extra_notes: Optional[str] = None
+    episode_generation_guidance: Optional[str] = None
     strict_markdown: bool = True

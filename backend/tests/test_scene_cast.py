@@ -83,6 +83,7 @@ def test_build_scene_entity_token_brief():
     assert "不是对白硬字幕" in brief
     assert "紧跟该人【建置】可见面整句" in brief
     assert "禁把多名牌攒到建置段末或入戏一起写" in brief
+    assert "标签仅职业/公开身份等明面信息" in brief
 
 
 def test_build_scene_entity_token_brief_empty():
@@ -97,7 +98,7 @@ def test_parse_char_extract_records_keeps_voice_profile():
     assert "标签=江湖侠客" in shen
 
 
-def test_identity_fallback_uses_current_not_trajectory():
+def test_nameplate_rejects_plot_laden_identity_and_tag():
     script = """[SCENES_BLOCK_START]
 [SCENE_START:EP01_SC01]
 [SCENE_CAST_START:EP01_SC01]
@@ -108,13 +109,60 @@ def test_identity_fallback_uses_current_not_trajectory():
 [CHAR_EXTRACT_START]
 [CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=女主｜适用场=EP01_SC01
 身份=现时=落寞寒门女眷｜轨迹=曾经富贵后落寞｜曾经=世家嫡女
+标签=落魄千金
 标签_en=Fallen Heiress
 [CHAR_EXTRACT_END]
 [SCENES_BLOCK_END]
 """
     brief = build_scene_entity_token_brief(script, "EP01_SC01")
-    assert "标签=落寞寒门女眷" in brief
-    assert "曾经富贵后落寞" not in brief.split("【本场角色标签】")[-1]
+    tag_section = brief.split("【本场角色标签】")[-1]
+    assert "CHAR:[@沈青]｜标签=无｜标签_en=无" in tag_section
+    assert "字幕=待落" in tag_section
+    assert "落寞寒门女眷" not in tag_section
+    assert "落魄千金" not in tag_section
+    assert "Fallen Heiress" not in tag_section
+    assert "曾经富贵后落寞" not in tag_section
+
+
+def test_nameplate_keeps_public_occupation_from_identity():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+[SCENE_CAST_START:EP01_SC01]
+【本场角色】在场=CHAR:[@沈青]｜待入画=无｜群演=无
+【本场道具】在场=无｜待入画=无
+[SCENE_CAST_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=女主｜适用场=EP01_SC01
+身份=江湖侠客
+[CHAR_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    brief = build_scene_entity_token_brief(script, "EP01_SC01")
+    assert "标签=江湖侠客" in brief.split("【本场角色标签】")[-1]
+
+
+def test_nameplate_rejects_character_positioning_tag():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+[SCENE_CAST_START:EP01_SC01]
+【本场角色】在场=CHAR:[@沈青]｜待入画=无｜群演=无
+【本场道具】在场=无｜待入画=无
+[SCENE_CAST_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=女主｜适用场=EP01_SC01
+身份=现时=落寞寒门女眷｜轨迹=曾经富贵后落寞｜曾经=世家嫡女
+标签=女主
+标签_en=Female Lead
+[CHAR_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    brief = build_scene_entity_token_brief(script, "EP01_SC01")
+    tag_section = brief.split("【本场角色标签】")[-1]
+    assert "标签=无｜标签_en=无" in tag_section
+    assert "女主" not in tag_section
+    assert "Female Lead" not in tag_section
 
 
 def test_character_label_style_pending_when_missing():

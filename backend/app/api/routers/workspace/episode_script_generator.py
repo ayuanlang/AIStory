@@ -40,6 +40,9 @@ from app.services.episode_script_output import (  # noqa: E402,F401
     extract_episode_script_output_between_markers,
     extract_official_episode_script,
 )
+from app.services.episode_script_prompt import (  # noqa: E402,F401
+    resolve_episode_generation_guidance_for_prompt,
+)
 from app.services.script_analysis_llm_config import (  # noqa: E402,F401
     sanitize_script_generation_llm_config_text_only,
 )
@@ -559,6 +562,7 @@ async def generate_project_episode_scripts_from_global_framework(
         "retry_failed_only": req.retry_failed_only,
         "strict_markdown": req.strict_markdown,
         "extra_notes_len": len(req.extra_notes or ""),
+        "episode_generation_guidance_len": len(req.episode_generation_guidance or ""),
         "started_at": started_at_iso,
     }
     logger.info(f"[generate_episode_scripts] START {json.dumps(call_meta, ensure_ascii=False)}")
@@ -1456,7 +1460,14 @@ async def generate_project_episode_scripts_from_global_framework(
             language=episode_language,
         )
 
+        episode_generation_guidance_block = resolve_episode_generation_guidance_for_prompt(
+            single_episode_mode=single_episode_mode,
+            request_guidance=req.episode_generation_guidance,
+            persisted_guidance=gi_story_input.get("episode_generation_guidance"),
+        )
+
         user_prompt = (
+            f"{episode_generation_guidance_block}"
             f"Project Title: {project_title}\n"
             f"Episode Number: {idx}\n"
             f"Episode Title (current DB value): {ep_title}\n"
@@ -1517,7 +1528,9 @@ async def generate_project_episode_scripts_from_global_framework(
                 f"[generate_episode_scripts] REQUEST_PAYLOAD episode_number={idx} episode_id={ep_id} "
                 f"user_prompt_len={len(user_prompt)} sys_prompt_len={len(sys_prompt_episode)} "
                 f"has_constraints_block={bool(constraints_block)} has_relationships_block={bool(relationships_block)} "
-                f"has_reference_search_block={bool(reference_search_block)} reference_search_block_len={len(reference_search_block or '')}"
+                f"has_reference_search_block={bool(reference_search_block)} reference_search_block_len={len(reference_search_block or '')} "
+                f"has_episode_generation_guidance={bool(episode_generation_guidance_block)} "
+                f"episode_generation_guidance_len={len(episode_generation_guidance_block)}"
             )
             _release_db_connection(db, f"generate_episode_scripts_episode_{ep_id}_llm_call")
             # After episode reference search completes, submit text-only prompt (no images).

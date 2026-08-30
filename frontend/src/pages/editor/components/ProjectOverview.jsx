@@ -288,6 +288,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             classic_framework: "",
             wild_creative_notes: "",
             extra_notes: "",
+            episode_generation_guidance: "",
         },
         character_profiles: [],
         character_canon_md: "",
@@ -324,6 +325,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         classic_framework: "",
         wild_creative_notes: "",
         extra_notes: "",
+        episode_generation_guidance: "",
     });
     const [promoInput, setPromoInput] = useState({
         promo_type: "企业宣传 / Corporate Promotion",
@@ -1370,6 +1372,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     classic_framework: globalStoryInput.classic_framework,
                     wild_creative_notes: globalStoryInput.wild_creative_notes,
                     extra_notes: globalStoryInput.extra_notes,
+                    episode_generation_guidance: globalStoryInput.episode_generation_guidance,
                 };
                 await saveProjectStoryGeneratorGlobalInput(id, payload);
                 setGeneratorAutosaveState('saved', t('故事输入已自动保存', 'Story input auto-saved'));
@@ -1697,6 +1700,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             classic_framework: globalStoryInput.classic_framework,
             wild_creative_notes: globalStoryInput.wild_creative_notes,
             extra_notes: globalStoryInput.extra_notes,
+            episode_generation_guidance: globalStoryInput.episode_generation_guidance,
             trending_ai_short_dramas_report: trendingDramasReport,
             ai_short_drama_industry_report: industryAnalysisReport,
             ...patch,
@@ -1968,6 +1972,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 classic_framework: globalStoryInput.classic_framework,
                 wild_creative_notes: globalStoryInput.wild_creative_notes,
                 extra_notes: globalStoryInput.extra_notes,
+                episode_generation_guidance: globalStoryInput.episode_generation_guidance,
             };
             const updated = await generateProjectStoryGlobal(id, buildScriptAnalysisApiPayload(payload));
             setProject(updated);
@@ -2182,7 +2187,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
             addLog?.(`Generating episode scripts (${modeLabel}, target 1..${n})... (This may take several minutes)`, 'process');
             addLog?.(
-                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, episode_duration_minutes: Number(globalStoryInput.episode_duration_minutes) > 0 ? Number(globalStoryInput.episode_duration_minutes) : 1, script_mode: globalStoryInput.script_mode, script_title: info?.script_title || project?.title || '', overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly, episode_number: specificEpisode })}`,
+                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, episode_duration_minutes: Number(globalStoryInput.episode_duration_minutes) > 0 ? Number(globalStoryInput.episode_duration_minutes) : 1, script_mode: globalStoryInput.script_mode, script_title: info?.script_title || project?.title || '', overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly, episode_number: specificEpisode, episode_generation_guidance_len: String(globalStoryInput.episode_generation_guidance || '').trim().length })}`,
                 'info'
             );
             const reqPayload = {
@@ -2199,6 +2204,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             };
             if (specificEpisode) {
                 reqPayload.episode_number = Number(specificEpisode);
+                const guidance = String(globalStoryInput.episode_generation_guidance || '').trim();
+                if (guidance) {
+                    reqPayload.episode_generation_guidance = guidance;
+                    void persistStoryGeneratorInputPatch({ episode_generation_guidance: guidance }).catch(() => {});
+                }
             }
             const res = await generateProjectEpisodeScripts(id, buildScriptAnalysisApiPayload(reqPayload));
 
@@ -4257,6 +4267,21 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 </div>
                             </div>
 
+                            <div>
+                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('本集生成指导', 'This Episode Generation Guidance')}</label>
+                                <div className="text-[11px] text-muted-foreground/80 mb-1.5">
+                                    {t('仅「单集生成」时作为最高优先写入用户提示词；全量生成不会注入。', 'Injected as highest-priority user brief only for single-episode generation; not used by Generate All.')}
+                                </div>
+                                <textarea
+                                    className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-24 resize-none placeholder:text-white/25"
+                                    value={globalStoryInput.episode_generation_guidance || ''}
+                                    onFocus={() => setStoryGenFocusStep('episode_scripts')}
+                                    onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, episode_generation_guidance: e.target.value }))}
+                                    disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                    placeholder={t('例如：本集强化反派压迫感；开场必须回收上集门铃声；高潮改在雨中对峙。', 'e.g. Heighten antagonist pressure; open by paying off last episode’s doorbell; move the climax to a rain confrontation.')}
+                                />
+                            </div>
+
                             {episodeScriptsProgress && (
                                 <div className="border border-white/10 rounded-lg p-3 bg-black/20 space-y-2">
                                     <div className="text-xs text-muted-foreground uppercase tracking-wide">{t('分集剧本进度快照', 'Episode Scripts Progress Snapshot')}</div>
@@ -4451,6 +4476,20 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 </button>
                             </div>
                         </div>
+                    </div>
+
+                    <div>
+                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('本集生成指导', 'This Episode Generation Guidance')}</label>
+                        <div className="text-[11px] text-muted-foreground/80 mb-1.5">
+                            {t('仅「单集生成」时作为最高优先写入用户提示词；全量生成不会注入。', 'Injected as highest-priority user brief only for single-episode generation; not used by Generate All.')}
+                        </div>
+                        <textarea
+                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-24 resize-none placeholder:text-white/25"
+                            value={globalStoryInput.episode_generation_guidance || ''}
+                            onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, episode_generation_guidance: e.target.value }))}
+                            disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                            placeholder={t('例如：本集强化反派压迫感；开场必须回收上集门铃声；高潮改在雨中对峙。', 'e.g. Heighten antagonist pressure; open by paying off last episode’s doorbell; move the climax to a rain confrontation.')}
+                        />
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

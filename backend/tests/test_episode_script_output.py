@@ -25,12 +25,13 @@ OFFICIAL_BODY = """# 1-工牌错位
 [BEAT_STREAM_END]
 [SCENE_END:EP01_SC01]
 [SCENES_BLOCK_END]
-## 剧情一句话与交接
-林一仍握着工牌，解雇信照片在手机里。
-## 结尾钩子
-保安按响门铃。
 [EMERGENCY_RECOVERY_BLOCK_START]
 适用=有下集
+#剧情一句话与交接：本集核心=工牌错位；最后一幕=电梯间；角色终态=林一握牌；关键道具位=解雇信在手机；Carry-out=林一仍在电梯、审计倒计时未决
+#结尾钩子：保安按响门铃；对齐下集Carry-in=是
+#当前场景=EP01_SC01｜场景名=工牌错位｜终态=林一在电梯内握牌
+#当前主环境=星澜电梯间 (Xinglan Elevator)｜复用=复用§8｜空间现态=轿厢门将开
+#下集开局=开新场景｜依据=钩子切到门外走廊
 #项1：紧急待核销=工牌未交；未决态=审计倒计时；下集须兑现=开场前段；依据=结尾钩子；状态=待下集核销
 #集级：待核销项数=1｜自检=通过
 [EMERGENCY_RECOVERY_BLOCK_END]
@@ -50,6 +51,11 @@ def test_extract_official_from_output_markers():
     assert "契科夫的枪" in official
     assert "分析过程很长" not in official
     assert "[EMERGENCY_RECOVERY_BLOCK_START]" in official
+    assert "#剧情一句话与交接" in official
+    assert "#结尾钩子" in official
+    assert "#当前场景=EP01_SC01" in official
+    assert "#当前主环境=星澜电梯间" in official
+    assert "#下集开局=开新场景" in official
     assert is_acceptable_episode_script_markdown(full)
 
 
@@ -96,6 +102,11 @@ def test_extract_official_trims_process_analysis_from_output():
         "## 剧情一句话与交接\n林一仍握着工牌。\n"
         "## 结尾钩子\n保安上门。\n"
         "[EMERGENCY_RECOVERY_BLOCK_START]\n适用=有下集\n"
+        "#剧情一句话与交接：林一仍握着工牌。\n"
+        "#结尾钩子：保安上门。\n"
+        "#当前场景=EP01_SC01｜场景名=工牌错位｜终态=林一在电梯\n"
+        "#当前主环境=星澜电梯间 (Xinglan Elevator)｜复用=复用§8｜空间现态=门将开\n"
+        "#下集开局=开新场景｜依据=切到门外\n"
         "#项1：紧急待核销=工牌未交；状态=待下集核销\n"
         "#集级：待核销项数=1｜自检=通过\n"
         "[EMERGENCY_RECOVERY_BLOCK_END]\n"
