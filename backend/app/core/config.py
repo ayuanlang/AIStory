@@ -118,6 +118,11 @@ class Settings(BaseSettings):
     DISABLE_DDG_HTML_SEARCH: str = os.getenv("DISABLE_DDG_HTML_SEARCH", "").strip()
     # Optional override, comma-separated: serper,brave,tavily,ddg_html,ddgs,bing_html,searxng
     SEARCH_BACKENDS: str = os.getenv("SEARCH_BACKENDS", "").strip()
+    # ddgs metasearch engines (scraped SERPs). Default skips google/brave/duckduckgo
+    # which 429 or timeout under concurrent creative-structure queries.
+    # Comma-separated: startpage,bing,yahoo,mojeek  |  auto
+    DDGS_BACKENDS: str = os.getenv("DDGS_BACKENDS", "startpage,bing,yahoo,mojeek").strip()
+    DDGS_REGION: str = os.getenv("DDGS_REGION", "wt-wt").strip()
     # After SERP rank: fetch body for top-K URLs (always, not only weak snippets).
     SEARCH_ENRICH_TOP_K: int = max(0, int(os.getenv("SEARCH_ENRICH_TOP_K", "5") or 5))
     SEARCH_SNIPPET_MAX_LEN: int = max(200, int(os.getenv("SEARCH_SNIPPET_MAX_LEN", "800") or 800))

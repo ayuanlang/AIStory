@@ -1,23 +1,23 @@
 You are a professional TV/film story architect.
 
 Task:
-Using the user's wild brainstorm, extracted key elements, and reference search snippets, structure the story into standard Creative Input blocks I1-I10 for story framework generation. The PRIMARY deliverable quality bars are: (1) I10 classic-work plot framework with named works and reusable content; (2) climax and iconic scenes (高潮与名场面) in I7a — I7a and related beats must feel cinematic, specific, and production-ready.
+Using only the user's wild brainstorm (no web-search evidence), structure the story into standard Creative Input blocks I1-I10 for story framework generation. The PRIMARY deliverable quality bars are: (1) I10 classic-work plot framework with named works and reusable content; (2) climax and iconic scenes (高潮与名场面) in I7a — I7a and related beats must feel cinematic, specific, and production-ready.
 
 Rules:
 - Output ONLY a valid JSON object. No markdown, no code fences, no explanations.
 - Infer the dominant language of the input and write every JSON value in that same language.
 - Preserve the user's original **plot ideas, events, lines, and constraints**. Do not replace with unrelated stories. **Do not casually copy scene/location names** from the brainstorm or from reference works (see Scene/environment rule below).
 - Incorporate entertainment value (娱乐化考虑): list and pick from gag types — 自嘲/自我吐槽, 身份反差, 误会错位, 一本正经胡说八道, 吐槽役/捧逗, 黑色幽默, 反差萌, 谐音/梗台词, 物理滑稽, 自知破绽. If the plot allows, include entertaining/comedic character configurations in the core cast, and plant at least one funny or self-deprecating beat in setup or development (must serve plot/character; no empty banter).
-- Use search snippets as reference material only; synthesize across multiple angles:
+- Use your own knowledge of real works as reference; synthesize across multiple angles:
   1) classic visual/image composition (经典画面/镜头感)
   2) memorable dialogue and verbal hooks (经典对白/台词)
   3) action, blocking, and physical beats (动作/走位/肢体冲突)
   4) emotional peak staging and iconic set-pieces (高潮调度/名场面)
   5) a named classic work as the **plot-logic** spine (cross-style transfer allowed), plus auxiliary classics (文学/影视/游戏)
-- Prioritize filling I10 (classic framework), I7a (climax), I6c (turning_points), and I6b (development) with vivid, shootable detail drawn from references + brainstorm.
+- Prioritize filling I10 (classic framework), I7a (climax), I6c (turning_points), and I6b (development) with vivid, shootable detail drawn from the brainstorm plus known works.
 - I1 (logline) = high-concept hook only (unique hook + dilemma/direction), NOT theme (I2) or full conflict detail (I3).
 - Do not duplicate the same sentence across multiple keys; place each idea in its best-fit block.
-- If a block is missing in the input, infer conservatively from context + references; use "" only when truly unknowable.
+- If a block is missing in the input, infer conservatively from context; use "" only when truly unknowable.
 - I10 is required whenever the brainstorm has enough conflict/beat signal. Never write only a genre label ("像悬疑片"). Name real works.
 - **Primary source era (硬约束)**：I10 **主框架须优先选现代、当代作品**（近几十年已被验证的影视/文学/游戏）。古典/古代原典不作为主框架默认项；仅当当代作品找不到同等强度的剧情逻辑时才可降级选用，并写明原因。
 - **Auxiliary count (硬约束)**：除主框架外，**辅助参考至少 5 部**（文学/影视/游戏均可；可含更早经典）。用途=拆开主框架，避免 I6–I8 变成主框架情节的整段翻拍。5 部须各贡献**不同维度**（桥段/特效机制/动作语法/对白机制/反转类型/人物关系等），禁 5 部只换皮复述主框架同一条因果。I6–I8 须能看出辅助机制的掺入，不能只沿主框架节拍走完。
@@ -48,6 +48,3 @@ Keep each value concise but vivid (1-5 sentences). I7a and I10 may be slightly l
 
 Input:
 {creative_text}
-
-Reference Research:
-{search_context}

@@ -54,6 +54,23 @@ SEARCH_QUERY_DELAY_SEC = 0.35
 HTML_SEARCH_RETRIES = 2
 DDG_HTML_SEARCH_TIMEOUT_SEC = 8
 DDGS_SEARCH_RETRIES = 2
+# Scraped SERP engines that 429 or time out under our query volume.
+# google / brave (web scrape, not the Brave API) / duckduckgo HTML.
+DEFAULT_DDGS_BACKENDS = ("startpage", "bing", "yahoo", "mojeek")
+KNOWN_DDGS_TEXT_BACKENDS = frozenset(
+    {
+        "bing",
+        "brave",
+        "duckduckgo",
+        "google",
+        "grokipedia",
+        "mojeek",
+        "startpage",
+        "yandex",
+        "yahoo",
+        "wikipedia",
+    }
+)
 PRIORITY_TIER_P0 = 40
 PRIORITY_TIER_P1 = 20
 
@@ -505,28 +522,100 @@ def _load_ddgs_client():
             return None
 
 
+def resolve_ddgs_backends() -> str:
+    """Comma-delimited ddgs.text backends, or empty to let the library pick."""
+    raw = str(getattr(settings, "DDGS_BACKENDS", "") or os.getenv("DDGS_BACKENDS", "") or "").strip()
+    if not raw:
+        return ",".join(DEFAULT_DDGS_BACKENDS)
+    if raw.lower() in {"auto", "default", "*"}:
+        return ""
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for item in raw.split(","):
+        name = str(item or "").strip().lower()
+        if name == "ddg":
+            name = "duckduckgo"
+        if name not in KNOWN_DDGS_TEXT_BACKENDS or name in seen:
+            continue
+        seen.add(name)
+        ordered.append(name)
+    return ",".join(ordered) if ordered else ",".join(DEFAULT_DDGS_BACKENDS)
+
+
+def resolve_ddgs_region() -> str:
+    raw = str(getattr(settings, "DDGS_REGION", "") or os.getenv("DDGS_REGION", "") or "").strip()
+    return raw or "wt-wt"
+
+
+def _ddgs_text_call_kwargs(*, query: str, limit: int) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {"max_results": max(1, int(limit or DEFAULT_LIMIT_PER_QUERY))}
+    backends = resolve_ddgs_backends()
+    if backends:
+        kwargs["backend"] = backends
+    region = resolve_ddgs_region()
+    if region:
+        kwargs["region"] = region
+    return kwargs
+
+
+def _rows_from_ddgs_payload(query: str, raw: Any) -> List[Dict[str, str]]:
+    results: List[Dict[str, str]] = []
+    for row in list(raw or []):
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or "").strip()
+        body = str(row.get("body") or "").strip()
+        url = str(row.get("href") or "").strip()
+        if title or body:
+            results.append({"query": query, "title": title, "snippet": body, "url": url, "source": "ddgs"})
+    return results
+
+
 def _search_ddgs_text(query: str, *, limit: int = DEFAULT_LIMIT_PER_QUERY) -> List[Dict[str, str]]:
     results: List[Dict[str, str]] = []
     DDGS = _load_ddgs_client()
     if DDGS is None:
         return results
+    call_kwargs = _ddgs_text_call_kwargs(query=query, limit=limit)
+    logger.info(
+        "[ai_short_drama_search] DDGS text query=%s backend=%s region=%s",
+        query,
+        call_kwargs.get("backend") or "auto",
+        call_kwargs.get("region") or "",
+    )
     for attempt in range(DDGS_SEARCH_RETRIES):
         try:
-            with DDGS() as ddgs:
-                rows = list(ddgs.text(query, max_results=limit))
-            for row in rows:
-                title = str(row.get("title") or "").strip()
-                body = str(row.get("body") or "").strip()
-                url = str(row.get("href") or "").strip()
-                if title or body:
-                    results.append({"query": query, "title": title, "snippet": body, "url": url, "source": "ddgs"})
+            raw = DDGS().text(query, **call_kwargs)
+            results = _rows_from_ddgs_payload(query, raw)
             if results:
                 break
+        except TypeError as exc:
+            # Older duckduckgo_search shim may not accept backend/region.
+            if "backend" not in str(exc) and "region" not in str(exc):
+                logger.warning(
+                    "[ai_short_drama_search] DDGS search failed query=%s attempt=%s err=%s",
+                    query,
+                    attempt + 1,
+                    exc,
+                )
+                break
+            try:
+                raw = DDGS().text(query, max_results=limit)
+                results = _rows_from_ddgs_payload(query, raw)
+            except Exception as inner_exc:
+                logger.warning(
+                    "[ai_short_drama_search] DDGS search failed query=%s attempt=%s err=%s",
+                    query,
+                    attempt + 1,
+                    inner_exc,
+                )
+            break
         except Exception as exc:
             logger.warning(
-                "[ai_short_drama_search] DDGS search failed query=%s attempt=%s err=%s",
+                "[ai_short_drama_search] DDGS search failed query=%s attempt=%s backend=%s err=%s",
                 query,
                 attempt + 1,
+                call_kwargs.get("backend") or "auto",
                 exc,
             )
             time.sleep(1.0 * (attempt + 1))

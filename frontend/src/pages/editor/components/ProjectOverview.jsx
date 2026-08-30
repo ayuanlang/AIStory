@@ -1921,12 +1921,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 });
                 return next;
             });
-            const snippetCount = structured?.prefill_meta?.search_meta?.snippet_count;
-            const searchNote = Number(snippetCount) > 0
-                ? t(`（已参考 ${snippetCount} 条高潮/名场面/画面/对白/动作检索素材）`, ` (informed by ${snippetCount} climax/iconic-scene reference snippets)`)
-                : '';
             setStoryGenFocusStep('structure_prefill');
-            alert(t('已提取关键要素、优先搜索现代/当代主框架并预填 I1–I10，请重点核对：主框架是否现代/当代、辅助是否至少 5 部且维度不同、转译与 I7a 高潮名场面。', 'Key elements extracted, modern/contemporary primary searched first, and I1–I10 prefilled. Review: primary is modern/contemporary, at least 5 distinct auxiliaries, transfer, and I7a climax scenes.') + searchNote);
+            alert(t('已预填 I1–I10，请重点核对：主框架是否现代/当代、辅助是否至少 5 部且维度不同、转译与 I7a 高潮名场面。', 'I1–I10 prefilled. Review: primary is modern/contemporary, at least 5 distinct auxiliaries, transfer, and I7a climax scenes.'));
         } catch (e) {
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
@@ -3896,7 +3892,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         <div className="text-sm font-semibold text-white">{t('脑洞标准输入（I1–I10）', 'Creative Input (I1–I10)')}</div>
                                     </div>
                                     <div className="text-xs text-muted-foreground mt-1">
-                                        {t('点「结构化预填」从天马行空自动提取，检索一部现代/当代作品作主骨架，并至少配 5 部辅助（拆开主框架、避免整段翻拍），核对 I1–I10；也可手工填写。预填不要随便抄场景：地点须匹配身份、符合逻辑且剧情真正需要；拿不准可不写环境，留给后续大纲规划。', 'Use Structure & Prefill to extract from wild ideas, lock a modern/contemporary plot-logic spine plus at least 5 auxiliaries (to avoid remaking the primary), then review I1–I10; or fill manually. Do not casually copy locations: a place must match status, stay logical, and be plot-required; otherwise omit environment and let later outline nodes plan it.')}
+                                        {t('点「结构化预填」从天马行空直接生成 I1–I10（主骨架优先现代/当代，并至少配 5 部辅助，避免整段翻拍）；也可手工填写。预填不要随便抄场景：地点须匹配身份、符合逻辑且剧情真正需要；拿不准可不写环境，留给后续大纲规划。', 'Use Structure & Prefill to generate I1–I10 from wild ideas (modern/contemporary primary plus at least 5 auxiliaries to avoid remaking the primary); or fill manually. Do not casually copy locations: a place must match status, stay logical, and be plot-required; otherwise omit environment and let later outline nodes plan it.')}
                                     </div>
                                 </div>
                                 <button
@@ -3904,10 +3900,10 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     onClick={handleStructureCreativeInput}
                                     disabled={isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady}
                                     className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
-                                    title={t('提取关键要素 → 优先搜索现代/当代作品的剧情逻辑（可跨风格转译）与高潮/名场面 → 预填 I1–I10（场景须匹配且可省略）', 'Extract key elements → search modern/contemporary plot-logic spines first (cross-style transferable) and climax/iconic references → prefill I1–I10 (locations optional, must match)')}
+                                    title={t('根据天马行空直接生成 I1–I10（主框架优先现代/当代，场景须匹配且可省略）', 'Generate I1–I10 directly from wild ideas (modern/contemporary primary; locations optional, must match)')}
                                 >
                                     {isStructuringCreativeInput
-                                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('检索分析中...', 'Researching...')}</>
+                                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('结构化中...', 'Structuring...')}</>
                                         : <><Wand2 className="w-3.5 h-3.5" /> {t('结构化预填', 'Structure & Prefill')}</>}
                                 </button>
                             </div>

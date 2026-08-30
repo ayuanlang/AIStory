@@ -1445,21 +1445,6 @@ async def generate_project_episode_scripts_from_global_framework(
                     "Use Global Story DNA Carry-in / Hook Ledger only; do not invent conflicting prior events.\n\n"
                 )
 
-        episode_language = _pick_first_text(
-            gi_basic_info.get("language"),
-            gi_story_input.get("language"),
-            project_global_info.get("language"),
-        )
-        reference_search_block = await _prepare_episode_script_reference_block(
-            user_id=user_id,
-            project_global_info=project_global_info,
-            llm_config=llm_config,
-            global_md=global_md,
-            episode_number=idx,
-            project_title=project_title,
-            language=episode_language,
-        )
-
         episode_generation_guidance_block = resolve_episode_generation_guidance_for_prompt(
             single_episode_mode=single_episode_mode,
             request_guidance=req.episode_generation_guidance,
@@ -1481,11 +1466,6 @@ async def generate_project_episode_scripts_from_global_framework(
             f"Character Canon (Markdown):\n{character_canon_md}\n\n"
             f"{relationships_block}"
         )
-        if reference_search_block.strip():
-            user_prompt += (
-                "Episode Reference Research (MUST consult before writing; localize, do not copy verbatim):\n"
-                f"{reference_search_block}\n\n"
-            )
         user_prompt += "Write the episode script draft now."
 
         try:
@@ -1528,12 +1508,12 @@ async def generate_project_episode_scripts_from_global_framework(
                 f"[generate_episode_scripts] REQUEST_PAYLOAD episode_number={idx} episode_id={ep_id} "
                 f"user_prompt_len={len(user_prompt)} sys_prompt_len={len(sys_prompt_episode)} "
                 f"has_constraints_block={bool(constraints_block)} has_relationships_block={bool(relationships_block)} "
-                f"has_reference_search_block={bool(reference_search_block)} reference_search_block_len={len(reference_search_block or '')} "
+                f"has_reference_search_block=False reference_search_block_len=0 "
                 f"has_episode_generation_guidance={bool(episode_generation_guidance_block)} "
                 f"episode_generation_guidance_len={len(episode_generation_guidance_block)}"
             )
             _release_db_connection(db, f"generate_episode_scripts_episode_{ep_id}_llm_call")
-            # After episode reference search completes, submit text-only prompt (no images).
+            # Episode writing is text-only (no images).
             generated_payload = await generate_markdown_with_retry(
                 user_prompt=user_prompt,
                 sys_prompt=sys_prompt_episode,

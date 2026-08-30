@@ -730,48 +730,6 @@ async def structure_project_creative_input_to_story_fields(
     )
 
     try:
-        extract_prompt_template = _resolve_prompt_text("story_generator_structure_extract_key_elements.txt")
-    except FileNotFoundError:
-        logger.error("Structure extract key elements prompt not found")
-        raise HTTPException(
-            status_code=404,
-            detail="Prompt file 'story_generator_structure_extract_key_elements.txt' not found.",
-        )
-
-    try:
-        extract_sys_prompt = extract_prompt_template.format(creative_text=creative_text)
-    except Exception:
-        extract_sys_prompt = extract_prompt_template
-
-    extract_user_prompt = (
-        f"{project_context}\n"
-        f"Wild Creative Brainstorm:\n{creative_text}\n\n"
-        "Extract searchable key elements from the brainstorm, with emphasis on "
-        "(1) a MODERN/CONTEMPORARY plot-LOGIC framework (literature / film / TV / game; prefer recent decades, not pre-modern classics as default primary) plus AT LEAST 5 auxiliary works of different dimensions (to avoid copying the primary plot), "
-        "and (2) climax moments and iconic scenes."
-    )
-    extract_raw = await _run_structure_llm_call(
-        db=db,
-        user_id=user_id,
-        project_global_info=project_global_info,
-        req=req,
-        sys_prompt=extract_sys_prompt,
-        user_prompt=extract_user_prompt,
-        billing_item="structure_extract_key_elements",
-        llm_context="structure_extract_key_elements",
-    )
-    key_elements = _normalize_llm_json_object(extract_raw, context="structure_extract_key_elements")
-
-    _release_db_connection(db, "structure_creative_input_web_search")
-    search_bundle = await collect_creative_structure_search_snippets(key_elements)
-    search_context = build_creative_structure_search_user_prompt(
-        search_bundle,
-        key_elements,
-        project_title=project_title_str,
-        language=language,
-    )
-
-    try:
         sys_prompt_template = _resolve_prompt_text("story_generator_structure_creative_input.txt")
     except FileNotFoundError:
         logger.error("Structure creative input prompt not found: story_generator_structure_creative_input.txt")
@@ -781,14 +739,14 @@ async def structure_project_creative_input_to_story_fields(
         )
 
     try:
-        sys_prompt = sys_prompt_template.format(creative_text=creative_text, search_context=search_context)
+        sys_prompt = sys_prompt_template.format(creative_text=creative_text)
     except Exception:
-        sys_prompt = f"{sys_prompt_template}\n\n{creative_text}\n\n{search_context}"
+        sys_prompt = f"{sys_prompt_template}\n\n{creative_text}"
 
     user_prompt = (
         f"{project_context}\n"
         f"Wild Creative Brainstorm:\n{creative_text}\n\n"
-        "Use the extracted key elements and reference search snippets to structure I1-I10. "
+        "Structure I1-I10 directly from the brainstorm. Do not wait for or assume web-search evidence. "
         "I10 must name one primary MODERN/CONTEMPORARY work (literature / film / TV / game; prefer recent decades) as the PLOT-LOGIC framework, "
         "plus AT LEAST 5 auxiliaries (older classics OK only as auxiliaries; each a different dimension) so I6-I8 is not a remake of the primary. "
         "Cross-style transfer is required: keep causal/beat/set-piece logic, "
@@ -826,13 +784,13 @@ async def structure_project_creative_input_to_story_fields(
     )
     normalized = _normalize_story_field_map(data, _CREATIVE_INPUT_STRUCTURE_KEYS)
     normalized["prefill_meta"] = {
-        "pipeline": "extract_key_elements -> reference_search -> structure_fill",
-        "key_elements": key_elements,
+        "pipeline": "structure_fill",
+        "key_elements": {},
         "search_meta": {
-            "query_count": len(search_bundle.get("queries") or []),
-            "snippet_count": len(search_bundle.get("snippets") or []),
-            "instant_note_count": len(search_bundle.get("instant_notes") or []),
-            "source_stats": search_bundle.get("source_stats") or {},
+            "query_count": 0,
+            "snippet_count": 0,
+            "instant_note_count": 0,
+            "source_stats": {},
         },
     }
     return normalized
