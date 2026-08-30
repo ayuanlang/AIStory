@@ -3981,6 +3981,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const diagnosticsPipelineNodesRef = useRef([]);
     const diagnosticsSceneUnitsRef = useRef([]);
     const analysisProgressHydratedRef = useRef(false);
+    const analysisStopRequestedRef = useRef(false);
+    /** 'user' | 'timeout' | '' — why stop was armed (shared by manual stop + pipeline deadline). */
+    const analysisStopReasonRef = useRef('');
 
     const publishLiveAnalysisProgressSnapshot = useCallback((patch = {}) => {
         if (applyingRemoteProgressRef.current) return;
@@ -14950,9 +14953,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
      */
     const environmentAssetDesignPendingRef = useRef(false);
     const stage3AutoStartCacheRef = useRef(null);
-    const analysisStopRequestedRef = useRef(false);
-    /** 'user' | 'timeout' | '' — why stop was armed (shared by manual stop + pipeline deadline). */
-    const analysisStopReasonRef = useRef('');
     /** Absolute epoch ms when the full analysis pipeline must stop (0 = inactive). */
     const analysisPipelineDeadlineRef = useRef(0);
     /** When true, Auto Zero Report Rerun must not dual-track persistence retries. */
