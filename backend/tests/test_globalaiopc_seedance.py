@@ -46,6 +46,32 @@ def test_globalaiopc_asset_helpers():
     assert svc._globalaiopc_guess_asset_type("https://cdn.example.com/a.mp4") == "Video"
     assert svc._globalaiopc_guess_asset_type("https://cdn.example.com/a.mp3") == "Audio"
     assert svc._globalaiopc_guess_asset_type("https://cdn.example.com/a.png") == "Image"
+    assert svc._globalaiopc_bare_asset_id("assetId://asset-9") == "asset-9"
+
+
+def test_globalaiopc_query_asset_posts_json_body():
+    svc = MediaGenerationService()
+    calls = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append({"method": method, "url": url, "json": kwargs.get("json")})
+        return _FakeResp({
+            "assetId": "asset-20260722164336-p4mms",
+            "status": "ACTIVE",
+            "errorMessage": None,
+        })
+
+    with patch("app.services.media_service.requests.request", fake_request):
+        payload, err = svc._globalaiopc_query_asset(
+            detail_url="https://zcbservice.aizfw.cn/kyyReactApiServer/asset/seedance2/assetDetail",
+            api_key="sk-test",
+            asset_id="assetId://asset-20260722164336-p4mms",
+        )
+    assert not err
+    assert payload["status"] == "ACTIVE"
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["json"] == {"assetId": "asset-20260722164336-p4mms"}
+    assert calls[0]["url"].endswith("/asset/seedance2/assetDetail")
 
 
 def test_globalaiopc_amount_usage():
@@ -72,10 +98,11 @@ def test_globalaiopc_reviews_assets_then_submits_seedance_payload():
                 "name": body.get("name"),
                 "errorMessage": None,
             })
-        if str(method).upper() == "GET" and "asset/seedance2" in url_l:
+        if str(method).upper() == "POST" and url_l.endswith("/asset/seedance2/assetdetail"):
             asset_state["status"] = "ACTIVE"
+            body = kwargs.get("json") or {}
             return _FakeResp({
-                "assetId": "asset-img-1" if "asset-img-1" in url else "asset-vid-1",
+                "assetId": body.get("assetId"),
                 "status": "ACTIVE",
                 "errorMessage": None,
             })
@@ -128,8 +155,12 @@ def test_globalaiopc_reviews_assets_then_submits_seedance_payload():
         ))
 
     upload_calls = [c for c in calls if str(c["url"]).endswith("/asset/seedance2/assetUpload")]
+    detail_calls = [c for c in calls if str(c["url"]).endswith("/asset/seedance2/assetDetail")]
     task_calls = [c for c in calls if str(c["url"]).endswith("/v2/model-center/tasks") and c["method"] == "POST"]
     assert upload_calls, calls
+    assert detail_calls, calls
+    assert all(c["method"] == "POST" for c in detail_calls)
+    assert {c["json"]["assetId"] for c in detail_calls} == {"asset-img-1", "asset-vid-1"}
     assert task_calls, calls
     assert upload_calls[0]["json"]["assetType"] == "Image"
     assert upload_calls[0]["json"]["url"] == "https://example.com/person.png"
@@ -210,6 +241,7 @@ def test_globalaiopc_first_last_excludes_multimodal_refs():
 if __name__ == "__main__":
     test_globalaiopc_api_root_strips_suffixes()
     test_globalaiopc_asset_helpers()
+    test_globalaiopc_query_asset_posts_json_body()
     test_globalaiopc_amount_usage()
     test_globalaiopc_reviews_assets_then_submits_seedance_payload()
     test_globalaiopc_first_last_excludes_multimodal_refs()

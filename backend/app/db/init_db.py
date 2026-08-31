@@ -3244,8 +3244,9 @@ def init_system_api_settings(db):
                 "durations_seconds": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
                 "notes": (
                     "GlobalAiOpc poll-only Seedance 2.0. Upload POST /asset/seedance2/assetUpload, "
-                    "poll asset detail until ACTIVE, then POST /v2/model-center/tasks with "
-                    "assetId://{assetId}; poll GET /v2/model-center/tasks/{id}."
+                    "poll POST /asset/seedance2/assetDetail {assetId} until ACTIVE, then POST "
+                    "/v2/model-center/tasks with assetId://{assetId}; poll GET "
+                    "/v2/model-center/tasks/{id}."
                 ),
             },
             is_active=False,

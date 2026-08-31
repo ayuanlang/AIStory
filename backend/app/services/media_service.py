@@ -15064,18 +15064,34 @@ class MediaGenerationService:
             return inner
         return data
 
+    def _globalaiopc_bare_asset_id(self, value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        lower = raw.lower()
+        if lower.startswith("assetid://"):
+            return raw.split("://", 1)[-1].strip()
+        if lower.startswith("asset://"):
+            return raw.split("://", 1)[-1].strip()
+        return raw
+
     def _globalaiopc_extract_asset_id(self, data: Any) -> str:
         payload = self._globalaiopc_unwrap_payload(data)
-        for key in ("assetId", "asset_id", "id"):
-            val = str(payload.get(key) or "").strip()
+        for key in ("assetId", "asset_id"):
+            val = self._globalaiopc_bare_asset_id(payload.get(key))
             if val:
                 return val
         asset = payload.get("asset")
         if isinstance(asset, dict):
-            for key in ("assetId", "asset_id", "id"):
-                val = str(asset.get(key) or "").strip()
+            for key in ("assetId", "asset_id"):
+                val = self._globalaiopc_bare_asset_id(asset.get(key))
                 if val:
                     return val
+        # Only accept generic `id` when this is clearly an asset payload.
+        if payload.get("assetType") or payload.get("status") or payload.get("errorMessage") is not None:
+            val = self._globalaiopc_bare_asset_id(payload.get("id"))
+            if val:
+                return val
         return ""
 
     def _globalaiopc_normalize_asset_status(self, value: Any) -> str:
@@ -15191,40 +15207,41 @@ class MediaGenerationService:
     def _globalaiopc_query_asset(
         self,
         *,
-        detail_urls: List[str],
+        detail_url: str,
         api_key: str,
+        asset_id: str,
     ) -> Tuple[Dict[str, Any], str]:
-        last_err = "asset_detail_failed"
-        for url in detail_urls:
-            target = str(url or "").strip()
-            if not target:
-                continue
-            try:
-                resp = self._globalaiopc_request("GET", target, api_key=api_key, timeout=30)
-            except Exception as exc:
-                last_err = str(exc)
-                continue
-            http_status = getattr(resp, "status_code", None) if resp is not None else None
-            if http_status not in {200, 201}:
-                last_err = f"HTTP {http_status}"
-                continue
-            try:
-                parsed = resp.json() if resp is not None and resp.content else {}
-            except Exception:
-                last_err = "asset_detail_invalid_json"
-                continue
-            payload = parsed if isinstance(parsed, dict) else {}
-            unwrapped = self._globalaiopc_unwrap_payload(payload)
-            if unwrapped:
-                return unwrapped, ""
-        return {}, last_err
+        target = str(detail_url or "").strip()
+        bare_id = self._globalaiopc_bare_asset_id(asset_id)
+        if not target or not bare_id:
+            return {}, "asset_detail_missing_id"
+        body = {"assetId": bare_id}
+        try:
+            resp = self._globalaiopc_request("POST", target, api_key=api_key, json_body=body, timeout=30)
+        except Exception as exc:
+            return {}, str(exc)
+        http_status = getattr(resp, "status_code", None) if resp is not None else None
+        try:
+            parsed = resp.json() if resp is not None and resp.content else {}
+        except Exception:
+            parsed = {}
+        payload = parsed if isinstance(parsed, dict) else {}
+        unwrapped = self._globalaiopc_unwrap_payload(payload)
+        status = self._globalaiopc_normalize_asset_status(unwrapped.get("status"))
+        if http_status not in {200, 201}:
+            err = self._globalaiopc_asset_error(payload, resp)
+            return {}, f"HTTP {http_status}: {err}" if err else f"HTTP {http_status}"
+        if not status:
+            err = self._globalaiopc_asset_error(payload, resp)
+            return {}, err or "asset_detail_missing_status"
+        return unwrapped, ""
 
     async def _globalaiopc_wait_asset_active(
         self,
         *,
         asset_id: str,
         api_key: str,
-        detail_urls: List[str],
+        detail_url: str,
         initial_payload: Optional[Dict[str, Any]] = None,
         poll_timeout_seconds: int = 180,
         poll_interval_seconds: int = 3,
@@ -15233,6 +15250,7 @@ class MediaGenerationService:
             (initial_payload or {}).get("status")
         )
         payload = dict(initial_payload or {})
+        last_err = ""
         if status in self.GLOBALAIOPC_ASSET_ACTIVE_STATUSES:
             return asset_id, payload, ""
         if status in self.GLOBALAIOPC_ASSET_FAILED_STATUSES:
@@ -15244,18 +15262,27 @@ class MediaGenerationService:
             await asyncio.sleep(interval)
             payload, err = await asyncio.to_thread(
                 self._globalaiopc_query_asset,
-                detail_urls=detail_urls,
+                detail_url=detail_url,
                 api_key=api_key,
+                asset_id=asset_id,
             )
             if not payload:
                 last_err = err or "asset_detail_failed"
+                logger.warning(
+                    "GlobalAiOpc asset detail poll failed | asset_id=%s error=%s",
+                    asset_id,
+                    last_err,
+                )
                 continue
             status = self._globalaiopc_normalize_asset_status(payload.get("status"))
             if status in self.GLOBALAIOPC_ASSET_ACTIVE_STATUSES:
                 return asset_id, payload, ""
             if status in self.GLOBALAIOPC_ASSET_FAILED_STATUSES:
                 return None, payload, self._globalaiopc_asset_error(payload) or f"asset_status={status}"
-        return None, payload, f"asset_review_timeout status={status or 'unknown'}"
+        return None, payload, (
+            f"asset_review_timeout status={status or 'unknown'}"
+            + (f" last_error={last_err}" if last_err else "")
+        )
 
     async def _globalaiopc_ensure_public_url(self, raw: Any, *, kind: str, fallback_name: str) -> Tuple[str, str]:
         text = str(raw or "").strip()
@@ -15315,7 +15342,7 @@ class MediaGenerationService:
         name: str,
         api_key: str,
         upload_url: str,
-        detail_url_builder,
+        detail_url: str,
         poll_timeout_seconds: int,
         poll_interval_seconds: int,
     ) -> Tuple[str, Dict[str, Any], str]:
@@ -15340,11 +15367,24 @@ class MediaGenerationService:
             name=name,
         )
         if not asset_id:
+            logger.warning(
+                "GlobalAiOpc asset upload failed | name=%s kind=%s error=%s raw=%s",
+                name,
+                kind,
+                upload_err,
+                _format_payload_for_log(upload_raw) if upload_raw else "",
+            )
             return "", upload_raw, upload_err or "asset_upload_failed"
+        logger.info(
+            "GlobalAiOpc asset uploaded | name=%s asset_id=%s status=%s",
+            name,
+            asset_id,
+            self._globalaiopc_normalize_asset_status((upload_raw or {}).get("status")) or "unknown",
+        )
         ready_id, detail_raw, wait_err = await self._globalaiopc_wait_asset_active(
             asset_id=asset_id,
             api_key=api_key,
-            detail_urls=detail_url_builder(asset_id),
+            detail_url=detail_url,
             initial_payload=upload_raw,
             poll_timeout_seconds=poll_timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
@@ -15396,43 +15436,29 @@ class MediaGenerationService:
         ).strip()
         if upload_url.startswith("/"):
             upload_url = f"{root_url}{upload_url}"
-
-        def _asset_detail_urls(asset_id: str) -> List[str]:
-            aid = str(asset_id or "").strip()
-            configured = str(tool_conf.get("asset_detail_endpoint") or "").strip()
-            urls: List[str] = []
-            if configured:
-                if configured.startswith("/"):
-                    configured = f"{root_url}{configured}"
-                if "{asset" in configured.lower() or "{id}" in configured.lower():
-                    urls.append(
-                        configured.replace("{assetId}", aid)
-                        .replace("{asset_id}", aid)
-                        .replace("{id}", aid)
-                    )
-                else:
-                    sep = "&" if "?" in configured else "?"
-                    urls.append(f"{configured}{sep}assetId={urllib.parse.quote(aid)}")
-            urls.append(f"{root_url}/asset/seedance2/assetDetail?assetId={urllib.parse.quote(aid)}")
-            urls.append(f"{root_url}/asset/seedance2/{urllib.parse.quote(aid)}")
-            # Older GlobalAiOpc Seedance2 library (kyyVideo2) as last resort.
-            urls.append(f"{root_url}/kyyVideo2/asset/{urllib.parse.quote(aid)}")
-            seen: Set[str] = set()
-            out: List[str] = []
-            for item in urls:
-                if item and item not in seen:
-                    seen.add(item)
-                    out.append(item)
-            return out
+        detail_url = str(
+            tool_conf.get("asset_detail_endpoint")
+            or f"{root_url}/asset/seedance2/assetDetail"
+        ).strip()
+        if detail_url.startswith("/"):
+            detail_url = f"{root_url}{detail_url}"
+        if "?" in detail_url:
+            detail_url = detail_url.split("?", 1)[0]
+        if not detail_url.lower().endswith("/asset/seedance2/assetdetail"):
+            if "/asset/seedance2" in detail_url.lower() and not detail_url.lower().endswith("assetdetail"):
+                detail_url = f"{root_url}/asset/seedance2/assetDetail"
 
         model = str(
             config.get("model")
             or tool_conf.get("model")
-            or config.get("base_model")
-            or tool_conf.get("base_model")
             or "sd_2.0_discount"
         ).strip() or "sd_2.0_discount"
-        if model.lower() in {"seedance-2", "seedance_2", "seedance2", "doubao-seedance-2-0-260128"}:
+        model_l = model.lower()
+        if (
+            " " in model
+            or model_l in {"seedance-2", "seedance_2", "seedance2", "doubao-seedance-2-0-260128"}
+            or model_l.startswith("globalaiopc")
+        ):
             model = "sd_2.0_discount"
 
         prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
@@ -15637,7 +15663,7 @@ class MediaGenerationService:
                 name=name,
                 api_key=api_key,
                 upload_url=upload_url,
-                detail_url_builder=_asset_detail_urls,
+                detail_url=detail_url,
                 poll_timeout_seconds=asset_poll_timeout,
                 poll_interval_seconds=asset_poll_interval,
             )
