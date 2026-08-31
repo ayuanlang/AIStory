@@ -2816,9 +2816,10 @@ const probeEpisodeAnalysisCompleteness = async ({
 
     const pendingAssetTargets = [];
     const pendingAssetLabels = [];
+    const extractSources = collectEpisodeAssetDesignSourceTexts(fresh);
     const envEntities = (entities || []).filter(isMainEnvironmentCompletenessAsset);
-    const hasEnvDesign = envEntities.length > 0
-        || countMainEnvironmentAssetsFromDesignJson(fresh?.ai_entity_design_result) > 0;
+    // Completeness is workspace-entity grounded. Leftover design JSON must not hide a missing library row.
+    const hasEnvDesign = envEntities.length > 0;
     const categorySpecs = [
         {
             key: 'characters',
@@ -2881,10 +2882,11 @@ const probeEpisodeAnalysisCompleteness = async ({
 
     // Environment design is plan-driven. Missing Index ENV rows must not hide a pending ENV job.
     const envAutoOn = !stage3AutoStart || stage3AutoStart.asset_design_environment !== false;
-    const adaptationText = String(fresh?.ai_scene_analysis_adaptation || '').trim();
     const hasPlanSource = hasEnvironmentPlan
-        || /\[SCENE_ENV_IDENT_START/i.test(adaptationText)
-        || /【主环境】/.test(adaptationText);
+        || extractSources.some((text) => (
+            textHasEnvironmentPlanSignals(text)
+            || collectMainEnvironmentNames(text).length > 0
+        ));
     if (envAutoOn && hasPlanSource && !hasEnvDesign && !pendingAssetTargets.includes('environments')) {
         ['environments', 'posters', 'covers'].forEach((target) => {
             if (!pendingAssetTargets.includes(target)) pendingAssetTargets.push(target);
@@ -2892,26 +2894,24 @@ const probeEpisodeAnalysisCompleteness = async ({
         if (!pendingAssetLabels.includes('environments')) pendingAssetLabels.push('environments');
     }
 
-    // Prop design is scene-split-driven. Missing Index PROP rows must not hide a pending PROP job.
+    // Prop / character design is scene-split-driven. Extracts live in scene_split result, not only adaptation.
     const propAutoOn = !stage3AutoStart || stage3AutoStart.asset_design_prop !== false;
-    const hasPropExtract = /\[PROP\]\s*名称\s*=/i.test(adaptationText);
+    const hasPropExtract = extractSources.some((text) => textHasTaggedExtractItems(text, 'PROP'));
     const propEntities = (entities || []).filter(
         (entity) => normalizeAssetReportType(entity?.type) === 'prop'
     );
-    const hasPropDesign = propEntities.length > 0
-        || /"props"\s*:\s*\[\s*\{/i.test(String(fresh?.ai_entity_design_result || ''));
+    const hasPropDesign = propEntities.length > 0;
     if (propAutoOn && hasPropExtract && !hasPropDesign && !pendingAssetTargets.includes('props')) {
         pendingAssetTargets.push('props');
         if (!pendingAssetLabels.includes('props')) pendingAssetLabels.push('props');
     }
 
     const charAutoOn = !stage3AutoStart || stage3AutoStart.asset_design_character !== false;
-    const hasCharExtract = /\[CHAR\]\s*名称\s*=/i.test(adaptationText);
+    const hasCharExtract = extractSources.some((text) => textHasTaggedExtractItems(text, 'CHAR'));
     const charEntities = (entities || []).filter(
         (entity) => normalizeAssetReportType(entity?.type) === 'character'
     );
-    const hasCharDesign = charEntities.length > 0
-        || /"characters"\s*:\s*\[\s*\{/i.test(String(fresh?.ai_entity_design_result || ''));
+    const hasCharDesign = charEntities.length > 0;
     if (charAutoOn && hasCharExtract && !hasCharDesign && !pendingAssetTargets.includes('characters')) {
         pendingAssetTargets.push('characters');
         if (!pendingAssetLabels.includes('characters')) pendingAssetLabels.push('characters');
@@ -3623,6 +3623,30 @@ const collectStage1SlotTexts = (stageOutputsRaw) => {
         texts.push(raw);
     }
     return texts;
+};
+
+/** Scene-split extracts and environment plan live in result / stage1 slots, not only adaptation. */
+const collectEpisodeAssetDesignSourceTexts = (fresh) => (
+    [
+        fresh?.ai_scene_analysis_adaptation,
+        fresh?.ai_scene_analysis_result,
+        ...collectStage1SlotTexts(fresh?.ai_stage_outputs),
+    ]
+        .map((text) => String(text || '').trim())
+        .filter(Boolean)
+);
+
+const mergeAssetSubtaskReports = (prevReports, nextReports) => {
+    const merged = new Map();
+    (Array.isArray(prevReports) ? prevReports : []).forEach((item) => {
+        const key = String(item?.key || item?.traceId || '').trim();
+        if (key) merged.set(key, item);
+    });
+    (Array.isArray(nextReports) ? nextReports : []).forEach((item) => {
+        const key = String(item?.key || item?.traceId || '').trim();
+        if (key) merged.set(key, item);
+    });
+    return Array.from(merged.values());
 };
 
 const readStage1OutputSlotContent = (stageOutputsRaw, outputKey) => {
@@ -9333,68 +9357,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return sources.some((text) => textHasTaggedExtractItems(text, 'CHAR'));
     }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, adaptationText]);
 
-    const hasPersistedCharacterAssetDesign = useCallback(() => {
-        const assetRaw = String(
-            activeEpisode?.ai_entity_design_result
-            || llmAssetRawResultContent
-            || ''
-        ).trim();
-        if (!assetRaw) return false;
-        if (/"characters"\s*:\s*\[\s*\{/i.test(assetRaw)) return true;
-        try {
-            const payload = getAnalysisEntitiesPayloadFromJsonText(assetRaw) || {};
-            return Array.isArray(payload.characters) && payload.characters.length > 0;
-        } catch (_) {
-            return false;
-        }
-    }, [
-        activeEpisode?.ai_entity_design_result,
-        getAnalysisEntitiesPayloadFromJsonText,
-        llmAssetRawResultContent,
-    ]);
+    const hasPersistedCharacterAssetDesign = useCallback((dbEntities) => {
+        const entities = Array.isArray(dbEntities) ? dbEntities : episodeOwnedEntities;
+        return (Array.isArray(entities) ? entities : []).some(
+            (entity) => normalizeAssetReportType(entity?.type) === 'character'
+        );
+    }, [episodeOwnedEntities]);
 
-    const hasPersistedPropAssetDesign = useCallback(() => {
-        const assetRaw = String(
-            activeEpisode?.ai_entity_design_result
-            || llmAssetRawResultContent
-            || ''
-        ).trim();
-        if (!assetRaw) return false;
-        if (/"props"\s*:\s*\[\s*\{/i.test(assetRaw)) return true;
-        try {
-            const payload = getAnalysisEntitiesPayloadFromJsonText(assetRaw) || {};
-            return Array.isArray(payload.props) && payload.props.length > 0;
-        } catch (_) {
-            return false;
-        }
-    }, [
-        activeEpisode?.ai_entity_design_result,
-        getAnalysisEntitiesPayloadFromJsonText,
-        llmAssetRawResultContent,
-    ]);
+    const hasPersistedPropAssetDesign = useCallback((dbEntities) => {
+        const entities = Array.isArray(dbEntities) ? dbEntities : episodeOwnedEntities;
+        return (Array.isArray(entities) ? entities : []).some(
+            (entity) => normalizeAssetReportType(entity?.type) === 'prop'
+        );
+    }, [episodeOwnedEntities]);
 
     const hasPersistedEnvironmentAssetDesign = useCallback((dbEntities) => {
         const entities = Array.isArray(dbEntities) ? dbEntities : episodeOwnedEntities;
-        if (countDbMainEnvironmentEntities(entities) > 0) return true;
-        const assetRaw = String(
-            activeEpisode?.ai_entity_design_result
-            || llmAssetRawResultContent
-            || ''
-        ).trim();
-        if (!assetRaw) return false;
-        if (countMainEnvironmentAssetsFromDesignJson(assetRaw) > 0) return true;
-        try {
-            const payload = getAnalysisEntitiesPayloadFromJsonText(assetRaw) || {};
-            return countMainEnvironmentDesignItems(payload.environments) > 0;
-        } catch (_) {
-            return false;
-        }
-    }, [
-        activeEpisode?.ai_entity_design_result,
-        episodeOwnedEntities,
-        getAnalysisEntitiesPayloadFromJsonText,
-        llmAssetRawResultContent,
-    ]);
+        return countDbMainEnvironmentEntities(entities) > 0;
+    }, [episodeOwnedEntities]);
 
     const hasPersistedCoverPosterAsset = useCallback(() => (
         (Array.isArray(episodeOwnedEntities) ? episodeOwnedEntities : []).some(
@@ -17706,18 +17686,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     && !(
                         skipExistingAssets
                         && !options?.forceAssetDesign
-                        && hasPersistedEnvironmentAssetDesign()
+                        && hasPersistedEnvironmentAssetDesign(existingEntities)
                     )
                 );
                 const charStillNeededFromExtract = (
                     wantsCharacters
                     && hasCharExtractForAssetDesign(extractSourceText)
-                    && !(skipExistingAssets && !options?.forceAssetDesign && hasPersistedCharacterAssetDesign())
+                    && !(skipExistingAssets && !options?.forceAssetDesign && hasPersistedCharacterAssetDesign(existingEntities))
                 );
                 const propStillNeededFromExtract = (
                     wantsProps
                     && hasPropExtractForAssetDesign(extractSourceText)
-                    && !(skipExistingAssets && !options?.forceAssetDesign && hasPersistedPropAssetDesign())
+                    && !(skipExistingAssets && !options?.forceAssetDesign && hasPersistedPropAssetDesign(existingEntities))
                 );
                 if (
                     filteredExisting.totalRows > 0
@@ -18073,18 +18053,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     : assetPromptKeysSnapshot.filter((key) => !assetsGenCompletedKeys.includes(key));
                 const allPersisted = assetPromptKeysSnapshot.length > 0
                     && assetPromptKeysSnapshot.every((key) => assetsGenCompletedKeys.includes(key));
-                setAnalysisFlowStatus({
-                    phase: 'assets_gen',
-                    assetsGenSettled: allPersisted && !stopped,
-                    message: buildAssetProgressMessage({
-                        persistedKeys: [...assetsGenCompletedKeys],
-                        llmDoneKeys: [...assetsLlmDoneKeys],
-                        pendingKeys: pending,
-                        failureLines: Array.isArray(failureLines) ? failureLines.filter(Boolean) : [],
-                        retryRound: assetRetryRound,
-                        stopped,
-                    }),
-                    highlightHint: highlightHint || '',
+                const progressMessage = buildAssetProgressMessage({
+                    persistedKeys: [...assetsGenCompletedKeys],
+                    llmDoneKeys: [...assetsLlmDoneKeys],
+                    pendingKeys: pending,
+                    failureLines: Array.isArray(failureLines) ? failureLines.filter(Boolean) : [],
+                    retryRound: assetRetryRound,
+                    stopped,
+                });
+                setAnalysisFlowStatus((prev) => {
+                    const prevPhase = String(prev?.phase || '').trim().toLowerCase();
+                    const preserveLivePhase = Boolean(options?.isRetryPhase2 && analysisRunInFlightRef.current)
+                        && prevPhase
+                        && !['idle', 'failed', 'assets_gen'].includes(prevPhase);
+                    return {
+                        ...(prev && typeof prev === 'object' ? prev : {}),
+                        phase: preserveLivePhase ? prevPhase : 'assets_gen',
+                        assetsGenSettled: allPersisted && !stopped,
+                        message: preserveLivePhase ? (String(prev?.message || '').trim() || progressMessage) : progressMessage,
+                        highlightHint: highlightHint || (preserveLivePhase ? progressMessage : String(prev?.highlightHint || '')),
+                    };
                 });
             };
 
@@ -19052,10 +19040,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     `Stage 4 asset design imported (${assetsGenCompletedCount}/${targetAssetsCount}${completedAssetTaskLabels ? `: ${completedAssetTaskLabels.replace(/、/g, ', ')}` : ''})`
                 );
             finalizeAnalysisFlowHistoryForPhase('assets_gen', assetsGenCompleteMessage);
-            setAnalysisFlowStatus({
-                phase: 'assets_gen',
-                message: assetsGenCompleteMessage,
-                assetsGenSettled: unfinishedKeys.length === 0,
+            setAnalysisFlowStatus((prev) => {
+                const prevPhase = String(prev?.phase || '').trim().toLowerCase();
+                const preserveLivePhase = Boolean(options?.isRetryPhase2 && analysisRunInFlightRef.current)
+                    && prevPhase
+                    && !['idle', 'failed'].includes(prevPhase);
+                return {
+                    ...(prev && typeof prev === 'object' ? prev : {}),
+                    phase: preserveLivePhase ? prevPhase : 'assets_gen',
+                    message: preserveLivePhase ? (String(prev?.message || '').trim() || assetsGenCompleteMessage) : assetsGenCompleteMessage,
+                    highlightHint: preserveLivePhase
+                        ? t('所选资产已重跑完成，可前往资产库查看', 'Selected assets finished rerunning; open the Assets library to review')
+                        : (prev?.highlightHint || ''),
+                    assetsGenSettled: unfinishedKeys.length === 0,
+                };
             });
 
             // Merge results
@@ -19257,7 +19255,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             reason: x.error || x.recommendation || x.status,
                             recommendation: x.recommendation || '',
                         }));
-                    if (!allowRepeatAutoStage3 && episodeIdForPhase2 > 0 && !options?.deferEnvironmentDesign) {
+                    if (
+                        !allowRepeatAutoStage3
+                        && episodeIdForPhase2 > 0
+                        && !options?.deferEnvironmentDesign
+                        && failedSubtaskItems.length <= 0
+                    ) {
                         phase2AutoCompletedEpisodeRef.current = episodeIdForPhase2;
                     }
                     if (failedSubtaskItems.length > 0) {
@@ -29092,14 +29095,54 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 
                 if (overlayOnLiveRun) {
-                    setAnalysisUiReport((prev) => ({
-                        ...(prev && typeof prev === 'object' ? prev : {}),
-                        importReport: newImportReport,
-                    }));
-                    setAnalysisFlowStatus((prev) => ({
-                        ...(prev && typeof prev === 'object' ? prev : {}),
-                        highlightHint: t('所选资产已重跑完成，可前往资产库查看', 'Selected assets finished rerunning; open the Assets library to review'),
-                    }));
+                    await refreshEpisodeOwnedEntities();
+                    const retryFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+                    setAnalysisUiReport((prev) => {
+                        const prevReport = (prev && typeof prev === 'object') ? prev : {};
+                        const prevImport = (prevReport.importReport && typeof prevReport.importReport === 'object')
+                            ? prevReport.importReport
+                            : {};
+                        const prevScenePost = (prevImport.sceneSubjectPostImportReport && typeof prevImport.sceneSubjectPostImportReport === 'object')
+                            ? prevImport.sceneSubjectPostImportReport
+                            : {};
+                        const nextScenePost = (postImportSceneSubjectReport && typeof postImportSceneSubjectReport === 'object')
+                            ? postImportSceneSubjectReport
+                            : {};
+                        const mergedScenePost = {
+                            ...syncScenePostImportCheckedCount(prevImport, nextScenePost),
+                            subtaskReports: mergeAssetSubtaskReports(
+                                prevScenePost.subtaskReports,
+                                nextScenePost.subtaskReports,
+                            ),
+                        };
+                        const prevStatus = String(prevReport.status || '').trim().toLowerCase();
+                        const keepLive = Boolean(isAnalyzing || analysisRunInFlightRef.current);
+                        const nextStatus = retryFailed > 0
+                            ? (keepLive ? 'running' : (prevStatus === 'failed' || prevStatus === 'error' ? 'failed' : 'warning'))
+                            : (keepLive || prevStatus === 'running' || prevStatus === 'failed' || prevStatus === 'error'
+                                ? 'running'
+                                : (prevStatus || 'running'));
+                        return {
+                            ...prevReport,
+                            status: nextStatus,
+                            error: retryFailed > 0 ? String(prevReport.error || '') : '',
+                            importReport: {
+                                ...newImportReport,
+                                sceneSubjectPostImportReport: mergedScenePost,
+                            },
+                        };
+                    });
+                    setAnalysisFlowStatus((prev) => {
+                        const prevPhase = String(prev?.phase || '').trim().toLowerCase();
+                        const nextPhase = prevPhase === 'failed' || prevPhase === 'idle'
+                            ? 'assets_gen'
+                            : (prevPhase || 'assets_gen');
+                        return {
+                            ...(prev && typeof prev === 'object' ? prev : {}),
+                            phase: nextPhase,
+                            highlightHint: t('所选资产已重跑完成，可前往资产库查看', 'Selected assets finished rerunning; open the Assets library to review'),
+                        };
+                    });
                     onLog?.('Stage 3 asset design retry completed during live analysis.', 'success');
                 } else {
                 setAnalysisUiReport((prev) => buildCompletedAnalysisUiReport({
@@ -29930,15 +29973,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     `[Pipeline Supervisor] Re-running asset design for: ${probe.pendingAssetTargets.join(', ')}`,
                     'process'
                 );
+                const supervisorExtractSource = [
+                    resolveAssetRerunSourceText(),
+                    resolveSceneSplitSourceText(),
+                    readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                    stage1SourceText,
+                    activeEpisode?.ai_scene_analysis_result,
+                    activeEpisode?.ai_scene_analysis_adaptation,
+                    workingSubjectIndexText,
+                    probe.subjectIndex,
+                ].map((text) => String(text || '').trim()).filter(Boolean).join('\n\n');
                 workingPostImport = await runPostImportSceneSubjectPipeline(
                     workingImportReport || { importedSceneRows: [] },
-                    workingSubjectIndexText || probe.subjectIndex,
+                    supervisorExtractSource || workingSubjectIndexText || probe.subjectIndex,
                     {
+                        extractSourceText: supervisorExtractSource,
                         explicitSubjectIndexText: workingSubjectIndexText || probe.subjectIndex,
                         targetEntityTypes: probe.pendingAssetTargets,
                         isRetryPhase2: true,
                         skipExistingAssets: true,
                         allowWithoutSubjectIndex: true,
+                        forceAssetDesign: true,
                     }
                 );
                 if (workingImportReport && typeof workingImportReport === 'object' && workingPostImport) {
@@ -30015,6 +30070,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         persistSceneMarkdownPatch,
         projectId,
         registerActiveAnalysisTask,
+        resolveAssetRerunSourceText,
         resolveSceneSplitSourceText,
         resolveSelectedScriptAnalysisApiId,
         runAutoImportAndSwitchToScenes,
@@ -31168,7 +31224,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let status = resolveCompletenessStatus(analysisCount, importedCount);
             let failed = false;
             let errorMessage = '';
-            if (subtaskInfo?.failed) {
+            if (subtaskInfo?.failed && importedCount <= 0) {
                 status = 'missing';
                 failed = true;
                 errorMessage = subtaskInfo.error;

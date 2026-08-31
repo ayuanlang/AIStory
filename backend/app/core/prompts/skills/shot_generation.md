@@ -231,7 +231,7 @@ Scene 首镜可多 1 条场级结果（仍是结果，不是蓝图论文）：`�
    | :--- | :--- | :--- |
    | **切角/反打/OTS** | Pan / Arc Orbit / Reverse Shot / OTS Switch（§四.9 G）；Video=「同一空间变化观察角度到 ENV:[新]」+自然过渡+§二.7A 抄该拍【建置】 | 合镜内禁 |
    | **状态衍生** | 状态/域场过程（雾/毁/Particles）；落幅后按 §二.7A 抄该拍【建置】 | 合镜内禁 |
-   | **门槛/出入舱** | Push Through Door / Track / 出入舱过程；落幅后该 Pn 含该拍【建置】（§二.7A） | 合镜内禁 |
+   | **门槛/出入舱** | 跟上游运镜档落地：`跟随入舱`=Track/Follow Through Door｜`过框推入`=Push Through Door/Window｜`窗外窥入`=Through Glass→Push In｜`绕体外跟`=Track along exterior→enter｜`落幅在舱`=本镜起幅已在舱（场际转入，不重拍街上跟）｜`跟随出舱`/`过框拉出`=Follow/Pull Through Door。合镜内禁 Static 硬切躲过阈。落幅后该 Pn 含该拍【建置】（§二.7A） | 合镜内禁 |
    | **闪回/倒叙/梦** | 见 §四.6；若落点 ENV 名不同，落幅后该 Pn 含该拍【建置】（§二.7A） | 禁硬切 |
    | **蒙太奇点切** | 见 §四.6 | 禁无桥硬切 |
    | **ENV 名未变** | 保持；对戏切视角仍用过程桥 | Shot 边界可硬切（见下） |
