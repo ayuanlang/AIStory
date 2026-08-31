@@ -398,13 +398,19 @@ def canonicalize_scene_unit_id(scene_id: str, scene_order: int, episode_prefix: 
     sid = str(scene_id or "").strip()
     prefix = str(episode_prefix or "EP01").strip().upper()
     order = max(1, int(scene_order or 0))
-    if re.match(r"^[A-Za-z]+\d+_SC", sid, flags=re.IGNORECASE):
-        return sid
+    match = re.fullmatch(r"([A-Za-z]+)(\d+)_SC(\d+)([A-Za-z]*)", sid, flags=re.IGNORECASE)
+    if match:
+        head = str(match.group(1) or "").upper()
+        sc_num = f"{int(match.group(3)):02d}"
+        suffix = str(match.group(4) or "").upper()
+        if head == "EP":
+            return f"{prefix}_SC{sc_num}{suffix}"
+        return f"{head}{int(match.group(2)):02d}_SC{sc_num}{suffix}"
     if re.fullmatch(r"\d+", sid):
         return f"{prefix}_SC{int(sid):02d}"
-    match = re.fullmatch(r"SC?(\d+)", sid, flags=re.IGNORECASE)
-    if match:
-        return f"{prefix}_SC{int(match.group(1)):02d}"
+    sc_match = re.fullmatch(r"SC?(\d+)", sid, flags=re.IGNORECASE)
+    if sc_match:
+        return f"{prefix}_SC{int(sc_match.group(1)):02d}"
     trailing_digits = re.search(r"(\d+)\s*$", sid)
     if trailing_digits and len(sid) <= 8:
         return f"{prefix}_SC{int(trailing_digits.group(1)):02d}"
@@ -546,22 +552,18 @@ def _reconcile_legacy_numeric_scene_rows(
     *,
     existing_by_scene: Dict[str, Any],
     units: List[ParsedSceneUnit],
+    episode_prefix: str = "EP01",
 ) -> None:
     canonical_ids = {str(unit.scene_id) for unit in units}
-    canonical_by_order = {
-        int(getattr(unit, "scene_order", 0) or 0): str(unit.scene_id)
-        for unit in units
-        if int(getattr(unit, "scene_order", 0) or 0) > 0
-    }
     now_iso = now_bj_iso()
     for scene_id, row in existing_by_scene.items():
         if scene_id in canonical_ids:
             continue
-        if not re.fullmatch(r"\d+", str(scene_id or "").strip()):
+        if _scene_id_has_letter_suffix(scene_id):
             continue
         order = int(getattr(row, "scene_order", 0) or 0)
-        canonical = canonical_by_order.get(order)
-        if canonical and canonical != scene_id:
+        normalized = canonicalize_scene_unit_id(scene_id, order, episode_prefix)
+        if normalized in canonical_ids and normalized != scene_id:
             row.import_status = "skipped"
             row.parse_status = "failed"
             row.parse_error_code = "SCENE_ID_SUPERSEDED_BY_CANONICAL"
@@ -2363,6 +2365,7 @@ def sync_scene_units_from_script_text(
         db,
         existing_by_scene=existing_by_scene,
         units=units,
+        episode_prefix=episode_prefix,
     )
 
     if not partial:

@@ -398,7 +398,14 @@ const canonicalizeSceneUnitId = (sceneId, sceneOrder, episodePrefix) => {
     const sid = String(sceneId || '').trim();
     const prefix = String(episodePrefix || 'EP01').trim().toUpperCase();
     const order = Math.max(1, Number(sceneOrder) || 0);
-    if (/^[A-Za-z]+\d+_SC/i.test(sid)) return sid;
+    const canonicalMatch = sid.match(/^([A-Za-z]+)(\d+)_SC(\d+)([A-Za-z]*)$/i);
+    if (canonicalMatch) {
+        const head = String(canonicalMatch[1] || '').toUpperCase();
+        const scNum = String(Number(canonicalMatch[3])).padStart(2, '0');
+        const suffix = String(canonicalMatch[4] || '').toUpperCase();
+        if (head === 'EP') return `${prefix}_SC${scNum}${suffix}`;
+        return `${head}${String(Number(canonicalMatch[2])).padStart(2, '0')}_SC${scNum}${suffix}`;
+    }
     if (/^\d+$/.test(sid)) return `${prefix}_SC${String(Number(sid)).padStart(2, '0')}`;
     const scMatch = sid.match(/^SC?(\d+)$/i);
     if (scMatch) return `${prefix}_SC${String(Number(scMatch[1])).padStart(2, '0')}`;
@@ -25165,19 +25172,48 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 };
 
                 const runSceneOrchestrationBranch = async () => {
+                    const splitSourceText = String(
+                        latestStage1NodeOutputsRef.current?.scene_split
+                        || sceneSplitText
+                        || extractStage1AdaptedScriptBody(stage1PhaseRawText)
+                        || stage1PhaseRawText
+                        || ''
+                    ).trim();
                     const sourceUnits = parseSceneUnitsFromScriptMarkers(
-                        extractStage1AdaptedScriptBody(stage1PhaseRawText) || stage1PhaseRawText
+                        extractStage1AdaptedScriptBody(splitSourceText) || splitSourceText
                     );
+                    const episodePrefixForScenes = resolveEpisodeSceneIdPrefix(activeEpisode, splitSourceText);
                     const expectedSceneIds = new Set(
-                        sourceUnits.map((unit) => String(unit?.sceneId || unit?.scene_id || '').trim()).filter(Boolean)
+                        sourceUnits.map((unit) => canonicalizeSceneUnitId(
+                            unit?.sceneId || unit?.scene_id,
+                            unit?.sceneOrder,
+                            episodePrefixForScenes
+                        )).filter(Boolean)
                     );
                     if (expectedSceneIds.size <= 0) {
                         throw new Error(t('未解析到可编排场景。', 'No scenes were available for orchestration.'));
                     }
+                    const resolveExpectedSceneId = (raw) => {
+                        const candidate = String(raw || '').trim();
+                        if (!candidate) return '';
+                        const canonical = canonicalizeSceneUnitId(
+                            candidate,
+                            deriveSceneOrderFromSceneId(candidate),
+                            episodePrefixForScenes
+                        );
+                        if (expectedSceneIds.has(canonical)) return canonical;
+                        const hit = [...expectedSceneIds].find((id) => sceneUnitIdsMatch(
+                            id,
+                            candidate,
+                            deriveSceneOrderFromSceneId(candidate),
+                            episodePrefixForScenes
+                        ));
+                        return hit || '';
+                    };
                     orchestrationCanonicalSceneIdsRef.current = mergeSceneIdAllowlist(
                         orchestrationCanonicalSceneIdsRef.current,
                         [...expectedSceneIds],
-                        resolveEpisodeSceneIdPrefix(activeEpisode, stage1PhaseRawText)
+                        episodePrefixForScenes
                     );
 
                     const launchedSceneIds = new Set();
@@ -25225,7 +25261,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const nodes = Array.isArray(snapshot?.pipeline_nodes) ? snapshot.pipeline_nodes : [];
                         const failedNode = nodes.find((node) => (
                             node?.node_name === 'scene_subskill_scene'
-                            && expectedSceneIds.has(String(node?.scene_id || '').trim())
+                            && resolveExpectedSceneId(node?.scene_id)
                             && node?.status === 'failed'
                         ));
                         if (failedNode) {
@@ -25235,12 +25271,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ));
                         }
                         nodes.forEach((node) => {
-                            const sceneId = String(node?.scene_id || '').trim();
+                            const sceneId = resolveExpectedSceneId(node?.scene_id);
                             const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
                             if (
                                 node?.node_name === 'scene_subskill_scene'
                                 && node?.status === 'success'
-                                && expectedSceneIds.has(sceneId)
+                                && sceneId
                                 && !launchedSceneIds.has(sceneId)
                                 && sceneBlock
                             ) {
@@ -25997,7 +26033,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const liveSplit = String(
             latestStage1NodeOutputsRef.current?.scene_split
             || getStageOutputContent('stage1', 'scene_split')
-            || latestStage1RawTextRef.current
             || ''
         ).trim();
         if (analysisTrustLiveDownstreamOnlyRef.current) {
@@ -26006,14 +26041,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const raw = String(
             liveSplit
             || readPersistedStage1Slot('scene_split')
-            || activeEpisode?.ai_scene_analysis_result
             || activeEpisode?.ai_scene_analysis_adaptation
             || ''
         ).trim();
         return withPersistedVisualBackfill(raw);
     }, [
         activeEpisode?.ai_scene_analysis_adaptation,
-        activeEpisode?.ai_scene_analysis_result,
         getStageOutputContent,
         readPersistedStage1Slot,
         withPersistedVisualBackfill,
@@ -32454,6 +32487,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 add(marker, deriveSceneOrderFromSceneId(marker), scene?.scene_name);
                             });
                             (diagnosticsSceneUnits || []).forEach((unit) => {
+                                const importStatus = String(unit?.import_status || '').trim().toLowerCase();
+                                const parseStatus = String(unit?.parse_status || '').trim().toLowerCase();
+                                const markdown = String(unit?.scene_markdown || '').trim();
+                                if (
+                                    (importStatus === 'skipped' || parseStatus === 'failed')
+                                    && !markdown
+                                ) return;
                                 addFromText(unit?.scene_id, unit?.scene_order, unit?.scene_markdown);
                             });
                             (diagnosticsPipelineNodes || []).forEach((node) => {
@@ -32503,7 +32543,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             Object.keys(progress?.items || {}).forEach((id) => add(id));
                             [...(orchestrationCanonicalSceneIdsRef.current || [])].forEach((id) => add(id));
                             [...(orchestrationLiveImportedScenesRef.current || [])].forEach((id) => add(id));
-                            return [...byId.values()].sort((left, right) => {
+                            const byIdentity = new Map();
+                            [...byId.values()].forEach((row) => {
+                                const identity = storyboardProgressIdentityKey(row.sceneId, { sceneOrder: row.order });
+                                const prev = byIdentity.get(identity);
+                                if (!prev) {
+                                    byIdentity.set(identity, row);
+                                    return;
+                                }
+                                const merged = {
+                                    ...prev,
+                                    order: (prev.order > 0 ? prev.order : row.order) || 0,
+                                    sceneName: prev.sceneName || row.sceneName || '',
+                                    sceneId: preferStoryboardMarker(prev.sceneId, row.sceneId),
+                                };
+                                byIdentity.set(identity, merged);
+                            });
+                            return [...byIdentity.values()].sort((left, right) => {
                                 if ((left.order || 0) !== (right.order || 0)) return (left.order || 0) - (right.order || 0);
                                 return String(left.sceneId).localeCompare(String(right.sceneId));
                             });

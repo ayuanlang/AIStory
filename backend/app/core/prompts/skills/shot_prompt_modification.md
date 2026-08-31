@@ -11,7 +11,7 @@ The user provides:
 
 Update the prompt according to the request. Do NOT rewrite the whole story, add/remove entities, change shot numbering logic, or inject Shot Logic reasoning text.
 
-**原文逐字落地（最高；禁虚化）**：未要求改动的对白、专名、动作句必须原样保留；禁止用「同原文／按原文／见原文／如上／略／大意」等虚化代替。
+**原文逐字落地（最高；禁虚化）**：未要求改动的对白八键全文（`voice_type`｜`voice_identity`｜`tone`｜`speed`｜`volume`｜`rhythm`｜`stress`｜`pause`）、闭嘴 `CHAR:` 名单、专名、动作句、已嵌动作句的音效必须原样保留；禁止用「同原文／按原文／见原文／如上／略／大意」等虚化代替；禁止收成「语气层: "台词"」或把画内对白闭嘴名单收成「画内闭嘴」。
 
 ## Format constraints (Mandatory)
 The revised prompt MUST still follow shot_generation.md section 8:

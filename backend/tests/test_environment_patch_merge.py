@@ -74,6 +74,49 @@ B1=R:{two}｜ENV:0度room two｜W:{two}｜R−W=∅
     assert "ENV_SCENE_PATCH_START" not in merged
 
 
+def test_environment_patches_strip_nested_scene_markers():
+    from app.services.script_analysis_flow import parse_scene_units_from_markers
+
+    split_text = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+【场景名称】短名=one
+[SCENE_CONTENT_START:EP01_SC01]
+original one
+[SCENE_CONTENT_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[SCENE_START:EP01_SC02]
+【场景名称】短名=two
+[SCENE_CONTENT_START:EP01_SC02]
+original two
+[SCENE_CONTENT_END:EP01_SC02]
+[SCENE_END:EP01_SC02]
+[SCENES_BLOCK_END]"""
+    patch_text = """[ENV_SCENE_PATCH_START:EP01_SC01]
+[SCENE_START:EP1_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+主环境=one
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+【主环境】room one
+[ENV_BLOCK_END]
+[SCENE_END:EP1_SC01]
+[ENV_SCENE_PATCH_END:EP01_SC01]
+[ENV_SCENE_PATCH_START:EP01_SC02]
+[SCENE_ENV_IDENT_START:EP01_SC02]
+主环境=two
+[SCENE_ENV_IDENT_END:EP01_SC02]
+[ENV_BLOCK_START]
+【主环境】room two
+[ENV_BLOCK_END]
+[ENV_SCENE_PATCH_END:EP01_SC02]"""
+
+    merged = _merge_environment_patches(split_text, patch_text)
+    units = parse_scene_units_from_markers(merged)
+    assert [unit.scene_id for unit in units] == ["EP01_SC01", "EP01_SC02"]
+    assert merged.count("[SCENE_START:") == 2
+    assert "[SCENE_START:EP1_SC01]" not in merged
+
+
 def test_completion_markers_must_be_unique_and_terminal():
     environment_marker = "[ENVIRONMENT_PLAN_OUTPUT_END]"
     assert _strip_required_completion_marker(

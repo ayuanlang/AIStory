@@ -82,6 +82,16 @@ _ENV_SCENE_PATCH_PATTERN = re.compile(
     r"`?\[ENV_SCENE_PATCH_END:([^\s\]]+)\]`?",
     re.IGNORECASE | re.DOTALL,
 )
+_NESTED_SCENE_MARKER_IN_PATCH_RE = re.compile(
+    r"`?\[SCENE_(?:CONTENT_)?(?:START|END):[^\s\]]+\]`?",
+    re.IGNORECASE,
+)
+
+
+def _strip_nested_scene_markers_from_patch(body: str) -> str:
+    """ENV patches must not introduce extra SCENE_START/END pairs into the split script."""
+    cleaned = _NESTED_SCENE_MARKER_IN_PATCH_RE.sub("", str(body or ""))
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 _ENVIRONMENT_COMPLETION_MARKER = "[ENVIRONMENT_PLAN_OUTPUT_END]"
 _ENV_BLOCK_WITH_COVERAGE_PATTERN = re.compile(
     r"\s*`?\[ENV_BLOCK_START(?:\:[^\]]+)?\]`?.*?"
@@ -107,7 +117,7 @@ def _extract_environment_patches(environment_output: str) -> Dict[str, str]:
         has_ident = "[SCENE_ENV_IDENT_START" in body.upper() and "[SCENE_ENV_IDENT_END" in body.upper()
         if not body or not (has_env or has_ident):
             raise HTTPException(status_code=422, detail=f"ENV_SCENE_PATCH_BLOCK_MISSING:{start_id}")
-        patches[start_id] = body
+        patches[start_id] = _strip_nested_scene_markers_from_patch(body)
     if patches:
         return patches
 
