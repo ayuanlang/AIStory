@@ -1296,6 +1296,7 @@ const Settings = () => {
             else if (frontendProviderName === "Doubao Video") backendProvider = "doubao";
             else if (frontendProviderName === "ark") backendProvider = "ark";
             else if (frontendProviderName === "ark-seedance" || frontendProviderName.includes("Ark-Seedance")) backendProvider = "ark-seedance";
+            else if (frontendProviderName === "GlobalAiOpc" || frontendProviderName.toLowerCase() === "globalaiopc") backendProvider = "globalaiopc";
             else if (frontendProviderName === "Zlhub Video" || frontendProviderName === "Lzhbu Video") backendProvider = "zlhub";
             else if (frontendProviderName === "Wanxiang") backendProvider = "wanxiang";
             else if (frontendProviderName === "HappyHorse") backendProvider = "happyhorse";

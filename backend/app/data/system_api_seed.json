@@ -1696,6 +1696,74 @@
       ]
     },
     {
+      "name": "GlobalAiOpc Seedance 2.0 Discount",
+      "category": "Video",
+      "provider": "globalaiopc",
+      "base_url": "https://zcbservice.aizfw.cn/kyyReactApiServer",
+      "model": "sd_2.0_discount",
+      "base_model": "seedance-2",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "capability_flags": {
+          "supports_first_frame": true,
+          "supports_last_frame": true,
+          "supports_reference_image": true,
+          "supports_reference_video": true,
+          "supports_reference_audio": true,
+          "supports_generate_audio": true
+        }
+      },
+      "supplier_info": {
+        "globalaiopc": {
+          "auth": "Bearer API Key",
+          "submit_endpoint": "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks",
+          "query_endpoint": "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks/{id}",
+          "asset_upload_endpoint": "https://zcbservice.aizfw.cn/kyyReactApiServer/asset/seedance2/assetUpload",
+          "asset_detail_endpoint": "https://zcbservice.aizfw.cn/kyyReactApiServer/asset/seedance2/assetDetail",
+          "callback_supported": false,
+          "poll_only": true,
+          "media_uri": "assetId://{assetId}",
+          "mutual_exclusion": "first_last_frame XOR multimodal_reference",
+          "duration_range": [4, 15],
+          "resolutions": ["480p", "720p", "1080p"]
+        }
+      },
+      "config": {
+        "endpoint": "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks",
+        "query_endpoint": "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks",
+        "asset_upload_endpoint": "https://zcbservice.aizfw.cn/kyyReactApiServer/asset/seedance2/assetUpload",
+        "asset_detail_endpoint": "https://zcbservice.aizfw.cn/kyyReactApiServer/asset/seedance2/assetDetail",
+        "generate_audio": true,
+        "watermark": false,
+        "poll_interval_seconds": 6,
+        "poll_timeout_seconds": 1200,
+        "asset_poll_interval_seconds": 3,
+        "asset_poll_timeout_seconds": 180,
+        "provider_api_key_strategy": "random",
+        "resolution": "720p",
+        "aspect_ratios": ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"],
+        "durations_seconds": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "async",
+        "poll",
+        "seedance-2",
+        "globalaiopc",
+        "asset-review"
+      ]
+    },
+    {
       "name": "zlhub doubao-seedance-2-0",
       "category": "Video",
       "provider": "zlhub",

@@ -210,6 +210,23 @@ def _resolve_poll_credentials(job: Dict[str, Any]) -> Tuple[str, str, str, str]:
                 root = root[: -len(_suffix)].rstrip("/")
                 break
         query_endpoint = f"{root}/v1/videos"
+    if (
+        "globalaiopc" in provider_l
+        or "aizfw" in provider_l
+        or "zcbservice" in provider_l
+        or "aizfw.cn" in str(base_url or query_endpoint or "").lower()
+    ) and not query_endpoint:
+        root = (base_url or "https://zcbservice.aizfw.cn/kyyReactApiServer").rstrip("/")
+        for _suffix in (
+            "/v2/model-center/tasks",
+            "/v2/model-center",
+            "/asset/seedance2/assetUpload",
+            "/asset/seedance2",
+        ):
+            if root.lower().endswith(_suffix):
+                root = root[: -len(_suffix)].rstrip("/")
+                break
+        query_endpoint = f"{root}/v2/model-center/tasks"
 
     return api_key, query_endpoint, provider, base_url
 

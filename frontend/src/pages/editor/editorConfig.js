@@ -20,6 +20,7 @@ export const PROVIDER_LABELS = {
         "Zlhub Video": "Zlhub (中联 / Doubao Seedance)",
         "ark": "Ark (火山方舟 API Key)",
         "ark-seedance": "Ark-Seedance (火山原生)",
+        "GlobalAiOpc": "GlobalAiOpc (Seedance 2.0)",
         "Wanxiang": "Wanxiang (通义万相 - Aliyun)",
         "Vidu (Video)": "Vidu (Shengshu)"
     }
@@ -85,6 +86,9 @@ export const MODEL_OPTIONS = {
         ],
         "ark-seedance": [
             { label: "Doubao Seedance 2.0 (ep)", value: "ep-doubao-seedance-2" }
+        ],
+        "GlobalAiOpc": [
+            { label: "Seedance 2.0 Discount", value: "sd_2.0_discount" }
         ],
         "Grsai-Video": [
             { label: "Sora Video", value: "sora-video" },

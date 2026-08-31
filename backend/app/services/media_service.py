@@ -261,6 +261,12 @@ def _extract_provider_money_usage(payload: Any) -> Dict[str, Any]:
         out["consumeMoney"] = float(cents) / 100.0
         out["consume_money"] = float(cents) / 100.0
         out.setdefault("currency", "CNY")
+    amount = _optional_usage_non_negative_float(payload.get("amount"))
+    if out.get("consumeMoney") is None and amount is not None:
+        out["consumeMoney"] = amount
+        out["consume_money"] = amount
+        out.setdefault("currency", currency or "CNY")
+        out.setdefault("billing_basis", "provider_amount")
     if out.get("cost_total_cents") is not None:
         out.setdefault("billing_basis", "provider_cost_total_cents")
     return out if (out.get("cost_total_cents") is not None or out.get("consumeMoney") is not None) else {}
@@ -818,6 +824,15 @@ class MediaGenerationService:
             return "ddimatuo"
         if normalized in {"dubai", "dubai3000", "dubai3000.xyz", "星耀"}:
             return "dubai"
+        if normalized in {
+            "globalaiopc",
+            "global ai opc",
+            "global-ai-opc",
+            "global_ai_opc",
+            "aizfw",
+            "zcbservice",
+        }:
+            return "globalaiopc"
         return raw or "unknown"
 
     def _vendor_failed_message(self, provider: Any, reason: Any) -> str:
@@ -3085,6 +3100,13 @@ class MediaGenerationService:
             or "64-81-112-180.sslip.io" in str(endpoint or base or "").lower()
             or "星耀" in str(provider or "")
         )
+        is_globalaiopc = (
+            "globalaiopc" in provider_l
+            or "aizfw" in provider_l
+            or "zcbservice" in provider_l
+            or "aizfw.cn" in str(endpoint or base or "").lower()
+            or "model-center/tasks" in str(endpoint or base or "").lower()
+        )
 
         try:
             raw_payload: Dict[str, Any] = {}
@@ -3326,6 +3348,72 @@ class MediaGenerationService:
                         or raw_payload.get("errorMessage")
                         or raw_payload.get("message")
                         or status
+                    ).strip()
+                    return _pack(raw_payload, status=status, error=err_msg)
+                return _pack(raw_payload, status=status or "running", pending=True)
+
+            if is_globalaiopc:
+                root = self._globalaiopc_api_root(base or self.GLOBALAIOPC_DEFAULT_API_ROOT, endpoint)
+                if not endpoint:
+                    endpoint = f"{root}/v2/model-center/tasks"
+                elif endpoint.startswith("/"):
+                    endpoint = f"{root}{endpoint}"
+                query_root = str(endpoint or "").rstrip("/")
+                if query_root.lower().endswith("/content"):
+                    query_root = query_root[: -len("/content")].rstrip("/")
+                    if "/" in query_root and query_root.rsplit("/", 1)[-1] == stable_task_id:
+                        query_root = query_root.rsplit("/", 1)[0]
+                if not query_root.lower().endswith("/v2/model-center/tasks"):
+                    query_root = f"{root}/v2/model-center/tasks"
+                headers = {
+                    "Authorization": f"Bearer {stable_key}",
+                    "Accept": "application/json",
+                }
+                target_url = f"{query_root}/{urllib.parse.quote(stable_task_id)}"
+
+                def _gao_get(use_proxy: bool = True):
+                    kwargs = {"headers": headers, "timeout": 30, "verify": False}
+                    if not use_proxy:
+                        kwargs["proxies"] = {"http": None, "https": None}
+                    return requests.get(target_url, **kwargs)
+
+                try:
+                    resp = _gao_get(True)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    resp = _gao_get(False)
+                if resp is None or getattr(resp, "status_code", None) not in {200, 201}:
+                    return {"error": f"globalaiopc_http_{getattr(resp, 'status_code', None)}"}
+                try:
+                    raw_payload = resp.json() if resp.content else {}
+                except Exception:
+                    return {"error": "globalaiopc_invalid_json"}
+                raw_payload = self._globalaiopc_unwrap_payload(raw_payload)
+                if not isinstance(raw_payload, dict):
+                    return {"error": "globalaiopc_invalid_payload"}
+                status = _normalize_status(
+                    raw_payload.get("status") or raw_payload.get("state")
+                )
+                url = ""
+                for key in ("video_url", "result_url", "resultUrl", "url"):
+                    candidate = str(raw_payload.get(key) or "").strip()
+                    if candidate.lower().startswith(("http://", "https://")):
+                        url = candidate
+                        break
+                if url and status not in {"failed", "canceled"}:
+                    packed = _pack(raw_payload, status="succeeded", url=url)
+                    packed["metadata"] = _attach_provider_usage_metadata(
+                        packed.get("metadata") if isinstance(packed.get("metadata"), dict) else {},
+                        task_payload=raw_payload,
+                        source="globalaiopc_task_query",
+                    )
+                    return packed
+                if status in {"failed", "canceled"}:
+                    err_msg = str(
+                        raw_payload.get("error")
+                        or raw_payload.get("errorMessage")
+                        or raw_payload.get("message")
+                        or status
+                        or "globalaiopc_query_failed"
                     ).strip()
                     return _pack(raw_payload, status=status, error=err_msg)
                 return _pack(raw_payload, status=status or "running", pending=True)
@@ -5536,6 +5624,12 @@ class MediaGenerationService:
             "dubai3000": "dubai",
             "dubai3000.xyz": "dubai",
             "星耀": "dubai",
+            "globalaiopc": "globalaiopc",
+            "global ai opc": "globalaiopc",
+            "global-ai-opc": "globalaiopc",
+            "global_ai_opc": "globalaiopc",
+            "aizfw": "globalaiopc",
+            "zcbservice": "globalaiopc",
             "ark-seedance": "ark-seedance",
             "ark_seedance": "ark-seedance",
             "ark seedance": "ark-seedance",
@@ -6112,6 +6206,18 @@ class MediaGenerationService:
                 negative_prompt=negative_prompt,
                 keyframes=keyframes,
             )
+        if normalized == "globalaiopc":
+            return await self._handle_globalaiopc_generation(
+                "video",
+                prompt,
+                active_config,
+                reference_image_url,
+                last_frame_url=last_frame_url,
+                duration=duration,
+                aspect_ratio=aspect_ratio,
+                negative_prompt=negative_prompt,
+                keyframes=keyframes,
+            )
         # Ark API-Key Seedance path must not fall through to doubao/ark-seedance.
         if normalized == "ark":
             return await self._handle_ark_generation(
@@ -6241,6 +6347,7 @@ class MediaGenerationService:
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
             "ddimatuo": {"base_url": "https://api.aiyrx.xyz", "model": "SD_2.0"},
             "dubai": {"base_url": "https://dubai3000.xyz", "model": "sd-2-fast"},
+            "globalaiopc": {"base_url": "https://zcbservice.aizfw.cn/kyyReactApiServer", "model": "sd_2.0_discount"},
         }
 
         rows = self._system_setting_query(session, category=category).order_by(SystemAPISetting.id.asc()).all()
@@ -6651,6 +6758,18 @@ class MediaGenerationService:
                     )
                 if effective_provider == "dubai":
                     return await self._handle_dubai_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        last_frame_url=effective_last_frame_url,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                        keyframes=effective_keyframes,
+                    )
+                if effective_provider == "globalaiopc":
+                    return await self._handle_globalaiopc_generation(
                         "video",
                         prompt,
                         active_config,
@@ -7254,6 +7373,7 @@ class MediaGenerationService:
             "shishikeji": {"base_url": "https://api.shishikeji.com", "model": "xinghe-2.0"},
             "ddimatuo": {"base_url": "https://api.aiyrx.xyz", "model": "SD_2.0"},
             "dubai": {"base_url": "https://dubai3000.xyz", "model": "sd-2-fast"},
+            "globalaiopc": {"base_url": "https://zcbservice.aizfw.cn/kyyReactApiServer", "model": "sd_2.0_discount"},
         }
 
         try:
@@ -12720,6 +12840,9 @@ class MediaGenerationService:
         }
 
     DDIMATUO_DEFAULT_API_ROOT = "https://api.aiyrx.xyz"
+    GLOBALAIOPC_DEFAULT_API_ROOT = "https://zcbservice.aizfw.cn/kyyReactApiServer"
+    GLOBALAIOPC_ASSET_ACTIVE_STATUSES = {"ACTIVE", "SUCCESS", "SUCCEEDED", "READY", "OK"}
+    GLOBALAIOPC_ASSET_FAILED_STATUSES = {"FAILED", "FAIL", "ERROR", "REJECTED", "EXPIRED", "DELETED"}
     DDIMATUO_WEBHOOK_EVENT_TYPES = frozenset({"video.completed", "video.failed", "video.cancelled"})
     DDIMATUO_TERMINAL_STATUSES = frozenset({
         "completed", "success", "succeeded", "done", "finished",
@@ -14896,6 +15019,712 @@ class MediaGenerationService:
                 result["url"] = content_url
             result["metadata"] = meta
         return result
+
+    def _globalaiopc_api_root(self, base_url: Any = None, endpoint: Any = None) -> str:
+        """Host root for GlobalAiOpc: strips model-center / seedance2 asset suffixes."""
+        candidates = [str(endpoint or "").strip(), str(base_url or "").strip()]
+        suffixes = (
+            "/v2/model-center/tasks",
+            "/v2/model-center",
+            "/asset/seedance2/assetUpload",
+            "/asset/seedance2/assetDetail",
+            "/asset/seedance2",
+            "/kyyVideo2/asset/upload",
+            "/kyyVideo2/asset",
+        )
+        for raw in candidates:
+            if not raw:
+                continue
+            text = raw.rstrip("/")
+            if text.startswith("/"):
+                continue
+            lower = text.lower()
+            for suffix in suffixes:
+                suffix_l = suffix.lower()
+                if lower.endswith(suffix_l):
+                    text = text[: -len(suffix)].rstrip("/")
+                    lower = text.lower()
+                    break
+            if text.lower().startswith(("http://", "https://")):
+                return text
+        return self.GLOBALAIOPC_DEFAULT_API_ROOT
+
+    def _globalaiopc_unwrap_payload(self, data: Any) -> Dict[str, Any]:
+        if not isinstance(data, dict):
+            return {}
+        inner = data.get("data")
+        if isinstance(inner, dict) and (
+            inner.get("assetId")
+            or inner.get("asset_id")
+            or inner.get("status")
+            or inner.get("id")
+            or inner.get("video_url")
+            or inner.get("result_url")
+        ):
+            return inner
+        return data
+
+    def _globalaiopc_extract_asset_id(self, data: Any) -> str:
+        payload = self._globalaiopc_unwrap_payload(data)
+        for key in ("assetId", "asset_id", "id"):
+            val = str(payload.get(key) or "").strip()
+            if val:
+                return val
+        asset = payload.get("asset")
+        if isinstance(asset, dict):
+            for key in ("assetId", "asset_id", "id"):
+                val = str(asset.get(key) or "").strip()
+                if val:
+                    return val
+        return ""
+
+    def _globalaiopc_normalize_asset_status(self, value: Any) -> str:
+        return str(value or "").strip().upper().replace("-", "_")
+
+    def _globalaiopc_is_asset_ref(self, value: Any) -> bool:
+        text = str(value or "").strip()
+        lower = text.lower()
+        return lower.startswith("assetid://") or lower.startswith("asset://")
+
+    def _globalaiopc_to_asset_uri(self, asset_id: Any) -> str:
+        raw = str(asset_id or "").strip()
+        if not raw:
+            return ""
+        if self._globalaiopc_is_asset_ref(raw):
+            if raw.lower().startswith("asset://") and not raw.lower().startswith("assetid://"):
+                return f"assetId://{raw.split('://', 1)[-1].strip()}"
+            if raw.lower().startswith("assetid://"):
+                return f"assetId://{raw.split('://', 1)[-1].strip()}"
+            return raw
+        return f"assetId://{raw}"
+
+    def _globalaiopc_guess_asset_type(self, value: Any, *, fallback: str = "Image") -> str:
+        text = str(value or "").strip().lower()
+        if self._looks_like_video_media_ref(text):
+            return "Video"
+        if text.startswith("data:audio/") or any(
+            token in text for token in (".mp3", ".wav", ".m4a", ".aac", "/audio/", "audio/")
+        ):
+            return "Audio"
+        return str(fallback or "Image").strip().capitalize() or "Image"
+
+    def _globalaiopc_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        api_key: str,
+        json_body: Optional[Dict[str, Any]] = None,
+        timeout: int = 60,
+    ):
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+        }
+        if json_body is not None:
+            headers["Content-Type"] = "application/json"
+
+        def _do(use_proxy: bool = True):
+            kwargs = {"headers": headers, "timeout": timeout, "verify": False}
+            if json_body is not None:
+                kwargs["json"] = json_body
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.request(str(method or "GET").upper(), url, **kwargs)
+
+        try:
+            return _do(True)
+        except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+            return _do(False)
+
+    def _globalaiopc_asset_error(self, payload: Any, resp: Any = None) -> str:
+        data = payload if isinstance(payload, dict) else {}
+        unwrapped = self._globalaiopc_unwrap_payload(data)
+        err = (
+            unwrapped.get("errorMessage")
+            or unwrapped.get("error_message")
+            or unwrapped.get("error")
+            or unwrapped.get("msg")
+            or unwrapped.get("message")
+            or data.get("errorMessage")
+            or data.get("msg")
+            or data.get("message")
+            or (resp.text if resp is not None else "")
+            or "asset_upload_failed"
+        )
+        return str(err).strip() or "asset_upload_failed"
+
+    def _globalaiopc_upload_asset(
+        self,
+        *,
+        upload_url: str,
+        api_key: str,
+        asset_type: str,
+        public_url: str,
+        name: str,
+    ) -> Tuple[Optional[str], Dict[str, Any], str]:
+        body = {
+            "assetType": str(asset_type or "Image").strip() or "Image",
+            "url": str(public_url or "").strip(),
+            "name": str(name or "asset").strip()[:50] or "asset",
+        }
+        try:
+            resp = self._globalaiopc_request("POST", upload_url, api_key=api_key, json_body=body, timeout=90)
+        except Exception as exc:
+            return None, {}, str(exc)
+        payload: Dict[str, Any] = {}
+        try:
+            parsed = resp.json() if resp is not None and resp.content else {}
+            payload = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            payload = {}
+        unwrapped = self._globalaiopc_unwrap_payload(payload)
+        asset_id = self._globalaiopc_extract_asset_id(payload)
+        http_status = getattr(resp, "status_code", None) if resp is not None else None
+        if http_status in {200, 201} and asset_id:
+            return asset_id, unwrapped or payload, ""
+        err = self._globalaiopc_asset_error(payload, resp)
+        if http_status:
+            err = f"HTTP {http_status}: {err}" if err else f"HTTP {http_status}"
+        return None, unwrapped or payload, err
+
+    def _globalaiopc_query_asset(
+        self,
+        *,
+        detail_urls: List[str],
+        api_key: str,
+    ) -> Tuple[Dict[str, Any], str]:
+        last_err = "asset_detail_failed"
+        for url in detail_urls:
+            target = str(url or "").strip()
+            if not target:
+                continue
+            try:
+                resp = self._globalaiopc_request("GET", target, api_key=api_key, timeout=30)
+            except Exception as exc:
+                last_err = str(exc)
+                continue
+            http_status = getattr(resp, "status_code", None) if resp is not None else None
+            if http_status not in {200, 201}:
+                last_err = f"HTTP {http_status}"
+                continue
+            try:
+                parsed = resp.json() if resp is not None and resp.content else {}
+            except Exception:
+                last_err = "asset_detail_invalid_json"
+                continue
+            payload = parsed if isinstance(parsed, dict) else {}
+            unwrapped = self._globalaiopc_unwrap_payload(payload)
+            if unwrapped:
+                return unwrapped, ""
+        return {}, last_err
+
+    async def _globalaiopc_wait_asset_active(
+        self,
+        *,
+        asset_id: str,
+        api_key: str,
+        detail_urls: List[str],
+        initial_payload: Optional[Dict[str, Any]] = None,
+        poll_timeout_seconds: int = 180,
+        poll_interval_seconds: int = 3,
+    ) -> Tuple[Optional[str], Dict[str, Any], str]:
+        status = self._globalaiopc_normalize_asset_status(
+            (initial_payload or {}).get("status")
+        )
+        payload = dict(initial_payload or {})
+        if status in self.GLOBALAIOPC_ASSET_ACTIVE_STATUSES:
+            return asset_id, payload, ""
+        if status in self.GLOBALAIOPC_ASSET_FAILED_STATUSES:
+            return None, payload, self._globalaiopc_asset_error(payload) or f"asset_status={status}"
+
+        deadline = time.time() + max(15, int(poll_timeout_seconds))
+        interval = max(2, min(10, int(poll_interval_seconds)))
+        while time.time() < deadline:
+            await asyncio.sleep(interval)
+            payload, err = await asyncio.to_thread(
+                self._globalaiopc_query_asset,
+                detail_urls=detail_urls,
+                api_key=api_key,
+            )
+            if not payload:
+                last_err = err or "asset_detail_failed"
+                continue
+            status = self._globalaiopc_normalize_asset_status(payload.get("status"))
+            if status in self.GLOBALAIOPC_ASSET_ACTIVE_STATUSES:
+                return asset_id, payload, ""
+            if status in self.GLOBALAIOPC_ASSET_FAILED_STATUSES:
+                return None, payload, self._globalaiopc_asset_error(payload) or f"asset_status={status}"
+        return None, payload, f"asset_review_timeout status={status or 'unknown'}"
+
+    async def _globalaiopc_ensure_public_url(self, raw: Any, *, kind: str, fallback_name: str) -> Tuple[str, str]:
+        text = str(raw or "").strip()
+        if not text:
+            return "", "empty_ref"
+        if self._globalaiopc_is_asset_ref(text):
+            return self._globalaiopc_to_asset_uri(text), ""
+        resolved = ""
+        try:
+            resolved = str(
+                await self._resolve_ref_for_api_async(
+                    text,
+                    force_data_uri_for_local=True,
+                    prefer_public_upload_url=True,
+                )
+                or ""
+            ).strip()
+        except Exception:
+            resolved = ""
+        if self._globalaiopc_is_asset_ref(resolved):
+            return self._globalaiopc_to_asset_uri(resolved), ""
+        if self._is_public_http_url(resolved) and not resolved.lower().startswith("data:"):
+            return resolved, ""
+        if self._is_public_http_url(text) and not text.lower().startswith("data:"):
+            return text, ""
+        loaded = self._ddimatuo_load_asset_file(resolved or text, kind=kind, fallback_name=fallback_name)
+        if not loaded:
+            return "", "public_url_required"
+        filename, binary, mime = loaded
+        try:
+            uploaded = oss_storage_service.upload_bytes(
+                binary,
+                user_id=0,
+                filename=filename or f"{fallback_name}.bin",
+                content_type=mime,
+                category="reference",
+            )
+        except Exception as exc:
+            return "", str(exc)
+        public_url = ""
+        if isinstance(uploaded, dict):
+            public_url = str(
+                uploaded.get("url")
+                or uploaded.get("public_url")
+                or uploaded.get("signed_url")
+                or ""
+            ).strip()
+        if self._is_public_http_url(public_url):
+            return public_url, ""
+        return "", "public_url_required"
+
+    async def _globalaiopc_review_media(
+        self,
+        raw: Any,
+        *,
+        kind: str,
+        name: str,
+        api_key: str,
+        upload_url: str,
+        detail_url_builder,
+        poll_timeout_seconds: int,
+        poll_interval_seconds: int,
+    ) -> Tuple[str, Dict[str, Any], str]:
+        if self._globalaiopc_is_asset_ref(raw):
+            return self._globalaiopc_to_asset_uri(raw), {}, ""
+        public_url, resolve_err = await self._globalaiopc_ensure_public_url(
+            raw,
+            kind=kind,
+            fallback_name=name,
+        )
+        if not public_url:
+            return "", {}, resolve_err or "public_url_required"
+        if self._globalaiopc_is_asset_ref(public_url):
+            return public_url, {}, ""
+        asset_type = self._globalaiopc_guess_asset_type(public_url, fallback=kind.capitalize())
+        asset_id, upload_raw, upload_err = await asyncio.to_thread(
+            self._globalaiopc_upload_asset,
+            upload_url=upload_url,
+            api_key=api_key,
+            asset_type=asset_type,
+            public_url=public_url,
+            name=name,
+        )
+        if not asset_id:
+            return "", upload_raw, upload_err or "asset_upload_failed"
+        ready_id, detail_raw, wait_err = await self._globalaiopc_wait_asset_active(
+            asset_id=asset_id,
+            api_key=api_key,
+            detail_urls=detail_url_builder(asset_id),
+            initial_payload=upload_raw,
+            poll_timeout_seconds=poll_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+        if not ready_id:
+            return "", detail_raw or upload_raw, wait_err or "asset_review_failed"
+        return self._globalaiopc_to_asset_uri(ready_id), detail_raw or upload_raw, ""
+
+    async def _handle_globalaiopc_generation(
+        self,
+        gen_type,
+        prompt,
+        config,
+        ref_image=None,
+        last_frame_url=None,
+        duration=5,
+        aspect_ratio=None,
+        negative_prompt: Optional[str] = None,
+        keyframes: Optional[List[str]] = None,
+    ):
+        """GlobalAiOpc Seedance 2.0: review assets, then POST /v2/model-center/tasks and poll.
+
+        Request body is standard Seedance 2.0 fields. Media URLs must be assetId:// after
+        POST /asset/seedance2/assetUpload reaches status=ACTIVE.
+        """
+        if str(gen_type or "").strip().lower() != "video":
+            return {"error": "GlobalAiOpc currently supports video generation only", "submit_failed": True}
+
+        api_key = str(config.get("api_key") or config.get("clientApiKey") or "").strip()
+        if not api_key:
+            return {"error": "No GlobalAiOpc API Key", "submit_failed": True}
+
+        tool_conf = config.get("config", {}) or {}
+        if tool_conf.get("_pure_callback_mode"):
+            logger.info("GlobalAiOpc ignoring pure_callback_mode | reason=poll_only_provider")
+
+        root_url = self._globalaiopc_api_root(
+            config.get("base_url") or tool_conf.get("base_url") or self.GLOBALAIOPC_DEFAULT_API_ROOT,
+            tool_conf.get("endpoint") or config.get("endpoint"),
+        )
+        submit_url = str(tool_conf.get("endpoint") or f"{root_url}/v2/model-center/tasks").strip().rstrip("/")
+        if submit_url.startswith("/"):
+            submit_url = f"{root_url}{submit_url}"
+        if "/v2/model-center/tasks" not in submit_url.lower():
+            submit_url = f"{root_url}/v2/model-center/tasks"
+        upload_url = str(
+            tool_conf.get("asset_upload_endpoint")
+            or f"{root_url}/asset/seedance2/assetUpload"
+        ).strip()
+        if upload_url.startswith("/"):
+            upload_url = f"{root_url}{upload_url}"
+
+        def _asset_detail_urls(asset_id: str) -> List[str]:
+            aid = str(asset_id or "").strip()
+            configured = str(tool_conf.get("asset_detail_endpoint") or "").strip()
+            urls: List[str] = []
+            if configured:
+                if configured.startswith("/"):
+                    configured = f"{root_url}{configured}"
+                if "{asset" in configured.lower() or "{id}" in configured.lower():
+                    urls.append(
+                        configured.replace("{assetId}", aid)
+                        .replace("{asset_id}", aid)
+                        .replace("{id}", aid)
+                    )
+                else:
+                    sep = "&" if "?" in configured else "?"
+                    urls.append(f"{configured}{sep}assetId={urllib.parse.quote(aid)}")
+            urls.append(f"{root_url}/asset/seedance2/assetDetail?assetId={urllib.parse.quote(aid)}")
+            urls.append(f"{root_url}/asset/seedance2/{urllib.parse.quote(aid)}")
+            # Older GlobalAiOpc Seedance2 library (kyyVideo2) as last resort.
+            urls.append(f"{root_url}/kyyVideo2/asset/{urllib.parse.quote(aid)}")
+            seen: Set[str] = set()
+            out: List[str] = []
+            for item in urls:
+                if item and item not in seen:
+                    seen.add(item)
+                    out.append(item)
+            return out
+
+        model = str(
+            config.get("model")
+            or tool_conf.get("model")
+            or config.get("base_model")
+            or tool_conf.get("base_model")
+            or "sd_2.0_discount"
+        ).strip() or "sd_2.0_discount"
+        if model.lower() in {"seedance-2", "seedance_2", "seedance2", "doubao-seedance-2-0-260128"}:
+            model = "sd_2.0_discount"
+
+        prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+        prompt_text = str(prompt_text or "").strip()
+        if not prompt_text:
+            return {"error": "GlobalAiOpc prompt is required", "submit_failed": True}
+
+        allowed_duration_values = self._normalize_duration_enum_values(
+            tool_conf.get("durations_seconds")
+            or tool_conf.get("duration_values")
+            or tool_conf.get("allowed_durations")
+            or list(range(4, 16))
+        ) or list(range(4, 16))
+        allowed_duration_values = [int(v) for v in allowed_duration_values if 4 <= int(v) <= 15] or list(range(4, 16))
+        try:
+            duration_in = int(
+                float(
+                    duration
+                    if duration is not None
+                    else (tool_conf.get("duration") if tool_conf.get("duration") is not None else 5)
+                )
+            )
+        except Exception:
+            duration_in = 5
+        if duration_in <= 0:
+            duration_in = 5
+        mapped_duration = self._map_duration_nearest(
+            duration_in, allowed_duration_values, prefer_higher_on_tie=False
+        )
+        duration_in = int(mapped_duration if mapped_duration is not None else max(4, min(15, duration_in)))
+        duration_in = max(4, min(15, duration_in))
+
+        allowed_ratios = self._normalize_str_list(
+            tool_conf.get("ratios")
+            or tool_conf.get("allowed_ratios")
+            or tool_conf.get("aspect_ratios")
+            or ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"]
+        ) or ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"]
+        normalized_ratio = self._normalize_aspect_ratio_value(
+            aspect_ratio or tool_conf.get("aspect_ratio") or tool_conf.get("ratio")
+        ) or "16:9"
+        mapped_ratio = self._map_aspect_ratio_to_allowed(normalized_ratio, allowed_ratios)
+        normalized_ratio = str(mapped_ratio or normalized_ratio or "16:9").strip() or "16:9"
+
+        def _normalize_resolution(value: Any) -> Optional[str]:
+            text = str(value or "").strip().lower().replace(" ", "")
+            if text in {"480", "480p", "sd", "draft", "low"}:
+                return "480p"
+            if text in {"720", "720p", "hd"}:
+                return "720p"
+            if text in {"1080", "1080p", "fhd", "fullhd", "high"}:
+                return "1080p"
+            return None
+
+        resolution = (
+            _normalize_resolution(tool_conf.get("resolution"))
+            or _normalize_resolution(tool_conf.get("video_resolution"))
+            or _normalize_resolution(tool_conf.get("quality"))
+            or ("480p" if self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft")) else "720p")
+        )
+
+        generate_audio = (
+            bool(self._normalize_bool_value(tool_conf.get("generate_audio")))
+            if tool_conf.get("generate_audio") is not None
+            else True
+        )
+        watermark = bool(self._normalize_bool_value(tool_conf.get("watermark"), default=False))
+        try:
+            seed = int(tool_conf.get("seed")) if tool_conf.get("seed") is not None else -1
+        except Exception:
+            seed = -1
+
+        def _first_scalar(raw: Any) -> str:
+            if isinstance(raw, list):
+                return str(raw[0] or "").strip() if raw else ""
+            return str(raw or "").strip()
+
+        explicit_first = _first_scalar(tool_conf.get("first_image") or config.get("first_image"))
+        explicit_last = _first_scalar(
+            tool_conf.get("last_image") or last_frame_url or config.get("last_image")
+        )
+        image_refs = self._collect_video_reference_image_urls(
+            ref_image,
+            tool_conf,
+            extra_sources=config,
+            include_last_frame=False,
+            last_frame_url=None,
+            limit=9,
+        )
+        if isinstance(keyframes, list) and keyframes:
+            for item in keyframes:
+                text = str(item or "").strip()
+                if text and text not in image_refs:
+                    image_refs.append(text)
+        if explicit_first and explicit_first not in image_refs:
+            image_refs = [explicit_first] + [item for item in image_refs if item != explicit_first]
+        video_refs = self._collect_video_reference_video_urls(tool_conf, extra_sources=config, limit=3)
+        audio_raw = (
+            tool_conf.get("reference_audio_urls")
+            or tool_conf.get("reference_audios")
+            or tool_conf.get("referenceAudios")
+            or config.get("reference_audio_urls")
+            or []
+        )
+        audio_refs: List[str] = []
+        if isinstance(audio_raw, list):
+            audio_refs = [str(item).strip() for item in audio_raw if str(item or "").strip()][:3]
+        elif str(audio_raw or "").strip():
+            audio_refs = [str(audio_raw).strip()]
+
+        raw_ref_mode = str(
+            tool_conf.get("ref_mode")
+            or tool_conf.get("video_ref_mode")
+            or tool_conf.get("mode")
+            or ""
+        ).strip().lower().replace("-", "_").replace(" ", "_")
+        if raw_ref_mode in {"refs_video", "entity_refs", "reference", "omni_reference", "omni"}:
+            ref_mode = "entity_refs"
+        elif raw_ref_mode in {"start_end", "first_last", "first_last_frame", "first_and_last", "flf"}:
+            ref_mode = "start_end"
+        elif raw_ref_mode in {"end", "last", "last_frame"}:
+            ref_mode = "end"
+        elif raw_ref_mode in {"start", "first", "first_frame"}:
+            ref_mode = "start"
+        elif raw_ref_mode in {"t2v", "text", "text_to_video"}:
+            ref_mode = "t2v"
+        else:
+            ref_mode = ""
+
+        if not ref_mode:
+            if explicit_last and (image_refs or explicit_first):
+                ref_mode = "start_end"
+            elif video_refs or audio_refs or len(image_refs) > 1:
+                ref_mode = "entity_refs"
+            elif image_refs or explicit_first:
+                ref_mode = "start"
+            else:
+                ref_mode = "t2v"
+
+        first_url = explicit_first or (image_refs[0] if image_refs else "")
+        last_url = explicit_last
+        if ref_mode == "start_end" and not last_url and len(image_refs) >= 2:
+            last_url = image_refs[1]
+        if ref_mode == "end" and not last_url and first_url:
+            last_url = first_url
+            first_url = ""
+
+        if ref_mode in {"start", "start_end", "end"}:
+            video_refs, audio_refs = [], []
+            if ref_mode == "start":
+                last_url = ""
+                image_refs = [first_url] if first_url else []
+            elif ref_mode == "end":
+                image_refs = []
+            else:
+                image_refs = [first_url] if first_url else []
+        elif ref_mode == "entity_refs":
+            last_url = ""
+            first_url = ""
+            image_refs = image_refs[:9]
+            video_refs = video_refs[:3]
+            audio_refs = audio_refs[:3]
+        else:
+            first_url = ""
+            last_url = ""
+            image_refs, video_refs, audio_refs = [], [], []
+
+        if audio_refs and not image_refs and not video_refs:
+            return {
+                "error": "Seedance 2.0 cannot accept audio-only input; include at least one reference image or video",
+                "submit_failed": True,
+            }
+        if ref_mode == "start_end" and (not first_url or not last_url):
+            return {
+                "error": "Seedance 2.0 first/last-frame mode requires both first_image and last_image",
+                "submit_failed": True,
+            }
+
+        asset_poll_timeout = 180
+        asset_poll_interval = 3
+        try:
+            if tool_conf.get("asset_poll_timeout_seconds") is not None:
+                asset_poll_timeout = min(300, max(30, int(tool_conf.get("asset_poll_timeout_seconds"))))
+        except Exception:
+            asset_poll_timeout = 180
+        try:
+            if tool_conf.get("asset_poll_interval_seconds") is not None:
+                asset_poll_interval = max(2, min(10, int(tool_conf.get("asset_poll_interval_seconds"))))
+        except Exception:
+            asset_poll_interval = 3
+
+        reviewed_images: List[str] = []
+        reviewed_videos: List[str] = []
+        reviewed_audios: List[str] = []
+        reviewed_first = ""
+        reviewed_last = ""
+
+        async def _review(raw: str, *, kind: str, name: str) -> str:
+            uri, _raw, err = await self._globalaiopc_review_media(
+                raw,
+                kind=kind,
+                name=name,
+                api_key=api_key,
+                upload_url=upload_url,
+                detail_url_builder=_asset_detail_urls,
+                poll_timeout_seconds=asset_poll_timeout,
+                poll_interval_seconds=asset_poll_interval,
+            )
+            if not uri:
+                raise RuntimeError(err or "asset_review_failed")
+            return uri
+
+        try:
+            if ref_mode in {"start", "start_end"} and first_url:
+                reviewed_first = await _review(first_url, kind="image", name="首帧")
+            if ref_mode in {"start_end", "end"} and last_url:
+                reviewed_last = await _review(last_url, kind="image", name="尾帧")
+            if ref_mode == "entity_refs":
+                for idx, item in enumerate(image_refs, start=1):
+                    reviewed_images.append(await _review(item, kind="image", name=f"参考图{idx}"))
+                for idx, item in enumerate(video_refs, start=1):
+                    reviewed_videos.append(await _review(item, kind="video", name=f"参考视频{idx}"))
+                for idx, item in enumerate(audio_refs, start=1):
+                    reviewed_audios.append(await _review(item, kind="audio", name=f"参考音频{idx}"))
+        except RuntimeError as exc:
+            return {
+                "error": f"GlobalAiOpc asset review failed: {exc}",
+                "submit_failed": True,
+            }
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt_text,
+            "duration": int(duration_in),
+            "aspect_ratio": normalized_ratio,
+            "resolution": resolution,
+            "seed": seed,
+            "generate_audio": generate_audio,
+            "watermark": watermark,
+        }
+        if reviewed_images:
+            payload["reference_images"] = list(reviewed_images)
+        if reviewed_videos:
+            payload["reference_videos"] = list(reviewed_videos)
+        if reviewed_audios:
+            payload["reference_audios"] = list(reviewed_audios)
+        if reviewed_first:
+            payload["first_image"] = reviewed_first
+        if reviewed_last:
+            payload["last_image"] = reviewed_last
+        tools = tool_conf.get("tools")
+        if isinstance(tools, list):
+            payload["tools"] = tools
+
+        poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        poll_interval_seconds = 6
+        try:
+            if tool_conf.get("poll_timeout_seconds") is not None:
+                poll_timeout_seconds = min(1200, max(60, int(tool_conf.get("poll_timeout_seconds"))))
+        except Exception:
+            poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        try:
+            if tool_conf.get("poll_interval_seconds") is not None:
+                poll_interval_seconds = max(5, min(10, int(tool_conf.get("poll_interval_seconds"))))
+        except Exception:
+            poll_interval_seconds = 6
+
+        base_metadata = {
+            "provider": "globalaiopc",
+            "model": model,
+            "prompt": prompt_text,
+            "submit_url": submit_url,
+            "query_endpoint": submit_url,
+            "poll_only": True,
+            "duration": int(duration_in),
+            "aspect_ratio": normalized_ratio,
+            "resolution": resolution,
+            "generate_audio": generate_audio,
+            "ref_mode": ref_mode,
+        }
+        return await self._submit_and_poll_video(
+            submit_url,
+            payload,
+            api_key,
+            "globalaiopc_video",
+            extra_metadata=base_metadata,
+            poll_timeout_seconds=poll_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            pure_callback_mode=False,
+            callback_enabled=False,
+            provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
+        )
 
     async def _handle_aiclub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "aiclub")
@@ -17235,7 +18064,12 @@ class MediaGenerationService:
                             video_url = data_content.get("video_url") or data_content.get("url")
                         # Veo-style: url at top level of poll response
                         if not video_url:
-                            video_url = p_data.get("video_url") or p_data.get("url")
+                            video_url = (
+                                p_data.get("video_url")
+                                or p_data.get("url")
+                                or p_data.get("result_url")
+                                or p_data.get("resultUrl")
+                            )
                         # Veo / OpenAI-compatible async API: separate /content endpoint.
                         # JSON body may contain a URL; binary video (e.g. Dubai) uses the
                         # content URL itself as the authenticated download target.
@@ -17330,9 +18164,11 @@ class MediaGenerationService:
                         # ContentGenerationTask scalar fields used by billing / continuity.
                         for src_key, dest_key in (
                             ("duration", "duration"),
+                            ("actualDuration", "actual_duration"),
                             ("ratio", "aspect_ratio"),
                             ("resolution", "resolution"),
                             ("generate_audio", "generate_audio"),
+                            ("amount", "provider_amount"),
                         ):
                             if p_data.get(src_key) not in (None, ""):
                                 metadata[dest_key] = p_data.get(src_key)
@@ -21625,6 +22461,8 @@ class MediaGenerationService:
         raw = str(url_or_path or "").strip()
         if not raw:
             return None
+        if raw.lower().startswith("assetid://"):
+            return raw
         if raw.startswith("asset://"):
             return None
         if raw.startswith("data:"):

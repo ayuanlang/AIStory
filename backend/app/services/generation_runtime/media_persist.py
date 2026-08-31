@@ -930,6 +930,8 @@ _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
     # Dubai / 星耀 /content downloads require the same API Key and expire.
     re.compile(r"(^|.+\.)dubai3000\.xyz$", re.IGNORECASE),
     re.compile(r"^64-81-112-180\.sslip\.io$", re.IGNORECASE),
+    # GlobalAiOpc result URLs expire; persist promptly.
+    re.compile(r"(^|.+\.)aizfw\.cn$", re.IGNORECASE),
 ]
 
 _EPHEMERAL_PROVIDER_MEDIA_QUERY_MARKERS = (

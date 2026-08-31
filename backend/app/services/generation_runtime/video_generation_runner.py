@@ -1358,6 +1358,7 @@ async def _run_generate_video(
                 "nukoai",
                 "shishikeji",
                 "dubai",
+                "globalaiopc",
             }:
                 video_provider_options["_pure_callback_mode"] = True
         is_kie_kling3_video = bool(

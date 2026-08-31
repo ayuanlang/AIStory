@@ -581,6 +581,8 @@ def _video_api_supports_last_frame_mode(provider: Any, model: Any) -> bool:
     # New Ark API-Key provider supports first/last-frame (mutually exclusive with refs).
     if provider_text == "ark":
         return True
+    if provider_text in {"globalaiopc", "global ai opc", "global-ai-opc"}:
+        return True
     # Other Seedance-2 suppliers default to multimodal refs unless modality
     # capability_flags.supports_last_frame is explicitly true.
     if "seedance-2" in model_text or "seedance_2" in model_text or "seedance2" in model_text:
@@ -1636,10 +1638,11 @@ def _append_video_api_ref_mapping(
     is_seedance = "seedance" in provider_l or "seedance" in model_l
     is_ddimatuo = "ddimatuo" in provider_l
     is_dubai = "dubai" in provider_l
-    # Seedance / DdiMatuo / Dubai bind @VideoN in prompt to videos[] / reference videos.
-    supports_video_ref_prompt = is_seedance or is_ddimatuo or is_dubai
+    is_globalaiopc = "globalaiopc" in provider_l or "aizfw" in provider_l
+    # Seedance / DdiMatuo / Dubai / GlobalAiOpc bind @VideoN in prompt to videos[] / reference videos.
+    supports_video_ref_prompt = is_seedance or is_ddimatuo or is_dubai or is_globalaiopc
     original_use_prev_video = bool(use_prev_video)
-    if is_seedance:
+    if is_seedance or is_globalaiopc:
         use_prev_video = True
 
     original_text = str(prompt or "").strip()

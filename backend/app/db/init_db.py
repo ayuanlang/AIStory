@@ -3187,6 +3187,74 @@ def init_system_api_settings(db):
     else:
         logger.info("System dubai video settings already initialized")
 
+    # Seed GlobalAiOpc Seedance 2.0 — asset review then poll model-center tasks.
+    globalaiopc_provider = "globalaiopc"
+    globalaiopc_base_url = "https://zcbservice.aizfw.cn/kyyReactApiServer"
+    globalaiopc_model = "sd_2.0_discount"
+    existing_gao_rows = db.query(SystemAPISetting).filter(
+        SystemAPISetting.provider == globalaiopc_provider,
+        SystemAPISetting.category == "Video",
+    ).all()
+    existing_gao_models = {
+        str(row.model or "").strip().lower()
+        for row in existing_gao_rows
+    }
+    gao_shared_api_key = ""
+    for row in existing_gao_rows:
+        if (row.api_key or "").strip():
+            gao_shared_api_key = row.api_key.strip()
+            break
+    if globalaiopc_model.lower() not in existing_gao_models:
+        from app.services.modality_utils import migrate_legacy_modality_string
+        gao_modality = migrate_legacy_modality_string("text-to-video,image-to-video")
+        if isinstance(gao_modality, dict):
+            flags = dict(gao_modality.get("capability_flags") or {})
+            flags.update({
+                "supports_first_frame": True,
+                "supports_last_frame": True,
+                "supports_reference_image": True,
+                "supports_reference_video": True,
+                "supports_reference_audio": True,
+                "supports_generate_audio": True,
+            })
+            gao_modality["capability_flags"] = flags
+        db.add(SystemAPISetting(
+            name="GlobalAiOpc Seedance 2.0 Discount",
+            category="Video",
+            provider=globalaiopc_provider,
+            api_key=gao_shared_api_key,
+            base_url=globalaiopc_base_url,
+            model=globalaiopc_model,
+            base_model="seedance-2",
+            modality=gao_modality,
+            config={
+                "provider_api_key_strategy": "random",
+                "poll_interval_seconds": 6,
+                "poll_timeout_seconds": 1200,
+                "asset_poll_interval_seconds": 3,
+                "asset_poll_timeout_seconds": 180,
+                "endpoint": f"{globalaiopc_base_url}/v2/model-center/tasks",
+                "query_endpoint": f"{globalaiopc_base_url}/v2/model-center/tasks",
+                "asset_upload_endpoint": f"{globalaiopc_base_url}/asset/seedance2/assetUpload",
+                "asset_detail_endpoint": f"{globalaiopc_base_url}/asset/seedance2/assetDetail",
+                "generate_audio": True,
+                "watermark": False,
+                "resolution": "720p",
+                "aspect_ratios": ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"],
+                "durations_seconds": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+                "notes": (
+                    "GlobalAiOpc poll-only Seedance 2.0. Upload POST /asset/seedance2/assetUpload, "
+                    "poll asset detail until ACTIVE, then POST /v2/model-center/tasks with "
+                    "assetId://{assetId}; poll GET /v2/model-center/tasks/{id}."
+                ),
+            },
+            is_active=False,
+        ))
+        db.commit()
+        logger.info("Seeded GlobalAiOpc Seedance 2.0 Discount into system_api_settings")
+    else:
+        logger.info("System globalaiopc video settings already initialized")
+
 
 def init_initial_data():
     db = SessionLocal()
