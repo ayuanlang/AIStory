@@ -131,6 +131,58 @@ def test_extract_official_trims_process_analysis_from_output():
     assert "这牌比我先当上高管" not in official
 
 
+LEDGER_BODY = """- **角色**：
+  - CHAR|林一 (Lin Yi)|#身份=审计员|#对白声线=克制短句|大纲描述摘录=工牌错位的新人|落点=EP01_SC01@Beat 1|核销
+- **道具**：
+  - PROP|工牌 (Badge)|#跨集价值=身份凭证|开场态=错位|结束态=仍握|核销
+- **环境**：
+  - ENV|星澜电梯间 (Xinglan Elevator)|主场景|#气质功能摘录=密闭轿厢|使用场=EP01_SC01|核销
+- Applied Entities 全覆盖=是
+"""
+
+
+def test_extract_official_injects_entity_position_ledger():
+    full = (
+        "[EPISODE_SCRIPT_THINKING_START]\n"
+        "## -1) 类型执行摘要\n"
+        "- **本集实体定位台账（强制）**：\n"
+        f"{LEDGER_BODY}"
+        "- **全局角色·道具特性状态表（强制）**：\n"
+        "  - CHAR特质|林一|#特性=克制\n"
+        "[EPISODE_SCRIPT_THINKING_END]\n"
+        f"[EPISODE_SCRIPT_OUTPUT_START]\n{OFFICIAL_BODY}[EPISODE_SCRIPT_OUTPUT_END]\n"
+    )
+    official = extract_official_episode_script(full)
+    assert official.startswith("# 1-工牌错位")
+    assert "## 核心重点" in official
+    ledger_at = official.index("本集实体定位台账")
+    scenes_at = official.index("## 场景列表")
+    assert ledger_at < scenes_at
+    assert "CHAR|林一 (Lin Yi)" in official
+    assert "PROP|工牌 (Badge)" in official
+    assert "ENV|星澜电梯间 (Xinglan Elevator)" in official
+    assert "类型执行摘要" not in official
+    assert "CHAR特质|林一" not in official
+    assert official.count("本集实体定位台账") == 1
+
+
+def test_extract_official_keeps_existing_ledger_without_duplicate():
+    body = (
+        "# 1-工牌错位\n"
+        "## 核心重点\n"
+        "- **卖点**：身份错位\n"
+        "## 本集实体定位台账\n"
+        "CHAR|林一 (Lin Yi)|#身份=审计员\n"
+        "## 场景列表\n"
+        "[SCENES_BLOCK_START]\nscene\n[SCENES_BLOCK_END]\n"
+    )
+    official = extract_official_episode_script(
+        "[EPISODE_SCRIPT_OUTPUT_START]\n" + body + "[EPISODE_SCRIPT_OUTPUT_END]\n"
+    )
+    assert official.count("本集实体定位台账") == 1
+    assert "CHAR|林一 (Lin Yi)" in official
+
+
 def test_heading_parse_reads_inside_output_markers():
     full = (
         "[EPISODE_SCRIPT_THINKING_START]\n摘要\n[EPISODE_SCRIPT_THINKING_END]\n"

@@ -1061,7 +1061,8 @@ const stripEpisodeScriptThinkingBlocks = (raw) => {
         .trim();
 };
 
-const PAGE_KEEP_HEADING = '核心重点|核心内容纲要|本集卖点|场景列表|场景进入|剧情一句话|结尾钩子|紧急回收';
+const PAGE_KEEP_HEADING = '核心重点|核心内容纲要|本集卖点|本集实体定位台账|场景列表|场景进入|剧情一句话|结尾钩子|紧急回收';
+const LEDGER_STOP = '全局角色|本集场景环境名清单|身份定位|核心重点|核心内容纲要|本集卖点|场景列表|剧情连贯自检|分集开局规划|写后核销|娱乐化段子|核心卖点（制作指导）|AI 视频研判';
 const PAGE_DROP_HEADING = '-?1\\)\\s*类型执行摘要|类型执行摘要|剧情连贯自检|娱乐化段子|桥段凝聚汇总|分集开局规划|写后核销总表|框架核销清单|大纲逐字分析台账|核心卖点（制作指导）|AI 视频研判';
 
 const stripLegacyEpisodeAnalysisSections = (raw) => {
@@ -1088,6 +1089,39 @@ const stripLegacyEpisodeAnalysisSections = (raw) => {
     return source.replace(/\n{3,}/g, '\n\n').trim();
 };
 
+const extractEntityPositionLedger = (raw) => {
+    const source = String(raw || '');
+    if (!source.trim() || !source.includes('本集实体定位台账')) return '';
+    const match = source.match(
+        new RegExp(
+            `^(?:#{1,6}\\s*|[-*]\\s*\\*{0,2})本集实体定位台账\\b[^\\n]*\\n([\\s\\S]*?)(?=^(?:#{1,6}\\s*|[-*]\\s*\\*{0,2})(?:${LEDGER_STOP})|\\[EPISODE_SCRIPT_|\\[SCENES_BLOCK_START\\]|\\s*$)`,
+            'im'
+        )
+    );
+    const body = String(match?.[1] || '').trim();
+    if (!body) return '';
+    return `## 本集实体定位台账\n${body}`.trim();
+};
+
+const injectEntityPositionLedger = (official, source) => {
+    const page = String(official || '').trim();
+    const ledger = extractEntityPositionLedger(source);
+    if (!page) return ledger;
+    if (/本集实体定位台账/.test(page)) return page;
+    if (!ledger) return page;
+    const core = page.match(/^##\s*核心重点\b[\s\S]*?(?=^##\s+|\[SCENES_BLOCK_START\])/im);
+    if (core && typeof core.index === 'number') {
+        const end = core.index + core[0].length;
+        return `${page.slice(0, end).trim()}\n\n${ledger}\n\n${page.slice(end).trim()}`.trim();
+    }
+    const heading = page.match(/^#\s+\S+.*$/m);
+    if (heading && typeof heading.index === 'number') {
+        const end = heading.index + heading[0].length;
+        return `${page.slice(0, end)}\n\n${ledger}\n\n${page.slice(end).trim()}`.trim();
+    }
+    return `${ledger}\n\n${page}`.trim();
+};
+
 const trimEpisodeScriptForPage = (raw) => {
     let source = String(raw || '').trim();
     if (!source) return '';
@@ -1109,11 +1143,16 @@ const extractOfficialEpisodeScript = (raw) => {
     const source = String(raw || '');
     if (!source.trim()) return '';
     const marked = extractBetweenEpisodeScriptMarkers(source, 'OUTPUT');
-    if (marked) return trimEpisodeScriptForPage(stripLegacyEpisodeAnalysisSections(marked));
+    if (marked) {
+        return injectEntityPositionLedger(
+            trimEpisodeScriptForPage(stripLegacyEpisodeAnalysisSections(marked)),
+            source
+        );
+    }
     const cleaned = trimEpisodeScriptForPage(
         stripLegacyEpisodeAnalysisSections(stripEpisodeScriptThinkingBlocks(source))
     );
-    return cleaned || source.trim();
+    return injectEntityPositionLedger(cleaned, source) || cleaned || source.trim();
 };
 
 /**
@@ -3622,7 +3661,7 @@ const textHasTaggedExtractItems = (text, tag) => {
 const CHAR_EXTRACT_FIELD_KEYS = [
     '名称', '名称_en', '番位', '适用场',
     '定位', '外形', '衣着', '性情', '特定动作', '身份',
-    '标签', '标签_en', '标签字体', '标签字色',
+    '名牌', '标签', '标签_en', '标签字体', '标签字色',
     '对白声线', '评价', '形态连续', '衍生',
 ];
 
@@ -3653,6 +3692,7 @@ const EXTRACT_FIELD_LABELS = {
     性情: { zh: '性情', en: 'Temperament' },
     特定动作: { zh: '特定动作', en: 'Signature Action' },
     身份: { zh: '身份', en: 'Identity' },
+    名牌: { zh: '名牌', en: 'Nameplate' },
     标签: { zh: '标签', en: 'Label' },
     标签_en: { zh: '标签英文', en: 'Label (EN)' },
     标签字体: { zh: '标签字体', en: 'Label Font' },

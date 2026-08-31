@@ -82,7 +82,18 @@ def strip_episode_script_thinking_blocks(text: str) -> str:
 
 
 _PAGE_KEEP_HEADING = (
-    r"核心重点|核心内容纲要|本集卖点|场景列表|场景进入|剧情一句话|结尾钩子|紧急回收"
+    r"核心重点|核心内容纲要|本集卖点|本集实体定位台账|场景列表|场景进入|剧情一句话|结尾钩子|紧急回收"
+)
+_LEDGER_STOP = (
+    r"全局角色|本集场景环境名清单|身份定位|核心重点|核心内容纲要|本集卖点|"
+    r"场景列表|剧情连贯自检|分集开局规划|写后核销|娱乐化段子|"
+    r"核心卖点（制作指导）|AI 视频研判"
+)
+_LEDGER_HEADING_RE = re.compile(
+    rf"(?ms)^(?P<head>(?:#{{1,6}}\s*|[-*]\s*\*{{0,2}})本集实体定位台账\b[^\n]*)\n"
+    rf"(?P<body>[\s\S]*?)"
+    rf"(?=^(?:#{{1,6}}\s*|[-*]\s*\*{{0,2}})(?:{_LEDGER_STOP})"
+    rf"|\[EPISODE_SCRIPT_|\[SCENES_BLOCK_START\]|\Z)",
 )
 _PAGE_DROP_HEADING = (
     r"-?1\)\s*类型执行摘要|类型执行摘要|剧情连贯自检|娱乐化段子|桥段凝聚汇总|"
@@ -120,10 +131,46 @@ def _strip_legacy_analysis_sections(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", source).strip()
 
 
+def extract_entity_position_ledger(text: str) -> str:
+    """Pull 本集实体定位台账 from THINKING or unmarked drafts."""
+    source = str(text or "")
+    if not source.strip() or "本集实体定位台账" not in source:
+        return ""
+    match = _LEDGER_HEADING_RE.search(source)
+    if not match:
+        return ""
+    body = str(match.group("body") or "").strip()
+    if not body:
+        return ""
+    return f"## 本集实体定位台账\n{body}".strip()
+
+
+def inject_entity_position_ledger(official: str, source: str) -> str:
+    """Keep the ledger on the script page; insert after 核心重点 when missing."""
+    page = str(official or "").strip()
+    if not page:
+        return extract_entity_position_ledger(source)
+    if re.search(r"本集实体定位台账", page):
+        return page
+    ledger = extract_entity_position_ledger(source)
+    if not ledger:
+        return page
+    core = re.search(
+        r"(?ms)^##\s*核心重点\b.*?(?=^##\s+|\[SCENES_BLOCK_START\])",
+        page,
+    )
+    if core:
+        return f"{page[:core.end()].rstrip()}\n\n{ledger}\n\n{page[core.end():].lstrip()}".strip()
+    heading = re.search(r"(?m)^#\s+\S+.*$", page)
+    if heading:
+        return f"{page[:heading.end()]}\n\n{ledger}\n\n{page[heading.end():].lstrip()}".strip()
+    return f"{ledger}\n\n{page}".strip()
+
+
 def trim_episode_script_for_page(text: str) -> str:
     """Keep only script-page payload for scene_split / 分场.
 
-    Keeps: title, 核心重点 (or legacy 纲要/卖点), scenes + beats, handoff, emergency recovery.
+    Keeps: title, 核心重点 (or legacy 纲要/卖点), 本集实体定位台账, scenes + beats, handoff, emergency recovery.
     Drops: entertainment ledger, BRIDGE / 桥段凝聚汇总, leftover process sections.
     """
     source = str(text or "").strip()
@@ -154,11 +201,13 @@ def extract_official_episode_script(text: str) -> str:
     marked = extract_episode_script_output_between_markers(source)
     if marked.get("found") and str(marked.get("content") or "").strip():
         cleaned = _strip_legacy_analysis_sections(str(marked.get("content") or ""))
-        return trim_episode_script_for_page(cleaned)
+        cleaned = trim_episode_script_for_page(cleaned)
+        return inject_entity_position_ledger(cleaned, source) or cleaned
 
     cleaned = strip_episode_script_thinking_blocks(source)
     cleaned = _strip_legacy_analysis_sections(cleaned)
     cleaned = trim_episode_script_for_page(cleaned)
+    cleaned = inject_entity_position_ledger(cleaned, source) or cleaned
     return cleaned.strip() or source.strip()
 
 

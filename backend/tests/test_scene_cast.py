@@ -83,7 +83,8 @@ def test_build_scene_entity_token_brief():
     assert "不是对白硬字幕" in brief
     assert "紧跟该人【建置】可见面整句" in brief
     assert "禁把多名牌攒到建置段末或入戏一起写" in brief
-    assert "标签仅职业/公开身份等明面信息" in brief
+    assert "标签仅剧中明确身份介绍的职业/公开身份" in brief
+    assert "禁推理" in brief
 
 
 def test_build_scene_entity_token_brief_empty():
@@ -124,7 +125,7 @@ def test_nameplate_rejects_plot_laden_identity_and_tag():
     assert "曾经富贵后落寞" not in tag_section
 
 
-def test_nameplate_keeps_public_occupation_from_identity():
+def test_nameplate_does_not_infer_tag_from_identity():
     script = """[SCENES_BLOCK_START]
 [SCENE_START:EP01_SC01]
 [SCENE_CAST_START:EP01_SC01]
@@ -139,7 +140,9 @@ def test_nameplate_keeps_public_occupation_from_identity():
 [SCENES_BLOCK_END]
 """
     brief = build_scene_entity_token_brief(script, "EP01_SC01")
-    assert "标签=江湖侠客" in brief.split("【本场角色标签】")[-1]
+    tag_section = brief.split("【本场角色标签】")[-1]
+    assert "CHAR:[@沈青]｜标签=无｜标签_en=无" in tag_section
+    assert "江湖侠客" not in tag_section
 
 
 def test_nameplate_rejects_character_positioning_tag():
@@ -198,3 +201,71 @@ def test_character_intro_tag_later_scene_and_variants():
     assert "CHAR:[@沈青]｜标签=江湖侠客｜标签_en=Jianghu Knight｜标签字体=魏碑｜标签字色=鎏金｜裸名=沈青｜裸名_en=Shen Qing｜字幕=已过" in later
     assert "CHAR:[@林岳_礼服版]｜标签=客栈掌柜｜标签_en=Innkeeper｜标签字体=魏碑｜标签字色=朱红｜裸名=林岳｜裸名_en=Lin Yue｜字幕=无" in later
     assert "CHAR:[@围观百姓]" not in later
+
+
+def test_nameplate_blocked_when_masked():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+[SCENE_CAST_START:EP01_SC01]
+【本场角色】在场=CHAR:[@沈青]｜待入画=无｜群演=无
+【本场道具】在场=无｜待入画=无
+[SCENE_CAST_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=女主｜适用场=EP01_SC01
+衣着=黑巾蒙面劲装
+标签=江湖侠客
+标签_en=Jianghu Knight
+[CHAR_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    brief = build_scene_entity_token_brief(script, "EP01_SC01")
+    tag_section = brief.split("【本场角色标签】")[-1]
+    assert "CHAR:[@沈青]" in tag_section
+    assert "字幕=无" in tag_section
+    assert "字幕=待落" not in tag_section
+    assert "蒙面/易容" in brief
+
+
+def test_nameplate_blocked_when_field_says_no():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+[SCENE_CAST_START:EP01_SC01]
+【本场角色】在场=CHAR:[@沈青]｜待入画=无｜群演=无
+【本场道具】在场=无｜待入画=无
+[SCENE_CAST_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=女主｜适用场=EP01_SC01
+衣着=青衫常服
+名牌=无
+标签=江湖侠客
+标签_en=Jianghu Knight
+[CHAR_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    brief = build_scene_entity_token_brief(script, "EP01_SC01")
+    assert "字幕=无" in brief.split("【本场角色标签】")[-1]
+    assert "字幕=待落" not in brief.split("【本场角色标签】")[-1]
+
+
+def test_nameplate_waits_for_unmask():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+[SCENE_CAST_START:EP01_SC01]
+【本场角色】在场=CHAR:[@沈青]｜待入画=无｜群演=无
+【本场道具】在场=无｜待入画=无
+[SCENE_CAST_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=女主｜适用场=EP01_SC01
+衣着=黑巾蒙面
+名牌=揭面后
+形态连续=EP01_SC01 Beat3起：蒙面→揭面
+[CHAR_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    brief = build_scene_entity_token_brief(script, "EP01_SC01")
+    tag_section = brief.split("【本场角色标签】")[-1]
+    assert "字幕=待落" in tag_section
+    assert "名牌条件=须真脸" in tag_section

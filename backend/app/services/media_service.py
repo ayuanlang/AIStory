@@ -15451,15 +15451,10 @@ class MediaGenerationService:
         model = str(
             config.get("model")
             or tool_conf.get("model")
+            or config.get("name")
+            or tool_conf.get("name")
             or "sd_2.0_discount"
         ).strip() or "sd_2.0_discount"
-        model_l = model.lower()
-        if (
-            " " in model
-            or model_l in {"seedance-2", "seedance_2", "seedance2", "doubao-seedance-2-0-260128"}
-            or model_l.startswith("globalaiopc")
-        ):
-            model = "sd_2.0_discount"
 
         prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
         prompt_text = str(prompt_text or "").strip()

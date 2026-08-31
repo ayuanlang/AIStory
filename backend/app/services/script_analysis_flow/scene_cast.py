@@ -8,7 +8,6 @@ from typing import Dict, List
 from app.core.prompt_injection import wrap_injection_section
 from app.services.script_analysis_flow.character_asset_brief import (
     CHAR_ITEM_PATTERN,
-    current_world_identity,
     extract_char_extract_blocks,
     extract_char_field,
     parse_char_extract_records,
@@ -33,6 +32,31 @@ TOKEN_NAME_PATTERN = re.compile(
 APPLICABLE_SCENE_PATTERN = re.compile(r"适用场\s*=\s*([^\n]+)", re.IGNORECASE)
 SCENE_ID_TOKEN_PATTERN = re.compile(r"EP\d{2}_SC\d{2}[A-Za-z]*", re.IGNORECASE)
 CROWD_ROLE_TOKENS = {"群演簇", "群演"}
+_TRUE_FACE_HIDDEN_TOKENS = (
+    "蒙面",
+    "易容",
+    "面具",
+    "面罩",
+    "假面",
+    "遮面",
+    "面帘",
+    "盔面",
+    "头套遮",
+    "面纱遮",
+    "不见真脸",
+    "真脸不可见",
+    "真容不可见",
+)
+_UNMASK_TOKENS = (
+    "揭面",
+    "卸易容",
+    "卸下面具",
+    "摘下面具",
+    "除去面罩",
+    "露出真容",
+    "现出真容",
+    "摘下面罩",
+)
 _NAMEPLATE_PLOT_LEAK_CN = (
     "落魄",
     "落寞",
@@ -209,13 +233,16 @@ def _subtitle_display_name_en(
     return _header_field(record_text, "名称_en") or _subtitle_display_name(name, record_text)
 
 
-def _character_tag(record_text: str) -> str:
+def _character_tag(record_text: str, base_text: str = "") -> str:
+    """Use only an explicit nameplate tag; never summarize from 身份=."""
     tag = _public_nameplate_label(extract_char_field(record_text, "标签"))
     if tag != "无":
         return tag
-    return _public_nameplate_label(
-        current_world_identity(extract_char_field(record_text, "身份"))
-    )
+    if base_text:
+        inherited = _public_nameplate_label(extract_char_field(base_text, "标签"))
+        if inherited != "无":
+            return inherited
+    return "无"
 
 
 def _character_tag_en(record_text: str, base_text: str = "") -> str:
@@ -227,6 +254,46 @@ def _character_tag_en(record_text: str, base_text: str = "") -> str:
         if inherited != "无":
             return inherited
     return "无"
+
+
+def _haystack_true_face(name: str, record_text: str) -> str:
+    parts = [
+        _clean(name),
+        extract_char_field(record_text, "衣着"),
+        extract_char_field(record_text, "外形"),
+        extract_char_field(record_text, "定位"),
+        extract_char_field(record_text, "形态连续"),
+        extract_char_field(record_text, "衍生"),
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _looks_true_face_hidden(name: str, record_text: str) -> bool:
+    haystack = _haystack_true_face(name, record_text)
+    return any(token in haystack for token in _TRUE_FACE_HIDDEN_TOKENS)
+
+
+def _later_unmasks(record_text: str) -> bool:
+    haystack = " ".join(
+        [
+            extract_char_field(record_text, "形态连续"),
+            extract_char_field(record_text, "衍生"),
+            extract_char_field(record_text, "名牌"),
+        ]
+    )
+    return any(token in haystack for token in _UNMASK_TOKENS)
+
+
+def _nameplate_mode(name: str, record_text: str) -> str:
+    """可 | 无 | 揭面后. Masked/disguised true-face-hidden forms have no nameplate."""
+    explicit = extract_char_field(record_text, "名牌")
+    if explicit in {"无", "否", "禁"}:
+        return "无"
+    if explicit in {"揭面后", "须真脸"}:
+        return "揭面后"
+    if _looks_true_face_hidden(name, record_text):
+        return "揭面后" if _later_unmasks(record_text) else "无"
+    return "可"
 
 
 def _character_label_style(record_text: str, field_name: str, base_text: str = "") -> str:
@@ -294,7 +361,9 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         "此为片内图形名牌（物理文字），不是对白硬字幕；禁写成画幅底部白字黑边。"
         "剧本或提取块已写的字样/字体/字色原样服从，禁改写。"
         "中文项目用 裸名+标签；英文项目用 裸名_en+标签_en；禁中英并列、禁用错语种上屏。"
-        "标签仅职业/公开身份等明面信息，禁剧情发展与角色定位；为无则只打裸名，禁臆造。"
+        "标签仅剧中明确身份介绍的职业/公开身份，禁推理，禁从身份、称呼、服制或叙述总结；为无则只打裸名，禁臆造。"
+        "蒙面/易容/面具/面罩等见不到真脸：字幕必须=无，连裸名也不打，禁为蒙面态补名牌。"
+        "名牌条件=须真脸 则等该人真脸正面/¾可读后再挂；全场未见真脸则不写、不标缺口。"
         "字体/字色为无或待补则跟 Global_Style 补一书体+具名色。"
         "字幕=已过|无 则不写。"
     )
@@ -317,21 +386,25 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         text = rec.get("text") or ""
         voice = extract_char_field(text, "对白声线") or "无"
         voice_rows.append(f"CHAR:[@{name}]｜对白声线={voice}")
-        tag = _character_tag(text)
         base_name = extract_char_field(text, "基名") or (
             name.split("_", 1)[0] if "_" in name else ""
         )
         base_text = _record_by_name(records, base_name).get("text") or ""
+        tag = _character_tag(text, base_text)
         tag_en = _character_tag_en(text, base_text)
         font = _character_label_style(text, "标签字体", base_text)
         color = _character_label_style(text, "标签字色", base_text)
         plot_role = _header_field(text, "番位")
         display_name = _subtitle_display_name(name, text)
         display_name_en = _subtitle_display_name_en(name, text, records)
+        nameplate_mode = _nameplate_mode(name, text)
+        face_gate = ""
         if plot_role in CROWD_ROLE_TOKENS:
             subtitle = "无"
             font = "无"
             color = "无"
+        elif nameplate_mode == "无":
+            subtitle = "无"
         elif _is_outfit_variant(name, text, all_record_names):
             subtitle = "无"
         else:
@@ -342,10 +415,13 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
                 subtitle = "已过"
             else:
                 subtitle = "待落"
+            if nameplate_mode == "揭面后":
+                face_gate = "｜名牌条件=须真脸"
         tag_rows.append(
             f"CHAR:[@{name}]｜标签={tag}｜标签_en={tag_en}｜"
             f"标签字体={font}｜标签字色={color}｜"
             f"裸名={display_name}｜裸名_en={display_name_en}｜字幕={subtitle}"
+            f"{face_gate}"
         )
     if voice_rows:
         body = f"{body}\n\n【本场对白声线】\n" + "\n".join(voice_rows)
