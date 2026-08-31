@@ -73,12 +73,9 @@ STATE_CUT_NEGATIVE = (
     "four-panel grid lines, 2x2 collage seams, panel borders, quadrant labels, split-screen divider"
 )
 SPECIAL_CUT_PROMPT = (
-    "所属主环境={main}。angle_key={main}|{angle}。"
-    "以对应主环境「{main}」四向拼图参考图的{grid}为空间与实体基准。"
-    "特别表述={note}。"
-    "按该特别表述改机位俯仰或透视生成单张16:9空镜，高分辨率。"
-    "不得另造未声明实体，不得把未改实体写成新陈设。"
-    "成稿须为单张完整镜头：禁止保留四向拼图的宫格分割线、宫格边框、格标/角标、十字拼缝或任何拼图装配痕迹。"
+    FIRST_CUT_PROMPT
+    + "特别表述={note}。"
+    + "以该宫格为空间基准，按该特别表述改机位俯仰或透视；不得另造未声明实体，不得把未改实体写成新陈设。"
 )
 SPECIAL_STATE_INJECT = "特别表述={note}。按该表述改俯仰或透视；仍以同角切割图为空间基准。"
 SOURCE_FLAG = "programmatic_derived_framing"
@@ -531,7 +528,45 @@ def _is_special_kind(kind: str) -> bool:
     return text in {"特别", "special", "仰天", "屋顶", "变形"}
 
 
+def _is_special_row(item: Dict[str, Any]) -> bool:
+    name = _clean(item.get("name"))
+    main = _clean(item.get("main") or item.get("所属主环境"))
+    suffix = _state_suffix(name, main)
+    row_kind = _clean(item.get("kind") or item.get("类型") or item.get("special_kind"))
+    special_kind, _ = _parse_special_note(item.get("special_note") or item.get("特别表述"))
+    return (
+        suffix in LOOK_UP_SUFFIXES
+        or suffix == "变形"
+        or _is_special_kind(row_kind)
+        or special_kind in {"仰天", "屋顶", "变形"}
+        or _row_looks_up(item)
+    )
+
+
+def _infer_special(item: Dict[str, Any], name: str = "", main: str = "") -> Tuple[str, str]:
+    special_kind, special_note = _parse_special_note(
+        item.get("special_note") or item.get("特别表述")
+    )
+    suffix = _state_suffix(
+        name or _clean(item.get("name")),
+        main or _clean(item.get("main") or item.get("所属主环境")),
+    )
+    if special_kind:
+        return special_kind, special_note
+    if suffix in LOOK_UP_SUFFIXES:
+        return "仰天", special_note or "仰天"
+    if suffix == "变形":
+        return "变形", special_note or "变形"
+    if _is_special_kind(item.get("kind") or item.get("类型") or ""):
+        if suffix:
+            return ("仰天" if suffix in LOOK_UP_SUFFIXES else suffix), special_note or suffix
+        return "仰天", special_note or "仰天"
+    return "", special_note
+
+
 def _is_state_row(item: Dict[str, Any]) -> bool:
+    if _is_special_row(item):
+        return False
     kind = _clean(item.get("kind") or item.get("类型")).lower()
     if _is_special_kind(kind):
         return False
@@ -639,7 +674,8 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
     main = main or _main_from_name(name)
     angle = _normalize_angle(item.get("angle") or item.get("view_angle_from_main"), name)
     grid = GRID_BY_ANGLE.get(angle, "左上0度格")
-    is_state = _is_state_row({**item, "name": name, "main": main, "angle": angle})
+    resolved = {**raw_item, "name": name, "main": main, "angle": angle}
+    is_state = _is_state_row(resolved)
     parent = _clean(item.get("parent") or item.get("同角切割父"))
     if parent in {"无", "n/a", "none", "-", ""}:
         parent = _same_angle_parent(name, main, angle) if is_state else ""
@@ -652,9 +688,7 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
     delta = _clean(item.get("state_delta") or item.get("状态Delta"))
     if delta.lower() in _EMPTY_FIELD_MARKERS:
         delta = ""
-    special_kind, special_note = _parse_special_note(
-        item.get("special_note") or item.get("特别表述")
-    )
+    special_kind, special_note = _infer_special(resolved, name, main)
     suffix = _state_suffix(name, main)
     name_en = f"{angle}deg {main}" + (f" {suffix}" if suffix else "")
     background = _clean(item.get("background") or item.get("背景"))
@@ -710,7 +744,7 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
         prompt = SPECIAL_CUT_PROMPT.format(main=main, angle=angle, grid=grid, note=special_note)
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
-            f"所属主环境={main}。截取宫格={grid}。触发={trigger}。特别表述={special_note}。"
+            f"所属主环境={main}。angle_key={main}|{angle}。截取宫格={grid}。触发={trigger}。特别表述={special_note}。"
         )
         deps = [f"ENV:[{main}]"]
         negative = FIRST_CUT_NEGATIVE

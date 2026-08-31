@@ -728,12 +728,37 @@ def test_special_note_injected_into_generation_prompt():
     look_up = build_derived_environment_item(by_name["0度客栈大堂_仰天"])
     assert "特别表述=仰天:满幅夜空与檐口剪影，地面仅近端截断" in look_up["generation_prompt_cn"]
     assert "按该特别表述改机位俯仰或透视" in look_up["generation_prompt_cn"]
-    assert "只切割，不要改画" not in look_up["generation_prompt_cn"]
+    assert look_up["generation_prompt_cn"].startswith("所属主环境=客栈大堂。angle_key=客栈大堂|0。")
+    assert "截取并放大其中对应的明确宫格位置（左上0度格）" in look_up["generation_prompt_cn"]
+    assert "只切割，不要改画" in look_up["generation_prompt_cn"]
     assert look_up["custom_attributes"]["derived_kind"] == "special"
     assert look_up["visual_dependencies"] == ["ENV:[客栈大堂]"]
     warped = build_derived_environment_item(by_name["180度客栈大堂_变形"])
     assert "特别表述=变形:荷兰角地平线左低右高，立柱倾斜压迫" in warped["generation_prompt_cn"]
+    assert "右下180度格" in warped["generation_prompt_cn"]
     assert "dutch angle" not in warped["negative_prompt_en"]
+
+
+def test_look_up_special_keeps_first_cut_even_when_labeled_state():
+    item = build_derived_environment_item(
+        {
+            "name": "180度豪华游艇甲板_仰天",
+            "main": "豪华游艇甲板",
+            "angle": 180,
+            "kind": "衍生的衍生",
+            "parent": "180度豪华游艇甲板",
+        }
+    )
+    prompt = item["generation_prompt_cn"]
+    assert item["name"] == "180度豪华游艇甲板_仰天"
+    assert item["custom_attributes"]["derived_kind"] == "special"
+    assert item["visual_dependencies"] == ["ENV:[豪华游艇甲板]"]
+    assert prompt.startswith("所属主环境=豪华游艇甲板。angle_key=豪华游艇甲板|180。")
+    assert "请严格要求按对应主环境「豪华游艇甲板」四向拼图参考图" in prompt
+    assert "截取并放大其中对应的明确宫格位置（右下180度格）" in prompt
+    assert "只切割，不要改画" in prompt
+    assert "已切割的同角衍生" not in prompt
+    assert "特别表述=仰天" in prompt
 
 
 def test_coverage_suffix_merges_into_degree_main_name():
