@@ -1,16 +1,21 @@
 # -*- coding: utf-8 -*-
 from app.services.script_analysis_flow.character_asset_brief import (
+    assemble_character_asset_design_user_content,
     build_character_asset_design_brief,
     char_extract_has_items,
     current_world_identity,
     parse_char_extract_records,
     splice_char_extract_into_script,
 )
+from app.core.prompt_injection import wrap_injection_section
+from app.services.script_analysis_flow.cover_poster_brief import build_cover_poster_brief
 from app.services.script_analysis_flow.environment_asset_brief import (
+    assemble_environment_asset_design_user_content,
     build_environment_asset_design_brief,
     environment_plan_has_ident,
 )
 from app.services.script_analysis_flow.prop_asset_brief import (
+    assemble_prop_asset_design_user_content,
     build_prop_asset_design_brief,
     prop_extract_has_items,
     splice_prop_extract_into_script,
@@ -64,6 +69,24 @@ def test_environment_brief_uses_plan_only_and_excludes_scene_analysis():
 def test_environment_brief_empty_without_plan():
     assert build_environment_asset_design_brief("") == ""
     assert environment_plan_has_ident("no ident here") is False
+
+
+def test_environment_design_user_content_excludes_script_to_analyze():
+    script = _planned_script()
+    env_brief = build_environment_asset_design_brief(script)
+    cover_brief = build_cover_poster_brief(script)
+    leaked_script = wrap_injection_section("待分析剧本", f"Script to Analyze:\n\n{script}")
+    composed = assemble_environment_asset_design_user_content(
+        cover_brief,
+        env_brief,
+        leaked_script,
+    )
+    assert "[封面海报简报开始]" in composed
+    assert "[环境规划开始]" in composed
+    assert "客栈大堂" in composed
+    assert "[待分析剧本开始]" not in composed
+    assert "Script to Analyze:" not in composed
+    assert "不该进入环境设计简报" not in composed
 
 
 def test_environment_brief_reads_patches_outside_scene_split():
@@ -273,6 +296,44 @@ def test_current_world_identity_strips_trajectory():
     assert current_world_identity("江湖侠客") == "江湖侠客"
     assert current_world_identity("无") == ""
     assert current_world_identity("") == ""
+
+
+def test_char_design_user_content_excludes_script_and_prop_brief():
+    script = _script_with_char_extract()
+    char_brief = build_character_asset_design_brief(script)
+    prop_brief = build_prop_asset_design_brief(_script_with_prop_extract())
+    leaked_script = wrap_injection_section("待分析剧本", f"Script to Analyze:\n\n{script}")
+    composed = assemble_character_asset_design_user_content(
+        char_brief,
+        prop_brief,
+        leaked_script,
+    )
+    assert "[全局统筹角色提取开始]" in composed
+    assert "沈青" in composed
+    assert "[待分析剧本开始]" not in composed
+    assert "Script to Analyze:" not in composed
+    assert "[全局统筹道具提取开始]" not in composed
+    assert "银打火机" not in composed
+    assert "不该进入角色设计简报" not in composed
+
+
+def test_prop_design_user_content_excludes_script_and_char_brief():
+    script = _script_with_prop_extract()
+    prop_brief = build_prop_asset_design_brief(script)
+    char_brief = build_character_asset_design_brief(_script_with_char_extract())
+    leaked_script = wrap_injection_section("待分析剧本", f"Script to Analyze:\n\n{script}")
+    composed = assemble_prop_asset_design_user_content(
+        prop_brief,
+        char_brief,
+        leaked_script,
+    )
+    assert "[全局统筹道具提取开始]" in composed
+    assert "银打火机" in composed
+    assert "[待分析剧本开始]" not in composed
+    assert "Script to Analyze:" not in composed
+    assert "[全局统筹角色提取开始]" not in composed
+    assert "沈青" not in composed
+    assert "不该进入道具设计简报" not in composed
 
 
 def test_char_brief_empty_when_extract_is_none():

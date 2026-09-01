@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import List, Tuple
 
-from app.core.prompt_injection import wrap_injection_section
+from app.core.prompt_injection import assemble_injection_parts, wrap_injection_section
 from app.services.script_analysis_flow.environment_reuse import (
     extract_scene_env_ident_block,
     parse_scene_env_ident_items,
@@ -116,11 +116,19 @@ def build_environment_asset_design_brief(adapted_script: str) -> str:
     body = "\n\n".join(scene_chunks).strip()
     preface = (
         "主环境资产设计真源。按场覆盖 IDENT 已识别主环境 +【主环境】/【未落清单】骨架。"
+        "本轮用户侧只注入项目信息 + 本块 + 封面海报简报；禁止把待分析剧本当输入。"
         "本轮只设计主环境四向拼图；禁止输出视角衍生或状态衍生。"
         "禁止重做场景勘探；禁止另起同义主环境名；定位/目标/情绪表达原样服务四向拼图。"
+        "严格遵守【主环境】对表演区/活动空间的空间要求：四面只深化规划已列围合；"
+        "中区默认空区无障碍，仅规划明文要求桌椅等主体时才落，禁止擅自增加主体。"
         "不要等待逐场分析。Subject Index 若仍含 environment 行只作旧稿兼容，不得压过本块。"
     )
     return wrap_injection_section("环境规划", f"{preface}\n\n{body}")
+
+
+def assemble_environment_asset_design_user_content(*parts: object) -> str:
+    """Cover brief + environment plan only. Strip any leaked script-to-analyze block."""
+    return assemble_injection_parts(*parts)
 
 
 def pick_environment_plan_source_and_brief(*sources: object) -> Tuple[str, str]:

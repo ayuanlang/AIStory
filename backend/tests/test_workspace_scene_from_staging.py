@@ -52,10 +52,15 @@ def test_scene_table_markdown_has_identity_columns():
     assert "客栈对峙" in markdown
 
 
-def test_workspace_beats_strip_per_beat_continuity_notes():
+def test_workspace_beats_keep_only_setup_and_action():
     staging = """[SCENE_START:EP01_SC02]
 【场景名称】客栈对峙·夜·内
+【主体定位方案】林岳=宫格=前中
+【Beat主体定位】B1=林岳=可见性=V
 [BEAT_START:1]
+- Beat 1：节拍=开场画面
+【取景锁定】当前环境=ENV:[180度客栈大堂]｜景别=MS｜[DERIVED_ENV:180度客栈大堂]
+文戏过程句不应进入视觉指导。
 ────【建置】────
 CHAR:[@林岳] 位于桌近镜头侧旁，站。
 ────【入戏】────
@@ -82,6 +87,31 @@ CHAR:[@陈]|宫格=中左|在场=是|可见=暂不可见|因=景别:CU仅主拍
     assert "场记分析" not in core
     assert "开拍在场角色数" not in core
     assert "暂不可见" not in core
+    assert "取景锁定" not in core
+    assert "DERIVED_ENV" not in core
+    assert "文戏过程句" not in core
+    assert "主体定位方案" not in core
+    assert "Beat主体定位" not in core
+
+
+def test_workspace_beats_ignore_framing_only_body():
+    framing = """[SCENE_START:EP01_SC02]
+【场景名称】客栈对峙·夜·内
+[BEAT_START:1]
+【取景锁定】当前环境=ENV:[180度客栈大堂]｜景别=MS｜[DERIVED_ENV:180度客栈大堂]
+林岳冷冷逼视。
+[BEAT_END:1]
+[SCENE_END:EP01_SC02]
+"""
+    payload = build_workspace_scene_payload_from_staging(
+        scene_id="EP01_SC02",
+        scene_order=2,
+        staging_text=framing,
+    )
+    core = payload["core_scene_info"] or ""
+    assert "取景锁定" not in core
+    assert "DERIVED_ENV" not in core
+    assert "林岳冷冷逼视" not in core
 
 
 def test_appearing_entities_strip_stacked_env_english_and_dedupe():

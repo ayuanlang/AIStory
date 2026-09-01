@@ -122,6 +122,24 @@ def strip_injection_section(text: str, label: str) -> str:
     return re.sub(pattern, "", str(text or ""), flags=re.DOTALL).strip()
 
 
+def assemble_injection_parts(*parts: object, strip_labels: Optional[List[str]] = None) -> str:
+    """Join injection chunks after stripping leaked sections. Always drops 待分析剧本."""
+    labels = [str(item).strip() for item in (strip_labels or []) if str(item).strip()]
+    if "待分析剧本" not in labels:
+        labels.append("待分析剧本")
+    chunks: List[str] = []
+    seen = set()
+    for part in parts:
+        text = str(part or "").strip()
+        for label in labels:
+            text = strip_injection_section(text, label)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        chunks.append(text)
+    return "\n\n".join(chunks).strip()
+
+
 def resolve_skill_watermark_key(prompt_ref: Any) -> Optional[str]:
     blob = str(prompt_ref or "").replace("\\", "/").lower()
     if not blob:

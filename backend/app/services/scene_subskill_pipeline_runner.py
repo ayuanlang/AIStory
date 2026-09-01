@@ -869,6 +869,35 @@ def _touch_running_pipeline_node(
     row.updated_at = now_bj_iso()
 
 
+def _remember_scene_subskill_block(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene_id: str,
+    scene_block: str,
+    step_name: str = "",
+    called: Optional[List[str]] = None,
+) -> None:
+    extra = {"scene_block": str(scene_block or "").strip()}
+    if str(step_name or "").strip():
+        extra["current_step"] = str(step_name).strip()
+    if isinstance(called, list) and called:
+        extra["called_subskills"] = [str(item).strip() for item in called if str(item or "").strip()]
+    _touch_running_pipeline_node(
+        db,
+        project_id=int(project_id or 0),
+        episode_id=int(episode_id or 0),
+        node_name="scene_subskill_scene",
+        scene_id=str(scene_id or "").strip() or None,
+        extra_meta=extra,
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 def _heartbeat_environment_wait(
     db: Session,
     *,
@@ -1988,6 +2017,15 @@ async def _run_derived_framing_then_staging(
             step_name="staging",
             result_text=current_block,
         )
+        _remember_scene_subskill_block(
+            task_db,
+            project_id=project_id,
+            episode_id=episode_id,
+            scene_id=scene_id,
+            scene_block=current_block,
+            step_name="staging",
+            called=called,
+        )
         return current_block
 
     framing_block = splice_environment_and_enhance_scene(
@@ -2093,6 +2131,15 @@ async def _run_derived_framing_then_staging(
             result_text=current_block,
         )
         called.append(step_name)
+        _remember_scene_subskill_block(
+            task_db,
+            project_id=project_id,
+            episode_id=episode_id,
+            scene_id=scene_id,
+            scene_block=current_block,
+            step_name=step_name,
+            called=called,
+        )
     return current_block
 
 
@@ -2351,6 +2398,15 @@ async def run_scene_subskill_pipeline(
                         scene_id=scene_id,
                         step_name=step_name,
                         result_text=current_block,
+                    )
+                    _remember_scene_subskill_block(
+                        task_db,
+                        project_id=project_id,
+                        episode_id=node_episode_id,
+                        scene_id=scene_id,
+                        scene_block=current_block,
+                        step_name=step_name,
+                        called=called,
                     )
 
                 if scene_start not in {"combat", "framing", "staging"}:

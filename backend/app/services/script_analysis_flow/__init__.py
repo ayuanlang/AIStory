@@ -64,11 +64,13 @@ from .derived_env_ingest import (
 )
 from .environment_reuse import extract_scene_env_ident_block, parse_scene_env_ident_items
 from .environment_asset_brief import (
+    assemble_environment_asset_design_user_content,
     build_environment_asset_design_brief,
     environment_plan_has_ident,
     pick_environment_plan_source_and_brief,
 )
 from .character_asset_brief import (
+    assemble_character_asset_design_user_content,
     build_character_asset_design_brief,
     char_extract_has_items,
     current_world_identity,
@@ -79,6 +81,7 @@ from .character_asset_brief import (
     splice_char_extract_into_script,
 )
 from .prop_asset_brief import (
+    assemble_prop_asset_design_user_content,
     build_prop_asset_design_brief,
     extract_prop_extract_blocks,
     first_text_with_prop_extract,
@@ -3159,9 +3162,11 @@ __all__ = [
     "extract_entity_profile_block_from_adapted",
     "build_assets_extraction_script_from_adapted",
     "resolve_assets_extraction_source_text",
+    "assemble_environment_asset_design_user_content",
     "build_environment_asset_design_brief",
     "environment_plan_has_ident",
     "pick_environment_plan_source_and_brief",
+    "assemble_character_asset_design_user_content",
     "build_character_asset_design_brief",
     "char_extract_has_items",
     "current_world_identity",
@@ -3170,6 +3175,7 @@ __all__ = [
     "first_text_with_char_extract",
     "parse_char_extract_records",
     "splice_char_extract_into_script",
+    "assemble_prop_asset_design_user_content",
     "build_prop_asset_design_brief",
     "extract_prop_extract_blocks",
     "first_text_with_prop_extract",

@@ -44,6 +44,16 @@ _CHAR_TOKEN_PATTERN = re.compile(r"CHAR\s*:\s*\[@([^\[\]]+)\]", re.IGNORECASE)
 _PROP_TOKEN_PATTERN = re.compile(r"PROP\s*:\s*\[([^\[\]]+)\]", re.IGNORECASE)
 _PLOT_STAGE_PATTERN = re.compile(r"(闪回|倒叙|梦境|想象|正常叙事)")
 _EPISODE_ID_PATTERN = re.compile(r"^(EP\d+)", re.IGNORECASE)
+_BEAT_START_RE = re.compile(r"`?\[BEAT_START(?::([^\s\]]+))?\]`?", re.IGNORECASE)
+_BEAT_END_RE = re.compile(r"`?\[BEAT_END(?::([^\s\]]+))?\]`?", re.IGNORECASE)
+_SETUP_HEAD_RE = re.compile(
+    r"(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*建置[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*",
+    re.IGNORECASE,
+)
+_ACTION_HEAD_RE = re.compile(
+    r"(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*入戏[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*",
+    re.IGNORECASE,
+)
 
 
 def _clean(value: object) -> str:
@@ -136,11 +146,63 @@ def _format_env_list(names_csv: str) -> str:
     return _join_unique([f"ENV:[{name}]" for name in names])
 
 
-def _beat_excerpt(beats_text: str, limit: int = 80) -> str:
+def _keep_setup_and_action(block: str, beat_id: str) -> str:
     from app.services.script_analysis_flow import strip_beat_transition_notes_from_script
 
-    cleaned = strip_beat_transition_notes_from_script(beats_text)
-    cleaned = re.sub(r"`?\[BEAT_(?:START|END)(?::[^\]]+)?\]`?", "", cleaned)
+    text = strip_beat_transition_notes_from_script(block)
+    header_m = _BEAT_START_RE.search(text)
+    footer_m = _BEAT_END_RE.search(text)
+    header = header_m.group(0) if header_m else f"[BEAT_START:{beat_id}]"
+    footer = footer_m.group(0) if footer_m else f"[BEAT_END:{beat_id}]"
+    if header_m and footer_m and footer_m.start() > header_m.end():
+        body = text[header_m.end(): footer_m.start()]
+    elif header_m:
+        body = text[header_m.end():]
+    else:
+        body = text
+    setup_m = _SETUP_HEAD_RE.search(body)
+    action_m = _ACTION_HEAD_RE.search(body)
+    if not setup_m and not action_m:
+        return ""
+    begin = setup_m.start() if setup_m else action_m.start()
+    visual_body = body[begin:].strip()
+    if not visual_body:
+        return ""
+    return f"{header}\n{visual_body}\n{footer}".strip()
+
+
+def extract_staging_visual_beats(scene_text: str) -> str:
+    """Keep only per-beat 【建置】+【入戏】 for scene stats and storyboard."""
+    from app.services.script_analysis_flow import (
+        extract_beat_blocks_from_scene_text,
+        strip_beat_transition_notes_from_script,
+    )
+
+    joined = strip_beat_transition_notes_from_script(
+        extract_beat_blocks_from_scene_text(scene_text)
+    )
+    if not joined.strip():
+        return ""
+    starts = list(_BEAT_START_RE.finditer(joined))
+    if not starts:
+        return _keep_setup_and_action(joined, "1")
+    visuals: List[str] = []
+    for idx, start_match in enumerate(starts):
+        beat_id = str(start_match.group(1) or idx + 1).strip() or str(idx + 1)
+        next_start = starts[idx + 1].start() if idx + 1 < len(starts) else len(joined)
+        end_match = _BEAT_END_RE.search(joined, start_match.end())
+        if end_match and end_match.start() <= next_start:
+            block = joined[start_match.start(): end_match.end()]
+        else:
+            block = joined[start_match.start(): next_start]
+        visual = _keep_setup_and_action(block, beat_id)
+        if visual:
+            visuals.append(visual)
+    return "\n\n".join(visuals).strip()
+
+
+def _beat_excerpt(beats_text: str, limit: int = 80) -> str:
+    cleaned = re.sub(r"`?\[BEAT_(?:START|END)(?::[^\]]+)?\]`?", "", str(beats_text or ""))
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return ""
@@ -153,11 +215,7 @@ def build_workspace_scene_payload_from_staging(
     scene_order: Optional[int] = None,
     staging_text: str,
 ) -> Dict[str, Any]:
-    from app.services.script_analysis_flow import (
-        extract_beat_blocks_from_scene_text,
-        extract_scene_name_value_from_scene_text,
-        strip_beat_transition_notes_from_script,
-    )
+    from app.services.script_analysis_flow import extract_scene_name_value_from_scene_text
 
     scene_id_text = _clean(scene_id)
     source = _clean(staging_text)
@@ -165,9 +223,7 @@ def build_workspace_scene_payload_from_staging(
         str(int(scene_order)) if scene_order else ""
     )
     scene_name = extract_scene_name_value_from_scene_text(source)
-    beats = rewrite_merged_derived_environment_names(
-        strip_beat_transition_notes_from_script(extract_beat_blocks_from_scene_text(source))
-    )
+    beats = rewrite_merged_derived_environment_names(extract_staging_visual_beats(source))
     derived_envs = extract_derived_environment_names_from_scene_text(source)
     char_names = collect_character_tokens(scene_id_text, source)
     prop_names = collect_prop_tokens(scene_id_text, source)

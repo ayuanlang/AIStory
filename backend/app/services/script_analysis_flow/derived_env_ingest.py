@@ -73,11 +73,17 @@ STATE_CUT_NEGATIVE = (
     "four-panel grid lines, 2x2 collage seams, panel borders, quadrant labels, split-screen divider"
 )
 SPECIAL_CUT_PROMPT = (
-    FIRST_CUT_PROMPT
-    + "特别表述={note}。"
-    + "以该宫格为空间基准，按该特别表述改机位俯仰或透视；不得另造未声明实体，不得把未改实体写成新陈设。"
+    "所属主环境={main}。angle_key={main}|{angle}。"
+    "以对应主环境「{main}」四向拼图参考图的{grid}为空间与实体基准，继承该格陈设与材质，禁止另造房间。"
+    "禁止只做平视宫格原样切割。"
+    "必须按现场编排特别形态改画：特别表述={note}。"
+    "成稿为单张16:9完整镜头，高分辨率；机位俯仰与透视服从特别表述；"
+    "禁止保留四向拼图的宫格分割线、宫格边框、格标/角标、十字拼缝或任何拼图装配痕迹。"
+    "不得另造未声明实体，不得把未改实体写成新陈设。"
 )
 SPECIAL_STATE_INJECT = "特别表述={note}。按该表述改俯仰或透视；仍以同角切割图为空间基准。"
+DEFAULT_LOOK_UP_NOTE = "仰天:机位仰视，画面主体为该宫格已写天空/天花/屋顶，地面仅近端截断"
+DEFAULT_WARP_NOTE = "变形:按现场编排特别表述改透视"
 SOURCE_FLAG = "programmatic_derived_framing"
 SPECIAL_KIND_PREFIXES = ("仰天", "屋顶", "变形")
 LOOK_UP_SUFFIXES = {"仰天", "仰视", "屋顶"}
@@ -552,16 +558,24 @@ def _infer_special(item: Dict[str, Any], name: str = "", main: str = "") -> Tupl
         main or _clean(item.get("main") or item.get("所属主环境")),
     )
     if special_kind:
-        return special_kind, special_note
+        return special_kind, _expand_special_note(special_kind, special_note)
     if suffix in LOOK_UP_SUFFIXES:
-        return "仰天", special_note or "仰天"
+        return "仰天", _expand_special_note("仰天", special_note)
     if suffix == "变形":
-        return "变形", special_note or "变形"
+        return "变形", _expand_special_note("变形", special_note)
     if _is_special_kind(item.get("kind") or item.get("类型") or ""):
-        if suffix:
-            return ("仰天" if suffix in LOOK_UP_SUFFIXES else suffix), special_note or suffix
-        return "仰天", special_note or "仰天"
+        kind = "仰天" if suffix in LOOK_UP_SUFFIXES else (suffix or "仰天")
+        return kind, _expand_special_note(kind, special_note or suffix)
     return "", special_note
+
+
+def _expand_special_note(kind: str, note: str) -> str:
+    text = _clean(note)
+    if kind in {"仰天", "屋顶"} and text.lower() in {"", "仰天", "仰视", "屋顶"}:
+        return DEFAULT_LOOK_UP_NOTE
+    if kind == "变形" and text.lower() in {"", "变形"}:
+        return DEFAULT_WARP_NOTE
+    return text
 
 
 def _is_state_row(item: Dict[str, Any]) -> bool:
@@ -619,6 +633,8 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
                     "parent": fields.get("同角切割父") or fields.get("parent"),
                     "state_delta": fields.get("状态Delta") or fields.get("state_delta"),
                     "special_note": fields.get("特别表述") or fields.get("special_note"),
+                    "empty_view_delta": fields.get("empty_view_delta") or fields.get("空镜差值"),
+                    "visible_bound": fields.get("可见边界") or fields.get("visible_bound"),
                     "background": fields.get("背景") or fields.get("background"),
                     "frame_left": fields.get("画左") or fields.get("frame_left"),
                     "frame_right": fields.get("画右") or fields.get("frame_right"),
@@ -742,6 +758,11 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
         visual_params = f"{lens}/Derived/State"
     elif special_note:
         prompt = SPECIAL_CUT_PROMPT.format(main=main, angle=angle, grid=grid, note=special_note)
+        empty_delta = _clean(resolved.get("empty_view_delta") or resolved.get("空镜差值"))
+        if empty_delta.lower() not in _EMPTY_FIELD_MARKERS:
+            prompt = f"{prompt}空镜差值={empty_delta}。"
+        if special_kind in {"仰天", "屋顶"} and background:
+            prompt = f"{prompt}画面主体={background}。"
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
             f"所属主环境={main}。angle_key={main}|{angle}。截取宫格={grid}。触发={trigger}。特别表述={special_note}。"

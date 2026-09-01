@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List
 
-from app.core.prompt_injection import wrap_injection_section
+from app.core.prompt_injection import assemble_injection_parts, wrap_injection_section
 
 CHAR_EXTRACT_BLOCK_PATTERN = re.compile(
     r"`?\[CHAR_EXTRACT_START(?::([^\s\]]+))?\]`?"
@@ -112,12 +112,17 @@ def build_character_asset_design_brief(adapted_script: str) -> str:
     body = extract_char_extract_blocks(script) or script
     preface = (
         "角色资产设计真源。全局统筹已完成角色提取与按场分配："
+        "本轮用户侧只注入项目信息 + 本块；禁止把待分析剧本当输入；禁止注入道具提取或道具资产信息。"
         "本块含具名角色/换装衍生/龙套/群演簇特征。"
-        "耳环/胸针等已并入衣着的配饰只画进定妆，不得另造道具依赖；"
-        "已标 detachable=是 或进入道具提取的件不进角色定妆。"
+        "耳环/胸针等已并入衣着的配饰只画进定妆，不得另造道具依赖。"
         "禁止重做切场或环境落点；禁止另起同义角色名；外形/衣着/评价原样服务四视图。"
         "须读各条身份=的现时/轨迹/曾经：原富贵后落寞与一直贫困须在定妆上可目视区分，禁压成现时贫困快照。"
         "对白声线与上屏物理文字标签（含字体/字色）不进生图词。"
         "Subject Index 若仍含 character 行只作旧稿兼容，不得压过本块。"
     )
     return wrap_injection_section("全局统筹角色提取", f"{preface}\n\n{body}")
+
+
+def assemble_character_asset_design_user_content(*parts: object) -> str:
+    """Character extract only. Drop script-to-analyze and any leaked prop brief."""
+    return assemble_injection_parts(*parts, strip_labels=["待分析剧本", "全局统筹道具提取"])

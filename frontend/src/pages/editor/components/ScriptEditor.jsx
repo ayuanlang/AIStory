@@ -1348,20 +1348,109 @@ const collectStage1NodeOutputsFromSlotMap = (outputs) => {
     return collected;
 };
 
-const resolveSceneSubskillStoredContent = (resultsMap, sceneId, stepKey, episodePrefix = 'EP01') => {
+const SCENE_SUBSKILL_BODY_KEYS = ['staging', 'framing', 'combat', 'drama'];
+const SCENE_SUBSKILL_STEP_FROM_PIPELINE = {
+    drama: 'drama',
+    combat: 'combat',
+    derived_framing: 'framing',
+    framing: 'framing',
+    staging: 'staging',
+};
+
+const lookupSceneSubskillSteps = (resultsMap, sceneId, episodePrefix = 'EP01') => {
     const map = resultsMap && typeof resultsMap === 'object' ? resultsMap : {};
     const target = String(sceneId || '').trim();
-    const keyName = String(stepKey || '').trim();
-    if (!target || !keyName) return '';
-    const direct = String(map[target]?.[keyName] || '').trim();
-    if (direct) return direct;
+    if (!target) return {};
+    if (map[target] && typeof map[target] === 'object' && !Array.isArray(map[target])) {
+        return map[target];
+    }
     const hit = Object.keys(map).find((key) => sceneUnitIdsMatch(
         key,
         target,
         deriveSceneOrderFromSceneId(target),
         episodePrefix
     ));
-    return String(map[hit]?.[keyName] || '').trim();
+    return (hit && map[hit] && typeof map[hit] === 'object' && !Array.isArray(map[hit]))
+        ? map[hit]
+        : {};
+};
+
+const resolveSceneSubskillStoredContent = (resultsMap, sceneId, stepKey, episodePrefix = 'EP01') => {
+    const keyName = String(stepKey || '').trim();
+    if (!keyName) return '';
+    return String(lookupSceneSubskillSteps(resultsMap, sceneId, episodePrefix)?.[keyName] || '').trim();
+};
+
+const pickLatestSceneSubskillBody = (sceneSteps) => {
+    if (!sceneSteps || typeof sceneSteps !== 'object' || Array.isArray(sceneSteps)) return '';
+    for (const key of SCENE_SUBSKILL_BODY_KEYS) {
+        const text = String(sceneSteps[key] || '').trim();
+        if (text) return text;
+    }
+    return '';
+};
+
+const lookupPipelineSceneBlock = (nodes, sceneId, episodePrefix = 'EP01') => {
+    const target = String(sceneId || '').trim();
+    if (!target || !Array.isArray(nodes) || nodes.length <= 0) return '';
+    const order = deriveSceneOrderFromSceneId(target);
+    const hit = nodes.find((node) => (
+        String(node?.node_name || '').trim() === 'scene_subskill_scene'
+        && sceneUnitIdsMatch(String(node?.scene_id || '').trim(), target, order, episodePrefix)
+        && String(node?.runtime_meta?.scene_block || '').trim()
+    ));
+    return String(hit?.runtime_meta?.scene_block || '').trim();
+};
+
+const resolveCurrentSceneStage1Body = ({
+    resultsMap,
+    sceneId,
+    stepKey,
+    episodePrefix = 'EP01',
+    pipelineBlock = '',
+    scriptText = '',
+} = {}) => {
+    const steps = lookupSceneSubskillSteps(resultsMap, sceneId, episodePrefix);
+    return String(
+        pickLatestSceneSubskillBody(steps)
+        || pipelineBlock
+        || (stepKey ? steps?.[stepKey] : '')
+        || extractAdaptedSceneBlockFromScript(scriptText, sceneId, episodePrefix)
+        || ''
+    ).trim();
+};
+
+const hydrateSceneSubskillResultsFromPipelineNodes = (existingRaw, nodes) => {
+    const map = parseSceneSubskillResultsMap(existingRaw);
+    let changed = false;
+    (Array.isArray(nodes) ? nodes : []).forEach((node) => {
+        if (String(node?.node_name || '').trim() !== 'scene_subskill_scene') return;
+        const sceneId = String(node?.scene_id || '').trim();
+        const block = String(node?.runtime_meta?.scene_block || '').trim();
+        if (!sceneId || !block) return;
+        const called = Array.isArray(node?.runtime_meta?.called_subskills)
+            ? node.runtime_meta.called_subskills
+            : [];
+        const stepName = String(
+            node?.runtime_meta?.current_step
+            || called[called.length - 1]
+            || ''
+        ).trim();
+        const key = SCENE_SUBSKILL_STEP_FROM_PIPELINE[stepName] || 'staging';
+        const scene = (map[sceneId] && typeof map[sceneId] === 'object' && !Array.isArray(map[sceneId]))
+            ? { ...map[sceneId] }
+            : {};
+        if (String(scene[key] || '').trim() === block) return;
+        scene[key] = block;
+        map[sceneId] = scene;
+        changed = true;
+    });
+    if (!changed) return String(existingRaw || '').trim();
+    try {
+        return JSON.stringify(map);
+    } catch (_) {
+        return String(existingRaw || '').trim();
+    }
 };
 
 const extractAdaptedSceneBlockFromScript = (scriptText, sceneId, episodePrefix = 'EP01') => {
@@ -1544,7 +1633,7 @@ const buildSceneTableMarkdownFromStaging = (sceneId, sceneBlock, sceneOrder) => 
         ? String(Number(sceneOrder))
         : (scMatch ? String(Number(scMatch[1])) : '');
     const sceneName = extractSceneNameValueForTable(source);
-    const beats = extractBeatBlocksFromSceneText(source);
+    const beats = extractStagingVisualBeats(source);
     const derivedEnvs = extractDerivedEnvNamesHeader(source);
     const chars = collectTypedEntityTokens(source, 'char').map((name) => `CHAR:[@${name}]`);
     const props = collectTypedEntityTokens(source, 'prop').map((name) => `PROP:[${name}]`);
@@ -1640,6 +1729,69 @@ const stripBeatTransitionNotesFromScript = (scriptText) => {
         text = text.replace(pairedRe, '\n');
     }
     return text.replace(/\n{3,}/g, '\n\n').trim();
+};
+
+const extractStagingVisualBeats = (sceneText) => {
+    const joined = stripBeatTransitionNotesFromScript(extractBeatBlocksFromSceneText(sceneText));
+    if (!joined.trim()) return '';
+    const setupRe = /(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*建置[ \t]*】/i;
+    const actionRe = /(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*入戏[ \t]*】/i;
+    const keepSetupAndAction = (block, beatId) => {
+        const text = stripBeatTransitionNotesFromScript(block);
+        const headerMatch = /`?\[BEAT_START(?::[^\s\]]+)?\]`?/i.exec(text);
+        const footerMatch = /`?\[BEAT_END(?::[^\s\]]+)?\]`?/i.exec(text);
+        const header = headerMatch ? headerMatch[0] : `[BEAT_START:${beatId}]`;
+        const footer = footerMatch ? footerMatch[0] : `[BEAT_END:${beatId}]`;
+        let body = text;
+        if (headerMatch && footerMatch && footerMatch.index > headerMatch.index + headerMatch[0].length) {
+            body = text.slice(headerMatch.index + headerMatch[0].length, footerMatch.index);
+        } else if (headerMatch) {
+            body = text.slice(headerMatch.index + headerMatch[0].length);
+        }
+        const setupMatch = setupRe.exec(body);
+        setupRe.lastIndex = 0;
+        const actionMatch = actionRe.exec(body);
+        actionRe.lastIndex = 0;
+        if (!setupMatch && !actionMatch) return '';
+        const begin = setupMatch ? setupMatch.index : actionMatch.index;
+        const visualBody = String(body.slice(begin) || '').trim();
+        if (!visualBody) return '';
+        return `${header}\n${visualBody}\n${footer}`.trim();
+    };
+    const startRe = /`?\[BEAT_START(?::([^\s\]]+))?\]`?/gi;
+    const starts = [];
+    let match;
+    while ((match = startRe.exec(joined)) !== null) {
+        starts.push({
+            index: match.index,
+            endPos: match.index + match[0].length,
+            beatId: String(match[1] || '').trim(),
+        });
+    }
+    if (!starts.length) return keepSetupAndAction(joined, '1');
+    const endRe = /`?\[BEAT_END(?::([^\s\]]+))?\]`?/gi;
+    return starts.map((startItem, idx) => {
+        const beatId = startItem.beatId || String(idx + 1);
+        const nextStart = idx + 1 < starts.length ? starts[idx + 1].index : joined.length;
+        endRe.lastIndex = startItem.endPos;
+        const endMatch = endRe.exec(joined);
+        const block = (endMatch && endMatch.index <= nextStart)
+            ? joined.slice(startItem.index, endMatch.index + endMatch[0].length)
+            : joined.slice(startItem.index, nextStart);
+        return keepSetupAndAction(block, beatId);
+    }).filter(Boolean).join('\n\n').trim();
+};
+
+const pipelineNodeHasStagingImportBody = (node) => {
+    if (String(node?.node_name || '').trim() !== 'scene_subskill_scene') return false;
+    if (String(node?.status || '').trim() !== 'success') return false;
+    const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
+    if (!sceneBlock) return false;
+    const called = Array.isArray(node?.runtime_meta?.called_subskills)
+        ? node.runtime_meta.called_subskills.map((item) => String(item || '').trim())
+        : [];
+    if (called.length > 0 && !called.includes('staging')) return false;
+    return /【\s*建置\s*】/.test(sceneBlock) && /【\s*入戏\s*】/.test(sceneBlock);
 };
 
 /**
@@ -12399,6 +12551,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ensureOutputSlot(outputs, 'raw_text', { kind: 'text', title: '第一阶段完整结果' }).content = '';
                 ensureOutputSlot(outputs, 'project_visual_backfill', { kind: 'json', title: '全局风格' }).content = '';
             }
+            if (persisted.stages?.stage1?.outputs) {
+                const outputs = persisted.stages.stage1.outputs;
+                Object.entries(latestStage1NodeOutputsRef.current || {}).forEach(([key, content]) => {
+                    const text = String(content || '').trim();
+                    if (!text || ['adapted_script', 'raw_text', 'project_visual_backfill'].includes(key)) return;
+                    ensureOutputSlot(outputs, key, {
+                        kind: key === 'scene_subskill_results' ? 'json' : 'markdown',
+                        title: key,
+                    }).content = text;
+                });
+            }
             if (trustLiveDownstreamOnly && persisted.stages?.stage1?.outputs) {
                 const outputs = persisted.stages.stage1.outputs;
                 const liveNodeKeys = new Set(
@@ -12475,7 +12638,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return { version: 1, stages: {} };
             }
         }
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, diagnosticsRefreshNonce, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, parseVisualBackfillGlobalStyle, subjectIndexText]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, diagnosticsPipelineNodes, diagnosticsRefreshNonce, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, parseVisualBackfillGlobalStyle, subjectIndexText]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -13016,6 +13179,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 : nodes;
             diagnosticsPipelineNodesRef.current = nextNodes;
             diagnosticsSceneUnitsRef.current = units;
+            const prevSubskillResults = String(latestStage1NodeOutputsRef.current?.scene_subskill_results || '').trim();
+            const hydratedSubskillResults = hydrateSceneSubskillResultsFromPipelineNodes(
+                prevSubskillResults,
+                nextNodes
+            );
+            if (hydratedSubskillResults && hydratedSubskillResults !== prevSubskillResults) {
+                latestStage1NodeOutputsRef.current = {
+                    ...latestStage1NodeOutputsRef.current,
+                    scene_subskill_results: hydratedSubskillResults,
+                };
+            }
             setDiagnosticsPipelineNodes(nextNodes);
             setDiagnosticsSceneUnits(units);
             if (episodeId > 0) {
@@ -14228,6 +14402,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         : null,
                     replaceSceneMarkdownByScene: false,
                     replaceSubjectIndex: true,
+                    stage1NodeOutputs: latestStage1NodeOutputsRef.current,
                 }), null, 2),
             });
             onLog?.(`[Stage 1 Adapted Script] Saved manual beats edit (len=${normalizedValue.length})`, 'success');
@@ -14533,31 +14708,49 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         splitSceneMarkdownTableBySceneId,
     ]);
 
-    const openStageArtifactEditModal = useCallback((kind, options = {}) => {
+    const openStageArtifactEditModal = useCallback(async (kind, options = {}) => {
         const stableKind = String(kind || '').trim();
         const requestedSceneId = String(options?.sceneId || '').trim();
         const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+        if (activeEpisode?.id) {
+            try {
+                const freshEpisode = await fetchEpisode(activeEpisode.id);
+                const freshNodeOutputs = collectStage1NodeOutputsFromSlotMap(
+                    parseStageOutputsObject(freshEpisode?.ai_stage_outputs || '')?.stages?.stage1?.outputs
+                );
+                latestStage1NodeOutputsRef.current = {
+                    ...freshNodeOutputs,
+                    ...collectStage1NodeOutputsFromSlotMap(latestStage1NodeOutputsRef.current),
+                };
+            } catch (_) {}
+        }
         if (SCENE_SUBSKILL_EDIT_KINDS.has(stableKind)) {
             const stage1Outputs = currentStageOutputs?.stages?.stage1?.outputs || {};
             const stepKey = SCENE_SUBSKILL_RESULT_KEYS[stableKind];
             const storedMap = parseSceneSubskillResultsMap(
-                stage1Outputs?.scene_subskill_results?.content
-                || latestStage1NodeOutputsRef.current?.scene_subskill_results
-            );
-            const storedContent = resolveSceneSubskillStoredContent(
-                storedMap,
-                requestedSceneId,
-                stepKey,
-                episodePrefix
+                latestStage1NodeOutputsRef.current?.scene_subskill_results
+                || stage1Outputs?.scene_subskill_results?.content
             );
             const source = String(
-                resolveScriptOptBeatsContent()
+                latestStage1NodeOutputsRef.current?.scene_subskills
+                || resolveScriptOptBeatsContent()
                 || stage1Outputs?.scene_subskills?.content
                 || stage1Outputs?.adapted_script?.content
                 || activeEpisode?.ai_scene_analysis_adaptation
                 || ''
             ).trim();
-            const content = storedContent || extractAdaptedSceneBlockFromScript(source, requestedSceneId, episodePrefix);
+            const content = resolveCurrentSceneStage1Body({
+                resultsMap: storedMap,
+                sceneId: requestedSceneId,
+                stepKey,
+                episodePrefix,
+                pipelineBlock: lookupPipelineSceneBlock(
+                    diagnosticsPipelineNodesRef.current,
+                    requestedSceneId,
+                    episodePrefix
+                ),
+                scriptText: source,
+            });
             if (!content) {
                 reportAnalysisPanelNotice(t('暂无该场逐场优化内容可编辑。', 'No per-scene refinement content is available to edit.'), 'warning');
                 return;
@@ -14617,8 +14810,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         if (['scene_split', 'environment_plan', 'scene_subskills'].includes(stableKind)) {
             const content = String(
-                currentStageOutputs?.stages?.stage1?.outputs?.[stableKind]?.content
-                || resolveScriptOptBeatsContent()
+                latestStage1NodeOutputsRef.current?.[stableKind]
+                || currentStageOutputs?.stages?.stage1?.outputs?.[stableKind]?.content
+                || (stableKind === 'scene_subskills' ? resolveScriptOptBeatsContent() : '')
                 || ''
             ).trim();
             if (!content) {
@@ -14843,6 +15037,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 stage1.outputs = outputs;
                 stages.stage1 = stage1;
                 stageOutputs.stages = stages;
+                latestStage1NodeOutputsRef.current = {
+                    ...latestStage1NodeOutputsRef.current,
+                    [kind]: content.trim(),
+                };
                 await onUpdateEpisodeInfo(activeEpisode.id, {
                     ai_scene_analysis_adaptation: content.trim(),
                     ai_stage_outputs: JSON.stringify(stageOutputs, null, 2),
@@ -14858,7 +15056,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
                 const fullScript = String(
-                    resolveScriptOptBeatsContent()
+                    latestStage1NodeOutputsRef.current?.scene_subskills
+                    || resolveScriptOptBeatsContent()
                     || activeEpisode?.ai_scene_analysis_adaptation
                     || ''
                 ).trim();
@@ -14866,14 +15065,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const stepKey = SCENE_SUBSKILL_RESULT_KEYS[kind];
                 const stageOutputs = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
                 const existingMap = parseSceneSubskillResultsMap(
-                    stageOutputs?.stages?.stage1?.outputs?.scene_subskill_results?.content
-                    || latestStage1NodeOutputsRef.current?.scene_subskill_results
+                    latestStage1NodeOutputsRef.current?.scene_subskill_results
+                    || stageOutputs?.stages?.stage1?.outputs?.scene_subskill_results?.content
                 );
                 const nextMap = { ...existingMap };
                 const sceneMap = {
                     ...(nextMap[sceneId] && typeof nextMap[sceneId] === 'object' ? nextMap[sceneId] : {}),
                 };
-                if (stepKey) sceneMap[stepKey] = content.trim();
+                const editedBody = content.trim();
+                if (stepKey) sceneMap[stepKey] = editedBody;
+                const latestExistingKey = SCENE_SUBSKILL_BODY_KEYS.find((key) => String(sceneMap[key] || '').trim());
+                if (latestExistingKey) sceneMap[latestExistingKey] = editedBody;
                 nextMap[sceneId] = sceneMap;
                 latestStage1NodeOutputsRef.current = {
                     ...latestStage1NodeOutputsRef.current,
@@ -23592,7 +23794,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 nodes.forEach((node) => {
                     const sceneId = String(node?.scene_id || '').trim();
                     const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
-                    if (node?.node_name === 'scene_subskill_scene' && node?.status === 'success' && sceneId && sceneBlock) {
+                    if (pipelineNodeHasStagingImportBody(node) && sceneId) {
                         const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
                         restartScenePatchMap[sceneId] = {
                             scene_id: sceneId,
@@ -23657,14 +23859,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     nodesAfter.forEach((node) => {
                         const sceneId = String(node?.scene_id || '').trim();
                         const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
-                        if (node?.node_name === 'scene_subskill_scene' && node?.status === 'success' && sceneId && sceneBlock) {
-                            const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
-                            restartScenePatchMap[sceneId] = {
-                                scene_id: sceneId,
-                                scene_order: sceneOrder,
-                                markdown: buildSceneTableMarkdownFromStaging(sceneId, sceneBlock, sceneOrder),
-                            };
-                        }
+                    if (pipelineNodeHasStagingImportBody(node) && sceneId) {
+                        const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
+                        restartScenePatchMap[sceneId] = {
+                            scene_id: sceneId,
+                            scene_order: sceneOrder,
+                            markdown: buildSceneTableMarkdownFromStaging(sceneId, sceneBlock, sceneOrder),
+                        };
+                    }
                     });
                     if (Object.keys(restartScenePatchMap).length <= 0) {
                         return { importedSceneRows: [] };
@@ -24154,6 +24356,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const stage1Raw = String(analyzedText || '').trim();
             if (stage1Raw) {
                 latestStage1RawTextRef.current = stage1Raw;
+                latestStage1NodeOutputsRef.current = {
+                    ...latestStage1NodeOutputsRef.current,
+                    scene_split: stage1Raw,
+                };
                 const adaptedNow = String(extractStage1AdaptedScriptBody(stage1Raw) || stage1Raw).trim();
                 if (adaptedNow) setAdaptationText(adaptedNow);
             }
@@ -24818,6 +25024,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const stage1Raw = String(analyzedText || '').trim();
             if (stage1Raw) {
                 latestStage1RawTextRef.current = stage1Raw;
+                latestStage1NodeOutputsRef.current = {
+                    ...latestStage1NodeOutputsRef.current,
+                    scene_split: stage1Raw,
+                };
                 const adaptedNow = String(extractStage1AdaptedScriptBody(stage1Raw) || stage1Raw).trim();
                 if (adaptedNow) setAdaptationText(adaptedNow);
             }
@@ -25076,6 +25286,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 abortIfPromptInjectionRisk(environmentPlanText);
                 stage1PhaseRawText = environmentPlanText;
                 latestStage1RawTextRef.current = environmentPlanText;
+                latestStage1NodeOutputsRef.current = {
+                    ...latestStage1NodeOutputsRef.current,
+                    environment_plan: environmentPlanText,
+                };
                 const {
                     adaptedScriptText,
                     userInput: stage2UserInput,
@@ -25347,11 +25561,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const sceneId = resolveExpectedSceneId(node?.scene_id);
                             const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
                             if (
-                                node?.node_name === 'scene_subskill_scene'
-                                && node?.status === 'success'
+                                pipelineNodeHasStagingImportBody(node)
                                 && sceneId
                                 && !launchedSceneIds.has(sceneId)
-                                && sceneBlock
                             ) {
                                 launchScene(sceneId, sceneBlock);
                             }
@@ -25467,6 +25679,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                     stage1PhaseRawText = sceneSubskillText;
                     latestStage1RawTextRef.current = sceneSubskillText;
+                    latestStage1NodeOutputsRef.current = {
+                        ...latestStage1NodeOutputsRef.current,
+                        scene_subskills: sceneSubskillText,
+                    };
                     const subskillAdaptedScript = String(
                         extractStage1AdaptedScriptBody(sceneSubskillText) || sceneSubskillText
                     ).trim();
@@ -26676,7 +26892,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 nodes.forEach((node) => {
                     const sceneId = String(node?.scene_id || '').trim();
                     const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
-                    if (node?.node_name === 'scene_subskill_scene' && node?.status === 'success' && sceneId && sceneBlock) {
+                    if (pipelineNodeHasStagingImportBody(node) && sceneId) {
                         const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
                         restartScenePatchMap[sceneId] = {
                             scene_id: sceneId,
@@ -27199,10 +27415,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const sceneId = String(node?.scene_id || '').trim();
                 const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
                 if (
-                    node?.node_name === 'scene_subskill_scene'
-                    && node?.status === 'success'
+                    pipelineNodeHasStagingImportBody(node)
                     && sceneId
-                    && sceneBlock
                     && (wantedSceneIds.size <= 0 || wantedSceneIds.has(sceneId))
                 ) {
                     const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
@@ -27862,6 +28076,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const stage1Raw = String(analyzedText || '').trim();
             if (stage1Raw) {
                 latestStage1RawTextRef.current = stage1Raw;
+                latestStage1NodeOutputsRef.current = {
+                    ...latestStage1NodeOutputsRef.current,
+                    scene_split: stage1Raw,
+                };
                 const adaptedNow = String(extractStage1AdaptedScriptBody(stage1Raw) || stage1Raw).trim();
                 if (adaptedNow) setAdaptationText(adaptedNow);
             }
@@ -29836,6 +30054,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ));
                     }
                     latestStage1RawTextRef.current = environmentPlanText;
+                    latestStage1NodeOutputsRef.current = {
+                        ...latestStage1NodeOutputsRef.current,
+                        environment_plan: environmentPlanText,
+                    };
                     try {
                         await persistLlmResultContent(environmentPlanText, 'ai_scene_analysis_result', {
                             source: 'pipeline-supervisor-environment-plan',
@@ -30014,7 +30236,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     nodes.forEach((node) => {
                         const sceneId = String(node?.scene_id || '').trim();
                         const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
-                        if (node?.node_name === 'scene_subskill_scene' && node?.status === 'success' && sceneId && sceneBlock) {
+                        if (pipelineNodeHasStagingImportBody(node) && sceneId) {
                             const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
                             stagingPatchMap[sceneId] = {
                                 scene_id: sceneId,

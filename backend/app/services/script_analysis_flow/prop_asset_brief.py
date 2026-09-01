@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import List
 
-from app.core.prompt_injection import wrap_injection_section
+from app.core.prompt_injection import assemble_injection_parts, wrap_injection_section
 
 PROP_EXTRACT_BLOCK_PATTERN = re.compile(
     r"`?\[PROP_EXTRACT_START(?::([^\s\]]+))?\]`?"
@@ -70,7 +70,8 @@ def build_prop_asset_design_brief(adapted_script: str) -> str:
         return ""
     body = extract_prop_extract_blocks(script) or script
     preface = (
-        "道具资产设计真源。全局统筹已完成 CHAR/PROP 裁定："
+        "道具资产设计真源。全局统筹已完成独立道具提取："
+        "本轮用户侧只注入项目信息 + 本块；禁止把待分析剧本当输入；禁止注入角色提取或角色定妆信息。"
         "已并入角色衣着的配饰不得再画成独立道具；"
         "可归环境陈设的家具装修不得再画成道具；"
         "本块只含过极严门槛、明文全局或载具外部本体的独立道具特征。"
@@ -80,3 +81,8 @@ def build_prop_asset_design_brief(adapted_script: str) -> str:
         "Subject Index 若仍含 prop 行只作旧稿兼容，不得压过本块。"
     )
     return wrap_injection_section("全局统筹道具提取", f"{preface}\n\n{body}")
+
+
+def assemble_prop_asset_design_user_content(*parts: object) -> str:
+    """Prop extract only. Drop script-to-analyze and any leaked character brief."""
+    return assemble_injection_parts(*parts, strip_labels=["待分析剧本", "全局统筹角色提取"])

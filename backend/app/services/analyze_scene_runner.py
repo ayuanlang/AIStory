@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.settings import get_scene_analysis_system_config
-from app.core.prompt_injection import wrap_injection_section
+from app.core.prompt_injection import strip_injection_section, wrap_injection_section
 from app.core.prompts.scene_analysis_feature_skills import (
     render_scene_analysis_routed_prompt,
     resolve_scene_analysis_feature_bundle,
@@ -77,6 +77,9 @@ from app.services.scene_subject_helpers import (
     _normalize_prior_entity_design_type,
 )
 from app.services.script_analysis_flow import (
+    assemble_character_asset_design_user_content,
+    assemble_environment_asset_design_user_content,
+    assemble_prop_asset_design_user_content,
     build_character_asset_design_brief,
     build_cover_poster_brief,
     pick_environment_plan_source_and_brief,
@@ -421,6 +424,33 @@ async def execute_analyze_scene(
             mode_lower=mode_lower,
             prompt_file_lower=prompt_file_lower,
         )
+        is_environment_asset_design = bool(
+            "entity_design_environment" in prompt_file_lower
+            or "2_pass_generate_assets_environments" in mode_lower
+            or (
+                subject_index_allowed_types_for_request
+                and "environment" in subject_index_allowed_types_for_request
+            )
+        )
+        is_prop_asset_design = bool(
+            "entity_design_prop" in prompt_file_lower
+            or "2_pass_generate_assets_props" in mode_lower
+            or (
+                subject_index_allowed_types_for_request
+                and "prop" in subject_index_allowed_types_for_request
+            )
+        )
+        is_character_asset_design = bool(
+            "entity_design_character" in prompt_file_lower
+            or "2_pass_generate_assets_characters" in mode_lower
+            or (
+                subject_index_allowed_types_for_request
+                and "character" in subject_index_allowed_types_for_request
+            )
+        )
+        is_scoped_asset_design = bool(
+            is_environment_asset_design or is_prop_asset_design or is_character_asset_design
+        )
 
 
         persisted_subject_index_for_prompt = ""
@@ -499,7 +529,10 @@ async def execute_analyze_scene(
                         log_prompt_file=getattr(request, "prompt_file", None),
                     )
 
-        if is_scene_beats_stage:
+        if is_scoped_asset_design:
+            # Seed is assembled below from the category brief + project info only.
+            user_content = ""
+        elif is_scene_beats_stage:
             orchestration_project_id = getattr(request, "project_id", None)
             if not orchestration_project_id and getattr(request, "episode_id", None):
                 try:
@@ -604,14 +637,6 @@ async def execute_analyze_scene(
                 )
             user_content = _build_script_to_analyze_block(request_text_for_prompt)
 
-        is_environment_asset_design = bool(
-            "entity_design_environment" in prompt_file_lower
-            or "2_pass_generate_assets_environments" in mode_lower
-            or (
-                subject_index_allowed_types_for_request
-                and "environment" in subject_index_allowed_types_for_request
-            )
-        )
         if is_environment_asset_design:
             request_text = str(getattr(request, "text", "") or "").strip()
             episode_plan_texts = []
@@ -652,30 +677,18 @@ async def execute_analyze_scene(
                 episode_adaptation_for_scene_beats,
                 *episode_plan_texts,
             )
-            if env_brief and "环境规划开始" not in str(user_content or "") and "环境规划与场景分析开始" not in str(user_content or ""):
-                user_content = f"{env_brief}\n\n{user_content}".strip()
-                logger.info(
-                    "[analyze_scene] injected environment-plan+scene-analysis brief episode_id=%s chars=%s",
-                    getattr(request, "episode_id", None),
-                    len(env_brief),
-                )
             cover_brief = build_cover_poster_brief(brief_source)
-            if cover_brief and "封面海报简报开始" not in str(user_content or ""):
-                user_content = f"{cover_brief}\n\n{user_content}".strip()
-                logger.info(
-                    "[analyze_scene] injected programmatic cover-poster brief episode_id=%s chars=%s",
-                    getattr(request, "episode_id", None),
-                    len(cover_brief),
-                )
-
-        is_prop_asset_design = bool(
-            "entity_design_prop" in prompt_file_lower
-            or "2_pass_generate_assets_props" in mode_lower
-            or (
-                subject_index_allowed_types_for_request
-                and "prop" in subject_index_allowed_types_for_request
+            user_content = assemble_environment_asset_design_user_content(
+                cover_brief,
+                env_brief,
             )
-        )
+            logger.info(
+                "[analyze_scene] environment asset design user seed episode_id=%s env_brief=%s cover_brief=%s script_block=omitted",
+                getattr(request, "episode_id", None),
+                len(env_brief or ""),
+                len(cover_brief or ""),
+            )
+
         if is_prop_asset_design:
             brief_source = episode_adaptation_for_scene_beats
             extra_prop_sources = [str(getattr(request, "text", "") or "")]
@@ -718,22 +731,13 @@ async def execute_analyze_scene(
                 *extra_prop_sources,
             ) or brief_source
             prop_brief = build_prop_asset_design_brief(brief_source)
-            if prop_brief and "全局统筹道具提取开始" not in str(user_content or "") and "环境规划道具提取开始" not in str(user_content or ""):
-                user_content = f"{prop_brief}\n\n{user_content}".strip()
-                logger.info(
-                    "[analyze_scene] injected scene-split prop brief episode_id=%s chars=%s",
-                    getattr(request, "episode_id", None),
-                    len(prop_brief),
-                )
-
-        is_character_asset_design = bool(
-            "entity_design_character" in prompt_file_lower
-            or "2_pass_generate_assets_characters" in mode_lower
-            or (
-                subject_index_allowed_types_for_request
-                and "character" in subject_index_allowed_types_for_request
+            user_content = assemble_prop_asset_design_user_content(prop_brief)
+            logger.info(
+                "[analyze_scene] prop asset design user seed episode_id=%s prop_brief=%s script_block=omitted char_brief=omitted",
+                getattr(request, "episode_id", None),
+                len(prop_brief or ""),
             )
-        )
+
         if is_character_asset_design:
             brief_source = episode_adaptation_for_scene_beats
             extra_char_sources = [str(getattr(request, "text", "") or "")]
@@ -776,13 +780,12 @@ async def execute_analyze_scene(
                 *extra_char_sources,
             ) or brief_source
             char_brief = build_character_asset_design_brief(brief_source)
-            if char_brief and "全局统筹角色提取开始" not in str(user_content or ""):
-                user_content = f"{char_brief}\n\n{user_content}".strip()
-                logger.info(
-                    "[analyze_scene] injected scene-split character brief episode_id=%s chars=%s",
-                    getattr(request, "episode_id", None),
-                    len(char_brief),
-                )
+            user_content = assemble_character_asset_design_user_content(char_brief)
+            logger.info(
+                "[analyze_scene] character asset design user seed episode_id=%s char_brief=%s script_block=omitted prop_brief=omitted",
+                getattr(request, "episode_id", None),
+                len(char_brief or ""),
+            )
 
         
         if request.project_metadata:
@@ -867,7 +870,7 @@ async def execute_analyze_scene(
                 logger.warning("[analyze_scene] failed to inject project main env catalog: %s", env_catalog_exc)
 
         # Optional platform knowledge-base RAG (reference-only; never mutates Subject Index names).
-        if is_script_optimization_stage or is_entity_design_phase:
+        if (is_script_optimization_stage or is_entity_design_phase) and not is_scoped_asset_design:
             try:
                 kb_query_source = str(getattr(request, "text", "") or "")
                 kb_inject = build_kb_rag_injection_for_analyze(
@@ -1194,6 +1197,13 @@ async def execute_analyze_scene(
                     getattr(request, "project_id", None),
                     getattr(request, "episode_id", None),
                 )
+
+        if is_scoped_asset_design:
+            user_content = strip_injection_section(str(user_content or ""), "待分析剧本")
+            if is_character_asset_design:
+                user_content = strip_injection_section(user_content, "全局统筹道具提取")
+            if is_prop_asset_design:
+                user_content = strip_injection_section(user_content, "全局统筹角色提取")
 
         # Construct messages
         messages = [
