@@ -5,8 +5,10 @@ from app.services.scene_subskill_pipeline_runner import (
     _strip_subskill_completion_marker,
 )
 from app.services.script_analysis_flow_runner import (
+    MIN_SCOPED_NODE_BODY_CHARS,
     _merge_environment_patches,
     _strip_required_completion_marker,
+    scoped_node_body_usable,
 )
 
 
@@ -115,6 +117,17 @@ original two
     assert [unit.scene_id for unit in units] == ["EP01_SC01", "EP01_SC02"]
     assert merged.count("[SCENE_START:") == 2
     assert "[SCENE_START:EP1_SC01]" not in merged
+
+
+def test_scoped_node_body_rejects_end_marker_only_or_short_stub():
+    marker = "[ENVIRONMENT_PLAN_OUTPUT_END]"
+    assert scoped_node_body_usable("") is False
+    assert scoped_node_body_usable(marker) is False
+    assert scoped_node_body_usable(_strip_required_completion_marker(marker, marker)) is False
+    assert scoped_node_body_usable("x" * MIN_SCOPED_NODE_BODY_CHARS) is False
+    assert scoped_node_body_usable("x" * (MIN_SCOPED_NODE_BODY_CHARS + 1)) is True
+    short_with_marker = f"{'stub'}\n{marker}"
+    assert scoped_node_body_usable(_strip_required_completion_marker(short_with_marker, marker)) is False
 
 
 def test_completion_markers_must_be_unique_and_terminal():

@@ -2923,14 +2923,12 @@ const probeEpisodeAnalysisCompleteness = async ({
         try {
             const stageOutputs = JSON.parse(String(fresh?.ai_stage_outputs || '').trim() || '{}');
             const planned = String(stageOutputs?.stages?.stage1?.outputs?.environment_plan?.content || '').trim();
-            if (planned) return true;
+            if (textHasEnvironmentPlanSignals(planned)) return true;
         } catch (_) {
             // Ignore malformed stage outputs and fall back to adaptation markers.
         }
         const adaptation = String(fresh?.ai_scene_analysis_adaptation || '').trim();
-        return /\[SCENE_ENV_IDENT_START/i.test(adaptation)
-            || /\[ENV_SCENE_PATCH_START/i.test(adaptation)
-            || /\[ENVIRONMENT_PLAN_OUTPUT_END/i.test(adaptation);
+        return textHasEnvironmentPlanSignals(adaptation);
     })();
     const hasSceneMarkdownByScene = (() => {
         try {
@@ -3325,6 +3323,24 @@ const formatDiagnosticSceneLabel = (sceneId, sceneOrder, sceneName) => {
     const name = cleanDiagnosticSceneName(sceneId, sceneName);
     if (sceneNo && name) return `${sceneNo} · ${name}`;
     return name || sceneNo || String(sceneId || '').trim();
+};
+
+const collectThisRunDiagnosticSceneAllowlist = (sceneSplitText, canonicalIds, episodePrefix = 'EP01') => {
+    const ids = [];
+    const text = String(sceneSplitText || '').trim();
+    if (text) {
+        try {
+            parseSceneUnitsFromScriptMarkersText(text).forEach((unit) => {
+                if (unit?.sceneId) ids.push(unit.sceneId);
+            });
+        } catch (_) {
+            // Scene-split text may not be marker-wrapped yet.
+        }
+    }
+    (canonicalIds instanceof Set ? [...canonicalIds] : (Array.isArray(canonicalIds) ? canonicalIds : [])).forEach((id) => {
+        if (id) ids.push(id);
+    });
+    return expandSceneIdAllowlist(ids, episodePrefix);
 };
 
 const SCENE_MATRIX_CHAIN = ['drama_opt', 'combat_opt', 'framing_opt', 'staging_opt', 'storyboard'];
@@ -3826,12 +3842,20 @@ const readStage1EnvironmentPlanContent = (stageOutputsRaw) => (
     readStage1OutputSlotContent(stageOutputsRaw, 'environment_plan')
 );
 
+const environmentPlanExtractedBody = (text) => {
+    const source = String(text || '').replace(/\r\n/g, '\n').trim();
+    if (!source) return '';
+    const marker = /`?\[ENVIRONMENT_PLAN_OUTPUT_END[^\]]*\]`?/i;
+    const match = marker.exec(source);
+    return (match ? source.slice(0, match.index) : source).trim();
+};
+
 const textHasEnvironmentPlanSignals = (text) => {
-    const source = String(text || '');
-    return /\[SCENE_ENV_IDENT_START/i.test(source)
-        || /\[ENV_SCENE_PATCH_START/i.test(source)
-        || /\[ENVIRONMENT_PLAN_OUTPUT_END/i.test(source)
-        || /【主环境】/.test(source);
+    const body = environmentPlanExtractedBody(text);
+    if (body.length <= 100) return false;
+    return /\[SCENE_ENV_IDENT_START/i.test(body)
+        || /\[ENV_SCENE_PATCH_START/i.test(body)
+        || /【主环境】/.test(body);
 };
 
 const textHasTaggedExtractItems = (text, tag) => {
@@ -3849,6 +3873,12 @@ const textHasTaggedExtractItems = (text, tag) => {
     return Boolean(body) && !/^\s*无\s*$/.test(body);
 };
 
+const taggedExtractHasStart = (text, tag) => new RegExp(`\\[${tag}_EXTRACT_START`, 'i').test(String(text || ''));
+
+const taggedExtractIsExplicitNone = (text, tag) => (
+    taggedExtractHasStart(text, tag) && !textHasTaggedExtractItems(text, tag)
+);
+
 const pickFirstMatchingText = (candidates, predicate) => {
     for (const text of candidates || []) {
         const value = String(text || '').trim();
@@ -3860,9 +3890,13 @@ const pickFirstMatchingText = (candidates, predicate) => {
 const resolveCategoryAssetSourceText = (candidates, category) => {
     const key = String(category || '').trim().toLowerCase();
     if (key === 'characters') {
+        const withStart = pickFirstMatchingText(candidates, (text) => taggedExtractHasStart(text, 'CHAR'));
+        if (withStart) return withStart;
         return pickFirstMatchingText(candidates, (text) => textHasTaggedExtractItems(text, 'CHAR'));
     }
     if (key === 'props') {
+        const withStart = pickFirstMatchingText(candidates, (text) => taggedExtractHasStart(text, 'PROP'));
+        if (withStart) return withStart;
         return pickFirstMatchingText(candidates, (text) => textHasTaggedExtractItems(text, 'PROP'));
     }
     if (key === 'environments') {
@@ -9551,37 +9585,45 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ), [hasEnvironmentPlanForAssetDesign, hasEnvironmentRowsInSubjectIndex]);
 
     const hasPropExtractForAssetDesign = useCallback((extraText = '') => {
-        const sources = [
+        const liveSources = [
             extraText,
-            latestStage1RawTextRef.current,
             latestStage1NodeOutputsRef.current?.scene_split,
             adaptationText,
+            latestStage1RawTextRef.current,
         ];
-        if (!analysisTrustLiveDownstreamOnlyRef.current) {
-            sources.push(
-                activeEpisode?.ai_scene_analysis_adaptation,
-                activeEpisode?.ai_scene_analysis_result,
-                ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
-            );
+        for (const text of liveSources) {
+            if (taggedExtractHasStart(text, 'PROP')) {
+                return textHasTaggedExtractItems(text, 'PROP');
+            }
         }
-        return sources.some((text) => textHasTaggedExtractItems(text, 'PROP'));
+        if (analysisTrustLiveDownstreamOnlyRef.current) return false;
+        const leftovers = [
+            activeEpisode?.ai_scene_analysis_adaptation,
+            activeEpisode?.ai_scene_analysis_result,
+            ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
+        ];
+        return leftovers.some((text) => textHasTaggedExtractItems(text, 'PROP'));
     }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, adaptationText]);
 
     const hasCharExtractForAssetDesign = useCallback((extraText = '') => {
-        const sources = [
+        const liveSources = [
             extraText,
-            latestStage1RawTextRef.current,
             latestStage1NodeOutputsRef.current?.scene_split,
             adaptationText,
+            latestStage1RawTextRef.current,
         ];
-        if (!analysisTrustLiveDownstreamOnlyRef.current) {
-            sources.push(
-                activeEpisode?.ai_scene_analysis_adaptation,
-                activeEpisode?.ai_scene_analysis_result,
-                ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
-            );
+        for (const text of liveSources) {
+            if (taggedExtractHasStart(text, 'CHAR')) {
+                return textHasTaggedExtractItems(text, 'CHAR');
+            }
         }
-        return sources.some((text) => textHasTaggedExtractItems(text, 'CHAR'));
+        if (analysisTrustLiveDownstreamOnlyRef.current) return false;
+        const leftovers = [
+            activeEpisode?.ai_scene_analysis_adaptation,
+            activeEpisode?.ai_scene_analysis_result,
+            ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
+        ];
+        return leftovers.some((text) => textHasTaggedExtractItems(text, 'CHAR'));
     }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, adaptationText]);
 
     const hasPersistedCharacterAssetDesign = useCallback((dbEntities) => {
@@ -13256,12 +13298,43 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             })
                 ? markPipelineNodesCanceledLocally(nodes)
                 : nodes;
+            const liveUnits = (Array.isArray(units) ? units : []).filter((unit) => {
+                const importStatus = String(unit?.import_status || '').trim().toLowerCase();
+                const err = String(unit?.parse_error_code || '').trim();
+                if (importStatus === 'skipped') return false;
+                return !['SCENE_MARKER_NOT_FOUND_IN_LATEST_SCRIPT', 'SCENE_ID_SUPERSEDED_BY_CANONICAL'].includes(err);
+            });
             diagnosticsPipelineNodesRef.current = nextNodes;
-            diagnosticsSceneUnitsRef.current = units;
+            diagnosticsSceneUnitsRef.current = liveUnits;
+            const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+            const splitText = String(latestStage1NodeOutputsRef.current?.scene_split || '').trim();
+            let hydrateAllowlist = null;
+            if (splitText) {
+                try {
+                    hydrateAllowlist = expandSceneIdAllowlist(
+                        parseSceneUnitsFromScriptMarkersText(splitText).map((unit) => unit.sceneId),
+                        episodePrefix
+                    );
+                } catch (_) {
+                    hydrateAllowlist = null;
+                }
+            }
+            const nodesForHydrate = (
+                hydrateAllowlist && hydrateAllowlist.size > 0
+                    ? nextNodes.filter((node) => {
+                        const sceneId = String(node?.scene_id || '').trim();
+                        return !sceneId || isSceneIdInAllowlist(sceneId, hydrateAllowlist, episodePrefix);
+                    })
+                    : (
+                        analysisTrustLiveDownstreamOnlyRef.current
+                            ? nextNodes.filter((node) => !String(node?.scene_id || '').trim())
+                            : nextNodes
+                    )
+            );
             const prevSubskillResults = String(latestStage1NodeOutputsRef.current?.scene_subskill_results || '').trim();
             const hydratedSubskillResults = hydrateSceneSubskillResultsFromPipelineNodes(
                 prevSubskillResults,
-                nextNodes
+                nodesForHydrate
             );
             if (hydratedSubskillResults && hydratedSubskillResults !== prevSubskillResults) {
                 latestStage1NodeOutputsRef.current = {
@@ -13270,11 +13343,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 };
             }
             setDiagnosticsPipelineNodes(nextNodes);
-            setDiagnosticsSceneUnits(units);
+            setDiagnosticsSceneUnits(liveUnits);
             if (episodeId > 0) {
                 publishEpisodeAnalysisProgress(episodeId, {
                     pipelineNodes: nextNodes,
-                    sceneUnits: units,
+                    sceneUnits: liveUnits,
                 });
             }
         };
@@ -15730,6 +15803,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const resetEpisodeDiagnosticsProgress = useCallback(async () => {
         analysisTrustLiveDownstreamOnlyRef.current = true;
         resetStoryboardKickoffTracking();
+        orchestrationCanonicalSceneIdsRef.current = new Set();
+        orchestrationLiveImportedScenesRef.current = new Set();
+        orchestrationPersistedSceneMarkdownRef.current = {};
+        setLiveSceneMarkdownByScene({});
         clearDiagnosticsPanelState();
         const episodeId = Number(activeEpisode?.id || 0);
         const pid = Number(projectId || 0);
@@ -15741,6 +15818,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
         } catch (resetErr) {
             onLog?.(`Diagnosis panel reset warning: ${resetErr?.message || resetErr}`, 'warning');
+        } finally {
+            // Invalidate polls that started during reset-episode and still hold the old snapshot.
+            diagnosticsEpochRef.current += 1;
+            diagnosticsPipelineNodesRef.current = [];
+            diagnosticsSceneUnitsRef.current = [];
+            setDiagnosticsPipelineNodes([]);
+            setDiagnosticsSceneUnits([]);
+            setDiagnosticsRefreshNonce((value) => value + 1);
         }
     }, [activeEpisode?.id, clearDiagnosticsPanelState, onLog, projectId, resetStoryboardKickoffTracking]);
 
@@ -18567,16 +18652,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             || latestStage1NodeOutputsRef.current?.scene_split
                             || ''
                         ).trim();
-                    const categoryBriefText = (pData.key === 'characters' || pData.key === 'props')
-                        ? pickFirstMatchingText(
-                            [extractSourceText, ...extractSourceCandidates].map((text) => resolveCategoryAssetBriefText(text, pData.key)),
-                            (text) => (
-                                pData.key === 'characters'
-                                    ? (/\[CHAR_EXTRACT_START/i.test(text) || textHasTaggedExtractItems(text, 'CHAR'))
-                                    : (/\[PROP_EXTRACT_START/i.test(text) || textHasTaggedExtractItems(text, 'PROP'))
-                            ),
-                        )
-                        : resolveCategoryAssetBriefText(extractSourceText, pData.key);
+                    const categoryBriefText = resolveCategoryAssetBriefText(extractSourceText, pData.key);
                     const nodeInputText = String(
                         categoryBriefText
                         || ((pData.key === 'characters' || pData.key === 'props')
@@ -18706,13 +18782,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             skippedExisting: true,
                         };
                     }
-                    const subtaskRequestedTargets = Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0
-                        ? requestedTargetFilters
-                        : (pData.key === 'characters'
-                            ? ['characters']
-                            : (pData.key === 'props'
-                                ? ['props']
-                                : (pData.key === 'environments' ? ['environments', 'posters', 'covers'] : [])));
+                    const subtaskRequestedTargets = pData.key === 'characters'
+                        ? ['characters']
+                        : (pData.key === 'props'
+                            ? ['props']
+                            : (pData.key === 'environments' ? ['environments', 'posters', 'covers'] : []));
                     const sceneAnalysisModeForSubtask = `2_pass_generate_assets_${pData.key}${subtaskRequestedTargets.length ? `__targets_${subtaskRequestedTargets.join('_')}` : ''}`;
                     const assetNodeKey = pData.nodeKey
                         || (pData.key === 'characters'
@@ -18722,13 +18796,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     if (liveKey) {
                         setLiveAssetDesignTaskKeys((prev) => (prev.includes(liveKey) ? prev : [...prev, liveKey]));
                     }
-                    if ((pData.key === 'characters' || pData.key === 'props') && !nodeInputText) {
+                    const extractTag = pData.key === 'characters' ? 'CHAR' : (pData.key === 'props' ? 'PROP' : '');
+                    const extractIsEmpty = Boolean(extractTag) && (
+                        !nodeInputText
+                        || taggedExtractIsExplicitNone(nodeInputText, extractTag)
+                        || !textHasTaggedExtractItems(nodeInputText, extractTag)
+                    );
+                    if ((pData.key === 'characters' || pData.key === 'props') && extractIsEmpty) {
                         onLog?.(
                             t(
-                                `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} 未找到可提交的提取块，已跳过 LLM`,
-                                `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} has no extract block to submit; skipping LLM`
+                                `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} 本次提取为「无」，已跳过 LLM`,
+                                `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} extract is none; skipping LLM`
                             ),
-                            'warning'
+                            'info'
                         );
                         return {
                             key: pData.key,
@@ -18739,7 +18819,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             subjectsJson: null,
                             hasImportableSubjects: false,
                             subtaskImportReport: null,
-                            subtaskImportError: 'missing extract block',
+                            subtaskImportError: 'empty extract',
                             skippedExisting: false,
                         };
                     }
@@ -32984,12 +33064,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             });
                             (diagnosticsSceneUnits || []).forEach((unit) => {
                                 const importStatus = String(unit?.import_status || '').trim().toLowerCase();
-                                const parseStatus = String(unit?.parse_status || '').trim().toLowerCase();
-                                const markdown = String(unit?.scene_markdown || '').trim();
-                                if (
-                                    (importStatus === 'skipped' || parseStatus === 'failed')
-                                    && !markdown
-                                ) return;
+                                const err = String(unit?.parse_error_code || '').trim();
+                                if (importStatus === 'skipped') return;
+                                if (['SCENE_MARKER_NOT_FOUND_IN_LATEST_SCRIPT', 'SCENE_ID_SUPERSEDED_BY_CANONICAL'].includes(err)) {
+                                    return;
+                                }
                                 addFromText(unit?.scene_id, unit?.scene_order, unit?.scene_markdown);
                             });
                             (diagnosticsPipelineNodes || []).forEach((node) => {
@@ -33015,6 +33094,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 || resolveSceneSplitSourceText?.()
                                 || ''
                             ).trim();
+                            const thisRunAllowlist = collectThisRunDiagnosticSceneAllowlist(
+                                thisRunSplit,
+                                [],
+                                episodePrefix
+                            );
+                            if (trustLiveOnly && thisRunAllowlist.size <= 0) {
+                                return [];
+                            }
                             try {
                                 if (thisRunSplit) {
                                     parseSceneUnitsFromScriptMarkersText(thisRunSplit).forEach((unit) => {
@@ -33030,17 +33117,36 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     : getStageOutputContent('stage1', 'scene_subskill_results')
                             );
                             Object.entries(subskillMap).forEach(([id, scene]) => {
+                                if (thisRunAllowlist.size > 0 && !isSceneIdInAllowlist(id, thisRunAllowlist, episodePrefix)) {
+                                    return;
+                                }
                                 const text = [scene?.drama, scene?.combat, scene?.framing, scene?.staging]
                                     .map((part) => String(part || '').trim())
                                     .filter(Boolean)
                                     .join('\n');
                                 addFromText(id, null, text);
                             });
-                            Object.keys(progress?.items || {}).forEach((id) => add(id));
+                            Object.keys(progress?.items || {}).forEach((id) => {
+                                if (thisRunAllowlist.size > 0 && !isSceneIdInAllowlist(id, thisRunAllowlist, episodePrefix)) {
+                                    return;
+                                }
+                                add(id);
+                            });
                             [...(orchestrationCanonicalSceneIdsRef.current || [])].forEach((id) => add(id));
-                            [...(orchestrationLiveImportedScenesRef.current || [])].forEach((id) => add(id));
+                            [...(orchestrationLiveImportedScenesRef.current || [])].forEach((id) => {
+                                if (thisRunAllowlist.size > 0 && !isSceneIdInAllowlist(id, thisRunAllowlist, episodePrefix)) {
+                                    return;
+                                }
+                                add(id);
+                            });
                             const byIdentity = new Map();
                             [...byId.values()].forEach((row) => {
+                                if (
+                                    thisRunAllowlist.size > 0
+                                    && !isSceneIdInAllowlist(row.sceneId, thisRunAllowlist, episodePrefix)
+                                ) {
+                                    return;
+                                }
                                 const identity = storyboardProgressIdentityKey(row.sceneId, { sceneOrder: row.order });
                                 const prev = byIdentity.get(identity);
                                 if (!prev) {
@@ -33087,10 +33193,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 detail: String(node?.runtime_meta?.current_step_label || node?.last_error_message || '').trim(),
                             };
                         };
-                        const resolveSceneSubskillGroupState = (node, group) => {
+                        const resolveSceneSubskillGroupState = (node, group, sceneId) => {
                             const waiting = { ready: false, active: false, failed: false, detail: '' };
                             if (!node) {
-                                if (sceneSubskillsState.ready && !sceneSubskillsState.active) {
+                                const steps = lookupSceneSubskillSteps(
+                                    parseSceneSubskillResultsMap(
+                                        analysisTrustLiveDownstreamOnlyRef.current
+                                            && !latestStage1NodeOutputsRef.current?.scene_subskill_results
+                                            ? ''
+                                            : getStageOutputContent('stage1', 'scene_subskill_results')
+                                    ),
+                                    sceneId,
+                                    episodePrefix
+                                );
+                                const stepKey = {
+                                    drama: 'drama',
+                                    combat: 'combat',
+                                    framing: 'framing',
+                                    staging: 'staging',
+                                }[group];
+                                if (stepKey && String(steps[stepKey] || '').trim()) {
                                     return { ready: true, active: false, failed: false, detail: '' };
                                 }
                                 return waiting;
@@ -33302,10 +33424,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ))}
                             {diagnosticSceneRows.map((row) => {
                                 const subskillNode = findScenePipelineNode('scene_subskill_scene', row.sceneId);
-                                const dramaState = resolveSceneSubskillGroupState(subskillNode, 'drama');
-                                const combatState = resolveSceneSubskillGroupState(subskillNode, 'combat');
-                                const framingState = resolveSceneSubskillGroupState(subskillNode, 'framing');
-                                const stagingState = resolveSceneSubskillGroupState(subskillNode, 'staging');
+                                const dramaState = resolveSceneSubskillGroupState(subskillNode, 'drama', row.sceneId);
+                                const combatState = resolveSceneSubskillGroupState(subskillNode, 'combat', row.sceneId);
+                                const framingState = resolveSceneSubskillGroupState(subskillNode, 'framing', row.sceneId);
+                                const stagingState = resolveSceneSubskillGroupState(subskillNode, 'staging', row.sceneId);
                                 const shotState = resolveSceneStoryboardState(row.sceneId);
                                 const sceneBusy = (state) => Boolean(state?.active);
                                 const canEditSceneDraft = (state) => Boolean(state?.ready && !state?.active);

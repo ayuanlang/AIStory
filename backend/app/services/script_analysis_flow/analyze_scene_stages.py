@@ -401,11 +401,94 @@ def _stage1_slot_content(obj: Dict[str, Any], output_key: str) -> Any:
     return slot
 
 
+_SCENE_START_ID_RE = re.compile(r"\[SCENE_START:([^\]]+)\]", re.IGNORECASE)
+
+
+def scene_ids_from_split_text(text: Any) -> set[str]:
+    """Collect SCENE_START ids from a global-orchestration / scene-split body."""
+    return {
+        str(match.group(1) or "").strip()
+        for match in _SCENE_START_ID_RE.finditer(str(text or ""))
+        if str(match.group(1) or "").strip()
+    }
+
+
+def scene_id_alias_set(scene_id: Any) -> set[str]:
+    sid = str(scene_id or "").strip()
+    if not sid:
+        return set()
+    aliases = {sid, sid.upper(), sid.lower()}
+    match = re.match(r"^(EP\d+)_SC(\d+[A-Z]?)$", sid, flags=re.IGNORECASE)
+    if match:
+        order = match.group(2)
+        digits = re.match(r"^(\d+)", order)
+        if digits:
+            aliases.add(str(int(digits.group(1))))
+            aliases.add(f"SC{int(digits.group(1)):02d}")
+            aliases.add(f"sc{int(digits.group(1)):02d}")
+        aliases.add(f"SC{order.upper()}")
+    elif re.match(r"^SC(\d+)$", sid, flags=re.IGNORECASE):
+        aliases.add(str(int(re.match(r"^SC(\d+)$", sid, flags=re.IGNORECASE).group(1))))
+    return {item for item in aliases if item}
+
+
+def prune_subskill_results_map_to_scene_ids(
+    result_map: Dict[str, Dict[str, str]],
+    keep_scene_ids: Any,
+) -> Dict[str, Dict[str, str]]:
+    keep_aliases: set[str] = set()
+    for raw in keep_scene_ids or []:
+        keep_aliases.update(scene_id_alias_set(raw))
+    if not keep_aliases:
+        return dict(result_map or {})
+    return {
+        sid: dict(steps)
+        for sid, steps in (result_map or {}).items()
+        if sid in keep_aliases or (scene_id_alias_set(sid) & keep_aliases)
+    }
+
+
+def prune_stale_scene_subskill_results(episode: Episode, keep_scene_ids: Any) -> int:
+    """Drop persisted per-scene subskill rows that are no longer in the latest split."""
+    if episode is None:
+        return 0
+    keep = {str(sid).strip() for sid in (keep_scene_ids or []) if str(sid).strip()}
+    if not keep:
+        return 0
+    obj = _load_stage_outputs_obj(episode)
+    outputs = _ensure_stage_outputs(obj, "stage1")
+    slot = (
+        outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
+        if isinstance(outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY), dict)
+        else {}
+    )
+    result_map = _parse_subskill_results_content(slot.get("content"))
+    if not result_map:
+        return 0
+    pruned = prune_subskill_results_map_to_scene_ids(result_map, keep)
+    removed = len(result_map) - len(pruned)
+    if removed <= 0:
+        return 0
+    outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = {
+        **slot,
+        "key": SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
+        "kind": "json",
+        "title": slot.get("title") or "逐场优化分步结果",
+        "content": json.dumps(pruned, ensure_ascii=False, indent=2),
+    }
+    _dump_stage_outputs_obj(episode, obj)
+    return removed
+
+
 def merge_ai_stage_outputs_preserving_subskills(existing: Any, incoming: Any) -> str:
     """Keep per-scene drama/framing/staging steps when a stale full-document write omits them.
 
     An explicit empty string is a restart wipe, not an omitted payload. Returning
     ``existing`` here left 全局统筹 / 环境规划 / 分场节点 on screen after 重新分析.
+
+    When incoming includes a new scene_split with SCENE_START markers, drop old
+    per-scene rows that are no longer in that split so a shorter rerun cannot
+    resurrect SC02 after the script only has SC01.
     """
     incoming_text = incoming if isinstance(incoming, str) else json.dumps(incoming or {}, ensure_ascii=False)
     if not str(incoming_text or "").strip():
@@ -433,6 +516,9 @@ def merge_ai_stage_outputs_preserving_subskills(existing: Any, incoming: Any) ->
             if str(value or "").strip():
                 scene[key] = value
         merged[sid] = scene
+    keep_ids = scene_ids_from_split_text(_stage1_slot_content(new_obj, "scene_split"))
+    if keep_ids:
+        merged = prune_subskill_results_map_to_scene_ids(merged, keep_ids)
     outputs = _ensure_stage_outputs(new_obj, "stage1")
     slot = outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
     slot = slot if isinstance(slot, dict) else {}

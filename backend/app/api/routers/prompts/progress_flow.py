@@ -286,6 +286,10 @@ async def get_episode_progress_snapshot(
             .order_by(ScriptProgressSceneUnit.scene_order.asc(), ScriptProgressSceneUnit.id.asc())
             .all()
         )
+        stale_error_codes = {
+            "SCENE_MARKER_NOT_FOUND_IN_LATEST_SCRIPT",
+            "SCENE_ID_SUPERSEDED_BY_CANONICAL",
+        }
         scene_units = [
             {
                 "scene_id": row.scene_id,
@@ -301,6 +305,8 @@ async def get_episode_progress_snapshot(
                 "updated_at": row.updated_at,
             }
             for row in rows
+            if str(getattr(row, "import_status", "") or "").strip().lower() != "skipped"
+            and str(getattr(row, "parse_error_code", "") or "").strip() not in stale_error_codes
         ]
 
     pipeline_nodes: List[Dict[str, Any]] = []

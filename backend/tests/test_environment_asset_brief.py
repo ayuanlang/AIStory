@@ -3,7 +3,9 @@ from app.services.script_analysis_flow.character_asset_brief import (
     assemble_character_asset_design_user_content,
     build_character_asset_design_brief,
     char_extract_has_items,
+    char_extract_is_explicit_none,
     current_world_identity,
+    first_text_with_char_extract,
     parse_char_extract_records,
     splice_char_extract_into_script,
 )
@@ -17,7 +19,9 @@ from app.services.script_analysis_flow.environment_asset_brief import (
 from app.services.script_analysis_flow.prop_asset_brief import (
     assemble_prop_asset_design_user_content,
     build_prop_asset_design_brief,
+    first_text_with_prop_extract,
     prop_extract_has_items,
+    prop_extract_is_explicit_none,
     splice_prop_extract_into_script,
 )
 from app.services.script_analysis_flow.registry import get_script_analysis_flow_registry
@@ -217,9 +221,10 @@ def test_prop_brief_uses_extract_and_excludes_beats():
     assert "[全局统筹道具提取开始]" in brief
     assert "[全局统筹道具提取结束]" in brief
     assert "银打火机" in brief
+    assert "道具资产设计真源" not in brief
     assert "长=1/2掌长" in brief
     assert "参照主体=名=成人男性手掌线性图" in brief
-    assert "长=/高=/宽=" in brief
+    assert "高=1/3掌宽" in brief
     assert "客栈大堂" in brief
     assert "不该进入道具设计简报" not in brief
     assert "【主环境】客栈大堂" not in brief
@@ -340,7 +345,7 @@ def test_char_brief_uses_extract_and_excludes_beats():
     assert "沈青" in brief
     assert "右耳银环" in brief
     assert "对白声线=江湖黑话夹杂霸气直球" in brief
-    assert "现时/轨迹/曾经" in brief
+    assert "角色资产设计真源" not in brief
     assert "不该进入角色设计简报" not in brief
     assert "客栈大堂" not in brief
     assert char_extract_has_items(script) is True
@@ -399,8 +404,24 @@ def test_char_brief_empty_when_extract_is_none():
 [CHAR_EXTRACT_END]
 """
     assert char_extract_has_items(empty) is False
+    assert char_extract_is_explicit_none(empty) is True
     assert build_character_asset_design_brief(empty) == ""
     assert build_character_asset_design_brief("") == ""
+    assert first_text_with_char_extract(empty, _script_with_char_extract()) == ""
+
+
+def test_prop_none_does_not_fall_back_to_previous_extract():
+    empty = """[PROP_EXTRACT_START]
+无
+[PROP_EXTRACT_END]
+"""
+    previous = _script_with_prop_extract()
+    assert prop_extract_is_explicit_none(empty) is True
+    assert first_text_with_prop_extract(empty, previous) == ""
+    assert build_prop_asset_design_brief(empty) == ""
+    brief = build_prop_asset_design_brief(previous)
+    assert "银打火机" in brief
+    assert "道具资产设计真源" not in brief
 
 
 def test_char_extract_splices_before_scenes_block_end():
@@ -466,3 +487,84 @@ def test_asset_design_does_not_require_subject_index():
     assert should_require_subject_index(env_stage) is False
     assert should_require_subject_index(char_stage) is False
     assert should_require_subject_index(beats_stage) is False
+
+
+def test_environment_plan_is_not_scoped_asset_design():
+    from app.services.analyze_scene_text_ops import _resolve_scoped_asset_design_category
+    from app.services.script_analysis_flow.analyze_scene_stages import resolve_analyze_scene_stage
+
+    plan_stage = resolve_analyze_scene_stage(
+        effective_scene_analysis_mode="stage1",
+        prompt_file="skills/scene_analysis_feature_stack/scene_planning_1_subskill_environment.md",
+        function_name="script_analysis",
+    )
+    assert plan_stage.is_entity_design_phase is False
+    assert _resolve_scoped_asset_design_category(
+        scene_analysis_mode="stage1",
+        prompt_file="skills/scene_analysis_feature_stack/scene_planning_1_subskill_environment.md",
+        action_name="环境规划",
+    ) == ""
+    assert _resolve_scoped_asset_design_category(
+        scene_analysis_mode="environment_plan",
+        prompt_file="skills/scene_analysis_feature_stack/scene_planning_1_subskill_environment.md",
+        action_name="环境规划",
+    ) == ""
+    assert _resolve_scoped_asset_design_category(
+        scene_analysis_mode="2_pass_generate_assets_environments",
+        prompt_file="skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md",
+        action_name="环境/封面设计",
+    ) == "environment"
+
+
+def test_scoped_category_stays_exclusive_when_targets_include_siblings():
+    from app.core.prompt_injection import strip_injection_section
+    from app.services.analyze_scene_text_ops import _resolve_scoped_asset_design_category
+
+    features = {
+        "target_entity_types": ["characters", "props", "environments"],
+        "asset_task_key": "characters",
+    }
+    assert _resolve_scoped_asset_design_category(
+        scene_analysis_features=features,
+        scene_analysis_mode="2_pass_generate_assets_characters__targets_characters_props_environments",
+        prompt_file="skills/scene_analysis_feature_stack/entity_design_character.md",
+    ) == "character"
+    assert _resolve_scoped_asset_design_category(
+        scene_analysis_features={"target_entity_types": ["characters", "props"], "asset_task_key": "props"},
+        scene_analysis_mode="2_pass_generate_assets_props__targets_characters_props",
+        prompt_file="skills/scene_analysis_feature_stack/entity_design_prop.md",
+    ) == "prop"
+
+    char_brief = build_character_asset_design_brief(_script_with_char_extract())
+    composed = assemble_character_asset_design_user_content(char_brief)
+    composed = strip_injection_section(composed, "待分析剧本")
+    composed = strip_injection_section(composed, "全局统筹道具提取")
+    assert "[全局统筹角色提取开始]" in composed
+    assert "[CHAR_EXTRACT_START]" in composed
+    assert "沈青" in composed
+
+
+def test_character_brief_keeps_extract_only_request_text():
+    extract_only = """[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=男主
+外形=瘦长
+[CHAR_EXTRACT_END]"""
+    brief = build_character_asset_design_brief(extract_only)
+    composed = assemble_character_asset_design_user_content(brief)
+    assert "[全局统筹角色提取开始]" in composed
+    assert "[CHAR_EXTRACT_START]" in composed
+    assert "沈青" in composed
+    assert "[待分析剧本开始]" not in composed
+
+
+def test_prop_brief_keeps_extract_only_request_text():
+    extract_only = """[PROP_EXTRACT_START]
+[PROP] 名称=银打火机｜名称_en=Silver Lighter
+外形=扁长方形银色金属机身
+[PROP_EXTRACT_END]"""
+    brief = build_prop_asset_design_brief(extract_only)
+    composed = assemble_prop_asset_design_user_content(brief)
+    assert "[全局统筹道具提取开始]" in composed
+    assert "[PROP_EXTRACT_START]" in composed
+    assert "银打火机" in composed
+    assert "[待分析剧本开始]" not in composed

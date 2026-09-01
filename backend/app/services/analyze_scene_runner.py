@@ -52,6 +52,7 @@ from app.services.analyze_scene_text_ops import (
     _infer_subject_index_allowed_types_for_request,
     _normalize_subject_index_entity_type,
     _resolve_scene_beats_adapted_script_text,
+    _resolve_scoped_asset_design_category,
     _trim_to_scenes_block,
 )
 from app.services.billing_service import billing_service
@@ -82,10 +83,6 @@ from app.services.script_analysis_flow import (
     assemble_prop_asset_design_user_content,
     build_character_asset_design_brief,
     build_cover_poster_brief,
-    extract_char_extract_blocks,
-    extract_prop_extract_blocks,
-    ensure_char_extract_block,
-    ensure_prop_extract_block,
     pick_environment_plan_source_and_brief,
     build_prop_asset_design_brief,
     first_text_with_char_extract,
@@ -428,33 +425,19 @@ async def execute_analyze_scene(
             mode_lower=mode_lower,
             prompt_file_lower=prompt_file_lower,
         )
-        is_environment_asset_design = bool(
-            "entity_design_environment" in prompt_file_lower
-            or "2_pass_generate_assets_environments" in mode_lower
-            or (
-                subject_index_allowed_types_for_request
-                and "environment" in subject_index_allowed_types_for_request
-            )
+        scoped_asset_category = _resolve_scoped_asset_design_category(
+            scene_analysis_features=getattr(request, "scene_analysis_features", None),
+            scene_analysis_mode=effective_scene_analysis_mode,
+            prompt_file=getattr(request, "prompt_file", None),
+            action_name=getattr(request, "action_name", None),
         )
-        is_prop_asset_design = bool(
-            "entity_design_prop" in prompt_file_lower
-            or "2_pass_generate_assets_props" in mode_lower
-            or (
-                subject_index_allowed_types_for_request
-                and "prop" in subject_index_allowed_types_for_request
-            )
-        )
-        is_character_asset_design = bool(
-            "entity_design_character" in prompt_file_lower
-            or "2_pass_generate_assets_characters" in mode_lower
-            or (
-                subject_index_allowed_types_for_request
-                and "character" in subject_index_allowed_types_for_request
-            )
-        )
-        is_scoped_asset_design = bool(
-            is_environment_asset_design or is_prop_asset_design or is_character_asset_design
-        )
+        # Environment planning / scene-split / per-scene subskills must keep 待分析剧本.
+        if not is_entity_design_phase or is_environment_plan_stage or is_scene_split_stage:
+            scoped_asset_category = ""
+        is_environment_asset_design = scoped_asset_category == "environment"
+        is_prop_asset_design = scoped_asset_category == "prop"
+        is_character_asset_design = scoped_asset_category == "character"
+        is_scoped_asset_design = bool(scoped_asset_category)
 
 
         persisted_subject_index_for_prompt = ""
@@ -693,10 +676,13 @@ async def execute_analyze_scene(
                 len(cover_brief or ""),
             )
 
-        if is_prop_asset_design:
-            brief_source = episode_adaptation_for_scene_beats
-            extra_prop_sources = [str(getattr(request, "text", "") or "")]
-            if getattr(request, "episode_id", None):
+        elif is_prop_asset_design:
+            request_text = str(getattr(request, "text", "") or "").strip()
+            request_has_prop_block = bool(
+                "[PROP_EXTRACT_START" in request_text.upper() or re.search(r"\[PROP\]", request_text)
+            )
+            extra_prop_sources = []
+            if not request_has_prop_block and getattr(request, "episode_id", None):
                 try:
                     _ep_for_prop = (
                         db.query(Episode)
@@ -730,30 +716,34 @@ async def execute_analyze_scene(
                         "[analyze_scene] failed loading adaptation for prop design brief: %s",
                         prop_brief_err,
                     )
-            brief_source = first_text_with_prop_extract(
-                str(getattr(request, "text", "") or ""),
-                brief_source,
-                *extra_prop_sources,
-            ) or brief_source
+            brief_source = (
+                request_text
+                if request_has_prop_block
+                else (
+                    first_text_with_prop_extract(
+                        request_text,
+                        episode_adaptation_for_scene_beats,
+                        *extra_prop_sources,
+                    )
+                    or episode_adaptation_for_scene_beats
+                )
+            )
             prop_brief = build_prop_asset_design_brief(brief_source)
-            if not prop_brief:
-                for source in (str(getattr(request, "text", "") or ""), brief_source, *extra_prop_sources):
-                    raw_block = ensure_prop_extract_block(source) or extract_prop_extract_blocks(source)
-                    if raw_block and "[PROP_EXTRACT_START" in raw_block.upper():
-                        prop_brief = build_prop_asset_design_brief(raw_block)
-                        if prop_brief:
-                            break
             user_content = assemble_prop_asset_design_user_content(prop_brief)
             logger.info(
-                "[analyze_scene] prop asset design user seed episode_id=%s prop_brief=%s script_block=omitted char_brief=omitted",
+                "[analyze_scene] prop asset design user seed episode_id=%s prop_brief=%s script_block=omitted char_brief=omitted request_has_block=%s",
                 getattr(request, "episode_id", None),
                 len(prop_brief or ""),
+                request_has_prop_block,
             )
 
-        if is_character_asset_design:
-            brief_source = episode_adaptation_for_scene_beats
-            extra_char_sources = [str(getattr(request, "text", "") or "")]
-            if getattr(request, "episode_id", None):
+        elif is_character_asset_design:
+            request_text = str(getattr(request, "text", "") or "").strip()
+            request_has_char_block = bool(
+                "[CHAR_EXTRACT_START" in request_text.upper() or re.search(r"\[CHAR\]", request_text)
+            )
+            extra_char_sources = []
+            if not request_has_char_block and getattr(request, "episode_id", None):
                 try:
                     _ep_for_char = (
                         db.query(Episode)
@@ -787,24 +777,25 @@ async def execute_analyze_scene(
                         "[analyze_scene] failed loading adaptation for character design brief: %s",
                         char_brief_err,
                     )
-            brief_source = first_text_with_char_extract(
-                str(getattr(request, "text", "") or ""),
-                brief_source,
-                *extra_char_sources,
-            ) or brief_source
+            brief_source = (
+                request_text
+                if request_has_char_block
+                else (
+                    first_text_with_char_extract(
+                        request_text,
+                        episode_adaptation_for_scene_beats,
+                        *extra_char_sources,
+                    )
+                    or episode_adaptation_for_scene_beats
+                )
+            )
             char_brief = build_character_asset_design_brief(brief_source)
-            if not char_brief:
-                for source in (str(getattr(request, "text", "") or ""), brief_source, *extra_char_sources):
-                    raw_block = ensure_char_extract_block(source) or extract_char_extract_blocks(source)
-                    if raw_block and "[CHAR_EXTRACT_START" in raw_block.upper():
-                        char_brief = build_character_asset_design_brief(raw_block)
-                        if char_brief:
-                            break
             user_content = assemble_character_asset_design_user_content(char_brief)
             logger.info(
-                "[analyze_scene] character asset design user seed episode_id=%s char_brief=%s script_block=omitted prop_brief=omitted",
+                "[analyze_scene] character asset design user seed episode_id=%s char_brief=%s script_block=omitted prop_brief=omitted request_has_block=%s",
                 getattr(request, "episode_id", None),
                 len(char_brief or ""),
+                request_has_char_block,
             )
 
         
@@ -1168,19 +1159,25 @@ async def execute_analyze_scene(
         except Exception:
             request_episode_id_for_prior = None
         if is_entity_design_phase and getattr(request, "project_id", None):
-            prior_prompt_types = {
-                _normalize_prior_entity_design_type(item)
-                for item in (subject_index_allowed_types_for_request or _PRIOR_ENTITY_DESIGN_TYPES)
-            }
-            prior_prompt_types = {item for item in prior_prompt_types if item in _PRIOR_ENTITY_DESIGN_TYPES}
-            if not prior_prompt_types and (
-                "entity_design_character" in prompt_file_lower
-                or "entity_design_prop" in prompt_file_lower
-                or "entity_design_environment" in prompt_file_lower
-                or mode_lower.startswith("2_pass_generate_assets")
-            ):
-                # Fallback when target types were not inferred: allow all non-poster design types.
-                prior_prompt_types = set(_PRIOR_ENTITY_DESIGN_TYPES)
+            if is_character_asset_design:
+                prior_prompt_types = {"character"}
+            elif is_prop_asset_design:
+                prior_prompt_types = {"prop"}
+            elif is_environment_asset_design:
+                prior_prompt_types = {"environment"}
+            else:
+                prior_prompt_types = {
+                    _normalize_prior_entity_design_type(item)
+                    for item in (subject_index_allowed_types_for_request or _PRIOR_ENTITY_DESIGN_TYPES)
+                }
+                prior_prompt_types = {item for item in prior_prompt_types if item in _PRIOR_ENTITY_DESIGN_TYPES}
+                if not prior_prompt_types and (
+                    "entity_design_character" in prompt_file_lower
+                    or "entity_design_prop" in prompt_file_lower
+                    or "entity_design_environment" in prompt_file_lower
+                    or mode_lower.startswith("2_pass_generate_assets")
+                ):
+                    prior_prompt_types = set(_PRIOR_ENTITY_DESIGN_TYPES)
 
             if prior_prompt_types and request_episode_id_for_prior and request_episode_id_for_prior > 0:
                 subject_index_for_prior_lookup = (
@@ -1222,8 +1219,33 @@ async def execute_analyze_scene(
             user_content = strip_injection_section(str(user_content or ""), "待分析剧本")
             if is_character_asset_design:
                 user_content = strip_injection_section(user_content, "全局统筹道具提取")
-            if is_prop_asset_design:
+            elif is_prop_asset_design:
                 user_content = strip_injection_section(user_content, "全局统筹角色提取")
+            user_blob = str(user_content or "")
+            logger.info(
+                "[analyze_scene] scoped asset design FINAL user episode_id=%s category=%s chars=%s has_char_start=%s has_prop_start=%s has_role_fence=%s has_prop_fence=%s",
+                getattr(request, "episode_id", None),
+                scoped_asset_category,
+                len(user_blob),
+                "[CHAR_EXTRACT_START" in user_blob.upper(),
+                "[PROP_EXTRACT_START" in user_blob.upper(),
+                "[全局统筹角色提取开始]" in user_blob,
+                "[全局统筹道具提取开始]" in user_blob,
+            )
+
+        skip_empty_asset_extract = bool(
+            (is_character_asset_design or is_prop_asset_design)
+            and not (
+                "[CHAR_EXTRACT_START" in str(user_content or "").upper()
+                or "[PROP_EXTRACT_START" in str(user_content or "").upper()
+            )
+        )
+        if skip_empty_asset_extract:
+            logger.info(
+                "[analyze_scene] skip LLM: scoped asset extract is 无 or empty episode_id=%s category=%s",
+                getattr(request, "episode_id", None),
+                scoped_asset_category,
+            )
 
         # Construct messages
         messages = [
@@ -1304,7 +1326,9 @@ async def execute_analyze_scene(
         provider = (config or {}).get("provider")
         model = (config or {}).get("model")
         reservation_tx = None
-        if billing_service.is_token_pricing(db, "analysis", provider, model):
+        if skip_empty_asset_extract:
+            pass
+        elif billing_service.is_token_pricing(db, "analysis", provider, model):
             est = billing_service.estimate_reserve_tokens_from_messages(messages)
             debug_meta.update({
                 "est_input_tokens": est.get("input_tokens", 0),
@@ -1616,7 +1640,22 @@ async def execute_analyze_scene(
         # Step 1: LLM call (all stages share the same transport loop).
         # Execute the LLM loop generically for all modes
         try:
-            loop1_res = await _run_loop(messages)
+            if skip_empty_asset_extract:
+                loop1_res = {
+                    "result_content": "",
+                    "segments_meta": [],
+                    "usage_total": {},
+                    "resolved_llm_routing": {},
+                    "finish_reason": "skip_empty_extract",
+                    "continuation_stopped_by_max_segments": False,
+                    "output_char_cap_reached": False,
+                    "continuation_reason_counts": {},
+                    "continuation_by_structure": 0,
+                    "provider_limit_hints": [],
+                    "llm_fallback_warnings": [],
+                }
+            else:
+                loop1_res = await _run_loop(messages)
         except getattr(llm_service, "AmbiguousLLMTransportError", Exception) as e:
             if type(e).__name__ == "AmbiguousLLMTransportError":
                 logger.error(f"[analyze_scene] {e}")

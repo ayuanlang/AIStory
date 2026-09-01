@@ -149,6 +149,85 @@ def test_load_subskill_results_accepts_object_content():
     assert merge_ai_stage_outputs_preserving_subskills(episode.ai_stage_outputs, "   ") == ""
 
 
+def test_merge_stage_outputs_drops_scenes_missing_from_new_split():
+    from app.services.script_analysis_flow.analyze_scene_stages import (
+        merge_ai_stage_outputs_preserving_subskills,
+    )
+
+    existing = json.dumps(
+        {
+            "version": 1,
+            "stages": {
+                "stage1": {
+                    "outputs": {
+                        "scene_subskill_results": {
+                            "key": "scene_subskill_results",
+                            "content": {
+                                "EP01_SC01": {"drama": "keep-sc01"},
+                                "EP01_SC02": {"drama": "stale-sc02"},
+                            },
+                        }
+                    }
+                }
+            },
+        },
+        ensure_ascii=False,
+    )
+    incoming = json.dumps(
+        {
+            "version": 1,
+            "stages": {
+                "stage1": {
+                    "outputs": {
+                        "scene_split": {
+                            "key": "scene_split",
+                            "content": "[SCENE_START:EP01_SC01]\nonly one scene\n[SCENE_END:EP01_SC01]",
+                        }
+                    }
+                }
+            },
+        },
+        ensure_ascii=False,
+    )
+    merged = json.loads(merge_ai_stage_outputs_preserving_subskills(existing, incoming))
+    kept = json.loads(merged["stages"]["stage1"]["outputs"]["scene_subskill_results"]["content"])
+    assert "EP01_SC01" in kept
+    assert "EP01_SC02" not in kept
+
+
+def test_prune_stale_scene_subskill_results_keeps_current_split_only():
+    from app.services.script_analysis_flow.analyze_scene_stages import (
+        prune_stale_scene_subskill_results,
+    )
+
+    episode = SimpleNamespace(
+        ai_stage_outputs=json.dumps(
+            {
+                "version": 1,
+                "stages": {
+                    "stage1": {
+                        "outputs": {
+                            "scene_subskill_results": {
+                                "key": "scene_subskill_results",
+                                "content": {
+                                    "EP01_SC01": {"drama": "keep"},
+                                    "EP01_SC02": {"drama": "drop"},
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+        )
+    )
+    assert prune_stale_scene_subskill_results(episode, ["EP01_SC01"]) == 1
+    kept = json.loads(
+        json.loads(episode.ai_stage_outputs)["stages"]["stage1"]["outputs"]["scene_subskill_results"]["content"]
+    )
+    assert list(kept) == ["EP01_SC01"]
+
+
 def test_persist_assets_extraction_writes_stage2_slots():
     episode = SimpleNamespace(
         id=3,
@@ -182,6 +261,18 @@ def test_reset_episode_analysis_progress_deletes_all_progress_rows():
     assert summary["removed_scene_units"] == 4
     assert summary["removed_pipeline_nodes"] == 9
     assert summary["removed_issues"] == 1
+
+
+def test_delete_stale_scene_progress_rows_returns_normalized_ids():
+    from app.services.script_analysis_flow import _delete_stale_scene_progress_rows
+
+    removed = _delete_stale_scene_progress_rows(
+        _DummyDb(),
+        project_id=1,
+        episode_id=2,
+        scene_ids=["EP01_SC02", "", "EP01_SC03"],
+    )
+    assert removed == ["EP01_SC02", "EP01_SC03"]
 
 
 def test_clear_episode_analysis_artifacts_blanks_stage_fields():

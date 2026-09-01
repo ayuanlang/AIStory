@@ -77,6 +77,7 @@ Storyboard 只等待当前 Scene 的工作区导入与 `asset_design_environment
 - `runPostImportSceneSubjectPipeline`：角色、独立道具与主环境均可在无 Subject Index 时启动；ENV 成功后 flush storyboard queue。
 - `analyze_scene` 资产设计节点禁止再以 Subject Index 作硬门槛；角色/道具/环境分别读提取块或环境规划。
 - 角色/道具提交给 LLM 的 `analyze_payload.text` 必须是编辑器同一真源切出的 `[CHAR_EXTRACT_START]` / `[PROP_EXTRACT_START]` 整块，禁止把环境规划或 Subject Index 当成角色/道具提取源。`latestStage1RawTextRef` 在环境规划完成后会被覆盖，选源时须先看 `scene_split`。
+- 每个资产设计节点只认自己的类：`asset_task_key` / `prompt_file` 互斥锁定 character|prop|environment。并行提交时 `target_entity_types` 即使带了兄弟类，也不得把本类提取块剥掉。有提取项时最终 user prompt 只注入项目信息 + 提取块本身，禁止注入处理说明/真源前言。本次全局统筹块内为`无`时以本次为准，禁止回退上次分析旧提取，也禁止提交 LLM。
 - 环境节点完成只认主环境已入库；仅有衍生环境不得算完成，也不得打开分镜 ENV 门闩。
 - 资产重跑真源：角色看 `[CHAR_EXTRACT]`，道具看 `[PROP_EXTRACT]`，主环境/封面看环境规划（`SCENE_ENV_IDENT` / 【主环境】 + 程序封面简报）。禁止再把 Subject Index 当作重跑硬门槛。
 - 角色 / 道具 / 环境重跑按类加锁，三类可同时发起。重跑其中一类时，另外两类不得进入运行态，也不得被全局 `isRetryingPhase2` 禁用。
@@ -84,6 +85,8 @@ Storyboard 只等待当前 Scene 的工作区导入与 `asset_design_environment
 - `handleRestartStage2`：跳过资产清单/场景编排 LLM，从建置稿重导入。
 - `tryResumeAnalysisFromExistingArtifacts`：缺 scenes 时从 staging 入表；仅 subjects JSON 不完整时只补 assets。
 - Scene 导入成功：queue/kick `kickoffStoryboardForImportedScene`，并更新 `storyboardTaskProgress`。
+- 环境规划必须注入待分析剧本（全局统筹成稿）。禁止把 `环境规划` 误判成环境资产设计而剥掉剧本。角色/道具/主环境**设计**才不注入待分析剧本。
+- 环境规划与所有分场子技能（文戏/武戏/现场编排/建置）除结束标志外，截取正文长度必须大于 100 字；只有结束标志或空壳视为不完整，自动换接口重试。
 - `run_scene_analysis_flow_node`：单节点执行；`scene_subskill_pipeline` 节点内部负责按场并发及场内串行，并在 staging 后 upsert 工作区 Scene。
 - API：`POST /prompts/scene-analysis/flow/run-node`；重生衍生环境：`POST /prompts/scene-analysis/flow/ingest-derived-environments`。
 

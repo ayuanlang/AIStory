@@ -149,9 +149,33 @@ def splice_char_extract_into_script(script_text: str, char_extract: str) -> str:
     return f"{before}\n\n{extract}\n{end_token}{after}"
 
 
+def char_extract_is_explicit_none(script_text: str) -> bool:
+    text = str(script_text or "")
+    if not CHAR_EXTRACT_START_PATTERN.search(text):
+        return False
+    inner = _char_extract_inner(text) or re.sub(
+        r"`?\[CHAR_EXTRACT_(START|END)(?::[^\s\]]+)?\]`?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    return bool(re.match(r"^\s*无\s*$", inner or ""))
+
+
+def _looks_like_char_extract(script_text: str) -> bool:
+    text = _clean(script_text)
+    if not text or char_extract_is_explicit_none(text):
+        return False
+    if char_extract_has_items(text):
+        return True
+    return bool(collect_loose_char_item_blocks(text))
+
+
 def first_text_with_char_extract(*candidates: object) -> str:
     for candidate in candidates:
         text = _clean(candidate)
+        if text and CHAR_EXTRACT_START_PATTERN.search(text):
+            return "" if char_extract_is_explicit_none(text) else text
         if text and char_extract_has_items(text):
             return text
     return ""
@@ -160,20 +184,22 @@ def first_text_with_char_extract(*candidates: object) -> str:
 def build_character_asset_design_brief(adapted_script: str) -> str:
     """Scene-split character extracts that must become independent character assets."""
     script = _clean(adapted_script)
-    if not script or not char_extract_has_items(script):
+    if not script:
         return ""
-    body = ensure_char_extract_block(script) or extract_char_extract_blocks(script) or script
-    preface = (
-        "角色资产设计真源。全局统筹已完成角色提取与按场分配："
-        "本轮用户侧只注入项目信息 + 本块；禁止把待分析剧本当输入；禁止注入道具提取或道具资产信息。"
-        "本块含具名角色/换装衍生/龙套/群演簇特征。"
-        "耳环/胸针等已并入衣着的配饰只画进定妆，不得另造道具依赖。"
-        "禁止重做切场或环境落点；禁止另起同义角色名；外形/衣着/评价原样服务四视图。"
-        "须读各条身份=的现时/轨迹/曾经：原富贵后落寞与一直贫困须在定妆上可目视区分，禁压成现时贫困快照。"
-        "对白声线与上屏物理文字标签（含字体/字色）不进生图词。"
-        "Subject Index 若仍含 character 行只作旧稿兼容，不得压过本块。"
-    )
-    return wrap_injection_section("全局统筹角色提取", f"{preface}\n\n{body}")
+    body = ensure_char_extract_block(script) or extract_char_extract_blocks(script)
+    if not body and _looks_like_char_extract(script):
+        body = script
+    if not body:
+        return ""
+    inner = _char_extract_inner(body) or re.sub(
+        r"`?\[CHAR_EXTRACT_(START|END)(?::[^\s\]]+)?\]`?",
+        "",
+        body,
+        flags=re.IGNORECASE,
+    ).strip()
+    if not inner or re.match(r"^\s*无\s*$", inner):
+        return ""
+    return wrap_injection_section("全局统筹角色提取", body)
 
 
 def assemble_character_asset_design_user_content(*parts: object) -> str:

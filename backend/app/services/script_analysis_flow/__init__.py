@@ -35,6 +35,7 @@ from .analyze_scene_stages import (
     load_stage1_output_text,
     lookup_persisted_scene_subskill_steps,
     merge_ai_stage_outputs_preserving_subskills,
+    prune_stale_scene_subskill_results,
     persist_scene_subskill_named_step,
     persist_scene_subskill_step_result,
     persist_script_optimization_stage,
@@ -573,6 +574,38 @@ def _reconcile_legacy_numeric_scene_rows(
             row.parse_status = "failed"
             row.parse_error_code = "SCENE_ID_SUPERSEDED_BY_CANONICAL"
             row.updated_at = now_iso
+
+
+def _delete_stale_scene_progress_rows(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene_ids: List[str],
+) -> List[str]:
+    """Hard-delete leftover per-scene progress so a shorter rerun cannot show ghost rows."""
+    stale_ids = [str(scene_id).strip() for scene_id in (scene_ids or []) if str(scene_id).strip()]
+    if not stale_ids:
+        return []
+    if ScriptProgressSceneUnit is not None:
+        db.query(ScriptProgressSceneUnit).filter(
+            ScriptProgressSceneUnit.project_id == int(project_id),
+            ScriptProgressSceneUnit.episode_id == int(episode_id),
+            ScriptProgressSceneUnit.scene_id.in_(stale_ids),
+        ).delete(synchronize_session=False)
+    if ScriptProgressPipelineNode is not None:
+        db.query(ScriptProgressPipelineNode).filter(
+            ScriptProgressPipelineNode.project_id == int(project_id),
+            ScriptProgressPipelineNode.episode_id == int(episode_id),
+            ScriptProgressPipelineNode.scene_id.in_(stale_ids),
+        ).delete(synchronize_session=False)
+    logger.info(
+        "[scene_progress] pruned stale scenes project_id=%s episode_id=%s ids=%s",
+        project_id,
+        episode_id,
+        stale_ids,
+    )
+    return stale_ids
 
 
 def normalize_node_status(value: Optional[str], default: str = "queued") -> str:
@@ -2373,14 +2406,22 @@ def sync_scene_units_from_script_text(
         episode_prefix=episode_prefix,
     )
 
+    removed_stale_scene_ids: List[str] = []
     if not partial:
-        for scene_id, row in existing_by_scene.items():
-            if scene_id in incoming_scene_ids:
-                continue
-            row.import_status = "skipped"
-            row.parse_status = "failed"
-            row.parse_error_code = "SCENE_MARKER_NOT_FOUND_IN_LATEST_SCRIPT"
-            row.updated_at = now_iso
+        stale_scene_ids = [
+            scene_id
+            for scene_id in existing_by_scene
+            if scene_id not in incoming_scene_ids
+        ]
+        if stale_scene_ids:
+            removed_stale_scene_ids = _delete_stale_scene_progress_rows(
+                db,
+                project_id=int(project_id),
+                episode_id=int(episode_id),
+                scene_ids=stale_scene_ids,
+            )
+        if episode_row is not None:
+            prune_stale_scene_subskill_results(episode_row, incoming_scene_ids)
 
     return {
         "project_id": int(project_id),
@@ -2389,6 +2430,7 @@ def sync_scene_units_from_script_text(
         "scene_count": len(units),
         "scene_ids": [unit.scene_id for unit in units],
         "parse_source": parse_source,
+        "removed_stale_scene_ids": removed_stale_scene_ids,
     }
 
 
@@ -3214,6 +3256,7 @@ __all__ = [
     "load_stage1_output_text",
     "lookup_persisted_scene_subskill_steps",
     "merge_ai_stage_outputs_preserving_subskills",
+    "prune_stale_scene_subskill_results",
     "persist_scene_subskill_named_step",
     "persist_scene_subskill_step_result",
     "persist_script_optimization_stage",

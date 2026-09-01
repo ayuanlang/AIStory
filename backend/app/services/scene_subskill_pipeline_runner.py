@@ -195,7 +195,7 @@ _PERSISTED_STEP_MARKERS = {
 
 def persisted_subskill_step_usable(step_key: str, text: str) -> bool:
     body = str(text or "").strip()
-    if len(body) < 40:
+    if len(body) <= 100:
         return False
     key = str(step_key or "").strip()
     markers = _PERSISTED_STEP_MARKERS.get(key)
@@ -788,7 +788,9 @@ def _recover_ready_framing_from_llm_log(
         "项目视觉回填",
     ).strip()
     stripped = _strip_subskill_completion_marker(cleaned, FRAMING_PROMPT) if cleaned else ""
-    candidate = stripped or cleaned
+    from app.services.script_analysis_flow_runner import scoped_node_body_usable
+
+    candidate = stripped if scoped_node_body_usable(stripped) else ""
     extracted = _try_extract_subskill_scene_block(candidate, scene_id, "") if candidate else ""
     ready = _coerce_ready_framing_block(extracted, candidate, scene_id)
     if ready:
@@ -1063,6 +1065,30 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
 
 def _completion_marker_pattern(marker: str):
     return re.compile(rf"`?{re.escape(marker)}`?", re.IGNORECASE)
+
+
+def _subskill_marker_present(text: str, prompt_file: str) -> bool:
+    source = str(text or "")
+    if not source:
+        return False
+    markers = [_SUBSKILL_COMPLETION_MARKERS.get(prompt_file) or ""]
+    if (
+        prompt_file in _LEGACY_COMBAT_PROMPTS
+        or prompt_file == COMBAT_PROMPT
+        or "subskill_vfx" in prompt_file
+        or "subskill_xian" in prompt_file
+        or "subskill_combat" in prompt_file
+    ):
+        markers.extend(_COMBAT_COMPLETION_MARKERS)
+    seen = set()
+    for marker in markers:
+        key = str(marker or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        if _completion_marker_pattern(key).search(source):
+            return True
+    return False
 
 
 def _strip_subskill_completion_marker(text: str, prompt_file: str) -> str:
@@ -1853,8 +1879,12 @@ async def _call_scene_subskill(
             _extract_analysis_text_from_result(result)
         ).strip()
         text = strip_injection_section(text, "项目视觉回填")
+        from app.services.script_analysis_flow_runner import scoped_node_body_usable
+
         stripped = _strip_subskill_completion_marker(text, prompt_file) if text else ""
-        candidate = stripped or text
+        marker_present = _subskill_marker_present(text, prompt_file)
+        body_usable = scoped_node_body_usable(stripped)
+        candidate = stripped if body_usable else ""
         extracted = (
             _try_extract_subskill_scene_block(
                 candidate,
@@ -1865,29 +1895,18 @@ async def _call_scene_subskill(
             if candidate
             else ""
         )
-        require_marker = prompt_file in {FRAMING_PROMPT, STAGING_PROMPT}
         if prompt_file == FRAMING_PROMPT:
-            ready = _coerce_ready_framing_block(extracted, candidate, scene_id)
-            if ready and (stripped or extracted):
-                if not stripped:
-                    logger.warning(
-                        "[scene_subskill_pipeline] accepted complete scene without end marker scene=%s prompt=%s",
-                        scene_id,
-                        prompt_file,
-                    )
+            ready = _coerce_ready_framing_block(extracted, candidate, scene_id) if candidate else ""
+            if ready and body_usable:
                 return ready
-        elif extracted and (stripped or not require_marker):
-            if not stripped:
-                logger.warning(
-                    "[scene_subskill_pipeline] accepted complete scene without end marker scene=%s prompt=%s",
-                    scene_id,
-                    prompt_file,
-                )
+        elif extracted and body_usable:
             return extracted
         if not text:
             failure_code = "SCENE_SUBSKILL_EMPTY_OUTPUT"
-        elif not stripped:
+        elif not marker_present:
             failure_code = "SCENE_SUBSKILL_COMPLETION_MARKER_MISSING"
+        elif not body_usable:
+            failure_code = "SCENE_SUBSKILL_OUTPUT_TOO_SHORT"
         else:
             try:
                 _extract_single_scene_block(
@@ -1903,12 +1922,13 @@ async def _call_scene_subskill(
             else:
                 failure_code = "SCENE_SUBSKILL_OUTPUT_INVALID"
         logger.warning(
-            "[scene_subskill_pipeline] incomplete output scene=%s prompt=%s attempt=%s/%s code=%s expected_marker=%s",
+            "[scene_subskill_pipeline] incomplete output scene=%s prompt=%s attempt=%s/%s code=%s body_chars=%s expected_marker=%s",
             scene_id,
             prompt_file,
             attempt,
             max_attempts,
             failure_code,
+            len(stripped or ""),
             completion_marker,
         )
         project_id = int(base_payload.get("project_id") or 0)
@@ -1929,7 +1949,7 @@ async def _call_scene_subskill(
                     "scene_id": scene_id,
                 },
                 error_code=failure_code,
-                error_message=f"{completion_marker} missing; retrying scene subskill",
+                error_message=f"{failure_code}; retrying scene subskill",
             )
             task_db.commit()
         if attempt >= max_attempts:

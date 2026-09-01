@@ -290,6 +290,82 @@ def _infer_subject_index_allowed_types_for_request(
         return {"environment", "cover"}
     return set()
 
+
+def _resolve_scoped_asset_design_category(
+    *,
+    scene_analysis_features: Any = None,
+    scene_analysis_mode: Any = None,
+    prompt_file: Any = None,
+    action_name: Any = None,
+) -> str:
+    """Exclusive category for Stage-3 scoped injection: character | prop | environment | ''."""
+    prompt = str(prompt_file or "").strip().lower().replace("\\", "/")
+    mode = str(scene_analysis_mode or "").strip().lower().replace("-", "_")
+    action = str(action_name or "").strip().lower()
+    if (
+        "subskill_environment" in prompt
+        or mode in {"environment_plan", "stage1", "stage_1"}
+        or "environment_plan" in mode
+        or "规划" in action
+    ) and "entity_design" not in prompt and "2_pass_generate_assets" not in mode:
+        return ""
+
+    features = scene_analysis_features if isinstance(scene_analysis_features, dict) else {}
+    task_key = _normalize_requested_asset_target_type(
+        features.get("asset_task_key") or features.get("asset_category")
+    )
+    if task_key == "character":
+        return "character"
+    if task_key == "prop":
+        return "prop"
+    if task_key in {"environment", "cover"}:
+        return "environment"
+
+    if "entity_design_character" in prompt:
+        return "character"
+    if "entity_design_prop" in prompt:
+        return "prop"
+    if "entity_design_environment" in prompt or "entity_design_poster" in prompt:
+        return "environment"
+
+    if "2_pass_generate_assets_characters" in mode:
+        return "character"
+    if "2_pass_generate_assets_props" in mode:
+        return "prop"
+    if "2_pass_generate_assets_environments" in mode:
+        return "environment"
+
+    if action:
+        has_char = "角色设计" in action or "character" in action
+        has_prop = "道具设计" in action or ("prop" in action and "prompt" not in action)
+        has_env = (
+            "环境设计" in action
+            or "环境资产" in action
+            or "封面设计" in action
+            or "entity_design_environment" in action
+            or "asset_design_environment" in action
+        )
+        if has_char and not has_prop and not has_env:
+            return "character"
+        if has_prop and not has_char and not has_env:
+            return "prop"
+        if has_env and not has_char and not has_prop:
+            return "environment"
+
+    allowed = _infer_subject_index_allowed_types_for_request(
+        mode_lower=mode,
+        prompt_file_lower=prompt,
+        scene_analysis_features=features,
+    )
+    if allowed == {"character"}:
+        return "character"
+    if allowed == {"prop"}:
+        return "prop"
+    if allowed & {"environment", "cover"} and not (allowed & {"character", "prop"}):
+        return "environment"
+    return ""
+
+
 def _filter_subject_index_text_by_types(
     subject_index_text: Any,
     allowed_types: set,

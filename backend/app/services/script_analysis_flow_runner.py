@@ -134,6 +134,15 @@ def _extract_environment_patches(environment_output: str) -> Dict[str, str]:
     return patches
 
 
+MIN_SCOPED_NODE_BODY_CHARS = 100
+
+
+def scoped_node_body_usable(text: Any, min_chars: int = MIN_SCOPED_NODE_BODY_CHARS) -> bool:
+    """True when stripped node body is more than an end marker / empty stub."""
+    body = str(text or "").strip()
+    return len(body) > int(min_chars or MIN_SCOPED_NODE_BODY_CHARS)
+
+
 def _strip_required_completion_marker(text: str, marker: str) -> str:
     source = str(text or "").strip()
     if not source or source.count(marker) != 1:

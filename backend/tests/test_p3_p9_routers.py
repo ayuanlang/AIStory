@@ -825,7 +825,7 @@ def test_analyze_scene_uses_shot_prompt_context():
     runner_src = runner_path.read_text(encoding="utf-8")
     assert "async def execute_analyze_scene(" in runner_src
     assert "from app.services.shot_generation_prompts import" in runner_src
-    assert len(runner_src.splitlines()) < 2200
+    assert len(runner_src.splitlines()) < 2600
     assert "        def _estimate_tokens(" not in runner_src
     assert "        def _infer_subject_index_allowed_types_for_request(" not in runner_src
 

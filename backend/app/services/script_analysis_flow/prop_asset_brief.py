@@ -109,9 +109,33 @@ def splice_prop_extract_into_script(script_text: str, prop_extract: str) -> str:
     return f"{before}\n\n{extract}\n{end_token}{after}"
 
 
+def prop_extract_is_explicit_none(script_text: str) -> bool:
+    text = str(script_text or "")
+    if not PROP_EXTRACT_START_PATTERN.search(text):
+        return False
+    inner = _prop_extract_inner(text) or re.sub(
+        r"`?\[PROP_EXTRACT_(START|END)(?::[^\s\]]+)?\]`?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    return bool(re.match(r"^\s*无\s*$", inner or ""))
+
+
+def _looks_like_prop_extract(script_text: str) -> bool:
+    text = _clean(script_text)
+    if not text or prop_extract_is_explicit_none(text):
+        return False
+    if prop_extract_has_items(text):
+        return True
+    return bool(collect_loose_prop_item_blocks(text))
+
+
 def first_text_with_prop_extract(*candidates: object) -> str:
     for candidate in candidates:
         text = _clean(candidate)
+        if text and PROP_EXTRACT_START_PATTERN.search(text):
+            return "" if prop_extract_is_explicit_none(text) else text
         if text and prop_extract_has_items(text):
             return text
     return ""
@@ -120,21 +144,22 @@ def first_text_with_prop_extract(*candidates: object) -> str:
 def build_prop_asset_design_brief(adapted_script: str) -> str:
     """Scene-split XOR leftovers that must become independent props."""
     script = _clean(adapted_script)
-    if not script or not prop_extract_has_items(script):
+    if not script:
         return ""
-    body = ensure_prop_extract_block(script) or extract_prop_extract_blocks(script) or script
-    preface = (
-        "道具资产设计真源。全局统筹已完成独立道具提取："
-        "本轮用户侧只注入项目信息 + 本块；禁止把待分析剧本当输入；禁止注入角色提取或角色定妆信息。"
-        "已并入角色衣着的配饰不得再画成独立道具；"
-        "可归环境陈设的家具装修不得再画成道具；"
-        "本块只含过极严门槛、明文全局或载具外部本体的独立道具特征。"
-        "禁止重做切场或环境落点；禁止另起同义道具名；定位/作用/外形/尺度/参照主体原样服务四视图。"
-        "须承接每条 PROP 的参照主体=名=与长=/高=/宽=及尺度=：有则原样画进第一第二宫；仅空缺才自行补线性图与对参照的长高宽比例。"
-        "参照与道具完全隔离、禁止接触。"
-        "Subject Index 若仍含 prop 行只作旧稿兼容，不得压过本块。"
-    )
-    return wrap_injection_section("全局统筹道具提取", f"{preface}\n\n{body}")
+    body = ensure_prop_extract_block(script) or extract_prop_extract_blocks(script)
+    if not body and _looks_like_prop_extract(script):
+        body = script
+    if not body:
+        return ""
+    inner = _prop_extract_inner(body) or re.sub(
+        r"`?\[PROP_EXTRACT_(START|END)(?::[^\s\]]+)?\]`?",
+        "",
+        body,
+        flags=re.IGNORECASE,
+    ).strip()
+    if not inner or re.match(r"^\s*无\s*$", inner):
+        return ""
+    return wrap_injection_section("全局统筹道具提取", body)
 
 
 def assemble_prop_asset_design_user_content(*parts: object) -> str:

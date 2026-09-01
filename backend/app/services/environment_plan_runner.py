@@ -76,6 +76,7 @@ async def _call_environment_plan_episode(
     from app.services.script_analysis_flow_runner import (
         _strip_required_completion_marker,
         build_script_analysis_retry_api_attempts,
+        scoped_node_body_usable,
     )
 
     payload = dict(base_payload)
@@ -111,13 +112,20 @@ async def _call_environment_plan_episode(
         )
         raw_text = _extract_analysis_text_from_result(result)
         patch_text = _strip_required_completion_marker(raw_text, _ENVIRONMENT_COMPLETION_MARKER)
-        if patch_text:
+        if scoped_node_body_usable(patch_text):
             return patch_text
+        last_error = (
+            "ENVIRONMENT_PLAN_OUTPUT_TOO_SHORT"
+            if _ENVIRONMENT_COMPLETION_MARKER in str(raw_text or "")
+            else "ENVIRONMENT_PLAN_COMPLETION_MARKER_MISSING"
+        )
         switched = api_id > 0 and api_id != original_api_id
         logger.warning(
-            "[environment_plan] incomplete episode attempt=%s/%s expected_marker=%s switched_api=%s",
+            "[environment_plan] incomplete episode attempt=%s/%s code=%s body_chars=%s expected_marker=%s switched_api=%s",
             attempt,
             max_attempts,
+            last_error,
+            len(patch_text or ""),
             _ENVIRONMENT_COMPLETION_MARKER,
             switched,
         )
@@ -133,7 +141,7 @@ async def _call_environment_plan_episode(
                 retry_count=attempt,
                 runtime_meta={"business_event": "retry", "business_reason": "环境规划返回不完整"},
                 error_code=last_error,
-                error_message="completion marker missing; retrying environment plan like global orchestration",
+                error_message=f"{last_error}; retrying environment plan like global orchestration",
             )
             db.commit()
     raise HTTPException(status_code=422, detail=f"{last_error}:{_ENVIRONMENT_COMPLETION_MARKER}")

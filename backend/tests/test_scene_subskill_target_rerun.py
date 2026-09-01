@@ -52,42 +52,44 @@ SC02新正文
 
 DRAMA_OK = (
     "[SCENE_START:EP01_SC01]\n"
-    "文戏增强已完成的正文，足够长以便续跑时识别为可用落库。\n"
+    "文戏增强已完成的正文，足够长以便续跑时识别为可用落库，长度须超过一百字门槛，不得当成空壳。\n"
     "[DRAMA_STANDARDIZATION_OUTPUT_END]\n"
     "[SCENE_END:EP01_SC01]"
 )
 DRAMA_STRIPPED = (
     "[SCENE_START:EP01_SC01]\n"
-    "文戏增强已完成并已去掉结束标签的正文，续跑仍应识别。\n"
+    "文戏增强已完成并已去掉结束标签的正文，续跑仍应识别为可用落库，长度须超过一百字门槛，不得当成空壳跳过本场文戏。\n"
     "[SCENE_END:EP01_SC01]"
 )
 FRAMING_STRIPPED = (
     "[SCENE_START:EP01_SC01]\n"
     "【Beat主体定位】B1=甲=可见性=V｜组=无\n"
-    "【取景锁定】当前环境=主环境 景别=MS 构图=中景 镜头角度=平视 选择证据=原文\n"
+    "【取景锁定】当前环境=主环境 景别=MS 构图=中景 镜头角度=平视 选择证据=原文对峙\n"
     "[DERIVED_ENV:0度沙漠]\n"
+    "现场编排已去掉结束标签，续跑仍应识别为可用落库，长度须超过一百字门槛。\n"
     "[SCENE_END:EP01_SC01]"
 )
 STAGING_OK = (
     "[SCENE_START:EP01_SC01]\n"
-    "建置与入戏已完成的正文，足够长以便跳过整场。\n"
+    "建置与入戏已完成的正文，足够长以便跳过整场，长度须超过一百字门槛。\n"
     "[STAGING_ENV_OUTPUT_END]\n"
     "[SCENE_END:EP01_SC01]"
 )
 STAGING_STRIPPED = (
     "[SCENE_START:EP01_SC01]\n"
-    "【建置】【入戏】入戏状态=站立 出场状态=离开 ENV氛围微=风沙\n"
+    "【建置】堂心空台 【入戏】入戏状态=站立 出场状态=离开 ENV氛围微=风沙灯影\n"
+    "建置稿已去掉结束标签，续跑仍应识别为可用落库，长度须超过一百字门槛，不得当成空壳跳过。\n"
     "[SCENE_END:EP01_SC01]"
 )
 COMBAT_OK = (
     "[SCENE_START:EP01_SC02]\n"
-    "武戏增强已完成的正文，足够长以便续跑时识别为可用落库。\n"
+    "武戏增强已完成的正文，足够长以便续跑时识别为可用落库，长度须超过一百字门槛。\n"
     "[COMBAT_SUBSKILL_OUTPUT_END]\n"
     "[SCENE_END:EP01_SC02]"
 )
 COMBAT_LEGACY = (
     "[SCENE_START:EP01_SC02]\n"
-    "旧特效增强落库仍应识别为武戏完成。足够长以便续跑识别。\n"
+    "旧特效增强落库仍应识别为武戏完成。足够长以便续跑识别，长度须超过一百字门槛。\n"
     "[VFX_SUBSKILL_OUTPUT_END]\n"
     "[SCENE_END:EP01_SC02]"
 )
@@ -132,7 +134,7 @@ def test_resume_reads_combat_route_from_persisted_drama_when_task_flags_false():
         "[XIAN] 命中=否｜类型=无｜证据=无\n"
         "[SPECIAL_SCENE_ANALYSIS_END:EP01_SC02]\n"
         "[SCENE_START:EP01_SC02]\n"
-        "文戏增强已完成的正文，足够长以便续跑时识别为可用落库。\n"
+        "文戏增强已完成的正文，足够长以便续跑时识别为可用落库，长度须超过一百字门槛。\n"
         "[DRAMA_STANDARDIZATION_OUTPUT_END]\n"
         "[SCENE_END:EP01_SC02]"
     )
