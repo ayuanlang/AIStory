@@ -670,6 +670,15 @@ def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> s
     return source
 
 
+def assert_staging_output_complete(text: str, scene_id: str = "") -> str:
+    """Refuse framing or truncated text after 建置与入戏. End marker is stripped before persist."""
+    body = str(text or "").strip()
+    sid = str(scene_id or "").strip() or "-"
+    if "【建置】" not in body or "【入戏】" not in body:
+        raise HTTPException(status_code=422, detail=f"STAGING_OUTPUT_INCOMPLETE:{sid}")
+    return body
+
+
 def _coerce_ready_framing_block(extracted: str, candidate: str, scene_id: str) -> str:
     """Accept extracted scene, spliced trailing payload, or the raw LLM body."""
     sources = []
@@ -1033,6 +1042,8 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
         return "场景现场编排已返回，但缺少主体定位或衍生环境提取，不能进入建置与入戏"
     if "STAGING_BLOCKED_ILLEGAL_DERIVED_ENV" in text:
         return "场景现场编排衍生环境名不合法，不能进入建置与入戏"
+    if "STAGING_OUTPUT_INCOMPLETE" in text:
+        return "建置与入戏未完整返回，已中断，未进入分镜"
     if "STAGING_BLOCKED_FRAMING" in text:
         return "场景现场编排未完成，不能进入建置与入戏"
     if "ROUTING_MISSING" in text:
@@ -1922,29 +1933,6 @@ async def _call_scene_subskill(
             )
             task_db.commit()
         if attempt >= max_attempts:
-            if previous_block and prompt_file == STAGING_PROMPT:
-                try:
-                    assert_derived_framing_ready_for_staging(previous_block, scene_id)
-                except HTTPException:
-                    logger.warning(
-                        "[scene_subskill_pipeline] refused staging fallback without framing scene=%s code=%s",
-                        scene_id,
-                        failure_code,
-                    )
-                else:
-                    fallback = _try_extract_subskill_scene_block(
-                        previous_block,
-                        scene_id,
-                        fallback_special,
-                        previous_block=previous_block,
-                    )
-                    if fallback:
-                        logger.warning(
-                            "[scene_subskill_pipeline] staging fell back to previous scene block scene=%s code=%s",
-                            scene_id,
-                            failure_code,
-                        )
-                        return fallback
             raise HTTPException(
                 status_code=422,
                 detail=f"{failure_code}:{scene_id}:{completion_marker}",
@@ -1999,15 +1987,18 @@ async def _run_derived_framing_then_staging(
             scene_id,
             PIPELINE_CONTRACT_VERSION,
         )
-        current_block = await _call_scene_subskill(
-            task_db=task_db,
-            current_user=user_principal,
-            base_payload=raw_payload,
-            prompt_file=prompt_file,
-            scene_input=current_input,
-            scene_id=scene_id,
-            fallback_special=special,
-            previous_block=current_block,
+        current_block = assert_staging_output_complete(
+            await _call_scene_subskill(
+                task_db=task_db,
+                current_user=user_principal,
+                base_payload=raw_payload,
+                prompt_file=prompt_file,
+                scene_input=current_input,
+                scene_id=scene_id,
+                fallback_special=special,
+                previous_block=current_block,
+            ),
+            scene_id,
         )
         called.append("staging")
         persist_scene_subskill_named_step(
@@ -2095,6 +2086,8 @@ async def _run_derived_framing_then_staging(
             fallback_special=special,
             previous_block=current_block,
         )
+        if step_name == "staging":
+            current_block = assert_staging_output_complete(current_block, scene_id)
         if step_name == "derived_framing":
             current_block = assert_derived_framing_ready_for_staging(current_block, scene_id)
             ingest_meta = _ingest_derived_environments_after_framing(
@@ -2500,6 +2493,7 @@ async def run_scene_subskill_pipeline(
                     skip_framing=scene_start == "staging",
                     entity_token_brief=str(task.get("entity_token_brief") or ""),
                 )
+                current_block = assert_staging_output_complete(current_block, scene_id)
                 if project_id > 0 and node_episode_id > 0:
                     workspace_import = {}
                     try:

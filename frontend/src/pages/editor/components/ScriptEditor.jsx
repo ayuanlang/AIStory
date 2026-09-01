@@ -5508,9 +5508,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!namesOnly) return '';
         return [
             '[Stage 2-1 Subject Index - REQUIRED INPUT]',
-            'CHAR/PROP name whitelist plus 【服化道连续性】 (which scene / when form changes). Do not expect other asset descriptions.',
+            'CHAR/PROP name whitelist plus 【服化道连续性】 (fundamental change? new CHAR/PROP? from which scene/beat to enable). Do not expect other asset descriptions.',
             'NAME LOCK: CHAR/PROP wrap names MUST be character-identical to the CHAR:/PROP: lists below.',
-            'Use 【服化道连续性】 to wrap the matching CHAR/PROP variant name at the stated scene/beat.',
+            'Use 【服化道连续性】 to wrap the new CHAR/PROP name from the stated enable scene/beat; before that point use the base name.',
             'ENV and Environment Name MUST be character-identical to 【本场衍生环境名】 only — never a bare main-environment name.',
             'Forbidden: any rename, polish, invent, or ENV wrap of a bare main-environment name. Mismatch = discard and rewrite.',
             wrapInjectionSection('Subject Index', namesOnly),
@@ -10931,6 +10931,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (String(node?.node_name || '').trim() !== 'scene_subskill_scene') continue;
             const status = String(node?.status || '').trim().toLowerCase();
             if (status !== 'success' && status !== 'warning') continue;
+            if (!pipelineNodeHasStagingImportBody({ ...node, status: 'success' })) continue;
             const sceneId = String(node?.scene_id || '').trim();
             if (!sceneId) continue;
             const meta = (node?.runtime_meta && typeof node.runtime_meta === 'object')
@@ -10939,8 +10940,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const workspaceImport = (meta.workspace_import && typeof meta.workspace_import === 'object')
                 ? meta.workspace_import
                 : {};
-            // Staging node success means 建置入戏 finished; backend already upserted the
-            // workspace Scene. Kick off this scene's storyboard immediately.
+            // Only kick storyboard after a real 建置+入戏 body. Incomplete staging
+            // (missing end marker) must stay failed and must not open this gate.
             await registerSceneImportedAndKickoffStoryboard({
                 sceneId,
                 sceneOrder: Number(node?.scene_order || meta.scene_order || 0) || deriveSceneOrderFromSceneId(sceneId),

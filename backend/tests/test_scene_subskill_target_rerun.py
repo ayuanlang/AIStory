@@ -243,6 +243,20 @@ def test_resume_uses_stripped_persisted_blocks_without_end_markers():
     assert plan.skipped_reason == "resume_framing"
 
 
+def test_staging_output_complete_rejects_framing_fallback():
+    from fastapi import HTTPException
+
+    from app.services.scene_subskill_pipeline_runner import assert_staging_output_complete
+
+    assert assert_staging_output_complete(STAGING_STRIPPED, "EP01_SC01") == STAGING_STRIPPED.strip()
+    try:
+        assert_staging_output_complete(FRAMING_STRIPPED, "EP01_SC01")
+    except HTTPException as exc:
+        assert "STAGING_OUTPUT_INCOMPLETE" in str(exc.detail)
+    else:
+        raise AssertionError("framing text must not pass as staging")
+
+
 def test_timeout_like_error_detects_hard_cancel_and_read_timeout():
     assert is_timeout_like_error(TimeoutError("LLM call timed out after 900s"))
     assert is_timeout_like_error(Exception("vendor failed: Read timeout: wall-clock"))

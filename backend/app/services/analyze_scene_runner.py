@@ -564,7 +564,7 @@ async def execute_analyze_scene(
                     "Do not expect other asset descriptions. Do not use the full Subject Index table.\n"
                     "Inject all CHAR and PROP names. ENV is derived-only ({N}度…) — never a bare main-environment name.\n"
                     "CHAR/PROP wrap names MUST be character-identical to the CHAR:/PROP: names below.\n"
-                    "【服化道连续性】 tells which scene / beat a CHAR or PROP form change starts; use it to wrap the matching variant name.\n"
+                    "【服化道连续性】 tells whether a form change is fundamental, whether a new CHAR/PROP must be created, and from which scene/beat to enable that new asset; wrap the matching variant name from the enable point.\n"
                     "ENV:[] and Environment Name MUST use the ENV list or 【本场衍生环境名】 — never a bare main-environment name.\n"
                     "Do NOT wrap names inside dialogue/台词 or physical text on letters, screens, books, signs.\n"
                     "If a Beat entity is not in these lists, keep Stage-1 natural language and do NOT wrap it.\n\n"
