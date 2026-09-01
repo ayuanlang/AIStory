@@ -71,9 +71,10 @@ _FLOW_DOWNSTREAM_NODES = {
     ],
     "environment_plan": [
         "asset_design_environment",
-        "storyboard_generation",
     ],
-    "scene_subskill_pipeline": ["storyboard_generation"],
+    # Storyboard is frontend-owned (per-scene generateSceneShots after staging+ENV).
+    # Queuing a backend placeholder here left storyboard_generation stuck in queued
+    # until finalize_stale marked it NODE_TIMEOUT after 900s.
 }
 
 _ENV_SCENE_PATCH_PATTERN = re.compile(

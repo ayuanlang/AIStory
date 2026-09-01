@@ -13165,6 +13165,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } else if (['failed', 'blocked'].includes(status) && !['failed', 'blocked'].includes(previous?.status)) {
                 const rawFailure = String(node?.last_error_message || node?.last_error_code || '').trim();
                 const errorCode = String(node?.last_error_code || '').trim().toUpperCase();
+                const isStoryboardPlaceholderTimeout = (
+                    (nodeName === 'storyboard_generation' || nodeName === 'shot_generation')
+                    && (
+                        errorCode === 'NODE_TIMEOUT'
+                        || /超过\s*\d+s\s*无进展/.test(businessReason)
+                        || /timed out after \d+s with no progress/i.test(rawFailure)
+                    )
+                );
+                if (isStoryboardPlaceholderTimeout) {
+                    const progress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
+                    if (
+                        isStoryboardTaskProgressSettled(progress)
+                        || Number(progress.completed || 0) > 0
+                    ) {
+                        return;
+                    }
+                }
                 const creditUserFailure = (
                     errorCode === 'INSUFFICIENT_CREDITS'
                     || /insufficient[_\s-]?credits/i.test(rawFailure)
@@ -15977,9 +15994,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (analysisProgressDisplay.isLive) return true;
         if (String(activeAnalysisTaskId || '').trim()) return true;
         if (loadAnalysisTaskMarker(activeEpisode?.id)?.taskId) return true;
-        if ((diagnosticsPipelineNodes || []).some((node) => (
-            ['running', 'queued'].includes(String(node?.status || '').trim().toLowerCase())
-        ))) return true;
+        if (hasInFlightPipelineNodes(diagnosticsPipelineNodes)) return true;
         return isEpisodeAnalysisTaskLive(activeEpisode?.id, {
             loadAnalysisTaskMarker,
             isAnalyzing,
@@ -32767,13 +32782,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const status = String(item?.status || '').trim().toLowerCase();
                             const node = findScenePipelineNode('storyboard_generation', sceneId);
                             const fromNode = stateFromPipelineNode(node);
+                            const nodeTimedOut = /NODE_TIMEOUT|超过\s*\d+s\s*无进展|timed out after/i.test(
+                                String(node?.last_error_code || node?.last_error_message || node?.runtime_meta?.business_reason || '')
+                            );
                             if (status === 'completed') {
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
                             if (['starting', 'generating', 'importing'].includes(status) || (fromNode.active && status !== 'failed')) {
                                 return { ready: false, active: true, failed: false, detail: '' };
                             }
-                            if (status === 'failed' || fromNode.failed) {
+                            if (status === 'failed' || (fromNode.failed && !nodeTimedOut)) {
                                 return { ready: false, active: false, failed: true, detail: String(item?.error || node?.last_error_message || '') };
                             }
                             if (fromNode.ready) {

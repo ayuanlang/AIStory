@@ -161,6 +161,100 @@ def test_finalize_stale_pipeline_nodes_marks_old_running_row():
     assert session.committed is True
 
 
+def test_finalize_stale_pipeline_nodes_closes_storyboard_when_shots_exist(monkeypatch):
+    from types import SimpleNamespace
+    from app.core.time_utils import now_bj
+    from app.services import script_analysis_flow as flow
+
+    stale_ts = (now_bj() - timedelta(seconds=1200)).isoformat(timespec="microseconds")
+    row = SimpleNamespace(
+        status="queued",
+        node_name="storyboard_generation",
+        episode_id=1,
+        updated_at=stale_ts,
+        started_at=stale_ts,
+        created_at=stale_ts,
+        runtime_meta={},
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+    )
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return [row]
+
+    class _Session:
+        committed = False
+
+        def query(self, *_args, **_kwargs):
+            return _Query()
+
+        def commit(self):
+            self.committed = True
+
+    monkeypatch.setattr(
+        flow,
+        "_episode_workspace_storyboard_coverage",
+        lambda *_args, **_kwargs: {"scene_count": 1, "with_shots": 1, "ok": True, "no_scenes": False},
+    )
+    session = _Session()
+    assert flow.finalize_stale_pipeline_nodes(session, episode_id=1, timeout_seconds=900) == 1
+    assert row.status == "success"
+    assert row.last_error_code is None
+    assert session.committed is True
+
+
+def test_finalize_stale_pipeline_nodes_keeps_queued_storyboard_placeholder():
+    from types import SimpleNamespace
+    from app.core.time_utils import now_bj
+    from app.services.script_analysis_flow import finalize_stale_pipeline_nodes
+
+    stale_ts = (now_bj() - timedelta(seconds=1200)).isoformat(timespec="microseconds")
+    row = SimpleNamespace(
+        status="queued",
+        node_name="storyboard_generation",
+        episode_id=1,
+        updated_at=stale_ts,
+        started_at=stale_ts,
+        created_at=stale_ts,
+        runtime_meta={},
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+    )
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return [row]
+
+    class _Session:
+        committed = False
+
+        def query(self, *_args, **_kwargs):
+            return _Query()
+
+        def commit(self):
+            self.committed = True
+
+    session = _Session()
+    assert finalize_stale_pipeline_nodes(session, episode_id=1, timeout_seconds=900) == 0
+    assert row.status == "queued"
+    assert session.committed is False
+
+
 def test_is_stale_llm_request_timestamp_uses_beijing_clock():
     now = now_bj()
     fresh = (now - timedelta(seconds=60)).isoformat(timespec="microseconds")

@@ -2535,7 +2535,52 @@ _COORDINATOR_PIPELINE_NODES = {
     "storyboard_generation",
     "shot_generation",
 }
+_FRONTEND_OWNED_STORYBOARD_NODES = {
+    "storyboard_generation",
+    "shot_generation",
+}
 _WAIT_ENV_STALE_BUDGET_SECONDS = 1200
+
+
+def _episode_workspace_storyboard_coverage(db: Session, episode_id: int) -> Dict[str, Any]:
+    """Count active workspace scenes that already have at least one active shot."""
+    from app.models.all_models import Scene, Shot
+    from app.services.soft_delete import _active_scene_clause, _active_shot_clause
+
+    eid = int(episode_id or 0)
+    if eid <= 0:
+        return {"scene_count": 0, "with_shots": 0, "ok": False, "no_scenes": True}
+    scene_ids = [
+        int(row[0])
+        for row in (
+            db.query(Scene.id)
+            .filter(Scene.episode_id == eid, _active_scene_clause())
+            .all()
+        )
+        if row and row[0]
+    ]
+    if not scene_ids:
+        return {"scene_count": 0, "with_shots": 0, "ok": False, "no_scenes": True}
+    with_shots = {
+        int(row[0])
+        for row in (
+            db.query(Shot.scene_id)
+            .filter(
+                Shot.episode_id == eid,
+                Shot.scene_id.in_(scene_ids),
+                _active_shot_clause(),
+            )
+            .distinct()
+            .all()
+        )
+        if row and row[0]
+    }
+    return {
+        "scene_count": len(scene_ids),
+        "with_shots": len(with_shots),
+        "ok": len(with_shots) >= len(scene_ids),
+        "no_scenes": False,
+    }
 
 
 def finalize_stale_pipeline_nodes(
@@ -2593,6 +2638,27 @@ def finalize_stale_pipeline_nodes(
         )
         if node_name in _COORDINATOR_PIPELINE_NODES and row_episode_id in fresh_child_episodes:
             continue
+        if node_name in _FRONTEND_OWNED_STORYBOARD_NODES:
+            try:
+                coverage = _episode_workspace_storyboard_coverage(db, row_episode_id)
+            except Exception:
+                coverage = {"scene_count": 0, "with_shots": 0, "ok": False, "no_scenes": True}
+            if coverage.get("ok"):
+                meta["business_event"] = "reconciled_from_workspace"
+                meta["business_reason"] = "工作区分镜已齐套"
+                row.status = "success"
+                row.last_error_code = None
+                row.last_error_message = None
+                row.runtime_meta = meta
+                row.ended_at = now_iso
+                row.updated_at = now_iso
+                finalized += 1
+                continue
+            current_status = str(getattr(row, "status", "") or "").strip().lower()
+            # Queued placeholder is not a backend LLM job. Frontend generateSceneShots
+            # owns completion; do not NODE_TIMEOUT it just because children finished.
+            if current_status == "queued" or coverage.get("no_scenes"):
+                continue
         if not is_stale_llm_request_timestamp(stamp, row_budget):
             continue
         meta["business_event"] = "timeout"

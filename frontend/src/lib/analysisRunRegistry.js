@@ -94,9 +94,17 @@ function emptyProgressSnapshot() {
 }
 
 export function hasInFlightPipelineNodes(nodes) {
-    return (Array.isArray(nodes) ? nodes : []).some((node) => (
-        ['running', 'queued'].includes(String(node?.status || '').trim().toLowerCase())
-    ));
+    return (Array.isArray(nodes) ? nodes : []).some((node) => {
+        const status = String(node?.status || '').trim().toLowerCase();
+        if (!['running', 'queued'].includes(status)) return false;
+        const name = String(node?.node_name || '').trim();
+        // Frontend owns per-scene generateSceneShots. A leftover queued
+        // storyboard_generation placeholder must not keep the analysis UI live.
+        if (status === 'queued' && (name === 'storyboard_generation' || name === 'shot_generation')) {
+            return false;
+        }
+        return true;
+    });
 }
 
 export function trackEpisodeAnalysisRun(episodeId, runPromise, meta = {}) {
