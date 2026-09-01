@@ -13,7 +13,10 @@ PROP_EXTRACT_BLOCK_PATTERN = re.compile(
     r"`?\[PROP_EXTRACT_END(?::([^\s\]]+))?\]`?",
     re.IGNORECASE | re.DOTALL,
 )
-PROP_ITEM_PATTERN = re.compile(r"^\[PROP\]\s*名称\s*=\s*(\S.+)$", re.MULTILINE | re.IGNORECASE)
+PROP_EXTRACT_START_PATTERN = re.compile(r"`?\[PROP_EXTRACT_START(?::[^\s\]]+)?\]`?", re.IGNORECASE)
+PROP_EXTRACT_END_PATTERN = re.compile(r"`?\[PROP_EXTRACT_END(?::[^\s\]]+)?\]`?", re.IGNORECASE)
+PROP_ITEM_PATTERN = re.compile(r"^\[PROP\]\s*名称\s*[=：:]\s*(\S.+)$", re.MULTILINE | re.IGNORECASE)
+PROP_LOOSE_ITEM_PATTERN = re.compile(r"\[PROP\][\s\S]{0,80}名称\s*[=：:]", re.IGNORECASE)
 
 
 def _clean(value: object) -> str:
@@ -21,21 +24,45 @@ def _clean(value: object) -> str:
 
 
 def extract_prop_extract_blocks(script_text: str) -> str:
+    text = str(script_text or "")
     blocks: List[str] = []
-    for match in PROP_EXTRACT_BLOCK_PATTERN.finditer(str(script_text or "")):
+    for match in PROP_EXTRACT_BLOCK_PATTERN.finditer(text):
         block = _clean(match.group(0))
         if block:
             blocks.append(block)
-    return "\n\n".join(blocks).strip()
+    if blocks:
+        return "\n\n".join(blocks).strip()
+    start = PROP_EXTRACT_START_PATTERN.search(text)
+    if not start:
+        return ""
+    rest = text[start.start():]
+    end = PROP_EXTRACT_END_PATTERN.search(rest)
+    if end:
+        return _clean(rest[: end.end()])
+    cut = re.search(
+        r"`?\[(?:CHAR_EXTRACT_START|SCENES_BLOCK_END)[^\]]*\]`?",
+        rest[len(start.group(0)):],
+        re.IGNORECASE,
+    )
+    clipped = rest[: len(start.group(0)) + cut.start()] if cut else rest
+    return f"{_clean(clipped)}\n[PROP_EXTRACT_END]".strip()
+
+
+def _prop_extract_inner(script_text: str) -> str:
+    inners: List[str] = []
+    for match in PROP_EXTRACT_BLOCK_PATTERN.finditer(extract_prop_extract_blocks(script_text) or ""):
+        inners.append(_clean(match.group(2)))
+    return "\n".join(inners).strip()
 
 
 def prop_extract_has_items(script_text: str) -> bool:
-    body = extract_prop_extract_blocks(script_text)
-    if not body:
-        return bool(PROP_ITEM_PATTERN.search(str(script_text or "")))
-    if re.search(r"^\s*无\s*$", body.split("]", 1)[-1], re.MULTILINE):
-        return bool(PROP_ITEM_PATTERN.search(body))
-    return bool(PROP_ITEM_PATTERN.search(body) or PROP_ITEM_PATTERN.search(str(script_text or "")))
+    text = str(script_text or "")
+    inner = _prop_extract_inner(text)
+    if inner and not re.match(r"^\s*无\s*$", inner):
+        return True
+    if PROP_EXTRACT_START_PATTERN.search(text) and PROP_LOOSE_ITEM_PATTERN.search(text):
+        return True
+    return bool(PROP_ITEM_PATTERN.search(text) or PROP_LOOSE_ITEM_PATTERN.search(text))
 
 
 def splice_prop_extract_into_script(script_text: str, prop_extract: str) -> str:

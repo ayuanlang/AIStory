@@ -13,7 +13,10 @@ CHAR_EXTRACT_BLOCK_PATTERN = re.compile(
     r"`?\[CHAR_EXTRACT_END(?::([^\s\]]+))?\]`?",
     re.IGNORECASE | re.DOTALL,
 )
-CHAR_ITEM_PATTERN = re.compile(r"^\[CHAR\]\s*名称\s*=\s*(\S.+)$", re.MULTILINE | re.IGNORECASE)
+CHAR_EXTRACT_START_PATTERN = re.compile(r"`?\[CHAR_EXTRACT_START(?::[^\s\]]+)?\]`?", re.IGNORECASE)
+CHAR_EXTRACT_END_PATTERN = re.compile(r"`?\[CHAR_EXTRACT_END(?::[^\s\]]+)?\]`?", re.IGNORECASE)
+CHAR_ITEM_PATTERN = re.compile(r"^\[CHAR\]\s*名称\s*[=：:]\s*(\S.+)$", re.MULTILINE | re.IGNORECASE)
+CHAR_LOOSE_ITEM_PATTERN = re.compile(r"\[CHAR\][\s\S]{0,80}名称\s*[=：:]", re.IGNORECASE)
 CHAR_RECORD_PATTERN = re.compile(r"^\[CHAR\][^\n]*(?:\n(?!\[CHAR\]).*)*", re.MULTILINE | re.IGNORECASE)
 
 
@@ -62,21 +65,45 @@ def parse_char_extract_records(script_text: str) -> List[Dict[str, str]]:
 
 
 def extract_char_extract_blocks(script_text: str) -> str:
+    text = str(script_text or "")
     blocks: List[str] = []
-    for match in CHAR_EXTRACT_BLOCK_PATTERN.finditer(str(script_text or "")):
+    for match in CHAR_EXTRACT_BLOCK_PATTERN.finditer(text):
         block = _clean(match.group(0))
         if block:
             blocks.append(block)
-    return "\n\n".join(blocks).strip()
+    if blocks:
+        return "\n\n".join(blocks).strip()
+    start = CHAR_EXTRACT_START_PATTERN.search(text)
+    if not start:
+        return ""
+    rest = text[start.start():]
+    end = CHAR_EXTRACT_END_PATTERN.search(rest)
+    if end:
+        return _clean(rest[: end.end()])
+    cut = re.search(
+        r"`?\[(?:PROP_EXTRACT_START|SCENES_BLOCK_END)[^\]]*\]`?",
+        rest[len(start.group(0)):],
+        re.IGNORECASE,
+    )
+    clipped = rest[: len(start.group(0)) + cut.start()] if cut else rest
+    return f"{_clean(clipped)}\n[CHAR_EXTRACT_END]".strip()
+
+
+def _char_extract_inner(script_text: str) -> str:
+    inners: List[str] = []
+    for match in CHAR_EXTRACT_BLOCK_PATTERN.finditer(extract_char_extract_blocks(script_text) or ""):
+        inners.append(_clean(match.group(2)))
+    return "\n".join(inners).strip()
 
 
 def char_extract_has_items(script_text: str) -> bool:
-    body = extract_char_extract_blocks(script_text)
-    if not body:
-        return bool(CHAR_ITEM_PATTERN.search(str(script_text or "")))
-    if re.search(r"^\s*无\s*$", body.split("]", 1)[-1], re.MULTILINE):
-        return bool(CHAR_ITEM_PATTERN.search(body))
-    return bool(CHAR_ITEM_PATTERN.search(body) or CHAR_ITEM_PATTERN.search(str(script_text or "")))
+    text = str(script_text or "")
+    inner = _char_extract_inner(text)
+    if inner and not re.match(r"^\s*无\s*$", inner):
+        return True
+    if CHAR_EXTRACT_START_PATTERN.search(text) and CHAR_LOOSE_ITEM_PATTERN.search(text):
+        return True
+    return bool(CHAR_ITEM_PATTERN.search(text) or CHAR_LOOSE_ITEM_PATTERN.search(text))
 
 
 def splice_char_extract_into_script(script_text: str, char_extract: str) -> str:

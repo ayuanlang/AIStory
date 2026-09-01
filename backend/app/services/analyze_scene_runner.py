@@ -82,6 +82,8 @@ from app.services.script_analysis_flow import (
     assemble_prop_asset_design_user_content,
     build_character_asset_design_brief,
     build_cover_poster_brief,
+    extract_char_extract_blocks,
+    extract_prop_extract_blocks,
     pick_environment_plan_source_and_brief,
     build_prop_asset_design_brief,
     first_text_with_char_extract,
@@ -731,6 +733,13 @@ async def execute_analyze_scene(
                 *extra_prop_sources,
             ) or brief_source
             prop_brief = build_prop_asset_design_brief(brief_source)
+            if not prop_brief:
+                for source in (str(getattr(request, "text", "") or ""), brief_source, *extra_prop_sources):
+                    raw_block = extract_prop_extract_blocks(source)
+                    if raw_block and "[PROP_EXTRACT_START" in raw_block.upper():
+                        prop_brief = build_prop_asset_design_brief(raw_block)
+                        if prop_brief:
+                            break
             user_content = assemble_prop_asset_design_user_content(prop_brief)
             logger.info(
                 "[analyze_scene] prop asset design user seed episode_id=%s prop_brief=%s script_block=omitted char_brief=omitted",
@@ -780,6 +789,13 @@ async def execute_analyze_scene(
                 *extra_char_sources,
             ) or brief_source
             char_brief = build_character_asset_design_brief(brief_source)
+            if not char_brief:
+                for source in (str(getattr(request, "text", "") or ""), brief_source, *extra_char_sources):
+                    raw_block = extract_char_extract_blocks(source)
+                    if raw_block and "[CHAR_EXTRACT_START" in raw_block.upper():
+                        char_brief = build_character_asset_design_brief(raw_block)
+                        if char_brief:
+                            break
             user_content = assemble_character_asset_design_user_content(char_brief)
             logger.info(
                 "[analyze_scene] character asset design user seed episode_id=%s char_brief=%s script_block=omitted prop_brief=omitted",

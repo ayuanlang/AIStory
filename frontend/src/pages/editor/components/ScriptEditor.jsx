@@ -17941,12 +17941,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     options?.extractSourceText,
                     explicitText,
                     latestStage1RawTextRef.current,
+                    latestStage1NodeOutputsRef.current?.scene_split,
                     adaptationText,
                     activeEpisode?.ai_scene_analysis_adaptation,
                     activeEpisode?.ai_scene_analysis_result,
                     ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
                 ].find((text) => hasAssetRerunExtractSignals(text))
-                    || String(options?.extractSourceText || explicitText || latestStage1RawTextRef.current || '').trim();
+                    || String(options?.extractSourceText || explicitText || latestStage1RawTextRef.current || latestStage1NodeOutputsRef.current?.scene_split || '').trim();
                 const wantsCharacters = requestedTypes.length === 0 || requestedTypes.includes('characters');
                 const wantsProps = requestedTypes.length === 0 || requestedTypes.includes('props');
                 const wantsEnvironments = requestedTypes.length === 0
@@ -18472,12 +18473,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         options?.extractSourceText,
                         explicitText,
                         latestStage1RawTextRef.current,
+                        latestStage1NodeOutputsRef.current?.scene_split,
                         adaptationText,
                         activeEpisode?.ai_scene_analysis_adaptation,
                         activeEpisode?.ai_scene_analysis_result,
                         ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
                     ].find((text) => hasAssetRerunExtractSignals(text))
-                        || String(options?.extractSourceText || explicitText || latestStage1RawTextRef.current || '').trim();
+                        || String(options?.extractSourceText || explicitText || latestStage1RawTextRef.current || latestStage1NodeOutputsRef.current?.scene_split || '').trim();
                     const nodeInputText = String(extractSourceText || specificSubjectIndexText || '').trim();
                     const envDesignHasPlanSource = pData.key === 'environments'
                         && hasEnvironmentPlanForAssetDesign(extractSourceText)
