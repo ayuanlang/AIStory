@@ -553,6 +553,7 @@ const EMPTY_STORYBOARD_TASK_PROGRESS = {
     completed: 0,
     failed: 0,
     running: 0,
+    waiting: 0,
     items: {},
 };
 
@@ -677,6 +678,7 @@ const normalizeStoryboardTaskProgress = (value) => {
         completed: Number(value.completed || 0) || 0,
         failed: Number(value.failed || 0) || 0,
         running: Number(value.running || 0) || 0,
+        waiting: Number(value.waiting || 0) || 0,
         items: {},
     };
 };
@@ -687,11 +689,12 @@ const pickRicherStoryboardTaskProgress = (...candidates) => {
     for (const candidate of candidates) {
         const normalized = normalizeStoryboardTaskProgress(candidate);
         const itemCount = Object.keys(normalized.items || {}).length;
+        const settled = Number(normalized.completed || 0) + Number(normalized.failed || 0);
+        const open = Number(normalized.running || 0) + Number(normalized.waiting || 0);
         const score = (itemCount * 1000)
             + (Number(normalized.started || 0) * 10)
-            + Number(normalized.completed || 0)
-            + Number(normalized.failed || 0)
-            + Number(normalized.running || 0);
+            + (settled * 5)
+            - open;
         if (score > bestScore) {
             best = normalized;
             bestScore = score;
@@ -2508,10 +2511,11 @@ const resolveEpisodeStoryboardCoverage = async ({
     const withShots = collectEpisodeSceneIdsWithShots(shotList);
     const missingSceneIds = sceneIds.filter((sceneId) => !withShots.has(sceneId));
     const sceneCountWithShots = sceneIds.filter((sceneId) => withShots.has(sceneId)).length;
-    const enoughScenes = expected <= 0 || sceneIds.length >= expected;
+    const allWorkspaceScenesHaveShots = sceneIds.length > 0 && missingSceneIds.length === 0;
+    const enoughScenes = expected <= 0 || sceneIds.length >= expected || allWorkspaceScenesHaveShots;
     const enoughShots = expected <= 0
         ? (sceneIds.length <= 0 || missingSceneIds.length === 0)
-        : sceneCountWithShots >= expected && missingSceneIds.length === 0;
+        : (sceneCountWithShots >= expected && missingSceneIds.length === 0) || allWorkspaceScenesHaveShots;
     return {
         sceneCount: sceneIds.length,
         sceneCountWithShots,
@@ -5869,7 +5873,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (terminalPhase || terminalReport) {
             // Never heal-away live flags while any pipeline lock is held — leftover
             // terminal report/phase from a prior run is common on repeated reruns.
-            if (pipelineStillLive) {
+            // Exception: every tracked storyboard is already settled and nothing is
+            // queued. A leftover claim / wait-loop must not keep the banner spinning.
+            if (pipelineStillLive && !isStoryboardTaskProgressSettled(progress)) {
                 return;
             }
             // Terminal UI means the run has finished writing results; never leave the
@@ -5881,7 +5887,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
-        if (pipelineStillLive) return;
+        if (pipelineStillLive && !isStoryboardTaskProgressSettled(progress)) return;
         if (phase !== 'storyboard') return;
         if (!isStoryboardTaskProgressSettled(progress)) return;
         const storyboardOutcome = resolveSettledStoryboardUiOutcome(progress);
@@ -10114,7 +10120,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!force && priorIsSameScene && !resumeQueued && priorStatus === 'waiting_env') {
             return true;
         }
-        if (!force && priorIsSameScene && priorStatus === 'completed' && !resumeQueued) {
+        // Identity-matched completed/failed must not be reopened as starting.
+        // priorIsSameScene can fail when canonicalize(item.marker) ≠ identity key.
+        if (!force && priorItem && priorStatus === 'completed' && !resumeQueued) {
+            return true;
+        }
+        if (!force && priorItem && priorStatus === 'failed' && !resumeQueued && !isStoryboardRetryableKickoffError(priorItem?.error)) {
             return true;
         }
 
@@ -10142,7 +10153,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             storyboardKickoffByMarkerRef.current.add(stableMarker);
             storyboardKickoffByIdentityRef.current.add(identity);
-            if (!['starting', 'generating', 'importing', 'waiting_env', 'waiting_import'].includes(priorStatus)) {
+            if (!['starting', 'generating', 'importing', 'waiting_env', 'waiting_import', 'completed', 'failed'].includes(priorStatus)) {
                 updateStoryboardTaskItem(stableMarker, {
                     sceneOrder,
                     status: 'starting',
@@ -10395,6 +10406,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         if (!force && storyboardKickoffByDbIdRef.current.has(dbSceneId)) {
             storyboardKickoffByMarkerRef.current.add(stableMarker);
+            const siblingDone = Object.values(storyboardTaskProgressRef.current?.items || {}).some((item) => (
+                Number(item?.dbSceneId || 0) === dbSceneId
+                && ['completed', 'failed'].includes(String(item?.status || '').trim().toLowerCase())
+            ));
+            if (siblingDone && !['completed', 'failed'].includes(priorStatus)) {
+                const skippedProgress = updateStoryboardTaskItem(stableMarker, {
+                    dbSceneId,
+                    sceneOrder,
+                    status: 'completed',
+                    error: '',
+                });
+                publishStoryboardTaskPanelStatus({
+                    markerSceneId: stableMarker,
+                    sceneOrder,
+                    status: 'completed',
+                    progressSnapshot: skippedProgress,
+                });
+            }
             return true;
         }
         if (force) {
@@ -11231,7 +11260,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            const progress = publishWaitingStatus();
+            const progress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
             const promiseCount = storyboardKickoffPromisesRef.current?.size || 0;
             const queued = pendingQueueCount();
             const missingExpected = missingExpectedStoryboardCount();
@@ -11249,13 +11278,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                 }
             }
-            const unresolved = isStoryboardProgressUnresolved(progress)
+            // missingExpected only drives residual kickoff / grace. It must not keep the
+            // wait loop alive after every tracked scene has already completed (phantom
+            // allowlist IDs used to leave the analysis banner on "进行中").
+            const liveWork = isStoryboardProgressUnresolved(progress)
                 || promiseCount > 0
                 || queued > 0
                 || claimedWithoutPromiseCount() > 0
-                || missingExpected > 0
-                // Keep polling while any scene is parked on waiting_env — even after the
-                // global ENV gate opens (per-scene prompts may still be importing).
                 || strandedWaitingEnvCount() > 0;
             const withinGrace = autoStartEnabled
                 && hasExpectedImportedScenes()
@@ -11265,10 +11294,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 )
                 && (Date.now() - waitStartedAt) < graceMs;
 
-            if (!unresolved && !withinGrace) {
+            if (promiseCount <= 0 && queued <= 0 && !withinGrace) {
                 // No tracked tasks after grace → treat as no storyboard work this run,
                 // unless workspace scenes are already imported and still have no shots.
-                if (Number(progress.started || 0) <= 0 && promiseCount <= 0 && queued <= 0) {
+                if (Number(progress.started || 0) <= 0 && !liveWork) {
                     const { count: missingShotCount } = autoStartEnabled
                         ? await countImportedScenesMissingShots()
                         : { count: 0 };
@@ -11293,7 +11322,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 // Kickoffs already completed/failed. A secondary DB coverage poll must not
                 // keep the analysis pipeline on "waiting" after 5/5 (leftover scenes or a
                 // compact-shot lag would otherwise loop until the pipeline deadline).
-                if (isStoryboardTaskProgressSettled(progress)) {
+                if (isStoryboardTaskProgressSettled(progress) && !liveWork) {
                     break;
                 }
                 const coverage = await resolveEpisodeStoryboardCoverage({
@@ -11306,7 +11335,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ],
                     expectedSceneCount: expectedStoryboardSceneCount(),
                 });
-                if (!coverage.ok) {
+                if (coverage.ok) {
+                    Object.entries(storyboardTaskProgressRef.current?.items || {}).forEach(([marker, item]) => {
+                        const status = String(item?.status || '').trim().toLowerCase();
+                        if (!['starting', 'generating', 'importing', 'waiting_env', 'waiting_import'].includes(status)) {
+                            return;
+                        }
+                        const healed = updateStoryboardTaskItem(marker, {
+                            sceneOrder: item?.sceneOrder,
+                            status: 'completed',
+                            error: '',
+                            dbSceneId: Number(item?.dbSceneId || 0) || undefined,
+                        });
+                        publishStoryboardTaskPanelStatus({
+                            markerSceneId: marker,
+                            sceneOrder: item?.sceneOrder,
+                            status: 'completed',
+                            progressSnapshot: healed,
+                        });
+                    });
+                    break;
+                }
+                if (!liveWork) {
                     try {
                         await ensureStoryboardTasksForImportedScenes(importReport);
                     } catch (_) {
@@ -11315,7 +11365,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     await new Promise((resolve) => setTimeout(resolve, pollMs));
                     continue;
                 }
-                break;
+            }
+            if (liveWork || withinGrace) {
+                publishWaitingStatus();
             }
             if (promiseCount > 0) {
                 await Promise.allSettled(Array.from(storyboardKickoffPromisesRef.current.values()));
@@ -11324,19 +11376,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             await new Promise((resolve) => setTimeout(resolve, pollMs));
         }
 
-        // Settle leftover waiting_env so the analysis panel cannot hang forever after the
-        // wait window. Pipeline kickoffs already deferred (not failed) while ENV was incomplete.
+        // Settle leftover waiting_* so the analysis panel cannot hang forever after the
+        // wait window. Pipeline kickoffs already deferred (not failed) while ENV/import lagged.
         const leftoverItems = storyboardTaskProgressRef.current?.items || {};
         Object.entries(leftoverItems).forEach(([marker, item]) => {
             const stableMarker = String(marker || '').trim();
             if (!stableMarker) return;
-            if (String(item?.status || '').trim().toLowerCase() !== 'waiting_env') return;
+            const leftoverStatus = String(item?.status || '').trim().toLowerCase();
+            if (!isStoryboardWaitingStatus(leftoverStatus)) return;
             storyboardKickoffByMarkerRef.current.delete(stableMarker);
             const errMsg = String(item?.error || '').trim()
-                || t(
-                    '等待环境资产超时，分镜未启动',
-                    'Timed out waiting for ENV assets; storyboard not started'
-                );
+                || (leftoverStatus === 'waiting_import'
+                    ? t('等待场景重新入库超时，分镜未启动', 'Timed out waiting to re-import the scene; storyboard not started')
+                    : t(
+                        '等待环境资产超时，分镜未启动',
+                        'Timed out waiting for ENV assets; storyboard not started'
+                    ));
             const failedProgress = updateStoryboardTaskItem(stableMarker, {
                 sceneOrder: item?.sceneOrder,
                 status: 'failed',
@@ -32712,13 +32767,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const status = String(item?.status || '').trim().toLowerCase();
                             const node = findScenePipelineNode('storyboard_generation', sceneId);
                             const fromNode = stateFromPipelineNode(node);
-                            if (['starting', 'generating', 'importing'].includes(status) || fromNode.active) {
+                            if (status === 'completed') {
+                                return { ready: true, active: false, failed: false, detail: '' };
+                            }
+                            if (['starting', 'generating', 'importing'].includes(status) || (fromNode.active && status !== 'failed')) {
                                 return { ready: false, active: true, failed: false, detail: '' };
                             }
                             if (status === 'failed' || fromNode.failed) {
                                 return { ready: false, active: false, failed: true, detail: String(item?.error || node?.last_error_message || '') };
                             }
-                            if (status === 'completed' || fromNode.ready) {
+                            if (fromNode.ready) {
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
                             if (['waiting_env', 'waiting_import'].includes(status)) {
