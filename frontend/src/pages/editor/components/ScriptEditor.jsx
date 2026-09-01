@@ -4162,6 +4162,39 @@ const hasAssetRerunExtractSignals = (text) => {
         || /【主环境】/.test(source);
 };
 
+const resolveAssetCategoryKeysFromTargets = (targetEntityTypes) => {
+    const raw = Array.isArray(targetEntityTypes) ? targetEntityTypes : null;
+    if (!raw || raw.length === 0) return ['characters', 'props', 'environments'];
+    const keys = new Set();
+    for (const item of raw) {
+        const key = String(item || '').trim().toLowerCase();
+        if (['character', 'characters', 'role', 'roles', '人物', '角色'].includes(key)) keys.add('characters');
+        else if (['prop', 'props', 'item', 'items', '道具', '物件'].includes(key)) keys.add('props');
+        else if (['environment', 'environments', 'env', 'scene', 'scenes', '场景', '环境', 'poster', 'posters', 'cover', 'covers', 'cover_poster', '海报', '封面'].includes(key)) {
+            keys.add('environments');
+        }
+    }
+    return Array.from(keys);
+};
+
+const normalizeAssetCategoryKey = (value) => {
+    const raw = String(value || '').trim().toLowerCase();
+    if (['character', 'characters', 'role', 'roles'].includes(raw)) return 'characters';
+    if (['prop', 'props', 'item', 'items'].includes(raw)) return 'props';
+    if (['environment', 'environments', 'env', 'poster', 'posters', 'cover', 'covers', 'cover_poster'].includes(raw)) {
+        return 'environments';
+    }
+    return raw;
+};
+
+const liveKeyForAssetCategory = (category) => {
+    const key = normalizeAssetCategoryKey(category);
+    if (key === 'characters') return 'character';
+    if (key === 'props') return 'prop';
+    if (key === 'environments') return 'environment';
+    return '';
+};
+
 const SUBJECT_INDEX_STANDARD_HEADERS = [
     'subject_no',
     'subject_type',
@@ -4751,6 +4784,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [adaptationText, setAdaptationText] = useState('');
     const [isEditingSubjectIndex, setIsEditingSubjectIndex] = useState(false);
     const [isRetryingPhase2, setIsRetryingPhase2] = useState(false);
+    const [retryingAssetCategoryKeys, setRetryingAssetCategoryKeys] = useState([]);
     const [isRegeneratingDerivedEnvs, setIsRegeneratingDerivedEnvs] = useState(false);
     const [liveAssetDesignTaskKeys, setLiveAssetDesignTaskKeys] = useState([]);
     const [systemPrompt, setSystemPrompt] = useState('');
@@ -9568,6 +9602,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const entities = Array.isArray(dbEntities) ? dbEntities : episodeOwnedEntities;
         return countDbMainEnvironmentEntities(entities) > 0;
     }, [episodeOwnedEntities]);
+
+    const isAssetCategoryBusy = useCallback((categoryOrKey) => {
+        const category = normalizeAssetCategoryKey(categoryOrKey);
+        if (retryingAssetCategoryKeys.includes(category) || phase2InFlightCategoriesRef.current.has(category)) {
+            return true;
+        }
+        const liveKey = liveKeyForAssetCategory(category);
+        return Boolean(liveKey && liveAssetDesignTaskKeys.includes(liveKey));
+    }, [liveAssetDesignTaskKeys, retryingAssetCategoryKeys]);
 
     const hasPersistedCoverPosterAsset = useCallback(() => (
         (Array.isArray(episodeOwnedEntities) ? episodeOwnedEntities : []).some(
@@ -16293,6 +16336,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setIsAnalyzing(false);
         setIsRetryingPhase2(false);
+        setRetryingAssetCategoryKeys([]);
         setIsRerunningStoryboard(false);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
@@ -17767,21 +17811,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
         }
 
-        const resolveIncomingAssetCategoryKeys = () => {
-            const raw = Array.isArray(options.targetEntityTypes) ? options.targetEntityTypes : null;
-            if (!raw || raw.length === 0) return ['characters', 'props', 'environments'];
-            const keys = new Set();
-            for (const item of raw) {
-                const key = String(item || '').trim().toLowerCase();
-                if (['character', 'characters', 'role', 'roles', '人物', '角色'].includes(key)) keys.add('characters');
-                else if (['prop', 'props', 'item', 'items', '道具', '物件'].includes(key)) keys.add('props');
-                else if (['environment', 'environments', 'env', 'scene', 'scenes', '场景', '环境', 'poster', 'posters', 'cover', 'covers', 'cover_poster', '海报', '封面'].includes(key)) {
-                    keys.add('environments');
-                }
-            }
-            return Array.from(keys);
-        };
-        const incomingAssetCategoryKeys = resolveIncomingAssetCategoryKeys();
+        const incomingAssetCategoryKeys = resolveAssetCategoryKeysFromTargets(options.targetEntityTypes);
         const freeAssetCategoryKeys = incomingAssetCategoryKeys.filter(
             (key) => !phase2InFlightCategoriesRef.current.has(key)
         );
@@ -17789,13 +17819,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             onLog?.('Skipped duplicate Stage 3 asset-design trigger while one is already running.', 'warning');
             return emptyReport;
         }
+        const syncRetryingAssetCategoryUi = () => {
+            const keys = Array.from(phase2InFlightCategoriesRef.current);
+            phase2GenerationInFlightRef.current = keys.length > 0;
+            setRetryingAssetCategoryKeys(keys);
+            setIsRetryingPhase2(keys.length > 0);
+        };
         const releaseIncomingAssetLock = () => {
             freeAssetCategoryKeys.forEach((key) => phase2InFlightCategoriesRef.current.delete(key));
-            phase2GenerationInFlightRef.current = phase2InFlightCategoriesRef.current.size > 0;
+            syncRetryingAssetCategoryUi();
         };
         const claimIncomingAssetLock = () => {
             freeAssetCategoryKeys.forEach((key) => phase2InFlightCategoriesRef.current.add(key));
-            phase2GenerationInFlightRef.current = true;
+            syncRetryingAssetCategoryUi();
         };
 
         const episodeIdForPhase2 = Number(activeEpisode?.id || 0) || 0;
@@ -19718,9 +19754,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setLiveAssetDesignTaskKeys((prev) => (
                 (Array.isArray(prev) ? prev : []).filter((key) => !launchedLiveKeys.includes(key))
             ));
-            if (options?.isRetryPhase2) {
-                setIsRetryingPhase2(false);
-            }
             // Parent analysis pipeline still owns task markers while scenes/storyboard continue.
             if (activeEpisode?.id && !analysisRunInFlightRef.current) {
                 clearAnalysisTaskMarker(activeEpisode.id);
@@ -29315,7 +29348,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || analysisProgressDisplay?.isLive
             || analysisRunInFlightRef.current
         );
-        if (phase2GenerationInFlightRef.current || (analysisFallbackRetryRef.current.running && !autoZeroCaller)) {
+        const requestedCategoryKeys = resolveAssetCategoryKeysFromTargets(options.targetEntityTypes);
+        const requestedAllBusy = requestedCategoryKeys.length > 0
+            && requestedCategoryKeys.every((key) => phase2InFlightCategoriesRef.current.has(key));
+        if (requestedAllBusy) {
+            onLog?.('[Stage 3 Asset Design] Skipped duplicate asset rerun; requested categories are already running.', 'warning');
+            return;
+        }
+        if (analysisFallbackRetryRef.current.running && !autoZeroCaller) {
             onLog?.('[Stage 3 Asset Design] Skipped duplicate asset rerun while Stage 3 is already running.', 'warning');
             return;
         }
@@ -29333,7 +29373,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             persistAnalysisSessionSnapshot(activeEpisode.id);
         }
         phase2RetryOptionsRef.current = options;
-        if (!overlayOnLiveRun) {
+        const scopedCategoryRerun = Array.isArray(options.targetEntityTypes) && options.targetEntityTypes.length > 0;
+        const siblingAssetLive = [...phase2InFlightCategoriesRef.current].some((key) => !requestedCategoryKeys.includes(key));
+        if (!overlayOnLiveRun && !siblingAssetLive) {
             activeAnalysisTaskIdsRef.current.clear();
             setActiveAnalysisTaskId('');
         }
@@ -29344,14 +29386,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setAnalyzing: false,
             setRetryingPhase2: true,
             runTag: 'phase2_retry',
-            preserveLivePipeline: overlayOnLiveRun,
+            preserveLivePipeline: overlayOnLiveRun || scopedCategoryRerun || siblingAssetLive,
         });
-        if (!overlayOnLiveRun) {
+        setRetryingAssetCategoryKeys(Array.from(new Set([
+            ...retryingAssetCategoryKeys,
+            ...requestedCategoryKeys.filter((key) => !phase2InFlightCategoriesRef.current.has(key)),
+        ])));
+        if (!overlayOnLiveRun && !siblingAssetLive) {
             clearAnalysisTaskMarker(activeEpisode?.id);
         }
         logSelectedScriptAnalysisApi('Stage 3 asset rerun');
         try {
-            resetAutoSubjectsImportCache();
+            if (!siblingAssetLive) resetAutoSubjectsImportCache();
             onLog?.(`Retrying Stage 3 asset design... targetTypes: ${options.targetEntityTypes ? options.targetEntityTypes.join(',') : 'all'} envScope=${options.envScope || 'main'}`, 'process');
             const extractSourceText = String(
                 options.extractSourceText
@@ -29590,16 +29636,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             onLog?.(`Retry Stage 3 asset design failed: ${error.message || String(error)}`, 'error');
         } finally {
-            setIsRetryingPhase2(false);
-            if (!overlayOnLiveRun) {
+            const stillBusy = phase2InFlightCategoriesRef.current.size > 0;
+            setRetryingAssetCategoryKeys(Array.from(phase2InFlightCategoriesRef.current));
+            setIsRetryingPhase2(stillBusy);
+            if (!overlayOnLiveRun && !scopedCategoryRerun && !stillBusy) {
                 clearAnalysisTaskMarker(activeEpisode?.id);
-                analysisRunInFlightRef.current = false;
+                if (!isAnalyzing) analysisRunInFlightRef.current = false;
             }
         }
     };
 
     const handleRegenDerivedEnvironments = async () => {
-        if (!projectId || !activeEpisode?.id || isRegeneratingDerivedEnvs || isRetryingPhase2) return;
+        if (!projectId || !activeEpisode?.id || isRegeneratingDerivedEnvs || isAssetCategoryBusy('environments')) return;
         const ok = await confirmUiMessage(t(
             '将仅删除并重生衍生环境。主环境和现有分镜都会保留。是否继续？',
             'This will delete and regenerate derived environments only. Main environments and existing storyboards are kept. Continue?'
@@ -32003,8 +32051,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     label: t('选择重跑', 'Choose Rerun'),
                     icon: 'play',
                     onClick: () => openPhase2RerunModal({ mode: 'all' }),
-                    disabled: isRetryingPhase2 || !hasAssetGenerationPrerequisite,
-                    loading: isRetryingPhase2 && (!phase2RetryOptionsRef.current?.targetEntityTypes),
+                    disabled: (retryingAssetCategoryKeys.length >= 3) || !hasAssetGenerationPrerequisite,
+                    loading: retryingAssetCategoryKeys.length >= 3,
                 }
             ],
             placeholder: t('第三阶段尚未返回资产设计结果。', 'No Stage 3 asset design output yet.'),
@@ -32067,7 +32115,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         label: t('编辑描述', 'Edit Description'),
                         icon: 'edit',
                         onClick: () => openStageArtifactEditModal(cat.key === 'characters' ? 'char_extract' : 'prop_extract'),
-                        disabled: isRetryingPhase2,
+                        disabled: isAssetCategoryBusy(cat.key),
                         loading: false,
                     }] : []),
                     {
@@ -32082,18 +32130,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 ? { envScope: 'main', purgeStoryboard: false }
                                 : {}),
                         }),
-                        disabled: isRetryingPhase2 || (
+                        disabled: isAssetCategoryBusy(cat.key) || (
                             cat.key === 'characters'
                                 ? !(hasCharExtractForAssetDesign() || hasPersistedCharacterAssetDesign())
                                 : cat.key === 'props'
                                     ? !(hasPropExtractForAssetDesign() || hasPersistedPropAssetDesign())
                                     : !(hasEnvironmentPlanForAssetDesign() || /\[SCENE_ENV_IDENT_START/i.test(String(resolveAssetRerunSourceText() || '')) || /【主环境】/.test(String(resolveAssetRerunSourceText() || '')))
                         ),
-                        loading: isRetryingPhase2 && (
-                            cat.key === 'environments' || cat.key === 'posters'
-                                ? phase2RetryOptionsRef.current?.targetEntityTypes?.includes('environments')
-                                : phase2RetryOptionsRef.current?.targetEntityTypes?.includes(cat.key)
-                        ),
+                        loading: isAssetCategoryBusy(cat.key),
                     }
                 ],
                 placeholder: t(`尚未返回${cat.labelZh}结果。`, `No ${cat.labelEn} output yet.`),
@@ -32101,7 +32145,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
 
         return cards;
-    }, [activeEpisode?.ai_entity_design_result, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, hasAssetGenerationPrerequisite, hasCharExtractForAssetDesign, hasEnvironmentPlanForAssetDesign, hasPersistedCharacterAssetDesign, hasPersistedPropAssetDesign, hasPropExtractForAssetDesign, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, openPhase2RerunModal, openStageArtifactEditModal, reportAnalysisPanelNotice, resolveAssetRerunSourceText, t]);
+    }, [activeEpisode?.ai_entity_design_result, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, hasAssetGenerationPrerequisite, hasCharExtractForAssetDesign, hasEnvironmentPlanForAssetDesign, hasPersistedCharacterAssetDesign, hasPersistedPropAssetDesign, hasPropExtractForAssetDesign, handleRetryPhase2, isAnalyzing, isAssetCategoryBusy, llmAssetRawResultContent, openPhase2RerunModal, openStageArtifactEditModal, reportAnalysisPanelNotice, resolveAssetRerunSourceText, retryingAssetCategoryKeys, t]);
 
     void stage1StageCards;
     void stage2StageCards;
@@ -32433,7 +32477,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         // Per-stage running UI: clear as soon as that stage's artifact is ready.
                         const scriptOptActive = isAnalysisLiveStepActive(livePhase, 'script_opt', { isLive: analysisLive, stepReady: scriptOptReady });
                         const assetDesignActive = Boolean(
-                            isRetryingPhase2
+                            retryingAssetCategoryKeys.length > 0
                             || liveAssetDesignTaskKeys.length > 0
                         );
                         const pipelineNodeByName = Object.fromEntries(
@@ -32525,12 +32569,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 number: 5,
                             },
                         ];
-                        const runningAssetTargets = (
-                            isRetryingPhase2
-                            && Array.isArray(phase2RetryOptionsRef.current?.targetEntityTypes)
-                        )
-                            ? phase2RetryOptionsRef.current.targetEntityTypes.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
-                            : null;
+                        const runningAssetTargets = retryingAssetCategoryKeys.length > 0
+                            ? retryingAssetCategoryKeys
+                            : (
+                                isRetryingPhase2
+                                && Array.isArray(phase2RetryOptionsRef.current?.targetEntityTypes)
+                            )
+                                ? phase2RetryOptionsRef.current.targetEntityTypes.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
+                                : null;
                         const resolveAssetCategoryState = (spec) => {
                             const completeness = (workflowCompletenessStats?.summaryItems || [])
                                 .find((row) => row?.key === spec.key);
@@ -32573,22 +32619,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     || (imported > 0 && expected <= 0)
                                 );
                             const targeted = !runningAssetTargets?.length
-                                || spec.targets.some((target) => runningAssetTargets.includes(target));
+                                || spec.targets.some((target) => runningAssetTargets.includes(target))
+                                || retryingAssetCategoryKeys.includes(spec.category);
                             const thisRunLaunched = liveAssetDesignTaskKeys.includes(spec.key)
-                                || (spec.key === 'environment' && environmentAssetDesignPendingRef.current);
+                                || retryingAssetCategoryKeys.includes(spec.category)
+                                || (
+                                    spec.key === 'environment'
+                                    && environmentAssetDesignPendingRef.current
+                                    && (
+                                        retryingAssetCategoryKeys.includes('environments')
+                                        || liveAssetDesignTaskKeys.includes('environment')
+                                        || (!retryingAssetCategoryKeys.length && !isRetryingPhase2)
+                                    )
+                                );
                             const settledThisRun = Boolean(analysisFlowStatus?.assetsGenSettled) && !isRetryingPhase2;
                             const waitingForLibrary = Boolean(isLoadingSubjectAssets || assetLibrarySyncing);
-                            // Running/queued pipeline nodes are honest only when this run
-                            // submitted that category, or analysis is still live (remount
-                            // resume). Ignore leftover "running" after the run has settled.
+                            // Sibling category reruns must not inherit leftover pipeline "running"
+                            // or the global analysis-live flag. Only this category's own launch counts.
                             const nodeLooksRunning = Boolean(nodeState.active)
-                                && (thisRunLaunched || analysisLive || isRetryingPhase2);
+                                && (thisRunLaunched || (analysisLive && !retryingAssetCategoryKeys.length && !isRetryingPhase2));
                             const active = Boolean(
                                 designUnlocked
                                 && !skipped
                                 && !readyByData
-                                && targeted
-                                && (thisRunLaunched || nodeLooksRunning)
+                                && (thisRunLaunched || (targeted && nodeLooksRunning))
                             );
                             const failed = Boolean(
                                 designUnlocked
@@ -32678,17 +32732,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 : spec.key === 'prop'
                                     ? hasPropExtractForAssetDesign()
                                     : (hasEnvironmentPlanForAssetDesign() || hasAssetGenerationPrerequisite);
-                            const retryingTypes = Array.isArray(phase2RetryOptionsRef.current?.targetEntityTypes)
-                                ? phase2RetryOptionsRef.current.targetEntityTypes
-                                : null;
-                            const categoryRetrying = Boolean(isRetryingPhase2) && (
-                                !retryingTypes
-                                || (spec.key === 'character' && retryingTypes.includes('characters'))
-                                || (spec.key === 'prop' && retryingTypes.includes('props'))
-                                || (spec.key === 'environment' && retryingTypes.some((item) => (
-                                    ['environments', 'posters', 'covers'].includes(String(item || '').trim().toLowerCase())
-                                )))
-                            );
+                            const categoryRetrying = isAssetCategoryBusy(spec.category);
                             const canRerunCategory = Boolean(
                                 (
                                     spec.key === 'character'
@@ -32802,7 +32846,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 <button
                                                     type="button"
                                                     onClick={() => { void handleRegenDerivedEnvironments(); }}
-                                                    disabled={!hasFramingForDerivedRegen || isRegeneratingDerivedEnvs || isRetryingPhase2}
+                                                    disabled={!hasFramingForDerivedRegen || isRegeneratingDerivedEnvs || isAssetCategoryBusy('environments')}
                                                     className={diagnosticBtnClass}
                                                     title={t('从各场场景现场编排输出程序重生衍生环境，不调用 LLM', 'Rebuild derived environments from floor-staging output; no LLM')}
                                                 >
@@ -33421,11 +33465,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         <div className="pt-0.5">
                             <button
                                 onClick={() => openPhase2RerunModal({ mode: 'all' })}
-                                disabled={isRetryingPhase2}
+                                disabled={retryingAssetCategoryKeys.length >= 3}
                                 className="text-[11px] px-2.5 py-1 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors disabled:opacity-50 inline-flex items-center gap-1"
                             >
-                                {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                {isRetryingPhase2 ? t('处理中', 'Processing') : t('重新生成未齐套的类型', 'Regenerate missing types')}
+                                {retryingAssetCategoryKeys.length >= 3 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                {retryingAssetCategoryKeys.length >= 3 ? t('处理中', 'Processing') : t('重新生成未齐套的类型', 'Regenerate missing types')}
                             </button>
                         </div>
                     </div>
@@ -34660,10 +34704,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <button
                                     type="button"
                                     onClick={confirmPhase2RerunSelection}
-                                    disabled={isRetryingPhase2 || (!hasAssetGenerationPrerequisite && phase2RerunDisplayEntries.length <= 0) || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0)}
-                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isRetryingPhase2 || (!hasAssetGenerationPrerequisite && phase2RerunDisplayEntries.length <= 0) || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0) ? 'bg-white/5 text-white/35 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-500 text-white'}`}
+                                    disabled={(
+                                        phase2RerunModal.mode === 'all'
+                                            ? retryingAssetCategoryKeys.length >= 3
+                                            : isAssetCategoryBusy(phase2RerunModal.category)
+                                    ) || (!hasAssetGenerationPrerequisite && phase2RerunDisplayEntries.length <= 0) || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0)}
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(
+                                        phase2RerunModal.mode === 'all'
+                                            ? retryingAssetCategoryKeys.length >= 3
+                                            : isAssetCategoryBusy(phase2RerunModal.category)
+                                    ) || (!hasAssetGenerationPrerequisite && phase2RerunDisplayEntries.length <= 0) || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0) ? 'bg-white/5 text-white/35 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-500 text-white'}`}
                                 >
-                                    {isRetryingPhase2 ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                    {(
+                                        phase2RerunModal.mode === 'all'
+                                            ? retryingAssetCategoryKeys.length >= 3
+                                            : isAssetCategoryBusy(phase2RerunModal.category)
+                                    ) ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                                     {t('确认重跑', 'Confirm Rerun')}
                                 </button>
                             </div>
