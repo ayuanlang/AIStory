@@ -1946,11 +1946,11 @@ _BEAT_ANALYSIS_NOTES_PAIR_RE = _paired_beat_notes_re(r"场记分析")
 
 
 def strip_beat_transition_notes_from_script(script_text: str) -> str:
-    """Remove paired Stage 1 analysis blocks before Stage 2.x injection.
+    """Remove paired Stage 1 analysis blocks before workspace / Stage 2.x / storyboard.
 
-    Strips both 【场记分析】…【场记分析结束】 and legacy
-    【Beat切换说明】…【Beat切换说明结束】. Unclosed blocks are left
-    untouched (never greedy-eat past SCENE/BEAT markers).
+    Strips both 【场记分析】…【场记分析结束】 (field-level or per-beat)
+    and legacy 【Beat切换说明】…【Beat切换说明结束】. Unclosed blocks
+    are left untouched (never greedy-eat past SCENE/BEAT markers).
     """
     text = str(script_text or "").replace("\r\n", "\n")
     if not text.strip():

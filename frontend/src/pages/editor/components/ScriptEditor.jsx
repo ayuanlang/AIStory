@@ -1617,8 +1617,8 @@ const stripBeatBoundaryMarkers = (beatsText) => String(beatsText || '')
     .trim();
 
 /**
- * Strip Stage 1 analysis blocks before Stage 2.1 / 2.2 injection.
- * Only removes paired segments:
+ * Strip Stage 1 analysis blocks before Stage 2.1 / 2.2 / storyboard injection.
+ * Only removes paired segments (field-level or per-beat):
  *   ────【场记分析】──── … ────【场记分析结束】────
  *   ────【Beat切换说明】──── … ────【Beat切换说明结束】────
  * Unclosed blocks are left untouched (never greedy-eat past SCENE/BEAT markers).

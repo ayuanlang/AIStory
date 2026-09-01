@@ -52,6 +52,38 @@ def test_scene_table_markdown_has_identity_columns():
     assert "客栈对峙" in markdown
 
 
+def test_workspace_beats_strip_per_beat_continuity_notes():
+    staging = """[SCENE_START:EP01_SC02]
+【场景名称】客栈对峙·夜·内
+[BEAT_START:1]
+────【建置】────
+CHAR:[@林岳] 位于桌近镜头侧旁，站。
+────【入戏】────
+对峙开始。
+────【场记分析】────
+开拍在场角色数=2｜开拍在场道具数=0｜开拍在场主体数=2
+开拍在场=CHAR:[@林岳]，CHAR:[@陈]
+本拍主体=CHAR:[@林岳]|宫格=中中|在场=是|可见=画内|因=本拍主拍
+CHAR:[@陈]|宫格=中左|在场=是|可见=暂不可见|因=景别:CU仅主拍
+收拍在场角色数=2｜收拍在场主体数=2
+────【场记分析结束】────
+[BEAT_END:1]
+[SCENE_END:EP01_SC02]
+"""
+    payload = build_workspace_scene_payload_from_staging(
+        scene_id="EP01_SC02",
+        scene_order=2,
+        staging_text=staging,
+    )
+    core = payload["core_scene_info"] or ""
+    assert "[BEAT_START:1]" in core
+    assert "【建置】" in core
+    assert "对峙开始" in core
+    assert "场记分析" not in core
+    assert "开拍在场角色数" not in core
+    assert "暂不可见" not in core
+
+
 def test_appearing_entities_strip_stacked_env_english_and_dedupe():
     staging = """[SCENE_START:EP01_SC01]
 【场景名称】高空追杀·夜·外
