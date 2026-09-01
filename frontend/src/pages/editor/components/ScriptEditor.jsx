@@ -3741,7 +3741,7 @@ const isDummySubject = (itemName) => {
 };
 
 const extractTaggedItemName = (block, tag) => {
-    const match = String(block || '').match(new RegExp(`\\[${tag}\\][\\s\\S]{0,80}名称\\s*[=：:]\\s*([^｜|\\r\\n]+)`, 'i'));
+    const match = String(block || '').match(new RegExp(`\\[${tag}\\][\\s\\S]{0,160}名称\\s*[=：:]\\s*([^｜|\\r\\n]+)`, 'i'));
     return String(match?.[1] || '').trim();
 };
 
@@ -3837,12 +3837,47 @@ const textHasEnvironmentPlanSignals = (text) => {
 const textHasTaggedExtractItems = (text, tag) => {
     const source = String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '');
     if (!source) return false;
-    if (new RegExp(`\\[${tag}\\][\\s\\S]{0,80}名称\\s*[=：:]`, 'i').test(source)) return true;
-    const blockRe = new RegExp(`\\[${tag}_EXTRACT_START[\\s\\S]*?\\[${tag}_EXTRACT_END`, 'i');
-    const block = source.match(blockRe);
-    if (!block) return false;
-    const body = String(block[0] || '').replace(new RegExp(`\\[${tag}_EXTRACT_(START|END)[^\\]]*\\]`, 'gi'), '').trim();
-    return Boolean(body) && !/^\s*无\s*$/.test(body) && /名称\s*[=：:]/.test(body);
+    if (new RegExp(`\\[${tag}\\][\\s\\S]{0,160}名称\\s*[=：:]`, 'i').test(source)) return true;
+    const startRe = new RegExp(`\\[${tag}_EXTRACT_START[^\\]]*\\]`, 'i');
+    const startMatch = startRe.exec(source);
+    if (!startMatch) return false;
+    const afterStart = startMatch.index + startMatch[0].length;
+    const endRe = new RegExp(`\\[${tag}_EXTRACT_END[^\\]]*\\]`, 'i');
+    endRe.lastIndex = afterStart;
+    const endMatch = endRe.exec(source);
+    const body = (endMatch ? source.slice(afterStart, endMatch.index) : source.slice(afterStart)).trim();
+    return Boolean(body) && !/^\s*无\s*$/.test(body);
+};
+
+const pickFirstMatchingText = (candidates, predicate) => {
+    for (const text of candidates || []) {
+        const value = String(text || '').trim();
+        if (value && predicate(value)) return value;
+    }
+    return '';
+};
+
+const resolveCategoryAssetSourceText = (candidates, category) => {
+    const key = String(category || '').trim().toLowerCase();
+    if (key === 'characters') {
+        return pickFirstMatchingText(candidates, (text) => textHasTaggedExtractItems(text, 'CHAR'));
+    }
+    if (key === 'props') {
+        return pickFirstMatchingText(candidates, (text) => textHasTaggedExtractItems(text, 'PROP'));
+    }
+    if (key === 'environments') {
+        return pickFirstMatchingText(candidates, (text) => textHasEnvironmentPlanSignals(text) || collectMainEnvironmentNames(text).length > 0);
+    }
+    return pickFirstMatchingText(candidates, hasAssetRerunExtractSignals);
+};
+
+const resolveCategoryAssetBriefText = (sourceText, category) => {
+    const source = String(sourceText || '').trim();
+    if (!source) return '';
+    const key = String(category || '').trim().toLowerCase();
+    if (key === 'characters') return takeTaggedExtractBlock(source, 'CHAR') || source;
+    if (key === 'props') return takeTaggedExtractBlock(source, 'PROP') || source;
+    return source;
 };
 
 const CHAR_EXTRACT_FIELD_KEYS = [
@@ -3913,7 +3948,7 @@ const takeTaggedExtractInner = (text, tag) => {
 
 const takeTaggedExtractBlock = (text, tag) => {
     const source = String(text || '');
-    if (!new RegExp(`\\[${tag}_EXTRACT_START`, 'i').test(source) && !new RegExp(`\\[${tag}\\][\\s\\S]{0,80}名称\\s*[=：:]`, 'i').test(source)) {
+    if (!new RegExp(`\\[${tag}_EXTRACT_START`, 'i').test(source) && !new RegExp(`\\[${tag}\\][\\s\\S]{0,160}名称\\s*[=：:]`, 'i').test(source)) {
         return '';
     }
     const inner = takeTaggedExtractInner(source, tag);
@@ -17938,17 +17973,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const requestedTypes = Array.isArray(options?.targetEntityTypes)
                     ? options.targetEntityTypes.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
                     : [];
-                const extractSourceText = [
+                const extractSourceCandidates = [
                     options?.extractSourceText,
                     explicitText,
-                    latestStage1RawTextRef.current,
                     latestStage1NodeOutputsRef.current?.scene_split,
+                    typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '',
+                    latestStage1RawTextRef.current,
                     adaptationText,
                     activeEpisode?.ai_scene_analysis_adaptation,
                     activeEpisode?.ai_scene_analysis_result,
                     ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
-                ].find((text) => hasAssetRerunExtractSignals(text))
-                    || String(options?.extractSourceText || explicitText || latestStage1RawTextRef.current || latestStage1NodeOutputsRef.current?.scene_split || '').trim();
+                ];
+                const extractSourceText = (
+                    (requestedTypes.includes('characters') && resolveCategoryAssetSourceText(extractSourceCandidates, 'characters'))
+                    || (requestedTypes.includes('props') && resolveCategoryAssetSourceText(extractSourceCandidates, 'props'))
+                    || (requestedTypes.some((item) => ['environments', 'posters', 'covers'].includes(String(item || '').trim().toLowerCase()))
+                        && resolveCategoryAssetSourceText(extractSourceCandidates, 'environments'))
+                    || resolveCategoryAssetSourceText(extractSourceCandidates, '')
+                    || String(options?.extractSourceText || explicitText || latestStage1NodeOutputsRef.current?.scene_split || '').trim()
+                );
                 const wantsCharacters = requestedTypes.length === 0 || requestedTypes.includes('characters');
                 const wantsProps = requestedTypes.length === 0 || requestedTypes.includes('props');
                 const wantsEnvironments = requestedTypes.length === 0
@@ -18470,18 +18513,47 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                     // Skip empty category (no rows of this type, or all already in DB).
                     // Environment design no longer requires Index ENV rows — the environment plan is enough.
-                    const extractSourceText = [
+                    const extractSourceCandidates = [
                         options?.extractSourceText,
                         explicitText,
-                        latestStage1RawTextRef.current,
                         latestStage1NodeOutputsRef.current?.scene_split,
+                        typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '',
+                        latestStage1RawTextRef.current,
                         adaptationText,
                         activeEpisode?.ai_scene_analysis_adaptation,
                         activeEpisode?.ai_scene_analysis_result,
                         ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
-                    ].find((text) => hasAssetRerunExtractSignals(text))
-                        || String(options?.extractSourceText || explicitText || latestStage1RawTextRef.current || latestStage1NodeOutputsRef.current?.scene_split || '').trim();
-                    const nodeInputText = String(extractSourceText || specificSubjectIndexText || '').trim();
+                    ];
+                    const extractSourceText = resolveCategoryAssetSourceText(extractSourceCandidates, pData.key)
+                        || String(
+                            options?.extractSourceText
+                            || explicitText
+                            || latestStage1NodeOutputsRef.current?.scene_split
+                            || ''
+                        ).trim();
+                    const categoryBriefText = (pData.key === 'characters' || pData.key === 'props')
+                        ? pickFirstMatchingText(
+                            [extractSourceText, ...extractSourceCandidates].map((text) => resolveCategoryAssetBriefText(text, pData.key)),
+                            (text) => (
+                                pData.key === 'characters'
+                                    ? (/\[CHAR_EXTRACT_START/i.test(text) || textHasTaggedExtractItems(text, 'CHAR'))
+                                    : (/\[PROP_EXTRACT_START/i.test(text) || textHasTaggedExtractItems(text, 'PROP'))
+                            ),
+                        )
+                        : resolveCategoryAssetBriefText(extractSourceText, pData.key);
+                    const nodeInputText = String(
+                        categoryBriefText
+                        || ((pData.key === 'characters' || pData.key === 'props')
+                            ? ''
+                            : (extractSourceText || specificSubjectIndexText))
+                        || ''
+                    ).trim();
+                    if ((pData.key === 'characters' || pData.key === 'props') && nodeInputText) {
+                        onLog?.(
+                            `[Stage 3 Asset Design] ${pData.key} extract brief chars=${nodeInputText.length} start=${/\[(?:CHAR|PROP)_EXTRACT_START/i.test(nodeInputText)}`,
+                            'info'
+                        );
+                    }
                     const envDesignHasPlanSource = pData.key === 'environments'
                         && hasEnvironmentPlanForAssetDesign(extractSourceText)
                         && !(skipExistingAssets && !options?.forceAssetDesign && hasPersistedEnvironmentAssetDesign());
@@ -18613,6 +18685,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const liveKey = promptKeyToLiveAssetKey(pData.key);
                     if (liveKey) {
                         setLiveAssetDesignTaskKeys((prev) => (prev.includes(liveKey) ? prev : [...prev, liveKey]));
+                    }
+                    if ((pData.key === 'characters' || pData.key === 'props') && !nodeInputText) {
+                        onLog?.(
+                            t(
+                                `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} 未找到可提交的提取块，已跳过 LLM`,
+                                `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} has no extract block to submit; skipping LLM`
+                            ),
+                            'warning'
+                        );
+                        return {
+                            key: pData.key,
+                            traceId: subtaskTraceId,
+                            importSessionId: subtaskImportSessionId,
+                            result: null,
+                            analysisText: '',
+                            subjectsJson: null,
+                            hasImportableSubjects: false,
+                            subtaskImportReport: null,
+                            subtaskImportError: 'missing extract block',
+                            skippedExisting: false,
+                        };
                     }
 
                     return awaitAnalyzeSceneWithRecovery(
@@ -26864,10 +26957,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 markEnvironmentAssetDesignReady('restart-stage2-env-auto-start-off');
             }
             if (restartPlanTargets.length > 0) {
+                const restartExtractSource = String(
+                    latestStage1NodeOutputsRef.current?.scene_split
+                    || (typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '')
+                    || stage1SourceText
+                    || latestStage1RawTextRef.current
+                    || ''
+                ).trim();
                 planAssetDesignPromise = runPostImportSceneSubjectPipeline(
                     null,
-                    '',
+                    restartExtractSource,
                     {
+                        extractSourceText: restartExtractSource,
                         targetEntityTypes: restartPlanTargets,
                         forceAssetDesign: true,
                         skipExistingAssets: false,

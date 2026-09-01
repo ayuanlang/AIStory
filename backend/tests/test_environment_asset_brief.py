@@ -275,6 +275,35 @@ def _script_with_char_extract() -> str:
 """
 
 
+def test_char_brief_rebuilds_from_loose_items_without_wrapper():
+    script = """[SCENES_BLOCK_START]
+[SCENE_END:EP01_SC01]
+[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=男主
+外形=瘦长
+[CHAR] 名称=阿宁｜名称_en=A Ning｜番位=女主
+外形=短发
+[SCENES_BLOCK_END]
+"""
+    brief = build_character_asset_design_brief(script)
+    assert "[CHAR_EXTRACT_START]" in brief
+    assert "[CHAR_EXTRACT_END]" in brief
+    assert "沈青" in brief
+    assert "阿宁" in brief
+    assert "瘦长" in brief
+    assert char_extract_has_items(script) is True
+
+
+def test_prop_brief_rebuilds_from_loose_items_without_wrapper():
+    script = """[PROP] 名称=银打火机｜名称_en=Silver Lighter
+外形=扁长方形银色金属机身
+"""
+    brief = build_prop_asset_design_brief(script)
+    assert "[PROP_EXTRACT_START]" in brief
+    assert "[PROP_EXTRACT_END]" in brief
+    assert "银打火机" in brief
+    assert prop_extract_has_items(script) is True
+
+
 def test_char_brief_keeps_extract_start_tag_for_multiline_and_fullwidth():
     script = """[CHAR_EXTRACT_START]
 [CHAR]

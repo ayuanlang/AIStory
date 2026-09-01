@@ -76,6 +76,7 @@ Storyboard 只等待当前 Scene 的工作区导入与 `asset_design_environment
 - 进度诊断拓扑：全局统筹 →（角色设计 ∥ 道具设计 ∥ 环境规划 ∥ 逐场优化）→ 主环境设计 → 建置稿入场景表 → 分镜。
 - `runPostImportSceneSubjectPipeline`：角色、独立道具与主环境均可在无 Subject Index 时启动；ENV 成功后 flush storyboard queue。
 - `analyze_scene` 资产设计节点禁止再以 Subject Index 作硬门槛；角色/道具/环境分别读提取块或环境规划。
+- 角色/道具提交给 LLM 的 `analyze_payload.text` 必须是编辑器同一真源切出的 `[CHAR_EXTRACT_START]` / `[PROP_EXTRACT_START]` 整块，禁止把环境规划或 Subject Index 当成角色/道具提取源。`latestStage1RawTextRef` 在环境规划完成后会被覆盖，选源时须先看 `scene_split`。
 - 环境节点完成只认主环境已入库；仅有衍生环境不得算完成，也不得打开分镜 ENV 门闩。
 - 资产重跑真源：角色看 `[CHAR_EXTRACT]`，道具看 `[PROP_EXTRACT]`，主环境/封面看环境规划（`SCENE_ENV_IDENT` / 【主环境】 + 程序封面简报）。禁止再把 Subject Index 当作重跑硬门槛。
 - 「重生衍生环境」只读各场 `derived_framing`（`scene_subskill_results.framing`，缺则 staging / pipeline `scene_block`）程序入库，禁止走 Stage 3 LLM。API：`POST /prompts/scene-analysis/flow/ingest-derived-environments`。

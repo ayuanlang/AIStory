@@ -16,11 +16,26 @@ PROP_EXTRACT_BLOCK_PATTERN = re.compile(
 PROP_EXTRACT_START_PATTERN = re.compile(r"`?\[PROP_EXTRACT_START(?::[^\s\]]+)?\]`?", re.IGNORECASE)
 PROP_EXTRACT_END_PATTERN = re.compile(r"`?\[PROP_EXTRACT_END(?::[^\s\]]+)?\]`?", re.IGNORECASE)
 PROP_ITEM_PATTERN = re.compile(r"^\[PROP\]\s*名称\s*[=：:]\s*(\S.+)$", re.MULTILINE | re.IGNORECASE)
-PROP_LOOSE_ITEM_PATTERN = re.compile(r"\[PROP\][\s\S]{0,80}名称\s*[=：:]", re.IGNORECASE)
+PROP_LOOSE_ITEM_PATTERN = re.compile(r"\[PROP\][\s\S]{0,160}名称\s*[=：:]", re.IGNORECASE)
+PROP_RECORD_PATTERN = re.compile(r"^\[PROP\][^\n]*(?:\n(?!\[PROP\]).*)*", re.MULTILINE | re.IGNORECASE)
 
 
 def _clean(value: object) -> str:
     return str(value or "").strip()
+
+
+def collect_loose_prop_item_blocks(script_text: str) -> List[str]:
+    items: List[str] = []
+    seen = set()
+    for match in PROP_RECORD_PATTERN.finditer(str(script_text or "")):
+        block = _clean(match.group(0))
+        if not block or block in seen:
+            continue
+        if re.match(r"^\[PROP\]\s*无\s*$", block, re.IGNORECASE):
+            continue
+        seen.add(block)
+        items.append(block)
+    return items
 
 
 def extract_prop_extract_blocks(script_text: str) -> str:
@@ -48,6 +63,16 @@ def extract_prop_extract_blocks(script_text: str) -> str:
     return f"{_clean(clipped)}\n[PROP_EXTRACT_END]".strip()
 
 
+def ensure_prop_extract_block(script_text: str) -> str:
+    existing = extract_prop_extract_blocks(script_text)
+    if existing:
+        return existing
+    items = collect_loose_prop_item_blocks(script_text)
+    if not items:
+        return ""
+    return "[PROP_EXTRACT_START]\n" + "\n\n".join(items) + "\n[PROP_EXTRACT_END]"
+
+
 def _prop_extract_inner(script_text: str) -> str:
     inners: List[str] = []
     for match in PROP_EXTRACT_BLOCK_PATTERN.finditer(extract_prop_extract_blocks(script_text) or ""):
@@ -61,6 +86,8 @@ def prop_extract_has_items(script_text: str) -> bool:
     if inner and not re.match(r"^\s*无\s*$", inner):
         return True
     if PROP_EXTRACT_START_PATTERN.search(text) and PROP_LOOSE_ITEM_PATTERN.search(text):
+        return True
+    if collect_loose_prop_item_blocks(text):
         return True
     return bool(PROP_ITEM_PATTERN.search(text) or PROP_LOOSE_ITEM_PATTERN.search(text))
 
@@ -95,7 +122,7 @@ def build_prop_asset_design_brief(adapted_script: str) -> str:
     script = _clean(adapted_script)
     if not script or not prop_extract_has_items(script):
         return ""
-    body = extract_prop_extract_blocks(script) or script
+    body = ensure_prop_extract_block(script) or extract_prop_extract_blocks(script) or script
     preface = (
         "道具资产设计真源。全局统筹已完成独立道具提取："
         "本轮用户侧只注入项目信息 + 本块；禁止把待分析剧本当输入；禁止注入角色提取或角色定妆信息。"

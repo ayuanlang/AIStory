@@ -84,6 +84,8 @@ from app.services.script_analysis_flow import (
     build_cover_poster_brief,
     extract_char_extract_blocks,
     extract_prop_extract_blocks,
+    ensure_char_extract_block,
+    ensure_prop_extract_block,
     pick_environment_plan_source_and_brief,
     build_prop_asset_design_brief,
     first_text_with_char_extract,
@@ -710,6 +712,7 @@ async def execute_analyze_scene(
                         )
                         raw_outputs = str(getattr(_ep_for_prop, "ai_stage_outputs", "") or "").strip()
                         if raw_outputs:
+                            extra_prop_sources.append(raw_outputs)
                             try:
                                 payload = json.loads(raw_outputs)
                                 stage1 = ((payload.get("stages") or {}).get("stage1") or {})
@@ -735,7 +738,7 @@ async def execute_analyze_scene(
             prop_brief = build_prop_asset_design_brief(brief_source)
             if not prop_brief:
                 for source in (str(getattr(request, "text", "") or ""), brief_source, *extra_prop_sources):
-                    raw_block = extract_prop_extract_blocks(source)
+                    raw_block = ensure_prop_extract_block(source) or extract_prop_extract_blocks(source)
                     if raw_block and "[PROP_EXTRACT_START" in raw_block.upper():
                         prop_brief = build_prop_asset_design_brief(raw_block)
                         if prop_brief:
@@ -766,6 +769,7 @@ async def execute_analyze_scene(
                         )
                         raw_outputs = str(getattr(_ep_for_char, "ai_stage_outputs", "") or "").strip()
                         if raw_outputs:
+                            extra_char_sources.append(raw_outputs)
                             try:
                                 payload = json.loads(raw_outputs)
                                 stage1 = ((payload.get("stages") or {}).get("stage1") or {})
@@ -791,7 +795,7 @@ async def execute_analyze_scene(
             char_brief = build_character_asset_design_brief(brief_source)
             if not char_brief:
                 for source in (str(getattr(request, "text", "") or ""), brief_source, *extra_char_sources):
-                    raw_block = extract_char_extract_blocks(source)
+                    raw_block = ensure_char_extract_block(source) or extract_char_extract_blocks(source)
                     if raw_block and "[CHAR_EXTRACT_START" in raw_block.upper():
                         char_brief = build_character_asset_design_brief(raw_block)
                         if char_brief:

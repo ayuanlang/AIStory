@@ -16,7 +16,7 @@ CHAR_EXTRACT_BLOCK_PATTERN = re.compile(
 CHAR_EXTRACT_START_PATTERN = re.compile(r"`?\[CHAR_EXTRACT_START(?::[^\s\]]+)?\]`?", re.IGNORECASE)
 CHAR_EXTRACT_END_PATTERN = re.compile(r"`?\[CHAR_EXTRACT_END(?::[^\s\]]+)?\]`?", re.IGNORECASE)
 CHAR_ITEM_PATTERN = re.compile(r"^\[CHAR\]\s*名称\s*[=：:]\s*(\S.+)$", re.MULTILINE | re.IGNORECASE)
-CHAR_LOOSE_ITEM_PATTERN = re.compile(r"\[CHAR\][\s\S]{0,80}名称\s*[=：:]", re.IGNORECASE)
+CHAR_LOOSE_ITEM_PATTERN = re.compile(r"\[CHAR\][\s\S]{0,160}名称\s*[=：:]", re.IGNORECASE)
 CHAR_RECORD_PATTERN = re.compile(r"^\[CHAR\][^\n]*(?:\n(?!\[CHAR\]).*)*", re.MULTILINE | re.IGNORECASE)
 
 
@@ -64,6 +64,20 @@ def parse_char_extract_records(script_text: str) -> List[Dict[str, str]]:
     return records
 
 
+def collect_loose_char_item_blocks(script_text: str) -> List[str]:
+    items: List[str] = []
+    seen = set()
+    for match in CHAR_RECORD_PATTERN.finditer(str(script_text or "")):
+        block = _clean(match.group(0))
+        if not block or block in seen:
+            continue
+        if re.match(r"^\[CHAR\]\s*无\s*$", block, re.IGNORECASE):
+            continue
+        seen.add(block)
+        items.append(block)
+    return items
+
+
 def extract_char_extract_blocks(script_text: str) -> str:
     text = str(script_text or "")
     blocks: List[str] = []
@@ -89,6 +103,16 @@ def extract_char_extract_blocks(script_text: str) -> str:
     return f"{_clean(clipped)}\n[CHAR_EXTRACT_END]".strip()
 
 
+def ensure_char_extract_block(script_text: str) -> str:
+    existing = extract_char_extract_blocks(script_text)
+    if existing:
+        return existing
+    items = collect_loose_char_item_blocks(script_text)
+    if not items:
+        return ""
+    return "[CHAR_EXTRACT_START]\n" + "\n\n".join(items) + "\n[CHAR_EXTRACT_END]"
+
+
 def _char_extract_inner(script_text: str) -> str:
     inners: List[str] = []
     for match in CHAR_EXTRACT_BLOCK_PATTERN.finditer(extract_char_extract_blocks(script_text) or ""):
@@ -102,6 +126,8 @@ def char_extract_has_items(script_text: str) -> bool:
     if inner and not re.match(r"^\s*无\s*$", inner):
         return True
     if CHAR_EXTRACT_START_PATTERN.search(text) and CHAR_LOOSE_ITEM_PATTERN.search(text):
+        return True
+    if collect_loose_char_item_blocks(text):
         return True
     return bool(CHAR_ITEM_PATTERN.search(text) or CHAR_LOOSE_ITEM_PATTERN.search(text))
 
@@ -136,7 +162,7 @@ def build_character_asset_design_brief(adapted_script: str) -> str:
     script = _clean(adapted_script)
     if not script or not char_extract_has_items(script):
         return ""
-    body = extract_char_extract_blocks(script) or script
+    body = ensure_char_extract_block(script) or extract_char_extract_blocks(script) or script
     preface = (
         "角色资产设计真源。全局统筹已完成角色提取与按场分配："
         "本轮用户侧只注入项目信息 + 本块；禁止把待分析剧本当输入；禁止注入道具提取或道具资产信息。"
