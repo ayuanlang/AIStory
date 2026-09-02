@@ -197,6 +197,16 @@ def test_scene_env_ident_parse_and_reuse_decision():
     reused_items = parse_scene_env_ident_items(reuse_only, "EP02_SC03")
     assert scene_has_new_environments(reused_items) is False
 
+    occupancy_reuse = """[SCENE_ENV_IDENT_START:EP11_SC02]
+[ENV] 名称=豪华游艇甲板｜环境族=占用｜占用面型=露天合建｜复用=是｜来源=本集｜匹配主环境=豪华游艇甲板｜依据=原文：“浑身抽搐的瘫倒在甲板上。”
+定位=继承原定义
+[SCENE_ENV_IDENT_END:EP11_SC02]"""
+    occupancy_items = parse_scene_env_ident_items(occupancy_reuse, "EP11_SC02")
+    assert occupancy_items[0]["reuse"] is True
+    assert occupancy_items[0]["source"] == "本集"
+    assert occupancy_items[0]["matched_name"] == "豪华游艇甲板"
+    assert scene_has_new_environments(occupancy_items) is False
+
     catalog = [
         {
             "name": "客栈大堂",

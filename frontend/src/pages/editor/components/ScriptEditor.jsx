@@ -3721,6 +3721,13 @@ import InputGroup from './InputGroup';
 import MarkdownCell from './MarkdownCell';
 import MarkdownHelpModal from './MarkdownHelpModal';
 import AiDiagnosisModal from './AiDiagnosisModal';
+import FailedNodeInspectModal from './FailedNodeInspectModal';
+import {
+    buildFailedNodeDiagnosisQuery,
+    buildFailedNodeDiagnosisSummary,
+    collectNodeFailureSource,
+    explainScriptAnalysisNodeFailure,
+} from '../../../lib/scriptAnalysisNodeFailure';
 import {
     PROVIDER_LABELS,
     MODEL_OPTIONS,
@@ -4827,6 +4834,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [manualModalOpen, setManualModalOpen] = useState(false);
     const [aiDiagnosisOpen, setAiDiagnosisOpen] = useState(false);
     const [aiDiagnosisWorkspaceSummary, setAiDiagnosisWorkspaceSummary] = useState('');
+    const [aiDiagnosisAutoStartQuery, setAiDiagnosisAutoStartQuery] = useState('');
+    const [aiDiagnosisFocusKey, setAiDiagnosisFocusKey] = useState('');
+    const [failedNodeInspect, setFailedNodeInspect] = useState(null);
     const [analysisModalMode, setAnalysisModalMode] = useState('stage1');
     const [subjectIndexText, setSubjectIndexText] = useState('');
     const [adaptationText, setAdaptationText] = useState('');
@@ -31898,7 +31908,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         stage2SceneMarkdownByScene,
     ]);
 
-    const openAiDiagnosisModal = useCallback(() => {
+    const openAiDiagnosisModal = useCallback((focus = null) => {
         const episodeLabel = buildEpisodeDisplayLabel({
             episodeNumber: activeEpisode?.episode_number,
             title: activeEpisode?.title,
@@ -31922,6 +31932,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || ''
         ).trim());
         const scriptOptPresent = Boolean(String(getStageOutputContent('stage1', 'adapted_script') || '').trim());
+        const focusSummary = focus?.extraSummary
+            ? String(focus.extraSummary)
+            : (focus ? buildFailedNodeDiagnosisSummary(focus) : '');
         const summary = [
             `项目：${project?.title || projectId || '-'}`,
             `分集：${episodeLabel || '-'} (id=${activeEpisode?.id || '-'})`,
@@ -31940,8 +31953,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             '',
             '场景编排预览（截断）：',
             scenePreview || '（空）',
+            ...(focusSummary ? ['', focusSummary] : []),
         ].join('\n');
         setAiDiagnosisWorkspaceSummary(summary);
+        setAiDiagnosisAutoStartQuery(String(focus?.autoStartQuery || '').trim());
+        setAiDiagnosisFocusKey(String(focus?.focusKey || focus?.stepKey || focus?.nodeKey || '').trim());
         setAiDiagnosisOpen(true);
     }, [
         activeEpisode?.ai_entity_design_result,
@@ -31963,6 +31979,64 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         resolveSubjectIndexTextForAssetRerun,
         workflowCompletenessStats?.summaryItems,
     ]);
+
+    const openFailedNodeInspect = useCallback((payload) => {
+        if (!payload || !payload.failed) return;
+        const explained = explainScriptAnalysisNodeFailure({
+            errorCode: payload.errorCode,
+            errorMessage: payload.errorMessage,
+            businessReason: payload.businessReason,
+            detail: payload.detail,
+            status: payload.status,
+        }, t);
+        setFailedNodeInspect({
+            stepKey: payload.stepKey || '',
+            nodeKey: payload.nodeKey || '',
+            sceneId: payload.sceneId || '',
+            sceneLabel: payload.sceneLabel || '',
+            label: payload.label || getAnalysisStageLabel(payload.stepKey, t),
+            canRerun: Boolean(payload.canRerun),
+            rerunKind: payload.rerunKind || '',
+            ...explained,
+        });
+    }, [t]);
+
+    const handleFailedNodeDiagnose = useCallback(() => {
+        const inspect = failedNodeInspect;
+        if (!inspect) {
+            openAiDiagnosisModal();
+            return;
+        }
+        const extraSummary = buildFailedNodeDiagnosisSummary(inspect);
+        openAiDiagnosisModal({
+            ...inspect,
+            extraSummary,
+            autoStartQuery: buildFailedNodeDiagnosisQuery(inspect, t),
+            focusKey: [inspect.stepKey, inspect.sceneId, inspect.errorCode].filter(Boolean).join(':'),
+        });
+        setFailedNodeInspect(null);
+    }, [failedNodeInspect, openAiDiagnosisModal, t]);
+
+    const handleFailedNodeRerun = useCallback(() => {
+        const inspect = failedNodeInspect;
+        if (!inspect) return;
+        setFailedNodeInspect(null);
+        const kind = String(inspect.rerunKind || '').trim();
+        if (kind === 'stage1' && inspect.nodeKey) {
+            void handleRerunStage1NodeOnly(inspect.nodeKey);
+            return;
+        }
+        if (kind === 'asset' && inspect.nodeKey) {
+            openPhase2RerunModal({
+                mode: 'category',
+                category: inspect.nodeKey,
+            });
+            return;
+        }
+        if (kind === 'scene' && inspect.stepKey && inspect.sceneId) {
+            void handleRerunSceneMatrixNode(inspect.stepKey, inspect.sceneId);
+        }
+    }, [failedNodeInspect, handleRerunSceneMatrixNode, handleRerunStage1NodeOnly, openPhase2RerunModal]);
 
     const stage2StageCards = useMemo(() => {
         const byScene = stage2SceneMarkdownByScene || {};
@@ -32274,9 +32348,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 onClose={() => setManualModalOpen(false)}
                 uiLang={uiLang}
             />
+            <FailedNodeInspectModal
+                open={Boolean(failedNodeInspect)}
+                payload={failedNodeInspect}
+                uiLang={uiLang}
+                onClose={() => setFailedNodeInspect(null)}
+                onDiagnose={handleFailedNodeDiagnose}
+                onRerun={handleFailedNodeRerun}
+                canRerun={Boolean(failedNodeInspect?.canRerun)}
+                rerunBusy={Boolean(analysisProgressDisplay.isLive)}
+            />
             <AiDiagnosisModal
                 open={aiDiagnosisOpen}
-                onClose={() => setAiDiagnosisOpen(false)}
+                onClose={() => {
+                    setAiDiagnosisOpen(false);
+                    setAiDiagnosisAutoStartQuery('');
+                    setAiDiagnosisFocusKey('');
+                }}
                 uiLang={uiLang}
                 pageKey="script_analysis"
                 systemLogs={systemPanelLogs}
@@ -32289,6 +32377,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 })}
                 systemApiId={selectedScriptAnalysisApiId}
                 onLog={onLog}
+                autoStartQuery={aiDiagnosisAutoStartQuery}
+                focusKey={aiDiagnosisFocusKey}
             />
             <div className="relative shrink-0 mb-5 overflow-visible rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.05] via-transparent to-transparent px-4 py-4 sm:px-6 sm:py-5">
                 <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(168,85,247,0.10),transparent_55%)]" />
@@ -32530,8 +32620,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <span className="font-bold text-sm">{t('进度诊断面板', 'Workflow Diagnostics')}</span>
                             <span className="text-[9px] leading-4 text-white/40 max-w-[520px]">
                                 {t(
-                                    '全局节点与分场节点分行展示。分场优化细分为文戏、武戏增强、场景现场编排、建置入戏，建置稿程序入库后接分镜。',
-                                    'Global and per-scene nodes are shown in separate sections. Per-scene refinement splits into drama, action enhancement, floor staging, and blocking; staging imports the workspace scene, then storyboards.'
+                                    '全局节点与分场节点分行展示。分场优化细分为文戏、武戏增强、场景现场编排、建置入戏，建置稿程序入库后接分镜。失败节点可点击查看原因、处理建议，并衔接 AI 诊断。',
+                                    'Global and per-scene nodes are shown in separate sections. Per-scene refinement splits into drama, action enhancement, floor staging, and blocking; staging imports the workspace scene, then storyboards. Click a failed node for the reason, next steps, and AI Diagnosis.'
                                 )}
                             </span>
                         </div>
@@ -32601,11 +32691,39 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const resolveNodeState = (nodeName, fallbackReady = false, fallbackActive = false) => {
                             const node = pipelineNodeByName[nodeName];
                             const status = String(node?.status || '').trim().toLowerCase();
+                            const source = collectNodeFailureSource(node, { status });
                             return {
                                 ready: status === 'success' || status === 'warning' || (!node && fallbackReady),
                                 active: ['running', 'queued'].includes(status) || (!node && fallbackActive),
                                 failed: status === 'failed' || status === 'blocked',
+                                errorCode: source.errorCode,
+                                errorMessage: source.errorMessage,
+                                businessReason: source.businessReason,
+                                detail: source.detail,
+                                status,
                             };
+                        };
+                        const openInspectFromNode = (stepKey, state, extras = {}) => {
+                            if (!state?.failed) return;
+                            const node = extras.node || pipelineNodeByName[extras.nodeName || extras.nodeKey] || null;
+                            const source = collectNodeFailureSource(node, {
+                                errorCode: extras.errorCode || state.errorCode,
+                                errorMessage: extras.errorMessage || state.errorMessage || state.detail,
+                                businessReason: extras.businessReason || state.businessReason,
+                                detail: extras.detail || state.detail,
+                                status: extras.status || state.status || 'failed',
+                            });
+                            openFailedNodeInspect({
+                                failed: true,
+                                stepKey,
+                                nodeKey: extras.nodeKey || '',
+                                sceneId: extras.sceneId || '',
+                                sceneLabel: extras.sceneLabel || '',
+                                label: extras.label || getAnalysisStageLabel(stepKey, t),
+                                canRerun: extras.canRerun,
+                                rerunKind: extras.rerunKind || '',
+                                ...source,
+                            });
                         };
                         const sceneSplitState = resolveNodeState(
                             'scene_split',
@@ -32792,7 +32910,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 unlocked: designUnlocked,
                                 waitingInventory: waitingUpstream || !designUnlocked,
                                 completeness,
-                                detail: String(completeness?.errorMessage || '').trim(),
+                                detail: String(completeness?.errorMessage || nodeState.errorMessage || nodeState.detail || '').trim(),
+                                errorCode: nodeState.errorCode,
+                                errorMessage: nodeState.errorMessage || String(completeness?.errorMessage || '').trim(),
+                                businessReason: nodeState.businessReason,
+                                status: failed ? 'failed' : '',
                             };
                         };
                         const assetCategoryStates = Object.fromEntries(
@@ -32885,13 +33007,37 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                         : t('待全局统筹', 'Wait global orchestration')
                                                 )
                                                 : t('等待中', 'Waiting');
+                            const inspectAssetFailure = () => openInspectFromNode(spec.stepKey, state, {
+                                nodeKey: spec.category,
+                                nodeName: spec.nodeName,
+                                label: getAnalysisStageLabel(spec.stepKey, t),
+                                canRerun: canRerunCategory,
+                                rerunKind: 'asset',
+                                detail: state.detail,
+                                errorMessage: state.detail,
+                            });
                             return (
                                 <div className="flex flex-col items-center gap-2 relative">
-                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
+                                    <div
+                                        role={state.failed ? 'button' : undefined}
+                                        tabIndex={state.failed ? 0 : undefined}
+                                        onClick={state.failed ? inspectAssetFailure : undefined}
+                                        onKeyDown={state.failed
+                                            ? (event) => {
+                                                if (event.key === 'Enter' || event.key === ' ') {
+                                                    event.preventDefault();
+                                                    inspectAssetFailure();
+                                                }
+                                            }
+                                            : undefined}
+                                        title={state.failed
+                                            ? t('点击查看失败原因、处理建议，并可开 AI 诊断', 'Click to view the failure reason, next steps, and AI Diagnosis')
+                                            : undefined}
+                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
                                         state.active
                                             ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
                                             : state.failed
-                                                ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
+                                                ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)] cursor-pointer hover:ring-2 hover:ring-red-300/70'
                                                 : state.ready
                                                     ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
                                                     : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'
@@ -32906,16 +33052,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </div>
                                     <div className="flex flex-col items-center gap-1 text-center">
                                         <span
+                                            role={state.failed ? 'button' : undefined}
+                                            tabIndex={state.failed ? 0 : undefined}
+                                            onClick={state.failed ? inspectAssetFailure : undefined}
                                             className={`text-[10px] ${
                                                 state.failed
-                                                    ? 'text-red-300'
+                                                    ? 'text-red-300 cursor-pointer hover:underline'
                                                     : state.ready
                                                         ? 'text-emerald-400/80'
                                                         : state.active
                                                             ? 'text-purple-300'
                                                             : 'text-white/30'
                                             }`}
-                                            title={state.detail || ''}
+                                            title={state.failed
+                                                ? t('点击查看失败原因', 'Click to view the failure reason')
+                                                : (state.detail || '')}
                                         >
                                             {statusLabel}
                                         </span>
@@ -32975,11 +33126,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         };
                         const renderPipelineNodeStep = (stepKey, state, number, nodeKey) => (
                             <div className="flex flex-col items-center gap-2 relative min-w-[78px]">
-                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
+                                <div
+                                    role={state.failed ? 'button' : undefined}
+                                    tabIndex={state.failed ? 0 : undefined}
+                                    onClick={state.failed
+                                        ? () => openInspectFromNode(stepKey, state, {
+                                            nodeKey,
+                                            nodeName: nodeKey,
+                                            canRerun: Boolean(!analysisLive && !state.active && activeEpisode?.id),
+                                            rerunKind: 'stage1',
+                                        })
+                                        : undefined}
+                                    onKeyDown={state.failed
+                                        ? (event) => {
+                                            if (event.key === 'Enter' || event.key === ' ') {
+                                                event.preventDefault();
+                                                openInspectFromNode(stepKey, state, {
+                                                    nodeKey,
+                                                    nodeName: nodeKey,
+                                                    canRerun: Boolean(!analysisLive && !state.active && activeEpisode?.id),
+                                                    rerunKind: 'stage1',
+                                                });
+                                            }
+                                        }
+                                        : undefined}
+                                    title={state.failed
+                                        ? t('点击查看失败原因、处理建议，并可开 AI 诊断', 'Click to view the failure reason, next steps, and AI Diagnosis')
+                                        : undefined}
+                                    className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
                                     state.active
                                         ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
                                         : state.failed
-                                            ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
+                                            ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)] cursor-pointer hover:ring-2 hover:ring-red-300/70'
                                             : state.ready
                                                 ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
                                                 : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'
@@ -32993,9 +33171,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 : number}
                                 </div>
                                 <div className="flex flex-col items-center gap-1 text-center">
-                                    <span className={`text-[10px] ${
+                                    <span
+                                        role={state.failed ? 'button' : undefined}
+                                        tabIndex={state.failed ? 0 : undefined}
+                                        onClick={state.failed
+                                            ? () => openInspectFromNode(stepKey, state, {
+                                                nodeKey,
+                                                nodeName: nodeKey,
+                                                canRerun: Boolean(!analysisLive && !state.active && activeEpisode?.id),
+                                                rerunKind: 'stage1',
+                                            })
+                                            : undefined}
+                                        title={state.failed
+                                            ? t('点击查看失败原因', 'Click to view the failure reason')
+                                            : undefined}
+                                        className={`text-[10px] ${
                                         state.failed
-                                            ? 'text-red-300'
+                                            ? 'text-red-300 cursor-pointer hover:underline'
                                             : state.ready
                                                 ? 'text-emerald-400/80'
                                                 : state.active
@@ -33219,11 +33411,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         );
                         const stateFromPipelineNode = (node, fallback = {}) => {
                             const status = String(node?.status || '').trim().toLowerCase();
+                            const source = collectNodeFailureSource(node, { status });
                             return {
                                 ready: status === 'success' || status === 'warning' || (!node && Boolean(fallback.ready)),
                                 active: ['running', 'queued'].includes(status) || (!node && Boolean(fallback.active)),
                                 failed: status === 'failed' || status === 'blocked',
-                                detail: String(node?.runtime_meta?.current_step_label || node?.last_error_message || '').trim(),
+                                detail: source.detail || source.errorMessage,
+                                errorCode: source.errorCode,
+                                errorMessage: source.errorMessage,
+                                businessReason: source.businessReason,
+                                status,
                             };
                         };
                         const resolveSceneSubskillGroupState = (node, group, sceneId) => {
@@ -33274,6 +33471,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     active: false,
                                     failed: true,
                                     detail: String(meta.business_reason || node?.last_error_message || '').trim(),
+                                    errorCode: String(node?.last_error_code || '').trim(),
+                                    errorMessage: String(node?.last_error_message || '').trim(),
+                                    businessReason: String(meta.business_reason || '').trim(),
+                                    status,
                                 };
                             }
                             if (failed && rank > doneAfter) {
@@ -33317,7 +33518,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 return { ready: false, active: true, failed: false, detail: '' };
                             }
                             if (status === 'failed' || (fromNode.failed && !nodeTimedOut)) {
-                                return { ready: false, active: false, failed: true, detail: String(item?.error || node?.last_error_message || '') };
+                                return {
+                                    ready: false,
+                                    active: false,
+                                    failed: true,
+                                    detail: String(item?.error || node?.last_error_message || ''),
+                                    errorCode: String(node?.last_error_code || '').trim(),
+                                    errorMessage: String(item?.error || node?.last_error_message || '').trim(),
+                                    businessReason: String(node?.runtime_meta?.business_reason || '').trim(),
+                                    status: status || 'failed',
+                                };
                             }
                             if (fromNode.ready) {
                                 return { ready: true, active: false, failed: false, detail: '' };
@@ -33330,13 +33540,44 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const renderMatrixEmpty = () => (
                             <div className="flex items-center justify-center min-h-[64px] text-white/20 text-xs">—</div>
                         );
-                        const renderSceneNodeCell = (state, { stepKey, sceneId, canEdit, canRerun } = {}) => (
+                        const renderSceneNodeCell = (state, { stepKey, sceneId, sceneLabel, canEdit, canRerun } = {}) => {
+                            const inspectSceneFailure = () => openInspectFromNode(stepKey, state, {
+                                nodeKey: stepKey,
+                                sceneId,
+                                sceneLabel: sceneLabel || sceneId,
+                                node: findScenePipelineNode(
+                                    stepKey === 'storyboard' ? 'storyboard_generation' : 'scene_subskill_scene',
+                                    sceneId
+                                ),
+                                canRerun,
+                                rerunKind: 'scene',
+                                detail: state.detail,
+                                errorCode: state.errorCode,
+                                errorMessage: state.errorMessage || state.detail,
+                                businessReason: state.businessReason,
+                            });
+                            return (
                             <div className="flex flex-col items-center gap-1 px-1 py-2 min-w-0">
-                                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold z-10 border ${
+                                <div
+                                    role={state.failed ? 'button' : undefined}
+                                    tabIndex={state.failed ? 0 : undefined}
+                                    onClick={state.failed ? inspectSceneFailure : undefined}
+                                    onKeyDown={state.failed
+                                        ? (event) => {
+                                            if (event.key === 'Enter' || event.key === ' ') {
+                                                event.preventDefault();
+                                                inspectSceneFailure();
+                                            }
+                                        }
+                                        : undefined}
+                                    title={state.failed
+                                        ? t('点击查看失败原因、处理建议，并可开 AI 诊断', 'Click to view the failure reason, next steps, and AI Diagnosis')
+                                        : undefined}
+                                    className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold z-10 border ${
                                     state.active
                                         ? 'bg-purple-500/50 border-purple-400 text-white'
                                         : state.failed
-                                            ? 'bg-red-500/70 border-red-400 text-white'
+                                            ? 'bg-red-500/70 border-red-400 text-white cursor-pointer hover:ring-2 hover:ring-red-300/70'
                                             : state.ready
                                                 ? 'bg-emerald-500 border-emerald-400 text-white'
                                                 : 'bg-white/5 border-white/20 text-white/40'
@@ -33349,9 +33590,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 ? <Check className="w-3.5 h-3.5" />
                                                 : '·'}
                                 </div>
-                                <span className={`text-[10px] text-center leading-tight ${
+                                <span
+                                    role={state.failed ? 'button' : undefined}
+                                    tabIndex={state.failed ? 0 : undefined}
+                                    onClick={state.failed ? inspectSceneFailure : undefined}
+                                    title={state.failed
+                                        ? t('点击查看失败原因', 'Click to view the failure reason')
+                                        : undefined}
+                                    className={`text-[10px] text-center leading-tight ${
                                     state.failed
-                                        ? 'text-red-300'
+                                        ? 'text-red-300 cursor-pointer hover:underline'
                                         : state.ready
                                             ? 'text-emerald-400/80'
                                             : state.active
@@ -33391,7 +33639,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </button>
                                 </div>
                             </div>
-                        );
+                            );
+                        };
                         return (
                     <div className="w-full flex flex-col gap-4">
                         <div className="w-full overflow-x-auto">
@@ -33472,6 +33721,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 const cellProps = (stepKey, state, extra = {}) => ({
                                     stepKey,
                                     sceneId: row.sceneId,
+                                    sceneLabel: formatDiagnosticSceneLabel(row.sceneId, row.order, row.sceneName),
                                     canEdit: extra.canEdit != null ? extra.canEdit : canEditSceneDraft(state),
                                     canRerun: extra.canRerun != null ? extra.canRerun : canRerunSubskill(state),
                                 });

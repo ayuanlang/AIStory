@@ -46,6 +46,8 @@ export default function AiDiagnosisModal({
     episodeLabel = '',
     systemApiId = null,
     onLog = null,
+    autoStartQuery = '',
+    focusKey = '',
 }) {
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const preset = PAGE_PRESETS[pageKey] || PAGE_PRESETS.script_analysis;
@@ -240,10 +242,10 @@ export default function AiDiagnosisModal({
 
                 <div className="flex-1 min-h-0 overflow-hidden [&_.bg-card]:bg-transparent [&_.bg-card]:border-0 [&_.bg-card]:rounded-none [&_.bg-card]:shadow-none">
                     <AgentChat
-                        key={`${pageKey}:${episodeId || 'none'}:${open ? 'open' : 'closed'}`}
+                        key={`${pageKey}:${episodeId || 'none'}:${open ? 'open' : 'closed'}:${focusKey || 'general'}`}
                         customModeOnly
                         hideHeader
-                        autoStartQuery={t(DEFAULT_DIAGNOSIS_QUERY_ZH, DEFAULT_DIAGNOSIS_QUERY_EN)}
+                        autoStartQuery={String(autoStartQuery || '').trim() || t(DEFAULT_DIAGNOSIS_QUERY_ZH, DEFAULT_DIAGNOSIS_QUERY_EN)}
                         customPlaceholder={t(
                             '继续追问……（会带上本轮对话记忆）',
                             'Ask a follow-up… (includes conversation memory)'

@@ -32,14 +32,10 @@ SCENE_ENV_IDENT_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 ENV_ITEM_PATTERN = re.compile(
-    r"^\s*\[ENV\]\s*"
-    r"名称\s*=\s*([^｜|\r\n]+)"
-    r"(?:\s*[｜|]\s*复用\s*=\s*([^｜|\r\n]+))?"
-    r"(?:\s*[｜|]\s*来源\s*=\s*([^｜|\r\n]+))?"
-    r"(?:\s*[｜|]\s*匹配主环境\s*=\s*([^｜|\r\n]+))?"
-    r"(?:\s*[｜|]\s*依据\s*=\s*([^\r\n]+))?",
+    r"^\s*\[ENV\]\s*(.+)$",
     re.IGNORECASE | re.MULTILINE,
 )
+_ENV_FIELD_SPLIT = re.compile(r"[｜|]")
 _DEGREE_NAME_PATTERN = re.compile(r"^(\d+)\s*度")
 _SOURCE_REUSE = {"项目库", "上集", "本集"}
 _SOURCE_NEW = {"新建", "新建设计", "无", "none", "n/a", ""}
@@ -63,6 +59,38 @@ def _clean_env_name(value: Any) -> str:
 def _truthy_reuse(value: Any) -> bool:
     text = str(value or "").strip().lower()
     return text in {"是", "yes", "y", "true", "1", "reuse", "复用"}
+
+
+def _parse_env_line_fields(line: str) -> Dict[str, str]:
+    """Parse `key=value` pairs from an [ENV] line; field order is not required."""
+    fields: Dict[str, str] = {}
+    for part in _ENV_FIELD_SPLIT.split(str(line or "")):
+        part = part.strip()
+        if not part:
+            continue
+        for sep in ("=", "：", ":"):
+            if sep in part:
+                key, _, value = part.partition(sep)
+                break
+        else:
+            continue
+        key = key.strip()
+        value = value.strip()
+        if key:
+            fields[key] = value
+    return fields
+
+
+def _env_field(fields: Dict[str, str], *keys: str) -> str:
+    for key in keys:
+        if key in fields:
+            return str(fields.get(key) or "").strip()
+    lowered = {str(name).strip().lower(): value for name, value in fields.items()}
+    for key in keys:
+        hit = lowered.get(str(key).strip().lower())
+        if hit is not None:
+            return str(hit).strip()
+    return ""
 
 
 def _normalize_source(value: Any) -> str:
@@ -125,13 +153,14 @@ def parse_scene_env_ident_items(text: str, scene_id: str = "") -> List[Dict[str,
 
     for block_scene_id, body in search_bodies:
         for match in ENV_ITEM_PATTERN.finditer(body):
-            name = _clean_env_name(match.group(1))
+            fields = _parse_env_line_fields(match.group(1))
+            name = _clean_env_name(_env_field(fields, "名称", "name"))
             if not name:
                 continue
-            reuse_raw = str(match.group(2) or "").strip()
-            source_raw = str(match.group(3) or "").strip()
-            matched = _clean_env_name(match.group(4))
-            evidence = str(match.group(5) or "").strip()
+            reuse_raw = _env_field(fields, "复用", "reuse")
+            source_raw = _env_field(fields, "来源", "source")
+            matched = _clean_env_name(_env_field(fields, "匹配主环境", "matched"))
+            evidence = _env_field(fields, "依据", "evidence")
             source_kind = _normalize_source(source_raw)
             reused = source_kind in _SOURCE_REUSE or _truthy_reuse(reuse_raw)
             if source_kind == "新建":
