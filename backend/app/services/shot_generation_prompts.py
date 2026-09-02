@@ -345,6 +345,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     tone = get_context_val(["tone", "mood", "atmosphere"])
     lighting = get_context_val(["lighting", "light_style", "light"])
     color_spectrum = get_context_val(["color_spectrum", "colorSpectrum", "色系光谱", "color_temperature_direction"])
+    color_palette = get_context_val(["color_palette", "colorPalette", "palette", "色卡", "色系", "色谱"])
     music_recommendation = get_context_val(["music_recommendation", "score_recommendation", "配乐推荐"])
     character_relationships = get_context_val(["character_relationships"])
     project_notes = get_context_val(["notes"])
@@ -410,6 +411,8 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         project_context_lines.append(f"Tone: {tone}")
     if lighting:
         project_context_lines.append(f"Lighting: {lighting}")
+    if color_palette:
+        project_context_lines.append(f"Color Palette: {color_palette}")
     if color_spectrum:
         project_context_lines.append(f"Color Spectrum: {color_spectrum}")
     if music_recommendation:
@@ -472,6 +475,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         "tone": tone,
         "lighting": lighting,
         "color_spectrum": color_spectrum,
+        "color_palette": color_palette,
         "music_recommendation": music_recommendation,
         "region_culture": region_culture,
         "era_setting": era_setting,
@@ -1145,6 +1149,8 @@ def _build_shot_prompts(
             f"（# Project Context「分镜最长秒数」；未注入则默认 {DEFAULT_MAX_SHOT_SECONDS}）。"
             f"鼓励合并门槛=MaxShotSeconds-6={max(0, max_shot_seconds - 6)}。"
             f"合镜不认主环境：相邻Beat默认合镜，只按时长门槛封口；衍生ENV名变只写转换运镜（切角过程/闪回胶片/门槛），禁止因跨主或闪回拆镜。"
+            f"合镜完成后必须评估每一对上下镜如何合理衔接：转镜运镜与转镜其他要求拆成转出/转入两半，分别写入上镜末P与下镜P1；禁止只写Logic衔接、禁止只改一侧、禁止下镜P1重开Wide。"
+            f"进出场不得压成一句：须落地在场者反应、已锁景别跨档与运镜衬托（反应近用Soft Push/Rack，入画出画过程用Follow/Pull Reveal）；上游无反应标upstream_missing_entry_reaction，禁止自造众人震惊，禁止为衬托另选景别。"
             f"符合合并逻辑时须一直累计到基准合镜Duration>门槛才封口；"
             f"若基准已>MaxShotSeconds，表列Duration强制=MaxShotSeconds，禁止超时拆镜。"
             f"镜末语言延续：本镜最后一个Beat为语言类（有非空台词的对白/OS/V.O./旁白/自白等）时，Duration在Duration0之后固定+1s（不参与封口判定，不得被下浮吃掉）；Video末秒须写说完后余韵定格，禁止卡音节切断。"
@@ -1190,9 +1196,11 @@ def _build_shot_prompts(
 {scene_subject_image_prompts_section}
 # Instruction
 1. Analyze `# Core Scene Info` Beats and break them down into shots per §三.3.
-2. Output exactly one Shot List markdown table. Do not copy prompt example/template rows (e.g. `{{Scene ID}}_SHzz` or a second header).
-3. Scene opening / OT- / 吸睛 must be P segments inside the Shot that covers Beat 1 — never an extra Shot outside Beat-Shot mapping.
-4. Every Beat must appear in some row's `Beat-Shot映射`; do not invent unmapped opening shots.
+2. After shot boundaries are locked, evaluate every adjacent pair per §三.3B: split transition camera moves and other cut requirements into outgoing (previous-shot last P) and incoming (next-shot P1).
+3. For character entry/exit beats, land reactions + locked shot-size change + complementary camera per §二.3B; do not flatten to one enter/exit sentence.
+4. Output exactly one Shot List markdown table. Do not copy prompt example/template rows (e.g. `{{Scene ID}}_SHzz` or a second header).
+5. Scene opening / OT- / 吸睛 must be P segments inside the Shot that covers Beat 1 — never an extra Shot outside Beat-Shot mapping.
+6. Every Beat must appear in some row's `Beat-Shot映射`; do not invent unmapped opening shots.
 """
     
     return system_prompt, user_input

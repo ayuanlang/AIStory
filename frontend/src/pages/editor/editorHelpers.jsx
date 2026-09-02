@@ -3589,10 +3589,94 @@ const LOCAL_MANUAL_REF_TECH_KEYS = [
     'deleted_ref_urls',
 ];
 
+const normalizeMediaUrlPathToken = (url) => {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    try {
+        const parsed = new URL(raw, 'https://aistory.local');
+        return `${String(parsed.hostname || '').toLowerCase()}${String(parsed.pathname || '').toLowerCase()}`;
+    } catch {
+        return raw.split('?')[0].split('#')[0].toLowerCase();
+    }
+};
+
+const pickShotImageUrl = (prevUrl, nextUrl, nextDefined) => {
+    const prevTrim = String(prevUrl || '').trim();
+    if (!nextDefined) return prevTrim;
+    const nextTrim = String(nextUrl || '').trim();
+    if (!nextTrim) return prevTrim;
+    if (!prevTrim) return nextTrim;
+    const nextDurable = isDurablePersistedMediaUrl(nextTrim);
+    const prevDurable = isDurablePersistedMediaUrl(prevTrim);
+    if (nextDurable && !prevDurable) return nextTrim;
+    if (prevDurable && !nextDurable) return prevTrim;
+    return nextTrim;
+};
+
+/**
+ * Choose video_url when merging a server/list row into local shot state.
+ * Durable incoming must not clobber a just-regenerated local preview that
+ * points at a different asset (compact lists keep the previous OSS URL until
+ * the new file is bound).
+ */
+const pickShotVideoUrl = (prevUrl, nextUrl, nextDefined, options = {}) => {
+    const prevTrim = String(prevUrl || '').trim();
+    if (!nextDefined) return prevTrim;
+    const nextTrim = String(nextUrl || '').trim();
+    if (!nextTrim) return prevTrim;
+    if (!prevTrim) return nextTrim;
+    if (prevTrim === nextTrim) return nextTrim;
+
+    const nextDurable = isDurablePersistedMediaUrl(nextTrim);
+    const prevDurable = isDurablePersistedMediaUrl(prevTrim);
+    const prevToken = normalizeMediaUrlPathToken(prevTrim);
+    const nextToken = normalizeMediaUrlPathToken(nextTrim);
+    const sameAsset = Boolean(prevToken && nextToken && prevToken === nextToken);
+    if (sameAsset) {
+        if (nextDurable && !prevDurable) return nextTrim;
+        if (prevDurable && !nextDurable) return prevTrim;
+        return nextTrim;
+    }
+
+    const prevMeta = options.prevMeta && typeof options.prevMeta === 'object' ? options.prevMeta : {};
+    const nextMeta = options.nextMeta && typeof options.nextMeta === 'object' ? options.nextMeta : {};
+    const prevBound = parseMediaBoundAtMs(prevMeta);
+    const nextBound = parseMediaBoundAtMs(nextMeta);
+    const incomingIsCompact = options.incomingIsCompact === true;
+
+    if (incomingIsCompact) {
+        if (!prevDurable || prevMeta.ephemeral_binding || prevMeta.needs_persistence_retry) {
+            return prevTrim;
+        }
+        if (prevBound && (Date.now() - prevBound) < EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS) {
+            return prevTrim;
+        }
+        return nextTrim;
+    }
+
+    if (prevBound && nextBound) {
+        if (prevBound > nextBound) return prevTrim;
+        if (nextBound > prevBound) return nextTrim;
+    }
+
+    if (!prevDurable && nextDurable && (prevMeta.ephemeral_binding || prevMeta.needs_persistence_retry)) {
+        const pending = String(prevMeta.pending_source_url || '').trim();
+        if (pending && (pending === nextTrim || normalizeMediaUrlPathToken(pending) === nextToken)) {
+            return nextTrim;
+        }
+        return prevTrim;
+    }
+
+    if (nextDurable && !prevDurable) return nextTrim;
+    if (prevDurable && !nextDurable) return prevTrim;
+    return nextTrim;
+};
+
 /**
  * Merge a server/list shot into local shot state without blanking just-generated
  * media that has not been persisted yet (provider temp URLs stay local-only).
- * Prefer durable OSS URLs when the incoming payload has them.
+ * Prefer durable OSS URLs when they are the same asset (ephemeral → OSS upgrade).
+ * Do not replace a different just-generated local video with a stale durable row.
  *
  * Compact list `technical_notes` omit ref/manual fields — never let them wipe
  * hydrated editor refs (e.g. 上镜帧「加入参考」).
@@ -3605,35 +3689,30 @@ export const mergeShotPreservingLocalMedia = (prevShot, incomingShot, options = 
         return options.markHydrated ? { ...incoming, is_compact: false } : { ...incoming };
     }
 
-    const pickMediaUrl = (prevUrl, nextUrl, nextDefined) => {
-        const prevTrim = String(prevUrl || '').trim();
-        if (!nextDefined) return prevTrim;
-        const nextTrim = String(nextUrl || '').trim();
-        if (!nextTrim) return prevTrim;
-        if (!prevTrim) return nextTrim;
-        const nextDurable = isDurablePersistedMediaUrl(nextTrim);
-        const prevDurable = isDurablePersistedMediaUrl(prevTrim);
-        if (nextDurable && !prevDurable) return nextTrim;
-        if (prevDurable && !nextDurable) return prevTrim;
-        return nextTrim;
-    };
+    const incomingIsCompact = incoming?.is_compact === true;
+    const prevTech = parseShotTechnicalNotes(prev.technical_notes);
+    const nextTech = Object.prototype.hasOwnProperty.call(incoming, 'technical_notes')
+        ? parseShotTechnicalNotes(incoming.technical_notes)
+        : {};
 
     const merged = { ...prev, ...incoming };
     const nextImageDefined = Object.prototype.hasOwnProperty.call(incoming, 'image_url');
     const nextVideoDefined = Object.prototype.hasOwnProperty.call(incoming, 'video_url');
-    merged.image_url = pickMediaUrl(prev.image_url, incoming.image_url, nextImageDefined);
-    merged.video_url = pickMediaUrl(prev.video_url, incoming.video_url, nextVideoDefined);
-
-    const incomingIsCompact = incoming?.is_compact === true;
+    merged.image_url = pickShotImageUrl(prev.image_url, incoming.image_url, nextImageDefined);
+    merged.video_url = pickShotVideoUrl(prev.video_url, incoming.video_url, nextVideoDefined, {
+        incomingIsCompact,
+        prevMeta: prevTech?.video_metadata,
+        nextMeta: nextTech?.video_metadata,
+    });
     if (Object.prototype.hasOwnProperty.call(incoming, 'technical_notes')) {
-        const prevTech = parseShotTechnicalNotes(prev.technical_notes);
-        const nextTech = parseShotTechnicalNotes(incoming.technical_notes);
-
         if (incomingIsCompact) {
             // Keep hydrated notes; only refresh compact-known media keys when present.
             const syncedTech = { ...prevTech };
             let techChanged = false;
+            const keptLocalVideo = String(merged.video_url || '').trim()
+                && String(merged.video_url || '').trim() !== String(incoming.video_url || '').trim();
             COMPACT_TECH_NOTES_SYNC_KEYS.forEach((key) => {
+                if (keptLocalVideo && (key === 'video_metadata' || key === 'video_oss_uploaded')) return;
                 if (!Object.prototype.hasOwnProperty.call(nextTech, key)) return;
                 const nextValue = nextTech[key];
                 if (nextValue === undefined || nextValue === null || nextValue === '') return;
@@ -3707,12 +3786,21 @@ export const mergeShotVideoOssPersistState = (shotLike, patch = {}) => {
     const meta = tech.video_metadata && typeof tech.video_metadata === 'object'
         ? { ...tech.video_metadata }
         : {};
+    const explicitBind = Object.prototype.hasOwnProperty.call(patch, 'videoUrl')
+        || Object.prototype.hasOwnProperty.call(patch, 'video_url');
+    if (explicitBind && videoUrl) {
+        meta.media_bound_at = new Date().toISOString();
+    }
+
     if (ossUploaded) {
         tech.video_oss_uploaded = true;
         delete meta.ephemeral_binding;
         delete meta.needs_persistence_retry;
         delete meta.remote_localization_failed;
         meta.oss_uploaded_success = true;
+        if (!meta.media_bound_at) {
+            meta.media_bound_at = new Date().toISOString();
+        }
         tech.video_metadata = meta;
     } else if (hasOssFlag && videoUrl) {
         // Explicit non-durable bind: keep preview locally and mark for OSS sync.

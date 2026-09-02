@@ -5646,9 +5646,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             if (!acceptPriorUrl && priorVideoUrl && durableUrl === priorVideoUrl) {
                 return false;
             }
+            const touched = mergeShotVideoOssPersistState(normalized, {
+                videoUrl: durableUrl,
+                ossUploaded: true,
+            });
             const patch = {
-                video_url: durableUrl,
-                technical_notes: normalized.technical_notes,
+                video_url: String(touched.video_url || durableUrl).trim(),
+                technical_notes: touched.technical_notes,
             };
 
             setShots((prev) => prev.map((item) => (
@@ -6323,6 +6327,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     clearPendingVideoJob(stableShotId);
                     continue;
                 }
+                const resumePriorVideoUrl = String(
+                    (
+                        (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId)
+                            ? editingShotRef.current?.video_url
+                            : ''
+                    )
+                    || (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)?.video_url
+                    || ''
+                ).trim();
 
                 const pauseUntil = Number(pausedResumeVideoJobsRef.current[jobId] || 0);
                 if (pauseUntil > Date.now()) {
@@ -6367,7 +6380,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             if (resultUrl || phase === 'succeeded') {
                                 const serverBoundVideoUrl = resultUrl;
                                 if (serverBoundVideoUrl) {
-                                    const newData = { video_url: serverBoundVideoUrl };
+                                    const resumeBase = (
+                                        (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId)
+                                            ? editingShotRef.current
+                                            : null
+                                    ) || (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
+                                    || { id: stableShotId, video_url: serverBoundVideoUrl };
+                                    const resumePatched = mergeShotVideoOssPersistState(resumeBase, {
+                                        videoUrl: serverBoundVideoUrl,
+                                        ossUploaded: isDurablePersistedMediaUrl(serverBoundVideoUrl),
+                                    });
+                                    const newData = {
+                                        video_url: serverBoundVideoUrl,
+                                        technical_notes: resumePatched.technical_notes,
+                                    };
                                     // Only PUT durable OSS URLs. Temp/provider/local paths are rejected by
                                     // the API until persist-media finishes — keep those local-only.
                                     if (isDurablePersistedMediaUrl(serverBoundVideoUrl)) {
@@ -6391,6 +6417,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         shotId: stableShotId,
                                         jobId,
                                         initialUrl: serverBoundVideoUrl,
+                                        previousVideoUrl: resumePriorVideoUrl,
                                     });
                                     if (!synced) {
                                         onLog?.(
@@ -6411,7 +6438,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             if (phase === 'failed' || phase === 'canceled') {
                                 const serverBoundVideoUrl = resultUrl;
                                 if (serverBoundVideoUrl) {
-                                    const newData = { video_url: serverBoundVideoUrl };
+                                    const resumeBase = (
+                                        (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId)
+                                            ? editingShotRef.current
+                                            : null
+                                    ) || (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
+                                    || { id: stableShotId, video_url: serverBoundVideoUrl };
+                                    const resumePatched = mergeShotVideoOssPersistState(resumeBase, {
+                                        videoUrl: serverBoundVideoUrl,
+                                        ossUploaded: isDurablePersistedMediaUrl(serverBoundVideoUrl),
+                                    });
+                                    const newData = {
+                                        video_url: serverBoundVideoUrl,
+                                        technical_notes: resumePatched.technical_notes,
+                                    };
                                     if (isDurablePersistedMediaUrl(serverBoundVideoUrl)) {
                                         try {
                                             await onUpdateShot(stableShotId, newData);
@@ -6432,6 +6472,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             shotId: stableShotId,
                                             jobId,
                                             initialUrl: serverBoundVideoUrl,
+                                            previousVideoUrl: resumePriorVideoUrl,
                                         });
                                         if (!synced) {
                                             onLog?.(
@@ -6987,7 +7028,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const mergedImageUrl = String(mediaMerged.image_url || '').trim();
             const mergedVideoUrl = String(mediaMerged.video_url || '').trim();
             const imageAssetChanged = normalizeAssetUrlToken(prevImageUrl) !== normalizeAssetUrlToken(mergedImageUrl);
-            const videoAssetChanged = normalizeAssetUrlToken(prevVideoUrl) !== normalizeAssetUrlToken(mergedVideoUrl);
+            const prevVideoBoundAt = getShotVideoMediaBoundAtMs(prev);
+            const mergedVideoBoundAt = getShotVideoMediaBoundAtMs({
+                ...prev,
+                video_url: mergedVideoUrl,
+                technical_notes: nextTechnicalNotes.value,
+            });
+            const videoAssetChanged = normalizeAssetUrlToken(prevVideoUrl) !== normalizeAssetUrlToken(mergedVideoUrl)
+                || Number(prevVideoBoundAt || 0) !== Number(mergedVideoBoundAt || 0);
 
             const mediaChanged =
                 imageAssetChanged ||
@@ -9362,6 +9410,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (!editingShot) return;
         let shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
+        const previousVideoUrl = String(shotSnapshot?.video_url || '').trim();
         const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
         const isVideoGenerating = isShotVideoUiRunning(targetShotId, targetGeneratingState);
         if (targetGeneratingState.start || targetGeneratingState.end || isVideoGenerating) {
@@ -9733,7 +9782,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 await syncShotVideoAfterOssPersist({
                                     shotId: targetShotId,
                                     jobId: createdVideoJobId,
-                                    previousVideoUrl: shotSnapshot.video_url,
+                                    previousVideoUrl,
                                 });
                             } finally {
                                 setShotMediaOssPersistBusy((prev) => {
@@ -9840,6 +9889,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 shotId: targetShotId,
                                 jobId: createdVideoJobId,
                                 initialUrl: resolvedVideoUrl,
+                                previousVideoUrl,
                             });
                             if (synced) return;
 
@@ -9941,6 +9991,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             shotId: targetShotId,
                                             jobId: createdVideoJobId,
                                             initialUrl: resultUrl,
+                                            previousVideoUrl,
                                         });
                                     }
                                 }
@@ -10021,6 +10072,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                          shotId: targetShotId,
                                          jobId: createdVideoJobId,
                                          initialUrl: resultUrl,
+                                         previousVideoUrl,
                                      });
                                  }
                              }
@@ -10485,6 +10537,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         shotId: targetShotId,
                         jobId: createdVideoJobId,
                         initialUrl: res.url,
+                        previousVideoUrl: currentVideoUrl,
                     });
                 }
 
@@ -13267,7 +13320,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             {(editingShot.video_url) ? (
                                                 isEditingVideoPreviewArmed ? (
                                                     <ManagedVideoPlayer
-                                                        key={`${editingShot.id}:${String(editingShot.video_url || '')}`}
+                                                        key={`${editingShot.id}:${String(editingShot.video_url || '')}:${getShotVideoMediaBoundAtMs(editingShot) || 0}`}
                                                         src={editingShot.video_url}
                                                         poster={resolveShotVideoPosterUrl(editingShot)}
                                                         className="max-w-full max-h-full object-contain"
@@ -14860,7 +14913,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     <div className={previewContentClass}>
                                                                         {editingShot.video_url ? (
                                                                             <ManagedVideoPlayer
-                                                                                key={`${editingShot.id}:${String(editingShot.video_url || '')}`}
+                                                                                key={`${editingShot.id}:${String(editingShot.video_url || '')}:${getShotVideoMediaBoundAtMs(editingShot) || 0}`}
                                                                                 src={detailPreviewUrl || editingShot.video_url}
                                                                                 poster={resolveShotVideoPosterUrl(editingShot)}
                                                                                 className={videoPreviewClass}

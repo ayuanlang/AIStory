@@ -80,6 +80,7 @@ def _backfill_line(script_text: str) -> str:
     style = _first_nonempty(backfill.get("Global_Style"), backfill.get("global_style"))
     tone = _clean(backfill.get("tone"))
     lighting = _clean(backfill.get("lighting"))
+    color_palette = _first_nonempty(backfill.get("color_palette"), backfill.get("色卡"))
     plot = _first_nonempty(backfill.get("comprehensive_plot"), backfill.get("plot_summary"))
     assets = _clean(backfill.get("comprehensive_assets"))
     parts = []
@@ -89,6 +90,8 @@ def _backfill_line(script_text: str) -> str:
         parts.append(f"影调={tone}")
     if lighting:
         parts.append(f"光线={lighting}")
+    if color_palette:
+        parts.append(f"色卡={color_palette}")
     if plot:
         parts.append(f"综合剧情={plot}")
     if assets:

@@ -261,6 +261,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         kb_collection_only: false,
         kb_collection_ids: [],
         borrowed_films: [],
+        color_palette: "",
         plot_summary: "",
         music_recommendation: "",
         generation_seed: "",
@@ -3244,6 +3245,14 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             placeholder={t('用逗号分隔，例如：银翼杀手, 黑客帝国', 'Use commas to separate, e.g. Blade Runner, Matrix')}
                         />
                     </div>
+
+                    <InputGroup idPrefix={prefix}
+                        label={t('色卡', 'Color Palette')}
+                        value={info.color_palette || ''}
+                        onChange={v => updateField('color_palette', v)}
+                        multi={true}
+                        placeholder={t('据借鉴影片选定：对标片=…｜主色=…｜辅色=…｜点缀=…｜过渡=…', 'From borrowed films: film=… | primary=… | secondary=… | accent=… | bridge=…')}
+                    />
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix}

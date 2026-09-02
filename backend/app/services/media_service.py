@@ -18866,6 +18866,183 @@ class MediaGenerationService:
             deduped.append(url)
         return deduped
 
+    def _is_kie_minimax_h3_model(self, model: Any) -> bool:
+        return str(model or "").strip().lower().startswith("minimax-h3/")
+
+    def _is_kie_minimax_h3_i2v_model(self, model: Any) -> bool:
+        return str(model or "").strip().lower() == "minimax-h3/image-to-video"
+
+    def _is_kie_minimax_h3_t2v_model(self, model: Any) -> bool:
+        return str(model or "").strip().lower() == "minimax-h3/text-to-video"
+
+    def _map_kie_minimax_h3_duration(self, value: Any) -> int:
+        try:
+            parsed = int(float(value))
+        except Exception:
+            parsed = 6
+        if parsed <= 0:
+            parsed = 6
+        return max(4, min(15, parsed))
+
+    def _map_kie_minimax_h3_resolution(self, value: Any) -> str:
+        text = str(value or "").strip().upper().replace(" ", "")
+        if text in {"768P", "768"}:
+            return "768P"
+        if text in {"2K", "2048", "1440P", "1440", "1080P", "1080", "2160P", "2160", "4K"}:
+            return "2K"
+        digits = "".join(ch for ch in text if ch.isdigit())
+        if digits:
+            try:
+                return "768P" if int(digits) <= 768 else "2K"
+            except Exception:
+                pass
+        return "2K"
+
+    def _map_kie_minimax_h3_aspect_ratio(self, value: Any) -> str:
+        allowed = ("21:9", "16:9", "4:3", "1:1", "3:4", "9:16")
+        aliases = {
+            "landscape": "16:9",
+            "portrait": "9:16",
+            "square": "1:1",
+            "widescreen": "21:9",
+            "adaptive": "16:9",
+            "auto": "16:9",
+        }
+        text = str(value or "").strip().replace(" ", "")
+        if not text:
+            return "16:9"
+        lower = text.lower()
+        if lower in aliases:
+            return aliases[lower]
+        by_lower = {item.lower(): item for item in allowed}
+        return by_lower.get(lower) or "16:9"
+
+    def _is_kie_minimax_h3_image_url(self, value: Any) -> bool:
+        raw = str(value or "").strip()
+        if raw.lower().startswith("oss://"):
+            return True
+        return self._is_public_http_url(raw)
+
+    def _host_kie_minimax_h3_image_url(self, value: Any, *, api_key: str, file_prefix: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        if self._is_kie_minimax_h3_image_url(raw):
+            return raw
+        public_url = str(self._resolve_public_media_url(raw) or "").strip()
+        if self._is_kie_minimax_h3_image_url(public_url):
+            return public_url
+        if raw.startswith("data:"):
+            mime = self._extract_data_uri_mime(raw)
+            hosted = raw
+            if "jpeg" not in mime and "jpg" not in mime and "png" not in mime and "webp" not in mime:
+                normalized = self._normalize_data_uri_image_for_kie(raw, target_format="JPEG")
+                if normalized:
+                    hosted = normalized
+                    mime = self._extract_data_uri_mime(normalized)
+            ext = ".jpg"
+            if "png" in mime:
+                ext = ".png"
+            elif "webp" in mime:
+                ext = ".webp"
+            uploaded = self._upload_kie_data_uri(
+                hosted,
+                api_key=api_key,
+                file_name=f"{file_prefix}-{uuid.uuid4().hex[:10]}{ext}",
+                upload_path="minimax-h3-inputs",
+            )
+            if uploaded and self._is_kie_minimax_h3_image_url(uploaded):
+                return uploaded
+        return ""
+
+    def _normalize_kie_minimax_h3_input(
+        self,
+        payload_input: Dict[str, Any],
+        *,
+        model: Any,
+        resolved_refs: Optional[List[str]] = None,
+        api_key: str = "",
+        fallback_aspect_ratio: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """Rewrite KIE payload to MiniMax H3 contract. Returns an error dict or None."""
+        if not isinstance(payload_input, dict) or not self._is_kie_minimax_h3_model(model):
+            return None
+
+        model_lower = str(model or "").strip().lower()
+        prompt_text = str(payload_input.get("prompt") or "").strip()
+        if len(prompt_text) > 7000:
+            prompt_text = prompt_text[:7000]
+        duration_value = self._map_kie_minimax_h3_duration(payload_input.get("duration"))
+        resolution_value = self._map_kie_minimax_h3_resolution(payload_input.get("resolution"))
+
+        if self._is_kie_minimax_h3_t2v_model(model_lower):
+            aspect_ratio = self._map_kie_minimax_h3_aspect_ratio(
+                payload_input.get("aspect_ratio") or fallback_aspect_ratio
+            )
+            payload_input.clear()
+            payload_input.update(
+                {
+                    "prompt": prompt_text,
+                    "aspect_ratio": aspect_ratio,
+                    "duration": duration_value,
+                    "resolution": resolution_value,
+                }
+            )
+            return None
+
+        refs = [str(item or "").strip() for item in (resolved_refs or []) if str(item or "").strip()]
+        if isinstance(payload_input.get("image_urls"), list):
+            refs.extend([str(item or "").strip() for item in payload_input.get("image_urls") or [] if str(item or "").strip()])
+        single_image = str(
+            payload_input.get("first_frame_url")
+            or payload_input.get("image_url")
+            or payload_input.get("imageUrl")
+            or ""
+        ).strip()
+        if single_image:
+            refs.insert(0, single_image)
+        last_frame = str(
+            payload_input.get("last_frame_url")
+            or payload_input.get("lastFrameUrl")
+            or ""
+        ).strip()
+
+        unique_refs: List[str] = []
+        seen_refs = set()
+        for item in refs:
+            if item in seen_refs:
+                continue
+            seen_refs.add(item)
+            unique_refs.append(item)
+
+        first_frame = unique_refs[0] if unique_refs else ""
+        if not last_frame and len(unique_refs) >= 2:
+            last_frame = unique_refs[1]
+
+        first_frame = self._host_kie_minimax_h3_image_url(
+            first_frame, api_key=api_key, file_prefix="minimax-h3-first"
+        )
+        last_frame = self._host_kie_minimax_h3_image_url(
+            last_frame, api_key=api_key, file_prefix="minimax-h3-last"
+        )
+        if not first_frame and not last_frame:
+            return {
+                "error": "KIE submission validation failed",
+                "details": "minimax-h3/image-to-video requires first_frame_url or last_frame_url (public HTTP/HTTPS/OSS image URL)",
+                "submit_failed": True,
+                "runtime_model": model,
+            }
+
+        payload_input.clear()
+        payload_input["prompt"] = prompt_text
+        if first_frame:
+            payload_input["first_frame_url"] = first_frame
+        if last_frame:
+            payload_input["last_frame_url"] = last_frame
+        payload_input["duration"] = duration_value
+        payload_input["resolution"] = resolution_value
+        return None
+
     async def _handle_kie_generation(
         self,
         gen_type,
@@ -18949,6 +19126,9 @@ class MediaGenerationService:
             "hailuo-standard-i2v": "hailuo/02-image-to-video-standard",
             "hailuo-2.3-pro": "hailuo/2-3-image-to-video-pro",
             "hailuo-2.3-standard": "hailuo/2-3-image-to-video-standard",
+            "minimax-h3": "minimax-h3/text-to-video",
+            "minimax-h3-t2v": "minimax-h3/text-to-video",
+            "minimax-h3-i2v": "minimax-h3/image-to-video",
             "wan-turbo": "wan/2-6-text-to-video",
             "wan-i2v": "wan/2-6-image-to-video",
             "wan-v2v": "wan/2-6-video-to-video",
@@ -18992,6 +19172,7 @@ class MediaGenerationService:
                     "bytedance/v1-lite-text-to-video":       "bytedance/v1-lite-image-to-video",
                     "hailuo/02-text-to-video-pro":           "hailuo/02-image-to-video-pro",
                     "hailuo/02-text-to-video-standard":      "hailuo/02-image-to-video-standard",
+                    "minimax-h3/text-to-video":              "minimax-h3/image-to-video",
                     "wan/2-6-text-to-video":                 "wan/2-6-image-to-video",
                     "wan/2-2-a14b-text-to-video-turbo":      "wan/2-2-a14b-image-to-video-turbo",
                     "kling-2.6/text-to-video":               "kling-2.6/image-to-video",
@@ -19077,11 +19258,16 @@ class MediaGenerationService:
         )
         is_gemini_omni_video_model = bool(gen_type == "video" and model_lower == "gemini-omni-video")
         is_topaz_video_upscale = bool(gen_type == "video" and str(model_lower or "").strip() == "topaz/video-upscale")
+        is_minimax_h3_video_model = bool(gen_type == "video" and self._is_kie_minimax_h3_model(model_lower))
         is_flux2_image_model = bool(gen_type == "image" and str(model_lower or "").startswith("flux-2/"))
         # KIE market video endpoints require duration as string for compatibility across models.
         # Wan 3.0 documents duration as integer (including -1 for intelligent duration).
+        # MiniMax H3 documents duration as integer 4-15.
         duration_string_required_model = bool(
-            gen_type == "video" and not is_topaz_video_upscale and not is_wan30_video_model
+            gen_type == "video"
+            and not is_topaz_video_upscale
+            and not is_wan30_video_model
+            and not is_minimax_h3_video_model
         )
 
         base_url = (config.get("base_url") or tool_conf.get("base_url") or "https://api.kie.ai").strip().rstrip("/")
@@ -20168,6 +20354,31 @@ class MediaGenerationService:
                         payload_input["image_url"] = hailuo_image_url
                         logger.warning("KIE Hailuo 2.3 image_url upload failed; using data URI fallback")
 
+            if is_minimax_h3_video_model:
+                # KIE MiniMax H3 contract:
+                # - i2v: first_frame_url and/or last_frame_url (HTTP/HTTPS/OSS)
+                # - t2v: aspect_ratio required (adaptive unsupported)
+                # - duration: integer 4-15
+                # - resolution: 768P | 2K
+                h3_error = self._normalize_kie_minimax_h3_input(
+                    payload_input,
+                    model=model,
+                    resolved_refs=resolved_refs if isinstance(resolved_refs, list) else [],
+                    api_key=api_key,
+                    fallback_aspect_ratio=normalized_ar or "",
+                )
+                if h3_error:
+                    return h3_error
+                logger.info(
+                    "KIE MiniMax H3 input normalized | model=%s duration=%s resolution=%s has_first=%s has_last=%s aspect_ratio=%s",
+                    model,
+                    payload_input.get("duration"),
+                    payload_input.get("resolution"),
+                    bool(payload_input.get("first_frame_url")),
+                    bool(payload_input.get("last_frame_url")),
+                    payload_input.get("aspect_ratio"),
+                )
+
             if model_lower == "bytedance/v1-pro-text-to-video":
                 payload_input.setdefault("aspect_ratio", normalized_ar or "16:9")
                 payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "720p"))
@@ -20846,6 +21057,21 @@ class MediaGenerationService:
                     if digits in {"768", "1080"}:
                         payload_input_obj["resolution"] = f"{digits}P"
 
+            # MiniMax H3 only accepts 768P / 2K and integer duration 4-15.
+            if is_minimax_h3_video_model:
+                payload_input_obj["duration"] = self._map_kie_minimax_h3_duration(
+                    payload_input_obj.get("duration")
+                )
+                payload_input_obj["resolution"] = self._map_kie_minimax_h3_resolution(
+                    payload_input_obj.get("resolution")
+                )
+                if self._is_kie_minimax_h3_t2v_model(model_lower):
+                    payload_input_obj["aspect_ratio"] = self._map_kie_minimax_h3_aspect_ratio(
+                        payload_input_obj.get("aspect_ratio") or normalized_ar
+                    )
+                else:
+                    payload_input_obj.pop("aspect_ratio", None)
+
             current_duration_text = str(payload_input_obj.get("duration") or "").strip()
             if current_duration_text:
                 try:
@@ -20891,7 +21117,7 @@ class MediaGenerationService:
                         payload_input_obj["resolution"] = str(mapped_seedance_resolution).strip()
 
             if tool_conf.get("draft") or tool_conf.get("draft_mode"):
-                if not is_gemini_omni_video_model and not is_flux2_image_model:
+                if not is_gemini_omni_video_model and not is_flux2_image_model and not is_minimax_h3_video_model:
                     payload_input_obj["resolution"] = "480P"
 
             if is_flux2_image_model:

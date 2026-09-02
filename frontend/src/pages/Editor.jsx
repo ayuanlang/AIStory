@@ -1252,7 +1252,7 @@ const Editor = ({
                 lighting: lightingRaw ? toText(lightingRaw) : '',
                 plot_summary: toText(pickValue(base, ['plot_summary', 'story_summary', '剧情总结'])),
                 music_recommendation: toText(pickValue(base, ['music_recommendation', 'score_recommendation', '配乐推荐'])),
-                color_palette: toText(pickValue(base, ['color_palette', 'colorPalette', 'palette', '色系', '色谱'])),
+                color_palette: toText(pickValue(base, ['color_palette', 'colorPalette', 'palette', '色卡', '色系', '色谱'])),
                 color_spectrum: toText(pickValue(base, ['color_spectrum', 'colorSpectrum', '色系光谱', '冷暖色调'])),
             };
 
@@ -1320,7 +1320,7 @@ const Editor = ({
             const lightingRaw = findValueByAliases(obj, ['lighting', 'light']);
             const plotSummaryRaw = findValueByAliases(obj, ['plot_summary', 'plotSummary', 'story_summary', 'storySummary', '剧情总结']);
             const musicRecommendationRaw = findValueByAliases(obj, ['music_recommendation', 'musicRecommendation', 'score_recommendation', 'scoreRecommendation', '配乐推荐']);
-            const colorPaletteRaw = findValueByAliases(obj, ['color_palette', 'colorPalette', 'palette', '色系', '色谱']);
+            const colorPaletteRaw = findValueByAliases(obj, ['color_palette', 'colorPalette', 'palette', '色卡', '色系', '色谱']);
             const colorSpectrumRaw = findValueByAliases(obj, ['color_spectrum', 'colorSpectrum', '色系光谱', '冷暖色调', 'color_temperature_direction']);
 
             const payload = {

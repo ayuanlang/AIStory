@@ -108,7 +108,7 @@ def _infer_system_api_retry_group(row: SystemAPISetting) -> str:
             if any(token in merged for token in ["lite", "fast", "draft", "turbo"]):
                 return "video-t2v-fast"
             return "video-t2v-pro"
-        if any(token in merged for token in ["vidu", "seedance", "sora-2", "veo", "hailuo", "wan", "kling", "runway"]):
+        if any(token in merged for token in ["vidu", "seedance", "sora-2", "veo", "hailuo", "minimax", "wan", "kling", "runway"]):
             return "video-t2v-pro"
 
     if category in {"voice", "audio", "tools"}:
@@ -2471,6 +2471,8 @@ def init_system_api_settings(db):
         _kie_item("Kie Hailuo Standard I2V (Canonical)", "Video", "hailuo/02-image-to-video-standard", "image-to-video"),
         _kie_item("Kie Hailuo 2.3 Pro I2V", "Video", "hailuo/2-3-image-to-video-pro", "image-to-video"),
         _kie_item("Kie Hailuo 2.3 Standard I2V", "Video", "hailuo/2-3-image-to-video-standard", "image-to-video"),
+        _kie_item("Kie MiniMax H3 T2V", "Video", "minimax-h3/text-to-video", "text-to-video"),
+        _kie_item("Kie MiniMax H3 I2V", "Video", "minimax-h3/image-to-video", "image-to-video"),
         _kie_item("Kie Wan 3.0 Video", "Video", "wan/3-0-video", "text-to-video,image-to-video,video-to-video"),
         _kie_item("Kie Wan 2.6 T2V (Canonical)", "Video", "wan/2-6-text-to-video", "text-to-video"),
         _kie_item("Kie Wan 2.6 I2V (Canonical)", "Video", "wan/2-6-image-to-video", "image-to-video"),
@@ -2588,6 +2590,36 @@ def init_system_api_settings(db):
             wan30_row.config = wan30_cfg
             db.commit()
             logger.info("Updated kie wan/3-0-video enum_catalog")
+
+    # Enrich MiniMax H3 runtime enum catalog (integer 4-15s / 768P|2K).
+    h3_enum_defaults = {
+        "resolution": ["768P", "2K"],
+        "duration": list(range(4, 16)),
+        "durations_seconds": list(range(4, 16)),
+    }
+    h3_t2v_aspect = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
+    for h3_model, extra_enum in (
+        ("minimax-h3/image-to-video", {}),
+        ("minimax-h3/text-to-video", {"aspect_ratio": h3_t2v_aspect}),
+    ):
+        h3_row = db.query(SystemAPISetting).filter(
+            SystemAPISetting.provider == kie_provider,
+            SystemAPISetting.model == h3_model,
+        ).first()
+        if h3_row is None:
+            continue
+        h3_cfg = dict(h3_row.config or {}) if isinstance(h3_row.config, dict) else {}
+        h3_enum = h3_cfg.get("enum_catalog") if isinstance(h3_cfg.get("enum_catalog"), dict) else {}
+        h3_enum_updated = False
+        for key, values in {**h3_enum_defaults, **extra_enum}.items():
+            if not h3_enum.get(key):
+                h3_enum[key] = list(values)
+                h3_enum_updated = True
+        if h3_enum_updated:
+            h3_cfg["enum_catalog"] = h3_enum
+            h3_row.config = h3_cfg
+            db.commit()
+            logger.info("Updated kie %s enum_catalog", h3_model)
 
     # Seed baseline Vidu models for system-level configuration.
     vidu_provider = "vidu"
