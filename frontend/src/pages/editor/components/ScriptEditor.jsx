@@ -2195,6 +2195,20 @@ const reportImportedPosterCount = (report) => {
     return Math.max(toPositiveCount(counts.poster), created, skipped);
 };
 
+const reportImportedEnvironmentCount = (report) => {
+    const counts = report?.importedSubjectCounts || {};
+    const created = countAssetItemsByType(report?.createdSubjectItems, 'environment');
+    const skipped = countAssetItemsByType(report?.skippedSubjectItems, 'environment');
+    return Math.max(toPositiveCount(counts.environment), created + skipped);
+};
+
+const environmentSubtaskMissingMainEnvError = (key, report, subjectsJson) => {
+    if (String(key || '').trim() !== 'environments') return '';
+    if (reportImportedEnvironmentCount(report) > 0) return '';
+    const designedMains = countMainEnvironmentDesignItems(subjectsJson?.environments);
+    return designedMains > 0 ? 'environments_not_imported' : 'environments_not_parsed';
+};
+
 const resolveImportReportAssetInsertedCount = (importReport, type) => {
     const scenePostReport = importReport?.sceneSubjectPostImportReport || {};
     const supplementReport = scenePostReport?.supplementReport || {};
@@ -18962,6 +18976,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             `[Stage 3 Asset Design] Environment imported but cover poster was not persisted key=${pData.key} trace_id=${subtaskTraceId} designed_posters=${designedPosters}`,
                                             'warning'
                                         );
+                                    } else if (environmentSubtaskMissingMainEnvError(pData.key, subtaskImportReport, subtaskPayload)) {
+                                        subtaskImportError = environmentSubtaskMissingMainEnvError(pData.key, subtaskImportReport, subtaskPayload);
+                                        logAssetImportFailureDiagnostic(pData.key, {
+                                            traceId: subtaskTraceId,
+                                            importReport: subtaskImportReport,
+                                            importError: subtaskImportError,
+                                            subjectsPayload: subtaskPayload,
+                                            phase: 'import',
+                                        });
+                                        onLog?.(
+                                            `[Stage 3 Asset Design] 环境资产未解析/未入库主环境 key=${pData.key} trace_id=${subtaskTraceId} reason=${subtaskImportError} posters=${importedPosters}`,
+                                            'error'
+                                        );
                                     } else {
                                         onLog?.(`[Stage 3 Asset Design] Subtask import done key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} created=${subCreated} skipped=${subSkipped} counted=${countedImported}`, 'success');
                                     }
@@ -19085,6 +19112,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const designedPosters = countDesignedCoverPosterItems(settled.value?.subjectsJson);
                     if (designedPosters > 0 && reportImportedPosterCount(report) <= 0) return false;
                 }
+                if (environmentSubtaskMissingMainEnvError(key, report, settled.value?.subjectsJson)) return false;
                 return true;
             };
             const importCachedCategorySubjects = async (pData, roundTag = '') => {
@@ -19155,6 +19183,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             && reportImportedPosterCount(subtaskImportReport) <= 0
                         ) {
                             subtaskImportError = 'cover_poster_not_imported';
+                        } else if (environmentSubtaskMissingMainEnvError(key, subtaskImportReport, subtaskPayload)) {
+                            subtaskImportError = environmentSubtaskMissingMainEnvError(key, subtaskImportReport, subtaskPayload);
                         }
                     }
                 } catch (subImportErr) {
@@ -19294,7 +19324,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     resultByKey.set(String(pData.key || ''), settled);
                     if (settled?.status === 'fulfilled' && settled.value?.subjectsJson) {
                         const payload = buildSubtaskSubjectsPayload(pData.key, settled.value.subjectsJson);
-                        if (hasAnySubjects(payload)) {
+                        const cacheable = pData.key === 'environments'
+                            ? (Array.isArray(payload.environments) && payload.environments.length > 0)
+                            : hasAnySubjects(payload);
+                        if (cacheable) {
                             cachedSubjectsByKey.set(String(pData.key || ''), settled.value.subjectsJson);
                         }
                     }

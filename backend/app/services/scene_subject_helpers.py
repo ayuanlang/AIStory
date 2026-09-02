@@ -692,6 +692,286 @@ def _collect_llm_json_text_candidates(raw_text: str) -> List[str]:
     return candidates
 
 
+_SUBJECT_SECTION_KEYS = ("characters", "props", "environments", "covers", "posters")
+_SUBJECT_ITEM_FIELD_KEYS = (
+    "subject_no",
+    "name",
+    "名称",
+    "subject_name_exact",
+    "subject_name",
+    "name_zh",
+    "display_name",
+    "name_en",
+    "base_name_en",
+    "atmosphere",
+    "visual_params",
+    "description_cn",
+    "generation_prompt_cn",
+    "generation_prompt_en",
+    "negative_prompt_en",
+    "anchor_description",
+)
+_NEXT_ITEM_FIELD_RE = re.compile(
+    r'\n\s*"(?:' + "|".join(re.escape(key) for key in _SUBJECT_ITEM_FIELD_KEYS) + r'|visual_dependencies|dependency_strategy)"\s*:'
+)
+_OBJECT_START_RE = re.compile(r'\{\s*"(?:subject_no|name|名称|subject_name_exact)"\s*:')
+_COVER_POSTER_NAME_KEYS = {"封面海报", "cover poster", "cover_poster"}
+
+
+def _sanitize_json_control_chars_in_strings(text: str) -> str:
+    """Escape raw control characters inside JSON strings so json.loads can succeed."""
+    out: List[str] = []
+    in_str = False
+    escape = False
+    for ch in str(text or ""):
+        if in_str:
+            if escape:
+                out.append(ch)
+                escape = False
+                continue
+            if ch == "\\":
+                out.append(ch)
+                escape = True
+                continue
+            if ch == '"':
+                in_str = False
+                out.append(ch)
+                continue
+            if ch == "\n":
+                out.append("\\n")
+                continue
+            if ch == "\r":
+                out.append("\\r")
+                continue
+            if ch == "\t":
+                out.append("\\t")
+                continue
+            if ord(ch) < 32:
+                out.append(f"\\u{ord(ch):04x}")
+                continue
+            out.append(ch)
+            continue
+        if ch == '"':
+            in_str = True
+        out.append(ch)
+    return "".join(out)
+
+
+def _try_parse_json_value(text: str) -> Any:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    cleaned = re.sub(r",\s*([\]}])", r"\1", raw)
+    for candidate in (raw, cleaned, _sanitize_json_control_chars_in_strings(cleaned)):
+        try:
+            return json.loads(candidate, strict=False)
+        except Exception:
+            continue
+    try:
+        import json5  # type: ignore
+
+        parsed = json5.loads(cleaned)
+        if parsed is not None:
+            return parsed
+    except Exception:
+        pass
+    return None
+
+
+def _json_unescape_string(value: str) -> str:
+    raw = str(value or "")
+    try:
+        return json.loads(f'"{raw}"', strict=False)
+    except Exception:
+        return (
+            raw.replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\\t", "\t")
+            .replace('\\"', '"')
+            .replace("\\\\", "\\")
+        )
+
+
+def _extract_field_until_next_key(window: str, field: str) -> Optional[str]:
+    key_re = re.compile(rf'"{re.escape(field)}"\s*:\s*', re.IGNORECASE)
+    match = key_re.search(window)
+    if not match:
+        return None
+    rest = window[match.end():]
+    stripped = rest.lstrip()
+    if not stripped:
+        return None
+    if stripped[0] == '"':
+        body = stripped[1:]
+        next_key = _NEXT_ITEM_FIELD_RE.search("\n" + body)
+        raw_value = body[: next_key.start() - 1] if next_key else body
+        raw_value = raw_value.rstrip()
+        if raw_value.endswith(","):
+            raw_value = raw_value[:-1].rstrip()
+        if raw_value.endswith('"'):
+            raw_value = raw_value[:-1]
+        return _json_unescape_string(raw_value)
+    if stripped[0] in "[{":
+        parsed = _try_parse_json_value(stripped)
+        if parsed is not None:
+            return parsed  # type: ignore[return-value]
+    return None
+
+
+def _slice_named_json_array_text(source: str, section: str) -> str:
+    key_re = re.compile(rf'"{re.escape(section)}"\s*:\s*\[', re.IGNORECASE)
+    match = key_re.search(source)
+    if not match:
+        return ""
+    start_bracket = source.find("[", match.start())
+    if start_bracket < 0:
+        return ""
+
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start_bracket, len(source)):
+        ch = source[i]
+        if in_str:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "[":
+            depth += 1
+            continue
+        if ch == "]":
+            depth -= 1
+            if depth == 0:
+                return source[start_bracket:i + 1]
+
+    sibling_re = re.compile(
+        r'\n\s*"(?:characters|props|environments|covers|posters)"\s*:',
+        re.IGNORECASE,
+    )
+    sibling = sibling_re.search(source, start_bracket + 1)
+    if sibling:
+        return source[start_bracket:sibling.start()].rstrip().rstrip(",")
+    return source[start_bracket:]
+
+
+def _extract_balanced_objects_from_text(source: str, max_count: int = 48) -> List[str]:
+    objects: List[str] = []
+    depth = 0
+    in_str = False
+    escape = False
+    obj_start = -1
+    for i, ch in enumerate(source):
+        if in_str:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+            continue
+        if ch == "}":
+            if depth <= 0:
+                continue
+            depth -= 1
+            if depth == 0 and obj_start >= 0:
+                candidate = source[obj_start:i + 1].strip()
+                if candidate:
+                    objects.append(candidate)
+                    if len(objects) >= max_count:
+                        break
+                obj_start = -1
+    return objects
+
+
+def _salvage_items_by_fields(array_text: str) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    starts = [match.start() for match in _OBJECT_START_RE.finditer(array_text)]
+    if not starts:
+        return items
+    starts.append(len(array_text))
+    for idx, start in enumerate(starts[:-1]):
+        window = array_text[start:starts[idx + 1]]
+        item: Dict[str, Any] = {}
+        for field in _SUBJECT_ITEM_FIELD_KEYS:
+            value = _extract_field_until_next_key(window, field)
+            if value is None or value == "":
+                continue
+            item[field] = value
+        name = str(
+            item.get("name")
+            or item.get("名称")
+            or item.get("subject_name_exact")
+            or item.get("subject_name")
+            or ""
+        ).strip()
+        if name:
+            item["name"] = name
+        if not item.get("name") and not item.get("subject_no"):
+            continue
+        if str(item.get("name") or "").strip().lower() in _COVER_POSTER_NAME_KEYS:
+            continue
+        items.append(item)
+    return items
+
+
+def _salvage_section_items_from_text(source: str, section: str) -> List[Dict[str, Any]]:
+    array_text = _slice_named_json_array_text(source, section)
+    if not array_text:
+        return []
+
+    parsed = _try_parse_json_value(array_text)
+    if isinstance(parsed, list):
+        return [item for item in parsed if isinstance(item, dict)]
+
+    salvaged: List[Dict[str, Any]] = []
+    for object_text in _extract_balanced_objects_from_text(array_text):
+        parsed_obj = _try_parse_json_value(object_text)
+        if isinstance(parsed_obj, dict):
+            salvaged.append(parsed_obj)
+
+    field_items = _salvage_items_by_fields(array_text)
+    if field_items:
+        seen = {
+            str(item.get("name") or item.get("名称") or "").strip()
+            for item in salvaged
+            if str(item.get("name") or item.get("名称") or "").strip()
+        }
+        added = 0
+        for item in field_items:
+            name = str(item.get("name") or item.get("名称") or "").strip()
+            if not name or name in seen:
+                continue
+            salvaged.append(item)
+            seen.add(name)
+            added += 1
+        if added:
+            logger.info(
+                "[subjects_json] salvaged %s extra %s item(s) via field scan after JSON parse failed",
+                added,
+                section,
+            )
+    return salvaged
+
+
 def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
     payload: Dict[str, List[Dict[str, Any]]] = {
         "characters": [], "covers": [],
@@ -935,6 +1215,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
         normalized = dict(item)
         normalized["name"] = _pick_text(
             item.get("name"),
+            item.get("名称"),
             item.get("subject_name_exact"),
             item.get("subject_name"),
             item.get("name_zh"),
@@ -1066,6 +1347,30 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
             seen_item_keys.add(item_key)
             deduped_items.append(item)
         payload[section] = deduped_items
+
+    # When a section key exists but strict JSON failed (raw newlines / unescaped
+    # quotes in huge generation_prompt_cn), salvage items from that array only.
+    for section in _SUBJECT_SECTION_KEYS:
+        if payload.get(section):
+            continue
+        salvaged_items = _salvage_section_items_from_text(text, section)
+        if not salvaged_items:
+            continue
+        normalized_items = []
+        for item in salvaged_items:
+            if not isinstance(item, dict):
+                continue
+            normalized = _normalize_item(section, item)
+            if not normalized.get("name") and not normalized.get("subject_no"):
+                continue
+            normalized_items.append(normalized)
+        if normalized_items:
+            payload[section] = normalized_items
+            logger.info(
+                "[subjects_json] recovered %s item(s) for %s after strict JSON extract missed the section",
+                len(normalized_items),
+                section,
+            )
 
     cover_poster_items: List[Dict[str, Any]] = []
     cover_poster_seen: set = set()

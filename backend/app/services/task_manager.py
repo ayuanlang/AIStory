@@ -28,6 +28,10 @@ _RESULT_TTL = max(60, int(os.getenv("ASYNC_TASK_RESULT_TTL_SECONDS", "300") or 3
 _RUNNING_TASK_MAX_AGE_SECONDS = max(300, int(os.getenv("ASYNC_TASK_MAX_AGE_SECONDS", "3600")))
 _RESULT_MAX_BYTES = max(16 * 1024, int(os.getenv("ASYNC_TASK_RESULT_MAX_BYTES", str(256 * 1024)) or (256 * 1024)))
 _RESULT_PREVIEW_MAX_CHARS = max(512, int(os.getenv("ASYNC_TASK_RESULT_PREVIEW_MAX_CHARS", "4096") or 4096))
+_RESULT_SALVAGE_PREVIEW_MAX_CHARS = max(
+    _RESULT_PREVIEW_MAX_CHARS,
+    int(os.getenv("ASYNC_TASK_RESULT_SALVAGE_PREVIEW_MAX_CHARS", "120000") or 120000),
+)
 _RESULT_COMPRESS_MIN_BYTES = max(
     16 * 1024,
     int(os.getenv("ASYNC_TASK_RESULT_COMPRESS_MIN_BYTES", str(64 * 1024)) or (64 * 1024)),
@@ -161,13 +165,29 @@ def _compact_task_result(value: Any) -> Any:
         if isinstance(value.get("subjects_json_count"), dict):
             kept["subjects_json_count"] = value.get("subjects_json_count")
         subjects_item_count = 0
+        env_item_count = 0
+        poster_item_count = 0
         if isinstance(subjects_json, dict):
             for _bucket in ("characters", "props", "environments", "posters", "covers"):
                 subjects_item_count += len(subjects_json.get(_bucket) or [])
-        # When subjects_json is empty, keep a much larger text preview so frontend can re-parse JSON.
+            env_item_count = len(subjects_json.get("environments") or [])
+            poster_item_count = len(subjects_json.get("posters") or []) + len(subjects_json.get("covers") or [])
+        # Poster-only extract is incomplete for environment design: keep a large
+        # preview so frontend can salvage environments[] from the raw LLM text.
+        nested_raw = ""
+        nested_preview = value.get("result")
+        if isinstance(nested_preview, str):
+            nested_raw = nested_preview
+        elif isinstance(nested_preview, dict) and isinstance(nested_preview.get("result"), str):
+            nested_raw = nested_preview.get("result") or ""
+        poster_only_env_gap = (
+            env_item_count <= 0
+            and poster_item_count > 0
+            and ('"environments"' in nested_raw or '"environment"' in nested_raw)
+        )
         text_preview_chars = (
-            max(_RESULT_PREVIEW_MAX_CHARS, 120_000)
-            if subjects_item_count <= 0
+            _RESULT_SALVAGE_PREVIEW_MAX_CHARS
+            if subjects_item_count <= 0 or poster_only_env_gap
             else _RESULT_PREVIEW_MAX_CHARS
         )
         nested = value.get("result")
@@ -180,11 +200,22 @@ def _compact_task_result(value: Any) -> Any:
                     kept["subjects_json"] = nested_subjects
                     subjects_json = nested_subjects
                     subjects_item_count = 0
+                    env_item_count = len(nested_subjects.get("environments") or [])
+                    poster_item_count = (
+                        len(nested_subjects.get("posters") or [])
+                        + len(nested_subjects.get("covers") or [])
+                    )
                     for _bucket in ("characters", "props", "environments", "posters", "covers"):
                         subjects_item_count += len(nested_subjects.get(_bucket) or [])
+                    nested_raw_text = nested.get("result") if isinstance(nested.get("result"), str) else ""
+                    poster_only_env_gap = (
+                        env_item_count <= 0
+                        and poster_item_count > 0
+                        and ('"environments"' in nested_raw_text or '"environment"' in nested_raw_text)
+                    )
                     text_preview_chars = (
-                        max(_RESULT_PREVIEW_MAX_CHARS, 120_000)
-                        if subjects_item_count <= 0
+                        _RESULT_SALVAGE_PREVIEW_MAX_CHARS
+                        if subjects_item_count <= 0 or poster_only_env_gap
                         else _RESULT_PREVIEW_MAX_CHARS
                     )
             if isinstance(nested.get("subjects_json_count"), dict):

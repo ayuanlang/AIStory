@@ -2255,6 +2255,23 @@ async def execute_analyze_scene(
                         env_name_align_exc,
                     )
 
+            if is_environment_asset_design and not (subjects_json.get("environments") or []):
+                poster_n = len(subjects_json.get("posters") or []) + len(subjects_json.get("covers") or [])
+                logger.warning(
+                    "[analyze_scene] environment design parsed 0 environments episode_id=%s posters=%s raw_chars=%s",
+                    getattr(request, "episode_id", None),
+                    poster_n,
+                    len(str(result_content or "")),
+                )
+                response_payload["warnings"] = [
+                    *list(response_payload.get("warnings") or []),
+                    "Environment asset JSON parsed 0 environments; local extract missed main-environment items.",
+                ]
+                response_payload["warning_codes"] = [
+                    *list(response_payload.get("warning_codes") or []),
+                    "ANALYSIS_ENV_DESIGN_ENVIRONMENTS_EMPTY",
+                ]
+
             response_payload["subjects_json"] = subjects_json
             response_payload["subjects_json_count"] = {
                 "characters": len(subjects_json.get("characters") or []),

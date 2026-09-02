@@ -1894,8 +1894,33 @@ const Editor = ({
                 );
 
             if (hasBackendSubjects) {
+                const wantsEnvironments = !targetTypeFilters
+                    || targetTypeFilters.length === 0
+                    || targetTypeFilters.includes('environments')
+                    || targetTypeFilters.some((item) => (
+                        ['environments', 'environment', 'env', 'posters', 'covers', 'poster', 'cover', 'cover_poster'].includes(item)
+                    ));
+                const backendEnvCount = Array.isArray(backendSubjectsJson.environments)
+                    ? backendSubjectsJson.environments.length
+                    : 0;
+                if (wantsEnvironments && backendEnvCount <= 0) {
+                    const salvagedEntities = getMergedEntitiesPayloadFromText(text);
+                    const salvagedEnvs = Array.isArray(salvagedEntities?.payload?.environments)
+                        ? salvagedEntities.payload.environments
+                        : [];
+                    if (salvagedEnvs.length > 0) {
+                        backendSubjectsJson.environments = salvagedEnvs;
+                        importDiagnostics.entitiesPayloadSource = 'backend_subjects_json+raw_env_salvage';
+                        addLog(
+                            `Backend subjects_json missed environments; salvaged ${salvagedEnvs.length} from raw LLM text.`,
+                            'warning'
+                        );
+                    }
+                }
                 jsonBlocks.push(backendSubjectsJson);
-                importDiagnostics.entitiesPayloadSource = 'backend_subjects_json';
+                if (importDiagnostics.entitiesPayloadSource === 'none') {
+                    importDiagnostics.entitiesPayloadSource = 'backend_subjects_json';
+                }
                 addLog('Using backend-extracted subjects_json for entity import.', 'info');
             } else {
                 const mergedEntities = getMergedEntitiesPayloadFromText(text);
@@ -2167,7 +2192,20 @@ const Editor = ({
                     const plannedCharacterCount = Array.isArray(data.characters) ? data.characters.length : 0;
                     const plannedPropCount = Array.isArray(data.props) ? data.props.length : 0;
                     const plannedEnvironmentCount = Array.isArray(data.environments) ? data.environments.length : 0;
-                    const plannedPosterCount = (Array.isArray(data.posters) ? data.posters.length : 0) + (Array.isArray(data.covers) ? data.covers.length : 0);
+                    const plannedPosterCount = (() => {
+                        const posters = Array.isArray(data.posters) ? data.posters : [];
+                        const covers = Array.isArray(data.covers) ? data.covers : [];
+                        const seen = new Set();
+                        [...posters, ...covers].forEach((item) => {
+                            if (!item || typeof item !== 'object') return;
+                            seen.add([
+                                String(item.subject_no || '').trim().toLowerCase(),
+                                String(item.name || item.subject_name_exact || '').trim().toLowerCase(),
+                                String(item.name_en || '').trim().toLowerCase(),
+                            ].join('|'));
+                        });
+                        return seen.size;
+                    })();
                     addLog(
                         `Entities block detected: character=${plannedCharacterCount}, prop=${plannedPropCount}, environment=${plannedEnvironmentCount}, poster=${plannedPosterCount}`,
                         'info'
