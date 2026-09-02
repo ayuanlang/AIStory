@@ -24,6 +24,29 @@ CHAR:[@林岳] 把 PROP:[信] 放在桌上。
 """
 
 
+def test_workspace_payload_extracts_beats_from_stream_only():
+    staging = """[BEAT_STREAM_START]
+[BEAT_START:1]
+────【建置】────
+当前环境=ENV:[0度客栈大堂]
+CHAR:[@林岳] 位于桌近镜头侧旁，站。
+────【入戏】────
+对峙开始。
+[BEAT_END:1]
+[BEAT_STREAM_END]
+"""
+    payload = build_workspace_scene_payload_from_staging(
+        scene_id="EP01_SC02",
+        scene_order=2,
+        staging_text=staging,
+    )
+    core = payload["core_scene_info"] or ""
+    assert "[BEAT_START:1]" in core
+    assert "【建置】" in core
+    assert "对峙开始" in core
+    assert "CHAR:[@林岳]" in (payload["linked_characters"] or "")
+
+
 def test_workspace_payload_extracts_staging_fields():
     payload = build_workspace_scene_payload_from_staging(
         scene_id="EP01_SC02",

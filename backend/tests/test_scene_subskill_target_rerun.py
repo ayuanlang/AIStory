@@ -81,6 +81,21 @@ STAGING_STRIPPED = (
     "建置稿已去掉结束标签，续跑仍应识别为可用落库，长度须超过一百字门槛，不得当成空壳跳过。\n"
     "[SCENE_END:EP01_SC01]"
 )
+STAGING_BEAT_STREAM_ONLY = (
+    "[BEAT_STREAM_START]\n"
+    "[BEAT_START:1]\n"
+    "────【建置】────\n"
+    "当前环境=ENV:[0度旧茶馆]｜景别=MS｜构图=中心｜镜头角度=平视\n"
+    "CHAR:[@掌柜] 位于八仙桌近镜头侧旁，坐，面向镜头，正面可见，目光平，手持=无，佩戴=无\n"
+    "────【入戏】────\n"
+    "CHAR:[@掌柜] 拨动算盘珠。\n"
+    "ENV背景微动=灯焰轻晃\n"
+    "────【场记分析】────\n"
+    "开拍在场=CHAR:[@掌柜]\n"
+    "────【场记分析结束】────\n"
+    "[BEAT_END:1]\n"
+    "[BEAT_STREAM_END]"
+)
 COMBAT_OK = (
     "[SCENE_START:EP01_SC02]\n"
     "武戏增强已完成的正文，足够长以便续跑时识别为可用落库，长度须超过一百字门槛。\n"
@@ -251,12 +266,18 @@ def test_staging_output_complete_rejects_framing_fallback():
     from app.services.scene_subskill_pipeline_runner import assert_staging_output_complete
 
     assert assert_staging_output_complete(STAGING_STRIPPED, "EP01_SC01") == STAGING_STRIPPED.strip()
+    assert assert_staging_output_complete(STAGING_BEAT_STREAM_ONLY, "EP01_SC01") == STAGING_BEAT_STREAM_ONLY.strip()
     try:
         assert_staging_output_complete(FRAMING_STRIPPED, "EP01_SC01")
     except HTTPException as exc:
         assert "STAGING_OUTPUT_INCOMPLETE" in str(exc.detail)
     else:
         raise AssertionError("framing text must not pass as staging")
+
+
+def test_staging_beat_stream_only_is_usable_without_scene_wrappers():
+    assert persisted_subskill_step_usable("staging", STAGING_BEAT_STREAM_ONLY)
+    assert not persisted_subskill_step_usable("framing", STAGING_BEAT_STREAM_ONLY)
 
 
 def test_timeout_like_error_detects_hard_cancel_and_read_timeout():

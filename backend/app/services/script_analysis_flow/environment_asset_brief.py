@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from app.core.prompt_injection import assemble_injection_parts, wrap_injection_section
 from app.services.script_analysis_flow.environment_reuse import (
     extract_scene_env_ident_block,
+    normalize_environment_name,
     parse_scene_env_ident_items,
 )
 
@@ -73,6 +74,99 @@ def _iter_env_scene_patches(script_text: str) -> List[Tuple[str, str]]:
     return patches
 
 
+_DERIVED_ENV_NAME_RE = re.compile(r"^\d+\s*度")
+
+
+def collect_ident_environment_names(script_text: str) -> List[str]:
+    """Unique IDENT names in first-seen exact spelling."""
+    names: List[str] = []
+    seen: set = set()
+    for item in parse_scene_env_ident_items(script_text):
+        name = _clean(item.get("name"))
+        key = normalize_environment_name(name)
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
+
+
+def _is_derived_environment_name(name: str) -> bool:
+    return bool(_DERIVED_ENV_NAME_RE.match(_clean(name)))
+
+
+def _rewrite_environment_item_name(item: Dict[str, Any], old_name: str, new_name: str) -> None:
+    item["name"] = new_name
+    old = _clean(old_name)
+    new = _clean(new_name)
+    if not old or old == new:
+        return
+    deps = item.get("visual_dependencies")
+    if isinstance(deps, list):
+        item["visual_dependencies"] = [
+            dep.replace(f"ENV:[{old}]", f"ENV:[{new}]") if isinstance(dep, str) else dep
+            for dep in deps
+        ]
+    for field in ("generation_prompt_cn", "anchor_description"):
+        value = item.get(field)
+        if not isinstance(value, str) or old not in value:
+            continue
+        item[field] = (
+            value.replace(f"所属主环境={old}", f"所属主环境={new}")
+            .replace(f"「{old}」", f"「{new}」")
+        )
+    strategy = item.get("dependency_strategy")
+    if isinstance(strategy, dict):
+        logic = strategy.get("logic")
+        if isinstance(logic, str) and old in logic:
+            strategy["logic"] = logic.replace(f"所属主环境={old}", f"所属主环境={new}")
+
+
+def align_environment_json_names_with_ident(
+    subjects_json: Dict[str, Any],
+    script_text: str,
+) -> Dict[str, Any]:
+    """Force environments[].name onto IDENT 名称=/name exact spelling."""
+    if not isinstance(subjects_json, dict):
+        return subjects_json
+    ident_names = collect_ident_environment_names(script_text)
+    environments = subjects_json.get("environments")
+    if not ident_names or not isinstance(environments, list):
+        return subjects_json
+
+    ident_by_key = {normalize_environment_name(name): name for name in ident_names}
+    used_keys: set = set()
+    for item in environments:
+        if not isinstance(item, dict):
+            continue
+        name = _clean(item.get("name"))
+        if not name or _is_derived_environment_name(name):
+            continue
+        key = normalize_environment_name(name)
+        canonical = ident_by_key.get(key)
+        if not canonical:
+            continue
+        if name != canonical:
+            _rewrite_environment_item_name(item, name, canonical)
+        used_keys.add(key)
+
+    leftover = [name for name in ident_names if normalize_environment_name(name) not in used_keys]
+    unmatched = []
+    for item in environments:
+        if not isinstance(item, dict):
+            continue
+        name = _clean(item.get("name"))
+        if not name or _is_derived_environment_name(name):
+            continue
+        if normalize_environment_name(name) in ident_by_key:
+            continue
+        unmatched.append(item)
+    if len(leftover) == 1 and len(unmatched) == 1:
+        old = _clean(unmatched[0].get("name"))
+        _rewrite_environment_item_name(unmatched[0], old, leftover[0])
+    return subjects_json
+
+
 def _append_scene_brief_chunk(scene_chunks: List[str], scene_id: str, scene_text: str) -> None:
     parts = _scene_brief_parts(scene_id, scene_text)
     if not parts:
@@ -118,7 +212,9 @@ def build_environment_asset_design_brief(adapted_script: str) -> str:
         "主环境资产设计真源。按场覆盖 IDENT 已识别主环境 +【主环境】/【未落清单】骨架。"
         "本轮用户侧只注入项目信息 + 本块 + 封面海报简报；禁止把待分析剧本当输入。"
         "本轮只设计主环境四向拼图；禁止输出视角衍生或状态衍生。"
-        "禁止重做场景勘探；禁止另起同义主环境名；定位/目标/情绪表达原样服务四向拼图。"
+        "禁止重做场景勘探；禁止另起同义主环境名；"
+        "environments[].name 必须与 IDENT [ENV] 名称= / name 逐字符完全一致；"
+        "定位/目标/情绪表达原样服务四向拼图。"
         "严格遵守【主环境】对表演区/活动空间的空间要求：四面只深化规划已列围合；"
         "中区默认空区无障碍，仅规划明文要求桌椅等主体时才落，禁止擅自增加主体。"
         "不要等待逐场分析。Subject Index 若仍含 environment 行只作旧稿兼容，不得压过本块。"

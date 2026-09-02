@@ -204,7 +204,13 @@ def persisted_subskill_step_usable(step_key: str, text: str) -> bool:
     # persist_scene_subskill_named_step stores the extracted scene block after
     # the completion marker is stripped. Marker-only checks would always miss.
     has_scene = bool(re.search(r"\[SCENE_START", body, re.IGNORECASE))
+    has_beat_stream = bool(re.search(r"\[BEAT_STREAM_START", body, re.IGNORECASE))
     if not has_scene:
+        # Staging may persist only the beat stream; wrappers are spliced from upstream.
+        if key == "staging" and has_beat_stream and (
+            "【入戏】" in body or "【建置】" in body
+        ):
+            return True
         return False
     if key == "drama":
         return True

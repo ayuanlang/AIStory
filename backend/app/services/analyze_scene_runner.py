@@ -78,6 +78,7 @@ from app.services.scene_subject_helpers import (
     _normalize_prior_entity_design_type,
 )
 from app.services.script_analysis_flow import (
+    align_environment_json_names_with_ident,
     assemble_character_asset_design_user_content,
     assemble_environment_asset_design_user_content,
     assemble_prop_asset_design_user_content,
@@ -438,6 +439,7 @@ async def execute_analyze_scene(
         is_prop_asset_design = scoped_asset_category == "prop"
         is_character_asset_design = scoped_asset_category == "character"
         is_scoped_asset_design = bool(scoped_asset_category)
+        environment_design_name_source = ""
 
 
         persisted_subject_index_for_prompt = ""
@@ -664,6 +666,7 @@ async def execute_analyze_scene(
                 episode_adaptation_for_scene_beats,
                 *episode_plan_texts,
             )
+            environment_design_name_source = brief_source
             cover_brief = build_cover_poster_brief(brief_source)
             user_content = assemble_environment_asset_design_user_content(
                 cover_brief,
@@ -2237,6 +2240,19 @@ async def execute_analyze_scene(
                         getattr(request, "episode_id", None),
                         subjects_name_align_exc,
                         exc_info=subjects_name_align_exc,
+                    )
+
+            if is_environment_asset_design and environment_design_name_source:
+                try:
+                    subjects_json = align_environment_json_names_with_ident(
+                        subjects_json,
+                        environment_design_name_source,
+                    )
+                except Exception as env_name_align_exc:
+                    logger.warning(
+                        "[analyze_scene] environment ident name align failed episode_id=%s err=%s",
+                        getattr(request, "episode_id", None),
+                        env_name_align_exc,
                     )
 
             response_payload["subjects_json"] = subjects_json

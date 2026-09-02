@@ -12,8 +12,10 @@ from app.services.script_analysis_flow.character_asset_brief import (
 from app.core.prompt_injection import wrap_injection_section
 from app.services.script_analysis_flow.cover_poster_brief import build_cover_poster_brief
 from app.services.script_analysis_flow.environment_asset_brief import (
+    align_environment_json_names_with_ident,
     assemble_environment_asset_design_user_content,
     build_environment_asset_design_brief,
+    collect_ident_environment_names,
     environment_plan_has_ident,
 )
 from app.services.script_analysis_flow.prop_asset_brief import (
@@ -60,6 +62,7 @@ def test_environment_brief_uses_plan_only_and_excludes_scene_analysis():
     assert "[环境规划开始]" in brief
     assert "[环境规划结束]" in brief
     assert "客栈大堂" in brief
+    assert "environments[].name 必须与 IDENT [ENV] 名称= / name 逐字符完全一致" in brief
     assert "定位=夜内对峙大厅" in brief
     assert "【主环境】客栈大堂" in brief
     assert "【未落环境实体清单】空椅" in brief
@@ -568,3 +571,50 @@ def test_prop_brief_keeps_extract_only_request_text():
     assert "[PROP_EXTRACT_START]" in composed
     assert "银打火机" in composed
     assert "[待分析剧本开始]" not in composed
+
+
+def test_collect_ident_environment_names_keeps_exact_spelling():
+    names = collect_ident_environment_names(_planned_script())
+    assert names == ["客栈大堂"]
+
+
+def test_align_environment_json_names_with_ident_rewrites_near_miss():
+    payload = {
+        "environments": [
+            {
+                "name": "客栈 大堂",
+                "generation_prompt_cn": "所属主环境=客栈 大堂。请按「客栈 大堂」四向拼图",
+                "visual_dependencies": [],
+            }
+        ]
+    }
+    aligned = align_environment_json_names_with_ident(payload, _planned_script())
+    assert aligned["environments"][0]["name"] == "客栈大堂"
+    assert "所属主环境=客栈大堂" in aligned["environments"][0]["generation_prompt_cn"]
+    assert "「客栈大堂」" in aligned["environments"][0]["generation_prompt_cn"]
+
+
+def test_align_environment_json_names_with_ident_maps_single_synonym():
+    payload = {
+        "environments": [
+            {
+                "name": "客栈大厅",
+                "generation_prompt_cn": "所属主环境=客栈大厅",
+            }
+        ]
+    }
+    aligned = align_environment_json_names_with_ident(payload, _planned_script())
+    assert aligned["environments"][0]["name"] == "客栈大堂"
+    assert aligned["environments"][0]["generation_prompt_cn"] == "所属主环境=客栈大堂"
+
+
+def test_align_environment_json_names_skips_derived_rows():
+    payload = {
+        "environments": [
+            {"name": "0度客栈大堂"},
+            {"name": "客栈 大堂"},
+        ]
+    }
+    aligned = align_environment_json_names_with_ident(payload, _planned_script())
+    assert aligned["environments"][0]["name"] == "0度客栈大堂"
+    assert aligned["environments"][1]["name"] == "客栈大堂"
