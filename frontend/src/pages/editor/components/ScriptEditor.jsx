@@ -29023,8 +29023,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         const chain = describeSceneMatrixDownstream(stableKind, t);
         if (!window.confirm(t(
-            `将重跑该场从“${label}”起的后续节点：${chain}。确认继续吗？`,
-            `This will rerun ${targetSceneId} from “${label}” through the remaining nodes: ${chain}. Continue?`
+            `将只重跑「${targetSceneId}」从“${label}”起的后续节点：${chain}。美术指导与其他分场不会重跑。确认继续吗？`,
+            `Only “${targetSceneId}” will rerun from “${label}” through: ${chain}. Art direction and other scenes will not run. Continue?`
         ))) return;
 
         const startedAt = Date.now();
@@ -32248,7 +32248,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 title: `${t('场景分析', 'Scene Analysis')} · ${sceneLabel}`,
                 status: sceneContent ? 'completed' : 'idle',
                 badge: sceneContent ? t('可导入', 'Importable') : t('待输出', 'Pending'),
-                summary: t('该场的场景 Markdown 表，可单独导入数据库或重跑。', 'Per-scene markdown table; import to DB or rerun individually.'),
+                summary: t('该场的场景 Markdown 表，可单独导入。重跑该场只从文戏优化重跑本场，不跑美术指导与其他分场。', 'Per-scene markdown table; import individually. Rerun This Scene starts from drama for this scene only and skips art direction and other scenes.'),
                 content: sceneContent,
                 actions: [
                     {
@@ -32265,11 +32265,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     },
                     {
                         key: `rerun-stage2-scene-${sceneId}`,
-                        label: t('重跑该场景', 'Rerun This Scene'),
+                        label: t('重跑该场', 'Rerun This Scene'),
                         icon: 'refresh',
-                        onClick: () => executeSceneBeatsRerun({ mode: 'single', sceneId }),
-                        disabled: !getStageOutputContent('stage1', 'adapted_script'),
-                        loading: false,
+                        onClick: () => handleRerunSceneMatrixNode('drama_opt', sceneId),
+                        disabled: isAnalyzing || !getStageOutputContent('stage1', 'scene_split'),
+                        loading: isAnalyzing,
                     },
                 ],
                 placeholder: t('该场尚未生成场景 Markdown。', 'No scene markdown for this scene yet.'),
@@ -32328,7 +32328,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
 
         return cards;
-    }, [activeEpisode?.ai_scene_analysis_subject_index, executeSceneBeatsRerun, extractPureSubjectIndexText, getStageOutputContent, handleImportStageArtifact, handleRerunSceneBeatsOnly, handleRestartStage2, hasUsableSubjectIndexRows, importScenesFromPerScenePatchMap, isAnalyzing, persistSubjectIndexEdit, stage2SceneMarkdownByScene, subjectIndexText, t]);
+    }, [activeEpisode?.ai_scene_analysis_subject_index, extractPureSubjectIndexText, getStageOutputContent, handleImportStageArtifact, handleRerunSceneBeatsOnly, handleRerunSceneMatrixNode, handleRestartStage2, hasUsableSubjectIndexRows, importScenesFromPerScenePatchMap, isAnalyzing, persistSubjectIndexEdit, stage2SceneMarkdownByScene, subjectIndexText, t]);
 
     const stage3StageCards = useMemo(() => {
         const stage3ArtifactJson = getStageOutputContent('stage3', 'asset_design_json');
@@ -32758,8 +32758,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <span className="font-bold text-sm">{t('进度诊断面板', 'Workflow Diagnostics')}</span>
                             <span className="text-[9px] leading-4 text-white/40 max-w-[520px]">
                                 {t(
-                                    '全局节点与分场节点分行展示。分场优化细分为文戏、武戏增强、场景现场编排、建置入戏，建置稿程序入库后接分镜。失败节点可点击查看原因、处理建议，并衔接 AI 诊断。',
-                                    'Global and per-scene nodes are shown in separate sections. Per-scene refinement splits into drama, action enhancement, floor staging, and blocking; staging imports the workspace scene, then storyboards. Click a failed node for the reason, next steps, and AI Diagnosis.'
+                                    '全局节点与分场节点分行展示。每场左侧「重跑该场」只从文戏优化重跑该场后续节点，不跑美术指导与其他分场。失败节点可点击查看原因、处理建议，并衔接 AI 诊断。',
+                                    'Global and per-scene nodes are shown separately. “Rerun This Scene” on the left starts that scene from drama and skips art direction and other scenes. Click a failed node for the reason, next steps, and AI Diagnosis.'
                                 )}
                             </span>
                         </div>
@@ -33837,7 +33837,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <div className="text-xs font-bold text-white/85">{t('分场节点', 'Per-scene nodes')}</div>
                                     <div className="text-[10px] text-white/35">
-                                        {t('每场一行：文戏、武戏增强、场景现场编排、建置入戏、分镜生成。建置稿程序入库后即可分镜。重跑某一节点会按序自动带起该场后续节点。', 'One row per scene: drama, action enhancement, floor staging, blocking, and storyboards. Staging imports the workspace scene before storyboard. Rerunning a node automatically continues through later nodes for that scene.')}
+                                        {t('每场一行：文戏、武戏增强、场景现场编排、建置入戏、分镜生成。左侧「重跑该场」从文戏优化重跑该场，不跑美术指导与其他分场。单节点重跑仍会按序带起该场后续节点。', 'One row per scene: drama, action enhancement, floor staging, blocking, and storyboards. “Rerun This Scene” starts that scene from drama and skips art direction and other scenes. A single-node rerun still continues through later nodes for that scene.')}
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">
@@ -33876,6 +33876,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     && !state?.active
                                     && activeEpisode?.id
                                 );
+                                const canRerunSceneFromDrama = Boolean(
+                                    !analysisLive
+                                    && activeEpisode?.id
+                                    && getStageOutputContent('stage1', 'scene_split')
+                                );
                                 const cellProps = (stepKey, state, extra = {}) => ({
                                     stepKey,
                                     sceneId: row.sceneId,
@@ -33886,12 +33891,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 return (
                                     <div key={`scene-row-${row.sceneId}`} className="contents">
                                         <div
-                                            className="flex items-center px-1 py-2 text-[11px] font-semibold text-white/75 border-t border-white/5"
+                                            className="flex flex-col items-start justify-center gap-1 px-1 py-2 border-t border-white/5"
                                             title={formatDiagnosticSceneLabel(row.sceneId, row.order, row.sceneName)}
                                         >
-                                            <span className="line-clamp-2 leading-tight">
+                                            <span className="line-clamp-2 leading-tight text-[11px] font-semibold text-white/75">
                                                 {formatDiagnosticSceneLabel(row.sceneId, row.order, row.sceneName)}
                                             </span>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleRerunSceneMatrixNode('drama_opt', row.sceneId)}
+                                                disabled={!canRerunSceneFromDrama}
+                                                className={diagnosticBtnClass}
+                                                title={t('只从文戏优化重跑该场后续节点，不跑美术指导与其他分场', 'Rerun this scene from drama only; skip art direction and other scenes')}
+                                            >
+                                                {t('重跑该场', 'Rerun This Scene')}
+                                            </button>
                                         </div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(dramaState, cellProps('drama_opt', dramaState))}</div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(combatState, cellProps('combat_opt', combatState))}</div>
