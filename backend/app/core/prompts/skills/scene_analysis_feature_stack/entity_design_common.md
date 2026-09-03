@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-09-03 00:40:00 +08:00
+# Prompt Updated At: 2026-09-03 23:42:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -42,7 +42,7 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 
 **最高优先级**：Node 4 的 `characters` / `props` / `environments` / `posters` 须逐条覆盖上游 Index；缺漏即废弃重写。按序推导后，仅按末尾模板输出最终 JSON。
 
-- **[Node 1] World Bible**：读 `Project Context.Type` / `Genre` / `Base Positioning` / `Global_Style` / Visual Backfill（`tone`/`lighting`/`borrowed_films`/`color_palette`/`color_spectrum`）/ 时代地域；统一视觉体系，禁反向题材化。礼法时地见 §1.2。动笔前按 §1.5 **继承已锁色卡**一次定全项目大光比+主冷暖四层色谱，再按 §1.3 主光源先行。题材气质（喜剧明亮/情感温润/仙侠空灵/写实材质可信/恐怖可压暗但仍可读）**不得**单独触发真人专属；渲染三选一**仅** §1.6。正向词按 §1.6 互斥套用（真人：真实体征/物理材质/自然光学——Character 定妆改走 character §2.0/§2.3；三维→各分型三维节；二维→各分型二维节；未命中默认真人并在 logic 标注）。
+- **[Node 1] World Bible**：读 `Project Context.Type` / `Genre` / `Base Positioning` / `Global_Style` / Visual Backfill（`tone`/`lighting`/`borrowed_films`/`color_palette`/`color_spectrum`）/ 时代地域；统一视觉体系，禁反向题材化。礼法时地见 §1.2。动笔前按 §1.5 **继承已锁色卡**一次定全项目大光比+主冷暖四层色谱（**缺 `color_palette` 时 Env 必须主动按顶级大片锁卡**，禁只写冷暖标签），再按 §1.3 主光源先行。题材气质（喜剧明亮/情感温润/仙侠空灵/写实材质可信/恐怖可压暗但仍可读）**不得**单独触发真人专属；渲染三选一**仅** §1.6。正向词按 §1.6 互斥套用（真人：真实体征/物理材质/自然光学——Character 定妆改走 character §2.0/§2.3；三维→各分型三维节；二维→各分型二维节；未命中默认真人并在 logic 标注）。
 - **[Node 2] 选角**：characters 索引 → 反同质化、合理头身比；真人见 character §2.0–§2.3。复用 Index `entity_attributes`；**Index 已写明任何要素须按 §1.3 零缺失回写入 `generation_prompt_cn`**（CHAR 纯换装衍生的未改面貌/身材除外，见 §1.3 例外）。
 - **[Node 3] 美术指导**：环境/道具美术深化与材质补足（Stage 1/2.1 不预写高级美术细节）；环境另须四向深化，增补边界见 environment §2.5。不得重定义抽取边界、Clean Plate 归属、Subject 分类。
 - **[Node 4] 封装 TD**：清单只读——禁新增/拆分/合并/重命名；缺口标「上游待补（回流 Stage 2）」。`subject_type` 归一后唯一数组归属：`character→characters[]`，`prop→props[]`，`environment→environments[]`，`cover_poster→posters[]`；单实体单归属。**命名终检先于其他**：`name`↔`subject_name_zh`，`name_en`/`base_name_en`↔`subject_name_en`，依赖名↔Index；任一字不等→废弃。遗漏/错分/重复/全入角色数组/Index 要素未进 prompt → Final Consistency Report 废弃重算。
@@ -96,7 +96,7 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 - **主光源先行（Env/Poster/Prop）**：先写主光源来源、方向、**作用范围**、**可见效果**；再补光/轮廓与材质色彩响应。禁只列灯位不写范围效果；禁先堆风格再泛写「电影感光影」。入射/受光/投影须可由具名光源位置几何推导；Fill 只许现有动机光经具名反射面反弹或已有第二 Practical；**禁为补光而补光**（无锚点棚拍柔光箱/虚构正面补光）。
 - **灯光具体要求**：亮度/光质/反差服从 Genre、**ENV 定位目标**与场级情绪；Env/Poster 明确 Key/Fill/Backlight 与硬柔光；Env 另须 FG/MG/BG 纵深光层与半影/投影落点，防平板；执行见 §1.5-A 与 environment §2.7 / §2.7.0。
 - **立体层次（Env/Poster/Prop）**：先明度/色温/清晰度/材质反射差，再装饰；阴影留细节；环境前中后景体积光与层次差——禁整室同亮抹平体积。
-- **色彩**：主/辅/点缀/过渡色绑材质、光源、距离层；Env 另须 FG/MG/BG 纵深色层与提神点缀，防单调发灰；执行见 §1.5 与 environment §2.9。
+- **色彩**：主/辅/点缀/过渡色绑材质、光源、距离层；**须先核销全局 `color_palette`**（无则 Env 主动按顶级大片锁卡）；**Env 辅色与点缀须与主色强烈对比**，FG/MG/BG 纵深色层须有立体感与对比度，防单调发灰；执行见 §1.5 与 environment §2.9。
 - **中文提示词维度**：连贯自然中文短句/短段。
   - Env/Prop 推荐序：主体 → 主光源与光影 → 构图机位 → 调色 → 细节 → 风格约束。
   - Character 定妆序（强制）：开篇其他（画布+项目风格+拍摄载体）→ 相貌 → 衣着 → 光线（≤1 句）→ 收尾其他（姿态+四视图）；权威 character §1.3。
@@ -126,7 +126,7 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 
 **职责**：Stage 1 Visual Backfill **须含**文学级 `color_spectrum`（主冷暖四选一）与 **`color_palette`（据顶级大片/`borrowed_films` 选定的色卡：对标片+主/辅/点缀/过渡具名色）**。本阶段**继承该色卡**，落实 Key:Fill、色温 K、材质绑色与四层技术落地；**禁止**另起与色卡或对标大片冲突的主色系。
 
-**推导输入**：Backfill 的 `Global_Style` / `tone` / `lighting` / **`color_palette`（首要色卡，不得冲突）** / **`color_spectrum`（须与色卡同向）** / `borrowed_films` + Context 的 Genre、定位、时代/地域 + **Index `basic_positioning`（ENV 定位目标）+ `scene_mood` / `scene_mood_cue`（场级环境主情绪；光色构图须响应，不得与色卡主冷暖打架）**。Node 1 前一次把已锁色卡落成全剧大光比与主冷暖色谱，再按定位目标与场级情绪微调各实体落地；禁各 Subject 各自发明冲突色系或回退均匀平光。缺 `color_palette` → logic 标 `upstream_missing_color_palette`，仍须按 `borrowed_films`+`color_spectrum` 弱推一张同向色卡，禁另造冲突色。
+**推导输入**：Backfill 的 `Global_Style` / `tone` / `lighting` / **`color_palette`（首要色卡，不得冲突）** / **`color_spectrum`（须与色卡同向）** / `borrowed_films` + Context 的 Genre、定位、时代/地域 + **Index `basic_positioning`（ENV 定位目标）+ `scene_mood` / `scene_mood_cue`（场级环境主情绪；光色构图须响应，不得与色卡主冷暖打架）**。Node 1 前一次把已锁色卡落成全剧大光比与主冷暖色谱，再按定位目标与场级情绪微调各实体落地；禁各 Subject 各自发明冲突色系或回退均匀平光。缺 `color_palette` → logic 标 `upstream_missing_color_palette`；**Env 必须主动锁卡**（禁止弱推交差）：优先用 `borrowed_films`，无则自锁 1 部真实顶级大片（院线/经典，须有可核验标志性调色），写出该片可核验的主/辅/点缀/过渡具名色 + 调色机制，`对标片=` 点名该片；禁只写冷暖标签、禁另造与题材/`color_spectrum` 冲突的色。
 - **场级定位×情绪驱动（强制）**：ENV 读本行 `basic_positioning` + `scene_mood`（或继承主环境）；CHAR/PROP 读本行 `scene_mood_cue`，缺则读挂场主环境 `scene_mood`。压迫/肃杀/悬疑→偏冷、大光比、纵深或负空间；温煦/明媚/温情→偏暖、可读主舞台、中心或对称可兼；孤绝/空寂→负空间+远景降饱和。**ENV** 把定位与情绪落入 §2.7.0 光学九项、§2.7 光影、§2.9 色彩与构图倾向（仍守四方正交；小屋禁扩豪宅透视）。**CHAR** 服化配色与材质响应该场光色；真人定妆 prompt 仍豁免戏剧光（只进 logic）。**PROP** 材质色与静物光冷暖响应该场，仍豁免 ≥8:1。缺 `scene_mood` → logic 标 `upstream_missing_scene_mood`，按 Backfill+时段气候弱推，禁另造与剧情相反的喜庆/恐怖光。
 
 #### A. 光影大光比（Env/Poster 默认主打 · 美观不平板）
@@ -140,7 +140,7 @@ Key 与 Fill 对比显著，亮暗分层清楚；**不等于**无脑压黑或刀
 #### B. 冷暖光谱（本阶段推导）
 内部推导（约 120–220 字等价），与 `tone`/`Global_Style`/§A 同体系：
 1. **主冷暖（四选一，须与 Stage 1 `color_spectrum` 及 `color_palette` 一致）**：冷调主导｜暖调主导｜冷暖对比（情感悬疑/noir 首选，须写 Key/Fill 冷暖与亮暗落层）｜同温层次（靠明度/大光比分层，禁只靠饱和度）。
-2. **四层具名色**：先抄 Stage 1 `color_palette` 的主/辅/点缀/过渡，再绑**具名表面+材质**落地；可按场级情绪微调明度/饱和，禁换主干色相。缺色卡则按对标大片补一层同向具名色。主色 1–2｜辅色 1–2｜点缀 ≤2（面积约 3%–10%，**Env 默认至少 1 个提神点缀**）｜过渡 1–2；禁抽象词。
+2. **四层具名色**：先抄 Stage 1 `color_palette` 的主/辅/点缀/过渡，再绑**具名表面+材质**落地；可按场级情绪微调明度/饱和，禁换主干色相。缺色卡则按上条主动锁的顶级大片写出同向具名色。主色 1–2｜辅色 1–2｜点缀 ≤2（面积约 3%–10%，**Env 默认至少 1 个提神点缀**）｜过渡 1–2；禁抽象词。**Env 辅色与点缀须与主色强烈对比**（色相或冷暖对冲，禁同灰不同明、禁同族邻色弱差冒充）；画面须有立体感与对比度。
 3. **光源绑定**：Key/Fill/阴影区色温与表面色；亮/暗区色谱分写；颜色绑材质与距离层。
 4. **段落偏移 ≥2 档**；衍生只写 Delta，不得另起主色谱。
 5. **Env 纵深色层（强制）**：前景/中景/背景各有可辨色相或明度差（可同色系递变）；细则 environment §2.9。
@@ -158,11 +158,11 @@ Key 与 Fill 对比显著，亮暗分层清楚；**不等于**无脑压黑或刀
 
 #### D. 输出前光色自检
 1. Env/Poster 已落实大光比？Prop 未误套 ≥8:1？Character 定妆 prompt **未**写大光比/Key:Fill？`description_cn` 均为 `""`？
-2. 已继承 Stage 1 `color_palette`（或标回流后按对标大片弱推）并回写主冷暖+四层色谱（Character 色谱落服装；大光比亮暗句仅 Env/Poster prompt 与 Character logic）？
+2. 已继承 Stage 1 `color_palette`（或标回流后由 Env **主动按顶级大片锁卡**，非弱推）并回写主冷暖+四层色谱（Character 色谱落服装；大光比亮暗句仅 Env/Poster prompt 与 Character logic）？
 3. Env/Poster 能答：哪区暖/冷、哪层亮/暗、光从哪来、作用范围与效果？Prop：光向一致且材质高光/半影/接触影可读？
 4. 夜景按 environment §2.8，可见动机光 ≤3，主舞台+动线可读且仍有纵深光层？
 5. 未与同项目其他 Subject 主色谱冲突或回退均匀平光？场级 `scene_mood`/`scene_mood_cue` 已驱动 ENV 光色构图、CHAR 服化配色、PROP 材质冷暖（缺键已标回流）？
-6. **Env 色彩美观不单调**：主+辅可辨、≥1 提神点缀、FG/MG/BG 纵深色层已写、无灰褐单色糊？
+6. **Env 色彩美观有对比**：已继承全局色卡或主动锁顶级大片 `对标片=`？辅色与点缀相对主色强烈对比（非同灰不同明）？FG/MG/BG 纵深色层已写且有立体感/对比度？无灰褐单色糊？
 7. **Env 光线美观不平板**：Key 方向+效果、Fill 有反射依据、FG/MG/BG 受光差、半影+投影落点、≥2 材质光学响应、无整室同亮？
 
 任一项为否 → 重写该实体 prompt。
