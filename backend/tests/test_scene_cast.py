@@ -83,7 +83,8 @@ def test_build_scene_entity_token_brief():
     assert "不是对白硬字幕" in brief
     assert "紧跟该人【建置】可见面整句" in brief
     assert "禁把多名牌攒到建置段末或入戏一起写" in brief
-    assert "标签仅剧中明确身份介绍的职业/公开身份" in brief
+    assert "标签优先抄 CHAR|#身份 的客观身份" in brief
+    assert "只上客观信息，禁透露剧情" in brief
     assert "禁推理" in brief
 
 
@@ -99,7 +100,7 @@ def test_parse_char_extract_records_keeps_voice_profile():
     assert "标签=江湖侠客" in shen
 
 
-def test_nameplate_rejects_plot_laden_identity_and_tag():
+def test_nameplate_keeps_char_pipe_identity_tag():
     script = """[SCENES_BLOCK_START]
 [SCENE_START:EP01_SC01]
 [SCENE_CAST_START:EP01_SC01]
@@ -117,11 +118,11 @@ def test_nameplate_rejects_plot_laden_identity_and_tag():
 """
     brief = build_scene_entity_token_brief(script, "EP01_SC01")
     tag_section = brief.split("【本场角色标签】")[-1]
-    assert "CHAR:[@沈青]｜标签=无｜标签_en=无" in tag_section
+    assert "CHAR:[@沈青]｜标签=千金｜标签_en=Heiress" in tag_section
     assert "字幕=待落" in tag_section
-    assert "落寞寒门女眷" not in tag_section
     assert "落魄千金" not in tag_section
     assert "Fallen Heiress" not in tag_section
+    assert "落寞寒门女眷" not in tag_section
     assert "曾经富贵后落寞" not in tag_section
 
 
@@ -143,6 +144,52 @@ def test_nameplate_does_not_infer_tag_from_identity():
     tag_section = brief.split("【本场角色标签】")[-1]
     assert "CHAR:[@沈青]｜标签=无｜标签_en=无" in tag_section
     assert "江湖侠客" not in tag_section
+
+
+def test_nameplate_keeps_heir_and_pet_identity_tags():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+[SCENE_CAST_START:EP01_SC01]
+【本场角色】在场=CHAR:[@陆廷泽]，CHAR:[@奥利奥]｜待入画=无｜群演=无
+【本场道具】在场=无｜待入画=无
+[SCENE_CAST_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=陆廷泽｜名称_en=Lu Tengze｜番位=男主｜适用场=EP01_SC01
+标签=第一家族继承人
+标签_en=First Family Heir
+[CHAR] 名称=奥利奥｜名称_en=Oreo｜番位=配角｜实体类=宠物｜适用场=EP01_SC01
+标签=智能AI宠物猫
+标签_en=AI Pet Cat
+[CHAR_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    brief = build_scene_entity_token_brief(script, "EP01_SC01")
+    tag_section = brief.split("【本场角色标签】")[-1]
+    assert "CHAR:[@陆廷泽]｜标签=第一家族继承人｜标签_en=First Family Heir" in tag_section
+    assert "CHAR:[@奥利奥]｜标签=智能AI宠物猫｜标签_en=AI Pet Cat" in tag_section
+
+
+def test_nameplate_rejects_arc_spoiler_tag():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+[SCENE_CAST_START:EP01_SC01]
+【本场角色】在场=CHAR:[@顾清漪]｜待入画=无｜群演=无
+【本场道具】在场=无｜待入画=无
+[SCENE_CAST_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=顾清漪｜名称_en=Gu Qingyi｜番位=女主｜适用场=EP01_SC01
+标签=复仇女皇
+标签_en=Revenge Empress
+[CHAR_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    brief = build_scene_entity_token_brief(script, "EP01_SC01")
+    tag_section = brief.split("【本场角色标签】")[-1]
+    assert "CHAR:[@顾清漪]｜标签=女皇｜标签_en=Empress" in tag_section
+    assert "复仇女皇" not in tag_section
+    assert "Revenge Empress" not in tag_section
 
 
 def test_nameplate_rejects_character_positioning_tag():

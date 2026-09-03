@@ -10848,10 +10848,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
         const existingCount = Array.isArray(existingShots) ? existingShots.length : 0;
-        // Workspace shots are authoritative for automatic kickoff. A single-scene
-        // clear used to flip trustLiveDownstreamOnly and wipe tracking, which
-        // disabled this skip and regenerated sibling storyboards.
-        if (existingCount > 0 && !force) {
+        const scopedAllowlistCount = countDistinctScenesInAllowlist(
+            orchestrationCanonicalSceneIdsRef.current
+        );
+        const isScopedRerunTarget = scopedAllowlistCount === 1
+            && isSceneIdInAllowlist(
+                stableMarker,
+                orchestrationCanonicalSceneIdsRef.current,
+                episodePrefix
+            );
+        // Sibling protection: automatic kickoff must not regenerate other scenes.
+        // The scene this run is actually targeting may still have leftovers if
+        // purge missed them — continue and replace on apply.
+        if (existingCount > 0 && !force && !isScopedRerunTarget) {
             storyboardKickoffByMarkerRef.current.add(stableMarker);
             storyboardKickoffByDbIdRef.current.add(dbSceneId);
             const skippedProgress = updateStoryboardTaskItem(stableMarker, {
@@ -10870,8 +10879,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             onLog?.(
                 t(
-                    `[分镜生成] ${stableMarker} 场景已有 ${existingCount} 条分镜，跳过自动重跑`,
-                    `[Storyboard] ${stableMarker} already has ${existingCount} shot(s); skipped automatic rerun`
+                    `[分镜生成] ${stableMarker} 已有 ${existingCount} 条分镜，保留不重跑`,
+                    `[Storyboard] ${stableMarker} already has ${existingCount} shot(s); kept as-is`
                 ),
                 'process'
             );
@@ -10966,25 +10975,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 // Re-check right before apply to avoid race with concurrent imports.
                 const latestShots = await fetchShots(dbSceneId);
                 const latestCount = Array.isArray(latestShots) ? latestShots.length : 0;
-                const replaceLeftoverShots = Boolean(
-                    analysisTrustLiveDownstreamOnlyRef.current && latestCount > 0
-                );
-                if (latestCount > 0 && !force && !replaceLeftoverShots) {
-                    const skippedProgress = updateStoryboardTaskItem(stableMarker, { status: 'completed', error: '' });
-                    publishStoryboardTaskPanelStatus({
-                        markerSceneId: stableMarker,
-                        sceneOrder,
-                        status: 'completed',
-                        progressSnapshot: skippedProgress,
-                    });
+                // This kickoff already paid for LLM rows for THIS scene. Always
+                // write them. "Keep siblings" is enforced by skipping kickoff
+                // before generate — never by discarding a finished result.
+                if (latestCount > 0) {
                     onLog?.(
                         t(
-                            `[分镜生成] ${stableMarker} 导入前发现场景已有 ${latestCount} 条分镜，放弃导入`,
-                            `[Storyboard] ${stableMarker}: scene already has ${latestCount} shot(s) before apply; import abandoned`
+                            `[分镜生成] ${stableMarker} 将覆盖写入本场已有 ${latestCount} 条分镜`,
+                            `[Storyboard] ${stableMarker}: replacing ${latestCount} existing shot(s) with this run’s result`
                         ),
-                        'warning'
+                        'info'
                     );
-                    return false;
                 }
                 const applyGeneratedRows = async (replaceExisting = false) => {
                     await applySceneAIResult(dbSceneId, {
@@ -10993,7 +10994,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     });
                 };
                 try {
-                    await applyGeneratedRows(Boolean(force) || replaceLeftoverShots);
+                    await applyGeneratedRows(true);
                 } catch (applyErr) {
                     const applyStatus = Number(applyErr?.response?.status || 0);
                     const applyDetail = String(
@@ -11001,40 +11002,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     );
                     const isAlreadyHasShots = applyStatus === 409 || /already has .*shot/i.test(applyDetail);
                     if (!isAlreadyHasShots) throw applyErr;
-
-                    // Backend may still see invisible/orphan shots that GET /shots filters out.
-                    // If the UI-visible list is empty, overwrite once so generated rows land.
-                    let visibleAfterConflict = [];
-                    try {
-                        visibleAfterConflict = await fetchShots(dbSceneId);
-                    } catch (_) {
-                        visibleAfterConflict = [];
-                    }
-                    const visibleCount = Array.isArray(visibleAfterConflict) ? visibleAfterConflict.length : 0;
-                    if (visibleCount > 0 && !force) {
-                        const skippedProgress = updateStoryboardTaskItem(stableMarker, {
-                            status: 'completed',
-                            error: '',
-                        });
-                        publishStoryboardTaskPanelStatus({
-                            markerSceneId: stableMarker,
-                            sceneOrder,
-                            status: 'completed',
-                            progressSnapshot: skippedProgress,
-                        });
-                        onLog?.(
-                            t(
-                                `[分镜生成] ${stableMarker} 场景已有 ${visibleCount} 条可见分镜，放弃导入`,
-                                `[Storyboard] ${stableMarker} already has ${visibleCount} visible shot(s); import abandoned`
-                            ),
-                            'warning'
-                        );
-                        return false;
-                    }
                     onLog?.(
                         t(
-                            `[分镜生成] ${stableMarker} 后端报已有分镜但页面可见 0 条，正在覆盖导入…`,
-                            `[Storyboard] ${stableMarker}: backend reports existing shots but UI sees 0; retrying with replace…`
+                            `[分镜生成] ${stableMarker} 后端仍报已有分镜，正在覆盖导入…`,
+                            `[Storyboard] ${stableMarker}: backend still reports existing shots; retrying with replace…`
                         ),
                         'warning'
                     );
@@ -31748,7 +31719,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (autoZeroReportHandledRef.current.key === reportKey) return;
         // Persistence-gap retries are owned by the pipeline supervisor (complete / user stop / 30min).
         autoZeroReportHandledRef.current = { key: reportKey, handledAt: Date.now() };
-        onLog?.('[Auto Zero Report Rerun] skipped: pipeline supervisor owns persistence retries.', 'info');
     }, [
         activeEpisode?.id,
         analysisUiReport,

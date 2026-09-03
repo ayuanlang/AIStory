@@ -57,18 +57,7 @@ _UNMASK_TOKENS = (
     "现出真容",
     "摘下面罩",
 )
-_NAMEPLATE_PLOT_LEAK_CN = (
-    "落魄",
-    "落寞",
-    "败落",
-    "发迹",
-    "贬谪",
-    "卧底",
-    "伪装",
-    "假面",
-    "复仇",
-    "曾经",
-    "前任",
+_NAMEPLATE_POSITIONING_CN = (
     "女主",
     "男主",
     "反派",
@@ -76,14 +65,40 @@ _NAMEPLATE_PLOT_LEAK_CN = (
     "主角",
     "龙套",
     "番位",
+)
+_NAMEPLATE_PLOT_PEEL_CN = (
+    "落魄",
+    "落寞",
+    "败落",
+    "发迹",
+    "贬谪",
+    "曾经",
+    "前任",
+    "卧底",
+    "伪装",
+    "假面",
     "揭穿",
     "真身",
-    "即将",
     "隐藏",
+    "重生",
+    "转世",
+    "穿越",
+    "回归",
+    "救世主",
+    "天选",
+    "命定",
+    "天命",
+    "即将",
+    "复仇",
+    "觉醒",
 )
-_NAMEPLATE_PLOT_LEAK_EN = re.compile(
-    r"\b(fallen|former|undercover|revenge|hidden|villain|protagonist|"
-    r"heroine|male\s+lead|female\s+lead|supporting\s+role)\b",
+_NAMEPLATE_POSITIONING_EN = re.compile(
+    r"\b(villain|protagonist|heroine|male\s+lead|female\s+lead|supporting\s+role)\b",
+    re.IGNORECASE,
+)
+_NAMEPLATE_PLOT_PEEL_EN = re.compile(
+    r"\b(fallen|former|undercover|revenge|hidden|reborn|awakened|"
+    r"chosen(?:\s+one)?|transmigrat\w*)\b",
     re.IGNORECASE,
 )
 
@@ -93,13 +108,25 @@ def _clean(value: object) -> str:
 
 
 def _public_nameplate_label(value: str) -> str:
-    """Keep occupation/public identity only; empty if plot or positioning leaks."""
+    """Keep objective identity; peel plot/circumstance words; reject positioning."""
     text = _clean(value)
     if not text or text == "无":
         return "无"
-    if any(token in text for token in _NAMEPLATE_PLOT_LEAK_CN):
+    if any(token in text for token in _NAMEPLATE_POSITIONING_CN):
         return "无"
-    if _NAMEPLATE_PLOT_LEAK_EN.search(text):
+    if _NAMEPLATE_POSITIONING_EN.search(text):
+        return "无"
+    for token in sorted(_NAMEPLATE_PLOT_PEEL_CN, key=len, reverse=True):
+        text = text.replace(token, "")
+    text = _NAMEPLATE_PLOT_PEEL_EN.sub("", text)
+    text = re.sub(r"[\s/·\-—_,，]+", " ", text).strip(" /·-—_,，")
+    if not text or text == "无":
+        return "无"
+    han = re.findall(r"[\u4e00-\u9fff]", text)
+    latin = re.findall(r"[A-Za-z]{2,}", text)
+    if not han and not latin:
+        return "无"
+    if len(han) == 1 and not latin:
         return "无"
     return text
 
@@ -234,7 +261,7 @@ def _subtitle_display_name_en(
 
 
 def _character_tag(record_text: str, base_text: str = "") -> str:
-    """Use only an explicit nameplate tag; never summarize from 身份=."""
+    """Use explicit 标签= (from CHAR|#身份 or intro); never summarize from 身份=."""
     tag = _public_nameplate_label(extract_char_field(record_text, "标签"))
     if tag != "无":
         return tag
@@ -361,7 +388,10 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         "此为片内图形名牌（物理文字），不是对白硬字幕；禁写成画幅底部白字黑边。"
         "剧本或提取块已写的字样/字体/字色原样服从，禁改写。"
         "中文项目用 裸名+标签；英文项目用 裸名_en+标签_en；禁中英并列、禁用错语种上屏。"
-        "标签仅剧中明确身份介绍的职业/公开身份，禁推理，禁从身份、称呼、服制或叙述总结；为无则只打裸名，禁臆造。"
+        "标签优先抄 CHAR|#身份 的客观身份（阶层/职业/职衔/物种，如千金/第一家族继承人/智能AI宠物猫）；"
+        "只上客观信息，禁透露剧情：处境词须剥（落魄千金→千金），弧光/表里里/未揭真身份不进。"
+        "禁推理，禁从称呼、服制、叙述或提取块身份=自拟；为无则只打裸名，禁臆造。"
+        "女主/反派等定位当无。"
         "蒙面/易容/面具/面罩等见不到真脸：字幕必须=无，连裸名也不打，禁为蒙面态补名牌。"
         "名牌条件=须真脸 则等该人真脸正面/¾可读后再挂；全场未见真脸则不写、不标缺口。"
         "字体/字色为无或待补则跟 Global_Style 补一书体+具名色。"
