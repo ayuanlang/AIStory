@@ -10848,34 +10848,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
         const existingCount = Array.isArray(existingShots) ? existingShots.length : 0;
-        const thisRunAlreadyTracked = (
-            STORYBOARD_IN_FLIGHT_STATUSES.includes(priorStatus)
-            || (priorStatus === 'completed' && priorFromThisRun)
-            || Boolean(storyboardKickoffPromisesRef.current?.has(stableMarker))
-        );
-        if (existingCount > 0 && !force && (thisRunAlreadyTracked || !analysisTrustLiveDownstreamOnlyRef.current)) {
+        // Workspace shots are authoritative for automatic kickoff. A single-scene
+        // clear used to flip trustLiveDownstreamOnly and wipe tracking, which
+        // disabled this skip and regenerated sibling storyboards.
+        if (existingCount > 0 && !force) {
             storyboardKickoffByMarkerRef.current.add(stableMarker);
             storyboardKickoffByDbIdRef.current.add(dbSceneId);
             const skippedProgress = updateStoryboardTaskItem(stableMarker, {
                 dbSceneId,
                 sceneOrder,
-                status: 'completed',
-                error: '',
+                status: priorStatus && priorStatus !== 'starting' ? priorStatus : 'completed',
+                error: priorStatus && priorStatus !== 'starting' ? String(priorItem?.error || '') : '',
             });
-            publishStoryboardTaskPanelStatus({
-                markerSceneId: stableMarker,
-                sceneOrder,
-                status: 'completed',
-                progressSnapshot: skippedProgress,
-            });
+            if (!priorStatus || priorStatus === 'starting') {
+                publishStoryboardTaskPanelStatus({
+                    markerSceneId: stableMarker,
+                    sceneOrder,
+                    status: 'completed',
+                    progressSnapshot: skippedProgress,
+                });
+            }
             onLog?.(
                 t(
-                    `[分镜生成] ${stableMarker} 场景已有 ${existingCount} 条分镜，放弃导入`,
-                    `[Storyboard] ${stableMarker} already has ${existingCount} shot(s); import abandoned`
+                    `[分镜生成] ${stableMarker} 场景已有 ${existingCount} 条分镜，跳过自动重跑`,
+                    `[Storyboard] ${stableMarker} already has ${existingCount} shot(s); skipped automatic rerun`
                 ),
-                'warning'
+                'process'
             );
-            return false;
+            return true;
         }
 
         storyboardKickoffByMarkerRef.current.add(stableMarker);
@@ -11138,6 +11138,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!pipelineNodeHasStagingImportBody({ ...node, status: 'success' })) continue;
             const sceneId = String(node?.scene_id || '').trim();
             if (!sceneId) continue;
+            const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+            const canonical = orchestrationCanonicalSceneIdsRef.current;
+            const liveImported = orchestrationLiveImportedScenesRef.current;
+            const allowlistActive = (
+                (canonical instanceof Set && canonical.size > 0)
+                || (liveImported instanceof Set && liveImported.size > 0)
+            );
+            if (allowlistActive) {
+                const inAllowlist = canonical instanceof Set
+                    && canonical.size > 0
+                    && isSceneIdInAllowlist(sceneId, canonical, episodePrefix);
+                const inLiveImported = liveImported instanceof Set
+                    && liveImported.size > 0
+                    && isSceneIdInAllowlist(sceneId, liveImported, episodePrefix);
+                if (!inAllowlist && !inLiveImported) continue;
+            }
             const meta = (node?.runtime_meta && typeof node.runtime_meta === 'object')
                 ? node.runtime_meta
                 : {};
@@ -11153,7 +11169,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
         }
     }, [
-        activeEpisode?.id,
+        activeEpisode,
         isStoryboardAutoStartEnabled,
         registerSceneImportedAndKickoffStoryboard,
     ]);
@@ -11491,6 +11507,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const { missingRows } = await countImportedScenesMissingShots();
             if (missingRows.length > 0) {
                 const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+                const canonical = orchestrationCanonicalSceneIdsRef.current;
+                const liveImported = orchestrationLiveImportedScenesRef.current;
+                const allowlistActive = (
+                    (canonical instanceof Set && canonical.size > 0)
+                    || (liveImported instanceof Set && liveImported.size > 0)
+                );
                 for (const row of missingRows) {
                     const raw = String(row?.scene_id || row?.scene_code || row?.scene_no || '').trim();
                     const marker = canonicalizeSceneUnitId(
@@ -11499,6 +11521,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         episodePrefix
                     ) || raw;
                     if (!marker) continue;
+                    if (allowlistActive) {
+                        const inAllowlist = canonical instanceof Set
+                            && canonical.size > 0
+                            && isSceneIdInAllowlist(marker, canonical, episodePrefix);
+                        const inLiveImported = liveImported instanceof Set
+                            && liveImported.size > 0
+                            && isSceneIdInAllowlist(marker, liveImported, episodePrefix);
+                        if (!inAllowlist && !inLiveImported) continue;
+                    }
                     await registerSceneImportedAndKickoffStoryboard({
                         sceneId: marker,
                         sceneOrder: deriveSceneOrderFromSceneId(raw) || row?.scene_number,
@@ -23206,11 +23237,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         dbSceneIds = null,
         markerSceneIds = null,
         reason = 'analysis-shot-clear',
+        allowEpisodeFallback = null,
     } = {}) {
         if (!activeEpisode?.id || typeof fetchShots !== 'function' || typeof deleteShot !== 'function') {
             return { deleted_shots: 0 };
         }
         try {
+            const callerScoped = Array.isArray(dbSceneIds) || Array.isArray(markerSceneIds);
+            const canFallback = allowEpisodeFallback === true
+                || (allowEpisodeFallback !== false && !callerScoped);
             let targetDbIds = Array.isArray(dbSceneIds)
                 ? dbSceneIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
                 : [];
@@ -23220,11 +23255,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     .map((marker) => Number(findDbSceneByPatchSceneId(dbScenes, marker)?.id || 0))
                     .filter((id) => Number.isFinite(id) && id > 0);
             }
-            if (!targetDbIds.length && typeof fetchScenes === 'function') {
+            if (!targetDbIds.length && canFallback && typeof fetchScenes === 'function') {
                 const dbScenes = await fetchScenes(activeEpisode.id).catch(() => []);
                 targetDbIds = (Array.isArray(dbScenes) ? dbScenes : [])
                     .map((scene) => Number(scene?.id || 0))
                     .filter((id) => Number.isFinite(id) && id > 0);
+            }
+            if (!targetDbIds.length) {
+                if (onLog) {
+                    onLog(
+                        `[Shot Purge] skipped source=${reason} reason=scoped-empty`,
+                        'process'
+                    );
+                }
+                return { deleted_shots: 0 };
             }
             let deletedShots = 0;
             for (const sceneId of [...new Set(targetDbIds)]) {
@@ -23458,6 +23502,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             resetRuntimePanels = true,
             purgeStoryboard = null,
             envScope = null,
+            partialSceneScope = false,
+            allowShotPurgeEpisodeFallback = null,
         } = options;
 
         const clearAll = stage === 'all' || stage === 'script_opt';
@@ -23469,6 +23515,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const sceneBeatsPartial = clearSceneBeatsStage
             && Array.isArray(markerSceneIds)
             && markerSceneIds.length > 0;
+        const storyboardPartial = stage === 'storyboard' && partialSceneScope === true;
+        const scopedSceneClear = sceneBeatsPartial || storyboardPartial;
+        if (clearSceneBeatsStage && partialSceneScope === true && !sceneBeatsPartial) {
+            if (onLog) {
+                onLog(
+                    '[Analysis Clear] single-scene scene_beats requested without markerSceneIds; skipped episode scene purge',
+                    'warning'
+                );
+            }
+        }
 
         const resolvedEnvScope = String(envScope || '').trim().toLowerCase()
             || (stage === 'assets_gen' ? 'main' : 'all');
@@ -23493,17 +23549,41 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisTrustLiveDownstreamOnlyRef.current = true;
 
         if (resetRuntimePanels) {
-            orchestrationLiveImportedScenesRef.current = new Set();
-            if (clearFromSceneBeats) {
-                orchestrationCanonicalSceneIdsRef.current = new Set();
-                if (!sceneBeatsPartial) {
-                    orchestrationPersistedSceneMarkdownRef.current = {};
-                    setLiveSceneMarkdownByScene({});
+            if (scopedSceneClear) {
+                const scopedMarkers = expandSceneIdAllowlist(
+                    Array.isArray(markerSceneIds) ? markerSceneIds : [],
+                    resolveEpisodeSceneIdPrefix(activeEpisode)
+                );
+                const nextLiveImported = new Set();
+                for (const sceneId of (orchestrationLiveImportedScenesRef.current || [])) {
+                    const stableId = String(sceneId || '').trim();
+                    if (stableId && !isSceneIdInAllowlist(stableId, scopedMarkers, resolveEpisodeSceneIdPrefix(activeEpisode))) {
+                        nextLiveImported.add(stableId);
+                    }
                 }
-                endSceneOrchestrationPanelTracking();
-            }
-            if (clearFromStoryboard && (clearFromSceneBeats || stage === 'storyboard')) {
-                resetStoryboardKickoffTracking();
+                orchestrationLiveImportedScenesRef.current = nextLiveImported;
+                if (clearFromSceneBeats) {
+                    endSceneOrchestrationPanelTracking();
+                }
+                if (clearFromStoryboard && (clearFromSceneBeats || stage === 'storyboard')) {
+                    clearStoryboardTrackingForScenes(
+                        Array.isArray(markerSceneIds) ? markerSceneIds : [],
+                        Array.isArray(dbSceneIds) ? dbSceneIds : [],
+                    );
+                }
+            } else {
+                orchestrationLiveImportedScenesRef.current = new Set();
+                if (clearFromSceneBeats) {
+                    orchestrationCanonicalSceneIdsRef.current = new Set();
+                    if (!sceneBeatsPartial) {
+                        orchestrationPersistedSceneMarkdownRef.current = {};
+                        setLiveSceneMarkdownByScene({});
+                    }
+                    endSceneOrchestrationPanelTracking();
+                }
+                if (clearFromStoryboard && (clearFromSceneBeats || stage === 'storyboard')) {
+                    resetStoryboardKickoffTracking();
+                }
             }
             // assets_gen + ENV: defer tracking reset until linked scenes are resolved (scoped).
             if (clearAll) {
@@ -23533,18 +23613,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const sceneIdsForReset = Array.isArray(markerSceneIds) && markerSceneIds.length > 0
                     ? markerSceneIds
                     : [];
-                await resetSceneOrchestrationProgress({
-                    project_id: Number(projectId),
-                    episode_id: Number(activeEpisode.id),
-                    scene_ids: sceneIdsForReset,
-                });
+                if (partialSceneScope === true && sceneIdsForReset.length <= 0) {
+                    if (onLog) {
+                        onLog('[Analysis Clear] skipped episode-wide orchestration reset (single-scene scope empty)', 'warning');
+                    }
+                } else {
+                    await resetSceneOrchestrationProgress({
+                        project_id: Number(projectId),
+                        episode_id: Number(activeEpisode.id),
+                        scene_ids: sceneIdsForReset,
+                    });
+                }
             } catch (orchErr) {
                 if (onLog) onLog(`[Analysis Clear] orchestration reset warning: ${orchErr?.message || orchErr}`, 'warning');
             }
         }
 
         // Workspace rows: scenes (cascade shots) or targeted shot purge.
-        if (clearFromExtract || (clearSceneBeatsStage && !sceneBeatsPartial)) {
+        // Single-scene scene_beats without markers must never fall through to episode purge.
+        if (clearFromExtract || (clearSceneBeatsStage && !sceneBeatsPartial && partialSceneScope !== true)) {
             await purgeEpisodeWorkspaceScenes(`${reason}-scenes`);
             diagnosticsEpochRef.current += 1;
             setDiagnosticsEpisodeSceneCount(0);
@@ -23612,6 +23699,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         dbSceneIds: scopedDbSceneIds,
                         markerSceneIds: scopedMarkerSceneIds,
                         reason: `${reason}-shots`,
+                        allowEpisodeFallback: false,
                     });
                 }
             } else {
@@ -23619,6 +23707,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     dbSceneIds: scopedDbSceneIds,
                     markerSceneIds: scopedMarkerSceneIds,
                     reason: `${reason}-shots`,
+                    allowEpisodeFallback: allowShotPurgeEpisodeFallback === true && !storyboardPartial,
                 });
             }
         }
@@ -23665,7 +23754,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 episodePatch.ai_entity_design_result = filteredDesign;
                 // Do not blank episode-level shot_content on scoped ENV clear —
                 // workspace shots for unrelated scenes must remain authoritative.
-            } else if (stage === 'storyboard') {
+            } else if (stage === 'storyboard' && !storyboardPartial) {
                 episodePatch.shot_content = '';
             }
 
@@ -27730,10 +27819,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 unitsForRerun,
                 episodePrefix
             );
+            if (rerunMode === 'single' && rerunSceneIds.length <= 0) {
+                throw new Error(t(
+                    `单场重排未解析到 Scene ID（${targetSceneId}），已中止以免清空其他场。`,
+                    `Single-scene rerun could not resolve Scene IDs for ${targetSceneId}; aborted to avoid clearing other scenes.`
+                ));
+            }
             // Clear scene-orchestration + downstream storyboard temp (keep Stage 1 / Subject Index / assets).
             await clearAnalysisArtifactsFromStage('scene_beats', {
                 preserveProgressUi: true,
                 markerSceneIds: rerunMode === 'single' ? rerunSceneIds : null,
+                partialSceneScope: rerunMode === 'single',
                 reason: rerunMode === 'single' ? 'restart-scene-beats-only-single-clear' : 'restart-scene-beats-only-all-clear',
                 refreshEpisode: true,
             });
@@ -28667,6 +28763,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             reportAnalysisPanelNotice(t('没有可重跑的分镜生成场景。', 'No storyboard scenes available to rerun.'), 'warning');
             return;
         }
+        if (rerunMode === 'single' && !targets.some((item) => String(item?.sceneId || '').trim() || Number(item?.dbSceneId || 0) > 0)) {
+            reportAnalysisPanelNotice(t('单场分镜重跑缺少 Scene ID，已中止以免清空其他场。', 'Single-scene storyboard rerun is missing a Scene ID; aborted to avoid clearing other scenes.'), 'warning');
+            return;
+        }
 
         const rerunStartedAt = Date.now();
         setIsRerunningStoryboard(true);
@@ -28683,11 +28783,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         let started = 0;
         try {
+            if (rerunMode === 'single') {
+                orchestrationCanonicalSceneIdsRef.current = expandSceneIdAllowlist(
+                    targets.map((item) => String(item?.sceneId || '').trim()).filter(Boolean),
+                    resolveEpisodeSceneIdPrefix(activeEpisode)
+                );
+            }
             // Clear existing shot temp for selected scenes before force regenerate/replace.
             await clearAnalysisArtifactsFromStage('storyboard', {
                 preserveProgressUi: true,
                 markerSceneIds: targets.map((item) => item?.sceneId).filter(Boolean),
                 dbSceneIds: targets.map((item) => item?.dbSceneId).filter(Boolean),
+                partialSceneScope: rerunMode === 'single',
+                allowShotPurgeEpisodeFallback: rerunMode === 'all',
                 reason: rerunMode === 'single' ? 'storyboard-rerun-single-clear' : 'storyboard-rerun-all-clear',
                 refreshEpisode: false,
                 resetRuntimePanels: true,
@@ -28809,6 +28917,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             analysisRunInFlightRef.current = false;
         }
     }, [
+        activeEpisode,
         awaitPendingStoryboardTasks,
         beginStageRerunUi,
         checkSceneLinkedEnvironmentDesignReady,
