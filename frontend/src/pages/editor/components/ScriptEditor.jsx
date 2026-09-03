@@ -26751,6 +26751,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return String(currentStageOutputs?.stages?.[stageKey]?.outputs?.[outputKey]?.content || '').trim();
     }, [currentStageOutputs]);
 
+    const triggerStageOutputsRefresh = useCallback(async () => {
+        setDiagnosticsRefreshNonce((value) => value + 1);
+        if (typeof onRefreshEpisodes === 'function') {
+            await onRefreshEpisodes();
+        }
+    }, [onRefreshEpisodes]);
+
     const hasFramingForDerivedRegen = useMemo(() => {
         const map = parseSceneSubskillResultsMap(
             getStageOutputContent('stage1', 'scene_subskill_results')
@@ -28442,7 +28449,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (adapted) setAdaptationText(adapted);
             setLlmRawResultContent(output);
             setLlmResultContent(normalizeLlmMarkdownTable(output));
-            triggerStageOutputsRefresh?.();
+            await triggerStageOutputsRefresh();
             setAnalysisFlowStatus({
                 phase: 'completed',
                 message: t(`${config.labelZh}重跑完成。`, `${config.labelEn} rerun completed.`),
@@ -28573,9 +28580,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phase: 'completed',
                 message: t('剧本统筹重跑已完成！', 'Script coordination rerun has finished!'),
             });
-            if (typeof triggerStageOutputsRefresh === 'function') {
-                triggerStageOutputsRefresh();
-            }
+            await triggerStageOutputsRefresh();
         } catch (error) {
             console.error('[ScriptEditor] Failed to rerun script optimization:', error);
             const friendlyErr = (error?.response?.data?.detail) || error?.message || String(error);
@@ -29151,7 +29156,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (adapted) setAdaptationText(adapted);
             setLlmRawResultContent(output);
             setLlmResultContent(normalizeLlmMarkdownTable(output));
-            triggerStageOutputsRefresh?.();
+            await triggerStageOutputsRefresh();
             onLog?.(
                 t(
                     `${targetSceneId} · ${label}已完成，建置稿由程序入库后将重跑该场分镜…`,
