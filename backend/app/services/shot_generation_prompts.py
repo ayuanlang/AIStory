@@ -1154,6 +1154,7 @@ def _build_shot_prompts(
             f"符合合并逻辑时须一直累计到基准合镜Duration>门槛才封口；"
             f"若基准已>MaxShotSeconds，表列Duration强制=MaxShotSeconds，禁止超时拆镜。"
             f"镜末语言延续：本镜最后一个Beat为语言类（有非空台词的对白/OS/V.O./旁白/自白等）时，Duration在Duration0之后固定+1s（不参与封口判定，不得被下浮吃掉）；Video末秒须写说完后余韵定格，禁止卡音节切断。"
+            f"合镜计时：Beat小计=建置串行+并行核Max(语言/动作/微表情/特效/运镜/音效)，禁止七类分项全额相加灌到MaxShotSeconds；同ENV的P2+建置=0s；跨P同一连续运镜只计一次；ENV微动/窗雨/雨丝/配乐特效=0s。无对白且无复杂动作且无宏大特效的建立/凝视合镜Duration落5–8（~可到9），禁止无撑满内容却填MaxShotSeconds。"
             f"景别构图与镜头角度：每镜只抄该拍【建置】拍摄键（缺则【取景锁定】）原文进Logic（景别继承/观察角度/构图规划）与Video落地句；合镜逐Beat抄各自锁档。禁止本层另选远近/构图/镜头角度。缺锁定标upstream_missing_framing回流。"
             f"影视语言：焦距/跟焦/帧率/曝光三角/光比/色温/柔硬/色调须可回指Video两光影段与运镜段；美术锚=ENV CN四宫格同方向格，不另起无锚光。"
             f"最终提示词镜头语言：Video五段须中英专业词并列点名（MCU/OTS/Eye-level/50mm Standard/Shallow DOF/Follow Focus/24fps/Key/Fill/Soft Light/Medium Contrast/Cool等），禁止口语冲淡（有光/推近一点/背景糊了/电影感）。"
