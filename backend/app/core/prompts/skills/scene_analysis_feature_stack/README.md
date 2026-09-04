@@ -1,62 +1,32 @@
 # Scene Analysis Feature Stack
 
-This package adds a routed scene-analysis base prompt plus runtime feature skills for the non-classic path.
+Live prompt files for the script-analysis flow (`script_analysis_flow/registry.py`). Classic mode still uses `scene_analysis.txt`.
 
-Current staged flow:
-- Stage 1: script adaptation (`scene_planning_1_script_optimization.md`)
-- Stage 2.1: asset extraction / Subject Index (`scene_planning_2_1_assets_extraction.md`)
-- Stage 2.2: scene orchestration / beats markdown (`scene_planning_2_2_beats_generation.md`)
-- Stage 3: asset design (`entity_design_common.md` + typed prompts: `entity_design_character.md`, `entity_design_prop.md`, `entity_design_environment_and_poster.md`)
+## Live node → prompt
 
-Deprecated (archived under `_archive/`; do not inject in production):
-- `_archive/scene_planning.md` — obsolete Stage 1+2 monolith
-- `_archive/entity_design.md` — obsolete Stage 3 monolith
-- `_archive/entity_design_environment.md` — obsolete env-only prompt
-Production uses split Stage 1/2.1/2.2 + `entity_design_common` + typed prompts.
+| Node | Prompt | Notes |
+| :--- | :--- | :--- |
+| `scene_split` | `scene_planning_1_subskill_cut_transition.md` | 全局统筹；CHAR/PROP 抽取权威 |
+| `environment_plan` | `scene_planning_1_subskill_environment.md` | |
+| `scene_subskill_pipeline` | `scene_planning_1_subskill_drama_standardization.md` → `combat?` → `derived_framing` → `staging_env` | per-scene；武戏只注入 `combat.md` |
+| `asset_design_character` | `entity_design_character.md` + inject `entity_design_common.md` | |
+| `asset_design_prop` | `entity_design_prop.md` + inject `entity_design_common.md` | |
+| `asset_design_environment` | `entity_design_environment_and_poster.md` + inject `entity_design_common.md` | |
+| `storyboard_generation` | `skills/shot_generation.md` | |
 
-Goals:
-- Keep `classic` on the original `scene_analysis.txt` path.
-- Use a separate routed base prompt for `feature_stack` and `decision_engine`.
-- Preserve a parallel configurable path beside the original prompt-only path.
-- Normalize project features into a finite set of dimensions.
-- Support a decision-engine route that can infer dimensions from project info and script text.
-- Render only matched dimension and combo skills into explicit routed slots without changing the output contract.
+## Kept but not a live node
 
-Runtime flow:
-1. `AnalyzeSceneRequest.scene_analysis_mode` selects `classic`, `feature_stack`, or `decision_engine`.
-2. `AnalyzeSceneRequest.scene_analysis_features` overrides or supplements `project_metadata`.
-3. `scene_analysis_feature_skills.py` resolves dimensions from explicit input, project metadata, and optionally script text inference.
-4. The decision engine selects matched dimension skills and combo skills.
-5. Registry entries can provide atomic `global/environment/character/prop/character_goal_alignment` fragments for explicit local slot routing.
-6. Combo local fragments use dedicated combo slots instead of reusing the `project_type` local slots.
-7. The analyze_scene endpoint loads the routed base prompt for non-classic modes and renders the selected slot blocks into the prompt.
-8. The routed base prompt keeps the same output contract, while `classic` still uses the original `scene_analysis.txt`.
+| File | Why keep |
+| :--- | :--- |
+| `scene_planning_1_script_optimization.md` | 只读基线 / Parent；默认 `prompt_file` 与前端若干 `fetchPrompt` 仍引用 |
+| `entity_design_common.md` | 资产设计注入共通段 |
 
-Dual-goal support:
-- `primary_goal` and `secondary_goal` can be used together.
-- This is intended for cases like `script_optimization + character_creation`.
-- In dual-goal mode, character design is expected to serve plot function, conflict structure, and relationship evolution.
+## Retired (do not inject)
 
-Design principles:
-- Use atomic skills by dimension instead of building hard-coded combinational prompts.
-- Keep skill fragments short and bias-focused.
-- Prefer explicit atomic registry fragments over auto-scoping one large prompt wherever a dimension or combo has clear local behavior.
-- Add combo rules only when they express real route differences that cannot be captured by one single dimension.
-- Expose the enum catalog so frontend/tooling can present explicit feature selectors.
+Moved to `_archive/2026-09-05-retired/`:
 
-Current implemented decision dimensions:
-- project_type
-- project_language
-- base_positioning
-- era_setting
-- region_culture
-- expected_model_family
-- generation_workflow
-- primary_goal
-- secondary_goal
-- character_emphasis
-- narrative_density
-- commercial_constraint
-- modality_focus
-- continuity_priority
-- safety_broadcast_level
+- `scene_planning_2_1_assets_extraction.md` — `assets_extraction` retired
+- `scene_planning_2_2_beats_generation.md` — `scene_markdown` retired
+- `scene_planning_1_subskill_vfx.md` / `scene_planning_1_subskill_xian_attack.md` — remap to `combat.md`
+
+Older monoliths stay under `_archive/`.

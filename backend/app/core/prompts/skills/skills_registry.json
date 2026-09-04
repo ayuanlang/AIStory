@@ -52,10 +52,11 @@
         },
         {
             "id": "assets_extraction",
-            "title": "Assets Extraction (资产提取)",
+            "title": "Assets Extraction (资产提取，已退役)",
             "type": "analysis",
+            "status": "retired",
             "prompts": [
-                "skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md"
+                "skills/scene_analysis_feature_stack/_archive/2026-09-05-retired/scene_planning_2_1_assets_extraction.md"
             ],
             "legacy_refs": [
                 "skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md"
@@ -63,10 +64,11 @@
         },
         {
             "id": "scene_planning",
-            "title": "Scene Planning (场景编排)",
+            "title": "Scene Planning (场景编排，已退役)",
             "type": "storyboard",
+            "status": "retired",
             "prompts": [
-                "skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md"
+                "skills/scene_analysis_feature_stack/_archive/2026-09-05-retired/scene_planning_2_2_beats_generation.md"
             ],
             "legacy_refs": [
                 "skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md"

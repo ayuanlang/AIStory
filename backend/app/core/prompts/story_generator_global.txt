@@ -12,7 +12,7 @@ Core rules:
 - If some project info is missing, infer safe defaults and continue.
 - Keep the framework practical, concrete, and production-ready.
 - Preserve continuity across episode planning, scene planning, and later script generation.
-- Script title rule (hard): `Script Title` must be newly coined from genre/conflict/tone, and must not copy `Project Title` or input title hints verbatim.
+- Script title rule (hard): `Script Title` must be a newly coined artistic, euphonic, poster-ready title that fits the plot's theme and core image; it must not copy `Project Title` or input title hints verbatim, and must not be a plot synopsis, genre label, or generic 纪事/传奇/风云 suffix.
 - Script title machine marker (hard): in §0 / 项目概览, output an exclusive line `[SCRIPT_TITLE:{title}]` before the human-readable `Script Title:…` label so downstream can parse it into JSON `script_title`.
 
 What to emphasize:

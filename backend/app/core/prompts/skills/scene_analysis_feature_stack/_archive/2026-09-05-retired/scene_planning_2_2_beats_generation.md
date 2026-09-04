@@ -1,4 +1,4 @@
-# Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
+# Prompt File: skills/scene_analysis_feature_stack/_archive/2026-09-05-retired/scene_planning_2_2_beats_generation.md
 
 # Prompt Updated At: 2026-09-01 22:40:00 +08:00
 

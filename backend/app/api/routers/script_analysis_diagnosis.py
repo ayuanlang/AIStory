@@ -523,6 +523,8 @@ def _extract_script_title_from_story_dna_markdown(markdown_text: Any) -> str:
         if not match:
             continue
         candidate = _clean_extracted_script_title_candidate(match.group(1))
+        if re.match(r"理据", candidate) or "意象=" in candidate:
+            continue
         if not _is_placeholder_script_title(candidate):
             return candidate
     return ""
@@ -560,7 +562,7 @@ def _build_non_literal_script_title(
         if _normalize_title_for_compare(candidate) != seed_norm:
             return candidate
 
-    return f"{motif}纪事"
+    return motif or "暗潮"
 
 
 def _resolve_episode_sort_number(episode: Optional[Episode]) -> Optional[int]:

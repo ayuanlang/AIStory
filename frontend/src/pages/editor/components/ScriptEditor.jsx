@@ -16972,7 +16972,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         maxValidationRetries = MAX_ANALYSIS_FALLBACK_ATTEMPTS,
         onTaskCreated,
     }) => {
-        const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
+        const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/_archive/2026-09-05-retired/scene_planning_2_2_beats_generation.md');
         const finalStage2_2Prompt = stage2_2PromptRes?.content || '';
         const scriptAnalysisApiId = resolveSelectedScriptAnalysisApiId();
         if (scriptAnalysisApiId) {

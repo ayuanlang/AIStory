@@ -1,0 +1,11 @@
+---
+description: 剧本分析全局记忆——CHAR/PROP 抽取权威与已退役环节
+alwaysApply: true
+---
+
+# 全局记忆：抽取权威
+
+- **角色／道具抽取只在全局统筹**：`scene_split` → `scene_planning_1_subskill_cut_transition.md` 的 `[CHAR_EXTRACT]` / `[PROP_EXTRACT]`。改抽取闸只改这一份。
+- **`_archive/2026-09-05-retired/scene_planning_2_1_assets_extraction.md` 已退役**（资产清单／Subject Index 抽取不再走 LLM）。禁止再改该文件的 CHAR/PROP 抽取闸，禁止把它当活权威。
+- 角色设计只消费全局统筹 `[CHAR_EXTRACT]`，不等待 2.1。
+- **法相／龙／金身／化龙凤**：跨 ≥2 Beat（动作可不相邻，间隔拍仍算）＋正反面＋自身动作 → 必须抽 CHAR，与宿主分名；不另要「可持续身份」；单拍无定形介质不抽。

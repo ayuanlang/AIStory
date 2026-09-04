@@ -38,6 +38,18 @@ _PROMPT_SKILL_ALIAS = {
     ),
     "scene_planning_1_subskill_vfx.md": "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md",
     "scene_planning_1_subskill_xian_attack.md": "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md",
+    "skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md": (
+        "skills/scene_analysis_feature_stack/_archive/2026-09-05-retired/scene_planning_2_1_assets_extraction.md"
+    ),
+    "skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md": (
+        "skills/scene_analysis_feature_stack/_archive/2026-09-05-retired/scene_planning_2_2_beats_generation.md"
+    ),
+    "scene_planning_2_1_assets_extraction.md": (
+        "skills/scene_analysis_feature_stack/_archive/2026-09-05-retired/scene_planning_2_1_assets_extraction.md"
+    ),
+    "scene_planning_2_2_beats_generation.md": (
+        "skills/scene_analysis_feature_stack/_archive/2026-09-05-retired/scene_planning_2_2_beats_generation.md"
+    ),
 }
 
 def _prompt_alias(prompt_ref: str) -> str:
