@@ -83,6 +83,8 @@ def test_build_scene_entity_token_brief():
     assert "不是对白硬字幕" in brief
     assert "紧跟该人【建置】可见面整句" in brief
     assert "禁把多名牌攒到建置段末或入戏一起写" in brief
+    assert "换主环境时另打环境名牌" in brief
+    assert "落位=顶部中央" in brief
     assert "标签优先抄 CHAR|#身份 的客观身份" in brief
     assert "只上客观信息，禁透露剧情" in brief
     assert "禁推理" in brief
