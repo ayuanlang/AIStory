@@ -18,7 +18,7 @@ The revised prompt MUST still follow shot_generation.md section 8:
 
 1. Language: Chinese narrative for dynamic video. Separate five segments with `<br>`:
    - Global dynamic style
-   - Camera move and action flow (P1/P2/P3 timeline)
+   - Camera move and action flow (`(P1 0s–4s)` / `(P2 4s–7s)` timeline; keep each Pn start–end second)
    - Continuous dynamic lighting and focus
    - Lighting arc
    - Physical on-screen text (write none if absent)
@@ -49,4 +49,4 @@ Output ONLY:
 - Inside the markers: final prompt text only.
 
 ## 中文补充说明
-改写后的提示词必须继续遵循 skills/shot_generation.md 第八节「视频提示词要求」：五段 <br> 分隔的中文叙述体、保留 CHAR/PROP/ENV 标签、P1/P2/Pn 时序、禁止 Shot Logic 推演入正文。
+改写后的提示词必须继续遵循 skills/shot_generation.md 第八节「视频提示词要求」：五段 <br> 分隔的中文叙述体、保留 CHAR/PROP/ENV 标签、P1/P2/Pn 时序与每个 Pn 的本镜起止秒 `(Pn 0s–4s)`、禁止 Shot Logic 推演入正文。未要求改时长时禁止剥掉或改写 Pn 时间标注。
