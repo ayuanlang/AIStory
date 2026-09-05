@@ -98,9 +98,12 @@ export function hasInFlightPipelineNodes(nodes) {
         const status = String(node?.status || '').trim().toLowerCase();
         if (!['running', 'queued'].includes(status)) return false;
         const name = String(node?.node_name || '').trim();
-        // Frontend owns per-scene generateSceneShots. A leftover queued
+        // Frontend owns per-scene generateSceneShots. A leftover queued/running
         // storyboard_generation placeholder must not keep the analysis UI live.
-        if (status === 'queued' && (name === 'storyboard_generation' || name === 'shot_generation')) {
+        if (
+            (status === 'queued' || status === 'running')
+            && (name === 'storyboard_generation' || name === 'shot_generation')
+        ) {
             return false;
         }
         return true;

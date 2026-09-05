@@ -720,13 +720,18 @@ const findStoryboardProgressItem = (progress, sceneId, extra = {}) => {
     ))?.[1] || null;
 };
 
+const isStoryboardPipelineNodeName = (name) => {
+    const key = String(name || '').trim();
+    return key === 'storyboard_generation' || key === 'shot_generation';
+};
+
 /** Drop leftover storyboard_generation success rows that this run has not completed. */
 const filterLeftoverStoryboardPipelineNodes = (nodes, progress) => {
     const list = Array.isArray(nodes) ? nodes : [];
     const normalized = normalizeStoryboardTaskProgress(progress);
     return list.filter((node) => {
         const name = String(node?.node_name || '').trim();
-        if (name !== 'storyboard_generation' && name !== 'shot_generation') return true;
+        if (!isStoryboardPipelineNodeName(name)) return true;
         const status = String(node?.status || '').trim().toLowerCase();
         if (!['success', 'warning'].includes(status)) return true;
         const sceneId = String(node?.scene_id || '').trim();
@@ -734,6 +739,59 @@ const filterLeftoverStoryboardPipelineNodes = (nodes, progress) => {
         const item = findStoryboardProgressItem(normalized, sceneId);
         return String(item?.status || '').toLowerCase() === 'completed';
     });
+};
+
+/** Frontend owns shot generation — map local progress onto leftover backend placeholders. */
+const overlayStoryboardPipelineNodesFromProgress = (nodes, progress) => {
+    const list = Array.isArray(nodes) ? nodes : [];
+    const normalized = normalizeStoryboardTaskProgress(progress);
+    let changed = false;
+    const next = list.map((node) => {
+        if (!isStoryboardPipelineNodeName(node?.node_name)) return node;
+        const current = String(node?.status || '').trim().toLowerCase();
+        if (['canceled', 'blocked'].includes(current)) return node;
+        const sceneId = String(node?.scene_id || '').trim();
+        if (sceneId) {
+            const item = findStoryboardProgressItem(normalized, sceneId, {
+                sceneOrder: deriveSceneOrderFromSceneId(sceneId),
+                markerSceneId: sceneId,
+            });
+            const itemStatus = String(item?.status || '').trim().toLowerCase();
+            if (itemStatus === 'completed' && current !== 'success' && current !== 'warning') {
+                changed = true;
+                return { ...node, status: 'success', progress_percent: 100 };
+            }
+            if (itemStatus === 'failed' && current !== 'failed') {
+                changed = true;
+                return {
+                    ...node,
+                    status: 'failed',
+                    last_error_message: String(item?.error || node?.last_error_message || '').trim(),
+                };
+            }
+            return node;
+        }
+        const started = Number(normalized.started || 0);
+        const running = Number(normalized.running || 0);
+        const waiting = Number(normalized.waiting || 0);
+        const finished = Number(normalized.completed || 0) + Number(normalized.failed || 0);
+        if (started > 0 && running <= 0 && waiting <= 0 && finished >= started) {
+            const nextStatus = Number(normalized.failed || 0) > 0 ? 'warning' : 'success';
+            if (current !== nextStatus) {
+                changed = true;
+                return { ...node, status: nextStatus, progress_percent: 100 };
+            }
+        }
+        return node;
+    });
+    return changed ? next : list;
+};
+
+const applyThisRunStoryboardPipelineNodes = (nodes, progress, { filterLeftover = false } = {}) => {
+    const overlaid = overlayStoryboardPipelineNodesFromProgress(nodes, progress);
+    return filterLeftover
+        ? filterLeftoverStoryboardPipelineNodes(overlaid, progress)
+        : overlaid;
 };
 
 const pickThisRunStoryboardTaskProgress = (state, ref, report, ignoreLeftover = false) => (
@@ -10158,6 +10216,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const nextProgress = normalizeStoryboardTaskProgress({ items: nextItems });
         storyboardTaskProgressRef.current = nextProgress;
         setStoryboardTaskProgress(nextProgress);
+        const overlaidNodes = applyThisRunStoryboardPipelineNodes(
+            diagnosticsPipelineNodesRef.current,
+            nextProgress,
+            { filterLeftover: Boolean(analysisTrustLiveDownstreamOnlyRef.current) },
+        );
+        if (overlaidNodes !== diagnosticsPipelineNodesRef.current) {
+            diagnosticsPipelineNodesRef.current = overlaidNodes;
+            setDiagnosticsPipelineNodes(overlaidNodes);
+            const episodeId = Number(activeEpisode?.id || 0);
+            if (episodeId > 0) {
+                publishEpisodeAnalysisProgress(episodeId, { pipelineNodes: overlaidNodes });
+            }
+        }
         return nextProgress;
     }, [activeEpisode]);
 
@@ -13441,12 +13512,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (importStatus === 'skipped') return false;
                 return !['SCENE_MARKER_NOT_FOUND_IN_LATEST_SCRIPT', 'SCENE_ID_SUPERSEDED_BY_CANONICAL'].includes(err);
             });
-            const filteredNodes = analysisTrustLiveDownstreamOnlyRef.current
-                ? filterLeftoverStoryboardPipelineNodes(
-                    nextNodes,
-                    storyboardTaskProgressRef.current,
-                )
-                : nextNodes;
+            const filteredNodes = applyThisRunStoryboardPipelineNodes(
+                nextNodes,
+                storyboardTaskProgressRef.current,
+                { filterLeftover: Boolean(analysisTrustLiveDownstreamOnlyRef.current) },
+            );
             diagnosticsPipelineNodesRef.current = filteredNodes;
             diagnosticsSceneUnitsRef.current = liveUnits;
             const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
@@ -13540,7 +13610,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const units = Array.isArray(snapshot?.scene_units) ? snapshot.scene_units : [];
                 applySnapshot(nodes, units);
                 void kickoffStoryboardsFromSuccessfulStagingNodes(nodes);
-                startPollingIfNeeded(nodes);
+                startPollingIfNeeded(diagnosticsPipelineNodesRef.current);
             } catch (_) {
                 if (!mounted || epoch !== diagnosticsEpochRef.current) return;
                 // Keep the last known snapshot on transient fetch errors.
@@ -16132,12 +16202,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 analysisTrustLiveDownstreamOnlyRef.current && !hasThisRunStage1
             );
             if (Array.isArray(snapshot.pipelineNodes) && !skipLeftoverProgressRows) {
-                const nextNodes = analysisTrustLiveDownstreamOnlyRef.current
-                    ? filterLeftoverStoryboardPipelineNodes(
-                        snapshot.pipelineNodes,
-                        storyboardTaskProgressRef.current,
-                    )
-                    : snapshot.pipelineNodes;
+                const nextNodes = applyThisRunStoryboardPipelineNodes(
+                    snapshot.pipelineNodes,
+                    storyboardTaskProgressRef.current,
+                    { filterLeftover: Boolean(analysisTrustLiveDownstreamOnlyRef.current) },
+                );
                 diagnosticsPipelineNodesRef.current = nextNodes;
                 setDiagnosticsPipelineNodes(nextNodes);
             }
@@ -33808,6 +33877,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             return waiting;
                         };
                         const sceneHasLiveStoryboardKickoff = (sceneId) => {
+                            const item = findStoryboardProgressItem(progress, sceneId, {
+                                sceneOrder: deriveSceneOrderFromSceneId(sceneId),
+                                markerSceneId: sceneId,
+                            });
+                            const itemStatus = String(item?.status || '').trim().toLowerCase();
+                            // Claims stay after settle to prevent double-start; they are not live work.
+                            if (itemStatus === 'completed' || itemStatus === 'failed') return false;
                             const identity = storyboardProgressIdentityKey(sceneId, {
                                 sceneOrder: deriveSceneOrderFromSceneId(sceneId),
                                 markerSceneId: sceneId,
@@ -33844,9 +33920,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             if (['waiting_env', 'waiting_import'].includes(status)) {
                                 return { ready: false, active: true, failed: false, detail: status === 'waiting_env' ? t('等待环境', 'Wait ENV') : t('等待入库', 'Wait import') };
                             }
-                            if (liveKickoff) {
-                                return { ready: false, active: true, failed: false, detail: '' };
-                            }
                             if (status === 'completed') {
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
@@ -33861,6 +33934,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     businessReason: String(node?.runtime_meta?.business_reason || '').trim(),
                                     status: status || 'failed',
                                 };
+                            }
+                            if (liveKickoff) {
+                                return { ready: false, active: true, failed: false, detail: '' };
                             }
                             if (fromNode.ready && !ignoreLeftoverStoryboard) {
                                 return { ready: true, active: false, failed: false, detail: '' };
