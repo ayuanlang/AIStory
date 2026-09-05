@@ -593,7 +593,7 @@ def apply_scene_ai_result(
             skipped_row_errors[:5],
         )
 
-    return _import_scene_shot_rows_to_db(
+    applied_shots = _import_scene_shot_rows_to_db(
         scene_id=scene_id,
         db=db,
         scene=scene,
@@ -603,3 +603,34 @@ def apply_scene_ai_result(
         skipped_row_errors=skipped_row_errors,
         replace_existing=replace_existing,
     )
+    try:
+        from app.services.scene_no_utils import canonicalize_progress_scene_marker
+        from app.services.script_analysis_flow import (
+            mark_storyboard_generation_applied,
+            resolve_episode_scene_id_prefix,
+        )
+
+        scene_marker = canonicalize_progress_scene_marker(
+            getattr(scene, "scene_no", "") or "",
+            episode_prefix=resolve_episode_scene_id_prefix(episode, fallback_number=1),
+        )
+        mark_storyboard_generation_applied(
+            db,
+            project_id=int(getattr(project, "id", 0) or 0),
+            episode_id=int(getattr(episode, "id", 0) or 0),
+            scene=scene,
+            scene_marker=scene_marker,
+            shot_count=len(applied_shots or []),
+        )
+        db.commit()
+    except Exception as persist_err:
+        logger.warning(
+            "[apply_scene_ai_result] storyboard node persist skipped scene_id=%s err=%s",
+            scene_id,
+            persist_err,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    return applied_shots

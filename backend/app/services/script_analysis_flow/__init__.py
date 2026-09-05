@@ -2610,12 +2610,13 @@ def _episode_workspace_storyboard_coverage(db: Session, episode_id: int) -> Dict
     ]
     if not scene_ids:
         return {"scene_count": 0, "with_shots": 0, "ok": False, "no_scenes": True}
+    # Count by workspace scene id. Shot.episode_id can be missing/stale after remap
+    # and must not hide already-applied shots from storyboard settlement.
     with_shots = {
         int(row[0])
         for row in (
             db.query(Shot.scene_id)
             .filter(
-                Shot.episode_id == eid,
                 Shot.scene_id.in_(scene_ids),
                 _active_shot_clause(),
             )
@@ -2629,7 +2630,105 @@ def _episode_workspace_storyboard_coverage(db: Session, episode_id: int) -> Dict
         "with_shots": len(with_shots),
         "ok": len(with_shots) >= len(scene_ids),
         "no_scenes": False,
+        "scene_ids_with_shots": with_shots,
     }
+
+
+def _workspace_scene_has_shots(db: Session, episode_id: int, scene_marker: str = "") -> bool:
+    """True when the marker maps to an active workspace scene that already has shots."""
+    from app.models.all_models import Shot
+    from app.services.script_progress_helpers import _resolve_scene_id_to_db_scene
+    from app.services.soft_delete import _active_shot_clause
+
+    marker = str(scene_marker or "").strip()
+    eid = int(episode_id or 0)
+    if not marker or eid <= 0:
+        return False
+    scene = _resolve_scene_id_to_db_scene(db, episode_id=eid, scene_marker_id=marker)
+    scene_pk = int(getattr(scene, "id", 0) or 0) if scene is not None else 0
+    if scene_pk <= 0:
+        return False
+    return (
+        db.query(Shot.id)
+        .filter(Shot.scene_id == scene_pk, _active_shot_clause())
+        .first()
+        is not None
+    )
+
+
+def mark_storyboard_generation_applied(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene: Any = None,
+    scene_marker: str = "",
+    shot_count: int = 0,
+) -> None:
+    """Persist frontend-owned storyboard success after shots land in the workspace."""
+    if ScriptProgressPipelineNode is None:
+        return
+    pid = int(project_id or 0)
+    eid = int(episode_id or 0)
+    if pid <= 0 or eid <= 0:
+        return
+    marker = str(scene_marker or "").strip()
+    episode = None
+    try:
+        from app.models.all_models import Episode
+        episode = db.query(Episode).filter(Episode.id == eid).first()
+    except Exception:
+        episode = None
+    prefix = resolve_episode_scene_id_prefix(episode, fallback_number=1)
+    if not marker and scene is not None:
+        from app.services.script_progress_helpers import _normalize_scene_marker_id_from_scene
+        marker = _normalize_scene_marker_id_from_scene(
+            scene,
+            eid,
+            episode=episode,
+            episode_prefix=prefix,
+        )
+    elif marker:
+        from app.services.scene_no_utils import canonicalize_progress_scene_marker
+        marker = canonicalize_progress_scene_marker(marker, episode_prefix=prefix) or marker
+    script_id = f"episode:{eid}"
+    meta = {
+        "business_event": "applied_from_workspace",
+        "business_reason": "分镜已写入工作区",
+        "shot_count": int(shot_count or 0),
+    }
+    if marker:
+        upsert_pipeline_node_status(
+            db,
+            project_id=pid,
+            episode_id=eid,
+            script_id=script_id,
+            scene_id=marker,
+            node_name="storyboard_generation",
+            status="success",
+            progress_percent=100.0,
+            runtime_meta=meta,
+        )
+    try:
+        coverage = _episode_workspace_storyboard_coverage(db, eid)
+    except Exception:
+        coverage = {"ok": False}
+    if coverage.get("ok"):
+        upsert_pipeline_node_status(
+            db,
+            project_id=pid,
+            episode_id=eid,
+            script_id=script_id,
+            node_name="storyboard_generation",
+            status="success",
+            progress_percent=100.0,
+            runtime_meta={
+                **meta,
+                "business_reason": "工作区分镜已齐套",
+                "scene_count": int(coverage.get("scene_count") or 0),
+                "with_shots": int(coverage.get("with_shots") or 0),
+            },
+        )
 
 
 def finalize_stale_pipeline_nodes(
@@ -2688,13 +2787,22 @@ def finalize_stale_pipeline_nodes(
         if node_name in _COORDINATOR_PIPELINE_NODES and row_episode_id in fresh_child_episodes:
             continue
         if node_name in _FRONTEND_OWNED_STORYBOARD_NODES:
+            scene_marker = str(getattr(row, "scene_id", "") or "").strip()
+            scene_ready = False
+            if scene_marker:
+                try:
+                    scene_ready = _workspace_scene_has_shots(db, row_episode_id, scene_marker)
+                except Exception:
+                    scene_ready = False
             try:
                 coverage = _episode_workspace_storyboard_coverage(db, row_episode_id)
             except Exception:
                 coverage = {"scene_count": 0, "with_shots": 0, "ok": False, "no_scenes": True}
-            if coverage.get("ok"):
+            if scene_ready or coverage.get("ok"):
                 meta["business_event"] = "reconciled_from_workspace"
-                meta["business_reason"] = "工作区分镜已齐套"
+                meta["business_reason"] = (
+                    "本场分镜已写入工作区" if scene_ready and not coverage.get("ok") else "工作区分镜已齐套"
+                )
                 row.status = "success"
                 row.last_error_code = None
                 row.last_error_message = None
@@ -3272,6 +3380,7 @@ __all__ = [
     "sync_scene_units_from_script_text",
     "update_scene_unit_orchestration_status",
     "finalize_stale_pipeline_nodes",
+    "mark_storyboard_generation_applied",
     "upsert_pipeline_node_status",
     "validate_analyze_scene_llm_finish_reason",
     "validate_scene_markdown_import_text",

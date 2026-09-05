@@ -67,8 +67,38 @@ def _scene_no_lookup_keys(scene_no: Any, *, scene_id: Any = None) -> List[str]:
         keys.append(f"{order:02d}")
         keys.append(f"SC{order:02d}")
         keys.append(f"SC{order}")
+        ep_match = re.search(r"(EP\d+)_SC", str(scene_id or scene_no or ""), flags=re.IGNORECASE)
+        if ep_match:
+            prefix = ep_match.group(1).upper()
+            keys.append(f"{prefix}_SC{order:02d}")
+            keys.append(f"{prefix}_SC{order}")
     # Preserve order while dropping empties/dupes.
     return list(dict.fromkeys(item for item in keys if item))
+
+
+def canonicalize_progress_scene_marker(
+    scene_no: Any,
+    *,
+    episode_prefix: str = "EP01",
+    scene_id: Any = None,
+) -> str:
+    """Matrix / pipeline scene_id: EP01_SC01. Workspace Scene.scene_no is often \"1\"."""
+    raw = str(scene_id or scene_no or "").strip()
+    prefix = str(episode_prefix or "EP01").strip().upper() or "EP01"
+    if not re.fullmatch(r"EP\d+", prefix):
+        prefix = "EP01"
+    if not raw:
+        return ""
+    letter_match = re.fullmatch(r"(EP\d+_SC\d+[A-Za-z]+)", raw, flags=re.IGNORECASE)
+    if letter_match:
+        return letter_match.group(1).upper()
+    source_ep = re.fullmatch(r"(EP\d+)_SC(\d+)", raw, flags=re.IGNORECASE)
+    if source_ep:
+        return f"{source_ep.group(1).upper()}_SC{int(source_ep.group(2)):02d}"
+    canonical = _canonicalize_scene_no(scene_no, scene_id=scene_id)
+    if canonical and re.fullmatch(r"\d+", canonical):
+        return f"{prefix}_SC{int(canonical):02d}"
+    return raw
 
 
 def _find_active_scene_by_scene_no(

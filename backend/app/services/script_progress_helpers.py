@@ -2,13 +2,12 @@
 """Script analysis progress row / scene marker helpers."""
 from __future__ import annotations
 
+import re
 from typing import Any, List, Optional
 
-from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from app.models.all_models import Scene, ScriptProgressSceneUnit
-from app.services.soft_delete import _active_scene_clause
 
 
 def _list_episode_scene_progress_rows(
@@ -39,41 +38,17 @@ def _resolve_scene_id_to_db_scene(
     episode_id: int,
     scene_marker_id: str,
 ) -> Optional[Scene]:
+    from app.services.scene_no_utils import _find_active_scene_by_scene_no
+
     marker = str(scene_marker_id or "").strip()
     if not marker:
         return None
-    fallback_no = marker
-    if "_SC" in marker:
-        try:
-            fallback_no = marker.split("_SC", 1)[1]
-        except Exception:
-            fallback_no = marker
-    scene = (
-        db.query(Scene)
-        .filter(
-            Scene.episode_id == int(episode_id),
-            or_(Scene.scene_no == marker, Scene.scene_no == fallback_no),
-            _active_scene_clause(),
-        )
-        .first()
+    return _find_active_scene_by_scene_no(
+        db,
+        episode_id=int(episode_id),
+        scene_no=marker,
+        scene_id=marker,
     )
-    if scene:
-        return scene
-    try:
-        maybe_num = int(fallback_no)
-    except Exception:
-        maybe_num = None
-    if maybe_num is not None:
-        return (
-            db.query(Scene)
-            .filter(
-                Scene.episode_id == int(episode_id),
-                cast(Scene.scene_no, String) == str(maybe_num),
-                _active_scene_clause(),
-            )
-            .first()
-        )
-    return None
 
 
 def _normalize_asset_types(values: Optional[List[str]]) -> List[str]:
@@ -98,12 +73,28 @@ def _normalize_asset_types(values: Optional[List[str]]) -> List[str]:
     return normalized or default_types
 
 
-def _normalize_scene_marker_id_from_scene(scene: Scene, episode_id: int) -> str:
-    scene_no = str(getattr(scene, "scene_no", "") or "").strip()
-    if scene_no:
-        if "_SC" in scene_no:
-            return scene_no
-        return f"EP{int(episode_id):02d}_SC{scene_no}"
-    return f"EP{int(episode_id):02d}_SC{int(scene.id)}"
+def _normalize_scene_marker_id_from_scene(
+    scene: Scene,
+    episode_id: int,
+    episode: Any = None,
+    episode_prefix: str = "",
+) -> str:
+    from app.services.scene_no_utils import canonicalize_progress_scene_marker
+
+    prefix = str(episode_prefix or "").strip().upper()
+    if not prefix and episode is not None:
+        try:
+            from app.services.script_analysis_flow import resolve_episode_scene_id_prefix
+            prefix = resolve_episode_scene_id_prefix(episode, fallback_number=1)
+        except Exception:
+            prefix = ""
+    if not prefix:
+        raw_no = str(getattr(scene, "scene_no", "") or "").strip()
+        ep_match = re.search(r"(EP\d+)_SC", raw_no, flags=re.IGNORECASE)
+        prefix = ep_match.group(1).upper() if ep_match else "EP01"
+    return canonicalize_progress_scene_marker(
+        getattr(scene, "scene_no", "") or "",
+        episode_prefix=prefix,
+    )
 
 

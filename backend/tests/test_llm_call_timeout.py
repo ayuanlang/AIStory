@@ -161,6 +161,123 @@ def test_finalize_stale_pipeline_nodes_marks_old_running_row():
     assert session.committed is True
 
 
+def test_mark_storyboard_generation_applied_writes_scene_and_episode_success(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import script_analysis_flow as flow
+
+    calls = []
+
+    def _upsert(_db, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(flow, "upsert_pipeline_node_status", _upsert)
+    monkeypatch.setattr(
+        flow,
+        "_episode_workspace_storyboard_coverage",
+        lambda *_args, **_kwargs: {"scene_count": 1, "with_shots": 1, "ok": True, "no_scenes": False},
+    )
+    flow.mark_storyboard_generation_applied(
+        object(),
+        project_id=9,
+        episode_id=3,
+        scene=SimpleNamespace(id=11, scene_no="EP01_SC02"),
+        shot_count=8,
+    )
+    assert [row.get("scene_id") for row in calls] == ["EP01_SC02", None]
+    assert all(row["status"] == "success" for row in calls)
+    assert all(row["node_name"] == "storyboard_generation" for row in calls)
+
+
+def test_mark_storyboard_generation_applied_canonicalizes_numeric_scene_no(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import script_analysis_flow as flow
+
+    calls = []
+
+    def _upsert(_db, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return None
+
+    class _Session:
+        def query(self, *_args, **_kwargs):
+            return _Query()
+
+    monkeypatch.setattr(flow, "upsert_pipeline_node_status", _upsert)
+    monkeypatch.setattr(
+        flow,
+        "_episode_workspace_storyboard_coverage",
+        lambda *_args, **_kwargs: {"scene_count": 1, "with_shots": 1, "ok": True, "no_scenes": False},
+    )
+    flow.mark_storyboard_generation_applied(
+        _Session(),
+        project_id=9,
+        episode_id=5,
+        scene=SimpleNamespace(id=11, scene_no="1"),
+        shot_count=4,
+    )
+    assert [row.get("scene_id") for row in calls] == ["EP01_SC01", None]
+
+
+def test_finalize_stale_pipeline_nodes_closes_per_scene_storyboard_when_that_scene_has_shots(monkeypatch):
+    from types import SimpleNamespace
+    from app.core.time_utils import now_bj
+    from app.services import script_analysis_flow as flow
+
+    stale_ts = (now_bj() - timedelta(seconds=1200)).isoformat(timespec="microseconds")
+    row = SimpleNamespace(
+        status="running",
+        node_name="storyboard_generation",
+        episode_id=1,
+        scene_id="EP01_SC01",
+        updated_at=stale_ts,
+        started_at=stale_ts,
+        created_at=stale_ts,
+        runtime_meta={},
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+    )
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return [row]
+
+    class _Session:
+        committed = False
+
+        def query(self, *_args, **_kwargs):
+            return _Query()
+
+        def commit(self):
+            self.committed = True
+
+    monkeypatch.setattr(flow, "_workspace_scene_has_shots", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        flow,
+        "_episode_workspace_storyboard_coverage",
+        lambda *_args, **_kwargs: {"scene_count": 2, "with_shots": 1, "ok": False, "no_scenes": False},
+    )
+    session = _Session()
+    assert flow.finalize_stale_pipeline_nodes(session, episode_id=1, timeout_seconds=900) == 1
+    assert row.status == "success"
+    assert row.last_error_code is None
+    assert session.committed is True
+
+
 def test_finalize_stale_pipeline_nodes_closes_storyboard_when_shots_exist(monkeypatch):
     from types import SimpleNamespace
     from app.core.time_utils import now_bj
