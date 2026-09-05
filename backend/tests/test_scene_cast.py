@@ -85,6 +85,8 @@ def test_build_scene_entity_token_brief():
     assert "禁把多名牌攒到建置段末或入戏一起写" in brief
     assert "换主环境时另打环境名牌" in brief
     assert "落位=顶部中央" in brief
+    assert "没有第二段标签" in brief
+    assert "禁止套角色格式写成【名】日】" in brief
     assert "标签优先抄 CHAR|#身份 的客观身份" in brief
     assert "只上客观信息，禁透露剧情" in brief
     assert "禁推理" in brief
@@ -318,3 +320,28 @@ def test_nameplate_waits_for_unmask():
     tag_section = brief.split("【本场角色标签】")[-1]
     assert "字幕=待落" in tag_section
     assert "名牌条件=须真脸" in tag_section
+
+
+def test_env_nameplate_injection_has_no_day_night_tag():
+    from app.services.script_analysis_flow.scene_cast import (
+        _env_nameplate_bare_name,
+        collect_scene_env_nameplate_names,
+    )
+
+    assert _env_nameplate_bare_name("龙门风月客栈·日·外") == "龙门风月客栈"
+    assert _env_nameplate_bare_name("0度清河城茶摊") == "清河城茶摊"
+    script = _script() + """
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=龙门风月客栈｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文
+[SCENE_ENV_IDENT_END:EP01_SC01]
+【主环境】清河城茶摊·日·外｜日夜内外=日·外
+"""
+    names = collect_scene_env_nameplate_names(script, "EP01_SC01", script)
+    assert "龙门风月客栈" in names
+    assert "清河城茶摊" in names
+    assert all("日" not in n and "外" not in n for n in names)
+    brief = build_scene_entity_token_brief(script, "EP01_SC01")
+    assert "【本场环境名牌】" in brief
+    assert "ENV:[龙门风月客栈]｜字样=【龙门风月客栈】｜标签=无｜落位=顶部中央" in brief
+    assert "字样=【龙门风月客栈】日" not in brief
+    assert "禁止写成【名】日】或【名】外】" in brief

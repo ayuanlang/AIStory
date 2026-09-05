@@ -338,6 +338,69 @@ def _same_scene_id(left: str, right: str) -> bool:
     return bool(left) and bool(right) and _clean(left).lower() == _clean(right).lower()
 
 
+_ENV_IDENT_NAME_PATTERN = re.compile(
+    r"\[ENV\][^\n]*名称\s*=\s*([^｜\|\r\n]+)",
+    re.IGNORECASE,
+)
+_MAIN_ENV_HEADER_NAME_PATTERN = re.compile(
+    r"(?m)^[ \t]*【主环境】[ \t]*([^｜\|\r\n]+)"
+)
+_ENV_NAMEPLATE_META_TAIL = re.compile(
+    r"(?:[·・\s/／]+(?:日|夜|晨|昏|昼|晚|内|外|室内|室外|春|夏|秋|冬|晴|雨|雪|阴))+$"
+)
+_ENV_DEGREE_PREFIX = re.compile(r"^\d+度")
+
+
+def _env_nameplate_bare_name(raw: str) -> str:
+    name = _clean(raw).strip("`\"'“”‘’[]")
+    name = re.sub(r"^(名称|主环境|环境名|环境)\s*[=：:]\s*", "", name).strip()
+    name = _ENV_DEGREE_PREFIX.sub("", name).strip()
+    name = _ENV_NAMEPLATE_META_TAIL.sub("", name).strip(" ·・")
+    if name in {"无", "空", "none", "n/a"}:
+        return ""
+    return name
+
+
+def collect_scene_env_nameplate_names(
+    script: str, scene_id: str, scene_text: str = ""
+) -> List[str]:
+    """Registered main-env names for this scene; strip 日夜内外 tails."""
+    from app.services.script_analysis_flow.environment_reuse import (
+        parse_scene_env_ident_items,
+    )
+
+    names: List[str] = []
+    seen = set()
+
+    def add(raw: str) -> None:
+        bare = _env_nameplate_bare_name(raw)
+        if not bare or bare in seen:
+            return
+        seen.add(bare)
+        names.append(bare)
+
+    for item in parse_scene_env_ident_items(script, scene_id):
+        add(str(item.get("name") or ""))
+        add(str(item.get("matched_name") or ""))
+    body = str(scene_text or "").strip()
+    if not body and scene_id:
+        start = f"[SCENE_START:{scene_id}]"
+        end = f"[SCENE_END:{scene_id}]"
+        lower = script.lower()
+        i = lower.find(start.lower())
+        j = lower.find(end.lower())
+        if i >= 0 and j > i:
+            body = script[i:j]
+    if body:
+        for item in parse_scene_env_ident_items(body, scene_id):
+            add(str(item.get("name") or ""))
+        for match in _ENV_IDENT_NAME_PATTERN.finditer(body):
+            add(match.group(1))
+        for match in _MAIN_ENV_HEADER_NAME_PATTERN.finditer(body):
+            add(match.group(1))
+    return names
+
+
 def scene_cast_token_names(cast_text: str) -> Dict[str, List[str]]:
     chars: List[str] = []
     props: List[str] = []
@@ -396,8 +459,11 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         "名牌条件=须真脸 则等该人真脸正面/¾可读后再挂；全场未见真脸则不写、不标缺口。"
         "字体/字色为无或待补则跟 Global_Style 补一书体+具名色。"
         "字幕=已过|无 则不写。"
-        "换主环境时另打环境名牌，类似角色名牌："
-        "画面打出物理文字标签：【{主环境裸名}】｜落位=顶部中央｜字体=…｜字色=…。"
+        "换主环境时另打环境名牌（与角色名牌不同：没有第二段标签）："
+        "只写 画面打出物理文字标签：【{主环境注册名}】｜落位=顶部中央｜字体=…｜字色=…。"
+        "禁止套角色格式写成【名】日】【名】外】【名】夜·内】【名】日·外】；"
+        "第二段任何字都不许（日/夜/晨/昏/内/外/季节/气候）。"
+        "禁止用【场景名称】（常带·日·外）。有【本场环境名牌】则原样抄字样=【注册名】，标签=无。"
         "本场B1与场内换主各打一次；同主切角/仅状态衍生不打。"
         "挂入戏起笔（新环境落定后、角色主动作前）；不算动作；禁挂建置、禁画幅底部。"
     )
@@ -461,4 +527,38 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         body = f"{body}\n\n【本场对白声线】\n" + "\n".join(voice_rows)
     if tag_rows:
         body = f"{body}\n\n【本场角色标签】\n" + "\n".join(tag_rows)
+    env_font = "待补"
+    env_color = "待补"
+    for rec in records:
+        if rec.get("name") not in scene_char_names:
+            continue
+        text = rec.get("text") or ""
+        base_name = extract_char_field(text, "基名") or (
+            (rec.get("name") or "").split("_", 1)[0]
+            if "_" in (rec.get("name") or "")
+            else ""
+        )
+        base_text = _record_by_name(records, base_name).get("text") or ""
+        font = _character_label_style(text, "标签字体", base_text)
+        color = _character_label_style(text, "标签字色", base_text)
+        if font and font not in {"无", "待补"}:
+            env_font = font
+        if color and color not in {"无", "待补"}:
+            env_color = color
+        if env_font != "待补" and env_color != "待补":
+            break
+    env_rows = []
+    for env_name in collect_scene_env_nameplate_names(
+        script, scene_id, scene_text or ""
+    ):
+        env_rows.append(
+            f"ENV:[{env_name}]｜字样=【{env_name}】｜标签=无｜落位=顶部中央｜"
+            f"字体={env_font}｜字色={env_color}"
+        )
+    if env_rows:
+        body = (
+            f"{body}\n\n【本场环境名牌】\n"
+            + "\n".join(env_rows)
+            + "\n只抄字样【注册名】，禁止写成【名】日】或【名】外】。"
+        )
     return wrap_injection_section("本场角色道具白名单", body)
