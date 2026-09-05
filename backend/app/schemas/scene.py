@@ -38,6 +38,11 @@ class SceneOut(BaseModel):
     linked_characters: Optional[str]
     key_props: Optional[str]
 
+    @field_validator("scene_no", mode="before")
+    @classmethod
+    def coerce_scene_no(cls, value: Any) -> str:
+        return "" if value is None else str(value)
+
     @field_validator("original_script_text", mode="before")
     @classmethod
     def coerce_original_script_text(cls, value: Any) -> str:

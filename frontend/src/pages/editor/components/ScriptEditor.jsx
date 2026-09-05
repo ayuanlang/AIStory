@@ -532,16 +532,16 @@ const resolveImportedDbSceneIdFromReport = (importReport, markerSceneId) => {
     return null;
 };
 
-const filterDbScenesByCanonicalMarkers = (dbScenes, canonicalMarkers) => {
+const filterDbScenesByCanonicalMarkers = (dbScenes, canonicalMarkers, episodePrefix = 'EP01') => {
     const rows = Array.isArray(dbScenes) ? dbScenes : [];
     const markers = Array.isArray(canonicalMarkers)
         ? canonicalMarkers
         : (canonicalMarkers instanceof Set ? [...canonicalMarkers] : []);
-    const allowed = expandSceneIdAllowlist(markers);
+    const allowed = expandSceneIdAllowlist(markers, episodePrefix);
     if (!allowed.size) return rows;
     const matched = rows.filter((row) => (
         [row?.scene_no, row?.scene_id, row?.scene_code]
-            .some((raw) => raw && isSceneIdInAllowlist(String(raw), allowed))
+            .some((raw) => raw && isSceneIdInAllowlist(String(raw), allowed, episodePrefix))
     ));
     // Markers that do not token-match DB scene_no (EP01_SC01 vs "1") must not
     // collapse coverage to "0 scenes, all done".
@@ -892,6 +892,54 @@ const isSceneIdInAllowlist = (marker, allowlist, episodePrefix = 'EP01') => {
         }
     }
     return false;
+};
+
+/** Matrix / pipeline IDs are EP01_SC01; workspace Scene.scene_no is often "1". */
+const findStoryboardRerunHit = (candidates, targetSceneId, episodePrefix = 'EP01') => {
+    const list = Array.isArray(candidates) ? candidates : [];
+    const target = String(targetSceneId || '').trim();
+    if (!target || !list.length) return null;
+    const prefix = String(episodePrefix || 'EP01').trim().toUpperCase() || 'EP01';
+    const targetOrder = deriveSceneOrderFromSceneId(target);
+    const allow = expandSceneIdAllowlist([target], prefix);
+
+    const byIdentity = list.find((item) => {
+        const order = Number(item?.sceneOrder) || targetOrder || 0;
+        const marker = String(item?.sceneId || item?.canonicalSceneId || '').trim();
+        return sceneUnitIdsMatch(marker, target, order, prefix)
+            || isSceneIdInAllowlist(marker, allow, prefix);
+    });
+    if (byIdentity) return byIdentity;
+
+    const dbLike = list.map((item) => ({
+        id: Number(item?.dbSceneId || 0) || undefined,
+        scene_no: item?.rawSceneNo || item?.sceneId,
+        scene_id: item?.canonicalSceneId || item?.sceneId,
+        scene_code: item?.sceneCode,
+    }));
+    const row = findDbSceneByPatchSceneId(dbLike, target);
+    if (row) {
+        const dbId = Number(row.id || 0);
+        return list.find((item) => (
+            (dbId > 0 && Number(item?.dbSceneId || 0) === dbId)
+            || sceneUnitIdsMatch(
+                item?.sceneId,
+                row.scene_no,
+                item?.sceneOrder || targetOrder,
+                prefix
+            )
+        )) || null;
+    }
+
+    if (Number.isFinite(targetOrder) && targetOrder > 0 && !sceneIdHasLetterSuffix(target)) {
+        const byOrder = list.filter((item) => {
+            if (sceneIdHasLetterSuffix(item?.sceneId)) return false;
+            const order = Number(item?.sceneOrder) || deriveSceneOrderFromSceneId(item?.sceneId);
+            return Number.isFinite(order) && order > 0 && order === targetOrder;
+        });
+        if (byOrder.length === 1) return byOrder[0];
+    }
+    return null;
 };
 
 const extractSceneMainEnvironmentNames = (sceneText) => {
@@ -28631,7 +28679,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const buildStoryboardRerunCandidates = useCallback(async () => {
         const episodeId = Number(activeEpisode?.id || 0);
         if (!episodeId || typeof fetchScenes !== 'function') return [];
-        const dbScenes = await fetchScenes(episodeId).catch(() => []);
+        const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+        const cachedScenes = Array.isArray(diagnosticsEpisodeScenes) ? diagnosticsEpisodeScenes : [];
+        let dbScenes = [];
+        let fetchError = null;
+        try {
+            const rows = await fetchScenes(episodeId);
+            dbScenes = Array.isArray(rows) ? rows : [];
+        } catch (err) {
+            fetchError = err;
+            dbScenes = cachedScenes;
+        }
+        if ((!Array.isArray(dbScenes) || dbScenes.length <= 0) && cachedScenes.length > 0) {
+            dbScenes = cachedScenes;
+        }
+        if (!dbScenes.length && fetchError) {
+            throw fetchError;
+        }
         const progressItems = storyboardTaskProgressRef.current?.items || {};
 
         // Rerun UI source of truth = workspace Scene rows (same as 齐套 panel).
@@ -28655,7 +28719,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        let scopedScenes = filterDbScenesByCanonicalMarkers(dbScenes, preferredMarkers);
+        let scopedScenes = filterDbScenesByCanonicalMarkers(dbScenes, preferredMarkers, episodePrefix);
         // If allowlist matched nothing but DB has scenes, fall back to all workspace scenes.
         if ((!Array.isArray(scopedScenes) || scopedScenes.length <= 0)
             && Array.isArray(dbScenes)
@@ -28668,9 +28732,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         for (const scene of (Array.isArray(scopedScenes) ? scopedScenes : [])) {
             const dbId = Number(scene?.id || 0);
             if (!Number.isFinite(dbId) || dbId <= 0) continue;
-            const marker = String(scene?.scene_no || scene?.scene_id || scene?.scene_code || '').trim()
+            const rawMarker = String(scene?.scene_no || scene?.scene_id || scene?.scene_code || '').trim()
                 || `#${dbId}`;
-            const order = deriveSceneOrderFromSceneId(marker);
+            const order = deriveSceneOrderFromSceneId(rawMarker);
+            const canonical = canonicalizeSceneUnitId(rawMarker, order, episodePrefix);
+            const marker = isCanonicalOrchestrationSceneId(canonical) ? canonical : rawMarker;
             const token = (
                 sceneIdHasLetterSuffix(marker)
                     ? (normalizeSceneIdToken(marker) || marker)
@@ -28682,15 +28748,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!prev || dbId > Number(prev.dbSceneId || 0)) {
                 bestByMarker.set(token, {
                     sceneId: marker,
+                    rawSceneNo: rawMarker,
+                    canonicalSceneId: canonical,
                     dbSceneId: dbId,
                     sceneOrder: Number(
                         progressItems[marker]?.sceneOrder
+                        || progressItems[rawMarker]?.sceneOrder
                         || order
                         || 0
                     ) || 0,
                     displayLabel: String(scene?.scene_name || marker).trim() || marker,
-                    status: String(progressItems[marker]?.status || '').trim().toLowerCase(),
-                    error: String(progressItems[marker]?.error || '').trim(),
+                    status: String(
+                        progressItems[marker]?.status
+                        || progressItems[rawMarker]?.status
+                        || ''
+                    ).trim().toLowerCase(),
+                    error: String(
+                        progressItems[marker]?.error
+                        || progressItems[rawMarker]?.error
+                        || ''
+                    ).trim(),
                 });
             }
         }
@@ -28715,7 +28792,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
         }
         return candidates;
-    }, [activeEpisode?.ai_stage_outputs, activeEpisode?.id, parseSceneMarkdownBySceneMap, parseStageOutputsObject]);
+    }, [
+        activeEpisode,
+        diagnosticsEpisodeScenes,
+        parseSceneMarkdownBySceneMap,
+        parseStageOutputsObject,
+    ]);
 
     const executeStoryboardRerun = useCallback(async ({
         mode = 'all',
@@ -28732,7 +28814,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (Number.isFinite(targetDbId) && targetDbId > 0) {
                     return Number(item?.dbSceneId || 0) === targetDbId;
                 }
-                return String(item?.sceneId || '').trim() === targetSceneId;
+                if (String(item?.sceneId || '').trim() === targetSceneId) return true;
+                return findStoryboardRerunHit([item], targetSceneId, resolveEpisodeSceneIdPrefix(activeEpisode)) === item;
             })
             : list;
         if (!targets.length) {
@@ -28972,12 +29055,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             try {
                 const candidates = await buildStoryboardRerunCandidates();
                 const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
-                const hit = (candidates || []).find((item) => sceneUnitIdsMatch(
-                    item.sceneId,
-                    targetSceneId,
-                    item.sceneOrder || deriveSceneOrderFromSceneId(targetSceneId),
-                    episodePrefix
-                ));
+                const hit = findStoryboardRerunHit(candidates, targetSceneId, episodePrefix);
                 if (!hit?.dbSceneId) {
                     reportAnalysisPanelNotice(t('该场尚未入库，暂无分镜草稿可编辑。', 'This scene is not imported yet, so there is no storyboard draft to edit.'), 'warning');
                     return;
@@ -29031,16 +29109,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!activeEpisode?.id || !targetSceneId) return;
         if (stableKind === 'scene_beats') {
             // Retired LLM node: staging already writes the workspace Scene. Fall through to storyboard.
-            const candidates = await buildStoryboardRerunCandidates();
+            let candidates = [];
+            try {
+                candidates = await buildStoryboardRerunCandidates();
+            } catch (error) {
+                reportAnalysisPanelNotice(t(
+                    `加载场景失败：${error?.response?.data?.detail || error?.message || error}`,
+                    `Failed to load scenes: ${error?.response?.data?.detail || error?.message || error}`
+                ), 'error');
+                return;
+            }
             const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
-            const hit = (candidates || []).find((item) => sceneUnitIdsMatch(
-                item.sceneId,
-                targetSceneId,
-                item.sceneOrder || deriveSceneOrderFromSceneId(targetSceneId),
-                episodePrefix
-            ));
+            const hit = findStoryboardRerunHit(candidates, targetSceneId, episodePrefix);
             if (!hit) {
-                reportAnalysisPanelNotice(t('该场尚未从建置稿入库，无法重跑分镜。', 'This scene is not imported from staging yet, so storyboard cannot rerun.'), 'warning');
+                reportAnalysisPanelNotice(
+                    candidates.length
+                        ? t(`找不到与 ${targetSceneId} 对应的已入库场景，无法重跑分镜。`, `No imported scene matches ${targetSceneId}; storyboard cannot rerun.`)
+                        : t('该场尚未从建置稿入库，无法重跑分镜。', 'This scene is not imported from staging yet, so storyboard cannot rerun.'),
+                    'warning'
+                );
                 return;
             }
             if (!window.confirm(t(
@@ -29056,16 +29143,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         if (stableKind === 'storyboard') {
-            const candidates = await buildStoryboardRerunCandidates();
+            let candidates = [];
+            try {
+                candidates = await buildStoryboardRerunCandidates();
+            } catch (error) {
+                reportAnalysisPanelNotice(t(
+                    `加载场景失败：${error?.response?.data?.detail || error?.message || error}`,
+                    `Failed to load scenes: ${error?.response?.data?.detail || error?.message || error}`
+                ), 'error');
+                return;
+            }
             const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
-            const hit = (candidates || []).find((item) => sceneUnitIdsMatch(
-                item.sceneId,
-                targetSceneId,
-                item.sceneOrder || deriveSceneOrderFromSceneId(targetSceneId),
-                episodePrefix
-            ));
+            const hit = findStoryboardRerunHit(candidates, targetSceneId, episodePrefix);
             if (!hit) {
-                reportAnalysisPanelNotice(t('该场尚未入库，无法重跑分镜。', 'This scene is not imported yet, so storyboard cannot rerun.'), 'warning');
+                reportAnalysisPanelNotice(
+                    candidates.length
+                        ? t(`找不到与 ${targetSceneId} 对应的已入库场景，无法重跑分镜。`, `No imported scene matches ${targetSceneId}; storyboard cannot rerun.`)
+                        : t('该场尚未入库，无法重跑分镜。', 'This scene is not imported yet, so storyboard cannot rerun.'),
+                    'warning'
+                );
                 return;
             }
             if (!window.confirm(t(
@@ -29166,12 +29262,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             const candidates = await buildStoryboardRerunCandidates();
             const episodePrefixForSb = resolveEpisodeSceneIdPrefix(activeEpisode);
-            const hit = (candidates || []).find((item) => sceneUnitIdsMatch(
-                item.sceneId,
-                targetSceneId,
-                item.sceneOrder || deriveSceneOrderFromSceneId(targetSceneId),
-                episodePrefixForSb
-            ));
+            const hit = findStoryboardRerunHit(candidates, targetSceneId, episodePrefixForSb);
             if (!hit) {
                 onLog?.(
                     t(

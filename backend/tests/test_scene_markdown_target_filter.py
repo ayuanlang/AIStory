@@ -230,3 +230,23 @@ def test_scene_out_coerces_null_original_script_text():
         }
     )
     assert scene.original_script_text == ""
+
+
+def test_scene_out_coerces_null_scene_no():
+    from app.schemas.scene import SceneOut
+
+    scene = SceneOut.model_validate(
+        {
+            "id": 2,
+            "scene_no": None,
+            "original_script_text": None,
+            "scene_name": "客栈对峙",
+            "equivalent_duration": None,
+            "core_scene_info": None,
+            "environment_name": None,
+            "linked_characters": None,
+            "key_props": None,
+        }
+    )
+    assert scene.scene_no == ""
+    assert scene.original_script_text == ""
