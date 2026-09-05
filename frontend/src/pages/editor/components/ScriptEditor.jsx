@@ -4629,6 +4629,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisFlowHistoryRef = useRef([]);
     const analysisUiReportRef = useRef(null);
     const storyboardTaskProgressRef = useRef(EMPTY_STORYBOARD_TASK_PROGRESS);
+    // Scene-subskill rerun parks this scene's storyboard cell as 等待中 until kickoff.
+    const storyboardPendingAfterSubskillRef = useRef(new Set());
     const diagnosticsPipelineNodesRef = useRef([]);
     const diagnosticsSceneUnitsRef = useRef([]);
     const analysisProgressHydratedRef = useRef(false);
@@ -9703,6 +9705,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             environmentAssetDesignPendingRef.current = false;
             stage3AutoStartCacheRef.current = null;
         }
+        storyboardPendingAfterSubskillRef.current = new Set();
         storyboardTaskProgressRef.current = EMPTY_STORYBOARD_TASK_PROGRESS;
         setStoryboardTaskProgress(EMPTY_STORYBOARD_TASK_PROGRESS);
     }, []);
@@ -29424,6 +29427,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const startedAt = Date.now();
         analysisRunInFlightRef.current = true;
+        storyboardPendingAfterSubskillRef.current = mergeSceneIdAllowlist(
+            storyboardPendingAfterSubskillRef.current,
+            [targetSceneId],
+            resolveEpisodeSceneIdPrefix(activeEpisode)
+        );
         beginStageRerunUi({
             phase: 'scene_subskills',
             message: t(`正在重跑${targetSceneId} · ${label}…`, `Rerunning ${targetSceneId} · ${label}...`),
@@ -29531,6 +29539,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             })) {
                 analysisStopRequestedRef.current = false;
             }
+            storyboardPendingAfterSubskillRef.current = new Set(
+                [...(storyboardPendingAfterSubskillRef.current || [])].filter((id) => (
+                    !isSceneIdInAllowlist(
+                        id,
+                        expandSceneIdAllowlist([targetSceneId], resolveEpisodeSceneIdPrefix(activeEpisode)),
+                        resolveEpisodeSceneIdPrefix(activeEpisode)
+                    )
+                ))
+            );
             clearAnalysisTaskMarker(activeEpisode?.id);
         }
     };
@@ -34081,12 +34098,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const nodeTimedOut = /NODE_TIMEOUT|超过\s*\d+s\s*无进展|timed out after/i.test(
                                 String(node?.last_error_code || node?.last_error_message || node?.runtime_meta?.business_reason || '')
                             );
+                            const pendingSet = storyboardPendingAfterSubskillRef.current;
+                            const pendingAfterSubskill = pendingSet instanceof Set
+                                && pendingSet.size > 0
+                                && isSceneIdInAllowlist(sceneId, pendingSet, episodePrefix);
                             // This-run kickoff / LLM submit must win over leftover completed nodes.
                             if (STORYBOARD_IN_FLIGHT_STATUSES.includes(status)) {
                                 return { ready: false, active: true, failed: false, detail: '' };
                             }
                             if (['waiting_env', 'waiting_import'].includes(status)) {
                                 return { ready: false, active: true, failed: false, detail: status === 'waiting_env' ? t('等待环境', 'Wait ENV') : t('等待入库', 'Wait import') };
+                            }
+                            // Drama/combat/staging rerun will kick storyboard later — show 等待中,
+                            // not leftover 已完成 from the previous successful apply.
+                            if (pendingAfterSubskill && status !== 'failed' && !fromNode.failed) {
+                                return { ready: false, active: false, failed: false, detail: '' };
                             }
                             if (status === 'completed') {
                                 return { ready: true, active: false, failed: false, detail: '' };
