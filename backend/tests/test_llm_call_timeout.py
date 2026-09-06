@@ -226,6 +226,35 @@ def test_mark_storyboard_generation_applied_canonicalizes_numeric_scene_no(monke
     assert [row.get("scene_id") for row in calls] == ["EP01_SC01", None]
 
 
+def test_mark_storyboard_generation_failed_writes_scene_node_only(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import script_analysis_flow as flow
+
+    calls = []
+
+    def _upsert(_db, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(flow, "upsert_pipeline_node_status", _upsert)
+    flow.mark_storyboard_generation_failed(
+        object(),
+        project_id=9,
+        episode_id=3,
+        scene_marker="EP01_SC02",
+        error_message="LLM timed out while generating shots",
+        error_code="STORYBOARD_GENERATION_FAILED",
+    )
+    assert len(calls) == 1
+    row = calls[0]
+    assert row["scene_id"] == "EP01_SC02"
+    assert row["node_name"] == "storyboard_generation"
+    assert row["status"] == "failed"
+    assert row["error_code"] == "STORYBOARD_GENERATION_FAILED"
+    assert row["error_message"] == "LLM timed out while generating shots"
+    assert row["runtime_meta"]["business_reason"] == "LLM timed out while generating shots"
+
+
 def test_finalize_stale_pipeline_nodes_closes_per_scene_storyboard_when_that_scene_has_shots(monkeypatch):
     from types import SimpleNamespace
     from app.core.time_utils import now_bj

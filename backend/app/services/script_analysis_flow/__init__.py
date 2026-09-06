@@ -2731,6 +2731,64 @@ def mark_storyboard_generation_applied(
         )
 
 
+def mark_storyboard_generation_failed(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene: Any = None,
+    scene_marker: str = "",
+    error_message: str = "",
+    error_code: str = "STORYBOARD_GENERATION_FAILED",
+) -> None:
+    """Persist frontend-owned storyboard failure so the inspect UI can show the reason."""
+    if ScriptProgressPipelineNode is None:
+        return
+    pid = int(project_id or 0)
+    eid = int(episode_id or 0)
+    if pid <= 0 or eid <= 0:
+        return
+    marker = str(scene_marker or "").strip()
+    episode = None
+    try:
+        from app.models.all_models import Episode
+        episode = db.query(Episode).filter(Episode.id == eid).first()
+    except Exception:
+        episode = None
+    prefix = resolve_episode_scene_id_prefix(episode, fallback_number=1)
+    if not marker and scene is not None:
+        from app.services.script_progress_helpers import _normalize_scene_marker_id_from_scene
+        marker = _normalize_scene_marker_id_from_scene(
+            scene,
+            eid,
+            episode=episode,
+            episode_prefix=prefix,
+        )
+    elif marker:
+        from app.services.scene_no_utils import canonicalize_progress_scene_marker
+        marker = canonicalize_progress_scene_marker(marker, episode_prefix=prefix) or marker
+    if not marker:
+        return
+    message = str(error_message or "").strip()
+    code = str(error_code or "").strip() or "STORYBOARD_GENERATION_FAILED"
+    upsert_pipeline_node_status(
+        db,
+        project_id=pid,
+        episode_id=eid,
+        script_id=f"episode:{eid}",
+        scene_id=marker,
+        node_name="storyboard_generation",
+        status="failed",
+        progress_percent=0.0,
+        error_code=code,
+        error_message=message,
+        runtime_meta={
+            "business_event": "failed_from_frontend",
+            "business_reason": message,
+        },
+    )
+
+
 def finalize_stale_pipeline_nodes(
     db: Session,
     *,
@@ -3381,6 +3439,7 @@ __all__ = [
     "update_scene_unit_orchestration_status",
     "finalize_stale_pipeline_nodes",
     "mark_storyboard_generation_applied",
+    "mark_storyboard_generation_failed",
     "upsert_pipeline_node_status",
     "validate_analyze_scene_llm_finish_reason",
     "validate_scene_markdown_import_text",

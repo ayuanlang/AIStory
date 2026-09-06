@@ -77,12 +77,13 @@ const classifyFailureKind = ({ errorCode, errorMessage, businessReason, detail, 
     if (code === 'SCENE_SUBSKILL_CANCELLED' || /canceled|cancelled|已取消/.test(lower)) {
         return 'cancelled';
     }
-    if (
-        code === 'STORYBOARD_JOB_FAILED'
-        || /waiting_env|wait_env|等待环境/.test(lower)
-        || (/主环境/.test(raw) && /未/.test(raw))
-    ) {
-        return 'storyboard_env';
+    const looksLikeEnvWait = /waiting_env|wait_env|等待环境/.test(lower)
+        || (/主环境/.test(raw) && /未/.test(raw));
+    if (code === 'STORYBOARD_GENERATION_FAILED') {
+        return looksLikeEnvWait ? 'storyboard_env' : 'storyboard_generation';
+    }
+    if (code === 'STORYBOARD_JOB_FAILED' || looksLikeEnvWait) {
+        return looksLikeEnvWait ? 'storyboard_env' : 'storyboard_generation';
     }
     if (
         code === 'SCENE_IMPORT_FAILED'
@@ -123,6 +124,7 @@ export const explainScriptAnalysisNodeFailure = (source, tFn) => {
         parse_failed: t('返回的结构无法解析，不能作为本节点成稿。', 'The returned structure could not be parsed, so this node has no usable draft.'),
         scene_mismatch: t('返回的场号与当前场次不一致。', 'The returned scene ID does not match this scene.'),
         cancelled: t('该节点已被取消或中途停止。', 'This node was canceled or stopped mid-run.'),
+        storyboard_generation: rawError || t('分镜生成失败。', 'Storyboard generation failed.'),
         storyboard_env: t('分镜未完成，通常是场景未入库或本场主环境未齐套。', 'Storyboard did not finish, usually because the scene is not imported or its main environment is not ready.'),
         import_failed: t('建置稿没有写入工作区场景表。', 'The staging draft was not written into the workspace scene table.'),
         cover_missing: t('封面海报简报缺失，环境设计无法收口。', 'The cover-poster brief is missing, so environment design cannot finish.'),
@@ -168,6 +170,10 @@ export const explainScriptAnalysisNodeFailure = (source, tFn) => {
         ],
         cancelled: [
             t('用「继续分析」或该节点「重跑」接着做，不必整集重开。', 'Use Continue analysis or Rerun on this node; do not restart the whole episode.'),
+        ],
+        storyboard_generation: [
+            t('只重跑该场分镜；超时或模型抖动时多数一次就能过。', 'Rerun this scene’s storyboard; a timeout or model flake often succeeds on retry.'),
+            t('反复失败时换一个剧本分析 API，或开 AI 诊断对照原始错误判断。', 'If it keeps failing, switch the script-analysis API or open AI Diagnosis with the raw error.'),
         ],
         storyboard_env: [
             t('先确认该场建置已入库，且本场主环境已生成。', 'Confirm this scene is imported and its main environment is generated.'),

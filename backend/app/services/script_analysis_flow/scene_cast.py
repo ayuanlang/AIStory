@@ -349,6 +349,61 @@ _ENV_NAMEPLATE_META_TAIL = re.compile(
     r"(?:[·・\s/／]+(?:日|夜|晨|昏|昼|晚|内|外|室内|室外|春|夏|秋|冬|晴|雨|雪|阴))+$"
 )
 _ENV_DEGREE_PREFIX = re.compile(r"^\d+度")
+_ENV_TIME_STORY_DAY = re.compile(
+    r"(?:重生|穿越|回归|转世)?第[一二三四五六七八九十百千零〇0-9]+[天日]"
+)
+_ENV_TIME_CLOCK = re.compile(
+    r"(?:早上|上午|中午|下午|傍晚|晚上|夜里|夜裡|凌晨|清晨|黄昏)?"
+    r"\s*"
+    r"(?:"
+    r"\d{1,2}\s*[点時时](?:\s*\d{1,2}\s*分)?"
+    r"|"
+    r"\d{1,2}\s*[:：]\s*\d{2}"
+    r"|"
+    r"\d{1,2}\s*(?:AM|PM|am|pm)"
+    r")"
+)
+_ENV_TIME_DAY_EN = re.compile(
+    r"(?:Rebirth|Transmigrat\w+|Return)?\s*Day\s+\d+",
+    re.IGNORECASE,
+)
+_ENV_TIME_BANNED_ALONE = frozenset(
+    {"日", "夜", "晨", "昏", "昼", "晚", "内", "外", "室内", "室外"}
+)
+
+
+def _scene_body_for_nameplate(script: str, scene_id: str, scene_text: str = "") -> str:
+    body = str(scene_text or "").strip()
+    if body:
+        return body
+    if not scene_id:
+        return str(script or "")
+    start = f"[SCENE_START:{scene_id}]"
+    end = f"[SCENE_END:{scene_id}]"
+    lower = script.lower()
+    i = lower.find(start.lower())
+    j = lower.find(end.lower())
+    if i >= 0 and j > i:
+        return script[i:j]
+    return str(script or "")
+
+
+def _env_nameplate_time_label(haystack: str) -> str:
+    """Explicit clock / story-day only; never 日夜内外 from scene headings."""
+    text = str(haystack or "")
+    text = re.sub(r"【场景名称】[^\n]*", " ", text)
+    text = re.sub(r"日夜内外\s*[=：:][^\n｜|]*", " ", text)
+    story = next((m.group(0).strip() for m in _ENV_TIME_STORY_DAY.finditer(text)), "")
+    clock = next((m.group(0).strip() for m in _ENV_TIME_CLOCK.finditer(text)), "")
+    day_en = next((m.group(0).strip() for m in _ENV_TIME_DAY_EN.finditer(text)), "")
+    parts = [part for part in (story, clock or day_en) if part]
+    if not parts:
+        return "无"
+    label = "".join(parts) if story and clock else (parts[0])
+    compact = re.sub(r"\s+", "", label)
+    if compact in _ENV_TIME_BANNED_ALONE:
+        return "无"
+    return label
 
 
 def _env_nameplate_bare_name(raw: str) -> str:
@@ -459,11 +514,12 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         "名牌条件=须真脸 则等该人真脸正面/¾可读后再挂；全场未见真脸则不写、不标缺口。"
         "字体/字色为无或待补则跟 Global_Style 补一书体+具名色。"
         "字幕=已过|无 则不写。"
-        "换主环境时另打环境名牌（与角色名牌不同：没有第二段标签）："
-        "只写 画面打出物理文字标签：【{主环境注册名}】｜落位=顶部中央｜字体=…｜字色=…。"
-        "禁止套角色格式写成【名】日】【名】外】【名】夜·内】【名】日·外】；"
-        "第二段任何字都不许（日/夜/晨/昏/内/外/季节/气候）。"
-        "禁止用【场景名称】（常带·日·外）。有【本场环境名牌】则原样抄字样=【注册名】，标签=无。"
+        "换主环境时另打环境名牌："
+        "只写 画面打出物理文字标签：【{主环境注册名}】｜落位=顶部中央｜字体=…｜字色=…；"
+        "原文有明确时间（早上9点、重生第一天）则【注册名】{时间}】，时间可空。"
+        "禁止套成【名】日】【名】外】【名】夜·内】【名】日·外】；"
+        "第二段只许明确时刻/故事日，禁日/夜/晨/昏/内/外/季节/气候，禁自拟三年前。"
+        "禁止用【场景名称】（常带·日·外）推日夜。有【本场环境名牌】则抄字样=【注册名】与时间=。"
         "本场B1与场内换主各打一次；同主切角/仅状态衍生不打。"
         "挂入戏起笔（新环境落定后、角色主动作前）；不算动作；禁挂建置、禁画幅底部。"
     )
@@ -548,17 +604,20 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         if env_font != "待补" and env_color != "待补":
             break
     env_rows = []
+    env_time = _env_nameplate_time_label(
+        _scene_body_for_nameplate(script, scene_id, scene_text or "")
+    )
     for env_name in collect_scene_env_nameplate_names(
         script, scene_id, scene_text or ""
     ):
         env_rows.append(
-            f"ENV:[{env_name}]｜字样=【{env_name}】｜标签=无｜落位=顶部中央｜"
-            f"字体={env_font}｜字色={env_color}"
+            f"ENV:[{env_name}]｜字样=【{env_name}】｜时间={env_time}｜标签={env_time}｜"
+            f"落位=顶部中央｜字体={env_font}｜字色={env_color}"
         )
     if env_rows:
         body = (
             f"{body}\n\n【本场环境名牌】\n"
             + "\n".join(env_rows)
-            + "\n只抄字样【注册名】，禁止写成【名】日】或【名】外】。"
+            + "\n只抄字样【注册名】；时间有明确时刻/故事日才打，可空；禁止写成【名】日】或【名】外】。"
         )
     return wrap_injection_section("本场角色道具白名单", body)

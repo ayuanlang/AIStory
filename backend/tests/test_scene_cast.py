@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from app.services.script_analysis_flow.character_asset_brief import parse_char_extract_records
 from app.services.script_analysis_flow.scene_cast import (
+    _env_nameplate_time_label,
     build_scene_entity_token_brief,
     extract_scene_cast_block,
     extract_scene_cast_blocks,
@@ -85,8 +86,8 @@ def test_build_scene_entity_token_brief():
     assert "禁把多名牌攒到建置段末或入戏一起写" in brief
     assert "换主环境时另打环境名牌" in brief
     assert "落位=顶部中央" in brief
-    assert "没有第二段标签" in brief
-    assert "禁止套角色格式写成【名】日】" in brief
+    assert "时间可空" in brief
+    assert "禁止套成【名】日】" in brief
     assert "标签优先抄 CHAR|#身份 的客观身份" in brief
     assert "只上客观信息，禁透露剧情" in brief
     assert "禁推理" in brief
@@ -342,6 +343,23 @@ def test_env_nameplate_injection_has_no_day_night_tag():
     assert all("日" not in n and "外" not in n for n in names)
     brief = build_scene_entity_token_brief(script, "EP01_SC01")
     assert "【本场环境名牌】" in brief
-    assert "ENV:[龙门风月客栈]｜字样=【龙门风月客栈】｜标签=无｜落位=顶部中央" in brief
+    assert "ENV:[龙门风月客栈]｜字样=【龙门风月客栈】｜时间=无｜标签=无｜落位=顶部中央" in brief
     assert "字样=【龙门风月客栈】日" not in brief
     assert "禁止写成【名】日】或【名】外】" in brief
+
+
+def test_env_nameplate_time_label_explicit_only():
+    assert _env_nameplate_time_label("【场景名称】客栈·日·外") == "无"
+    assert _env_nameplate_time_label("日夜内外=日·外") == "无"
+    assert _env_nameplate_time_label("天亮后众人走进客栈") == "无"
+    assert _env_nameplate_time_label("画面叠字：早上9点，客栈大堂") == "早上9点"
+    assert _env_nameplate_time_label("重生第一天，他睁开眼") == "重生第一天"
+    script = _script().replace("body", "重生第一天早上9点，客栈开门。")
+    script += """
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=龙门风月客栈｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文
+[SCENE_ENV_IDENT_END:EP01_SC01]
+"""
+    brief = build_scene_entity_token_brief(script, "EP01_SC01")
+    assert "时间=重生第一天早上9点" in brief
+    assert "字样=【龙门风月客栈】日" not in brief

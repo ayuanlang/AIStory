@@ -79,6 +79,14 @@ class ProgressReconcileRequest(BaseModel):
     episode_id: int
 
 
+class StoryboardGenerationFailedRequest(BaseModel):
+    project_id: int
+    episode_id: int
+    scene_marker: str
+    error_message: Optional[str] = None
+    error_code: Optional[str] = None
+
+
 class DerivedEnvIngestRequest(BaseModel):
     project_id: int
     episode_id: int
@@ -254,6 +262,44 @@ async def reset_episode_progress(
         "project_id": int(episode.project_id),
         "episode_id": int(request.episode_id),
         **summary,
+    }
+
+
+@router.post("/prompts/scene-analysis/progress/storyboard-failed")
+async def mark_storyboard_generation_failed_progress(
+    request: StoryboardGenerationFailedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == int(request.episode_id), _active_episode_clause())
+        .first()
+    )
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
+    _require_project_access(db, episode.project_id, current_user)
+    if int(request.project_id) != int(episode.project_id):
+        raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
+    marker = str(request.scene_marker or "").strip()
+    if not marker:
+        raise HTTPException(status_code=400, detail="scene_marker is required")
+    from app.services.script_analysis_flow import mark_storyboard_generation_failed
+
+    mark_storyboard_generation_failed(
+        db,
+        project_id=int(episode.project_id),
+        episode_id=int(request.episode_id),
+        scene_marker=marker,
+        error_message=str(request.error_message or "").strip(),
+        error_code=str(request.error_code or "").strip() or "STORYBOARD_GENERATION_FAILED",
+    )
+    db.commit()
+    return {
+        "status": "ok",
+        "project_id": int(episode.project_id),
+        "episode_id": int(request.episode_id),
+        "scene_marker": marker,
     }
 
 

@@ -4278,6 +4278,7 @@ export const ingestDerivedEnvironmentsFromFraming = async (payload = {}) => (
 export const syncSceneUnitsProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/sync-scene-units', payload || {})).data;
 export const resetSceneOrchestrationProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/reset-scene-orchestration', payload || {})).data;
 export const resetEpisodeAnalysisProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/reset-episode', payload || {})).data;
+export const reportStoryboardGenerationFailed = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/storyboard-failed', payload || {})).data;
 export const getEpisodeProgressSnapshot = async (episodeId) => (await api.get(`/prompts/scene-analysis/progress/episodes/${episodeId}`)).data;
 export const getProjectProgressOverview = async (projectId) => (await api.get(`/prompts/scene-analysis/progress/projects/${projectId}/overview`)).data;
 export const getProjectProgressIssues = async (projectId, params = {}) => (await api.get(`/prompts/scene-analysis/progress/projects/${projectId}/issues`, { params: params || {} })).data;

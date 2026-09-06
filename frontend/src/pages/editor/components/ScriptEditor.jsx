@@ -164,6 +164,7 @@ import {
     resetSceneOrchestrationProgress,
     resetEpisodeAnalysisProgress,
     getEpisodeProgressSnapshot,
+    reportStoryboardGenerationFailed,
     splitEpisodeScript,
 } from '../../../services/api';
 import { entityNameAppearsInText, entityTokenMatchesName, normalizeEntityToken } from '../../../lib/entityToken';
@@ -741,17 +742,67 @@ const filterLeftoverStoryboardPipelineNodes = (nodes, progress) => {
     });
 };
 
+const formatStoryboardFailureDetail = (detail) => {
+    if (detail == null) return '';
+    if (typeof detail === 'string') return detail.trim();
+    if (Array.isArray(detail)) {
+        return detail.map((item) => {
+            if (typeof item === 'string') return item.trim();
+            if (item && typeof item === 'object') {
+                return String(item.msg || item.message || item.detail || '').trim() || JSON.stringify(item);
+            }
+            return String(item || '').trim();
+        }).filter(Boolean).join('; ');
+    }
+    if (typeof detail === 'object') {
+        const nested = formatStoryboardFailureDetail(detail.detail);
+        if (nested) return nested;
+        return String(detail.msg || detail.message || '').trim() || JSON.stringify(detail);
+    }
+    return String(detail).trim();
+};
+
+const resolveStoryboardFailureMessage = (error, fallback = 'unknown error') => {
+    const fromDetail = formatStoryboardFailureDetail(error?.response?.data?.detail);
+    if (fromDetail && fromDetail !== '[object Object]') return fromDetail;
+    const fromMessage = String(error?.message || '').trim();
+    if (fromMessage && fromMessage !== '[object Object]') return fromMessage;
+    const asText = String(error || '').trim();
+    if (asText && asText !== '[object Object]') return asText;
+    return String(fallback || 'unknown error');
+};
+
+const applyStoryboardProgressFailureToNode = (node, item) => {
+    const nextError = String(item?.error || node?.last_error_message || '').trim();
+    const nextCode = String(
+        item?.errorCode || item?.error_code || node?.last_error_code || 'STORYBOARD_GENERATION_FAILED'
+    ).trim();
+    const prevMeta = node?.runtime_meta && typeof node.runtime_meta === 'object' ? node.runtime_meta : {};
+    return {
+        ...node,
+        status: 'failed',
+        last_error_code: nextCode,
+        last_error_message: nextError,
+        runtime_meta: {
+            ...prevMeta,
+            ...(nextError ? { business_reason: nextError } : {}),
+        },
+    };
+};
+
 /** Frontend owns shot generation — map local progress onto leftover backend placeholders. */
 const overlayStoryboardPipelineNodesFromProgress = (nodes, progress) => {
     const list = Array.isArray(nodes) ? nodes : [];
     const normalized = normalizeStoryboardTaskProgress(progress);
     let changed = false;
+    const seenIdentities = new Set();
     const next = list.map((node) => {
         if (!isStoryboardPipelineNodeName(node?.node_name)) return node;
         const current = String(node?.status || '').trim().toLowerCase();
         if (['canceled', 'blocked'].includes(current)) return node;
         const sceneId = String(node?.scene_id || '').trim();
         if (sceneId) {
+            seenIdentities.add(storyboardProgressIdentityKey(sceneId, node));
             const item = findStoryboardProgressItem(normalized, sceneId, {
                 sceneOrder: deriveSceneOrderFromSceneId(sceneId),
                 markerSceneId: sceneId,
@@ -761,13 +812,14 @@ const overlayStoryboardPipelineNodesFromProgress = (nodes, progress) => {
                 changed = true;
                 return { ...node, status: 'success', progress_percent: 100 };
             }
-            if (itemStatus === 'failed' && current !== 'failed') {
-                changed = true;
-                return {
-                    ...node,
-                    status: 'failed',
-                    last_error_message: String(item?.error || node?.last_error_message || '').trim(),
-                };
+            if (itemStatus === 'failed') {
+                const nextError = String(item?.error || node?.last_error_message || '').trim();
+                const alreadySame = current === 'failed'
+                    && nextError === String(node?.last_error_message || '').trim();
+                if (!alreadySame) {
+                    changed = true;
+                    return applyStoryboardProgressFailureToNode(node, item);
+                }
             }
             return node;
         }
@@ -783,6 +835,21 @@ const overlayStoryboardPipelineNodesFromProgress = (nodes, progress) => {
             }
         }
         return node;
+    });
+    Object.entries(normalized.items || {}).forEach(([marker, item]) => {
+        if (String(item?.status || '').trim().toLowerCase() !== 'failed') return;
+        const identity = storyboardProgressIdentityKey(marker, item);
+        if (seenIdentities.has(identity)) return;
+        const sceneId = String(item?.markerSceneId || marker || '').trim();
+        if (!sceneId) return;
+        changed = true;
+        seenIdentities.add(identity);
+        next.push(applyStoryboardProgressFailureToNode({
+            node_name: 'storyboard_generation',
+            scene_id: sceneId,
+            progress_percent: 0,
+            runtime_meta: { business_event: 'failed_from_frontend' },
+        }, item));
     });
     return changed ? next : list;
 };
@@ -10322,8 +10389,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 publishEpisodeAnalysisProgress(episodeId, { pipelineNodes: overlaidNodes });
             }
         }
+        if (String(patch?.status || '').trim().toLowerCase() === 'failed') {
+            const episodeId = Number(activeEpisode?.id || 0);
+            const pid = Number(projectId || activeEpisode?.project_id || 0);
+            const errMsg = String(patch?.error || nextItems[stableMarker]?.error || '').trim();
+            if (episodeId > 0 && pid > 0) {
+                void reportStoryboardGenerationFailed({
+                    project_id: pid,
+                    episode_id: episodeId,
+                    scene_marker: stableMarker,
+                    error_message: errMsg,
+                    error_code: String(
+                        patch?.errorCode || patch?.error_code || 'STORYBOARD_GENERATION_FAILED'
+                    ).trim() || 'STORYBOARD_GENERATION_FAILED',
+                }).catch(() => {});
+            }
+        }
         return nextProgress;
-    }, [activeEpisode]);
+    }, [activeEpisode, projectId]);
 
     const publishStoryboardTaskPanelStatus = useCallback(({
         markerSceneId,
@@ -11228,7 +11311,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
                 return true;
             } catch (err) {
-                const errMsg = String(err?.response?.data?.detail || err?.message || err || 'unknown error');
+                const errMsg = resolveStoryboardFailureMessage(err);
                 const failedProgress = updateStoryboardTaskItem(stableMarker, {
                     status: 'failed',
                     error: errMsg,
@@ -33187,8 +33270,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <span className="font-bold text-sm">{t('进度诊断面板', 'Workflow Diagnostics')}</span>
                             <span className="text-[9px] leading-4 text-white/40 max-w-[520px]">
                                 {t(
-                                    '全局节点与分场节点分行展示。每场左侧「重跑该场」只从文戏优化重跑该场后续节点，不跑美术指导与其他分场。失败节点可点击查看原因、处理建议，并衔接 AI 诊断。',
-                                    'Global and per-scene nodes are shown separately. “Rerun This Scene” on the left starts that scene from drama and skips art direction and other scenes. Click a failed node for the reason, next steps, and AI Diagnosis.'
+                                    '全局节点与分场节点分行展示。每场左侧「重跑该场」只从文戏优化重跑该场后续节点，不跑美术指导与其他分场。失败节点可点「查看原因」看错误、处理建议，并衔接 AI 诊断。',
+                                    'Global and per-scene nodes are shown separately. “Rerun This Scene” on the left starts that scene from drama and skips art direction and other scenes. Use View reason on a failed node for the error, next steps, and AI Diagnosis.'
                                 )}
                             </span>
                         </div>
@@ -33503,6 +33586,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const canImportAssets = Boolean(resolveDiagnosticAssetDesignImport().assetDesignJson) && !assetDesignActive;
                         const canRerunStoryboard = Boolean((storyboardCanStart || storyboardSettled) && !storyboardInFlight && !isRerunningStoryboard);
                         const diagnosticBtnClass = 'text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-40 disabled:cursor-not-allowed hover:text-white transition-colors';
+                        const failedInspectBtnClass = 'text-[10px] px-1 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors';
+                        const renderFailedReasonButton = (onInspect) => (
+                            <button
+                                type="button"
+                                onClick={onInspect}
+                                className={failedInspectBtnClass}
+                                title={t('查看失败原因、处理建议，并可开 AI 诊断', 'View the failure reason, next steps, and AI Diagnosis')}
+                            >
+                                {t('查看原因', 'View reason')}
+                            </button>
+                        );
+                        const renderFailedReasonPreview = (state) => {
+                            const text = String(state?.errorMessage || state?.detail || state?.businessReason || '').trim();
+                            if (!text) return null;
+                            return (
+                                <span
+                                    className="max-w-[7.5rem] line-clamp-2 text-[9px] leading-tight text-red-200/75 text-center"
+                                    title={text}
+                                >
+                                    {text}
+                                </span>
+                            );
+                        };
                         const renderImportButton = (kind, enabled) => (
                             <button
                                 type="button"
@@ -33636,7 +33742,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         >
                                             {statusLabel}
                                         </span>
+                                        {state.failed ? renderFailedReasonPreview(state) : null}
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
+                                            {state.failed ? renderFailedReasonButton(inspectAssetFailure) : null}
                                             {renderImportButton('assets', canImportCategory)}
                                             {(spec.key === 'character' || spec.key === 'prop') ? (
                                                 <button
@@ -33768,7 +33876,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     ? t('处理中', 'Processing')
                                                     : t('等待中', 'Waiting')}
                                     </span>
-                                    <div className="flex items-center gap-1">
+                                    {state.failed ? renderFailedReasonPreview(state) : null}
+                                    <div className="flex items-center gap-1 flex-wrap justify-center">
+                                        {state.failed
+                                            ? renderFailedReasonButton(() => openInspectFromNode(stepKey, state, {
+                                                nodeKey,
+                                                nodeName: nodeKey,
+                                                canRerun: Boolean(!analysisLive && !state.active && activeEpisode?.id),
+                                                rerunKind: 'stage1',
+                                            }))
+                                            : null}
                                         <button
                                             type="button"
                                             onClick={() => openStageArtifactEditModal(stepKey)}
@@ -34217,7 +34334,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 ? (state.detail || t('处理中', 'Processing'))
                                                 : t('等待中', 'Waiting')}
                                 </span>
+                                {state.failed ? renderFailedReasonPreview(state) : null}
                                 <div className="flex items-center gap-1 flex-wrap justify-center">
+                                    {state.failed ? renderFailedReasonButton(inspectSceneFailure) : null}
                                     <button
                                         type="button"
                                         onClick={() => openSceneNodeEditModal(stepKey, sceneId)}
