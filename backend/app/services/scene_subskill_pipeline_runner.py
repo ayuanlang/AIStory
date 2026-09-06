@@ -103,7 +103,7 @@ _SUBSKILL_STEP_PROGRESS = {
     "staging": 82.0,
 }
 _BEAT_FRAMING_PLAN_PATTERN = re.compile(r"【Beat景别构图方案】")
-_BEAT_PLACEMENT_PATTERN = re.compile(r"【Beat主体定位】")
+_BEAT_PLACEMENT_PATTERN = re.compile(r"【(?:Beat主体定位|角色道具宫格分布图)】")
 _LEGACY_COMBAT_PROMPTS = {
     "skills/scene_analysis_feature_stack/scene_planning_1_subskill_vfx.md": COMBAT_PROMPT,
     "skills/scene_analysis_feature_stack/scene_planning_1_subskill_xian_attack.md": COMBAT_PROMPT,
@@ -218,7 +218,8 @@ def persisted_subskill_step_usable(step_key: str, text: str) -> bool:
         return True
     if key == "framing":
         return (
-            "【Beat主体定位】" in body
+            "【角色道具宫格分布图】" in body
+            or "【Beat主体定位】" in body
             or "【取景锁定】" in body
             or "[DERIVED_ENV" in body
             or "【Beat景别构图方案】" in body
@@ -503,6 +504,8 @@ def merge_scene_blocks_into_script(
     return "\n".join(part for part in parts if part)
 
 
+_GRID_MAP_HEADING = "【角色道具宫格分布图】"
+_GRID_MAP_REQUIRED_FIELDS = ("当前环境=", "景别=")
 _FRAMING_LOCK_HEADING = "【取景锁定】"
 _FRAMING_LOCK_REQUIRED_FIELDS = ("当前环境=", "景别=", "构图=", "镜头角度=")
 _FRAMING_EVIDENCE_FIELD = "选择证据="
@@ -526,9 +529,11 @@ def _iter_beat_bodies(source: str) -> List[Tuple[str, str]]:
 
 def _beat_has_framing_lock(body: str) -> bool:
     text = str(body or "")
+    compact = text.replace(" ", "").replace("＝", "=")
+    if _GRID_MAP_HEADING in text:
+        return all(field in compact for field in _GRID_MAP_REQUIRED_FIELDS)
     if _FRAMING_LOCK_HEADING not in text:
         return False
-    compact = text.replace(" ", "").replace("＝", "=")
     return all(field in compact for field in _FRAMING_LOCK_REQUIRED_FIELDS) and (
         _FRAMING_EVIDENCE_FIELD in compact
     )
@@ -549,7 +554,12 @@ def _framing_lock_bodies_by_id(source: str) -> Dict[str, Tuple[str, str]]:
     return found
 
 
-_FRAMING_PLAN_HEADINGS = ("【主体定位方案】", "【宫格草稿】", "【Beat主体定位】")
+_FRAMING_PLAN_HEADINGS = (
+    "【角色道具宫格分布图】",
+    "【主体定位方案】",
+    "【宫格草稿】",
+    "【Beat主体定位】",
+)
 
 
 def _last_beat_stream_block(text: str) -> str:
@@ -564,7 +574,7 @@ def _last_beat_stream_block(text: str) -> str:
 
 def _locked_beat_stream_from_text(text: str) -> str:
     stream = _last_beat_stream_block(text)
-    if stream and _FRAMING_LOCK_HEADING in stream:
+    if stream and (_GRID_MAP_HEADING in stream or _FRAMING_LOCK_HEADING in stream):
         return stream
     chunks = [
         f"[BEAT_START:{beat_id}]\n{body.strip()}\n[BEAT_END:{beat_id}]"
@@ -613,7 +623,7 @@ def _splice_trailing_framing_payload(raw_text: str, scene_text: str) -> str:
         if extract:
             extras.append(str(extract.group(0) or "").strip())
     scene_has_lock = any(_beat_has_framing_lock(body) for _, body in _iter_beat_bodies(scene))
-    if not scene_has_lock and _FRAMING_LOCK_HEADING in raw:
+    if not scene_has_lock and (_GRID_MAP_HEADING in raw or _FRAMING_LOCK_HEADING in raw):
         locked_stream = _locked_beat_stream_from_text(raw)
         if locked_stream and locked_stream not in scene:
             extras.append(locked_stream)
@@ -632,6 +642,7 @@ def _framing_has_plan_and_extract(source: str) -> bool:
         _BEAT_PLACEMENT_PATTERN.search(text)
         or _FRAMING_LOCK_HEADING in text
         or _BEAT_FRAMING_PLAN_PATTERN.search(text)
+        or "【角色道具宫格分布图】" in text
         or "【主体定位方案】" in text
         or "【宫格草稿】" in text
     )
@@ -1044,8 +1055,8 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
             parts = rest.split(":", 1)
             beat_ids = parts[1].split()[0].rstrip(")'\"") if len(parts) > 1 else ""
         if beat_ids:
-            return f"场景现场编排已返回，但拍 {beat_ids} 缺少取景锁定，不能进入建置与入戏"
-        return "场景现场编排已返回，但部分拍缺少取景锁定，不能进入建置与入戏"
+            return f"场景现场编排已返回，但拍 {beat_ids} 缺少宫格分布图，不能进入建置与入戏"
+        return "场景现场编排已返回，但部分拍缺少宫格分布图，不能进入建置与入戏"
     if "STAGING_BLOCKED_FRAMING_INCOMPLETE" in text:
         return "场景现场编排已返回，但缺少主体定位或衍生环境提取，不能进入建置与入戏"
     if "STAGING_BLOCKED_ILLEGAL_DERIVED_ENV" in text:
@@ -1537,12 +1548,26 @@ def _ensure_reused_main_env_block(
     return f"{source}\n{env_block}"
 
 
+_DERIVED_ENV_IN_ENV_BLOCK = re.compile(
+    r"\n?────【衍生环境】────.*?(?=────【|\[ENV_BLOCK_END|$)",
+    re.DOTALL,
+)
+
+
 def extract_environment_planning_sections(scene_text: str) -> str:
     source = str(scene_text or "")
     ident = extract_scene_env_ident_block(source)
     match = _ENV_BLOCK_WITH_COVERAGE_PATTERN.search(source)
     env = str(match.group(0) or "").strip() if match else extract_env_block_from_scene_text(source).strip()
     return "\n".join(part for part in (ident, env) if str(part or "").strip())
+
+
+def _main_env_for_staging(env_scene_block: str) -> str:
+    """Main-env + unplaced only; framing output no longer 透传 these."""
+    sections = extract_environment_planning_sections(env_scene_block)
+    if not sections:
+        return ""
+    return _DERIVED_ENV_IN_ENV_BLOCK.sub("", sections).strip()
 
 
 def strip_environment_planning_sections(scene_text: str) -> str:
@@ -1990,9 +2015,13 @@ async def _run_derived_framing_then_staging(
         current_block = assert_derived_framing_ready_for_staging(enhance_block, scene_id)
         if "derived_framing" not in called:
             called.append("derived_framing")
+        staging_scene = current_block
+        main_env = _main_env_for_staging(env_scene)
+        if main_env and "【主环境】" not in current_block:
+            staging_scene = f"{main_env}\n\n{current_block}"
         current_input = _with_derived_env_frame_anchors(
             _wrap_single_scene_input(
-                current_block,
+                staging_scene,
                 comprehensive_info,
                 project_tail,
                 entity_token_brief,
@@ -2079,9 +2108,13 @@ async def _run_derived_framing_then_staging(
             )
         if step_name == "staging":
             current_block = assert_derived_framing_ready_for_staging(current_block, scene_id)
+            staging_scene = current_block
+            main_env = _main_env_for_staging(env_scene or framing_block)
+            if main_env and "【主环境】" not in current_block:
+                staging_scene = f"{main_env}\n\n{current_block}"
             current_input = _with_derived_env_frame_anchors(
                 _wrap_single_scene_input(
-                    current_block,
+                    staging_scene,
                     comprehensive_info,
                     project_tail,
                     entity_token_brief,

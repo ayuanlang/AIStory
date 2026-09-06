@@ -392,6 +392,46 @@ def test_staging_gate_requires_framing_plan_and_tags():
     assert "【Beat主体定位】" in ready
     assert "[DERIVED_ENV:" in ready
 
+    grid_map = (
+        "【角色道具宫格分布图】\n"
+        "CHAR:[@掌柜]｜宫格=中2列×中2行｜方式=相对｜站位=位于柜台西面｜站位变=开场｜朝向=面向大门｜朝向变=开场\n"
+        "机位=中2列×南3行｜望=北｜景别=MCU｜针对=CHAR:[@掌柜]｜可见=CHAR:[@掌柜]｜覆盖=单人\n"
+        "当前环境=ENV:[0度客栈大堂]\n"
+        "【取景锁定】当前环境=ENV:[0度客栈大堂]｜望向=北｜景别=MCU｜"
+        "构图=三分｜镜头角度=平拍｜选择证据=ENV:机位望向:北/文戏:交代柜台｜"
+        "机位:Beat:对掌柜｜景别:原文:近景｜构图:文戏:柜台｜"
+        "[DERIVED_ENV:0度客栈大堂]\n"
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+    )
+    grid_ready = assert_derived_framing_ready_for_staging(grid_map, "EP01_SC02")
+    assert "【角色道具宫格分布图】" in grid_ready
+
+    lean = (
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=第一刀｜"
+        "生成提示=按主环境四向拼图截取0度宫格\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂_仰天｜所属主环境=客栈大堂｜view_angle_from_main=0｜"
+        "类型=特别｜特别表述=仰天:满幅夜空｜生成提示=按特别表述改俯仰\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂_扭曲｜所属主环境=客栈大堂｜view_angle_from_main=0｜"
+        "类型=衍生的衍生｜同角切割父=0度客栈大堂｜状态Delta=梁柱弯｜"
+        "生成提示=以父衍生为本只改状态Delta\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+        "[BEAT_STREAM_START]\n"
+        "[BEAT_START:1]\n"
+        "- Beat 1：节拍=铺垫\n掌柜拨算盘。\n"
+        "【角色道具宫格分布图】\n"
+        "CHAR:[@掌柜]｜宫格=中2列×中2行｜站位变=开场｜朝向变=开场\n"
+        "机位=中2列×南3行｜望=北｜景别=WS｜当前环境=ENV:[0度客栈大堂]｜[DERIVED_ENV:0度客栈大堂]\n"
+        "[BEAT_END:1]\n"
+        "[BEAT_STREAM_END]\n"
+    )
+    lean_ready = assert_derived_framing_ready_for_staging(lean, "EP01_SC02")
+    assert "【角色道具宫格分布图】" in lean_ready
+    assert "掌柜拨算盘" in lean_ready
+    assert "【取景锁定】" not in lean_ready
+
     try:
         assert_derived_framing_ready_for_staging("文戏+仙攻完成，没有构图方案", "EP01_SC02")
         raise AssertionError("expected staging to be blocked")
@@ -715,8 +755,8 @@ def test_pipeline_ingests_derived_env_immediately_after_framing():
 def test_special_note_injected_into_generation_prompt():
     items = parse_derived_env_extract_items(
         "[DERIVED_ENV_EXTRACT_START]\n"
-        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=第一刀｜同角切割父=无｜状态Delta=无\n"
-        "[DERIVED_ENV] 名称=0度客栈大堂_仰天｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=特别｜特别表述=仰天:满幅夜空与檐口剪影，地面仅近端截断｜empty_view_delta=满幅夜空，地面仅近端截断｜同角切割父=无｜状态Delta=无\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=第一刀｜同角切割父=无｜状态Delta=无｜生成提示=按主环境四向拼图截取0度宫格\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂_仰天｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=特别｜特别表述=仰天:满幅夜空与檐口剪影，地面仅近端截断｜empty_view_delta=满幅夜空，地面仅近端截断｜同角切割父=无｜状态Delta=无｜生成提示=按特别表述改俯仰\n"
         "[DERIVED_ENV] 名称=180度客栈大堂_变形｜所属主环境=客栈大堂｜view_angle_from_main=180｜类型=特别｜特别表述=变形:荷兰角地平线左低右高，立柱倾斜压迫｜同角切割父=无｜状态Delta=无\n"
         "[DERIVED_ENV_EXTRACT_END]\n"
     )
@@ -724,9 +764,11 @@ def test_special_note_injected_into_generation_prompt():
     assert by_name["0度客栈大堂_仰天"]["special_note"].startswith("仰天")
     regular = build_derived_environment_item(by_name["0度客栈大堂"])
     assert "特别表述=" not in regular["generation_prompt_cn"]
+    assert "生成提示=按主环境四向拼图截取0度宫格" in regular["generation_prompt_cn"]
     assert regular["custom_attributes"]["derived_kind"] == "first_cut"
     look_up = build_derived_environment_item(by_name["0度客栈大堂_仰天"])
     assert "特别表述=仰天:满幅夜空与檐口剪影，地面仅近端截断" in look_up["generation_prompt_cn"]
+    assert "生成提示=按特别表述改俯仰" in look_up["generation_prompt_cn"]
     assert "空镜差值=满幅夜空，地面仅近端截断" in look_up["generation_prompt_cn"]
     assert "必须按现场编排特别形态改画" in look_up["generation_prompt_cn"]
     assert "禁止只做平视宫格原样切割" in look_up["generation_prompt_cn"]

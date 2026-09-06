@@ -34,8 +34,8 @@ EVIDENCE_NAME_PATTERN = re.compile(
     re.IGNORECASE,
 )
 FRAMING_ENV_FIELD_PATTERN = re.compile(
-    r"【(?:Beat景别构图方案|取景锁定|Beat主体定位)】(.*?)(?:"
-    r"【(?:景别构图综合|主体定位方案|取景锁定|Beat主体定位|实体覆盖)】|"
+    r"【(?:Beat景别构图方案|取景锁定|Beat主体定位|角色道具宫格分布图)】(.*?)(?:"
+    r"【(?:景别构图综合|主体定位方案|取景锁定|Beat主体定位|角色道具宫格分布图|实体覆盖)】|"
     r"\[DERIVED_ENV_EXTRACT_START\]|\[BEAT_STREAM_START\])",
     re.IGNORECASE | re.DOTALL,
 )
@@ -633,6 +633,7 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
                     "parent": fields.get("同角切割父") or fields.get("parent"),
                     "state_delta": fields.get("状态Delta") or fields.get("state_delta"),
                     "special_note": fields.get("特别表述") or fields.get("special_note"),
+                    "gen_prompt": fields.get("生成提示") or fields.get("gen_prompt"),
                     "empty_view_delta": fields.get("empty_view_delta") or fields.get("空镜差值"),
                     "visible_bound": fields.get("可见边界") or fields.get("visible_bound"),
                     "background": fields.get("背景") or fields.get("background"),
@@ -781,6 +782,9 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
         negative = FIRST_CUT_NEGATIVE
         atmosphere = f"{'Master' if angle == 0 else 'Angle'} empty plate crop"
         visual_params = f"{lens}/Derived/{angle}"
+    gen_hint = _clean(item.get("gen_prompt") or item.get("生成提示"))
+    if gen_hint and gen_hint.lower() not in _EMPTY_FIELD_MARKERS and gen_hint not in prompt:
+        prompt = f"{prompt}生成提示={gen_hint}。"
     if special_kind == "变形":
         negative = negative.replace("dutch angle, tilted horizon, ", "").replace("dutch angle, ", "")
     return {
