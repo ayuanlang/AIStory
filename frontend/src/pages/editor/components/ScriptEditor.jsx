@@ -861,11 +861,40 @@ const applyThisRunStoryboardPipelineNodes = (nodes, progress, { filterLeftover =
         : overlaid;
 };
 
-const pickThisRunStoryboardTaskProgress = (state, ref, report, ignoreLeftover = false) => (
-    ignoreLeftover
+const THIS_RUN_STORYBOARD_SLACK_MS = 1000;
+
+/** True when a progress item was written during the current analysis clock. */
+const isThisRunStoryboardProgressItem = (item, runStartedAt, { requireRunClock = false } = {}) => {
+    const started = Number(item?.runStartedAt || 0);
+    const runAt = Number(runStartedAt || 0);
+    if (started <= 0) return false;
+    if (runAt <= 0) return !requireRunClock;
+    return started >= (runAt - THIS_RUN_STORYBOARD_SLACK_MS);
+};
+
+/** Drop leftover 已完成 rows that belong to a previous run. */
+const stripLeftoverCompletedStoryboardItems = (progress, runStartedAt, options = {}) => {
+    const normalized = normalizeStoryboardTaskProgress(progress);
+    const items = {};
+    let changed = false;
+    Object.entries(normalized.items || {}).forEach(([key, item]) => {
+        const status = String(item?.status || '').toLowerCase();
+        if (status === 'completed' && !isThisRunStoryboardProgressItem(item, runStartedAt, options)) {
+            changed = true;
+            return;
+        }
+        items[key] = item;
+    });
+    return changed ? normalizeStoryboardTaskProgress({ items }) : normalized;
+};
+
+const pickThisRunStoryboardTaskProgress = (state, ref, report, ignoreLeftover = false, runStartedAt = 0) => {
+    const picked = ignoreLeftover
         ? pickRicherStoryboardTaskProgress(state, ref)
-        : pickRicherStoryboardTaskProgress(state, ref, report)
-);
+        : pickRicherStoryboardTaskProgress(state, ref, report);
+    if (!ignoreLeftover) return picked;
+    return stripLeftoverCompletedStoryboardItems(picked, runStartedAt, { requireRunClock: true });
+};
 
 const resolveLiveImportedSceneIdsToSkip = async ({
     fetchScenesFn,
@@ -4723,6 +4752,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const storyboardTaskProgressRef = useRef(EMPTY_STORYBOARD_TASK_PROGRESS);
     // Scene-subskill rerun parks this scene's storyboard cell as 等待中 until kickoff.
     const storyboardPendingAfterSubskillRef = useRef(new Set());
+    // Survives resetStoryboardKickoffTracking during a full-analysis clear sequence.
+    const storyboardRestartPendingSceneIdsRef = useRef([]);
     const diagnosticsPipelineNodesRef = useRef([]);
     const diagnosticsSceneUnitsRef = useRef([]);
     const analysisProgressHydratedRef = useRef(false);
@@ -5964,6 +5995,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     useEffect(() => {
         setLiveSceneMarkdownByScene(null);
         analysisTrustLiveDownstreamOnlyRef.current = false;
+        storyboardRestartPendingSceneIdsRef.current = [];
     }, [activeEpisode?.id]);
 
     useEffect(() => {
@@ -6212,6 +6244,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 storyboardTaskProgressRef.current,
                 analysisUiReport?.storyboardTaskProgress,
                 analysisTrustLiveDownstreamOnlyRef.current,
+                analysisTimerStartedAtRef.current,
             );
         return resolveAnalysisProgressDisplayState({
             isAnalyzing,
@@ -6441,6 +6474,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             storyboardTaskProgressRef.current,
             analysisUiReport?.storyboardTaskProgress,
             analysisTrustLiveDownstreamOnlyRef.current,
+            analysisTimerStartedAtRef.current,
         );
         const storyboardUnresolved = isStoryboardProgressUnresolved(progress)
             || hasBlockingStoryboardKickoffWork(progress, {
@@ -6545,6 +6579,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             storyboardTaskProgressRef.current,
             analysisUiReport?.storyboardTaskProgress,
             analysisTrustLiveDownstreamOnlyRef.current,
+            analysisTimerStartedAtRef.current,
         );
         // Do not promote UI to completed while storyboard tasks are still open.
         if (
@@ -6599,6 +6634,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             storyboardTaskProgressRef.current,
             analysisUiReport?.storyboardTaskProgress,
             analysisTrustLiveDownstreamOnlyRef.current,
+            analysisTimerStartedAtRef.current,
         );
         const unresolved = isStoryboardProgressUnresolved(progress)
             || hasBlockingStoryboardKickoffWork(progress, {
@@ -6672,6 +6708,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             storyboardTaskProgressRef.current,
             analysisUiReport?.storyboardTaskProgress,
             analysisTrustLiveDownstreamOnlyRef.current,
+            analysisTimerStartedAtRef.current,
         );
         const openStoryboard = isStoryboardProgressUnresolved(progress)
             || hasBlockingStoryboardKickoffWork(progress, {
@@ -9787,6 +9824,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const resetStoryboardKickoffTracking = useCallback((options = {}) => {
         const preserveEnvGate = Boolean(options?.preserveEnvGate);
+        const preservePendingAfterSubskill = Boolean(options?.preservePendingAfterSubskill);
         storyboardKickoffByMarkerRef.current = new Set();
         storyboardKickoffByIdentityRef.current = new Set();
         storyboardKickoffByDbIdRef.current = new Set();
@@ -9797,7 +9835,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             environmentAssetDesignPendingRef.current = false;
             stage3AutoStartCacheRef.current = null;
         }
-        storyboardPendingAfterSubskillRef.current = new Set();
+        if (!preservePendingAfterSubskill) {
+            storyboardPendingAfterSubskillRef.current = new Set();
+        }
         storyboardTaskProgressRef.current = EMPTY_STORYBOARD_TASK_PROGRESS;
         setStoryboardTaskProgress(EMPTY_STORYBOARD_TASK_PROGRESS);
     }, []);
@@ -10398,6 +10438,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             markerSceneId: stableMarker,
             runStartedAt: Number(analysisTimerStartedAtRef.current || Date.now()) || Date.now(),
         };
+        if (isThisRunStoryboardProgressItem(nextItems[stableMarker], analysisTimerStartedAtRef.current, { requireRunClock: true })) {
+            const prefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+            const writtenAllowlist = expandSceneIdAllowlist([stableMarker], prefix);
+            storyboardPendingAfterSubskillRef.current = new Set(
+                [...(storyboardPendingAfterSubskillRef.current || [])].filter((id) => (
+                    !isSceneIdInAllowlist(id, writtenAllowlist, prefix)
+                ))
+            );
+            storyboardRestartPendingSceneIdsRef.current = (storyboardRestartPendingSceneIdsRef.current || [])
+                .filter((id) => !isSceneIdInAllowlist(id, writtenAllowlist, prefix));
+        }
         const nextProgress = normalizeStoryboardTaskProgress({ items: nextItems });
         storyboardTaskProgressRef.current = nextProgress;
         setStoryboardTaskProgress(nextProgress);
@@ -16219,12 +16270,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const resetEpisodeDiagnosticsProgress = useCallback(async () => {
         analysisTrustLiveDownstreamOnlyRef.current = true;
+        // Bump the run clock first so leftover completed items cannot look like this-run.
+        analysisTimerStartedAtRef.current = Date.now();
+        const pendingSceneIds = [
+            ...Object.keys(storyboardTaskProgressRef.current?.items || {}),
+            ...(storyboardRestartPendingSceneIdsRef.current || []),
+            ...(diagnosticsSceneUnitsRef.current || []).map((unit) => unit?.scene_id || unit?.sceneId),
+            ...(diagnosticsPipelineNodesRef.current || []).map((node) => node?.scene_id),
+        ].map((id) => String(id || '').trim()).filter(Boolean);
+        if (pendingSceneIds.length > 0) {
+            storyboardRestartPendingSceneIdsRef.current = [...new Set([
+                ...(storyboardRestartPendingSceneIdsRef.current || []),
+                ...pendingSceneIds,
+            ])];
+        }
         // Clear leftover pipeline rows before publishing empty storyboard progress.
         // Otherwise resetStoryboardKickoffTracking republishes last-run
         // storyboard_generation success nodes into the live snapshot.
         diagnosticsPipelineNodesRef.current = [];
         diagnosticsSceneUnitsRef.current = [];
         resetStoryboardKickoffTracking();
+        if ((storyboardRestartPendingSceneIdsRef.current || []).length > 0) {
+            storyboardPendingAfterSubskillRef.current = mergeSceneIdAllowlist(
+                new Set(),
+                storyboardRestartPendingSceneIdsRef.current,
+                resolveEpisodeSceneIdPrefix(activeEpisode)
+            );
+        }
         orchestrationCanonicalSceneIdsRef.current = new Set();
         orchestrationLiveImportedScenesRef.current = new Set();
         orchestrationPersistedSceneMarkdownRef.current = {};
@@ -16262,9 +16334,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 pipelineNodes: [],
                 sceneUnits: [],
             });
+            if ((storyboardRestartPendingSceneIdsRef.current || []).length > 0) {
+                storyboardPendingAfterSubskillRef.current = mergeSceneIdAllowlist(
+                    new Set(),
+                    storyboardRestartPendingSceneIdsRef.current,
+                    resolveEpisodeSceneIdPrefix(activeEpisode)
+                );
+            }
         }
     }, [
-        activeEpisode?.id,
+        activeEpisode,
         clearDiagnosticsPanelState,
         onLog,
         projectId,
@@ -16321,7 +16400,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (uiReport) {
                 setAnalysisUiReportState(uiReport);
                 setAnalysisReviewIssues(Array.isArray(uiReport.reviewIssues) ? uiReport.reviewIssues : []);
-                const restoredStoryboard = normalizeStoryboardTaskProgress(uiReport.storyboardTaskProgress);
+                const restoredStoryboard = analysisTrustLiveDownstreamOnlyRef.current
+                    ? stripLeftoverCompletedStoryboardItems(
+                        normalizeStoryboardTaskProgress(uiReport.storyboardTaskProgress),
+                        analysisTimerStartedAtRef.current,
+                        { requireRunClock: true },
+                    )
+                    : normalizeStoryboardTaskProgress(uiReport.storyboardTaskProgress);
                 const localStoryboard = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
                 const livePhase = String(
                     snapshot.flowStatus?.phase || analysisFlowStatusRef.current?.phase || ''
@@ -17519,7 +17604,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             clearStoryboardTrackingForScenes([...targetMarkerSet]);
         } else {
             orchestrationLiveImportedScenesRef.current = new Set();
-            resetStoryboardKickoffTracking({ preserveEnvGate: true });
+            resetStoryboardKickoffTracking({ preserveEnvGate: true, preservePendingAfterSubskill: true });
         }
 
         // Full-pipeline precheck: do not re-orchestrate scenes already in the workspace DB.
@@ -22885,6 +22970,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             // Confirmations done: wipe temp-area + workspace artifacts before a fresh full run.
             // Keep preparing UI (preserveProgressUi) so the button/progress stay in running state.
+            // Hold in-flight before awaits so leftover snapshot subscribers cannot restore 已完成.
+            analysisRunInFlightRef.current = true;
             try {
                 if (onLog) onLog('Clearing workspace analysis artifacts and diagnostic panel before AI Script Analysis...', 'process');
                 await resetEpisodeDiagnosticsProgress();
@@ -22894,6 +22981,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
             } catch (clearErr) {
                 console.error('Failed to clear analysis outputs before rerun', clearErr);
+                analysisRunInFlightRef.current = false;
                 releaseAnalysisClickClaim();
                 alert(t(
                     `清空工作区分析结果失败：${clearErr?.message || clearErr}`,
@@ -24236,7 +24324,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             storyboardAutoStarted: false,
             storyboardTaskProgress: EMPTY_STORYBOARD_TASK_PROGRESS,
         });
-    }, [beginAnalysisTimer, resetAnalysisRunProgressLogs, t]);
+        if ((storyboardRestartPendingSceneIdsRef.current || []).length > 0) {
+            storyboardPendingAfterSubskillRef.current = mergeSceneIdAllowlist(
+                new Set(),
+                storyboardRestartPendingSceneIdsRef.current,
+                resolveEpisodeSceneIdPrefix(activeEpisode)
+            );
+        }
+    }, [activeEpisode, beginAnalysisTimer, resetAnalysisRunProgressLogs, t]);
 
     /** Shared entry for stage rerun buttons — must flip status/phase before any await. */
     const beginStageRerunUi = useCallback(({
@@ -33312,6 +33407,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             storyboardTaskProgressRef.current,
                             analysisUiReport?.storyboardTaskProgress,
                             ignoreLeftoverStoryboard,
+                            analysisTimerStartedAtRef.current,
                         );
                         const trackedStoryboardStartedCount = Number(progress?.started || 0);
                         const trackedStoryboardCompletedCount = Number(progress?.completed || 0);
@@ -34244,6 +34340,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const pendingAfterSubskill = pendingSet instanceof Set
                                 && pendingSet.size > 0
                                 && isSceneIdInAllowlist(sceneId, pendingSet, episodePrefix);
+                            const thisRunItem = isThisRunStoryboardProgressItem(
+                                item,
+                                analysisTimerStartedAtRef.current,
+                                { requireRunClock: Boolean(ignoreLeftoverStoryboard || pendingAfterSubskill) }
+                            );
+                            const subskillNode = findScenePipelineNode('scene_subskill_scene', sceneId);
+                            const subskillActive = ['running', 'queued'].includes(
+                                String(subskillNode?.status || '').trim().toLowerCase()
+                            );
                             // This-run kickoff / LLM submit must win over leftover completed nodes.
                             if (STORYBOARD_IN_FLIGHT_STATUSES.includes(status)) {
                                 return { ready: false, active: true, failed: false, detail: '' };
@@ -34251,9 +34356,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             if (['waiting_env', 'waiting_import'].includes(status)) {
                                 return { ready: false, active: true, failed: false, detail: status === 'waiting_env' ? t('等待环境', 'Wait ENV') : t('等待入库', 'Wait import') };
                             }
-                            // Drama/combat/staging rerun will kick storyboard later — show 等待中,
-                            // not leftover 已完成 from the previous successful apply.
-                            if (pendingAfterSubskill && status !== 'failed' && !fromNode.failed) {
+                            // Drama/combat/staging rerun or a fresh full analysis will kick storyboard later.
+                            // Hide leftover 已完成 from the previous successful apply.
+                            if (
+                                (pendingAfterSubskill || ignoreLeftoverStoryboard || subskillActive)
+                                && status !== 'failed'
+                                && !fromNode.failed
+                                && !thisRunItem
+                            ) {
                                 return { ready: false, active: false, failed: false, detail: '' };
                             }
                             if (status === 'completed') {
