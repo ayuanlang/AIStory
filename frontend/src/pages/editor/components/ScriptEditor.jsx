@@ -713,12 +713,43 @@ const storyboardItemIsInFlight = (item) => {
 
 const findStoryboardProgressItem = (progress, sceneId, extra = {}) => {
     const items = progress?.items && typeof progress.items === 'object' ? progress.items : {};
-    const direct = items[String(sceneId || '').trim()];
-    if (direct) return direct;
+    const wanted = String(sceneId || '').trim();
     const identity = storyboardProgressIdentityKey(sceneId, extra);
-    return Object.entries(items).find(([key, row]) => (
-        storyboardProgressIdentityKey(key, row) === identity
-    ))?.[1] || null;
+    let best = null;
+    let bestRank = -1;
+    Object.entries(items).forEach(([key, row]) => {
+        const keyMatch = String(key || '').trim() === wanted;
+        const identityMatch = storyboardProgressIdentityKey(key, row) === identity;
+        if (!keyMatch && !identityMatch) return;
+        // In-flight / waiting must beat leftover completed on the same scene identity.
+        const rank = storyboardStatusRank(row?.status) + (keyMatch ? 0.05 : 0);
+        if (rank > bestRank) {
+            best = row;
+            bestRank = rank;
+        }
+    });
+    return best;
+};
+
+/** Keep this-run starting/generating items even when a leftover settled snapshot scores richer. */
+const mergeInFlightStoryboardProgress = (base, ...liveSources) => {
+    const items = { ...(normalizeStoryboardTaskProgress(base).items || {}) };
+    liveSources.forEach((source) => {
+        Object.entries(normalizeStoryboardTaskProgress(source).items || {}).forEach(([key, item]) => {
+            if (!storyboardItemIsInFlight(item)) return;
+            const identity = storyboardProgressIdentityKey(key, item);
+            Object.keys(items).forEach((existingKey) => {
+                if (existingKey === key) return;
+                if (storyboardProgressIdentityKey(existingKey, items[existingKey]) !== identity) return;
+                if (!storyboardItemIsInFlight(items[existingKey])) delete items[existingKey];
+            });
+            const existing = items[key];
+            if (!existing || storyboardStatusRank(item?.status) >= storyboardStatusRank(existing?.status)) {
+                items[key] = existing ? { ...existing, ...item } : item;
+            }
+        });
+    });
+    return normalizeStoryboardTaskProgress({ items });
 };
 
 const isStoryboardPipelineNodeName = (name) => {
@@ -892,8 +923,10 @@ const pickThisRunStoryboardTaskProgress = (state, ref, report, ignoreLeftover = 
     const picked = ignoreLeftover
         ? pickRicherStoryboardTaskProgress(state, ref)
         : pickRicherStoryboardTaskProgress(state, ref, report);
-    if (!ignoreLeftover) return picked;
-    return stripLeftoverCompletedStoryboardItems(picked, runStartedAt, { requireRunClock: true });
+    const stripped = ignoreLeftover
+        ? stripLeftoverCompletedStoryboardItems(picked, runStartedAt, { requireRunClock: true })
+        : picked;
+    return mergeInFlightStoryboardProgress(stripped, state, ref);
 };
 
 const resolveLiveImportedSceneIdsToSkip = async ({
@@ -34305,8 +34338,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 markerSceneId: sceneId,
                             });
                             const itemStatus = String(item?.status || '').trim().toLowerCase();
-                            // Claims stay after settle to prevent double-start; they are not live work.
-                            if (itemStatus === 'completed' || itemStatus === 'failed') return false;
+                            const thisRunSettled = (
+                                (itemStatus === 'completed' || itemStatus === 'failed')
+                                && isThisRunStoryboardProgressItem(
+                                    item,
+                                    analysisTimerStartedAtRef.current,
+                                    { requireRunClock: true }
+                                )
+                            );
+                            // This-run settle claims stay to prevent double-start; leftover 已完成
+                            // must not hide a kickoff that just started.
+                            if (thisRunSettled) return false;
+                            if (STORYBOARD_IN_FLIGHT_STATUSES.includes(itemStatus) || isStoryboardWaitingStatus(itemStatus)) {
+                                return true;
+                            }
                             const identity = storyboardProgressIdentityKey(sceneId, {
                                 sceneOrder: deriveSceneOrderFromSceneId(sceneId),
                                 markerSceneId: sceneId,
@@ -34356,6 +34401,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             if (['waiting_env', 'waiting_import'].includes(status)) {
                                 return { ready: false, active: true, failed: false, detail: status === 'waiting_env' ? t('等待环境', 'Wait ENV') : t('等待入库', 'Wait import') };
                             }
+                            if (liveKickoff) {
+                                return { ready: false, active: true, failed: false, detail: '' };
+                            }
                             // Drama/combat/staging rerun or a fresh full analysis will kick storyboard later.
                             // Hide leftover 已完成 from the previous successful apply.
                             if (
@@ -34380,9 +34428,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     businessReason: String(node?.runtime_meta?.business_reason || '').trim(),
                                     status: status || 'failed',
                                 };
-                            }
-                            if (liveKickoff) {
-                                return { ready: false, active: true, failed: false, detail: '' };
                             }
                             if (fromNode.ready && !ignoreLeftoverStoryboard) {
                                 return { ready: true, active: false, failed: false, detail: '' };
