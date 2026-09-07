@@ -2323,9 +2323,42 @@ async def execute_analyze_scene(
             debug_meta["subject_consistency"] = subject_consistency_meta
 
             prompt_syntax_rules = ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES
+            prompt_check_sections = ["characters", "props", "environments", "posters"]
+            if is_character_asset_design:
+                prompt_check_sections = ["characters"]
+            elif is_prop_asset_design:
+                prompt_check_sections = ["props"]
+            elif is_environment_asset_design:
+                prompt_check_sections = ["environments"]
 
-            prompt_template_meta = _detect_prompt_template_syntax_warnings(result_content, prompt_syntax_rules)
+            prompt_template_meta = _detect_prompt_template_syntax_warnings(
+                result_content,
+                prompt_syntax_rules,
+                subjects_json,
+                sections=prompt_check_sections,
+            )
             debug_meta["prompt_template_syntax"] = prompt_template_meta
+
+            missing_prompt_cn_items = prompt_template_meta.get("missing_generation_prompt_cn") or []
+            if is_entity_design_phase and missing_prompt_cn_items:
+                examples = "; ".join(
+                    f"{it.get('section')}:{it.get('name')}"
+                    for it in missing_prompt_cn_items[:8]
+                )
+                blocking_prompt_warnings = [
+                    f"主体缺少中文提示词 generation_prompt_cn。Examples: {examples}"
+                ]
+                detail = _build_scene_analysis_blocking_failure_detail(
+                    ["ANALYSIS_GENERATION_PROMPT_CN_MISSING"],
+                    blocking_prompt_warnings,
+                    [],
+                )
+                logger.error(
+                    "[analyze_scene] generation_prompt_cn_missing_blocking episode_id=%s examples=%s",
+                    getattr(request, "episode_id", None),
+                    examples,
+                )
+                raise HTTPException(status_code=400, detail=detail)
 
             diagnosis_hints: List[str] = []
             if (extraction_gap_meta.get("missing_total") or 0) > 0:
@@ -2518,6 +2551,7 @@ async def execute_analyze_scene(
         severe_import_review_codes = {
             "ANALYSIS_JSON_INVALID",
             "ANALYSIS_STRUCTURE_INCOMPLETE",
+            "ANALYSIS_GENERATION_PROMPT_CN_MISSING",
         }
         if not is_scene_beats_stage:
             severe_import_review_codes.update(

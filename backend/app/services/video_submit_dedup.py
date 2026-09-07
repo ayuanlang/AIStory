@@ -92,38 +92,42 @@ def _cleanup_video_dedup_cache(now_ts: float) -> None:
 ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, Any]] = {
     "characters": {
         "required_text_fields": [
-            "subject_no", "name", "name_en", "base_name_en", "description_cn",
+            "subject_no", "name", "name_en", "base_name_en",
             "gender", "role", "archetype", "appearance_cn", "clothing",
-            "action_characteristics", "generation_prompt_cn", "generation_prompt_en",
+            "action_characteristics", "generation_prompt_cn",
             "negative_prompt_en", "anchor_description",
         ],
+        "allow_empty_text_fields": ["description_cn", "generation_prompt_en"],
         "required_present_fields": ["visual_dependencies", "dependency_strategy"],
         "dependency_strategy_required_keys": ["type", "logic"],
     },
     "props": {
         "required_text_fields": [
             "subject_no", "name", "name_en", "base_name_en", "type",
-            "description_cn", "generation_prompt_cn", "generation_prompt_en",
+            "generation_prompt_cn",
             "negative_prompt_en", "anchor_description",
         ],
+        "allow_empty_text_fields": ["description_cn", "generation_prompt_en"],
         "required_present_fields": ["visual_dependencies", "dependency_strategy"],
         "dependency_strategy_required_keys": ["type", "logic"],
     },
     "environments": {
         "required_text_fields": [
             "subject_no", "name", "name_en", "base_name_en", "atmosphere",
-            "visual_params", "description_cn", "generation_prompt_cn",
-            "generation_prompt_en", "negative_prompt_en", "anchor_description",
+            "visual_params", "generation_prompt_cn",
+            "negative_prompt_en", "anchor_description",
         ],
+        "allow_empty_text_fields": ["description_cn", "generation_prompt_en"],
         "required_present_fields": ["visual_dependencies", "dependency_strategy"],
         "dependency_strategy_required_keys": ["type", "logic"],
     },
     "posters": {
         "required_text_fields": [
             "subject_no", "name", "name_en", "base_name_en", "atmosphere",
-            "visual_params", "description_cn", "generation_prompt_cn",
-            "generation_prompt_en", "negative_prompt_en", "anchor_description",
+            "visual_params", "generation_prompt_cn",
+            "negative_prompt_en", "anchor_description",
         ],
+        "allow_empty_text_fields": ["description_cn", "generation_prompt_en"],
         "required_present_fields": ["visual_dependencies", "dependency_strategy"],
         "dependency_strategy_required_keys": ["type", "logic"],
     },

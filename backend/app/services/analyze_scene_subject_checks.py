@@ -181,8 +181,62 @@ def _detect_subject_consistency_warnings(text: str, parsed_entities: Dict[str, A
         "warnings": warnings,
     }
 
-def _detect_prompt_template_syntax_warnings(text: str, syntax_rules: Dict[str, Any]) -> Dict[str, Any]:
-    entities_payload = _extract_entities_from_json_candidates(text)
+_EMPTY_GENERATION_PROMPT_CN_MARKERS = frozenset({
+    "",
+    "…",
+    "...",
+    "……",
+    "待补",
+    "停止成稿",
+    "null",
+    "none",
+    "n/a",
+    "na",
+    "-",
+})
+_DEFAULT_ALLOW_EMPTY_TEXT_FIELDS = frozenset({"description_cn", "generation_prompt_en"})
+_GENERATION_PROMPT_CN_SECTIONS = ("characters", "props", "environments")
+
+
+def _is_empty_generation_prompt_cn(value: Any) -> bool:
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return True
+    return text.casefold() in _EMPTY_GENERATION_PROMPT_CN_MARKERS
+
+
+def _collect_missing_generation_prompt_cn(
+    payload: Dict[str, Any],
+    sections: Optional[List[str]] = None,
+) -> List[Dict[str, str]]:
+    wanted = [str(x).strip() for x in (sections or _GENERATION_PROMPT_CN_SECTIONS) if str(x).strip()]
+    missing: List[Dict[str, str]] = []
+    seen = set()
+    for section in wanted:
+        items = payload.get(section) if isinstance(payload, dict) else None
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if not _is_empty_generation_prompt_cn(item.get("generation_prompt_cn")):
+                continue
+            name = str(item.get("name") or item.get("name_en") or item.get("subject_no") or "").strip() or "(unnamed)"
+            key = (section, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            missing.append({"section": section, "name": name})
+    return missing
+
+
+def _detect_prompt_template_syntax_warnings(
+    text: str,
+    syntax_rules: Dict[str, Any],
+    parsed_entities: Dict[str, Any] = None,
+    sections: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    entities_payload = parsed_entities if parsed_entities is not None else _extract_entities_from_json_candidates(text)
     warning_codes: List[str] = []
     warnings: List[str] = []
     mismatches: List[Dict[str, Any]] = []
@@ -206,18 +260,30 @@ def _detect_prompt_template_syntax_warnings(text: str, syntax_rules: Dict[str, A
         "environments": ["environments"],
         "posters": ["posters", "covers"],
     }
+    wanted_sections = {
+        str(x).strip()
+        for x in (sections or list(section_aliases.keys()))
+        if str(x).strip()
+    }
 
     for section, payload_keys in section_aliases.items():
+        if wanted_sections and section not in wanted_sections:
+            continue
         rules = syntax_rules.get(section) if isinstance(syntax_rules, dict) else None
         if not isinstance(rules, dict):
             continue
         required_text_fields = [str(x).strip() for x in (rules.get("required_text_fields") or []) if str(x).strip()]
         required_present_fields = [str(x).strip() for x in (rules.get("required_present_fields") or []) if str(x).strip()]
         dependency_strategy_required_keys = [str(x).strip() for x in (rules.get("dependency_strategy_required_keys") or []) if str(x).strip()]
+        allow_empty_text_fields = {
+            str(x).strip()
+            for x in (rules.get("allow_empty_text_fields") or _DEFAULT_ALLOW_EMPTY_TEXT_FIELDS)
+            if str(x).strip()
+        }
 
         items: Any = []
         for payload_key in payload_keys:
-            candidate_items = entities_payload.get(payload_key)
+            candidate_items = entities_payload.get(payload_key) if isinstance(entities_payload, dict) else None
             if isinstance(candidate_items, list):
                 items = candidate_items
                 break
@@ -228,7 +294,10 @@ def _detect_prompt_template_syntax_warnings(text: str, syntax_rules: Dict[str, A
             if not isinstance(item, dict):
                 continue
             name = str(item.get("name") or item.get("name_en") or "").strip() or "(unnamed)"
-            missing_text_fields = [field for field in required_text_fields if _missing_text_field(item.get(field))]
+            missing_text_fields = [
+                field for field in required_text_fields
+                if field not in allow_empty_text_fields and _missing_text_field(item.get(field))
+            ]
             missing_present_fields = [field for field in required_present_fields if _missing_present_field(field, item)]
 
             missing_dependency_strategy_keys: List[str] = []
@@ -248,6 +317,24 @@ def _detect_prompt_template_syntax_warnings(text: str, syntax_rules: Dict[str, A
                     "missing_dependency_strategy_keys": missing_dependency_strategy_keys,
                 })
 
+    prompt_cn_sections = [
+        section for section in _GENERATION_PROMPT_CN_SECTIONS
+        if not wanted_sections or section in wanted_sections
+    ]
+    missing_generation_prompt_cn = _collect_missing_generation_prompt_cn(entities_payload, prompt_cn_sections)
+
+    if missing_generation_prompt_cn:
+        warning_codes.append("ANALYSIS_GENERATION_PROMPT_CN_MISSING")
+        preview = missing_generation_prompt_cn[:8]
+        summary = "; ".join([
+            f"{it.get('section')}:{it.get('name')}"
+            for it in preview
+        ])
+        warnings.append(
+            "角色/道具/环境 JSON 缺少中文提示词 generation_prompt_cn，每个主体必须非空。"
+            f" Examples: {summary}"
+        )
+
     if mismatches:
         warning_codes.append("ANALYSIS_PROMPT_TEMPLATE_MISMATCH")
         preview = mismatches[:8]
@@ -264,6 +351,7 @@ def _detect_prompt_template_syntax_warnings(text: str, syntax_rules: Dict[str, A
         "checked_sections": ["characters", "props", "environments", "covers", "posters"],
         "mismatch_count": len(mismatches),
         "mismatches": mismatches,
+        "missing_generation_prompt_cn": missing_generation_prompt_cn,
         "warning_codes": warning_codes,
         "warnings": warnings,
     }

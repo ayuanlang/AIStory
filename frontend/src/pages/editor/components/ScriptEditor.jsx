@@ -4072,9 +4072,44 @@ const extractTaggedItemName = (block, tag) => {
     return String(match?.[1] || '').trim();
 };
 
-const splitTaggedExtractItems = (text, tag) => {
+const takeTaggedExtractInner = (text, tag) => {
     const source = String(text || '');
-    if (!source || !tag) return [];
+    const startRe = new RegExp(`\\[${tag}_EXTRACT_START[^\\]]*\\]`, 'i');
+    const endRe = new RegExp(`\\[${tag}_EXTRACT_END[^\\]]*\\]`, 'i');
+    const startMatch = startRe.exec(source);
+    if (!startMatch) return '';
+    const afterStart = startMatch.index + startMatch[0].length;
+    endRe.lastIndex = afterStart;
+    const endMatch = endRe.exec(source);
+    if (!endMatch) return '';
+    return source.slice(afterStart, endMatch.index).trim();
+};
+
+const nextTaggedExtractItemEnd = (source, fromIndex, tag) => {
+    const text = String(source || '');
+    if (!text || fromIndex >= text.length) return text.length;
+    const sameTagRe = new RegExp(`\\[${tag}\\](?!_)`, 'gi');
+    sameTagRe.lastIndex = fromIndex;
+    const sameMatch = sameTagRe.exec(text);
+    const otherTag = String(tag || '').toUpperCase() === 'PROP' ? 'CHAR' : 'PROP';
+    const otherTagRe = new RegExp(`\\[${otherTag}\\](?!_)`, 'gi');
+    otherTagRe.lastIndex = fromIndex;
+    const otherMatch = otherTagRe.exec(text);
+    const boundaryRe = /\[(?:CHAR|PROP)_EXTRACT_(?:START|END)[^\]]*\]/gi;
+    boundaryRe.lastIndex = fromIndex;
+    const boundaryMatch = boundaryRe.exec(text);
+    const candidates = [sameMatch, otherMatch, boundaryMatch]
+        .filter(Boolean)
+        .map((match) => match.index)
+        .filter((index) => index >= fromIndex);
+    return candidates.length ? Math.min(...candidates) : text.length;
+};
+
+const splitTaggedExtractItems = (text, tag) => {
+    const raw = String(text || '');
+    if (!raw || !tag) return [];
+    const inner = takeTaggedExtractInner(raw, tag);
+    const source = inner || raw;
     const startRe = new RegExp(`\\[${tag}\\](?!_)`, 'gi');
     const starts = [];
     let match = startRe.exec(source);
@@ -4082,8 +4117,8 @@ const splitTaggedExtractItems = (text, tag) => {
         starts.push(match.index);
         match = startRe.exec(source);
     }
-    return starts.map((start, idx) => {
-        const end = idx + 1 < starts.length ? starts[idx + 1] : source.length;
+    return starts.map((start) => {
+        const end = nextTaggedExtractItemEnd(source, start + 1, tag);
         const block = source.slice(start, end).trim();
         const name = extractTaggedItemName(block, tag);
         return { name, block };
@@ -4278,19 +4313,6 @@ const EXTRACT_FIELD_LABELS = {
     宿主: { zh: '宿主', en: 'Host' },
 };
 
-const takeTaggedExtractInner = (text, tag) => {
-    const source = String(text || '');
-    const startRe = new RegExp(`\\[${tag}_EXTRACT_START[^\\]]*\\]`, 'i');
-    const endRe = new RegExp(`\\[${tag}_EXTRACT_END[^\\]]*\\]`, 'i');
-    const startMatch = startRe.exec(source);
-    if (!startMatch) return '';
-    const afterStart = startMatch.index + startMatch[0].length;
-    endRe.lastIndex = afterStart;
-    const endMatch = endRe.exec(source);
-    if (!endMatch) return '';
-    return source.slice(afterStart, endMatch.index).trim();
-};
-
 const takeTaggedExtractBlock = (text, tag) => {
     const source = String(text || '');
     if (!new RegExp(`\\[${tag}_EXTRACT_START`, 'i').test(source) && !new RegExp(`\\[${tag}\\][\\s\\S]{0,160}名称\\s*[=：:]`, 'i').test(source)) {
@@ -4352,10 +4374,13 @@ const parseTaggedExtractItemFields = (block, tag) => {
         const eq = String(part || '').match(/^([^＝=:]+)[=：:]([\s\S]*)$/);
         if (eq) remember(eq[1], eq[2]);
     });
-    lines.slice(1).forEach((line) => {
+    for (const line of lines.slice(1)) {
+        if (/^\[(?:CHAR|PROP)\](?!_)/i.test(line) || /^\[(?:CHAR|PROP)_EXTRACT_(?:START|END)/i.test(line)) {
+            break;
+        }
         const eq = String(line || '').match(/^([^＝=:]+)[=：:]([\s\S]*)$/);
         if (eq) remember(eq[1], eq[2]);
-    });
+    }
     return { fields, fieldOrder };
 };
 

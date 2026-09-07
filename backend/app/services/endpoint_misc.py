@@ -111,6 +111,8 @@ def _build_scene_analysis_blocking_failure_detail(
         reasons_cn.append("仅解析到 Subject Index 表头，缺少实体条目")
     if "ANALYSIS_SUBJECT_INDEX_REQUIRED" in codes:
         reasons_cn.append("缺少资产清单（Subject Index），无法继续场景编排或资产生成")
+    if "ANALYSIS_GENERATION_PROMPT_CN_MISSING" in codes:
+        reasons_cn.append("角色/道具/环境缺少中文提示词 generation_prompt_cn")
 
     raw_reasons: List[str] = []
     raw_reasons.extend([str(x or "").strip() for x in (integrity_warnings or []) if str(x or "").strip()])
