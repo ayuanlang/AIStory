@@ -10,6 +10,9 @@ from app.services.scene_subskill_pipeline_runner import (
     persisted_subskill_step_usable,
     resolve_scene_subskill_resume,
     resolve_subskill_start_group,
+    scene_subskill_rerun_cleanup_plan,
+    scene_subskill_rerun_downstream_steps,
+    seed_scene_block_for_start,
     should_recover_framing_from_llm_log,
 )
 
@@ -284,6 +287,45 @@ def test_timeout_like_error_detects_hard_cancel_and_read_timeout():
     assert is_timeout_like_error(TimeoutError("LLM call timed out after 900s"))
     assert is_timeout_like_error(Exception("vendor failed: Read timeout: wall-clock"))
     assert not is_timeout_like_error(Exception("SCENE_SUBSKILL_OUTPUT_INVALID"))
+
+
+def test_explicit_rerun_cleanup_plan_lists_business_downstream():
+    framing_plan = scene_subskill_rerun_cleanup_plan("framing")
+    assert scene_subskill_rerun_downstream_steps("framing") == ["framing", "staging"]
+    assert framing_plan["start_label"] == "场景现场编排"
+    assert framing_plan["output_labels"] == ["现场编排稿", "建置入戏稿"]
+    assert framing_plan["clear_derived_env"] is True
+    assert framing_plan["clear_workspace_scene"] is True
+    staging_plan = scene_subskill_rerun_cleanup_plan("staging")
+    assert staging_plan["output_labels"] == ["建置入戏稿"]
+    assert staging_plan["clear_derived_env"] is False
+
+
+def test_explicit_rerun_seeds_from_persisted_step_not_aggregate_staging():
+    persist = {
+        "drama": DRAMA_OK,
+        "framing": FRAMING_STRIPPED,
+        "staging": STAGING_OK,
+    }
+    framing_seed = seed_scene_block_for_start(
+        start_group="framing",
+        raw_scene_block=STAGING_OK,
+        persist_steps=persist,
+    )
+    staging_seed = seed_scene_block_for_start(
+        start_group="staging",
+        raw_scene_block=STAGING_OK,
+        persist_steps=persist,
+    )
+    assert framing_seed == DRAMA_OK
+    assert "建置与入戏已完成" not in framing_seed
+    assert staging_seed == FRAMING_STRIPPED
+    assert "【建置】" not in staging_seed
+    assert seed_scene_block_for_start(
+        start_group="combat",
+        raw_scene_block=STAGING_OK,
+        persist_steps=persist,
+    ) == DRAMA_OK
 
 
 def test_filter_subskill_tasks_matches_canonical_and_tail():

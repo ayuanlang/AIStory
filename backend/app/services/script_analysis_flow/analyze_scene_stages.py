@@ -608,6 +608,65 @@ def persist_scene_subskill_named_step(
     )
 
 
+def clear_scene_subskill_step_results(
+    *,
+    db: Session,
+    episode_id: int,
+    scene_id: str,
+    step_keys: List[str],
+) -> Dict[str, Any]:
+    """Remove named per-scene drafts so a rerun cannot reuse the previous run."""
+    from app.services.soft_delete import _active_episode_clause
+
+    eid = int(episode_id or 0)
+    sid = str(scene_id or "").strip()
+    keys = [str(key or "").strip() for key in (step_keys or []) if str(key or "").strip()]
+    if eid <= 0 or not sid or not keys:
+        return {"patched": False, "removed": [], "reason": "invalid_args"}
+    lock = _get_stage_output_patch_lock(eid)
+    with lock:
+        episode = (
+            db.query(Episode)
+            .filter(Episode.id == eid, _active_episode_clause())
+            .populate_existing()
+            .first()
+        )
+        if episode is None:
+            return {"patched": False, "removed": [], "reason": "episode_missing"}
+        obj = _load_stage_outputs_obj(episode)
+        outputs = _ensure_stage_outputs(obj, "stage1")
+        slot = (
+            outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
+            if isinstance(outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY), dict)
+            else {}
+        )
+        result_map = _parse_subskill_results_content(slot.get("content"))
+        scene_map = result_map.get(sid) if isinstance(result_map.get(sid), dict) else {}
+        if not scene_map:
+            sid_l = sid.lower()
+            for key, value in result_map.items():
+                if str(key or "").strip().lower() == sid_l and isinstance(value, dict):
+                    sid = str(key)
+                    scene_map = value
+                    break
+        removed = []
+        for key in keys:
+            if str(scene_map.get(key) or "").strip():
+                removed.append(key)
+            scene_map.pop(key, None)
+        result_map[sid] = scene_map
+        outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = {
+            **slot,
+            "key": SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
+            "kind": "json",
+            "title": slot.get("title") or "逐场优化分步结果",
+            "content": json.dumps(result_map, ensure_ascii=False, indent=2),
+        }
+        _dump_stage_outputs_obj(episode, obj)
+        db.commit()
+    return {"patched": True, "removed": removed, "scene_id": sid}
+
+
 def load_scene_subskill_results_map(db: Session, episode_id: int) -> Dict[str, Dict[str, str]]:
     from app.services.soft_delete import _active_episode_clause
 

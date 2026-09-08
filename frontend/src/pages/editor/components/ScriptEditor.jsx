@@ -1757,13 +1757,44 @@ const resolveCurrentSceneStage1Body = ({
     scriptText = '',
 } = {}) => {
     const steps = lookupSceneSubskillSteps(resultsMap, sceneId, episodePrefix);
+    const requested = stepKey ? String(steps?.[stepKey] || '').trim() : '';
     return String(
-        pickLatestSceneSubskillBody(steps)
+        requested
+        || pickLatestSceneSubskillBody(steps)
         || pipelineBlock
-        || (stepKey ? steps?.[stepKey] : '')
         || extractAdaptedSceneBlockFromScript(scriptText, sceneId, episodePrefix)
         || ''
     ).trim();
+};
+
+const mergeSceneSubskillResultsPreferringFresh = (liveRaw, freshRaw) => {
+    const liveMap = parseSceneSubskillResultsMap(liveRaw);
+    const freshMap = parseSceneSubskillResultsMap(freshRaw);
+    const next = { ...liveMap };
+    Object.entries(freshMap).forEach(([sceneId, steps]) => {
+        if (!steps || typeof steps !== 'object' || Array.isArray(steps)) return;
+        next[sceneId] = {
+            ...(next[sceneId] && typeof next[sceneId] === 'object' ? next[sceneId] : {}),
+            ...steps,
+        };
+    });
+    try {
+        return JSON.stringify(next);
+    } catch (_) {
+        return String(freshRaw || liveRaw || '').trim();
+    }
+};
+
+const mergeStage1NodeOutputsPreferringFresh = (liveOutputs, freshOutputs) => {
+    const live = collectStage1NodeOutputsFromSlotMap(liveOutputs);
+    const fresh = collectStage1NodeOutputsFromSlotMap(freshOutputs);
+    const merged = { ...live, ...fresh };
+    const mergedResults = mergeSceneSubskillResultsPreferringFresh(
+        live.scene_subskill_results,
+        fresh.scene_subskill_results
+    );
+    if (String(mergedResults || '').trim()) merged.scene_subskill_results = mergedResults;
+    return merged;
 };
 
 const hydrateSceneSubskillResultsFromPipelineNodes = (existingRaw, nodes) => {
@@ -3704,11 +3735,36 @@ const collectThisRunDiagnosticSceneAllowlist = (sceneSplitText, canonicalIds, ep
 };
 
 const SCENE_MATRIX_CHAIN = ['drama_opt', 'combat_opt', 'framing_opt', 'staging_opt', 'storyboard'];
+const SCENE_MATRIX_DOWNSTREAM_GROUPS = {
+    drama_opt: ['drama', 'combat', 'framing', 'staging', 'storyboard'],
+    combat_opt: ['combat', 'framing', 'staging', 'storyboard'],
+    framing_opt: ['framing', 'staging', 'storyboard'],
+    staging_opt: ['staging', 'storyboard'],
+    storyboard: ['storyboard'],
+};
+const SCENE_MATRIX_OUTPUT_LABELS = {
+    drama: ['文戏优化稿', 'drama draft'],
+    combat: ['武戏增强稿', 'action draft'],
+    framing: ['现场编排稿', 'floor-staging draft'],
+    staging: ['建置入戏稿', 'blocking draft'],
+};
 
 const describeSceneMatrixDownstream = (stepKey, tFn) => {
     const idx = SCENE_MATRIX_CHAIN.indexOf(String(stepKey || '').trim());
     const keys = idx >= 0 ? SCENE_MATRIX_CHAIN.slice(idx) : [stepKey];
     return keys.map((key) => getAnalysisStageLabel(key, tFn)).join(' → ');
+};
+
+const sceneMatrixDownstreamGroups = (kind) => (
+    SCENE_MATRIX_DOWNSTREAM_GROUPS[String(kind || '').trim()] || []
+);
+
+const sceneMatrixOutputLabels = (kind, tFn) => {
+    const t = typeof tFn === 'function' ? tFn : (zh) => zh;
+    return sceneMatrixDownstreamGroups(kind)
+        .map((group) => SCENE_MATRIX_OUTPUT_LABELS[group])
+        .filter(Boolean)
+        .map(([zh, en]) => t(zh, en));
 };
 
 /** Internal pipeline lines: keep in system logs, never in the progress UI. */
@@ -3742,6 +3798,7 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
         [/\[Analysis Resume\]/gi, t('[继续分析]', '[Resume analysis]')],
         [/\[Auto Zero Report Rerun\]/gi, t('[自动补齐]', '[Auto refill]')],
         [/\[分镜生成\]/gi, t('[分镜生成]', '[Storyboard]')],
+        [/\[重跑清理\]/gi, t('[重跑清理]', '[Rerun cleanup]')],
         [/Persistence gap — auto-retry/gi, t('分类入库失败，正在按类重试', 'Category import failed; retrying by category')],
         [/auto-retry round \d+ for incomplete categories only/gi, t('仅重试未入库分类', 'retry unimported categories only')],
         [/Import-only retry/gi, t('仅重试入库', 'import-only retry')],
@@ -6117,6 +6174,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         loading: false,
     });
     const [isRerunningStoryboard, setIsRerunningStoryboard] = useState(false);
+    const [sceneMatrixRerun, setSceneMatrixRerun] = useState(null);
     const [diagnosticImportingKind, setDiagnosticImportingKind] = useState('');
     const [stageArtifactEditModal, setStageArtifactEditModal] = useState({
         open: false,
@@ -13156,10 +13214,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 Object.entries(latestStage1NodeOutputsRef.current || {}).forEach(([key, content]) => {
                     const text = String(content || '').trim();
                     if (!text || ['adapted_script', 'raw_text', 'project_visual_backfill'].includes(key)) return;
-                    ensureOutputSlot(outputs, key, {
+                    const slot = ensureOutputSlot(outputs, key, {
                         kind: key === 'scene_subskill_results' ? 'json' : 'markdown',
                         title: key,
-                    }).content = text;
+                    });
+                    if (key === 'scene_subskill_results') {
+                        slot.content = mergeSceneSubskillResultsPreferringFresh(text, slot.content);
+                        return;
+                    }
+                    slot.content = text;
                 });
             }
             if (trustLiveDownstreamOnly && persisted.stages?.stage1?.outputs) {
@@ -15371,10 +15434,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const freshNodeOutputs = collectStage1NodeOutputsFromSlotMap(
                     parseStageOutputsObject(freshEpisode?.ai_stage_outputs || '')?.stages?.stage1?.outputs
                 );
-                latestStage1NodeOutputsRef.current = {
-                    ...freshNodeOutputs,
-                    ...collectStage1NodeOutputsFromSlotMap(latestStage1NodeOutputsRef.current),
-                };
+                latestStage1NodeOutputsRef.current = mergeStage1NodeOutputsPreferringFresh(
+                    latestStage1NodeOutputsRef.current,
+                    freshNodeOutputs
+                );
             } catch (_) {}
         }
         if (SCENE_SUBSKILL_EDIT_KINDS.has(stableKind)) {
@@ -15727,8 +15790,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 };
                 const editedBody = content.trim();
                 if (stepKey) sceneMap[stepKey] = editedBody;
-                const latestExistingKey = SCENE_SUBSKILL_BODY_KEYS.find((key) => String(sceneMap[key] || '').trim());
-                if (latestExistingKey) sceneMap[latestExistingKey] = editedBody;
                 nextMap[sceneId] = sceneMap;
                 latestStage1NodeOutputsRef.current = {
                     ...latestStage1NodeOutputsRef.current,
@@ -29662,11 +29723,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ))) return;
 
         const startedAt = Date.now();
+        const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+        const clearedOutputLabels = sceneMatrixOutputLabels(stableKind, t);
         analysisRunInFlightRef.current = true;
+        latestIsAnalyzingRef.current = true;
+        setSceneMatrixRerun({ sceneId: targetSceneId, kind: stableKind });
         storyboardPendingAfterSubskillRef.current = mergeSceneIdAllowlist(
             storyboardPendingAfterSubskillRef.current,
             [targetSceneId],
-            resolveEpisodeSceneIdPrefix(activeEpisode)
+            episodePrefix
         );
         beginStageRerunUi({
             phase: 'scene_subskills',
@@ -29674,6 +29739,76 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             startedAt,
             resetLogs: true,
         });
+        const existingResultsMap = parseSceneSubskillResultsMap(
+            latestStage1NodeOutputsRef.current?.scene_subskill_results
+            || getStageOutputContent('stage1', 'scene_subskill_results')
+        );
+        const sceneSteps = {
+            ...(lookupSceneSubskillSteps(existingResultsMap, targetSceneId, episodePrefix) || {}),
+        };
+        const stepKeysToClear = sceneMatrixDownstreamGroups(stableKind)
+            .filter((group) => group !== 'storyboard');
+        stepKeysToClear.forEach((key) => {
+            delete sceneSteps[key];
+        });
+        const nextResultsMap = { ...existingResultsMap };
+        const existingKey = Object.keys(nextResultsMap).find((key) => sceneUnitIdsMatch(
+            key,
+            targetSceneId,
+            deriveSceneOrderFromSceneId(targetSceneId),
+            episodePrefix
+        )) || targetSceneId;
+        nextResultsMap[existingKey] = sceneSteps;
+        latestStage1NodeOutputsRef.current = {
+            ...latestStage1NodeOutputsRef.current,
+            scene_subskill_results: JSON.stringify(nextResultsMap),
+        };
+        onLog?.(
+            t(
+                `重跑「${targetSceneId}」已开始：从「${label}」起，先清理该场后续成稿、工作区内容与运行状态。`,
+                `Rerun of “${targetSceneId}” started from “${label}”. Clearing later drafts, workspace content, and run status first.`
+            ),
+            'process'
+        );
+        onLog?.(
+            t(
+                `已清除该场过程产出：${clearedOutputLabels.join('、') || '该场起点及后续稿件'}。`,
+                `Cleared this scene’s process drafts: ${clearedOutputLabels.join(', ') || 'this node and later drafts'}.`
+            ),
+            'info'
+        );
+        try {
+            await clearAnalysisArtifactsFromStage('scene_beats', {
+                preserveProgressUi: true,
+                markerSceneIds: [targetSceneId],
+                partialSceneScope: true,
+                reason: `scene-matrix-rerun-${stableKind}`,
+                refreshEpisode: false,
+                resetRuntimePanels: true,
+            });
+            onLog?.(
+                t(
+                    `已将该场工作区场景与分镜标为删除。`,
+                    `This scene’s workspace scene and storyboards were marked deleted.`
+                ),
+                'info'
+            );
+            onLog?.(
+                t(
+                    `已清除该场逐场优化与分镜的运行状态。`,
+                    `This scene’s per-scene refinement and storyboard run status were cleared.`
+                ),
+                'info'
+            );
+        } catch (clearError) {
+            onLog?.(
+                t(
+                    `重跑前清理未完全完成：${clearError?.message || clearError}`,
+                    `Pre-rerun cleanup did not finish completely: ${clearError?.message || clearError}`
+                ),
+                'warning'
+            );
+        }
         try {
             const result = await awaitAnalyzeSceneWithRecovery(
                 () => runScriptAnalysisFlowAnalyzeNode(
@@ -29711,6 +29846,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setLlmRawResultContent(output);
             setLlmResultContent(normalizeLlmMarkdownTable(output));
             await triggerStageOutputsRefresh();
+            try {
+                const freshEpisode = await fetchEpisode(activeEpisode.id);
+                const freshNodeOutputs = collectStage1NodeOutputsFromSlotMap(
+                    parseStageOutputsObject(freshEpisode?.ai_stage_outputs || '')?.stages?.stage1?.outputs
+                );
+                latestStage1NodeOutputsRef.current = mergeStage1NodeOutputsPreferringFresh(
+                    latestStage1NodeOutputsRef.current,
+                    freshNodeOutputs
+                );
+                setDiagnosticsRefreshNonce((value) => value + 1);
+            } catch (_) {}
             onLog?.(
                 t(
                     `${targetSceneId} · ${label}已完成，正在核对入库场景并重跑该场分镜…`,
@@ -29768,6 +29914,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             latestIsAnalyzingRef.current = false;
             setIsAnalyzing(false);
             analysisRunInFlightRef.current = false;
+            setSceneMatrixRerun(null);
             setActiveAnalysisTaskId('');
             if (!isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
                 localStopRequested: analysisStopRequestedRef.current,
@@ -34262,6 +34409,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         };
                         const resolveSceneSubskillGroupState = (node, group, sceneId) => {
                             const waiting = { ready: false, active: false, failed: false, detail: '' };
+                            const rerunKind = String(sceneMatrixRerun?.kind || '').trim();
+                            const rerunSceneId = String(sceneMatrixRerun?.sceneId || '').trim();
+                            if (
+                                rerunKind
+                                && rerunSceneId
+                                && sceneUnitIdsMatch(
+                                    rerunSceneId,
+                                    sceneId,
+                                    deriveSceneOrderFromSceneId(sceneId),
+                                    episodePrefix
+                                )
+                                && sceneMatrixDownstreamGroups(rerunKind).includes(group)
+                            ) {
+                                return {
+                                    ready: false,
+                                    active: true,
+                                    failed: false,
+                                    detail: t('已开始运行', 'Started'),
+                                };
+                            }
                             if (!node) {
                                 const steps = lookupSceneSubskillSteps(
                                     parseSceneSubskillResultsMap(
@@ -34370,6 +34537,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             return false;
                         };
                         const resolveSceneStoryboardState = (sceneId) => {
+                            const rerunKind = String(sceneMatrixRerun?.kind || '').trim();
+                            const rerunSceneId = String(sceneMatrixRerun?.sceneId || '').trim();
+                            if (
+                                rerunKind
+                                && rerunSceneId
+                                && sceneUnitIdsMatch(
+                                    rerunSceneId,
+                                    sceneId,
+                                    deriveSceneOrderFromSceneId(sceneId),
+                                    episodePrefix
+                                )
+                                && sceneMatrixDownstreamGroups(rerunKind).includes('storyboard')
+                            ) {
+                                return {
+                                    ready: false,
+                                    active: true,
+                                    failed: false,
+                                    detail: t('已开始运行', 'Started'),
+                                };
+                            }
                             const item = findStoryboardProgressItem(progress, sceneId, {
                                 sceneOrder: deriveSceneOrderFromSceneId(sceneId),
                                 markerSceneId: sceneId,
@@ -34531,13 +34718,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     <button
                                         type="button"
                                         onClick={() => handleRerunSceneMatrixNode(stepKey, sceneId)}
-                                        disabled={!canRerun}
+                                        disabled={!canRerun || Boolean(state?.active)}
                                         className={diagnosticBtnClass}
-                                        title={canRerun
-                                            ? t('重跑该场该节点，并按序重跑后续节点', 'Rerun this scene node and its downstream nodes in order')
-                                            : t('当前不可重跑', 'Rerun is unavailable now')}
+                                        title={state?.active
+                                            ? t('该节点已开始运行', 'This node has already started')
+                                            : canRerun
+                                                ? t('重跑该场该节点，并按序重跑后续节点', 'Rerun this scene node and its downstream nodes in order')
+                                                : t('当前不可重跑', 'Rerun is unavailable now')}
                                     >
-                                        {t('重跑', 'Rerun')}
+                                        {state?.active
+                                            ? (
+                                                <span className="inline-flex items-center gap-1">
+                                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                                    {t('已开始运行', 'Started')}
+                                                </span>
+                                            )
+                                            : t('重跑', 'Rerun')}
                                     </button>
                                 </div>
                             </div>
@@ -34644,11 +34840,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             <button
                                                 type="button"
                                                 onClick={() => handleRerunSceneMatrixNode('drama_opt', row.sceneId)}
-                                                disabled={!canRerunSceneFromDrama}
+                                                disabled={!canRerunSceneFromDrama || Boolean(sceneBusy(dramaState))}
                                                 className={diagnosticBtnClass}
-                                                title={t('只从文戏优化重跑该场后续节点，不跑美术指导与其他分场', 'Rerun this scene from drama only; skip art direction and other scenes')}
+                                                title={sceneBusy(dramaState)
+                                                    ? t('该场已开始运行', 'This scene has already started')
+                                                    : t('只从文戏优化重跑该场后续节点，不跑美术指导与其他分场', 'Rerun this scene from drama only; skip art direction and other scenes')}
                                             >
-                                                {t('重跑该场', 'Rerun This Scene')}
+                                                {sceneBusy(dramaState)
+                                                    ? (
+                                                        <span className="inline-flex items-center gap-1">
+                                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                                            {t('已开始运行', 'Started')}
+                                                        </span>
+                                                    )
+                                                    : t('重跑该场', 'Rerun This Scene')}
                                             </button>
                                         </div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(dramaState, cellProps('drama_opt', dramaState))}</div>

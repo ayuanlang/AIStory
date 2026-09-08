@@ -38,6 +38,7 @@ from app.services.script_analysis_flow import (
     load_stage1_output_text,
     lookup_persisted_scene_subskill_steps,
     persist_scene_subskill_named_step,
+    clear_scene_subskill_step_results,
     persist_script_optimization_stage,
     upsert_pipeline_node_status,
     upsert_workspace_scene_from_staging,
@@ -191,6 +192,240 @@ _PERSISTED_STEP_MARKERS = {
     "framing": ("[DERIVED_FRAMING_OUTPUT_END]",),
     "staging": ("[STAGING_ENV_OUTPUT_END]",),
 }
+
+
+_SUBSKILL_STEP_ORDER = ("drama", "combat", "framing", "staging")
+_SUBSKILL_START_BUSINESS = {
+    "drama": "文戏优化",
+    "combat": "武戏增强",
+    "framing": "场景现场编排",
+    "staging": "建置入戏",
+}
+_SUBSKILL_OUTPUT_BUSINESS = {
+    "drama": "文戏优化稿",
+    "combat": "武戏增强稿",
+    "framing": "现场编排稿",
+    "staging": "建置入戏稿",
+}
+
+
+def scene_subskill_rerun_downstream_steps(start_group: str) -> List[str]:
+    group = str(start_group or "").strip() or "drama"
+    if group not in _SUBSKILL_STEP_ORDER:
+        return ["staging"]
+    return list(_SUBSKILL_STEP_ORDER[_SUBSKILL_STEP_ORDER.index(group) :])
+
+
+def scene_subskill_rerun_cleanup_plan(start_group: str) -> Dict[str, Any]:
+    steps = scene_subskill_rerun_downstream_steps(start_group)
+    return {
+        "start_group": str(start_group or "").strip() or "drama",
+        "start_label": _SUBSKILL_START_BUSINESS.get(start_group, "逐场优化"),
+        "steps": steps,
+        "output_labels": [_SUBSKILL_OUTPUT_BUSINESS[key] for key in steps if key in _SUBSKILL_OUTPUT_BUSINESS],
+        "clear_derived_env": str(start_group or "") in {"drama", "combat", "framing"},
+        "clear_workspace_scene": True,
+        "clear_shots": True,
+    }
+
+
+def _derived_env_names_from_framing_text(text: str) -> List[str]:
+    from app.services.script_analysis_flow.derived_env_ingest import DERIVED_ENV_TAG_PATTERN
+
+    names = []
+    for match in DERIVED_ENV_TAG_PATTERN.finditer(str(text or "")):
+        name = str(match.group(1) or "").strip()
+        if name:
+            names.append(name)
+    return list(dict.fromkeys(names))
+
+
+def _soft_delete_workspace_for_scene_rerun(
+    db: Session,
+    *,
+    episode_id: int,
+    scene_id: str,
+) -> Dict[str, int]:
+    from app.services.deletion_ops import _soft_delete_scenes
+    from app.services.scene_no_utils import _find_active_scene_by_scene_no
+
+    scene = _find_active_scene_by_scene_no(
+        db,
+        episode_id=int(episode_id),
+        scene_no=scene_id,
+        scene_id=scene_id,
+    )
+    if scene is None:
+        return {"scenes": 0, "shots": 0, "workspace_scene_id": 0}
+    scene_pk = int(getattr(scene, "id", 0) or 0)
+    deleted_scenes = _soft_delete_scenes(db, scene_id=scene_pk) if scene_pk > 0 else 0
+    return {
+        "scenes": int(deleted_scenes or 0),
+        "shots": int(deleted_scenes or 0),
+        "workspace_scene_id": scene_pk,
+    }
+
+
+def _soft_delete_derived_env_named(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    names: List[str],
+) -> int:
+    from app.models.all_models import Entity
+    from app.services.deletion_ops import _soft_delete_entities
+    from app.services.script_analysis_flow.derived_env_ingest import _is_derived_environment_entity
+    from app.services.soft_delete import _active_entity_clause
+
+    wanted = {str(name or "").strip() for name in (names or []) if str(name or "").strip()}
+    if not wanted or int(project_id or 0) <= 0:
+        return 0
+    rows = (
+        db.query(Entity)
+        .filter(
+            Entity.project_id == int(project_id),
+            Entity.episode_id == int(episode_id),
+            _active_entity_clause(),
+        )
+        .all()
+    )
+    scoped_ids = [
+        int(row.id)
+        for row in rows
+        if _is_derived_environment_entity(row) and str(getattr(row, "name", "") or "").strip() in wanted
+    ]
+    if not scoped_ids:
+        return 0
+    return int(_soft_delete_entities(db, entity_ids=scoped_ids) or 0)
+
+
+def prepare_explicit_scene_subskill_rerun(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene_id: str,
+    start_group: str,
+) -> Dict[str, Any]:
+    """Clear drafts, mark workspace rows deleted, and reset runtime before an explicit rerun."""
+    plan = scene_subskill_rerun_cleanup_plan(start_group)
+    sid = str(scene_id or "").strip()
+    persist_steps = lookup_persisted_scene_subskill_steps(
+        load_scene_subskill_results_map(db, episode_id),
+        sid,
+    )
+    framing_text = str((persist_steps or {}).get("framing") or "")
+    derived_names = _derived_env_names_from_framing_text(framing_text) if plan["clear_derived_env"] else []
+
+    cleared = clear_scene_subskill_step_results(
+        db=db,
+        episode_id=episode_id,
+        scene_id=sid,
+        step_keys=plan["steps"],
+    )
+    workspace = _soft_delete_workspace_for_scene_rerun(db, episode_id=episode_id, scene_id=sid)
+    derived_deleted = (
+        _soft_delete_derived_env_named(
+            db,
+            project_id=project_id,
+            episode_id=episode_id,
+            names=derived_names,
+        )
+        if plan["clear_derived_env"]
+        else 0
+    )
+
+    upsert_pipeline_node_status(
+        db,
+        project_id=int(project_id or 0),
+        episode_id=int(episode_id),
+        script_id=f"episode:{int(episode_id)}",
+        node_name="scene_subskill_scene",
+        scene_id=sid,
+        status="running",
+        progress_percent=5.0,
+        error_code=None,
+        error_message=None,
+        runtime_meta={
+            "business_event": "started",
+            "current_step": plan["start_group"],
+            "called_subskills": [],
+            "scene_block": "",
+            "rerun_cleared": True,
+        },
+    )
+    upsert_pipeline_node_status(
+        db,
+        project_id=int(project_id or 0),
+        episode_id=int(episode_id),
+        script_id=f"episode:{int(episode_id)}",
+        node_name="storyboard_generation",
+        scene_id=sid,
+        status="queued",
+        progress_percent=0.0,
+        error_code=None,
+        error_message=None,
+        runtime_meta={"business_event": "queued", "rerun_cleared": True},
+    )
+
+    removed_outputs = [
+        _SUBSKILL_OUTPUT_BUSINESS[key]
+        for key in (cleared.get("removed") or [])
+        if key in _SUBSKILL_OUTPUT_BUSINESS
+    ]
+    deleted_bits = []
+    if int(workspace.get("scenes") or 0) > 0:
+        deleted_bits.append(f"该场工作区场景 {int(workspace.get('scenes') or 0)} 条")
+    if int(workspace.get("shots") or 0) > 0 or int(workspace.get("scenes") or 0) > 0:
+        deleted_bits.append("该场分镜")
+    if derived_deleted > 0:
+        deleted_bits.append(f"该场由现场编排生成的衍生环境 {derived_deleted} 条")
+    if not deleted_bits:
+        deleted_bits.append("该场暂无需要标删的工作区场景、分镜或衍生环境")
+
+    logger.warning("[重跑清理] 场次 %s 从「%s」起重跑。", sid, plan["start_label"])
+    logger.warning(
+        "[重跑清理] 已清除过程产出：%s。",
+        "、".join(removed_outputs) if removed_outputs else "该场起点及后续稿件（原无成稿）",
+    )
+    logger.warning("[重跑清理] 已将数据库内容标为删除：%s。", "、".join(deleted_bits))
+    logger.warning("[重跑清理] 已清除运行状态：该场逐场优化节点、该场分镜生成节点。")
+    return {
+        "scene_id": sid,
+        "plan": plan,
+        "removed_outputs": removed_outputs,
+        "workspace": workspace,
+        "derived_deleted": derived_deleted,
+    }
+
+
+def seed_scene_block_for_start(
+    *,
+    start_group: str,
+    raw_scene_block: str,
+    persist_steps: Optional[Dict[str, str]] = None,
+) -> str:
+    """Pick the correct upstream body for an explicit scene rerun.
+
+    Aggregate ``scene_subskills`` is the last staging draft. Seeding framing or
+    staging from that text makes 现场编排 / 建置 keep the previous run.
+    """
+    steps = persist_steps if isinstance(persist_steps, dict) else {}
+    raw = str(raw_scene_block or "").strip()
+    group = str(start_group or "").strip() or "drama"
+
+    def _usable(key: str) -> str:
+        text = str(steps.get(key) or "").strip()
+        return text if persisted_subskill_step_usable(key, text) else ""
+
+    if group == "staging":
+        return _usable("framing") or raw
+    if group == "framing":
+        return _usable("combat") or _usable("drama") or strip_environment_planning_sections(raw)
+    if group == "combat":
+        return _usable("drama") or strip_environment_planning_sections(raw)
+    return strip_environment_planning_sections(raw)
 
 
 def persisted_subskill_step_usable(step_key: str, text: str) -> bool:
@@ -2232,23 +2467,37 @@ async def run_scene_subskill_pipeline(
     persist_map: Dict[str, Dict[str, str]] = {}
     pipeline_rows: Dict[str, Dict[str, str]] = {}
     fallback_scripts: List[str] = []
-    if not explicit_start and node_episode_id > 0:
+    if explicit_start and node_episode_id > 0:
+        for task in tasks:
+            scene_id = str(task.get("scene_id") or "").strip()
+            if not scene_id:
+                continue
+            prepare_explicit_scene_subskill_rerun(
+                db,
+                project_id=project_id,
+                episode_id=node_episode_id,
+                scene_id=scene_id,
+                start_group=start_group,
+            )
+        db.commit()
+    if node_episode_id > 0:
         persist_map = load_scene_subskill_results_map(db, node_episode_id)
-        pipeline_rows = _load_scene_pipeline_rows(
-            db,
-            project_id=project_id,
-            episode_id=node_episode_id,
-        )
-        resume_episode = (
-            db.query(Episode)
-            .filter(Episode.id == int(node_episode_id), _active_episode_clause())
-            .populate_existing()
-            .first()
-        )
-        fallback_scripts = [
-            load_stage1_output_text(db, node_episode_id, "scene_subskills"),
-            str(getattr(resume_episode, "ai_scene_analysis_adaptation", "") or ""),
-        ]
+        if not explicit_start:
+            pipeline_rows = _load_scene_pipeline_rows(
+                db,
+                project_id=project_id,
+                episode_id=node_episode_id,
+            )
+            resume_episode = (
+                db.query(Episode)
+                .filter(Episode.id == int(node_episode_id), _active_episode_clause())
+                .populate_existing()
+                .first()
+            )
+            fallback_scripts = [
+                load_stage1_output_text(db, node_episode_id, "scene_subskills"),
+                str(getattr(resume_episode, "ai_scene_analysis_adaptation", "") or ""),
+            ]
     resume_plans: Dict[str, SceneSubskillResume] = {}
     if not explicit_start:
         for task in tasks:
@@ -2404,13 +2653,23 @@ async def run_scene_subskill_pipeline(
                     task_db.commit()
                 special = str(task.get("special_analysis") or "")
                 raw_scene_block = str(task.get("scene_block") or "")
+                persist_steps = lookup_persisted_scene_subskill_steps(persist_map, scene_id)
                 resume_block = str(scene_resume.current_block or "").strip() if scene_resume else ""
                 if resume_block:
                     current_block = resume_block
-                elif scene_start == "staging":
-                    current_block = raw_scene_block.strip()
                 else:
-                    current_block = strip_environment_planning_sections(raw_scene_block)
+                    current_block = seed_scene_block_for_start(
+                        start_group=scene_start,
+                        raw_scene_block=raw_scene_block,
+                        persist_steps=persist_steps,
+                    )
+                    logger.info(
+                        "[scene_subskill_pipeline] seed scene=%s start=%s persist=%s chars=%s",
+                        scene_id,
+                        scene_start,
+                        sorted(key for key in persist_steps if str(persist_steps.get(key) or "").strip()),
+                        len(current_block),
+                    )
                 if special and special not in current_block:
                     current_block = "\n".join(part for part in (special, current_block) if part)
                 called: List[str] = list(scene_resume.called) if scene_resume else []
