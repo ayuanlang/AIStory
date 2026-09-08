@@ -505,6 +505,107 @@ standardized beat
     assert "────【衍生环境】────" not in scene_head
 
 
+def test_framing_splice_drops_extract_block_inside_env_plan():
+    from app.services.scene_subskill_pipeline_runner import splice_environment_and_enhance_scene
+
+    env_scene = """[SCENE_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+【主环境】客栈大堂
+[DERIVED_ENV_EXTRACT_START]
+[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜生成提示=上轮提取旧稿
+[DERIVED_ENV_EXTRACT_END]
+[ENV_BLOCK_END]
+[SCENE_END:EP01_SC01]"""
+    enhance = """[SCENE_START:EP01_SC01]
+[DERIVED_ENV_EXTRACT_START:EP01_SC01]
+[DERIVED_ENV] 名称=180度客栈大堂｜所属主环境=客栈大堂｜生成提示=带场号旧提取
+[DERIVED_ENV_EXTRACT_END:EP01_SC01]
+【场景名称】客栈对峙
+[SCENE_CONTENT_START:EP01_SC01]
+drama body
+[BEAT_START:B1]
+standardized beat
+[BEAT_END:B1]
+[SCENE_CONTENT_END:EP01_SC01]
+[SCENE_END:EP01_SC01]"""
+
+    spliced = splice_environment_and_enhance_scene("EP01_SC01", env_scene, enhance)
+    assert "【主环境】客栈大堂" in spliced
+    assert "drama body" in spliced
+    assert "上轮提取旧稿" not in spliced
+    assert "带场号旧提取" not in spliced
+    assert "[DERIVED_ENV_EXTRACT_START" not in spliced
+
+
+def test_framing_splice_drops_prior_grid_map():
+    from app.services.scene_subskill_pipeline_runner import splice_environment_and_enhance_scene
+
+    env_scene = """[SCENE_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+【主环境】客栈大堂
+[ENV_BLOCK_END]
+[SCENE_END:EP01_SC01]"""
+    enhance = """[SCENE_START:EP01_SC01]
+【场景名称】客栈对峙
+[SCENE_CONTENT_START:EP01_SC01]
+drama body
+[BEAT_START:B1]
+掌柜拨算盘。
+【角色道具宫格分布图】
+CHAR:[@掌柜]｜宫格=中2列×中2行｜方式=相对｜站位=上轮旧站位
+当前环境=ENV:[0度客栈大堂]｜景别=MCU
+[BEAT_END:B1]
+[SCENE_CONTENT_END:EP01_SC01]
+[SCENE_END:EP01_SC01]"""
+
+    spliced = splice_environment_and_enhance_scene("EP01_SC01", env_scene, enhance)
+    assert "drama body" in spliced
+    assert "掌柜拨算盘。" in spliced
+    assert "上轮旧站位" not in spliced
+    assert "【角色道具宫格分布图】" not in spliced
+
+
+def test_trailing_framing_plan_ignores_echoed_prefix_grid_map():
+    from app.services.scene_subskill_pipeline_runner import _splice_trailing_framing_payload
+
+    raw = """【角色道具宫格分布图】
+CHAR:[@掌柜]｜站位=回声旧宫格
+当前环境=ENV:[0度客栈大堂]｜景别=MCU
+[SCENE_START:EP01_SC01]
+掌柜拨算盘。
+[SCENE_END:EP01_SC01]
+【角色道具宫格分布图】
+CHAR:[@掌柜]｜站位=本轮场后宫格
+当前环境=ENV:[90度客栈大堂]｜景别=MS"""
+    spliced = _splice_trailing_framing_payload(raw, "掌柜拨算盘。", "EP01_SC01")
+    assert "本轮场后宫格" in spliced
+    assert "回声旧宫格" not in spliced
+
+
+def test_trailing_framing_extract_ignores_echoed_prefix():
+    from app.services.scene_subskill_pipeline_runner import _splice_trailing_framing_payload
+
+    raw = """[DERIVED_ENV_EXTRACT_START]
+[DERIVED_ENV] 名称=0度客栈大堂｜生成提示=回声旧提取
+[DERIVED_ENV_EXTRACT_END]
+[SCENE_START:EP01_SC01]
+【角色道具宫格分布图】B1
+[SCENE_END:EP01_SC01]
+[DERIVED_ENV_EXTRACT_START]
+[DERIVED_ENV] 名称=90度客栈大堂｜生成提示=本轮场后提取
+[DERIVED_ENV_EXTRACT_END]"""
+    scene = """【角色道具宫格分布图】B1"""
+    spliced = _splice_trailing_framing_payload(raw, scene, "EP01_SC01")
+    assert "本轮场后提取" in spliced
+    assert "回声旧提取" not in spliced
+
+
 def test_assets_extraction_uses_scene_split_plus_per_scene_env():
     from app.core.prompt_injection import wrap_injection_section
     from app.services.script_analysis_flow import resolve_assets_extraction_source_text

@@ -636,6 +636,10 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
                     "gen_prompt": fields.get("生成提示") or fields.get("gen_prompt"),
                     "empty_view_delta": fields.get("empty_view_delta") or fields.get("空镜差值"),
                     "visible_bound": fields.get("可见边界") or fields.get("visible_bound"),
+                    "activity": fields.get("活动适配") or fields.get("activity"),
+                    "visible_whitelist": fields.get("可见内容白名单") or fields.get("visible_whitelist"),
+                    "opposite": fields.get("对向位") or fields.get("opposite"),
+                    "invisible": fields.get("不可见内容") or fields.get("invisible"),
                     "background": fields.get("背景") or fields.get("background"),
                     "frame_left": fields.get("画左") or fields.get("frame_left"),
                     "frame_right": fields.get("画右") or fields.get("frame_right"),
@@ -1020,6 +1024,25 @@ _DERIVED_ENV_SIGNAL_PATTERN = re.compile(
     r"\[DERIVED_ENV|【本场衍生环境名】|────【衍生环境】────",
     re.IGNORECASE,
 )
+_DUPLICATE_DERIVED_ENV_BULLET = re.compile(
+    r"^[ \t]*[-*][ \t]+`?\d+\s*度[^:\n：]*[`：:].+$",
+    re.MULTILINE,
+)
+
+
+def collapse_duplicate_derived_environment_sections(text: str) -> str:
+    """Keep the extract block as the only derived-env body; drop the old bullet table."""
+    source = str(text or "")
+    if not source.strip():
+        return source
+    has_extract = bool(
+        DERIVED_ENV_EXTRACT_BLOCK_PATTERN.search(source)
+        or re.search(r"^\s*\[DERIVED_ENV\]\s+", source, re.MULTILINE)
+    )
+    if not has_extract:
+        return source
+    cleaned = _DUPLICATE_DERIVED_ENV_BULLET.sub("", source)
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
 
 
 def _normalize_env_name_key(value: str) -> str:

@@ -348,6 +348,28 @@ def test_framing_seed_strips_prior_derived_environment_from_persist():
     assert "文戏增强已完成的正文" in seeded
 
 
+def test_framing_seed_strips_prior_grid_map_from_persist():
+    polluted = (
+        "[SCENE_START:EP01_SC01]\n"
+        "文戏增强已完成的正文，足够长以便续跑时识别为可用落库，长度须超过一百字门槛，不得当成空壳。\n"
+        "[BEAT_START:B1]\n"
+        "掌柜拨算盘。\n"
+        "【角色道具宫格分布图】\n"
+        "CHAR:[@掌柜]｜宫格=中2列×中2行｜方式=相对｜站位=上轮旧宫格站位\n"
+        "当前环境=ENV:[0度旧茶馆]｜景别=MCU\n"
+        "[BEAT_END:B1]\n"
+        "[SCENE_END:EP01_SC01]"
+    )
+    seeded = seed_scene_block_for_start(
+        start_group="framing",
+        raw_scene_block=STAGING_OK,
+        persist_steps={"drama": polluted},
+    )
+    assert "掌柜拨算盘。" in seeded
+    assert "上轮旧宫格站位" not in seeded
+    assert "【角色道具宫格分布图】" not in seeded
+
+
 def test_filter_subskill_tasks_matches_canonical_and_tail():
     tasks = [
         {"scene_id": "EP01_SC01", "scene_order": 1},

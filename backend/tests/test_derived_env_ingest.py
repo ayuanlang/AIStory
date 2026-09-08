@@ -969,3 +969,69 @@ def test_ingest_endpoint_is_programmatic():
     assert "ingest-derived-environments" in src
     assert "regen_derived_environments_from_framing" in src
     assert "No LLM" in src or "no LLM" in src.lower()
+
+
+def test_collapse_drops_bullet_table_when_extract_exists():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        collapse_duplicate_derived_environment_sections,
+    )
+    from app.services.scene_subskill_pipeline_runner import (
+        assert_derived_framing_ready_for_staging,
+    )
+
+    text = (
+        "────【衍生环境】────\n"
+        "- `0度客栈大堂`：view_angle_from_main=0｜触发=Master｜活动适配=柜台后｜"
+        "可见内容白名单=柜台:正面｜背景=柜台｜所属主环境=客栈大堂\n"
+        "- `180度客栈大堂`：view_angle_from_main=180｜触发=反打｜所属主环境=客栈大堂\n"
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜"
+        "类型=第一刀｜活动适配=柜台后｜可见内容白名单=柜台:正面｜背景=柜台\n"
+        "[DERIVED_ENV] 名称=180度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=180｜"
+        "类型=第一刀｜触发=反打\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+        "【本场衍生环境名】0度客栈大堂，180度客栈大堂\n"
+        "【角色道具宫格分布图】\n"
+        "当前环境=ENV:[0度客栈大堂]｜[DERIVED_ENV:0度客栈大堂]\n"
+    )
+    collapsed = collapse_duplicate_derived_environment_sections(text)
+    assert "────【衍生环境】────" in collapsed
+    assert "[DERIVED_ENV_EXTRACT_START]" in collapsed
+    assert "【本场衍生环境名】0度客栈大堂，180度客栈大堂" in collapsed
+    assert "- `0度客栈大堂`：" not in collapsed
+    assert "- `180度客栈大堂`：" not in collapsed
+    assert "活动适配=柜台后" in collapsed
+    assert "可见内容白名单=柜台:正面" in collapsed
+
+    ready = assert_derived_framing_ready_for_staging(text, "EP01_SC01")
+    assert "- `0度客栈大堂`：" not in ready
+    assert "[DERIVED_ENV] 名称=0度客栈大堂" in ready
+
+
+def test_parse_extract_keeps_activity_and_whitelist():
+    text = (
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜"
+        "类型=第一刀｜活动适配=柜台后对戏｜可见内容白名单=柜台:正面｜可见边界=左=楼梯口｜"
+        "对向位=180｜不可见内容=正门\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+    )
+    items = parse_derived_env_extract_items(text)
+    assert len(items) == 1
+    assert items[0]["activity"] == "柜台后对戏"
+    assert items[0]["visible_whitelist"] == "柜台:正面"
+    assert items[0]["visible_bound"] == "左=楼梯口"
+    assert items[0]["opposite"] == "180"
+    assert items[0]["invisible"] == "正门"
+
+
+def test_collapse_keeps_bullets_when_extract_missing():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        collapse_duplicate_derived_environment_sections,
+    )
+
+    text = (
+        "────【衍生环境】────\n"
+        "- `0度客栈大堂`：所属主环境=客栈大堂｜活动适配=柜台后\n"
+    )
+    assert collapse_duplicate_derived_environment_sections(text) == text

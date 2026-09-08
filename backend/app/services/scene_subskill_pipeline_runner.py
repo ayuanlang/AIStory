@@ -47,6 +47,7 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     DERIVED_ENV_EXTRACT_BLOCK_PATTERN,
     DERIVED_ENV_TAG_PATTERN,
     build_derived_env_frame_anchor_injection,
+    collapse_duplicate_derived_environment_sections,
     ingest_derived_environments_from_framing,
     rewrite_merged_derived_environment_names,
 )
@@ -128,6 +129,16 @@ _ENV_BLOCK_WITH_COVERAGE_PATTERN = re.compile(
     r"\s*`?\[ENV_BLOCK_START(?:\:[^\]]+)?\]`?.*?"
     r"`?\[ENV_BLOCK_END(?:\:[^\]]+)?\]`?"
     r"(?:\s*【Beat→衍生ENV剧情覆盖矩阵】.*?【ENV覆盖综合】[^\r\n]*)?",
+    re.IGNORECASE | re.DOTALL,
+)
+_DERIVED_ENV_EXTRACT_ANY = re.compile(
+    r"`?\[DERIVED_ENV_EXTRACT_START(?::[^\]]+)?\]`?.*?"
+    r"`?\[DERIVED_ENV_EXTRACT_END(?::[^\]]+)?\]`?",
+    re.IGNORECASE | re.DOTALL,
+)
+_DERIVED_ENV_EXTRACT_UNCLOSED = re.compile(
+    r"`?\[DERIVED_ENV_EXTRACT_START(?::[^\]]+)?\]`?.*?"
+    r"(?=(?:\r?\n\[BEAT_STREAM)|(?:\r?\n\[SCENE_CONTENT)|(?:\r?\n\[SCENE_END)|(?:\r?\n\[SCENES_BLOCK_END)|$)",
     re.IGNORECASE | re.DOTALL,
 )
 _ENV_PLAN_WAIT_SECONDS = 1200.0
@@ -850,27 +861,45 @@ def _framing_plan_block(text: str) -> str:
     return rest[:end_at].strip()
 
 
-def _splice_trailing_framing_payload(raw_text: str, scene_text: str) -> str:
+def _trailing_text_after_scene_end(raw_text: str, scene_id: str = "") -> str:
+    """Only the suffix after this scene's last SCENE_END; ignore echoed prefix extract."""
+    raw = str(raw_text or "")
+    sid = str(scene_id or "").strip()
+    pattern = (
+        re.compile(rf"`?\[SCENE_END:{re.escape(sid)}\]`?", re.IGNORECASE)
+        if sid
+        else re.compile(r"`?\[SCENE_END(?::[^\]]+)?\]`?", re.IGNORECASE)
+    )
+    last = None
+    for match in pattern.finditer(raw):
+        last = match
+    if last is None:
+        return ""
+    return raw[last.end() :]
+
+
+def _splice_trailing_framing_payload(raw_text: str, scene_text: str, scene_id: str = "") -> str:
     """Keep plan/extract/locks the model wrote after SCENE_END or SCENES_BLOCK_END."""
     raw = str(raw_text or "")
     scene = str(scene_text or "").strip()
     if not raw.strip():
         return scene
     extras: List[str] = []
+    trailing = _trailing_text_after_scene_end(raw, scene_id)
     if not any(heading in scene for heading in _FRAMING_PLAN_HEADINGS):
-        plan = _framing_plan_block(raw)
+        plan = _framing_plan_block(trailing)
         if plan:
             extras.append(plan)
     if not (
-        DERIVED_ENV_EXTRACT_BLOCK_PATTERN.search(scene)
+        _DERIVED_ENV_EXTRACT_ANY.search(scene)
         or DERIVED_ENV_TAG_PATTERN.search(scene)
     ):
-        extract = DERIVED_ENV_EXTRACT_BLOCK_PATTERN.search(raw)
+        extract = _DERIVED_ENV_EXTRACT_ANY.search(trailing)
         if extract:
             extras.append(str(extract.group(0) or "").strip())
     scene_has_lock = any(_beat_has_framing_lock(body) for _, body in _iter_beat_bodies(scene))
-    if not scene_has_lock and (_GRID_MAP_HEADING in raw or _FRAMING_LOCK_HEADING in raw):
-        locked_stream = _locked_beat_stream_from_text(raw)
+    if not scene_has_lock and (_GRID_MAP_HEADING in trailing or _FRAMING_LOCK_HEADING in trailing):
+        locked_stream = _locked_beat_stream_from_text(trailing)
         if locked_stream and locked_stream not in scene:
             extras.append(locked_stream)
     if not extras:
@@ -902,7 +931,9 @@ def _framing_has_plan_and_extract(source: str) -> bool:
 
 def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> str:
     """Hard gate: staging must not start unless framing output is extractable."""
-    source = rewrite_merged_derived_environment_names(str(text or "")).strip()
+    source = collapse_duplicate_derived_environment_sections(
+        rewrite_merged_derived_environment_names(str(text or ""))
+    ).strip()
     sid = str(scene_id or "").strip()
     if not source:
         raise HTTPException(status_code=422, detail=f"STAGING_BLOCKED_FRAMING_EMPTY:{sid}")
@@ -950,7 +981,7 @@ def _coerce_ready_framing_block(extracted: str, candidate: str, scene_id: str) -
     if extracted_text:
         sources.append(extracted_text)
         if candidate_text:
-            sources.append(_splice_trailing_framing_payload(candidate_text, extracted_text))
+            sources.append(_splice_trailing_framing_payload(candidate_text, extracted_text, scene_id))
     if candidate_text:
         sources.append(candidate_text)
         recovered = _try_extract_subskill_scene_block(candidate_text, scene_id, "")
@@ -1730,7 +1761,7 @@ def _extract_single_scene_block(
         )
     unit = matches[0]
     special = str(fallback_special or "").strip() or _special_block_from_text(text, scene_id)
-    scene_text = _splice_trailing_framing_payload(sanitized_text, unit.scene_text)
+    scene_text = _splice_trailing_framing_payload(sanitized_text, unit.scene_text, scene_id)
     return "\n".join(
         part
         for part in (
@@ -1806,6 +1837,18 @@ _PRIOR_DERIVED_ENV_COVERAGE = re.compile(
 )
 _PRIOR_ENV_COVERAGE_SUMMARY = re.compile(r"(?:\r?\n)?【ENV覆盖综合】[^\r\n]*")
 _PRIOR_DERIVED_ENV_LINE = re.compile(r"(?:\r?\n)?\[DERIVED_ENV\][^\r\n]*")
+_PRIOR_FRAMING_PLAN_BLOCK = re.compile(
+    r"(?:\r?\n)?【(?:角色道具宫格分布图|取景锁定|Beat主体定位|主体定位方案|宫格草稿|Beat景别构图方案)】"
+    r".*?"
+    r"(?=(?:\r?\n【(?:角色道具宫格分布图|取景锁定|Beat主体定位|主体定位方案|宫格草稿|Beat景别构图方案|建置|入戏|场记分析)】)"
+    r"|(?:\r?\n\[BEAT_END)"
+    r"|(?:\r?\n\[BEAT_START)"
+    r"|(?:\r?\n\[BEAT_STREAM_END)"
+    r"|(?:\r?\n\[SCENE_CONTENT)"
+    r"|(?:\r?\n\[SCENE_END)"
+    r"|$)",
+    re.DOTALL,
+)
 _COVERAGE_AFTER_ENV = re.compile(
     r"(?:\s*【Beat→衍生ENV剧情覆盖矩阵】.*?【ENV覆盖综合】[^\r\n]*)",
     re.DOTALL,
@@ -1826,17 +1869,21 @@ def _main_env_for_staging(env_scene_block: str) -> str:
     if not sections:
         return ""
     cleaned = _DERIVED_ENV_IN_ENV_BLOCK.sub("", sections)
+    cleaned = _DERIVED_ENV_EXTRACT_ANY.sub("", cleaned)
+    cleaned = _DERIVED_ENV_EXTRACT_UNCLOSED.sub("", cleaned)
     cleaned = _COVERAGE_AFTER_ENV.sub("", cleaned)
     return cleaned.strip()
 
 
 def strip_prior_derived_environment_sections(scene_text: str) -> str:
     """Drop leftover 现场编排 derived-env tables so this run cannot copy them."""
-    stripped = DERIVED_ENV_EXTRACT_BLOCK_PATTERN.sub("", str(scene_text or ""))
+    stripped = _DERIVED_ENV_EXTRACT_ANY.sub("", str(scene_text or ""))
+    stripped = _DERIVED_ENV_EXTRACT_UNCLOSED.sub("", stripped)
     stripped = _PRIOR_DERIVED_ENV_NAMES_LINE.sub("", stripped)
     stripped = _PRIOR_DERIVED_ENV_COVERAGE.sub("", stripped)
     stripped = _PRIOR_ENV_COVERAGE_SUMMARY.sub("", stripped)
     stripped = _PRIOR_DERIVED_ENV_LINE.sub("", stripped)
+    stripped = _PRIOR_FRAMING_PLAN_BLOCK.sub("", stripped)
     kept: List[str] = []
     skipping = False
     for line in stripped.replace("\r\n", "\n").splitlines():
@@ -2369,7 +2416,9 @@ async def _run_derived_framing_then_staging(
         special,
     )
     episode_env_blocks = {
-        name: _DERIVED_ENV_IN_ENV_BLOCK.sub("", block).strip()
+        name: strip_prior_derived_environment_sections(
+            _DERIVED_ENV_IN_ENV_BLOCK.sub("", block)
+        )
         for name, block in collect_episode_env_blocks_by_name(env_script).items()
     }
     ident_items = parse_scene_env_ident_items(env_scene or framing_block, scene_id)
