@@ -36,6 +36,7 @@ from app.services.script_analysis_flow import (
     import_analyze_scene_stage_result,
     parse_scene_units_from_markers,
     persist_script_optimization_stage,
+    reset_downstream_progress_for_node_rerun,
     resolve_assets_extraction_source_text,
     upsert_pipeline_node_status,
 )
@@ -459,6 +460,13 @@ async def execute_scene_analysis_flow_node(
                         status="queued",
                         progress_percent=0.0,
                     )
+            reset_downstream_progress_for_node_rerun(
+                db,
+                project_id=node_project_id,
+                episode_id=node_episode_id,
+                node_key=node_key,
+                scoped_scene_ids=target_scene_ids if scoped_rerun else None,
+            )
             db.commit()
 
         llm_started_perf = time.perf_counter()

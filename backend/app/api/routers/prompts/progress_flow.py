@@ -87,6 +87,18 @@ class StoryboardGenerationFailedRequest(BaseModel):
     error_code: Optional[str] = None
 
 
+class StoryboardGenerationStartedRequest(BaseModel):
+    project_id: int
+    episode_id: int
+    scene_marker: str
+
+
+class StoryboardGenerationResetRequest(BaseModel):
+    project_id: int
+    episode_id: int
+    scene_markers: Optional[List[str]] = None
+
+
 class DerivedEnvIngestRequest(BaseModel):
     project_id: int
     episode_id: int
@@ -300,6 +312,82 @@ async def mark_storyboard_generation_failed_progress(
         "project_id": int(episode.project_id),
         "episode_id": int(request.episode_id),
         "scene_marker": marker,
+    }
+
+
+@router.post("/prompts/scene-analysis/progress/storyboard-started")
+async def mark_storyboard_generation_started_progress(
+    request: StoryboardGenerationStartedRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == int(request.episode_id), _active_episode_clause())
+        .first()
+    )
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
+    _require_project_access(db, episode.project_id, current_user)
+    if int(request.project_id) != int(episode.project_id):
+        raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
+    marker = str(request.scene_marker or "").strip()
+    if not marker:
+        raise HTTPException(status_code=400, detail="scene_marker is required")
+    from app.services.script_analysis_flow import mark_storyboard_generation_started
+
+    mark_storyboard_generation_started(
+        db,
+        project_id=int(episode.project_id),
+        episode_id=int(request.episode_id),
+        scene_marker=marker,
+    )
+    db.commit()
+    return {
+        "status": "ok",
+        "project_id": int(episode.project_id),
+        "episode_id": int(request.episode_id),
+        "scene_marker": marker,
+    }
+
+
+@router.post("/prompts/scene-analysis/progress/storyboard-reset")
+async def reset_storyboard_generation_progress(
+    request: StoryboardGenerationResetRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == int(request.episode_id), _active_episode_clause())
+        .first()
+    )
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
+    _require_project_access(db, episode.project_id, current_user)
+    if int(request.project_id) != int(episode.project_id):
+        raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
+    from app.services.script_analysis_flow import reset_storyboard_generation_nodes
+
+    markers = [
+        str(marker or "").strip()
+        for marker in (request.scene_markers or [])
+        if str(marker or "").strip()
+    ]
+    summary = reset_storyboard_generation_nodes(
+        db,
+        project_id=int(episode.project_id),
+        episode_id=int(request.episode_id),
+        scene_markers=markers or None,
+        include_episode_level=True,
+    )
+    db.commit()
+    return {
+        "status": "ok",
+        "project_id": int(episode.project_id),
+        "episode_id": int(request.episode_id),
+        "scene_markers": markers,
+        **summary,
     }
 
 

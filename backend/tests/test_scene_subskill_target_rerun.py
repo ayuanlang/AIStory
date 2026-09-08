@@ -295,7 +295,7 @@ def test_explicit_rerun_cleanup_plan_lists_business_downstream():
     assert framing_plan["start_label"] == "场景现场编排"
     assert framing_plan["output_labels"] == ["现场编排稿", "建置入戏稿"]
     assert framing_plan["clear_derived_env"] is True
-    assert framing_plan["clear_workspace_scene"] is True
+    assert framing_plan["clear_workspace_scene"] is False
     staging_plan = scene_subskill_rerun_cleanup_plan("staging")
     assert staging_plan["output_labels"] == ["建置入戏稿"]
     assert staging_plan["clear_derived_env"] is False
@@ -326,6 +326,26 @@ def test_explicit_rerun_seeds_from_persisted_step_not_aggregate_staging():
         raw_scene_block=STAGING_OK,
         persist_steps=persist,
     ) == DRAMA_OK
+
+
+def test_framing_seed_strips_prior_derived_environment_from_persist():
+    polluted = (
+        "[SCENE_START:EP01_SC01]\n"
+        "────【衍生环境】────\n"
+        "- `0度旧茶馆`：上轮现场编排旧稿，足够长以便续跑时识别为可用落库，长度须超过一百字门槛。\n"
+        "【本场衍生环境名】0度旧茶馆\n"
+        "文戏增强已完成的正文，足够长以便续跑时识别为可用落库，长度须超过一百字门槛，不得当成空壳。\n"
+        "[SCENE_END:EP01_SC01]"
+    )
+    seeded = seed_scene_block_for_start(
+        start_group="framing",
+        raw_scene_block=STAGING_OK,
+        persist_steps={"drama": polluted},
+    )
+    assert "上轮现场编排旧稿" not in seeded
+    assert "────【衍生环境】────" not in seeded
+    assert "【本场衍生环境名】" not in seeded
+    assert "文戏增强已完成的正文" in seeded
 
 
 def test_filter_subskill_tasks_matches_canonical_and_tail():

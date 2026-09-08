@@ -2589,7 +2589,153 @@ _FRONTEND_OWNED_STORYBOARD_NODES = {
     "storyboard_generation",
     "shot_generation",
 }
+_PER_SCENE_RESET_ON_RERUN = {
+    "scene_split": ["scene_subskill_scene", "storyboard_generation"],
+    "environment_plan": ["storyboard_generation"],
+    "scene_subskill_pipeline": ["storyboard_generation"],
+}
 _WAIT_ENV_STALE_BUDGET_SECONDS = 1200
+
+
+def _iter_pipeline_nodes(
+    db: Session,
+    *,
+    episode_id: int,
+    node_names: List[str],
+    scene_ids: Optional[List[str]] = None,
+    include_episode_level: bool = False,
+) -> List[Any]:
+    if ScriptProgressPipelineNode is None:
+        return []
+    names = [str(name or "").strip() for name in (node_names or []) if str(name or "").strip()]
+    if not names or int(episode_id or 0) <= 0:
+        return []
+    query = db.query(ScriptProgressPipelineNode).filter(
+        ScriptProgressPipelineNode.episode_id == int(episode_id),
+        ScriptProgressPipelineNode.node_name.in_(names),
+    )
+    if scene_ids is not None:
+        from sqlalchemy import or_
+
+        wanted = {str(sid or "").strip() for sid in scene_ids if str(sid or "").strip()}
+        if not wanted and not include_episode_level:
+            return []
+        clauses = []
+        if wanted:
+            clauses.append(ScriptProgressPipelineNode.scene_id.in_(list(wanted)))
+        if include_episode_level:
+            clauses.append(ScriptProgressPipelineNode.scene_id.is_(None))
+            clauses.append(ScriptProgressPipelineNode.scene_id == "")
+        if clauses:
+            query = query.filter(or_(*clauses))
+    return list(query.all())
+
+
+def reset_storyboard_generation_nodes(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene_markers: Optional[List[str]] = None,
+    include_episode_level: bool = True,
+) -> Dict[str, Any]:
+    """Queue leftover storyboard success so a rerun cannot keep stale 已完成."""
+    pid = int(project_id or 0)
+    eid = int(episode_id or 0)
+    if pid <= 0 or eid <= 0 or ScriptProgressPipelineNode is None:
+        return {"reset_count": 0}
+    markers = [str(marker or "").strip() for marker in (scene_markers or []) if str(marker or "").strip()]
+    script_id = f"episode:{eid}"
+    reset_keys: Set[Tuple[str, Optional[str]]] = set()
+
+    def _queue(node_name: str, scene_id: Optional[str]) -> None:
+        key = (str(node_name), scene_id or None)
+        if key in reset_keys:
+            return
+        reset_keys.add(key)
+        upsert_pipeline_node_status(
+            db,
+            project_id=pid,
+            episode_id=eid,
+            script_id=script_id,
+            node_name=node_name,
+            scene_id=scene_id,
+            status="queued",
+            progress_percent=0.0,
+            error_code=None,
+            error_message=None,
+            runtime_meta={"business_event": "queued", "rerun_cleared": True},
+        )
+
+    for row in _iter_pipeline_nodes(
+        db,
+        episode_id=eid,
+        node_names=["storyboard_generation", "shot_generation"],
+        scene_ids=markers or None,
+        include_episode_level=include_episode_level,
+    ):
+        _queue(
+            str(getattr(row, "node_name", "") or "").strip() or "storyboard_generation",
+            str(getattr(row, "scene_id", "") or "").strip() or None,
+        )
+    if include_episode_level:
+        _queue("storyboard_generation", None)
+    for marker in markers:
+        _queue("storyboard_generation", marker)
+    return {"reset_count": len(reset_keys)}
+
+
+def reset_downstream_progress_for_node_rerun(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    node_key: str,
+    scoped_scene_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Reset per-scene leftover success when an upstream flow node is rerun."""
+    key = str(node_key or "").strip()
+    pid = int(project_id or 0)
+    eid = int(episode_id or 0)
+    if pid <= 0 or eid <= 0 or not key:
+        return {"reset_count": 0}
+    per_scene_names = list(_PER_SCENE_RESET_ON_RERUN.get(key, []))
+    if not per_scene_names:
+        return {"reset_count": 0}
+    scoped = [str(scene_id or "").strip() for scene_id in (scoped_scene_ids or []) if str(scene_id or "").strip()]
+    script_id = f"episode:{eid}"
+    reset_count = 0
+    for row in _iter_pipeline_nodes(
+        db,
+        episode_id=eid,
+        node_names=per_scene_names,
+        scene_ids=scoped or None,
+        include_episode_level="storyboard_generation" in per_scene_names,
+    ):
+        upsert_pipeline_node_status(
+            db,
+            project_id=pid,
+            episode_id=eid,
+            script_id=script_id,
+            node_name=str(getattr(row, "node_name", "") or "").strip(),
+            scene_id=str(getattr(row, "scene_id", "") or "").strip() or None,
+            status="queued",
+            progress_percent=0.0,
+            error_code=None,
+            error_message=None,
+            runtime_meta={"business_event": "queued", "rerun_cleared": True},
+        )
+        reset_count += 1
+    if "storyboard_generation" in per_scene_names:
+        storyboard = reset_storyboard_generation_nodes(
+            db,
+            project_id=pid,
+            episode_id=eid,
+            scene_markers=scoped or None,
+            include_episode_level=True,
+        )
+        reset_count += int(storyboard.get("reset_count") or 0)
+    return {"reset_count": reset_count}
 
 
 def _episode_workspace_storyboard_coverage(db: Session, episode_id: int) -> Dict[str, Any]:
@@ -2713,7 +2859,9 @@ def mark_storyboard_generation_applied(
     try:
         coverage = _episode_workspace_storyboard_coverage(db, eid)
     except Exception:
-        coverage = {"ok": False}
+        coverage = {"ok": False, "scene_count": 0, "with_shots": 0}
+    scene_count = int(coverage.get("scene_count") or 0)
+    with_shots = int(coverage.get("with_shots") or 0)
     if coverage.get("ok"):
         upsert_pipeline_node_status(
             db,
@@ -2726,8 +2874,110 @@ def mark_storyboard_generation_applied(
             runtime_meta={
                 **meta,
                 "business_reason": "工作区分镜已齐套",
-                "scene_count": int(coverage.get("scene_count") or 0),
-                "with_shots": int(coverage.get("with_shots") or 0),
+                "scene_count": scene_count,
+                "with_shots": with_shots,
+            },
+        )
+    else:
+        progress = 0.0
+        if scene_count > 0:
+            progress = min(99.0, max(5.0, (with_shots / scene_count) * 100.0))
+        upsert_pipeline_node_status(
+            db,
+            project_id=pid,
+            episode_id=eid,
+            script_id=script_id,
+            node_name="storyboard_generation",
+            status="running",
+            progress_percent=progress,
+            runtime_meta={
+                **meta,
+                "business_event": "started",
+                "business_reason": "分镜尚未齐套",
+                "scene_count": scene_count,
+                "with_shots": with_shots,
+            },
+        )
+
+
+def mark_storyboard_generation_started(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene: Any = None,
+    scene_marker: str = "",
+) -> None:
+    """Persist frontend-owned storyboard running so poll/UI match generateSceneShots."""
+    if ScriptProgressPipelineNode is None:
+        return
+    pid = int(project_id or 0)
+    eid = int(episode_id or 0)
+    if pid <= 0 or eid <= 0:
+        return
+    marker = str(scene_marker or "").strip()
+    episode = None
+    try:
+        from app.models.all_models import Episode
+        episode = db.query(Episode).filter(Episode.id == eid).first()
+    except Exception:
+        episode = None
+    prefix = resolve_episode_scene_id_prefix(episode, fallback_number=1)
+    if not marker and scene is not None:
+        from app.services.script_progress_helpers import _normalize_scene_marker_id_from_scene
+        marker = _normalize_scene_marker_id_from_scene(
+            scene,
+            eid,
+            episode=episode,
+            episode_prefix=prefix,
+        )
+    elif marker:
+        from app.services.scene_no_utils import canonicalize_progress_scene_marker
+        marker = canonicalize_progress_scene_marker(marker, episode_prefix=prefix) or marker
+    if not marker:
+        return
+    script_id = f"episode:{eid}"
+    meta = {
+        "business_event": "started",
+        "business_reason": "分镜生成进行中",
+    }
+    upsert_pipeline_node_status(
+        db,
+        project_id=pid,
+        episode_id=eid,
+        script_id=script_id,
+        scene_id=marker,
+        node_name="storyboard_generation",
+        status="running",
+        progress_percent=15.0,
+        error_code=None,
+        error_message=None,
+        runtime_meta=meta,
+    )
+    try:
+        coverage = _episode_workspace_storyboard_coverage(db, eid)
+    except Exception:
+        coverage = {"ok": False, "scene_count": 0, "with_shots": 0}
+    if not coverage.get("ok"):
+        scene_count = int(coverage.get("scene_count") or 0)
+        with_shots = int(coverage.get("with_shots") or 0)
+        progress = 15.0
+        if scene_count > 0:
+            progress = min(99.0, max(15.0, (with_shots / scene_count) * 100.0))
+        upsert_pipeline_node_status(
+            db,
+            project_id=pid,
+            episode_id=eid,
+            script_id=script_id,
+            node_name="storyboard_generation",
+            status="running",
+            progress_percent=progress,
+            error_code=None,
+            error_message=None,
+            runtime_meta={
+                **meta,
+                "scene_count": scene_count,
+                "with_shots": with_shots,
             },
         )
 
@@ -3442,6 +3692,9 @@ __all__ = [
     "finalize_stale_pipeline_nodes",
     "mark_storyboard_generation_applied",
     "mark_storyboard_generation_failed",
+    "mark_storyboard_generation_started",
+    "reset_downstream_progress_for_node_rerun",
+    "reset_storyboard_generation_nodes",
     "upsert_pipeline_node_status",
     "validate_analyze_scene_llm_finish_reason",
     "validate_scene_markdown_import_text",

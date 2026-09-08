@@ -224,7 +224,7 @@ def scene_subskill_rerun_cleanup_plan(start_group: str) -> Dict[str, Any]:
         "steps": steps,
         "output_labels": [_SUBSKILL_OUTPUT_BUSINESS[key] for key in steps if key in _SUBSKILL_OUTPUT_BUSINESS],
         "clear_derived_env": str(start_group or "") in {"drama", "combat", "framing"},
-        "clear_workspace_scene": True,
+        "clear_workspace_scene": False,
         "clear_shots": True,
     }
 
@@ -246,7 +246,7 @@ def _soft_delete_workspace_for_scene_rerun(
     episode_id: int,
     scene_id: str,
 ) -> Dict[str, int]:
-    from app.services.deletion_ops import _soft_delete_scenes
+    from app.services.deletion_ops import _soft_delete_shots
     from app.services.scene_no_utils import _find_active_scene_by_scene_no
 
     scene = _find_active_scene_by_scene_no(
@@ -258,10 +258,10 @@ def _soft_delete_workspace_for_scene_rerun(
     if scene is None:
         return {"scenes": 0, "shots": 0, "workspace_scene_id": 0}
     scene_pk = int(getattr(scene, "id", 0) or 0)
-    deleted_scenes = _soft_delete_scenes(db, scene_id=scene_pk) if scene_pk > 0 else 0
+    deleted_shots = _soft_delete_shots(db, scene_id=scene_pk) if scene_pk > 0 else 0
     return {
-        "scenes": int(deleted_scenes or 0),
-        "shots": int(deleted_scenes or 0),
+        "scenes": 0,
+        "shots": int(deleted_shots or 0),
         "workspace_scene_id": scene_pk,
     }
 
@@ -368,6 +368,18 @@ def prepare_explicit_scene_subskill_rerun(
         error_message=None,
         runtime_meta={"business_event": "queued", "rerun_cleared": True},
     )
+    upsert_pipeline_node_status(
+        db,
+        project_id=int(project_id or 0),
+        episode_id=int(episode_id),
+        script_id=f"episode:{int(episode_id)}",
+        node_name="storyboard_generation",
+        status="queued",
+        progress_percent=0.0,
+        error_code=None,
+        error_message=None,
+        runtime_meta={"business_event": "queued", "rerun_cleared": True},
+    )
 
     removed_outputs = [
         _SUBSKILL_OUTPUT_BUSINESS[key]
@@ -375,10 +387,8 @@ def prepare_explicit_scene_subskill_rerun(
         if key in _SUBSKILL_OUTPUT_BUSINESS
     ]
     deleted_bits = []
-    if int(workspace.get("scenes") or 0) > 0:
-        deleted_bits.append(f"该场工作区场景 {int(workspace.get('scenes') or 0)} 条")
-    if int(workspace.get("shots") or 0) > 0 or int(workspace.get("scenes") or 0) > 0:
-        deleted_bits.append("该场分镜")
+    if int(workspace.get("shots") or 0) > 0:
+        deleted_bits.append(f"该场分镜 {int(workspace.get('shots') or 0)} 条")
     if derived_deleted > 0:
         deleted_bits.append(f"该场由现场编排生成的衍生环境 {derived_deleted} 条")
     if not deleted_bits:
@@ -422,7 +432,8 @@ def seed_scene_block_for_start(
     if group == "staging":
         return _usable("framing") or raw
     if group == "framing":
-        return _usable("combat") or _usable("drama") or strip_environment_planning_sections(raw)
+        body = _usable("combat") or _usable("drama") or raw
+        return strip_environment_planning_sections(body)
     if group == "combat":
         return _usable("drama") or strip_environment_planning_sections(raw)
     return strip_environment_planning_sections(raw)
@@ -1602,7 +1613,7 @@ def _recover_markerless_scene_fragment(
         merged = "\n\n".join(
             part
             for part in (
-                _strip_staging_sections(old_header),
+                strip_prior_derived_environment_sections(_strip_staging_sections(old_header)),
                 new_header,
                 new_beats,
             )
@@ -1787,6 +1798,18 @@ _DERIVED_ENV_IN_ENV_BLOCK = re.compile(
     r"\n?────【衍生环境】────.*?(?=────【|\[ENV_BLOCK_END|$)",
     re.DOTALL,
 )
+_PRIOR_DERIVED_ENV_HEADER = re.compile(r"^(?:────)?【衍生环境】(?:────)?$")
+_PRIOR_DERIVED_ENV_NAMES_LINE = re.compile(r"(?:\r?\n)?【本场衍生环境名】[^\r\n]*")
+_PRIOR_DERIVED_ENV_COVERAGE = re.compile(
+    r"(?:\r?\n)?【Beat→衍生ENV剧情覆盖矩阵】.*?(?=【ENV覆盖综合】|$)",
+    re.DOTALL,
+)
+_PRIOR_ENV_COVERAGE_SUMMARY = re.compile(r"(?:\r?\n)?【ENV覆盖综合】[^\r\n]*")
+_PRIOR_DERIVED_ENV_LINE = re.compile(r"(?:\r?\n)?\[DERIVED_ENV\][^\r\n]*")
+_COVERAGE_AFTER_ENV = re.compile(
+    r"(?:\s*【Beat→衍生ENV剧情覆盖矩阵】.*?【ENV覆盖综合】[^\r\n]*)",
+    re.DOTALL,
+)
 
 
 def extract_environment_planning_sections(scene_text: str) -> str:
@@ -1802,7 +1825,37 @@ def _main_env_for_staging(env_scene_block: str) -> str:
     sections = extract_environment_planning_sections(env_scene_block)
     if not sections:
         return ""
-    return _DERIVED_ENV_IN_ENV_BLOCK.sub("", sections).strip()
+    cleaned = _DERIVED_ENV_IN_ENV_BLOCK.sub("", sections)
+    cleaned = _COVERAGE_AFTER_ENV.sub("", cleaned)
+    return cleaned.strip()
+
+
+def strip_prior_derived_environment_sections(scene_text: str) -> str:
+    """Drop leftover 现场编排 derived-env tables so this run cannot copy them."""
+    stripped = DERIVED_ENV_EXTRACT_BLOCK_PATTERN.sub("", str(scene_text or ""))
+    stripped = _PRIOR_DERIVED_ENV_NAMES_LINE.sub("", stripped)
+    stripped = _PRIOR_DERIVED_ENV_COVERAGE.sub("", stripped)
+    stripped = _PRIOR_ENV_COVERAGE_SUMMARY.sub("", stripped)
+    stripped = _PRIOR_DERIVED_ENV_LINE.sub("", stripped)
+    kept: List[str] = []
+    skipping = False
+    for line in stripped.replace("\r\n", "\n").splitlines():
+        heading = line.strip()
+        if _PRIOR_DERIVED_ENV_HEADER.match(heading):
+            skipping = True
+            continue
+        if skipping:
+            if (
+                not heading
+                or heading.startswith("-")
+                or heading.startswith("*")
+                or heading.startswith("`")
+                or heading.startswith("[DERIVED_ENV")
+            ):
+                continue
+            skipping = False
+        kept.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
 
 
 def strip_environment_planning_sections(scene_text: str) -> str:
@@ -1815,7 +1868,7 @@ def strip_environment_planning_sections(scene_text: str) -> str:
         stripped,
         flags=re.IGNORECASE | re.DOTALL,
     )
-    return re.sub(r"\n{3,}", "\n\n", stripped).strip()
+    return strip_prior_derived_environment_sections(stripped)
 
 
 def splice_environment_and_enhance_scene(
@@ -1826,7 +1879,7 @@ def splice_environment_and_enhance_scene(
 ) -> str:
     """Join env-plan main-env sections with drama/VFX/Xian output for framing."""
     sid = str(scene_id or "").strip()
-    env_sections = extract_environment_planning_sections(env_scene_block)
+    env_sections = _main_env_for_staging(env_scene_block)
     if not env_sections:
         raise HTTPException(status_code=422, detail=f"STAGING_ENV_SCENE_MISSING:{sid}")
     enhance = strip_environment_planning_sections(enhance_scene_block)
@@ -2315,7 +2368,10 @@ async def _run_derived_framing_then_staging(
         enhance_block,
         special,
     )
-    episode_env_blocks = collect_episode_env_blocks_by_name(env_script)
+    episode_env_blocks = {
+        name: _DERIVED_ENV_IN_ENV_BLOCK.sub("", block).strip()
+        for name, block in collect_episode_env_blocks_by_name(env_script).items()
+    }
     ident_items = parse_scene_env_ident_items(env_scene or framing_block, scene_id)
     derived_block = build_reused_derived_environment_injection(
         ident_items,

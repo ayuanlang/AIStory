@@ -464,6 +464,47 @@ standardized beat
     assert "【主环境】客栈大堂" in extracted_env
 
 
+def test_framing_splice_drops_prior_derived_environment_tables():
+    from app.services.scene_subskill_pipeline_runner import splice_environment_and_enhance_scene
+
+    env_scene = """[SCENE_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+【主环境】客栈大堂
+────【衍生环境】────
+- `0度客栈大堂`：环境规划旧衍生
+[ENV_BLOCK_END]
+[SCENE_END:EP01_SC01]"""
+    enhance = """[SCENE_START:EP01_SC01]
+────【衍生环境】────
+- `0度客栈大堂`：上轮现场编排旧稿
+[DERIVED_ENV_EXTRACT_START]
+[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂
+[DERIVED_ENV_EXTRACT_END]
+【本场衍生环境名】0度客栈大堂
+【场景名称】客栈对峙
+[SCENE_CONTENT_START:EP01_SC01]
+drama body
+[BEAT_START:B1]
+standardized beat
+[BEAT_END:B1]
+[SCENE_CONTENT_END:EP01_SC01]
+[SCENE_END:EP01_SC01]"""
+
+    spliced = splice_environment_and_enhance_scene("EP01_SC01", env_scene, enhance)
+    assert "【主环境】客栈大堂" in spliced
+    assert "drama body" in spliced
+    assert "standardized beat" in spliced
+    assert "上轮现场编排旧稿" not in spliced
+    assert "环境规划旧衍生" not in spliced
+    assert "【本场衍生环境名】" not in spliced
+    assert "[DERIVED_ENV_EXTRACT_START]" not in spliced
+    scene_head = spliced.split("[SCENE_CONTENT_START:EP01_SC01]", 1)[0]
+    assert "────【衍生环境】────" not in scene_head
+
+
 def test_assets_extraction_uses_scene_split_plus_per_scene_env():
     from app.core.prompt_injection import wrap_injection_section
     from app.services.script_analysis_flow import resolve_assets_extraction_source_text
