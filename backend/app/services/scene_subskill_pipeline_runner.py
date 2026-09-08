@@ -49,7 +49,6 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     build_derived_env_frame_anchor_injection,
     collapse_duplicate_derived_environment_sections,
     ingest_derived_environments_from_framing,
-    rewrite_merged_derived_environment_names,
 )
 from app.core.time_utils import now_bj_iso
 from app.services.script_analysis_flow.environment_reuse import (
@@ -335,6 +334,13 @@ def prepare_explicit_scene_subskill_rerun(
         scene_id=sid,
         step_keys=plan["steps"],
     )
+    sanitized_outputs = _sanitize_upstream_subskill_persist(
+        db,
+        episode_id=episode_id,
+        scene_id=sid,
+        persist_steps=persist_steps,
+        cleared_keys=plan["steps"],
+    )
     workspace = _soft_delete_workspace_for_scene_rerun(db, episode_id=episode_id, scene_id=sid)
     derived_deleted = (
         _soft_delete_derived_env_named(
@@ -345,6 +351,20 @@ def prepare_explicit_scene_subskill_rerun(
         )
         if plan["clear_derived_env"]
         else 0
+    )
+    removed_outputs = [
+        _SUBSKILL_OUTPUT_BUSINESS[key]
+        for key in (cleared.get("removed") or [])
+        if key in _SUBSKILL_OUTPUT_BUSINESS
+    ]
+    account = format_scene_rerun_account(
+        scene_id=sid,
+        plan=plan,
+        persist_steps=persist_steps,
+        removed_outputs=removed_outputs,
+        sanitized_outputs=sanitized_outputs,
+        workspace=workspace,
+        derived_deleted=derived_deleted,
     )
 
     upsert_pipeline_node_status(
@@ -364,6 +384,7 @@ def prepare_explicit_scene_subskill_rerun(
             "called_subskills": [],
             "scene_block": "",
             "rerun_cleared": True,
+            "rerun_account": account,
         },
     )
     upsert_pipeline_node_status(
@@ -392,33 +413,113 @@ def prepare_explicit_scene_subskill_rerun(
         runtime_meta={"business_event": "queued", "rerun_cleared": True},
     )
 
-    removed_outputs = [
-        _SUBSKILL_OUTPUT_BUSINESS[key]
-        for key in (cleared.get("removed") or [])
-        if key in _SUBSKILL_OUTPUT_BUSINESS
-    ]
-    deleted_bits = []
-    if int(workspace.get("shots") or 0) > 0:
-        deleted_bits.append(f"该场分镜 {int(workspace.get('shots') or 0)} 条")
-    if derived_deleted > 0:
-        deleted_bits.append(f"该场由现场编排生成的衍生环境 {derived_deleted} 条")
-    if not deleted_bits:
-        deleted_bits.append("该场暂无需要标删的工作区场景、分镜或衍生环境")
-
-    logger.warning("[重跑清理] 场次 %s 从「%s」起重跑。", sid, plan["start_label"])
-    logger.warning(
-        "[重跑清理] 已清除过程产出：%s。",
-        "、".join(removed_outputs) if removed_outputs else "该场起点及后续稿件（原无成稿）",
-    )
-    logger.warning("[重跑清理] 已将数据库内容标为删除：%s。", "、".join(deleted_bits))
-    logger.warning("[重跑清理] 已清除运行状态：该场逐场优化节点、该场分镜生成节点。")
+    for line in account:
+        logger.warning("[重跑清理] %s", line)
     return {
         "scene_id": sid,
         "plan": plan,
         "removed_outputs": removed_outputs,
+        "sanitized_outputs": sanitized_outputs,
         "workspace": workspace,
         "derived_deleted": derived_deleted,
+        "account": account,
     }
+
+
+def format_scene_rerun_account(
+    *,
+    scene_id: str,
+    plan: Dict[str, Any],
+    persist_steps: Optional[Dict[str, str]] = None,
+    removed_outputs: Optional[List[str]] = None,
+    sanitized_outputs: Optional[List[str]] = None,
+    workspace: Optional[Dict[str, Any]] = None,
+    derived_deleted: int = 0,
+) -> List[str]:
+    """Business-language inventory of every store this scene rerun touches."""
+    sid = str(scene_id or "").strip() or "-"
+    start_label = str((plan or {}).get("start_label") or "逐场优化")
+    steps = [str(key or "").strip() for key in ((plan or {}).get("steps") or []) if str(key or "").strip()]
+    persist = persist_steps if isinstance(persist_steps, dict) else {}
+    cleared = list(removed_outputs or []) or [
+        _SUBSKILL_OUTPUT_BUSINESS[key] for key in steps if key in _SUBSKILL_OUTPUT_BUSINESS
+    ]
+    kept: List[str] = []
+    missing: List[str] = []
+    for key, label in _SUBSKILL_OUTPUT_BUSINESS.items():
+        if key in steps:
+            continue
+        if str(persist.get(key) or "").strip():
+            kept.append(label)
+        else:
+            missing.append(label)
+    shot_n = int((workspace or {}).get("shots") or 0)
+    derived_n = int(derived_deleted or 0)
+    lines = [f"场次 {sid} 从「{start_label}」起重跑，该场信息如下："]
+    lines.append(
+        f"过程产出：清空 { '、'.join(cleared) if cleared else '该场起点及后续稿件（原无成稿）' }。"
+    )
+    if kept:
+        lines.append(f"过程产出：保留 { '、'.join(kept) }；若掺上轮现场编排会先剔除拍内图再写回。")
+    if missing:
+        lines.append(f"过程产出：上游无成稿 { '、'.join(missing) }。")
+    if sanitized_outputs:
+        lines.append(f"上游稿已剔除上轮拍内图：{'、'.join(sanitized_outputs)}。")
+    lines.append("整场合成稿：本场段落本轮结束后用新稿替换，其他场不动。")
+    if shot_n > 0:
+        lines.append(f"数据库：该场分镜 {shot_n} 条已标删；工作区场景行保留。")
+    else:
+        lines.append("数据库：该场暂无分镜可标删；工作区场景行保留。")
+    if (plan or {}).get("clear_derived_env"):
+        if derived_n > 0:
+            lines.append(f"数据库：该场由现场编排生成的衍生环境 {derived_n} 条已标删。")
+        else:
+            lines.append("数据库：该场暂无由现场编排生成的衍生环境可标删。")
+    else:
+        lines.append("数据库：衍生环境资产不改（本次不重跑现场编排）。")
+    lines.append("运行状态：该场逐场优化节点已重置为运行中；该场分镜节点已重置为排队。")
+    lines.append("不改：全局统筹、环境规划、其他场过程产出、已入库的角色/道具/环境设计。")
+    return lines
+
+
+def _sanitize_upstream_subskill_persist(
+    db: Session,
+    *,
+    episode_id: int,
+    scene_id: str,
+    persist_steps: Optional[Dict[str, str]],
+    cleared_keys: List[str],
+) -> List[str]:
+    """If kept drama/combat drafts mixed in last 现场编排, strip those beat maps in place."""
+    cleared = {str(key or "").strip() for key in (cleared_keys or [])}
+    notes: List[str] = []
+    for key, label in (("drama", "文戏稿"), ("combat", "武戏稿")):
+        if key in cleared:
+            continue
+        text = str((persist_steps or {}).get(key) or "").strip()
+        if not text:
+            continue
+        cleaned = strip_prior_derived_environment_sections(text)
+        if cleaned == text:
+            continue
+        if not persisted_subskill_step_usable(key, cleaned):
+            clear_scene_subskill_step_results(
+                db=db,
+                episode_id=episode_id,
+                scene_id=scene_id,
+                step_keys=[key],
+            )
+            notes.append(f"{label}（已清空，正文无法恢复）")
+            continue
+        persist_scene_subskill_named_step(
+            db=db,
+            episode_id=episode_id,
+            scene_id=scene_id,
+            step_name=key,
+            result_text=cleaned,
+        )
+        notes.append(label)
+    return notes
 
 
 def seed_scene_block_for_start(
@@ -446,7 +547,8 @@ def seed_scene_block_for_start(
         body = _usable("combat") or _usable("drama") or raw
         return strip_environment_planning_sections(body)
     if group == "combat":
-        return _usable("drama") or strip_environment_planning_sections(raw)
+        body = _usable("drama") or raw
+        return strip_environment_planning_sections(body)
     return strip_environment_planning_sections(raw)
 
 
@@ -503,7 +605,11 @@ _DRAMA_OUTPUT_HINTS = (
 
 def _looks_like_completed_drama(text: str) -> bool:
     body = str(text or "")
-    return persisted_subskill_step_usable("drama", body) and any(hint in body for hint in _DRAMA_OUTPUT_HINTS)
+    if not persisted_subskill_step_usable("drama", body):
+        return False
+    if "【角色道具宫格分布图】" in body or "【建置】" in body or "【入戏】" in body:
+        return False
+    return any(hint in body for hint in _DRAMA_OUTPUT_HINTS)
 
 
 def extract_scene_block_from_script(script_text: str, scene_id: str) -> str:
@@ -553,7 +659,7 @@ def hydrate_persisted_subskill_steps(
         ):
             hydrated["framing"] = block
         if _looks_like_completed_drama(block):
-            hydrated["drama"] = block
+            hydrated["drama"] = strip_prior_derived_environment_sections(block)
             break
     return hydrated
 
@@ -930,10 +1036,11 @@ def _framing_has_plan_and_extract(source: str) -> bool:
 
 
 def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> str:
-    """Hard gate: staging must not start unless framing output is extractable."""
-    source = collapse_duplicate_derived_environment_sections(
-        rewrite_merged_derived_environment_names(str(text or ""))
-    ).strip()
+    """Hard gate: staging must not start unless framing output is extractable.
+
+    Beat ``当前环境=`` / ``[DERIVED_ENV:]`` stay as the framing LLM wrote them.
+    """
+    source = collapse_duplicate_derived_environment_sections(str(text or "")).strip()
     sid = str(scene_id or "").strip()
     if not source:
         raise HTTPException(status_code=422, detail=f"STAGING_BLOCKED_FRAMING_EMPTY:{sid}")
@@ -1117,6 +1224,30 @@ def _mark_scene_subskill_step(
     }
     if extra_meta:
         meta.update(extra_meta)
+    if "called_subskills" not in meta:
+        scene_id_norm = str(scene_id or "").strip() or None
+        existing = (
+            task_db.query(ScriptProgressPipelineNode)
+            .filter(
+                ScriptProgressPipelineNode.project_id == int(project_id),
+                ScriptProgressPipelineNode.episode_id == int(episode_id),
+                ScriptProgressPipelineNode.node_name == "scene_subskill_scene",
+                ScriptProgressPipelineNode.scene_id == scene_id_norm,
+            )
+            .first()
+        )
+        prev_meta = (
+            dict(existing.runtime_meta)
+            if existing is not None and isinstance(getattr(existing, "runtime_meta", None), dict)
+            else {}
+        )
+        prev_called = [
+            str(item).strip()
+            for item in (prev_meta.get("called_subskills") or [])
+            if str(item or "").strip()
+        ]
+        if prev_called:
+            meta["called_subskills"] = prev_called
     upsert_pipeline_node_status(
         task_db,
         project_id=int(project_id),
@@ -1837,10 +1968,20 @@ _PRIOR_DERIVED_ENV_COVERAGE = re.compile(
 )
 _PRIOR_ENV_COVERAGE_SUMMARY = re.compile(r"(?:\r?\n)?【ENV覆盖综合】[^\r\n]*")
 _PRIOR_DERIVED_ENV_LINE = re.compile(r"(?:\r?\n)?\[DERIVED_ENV\][^\r\n]*")
+_PRIOR_FRAMING_PLAN_TITLES = (
+    "角色道具宫格分布图",
+    "取景锁定",
+    "Beat主体定位",
+    "主体定位方案",
+    "宫格草稿",
+    "Beat景别构图方案",
+)
 _PRIOR_FRAMING_PLAN_BLOCK = re.compile(
-    r"(?:\r?\n)?【(?:角色道具宫格分布图|取景锁定|Beat主体定位|主体定位方案|宫格草稿|Beat景别构图方案)】"
+    r"(?:\r?\n)?[ \t]*(?:`{1,3}|\*{1,2}|#{1,6}[ \t]*)?"
+    r"【?(?:角色道具宫格分布图|取景锁定|Beat主体定位|主体定位方案|宫格草稿|Beat景别构图方案)】?"
+    r"(?:`{1,3}|\*{1,2})?[ \t]*"
     r".*?"
-    r"(?=(?:\r?\n【(?:角色道具宫格分布图|取景锁定|Beat主体定位|主体定位方案|宫格草稿|Beat景别构图方案|建置|入戏|场记分析)】)"
+    r"(?=(?:\r?\n[ \t]*(?:`{1,3}|\*{1,2}|#{1,6}[ \t]*)?【?(?:角色道具宫格分布图|取景锁定|Beat主体定位|主体定位方案|宫格草稿|Beat景别构图方案|建置|入戏|场记分析)】?)"
     r"|(?:\r?\n\[BEAT_END)"
     r"|(?:\r?\n\[BEAT_START)"
     r"|(?:\r?\n\[BEAT_STREAM_END)"
@@ -1849,6 +1990,56 @@ _PRIOR_FRAMING_PLAN_BLOCK = re.compile(
     r"|$)",
     re.DOTALL,
 )
+_BEAT_OR_SCENE_BOUNDARY = re.compile(
+    r"^\[(?:BEAT_(?:START|END)|BEAT_STREAM_(?:START|END)|SCENE_(?:CONTENT_)?(?:START|END))",
+    re.IGNORECASE,
+)
+_ORPHAN_GRID_MAP_ROW = re.compile(
+    r"^(?:CHAR|PROP):\[[^\]]+\]\s*｜.*宫格="
+)
+_GRID_MAP_BODY_PREFIXES = (
+    "基准=主环境",
+    "机位=",
+    "可见=",
+    "覆盖=",
+    "当前环境=",
+    "选择证据=",
+    "轴线=",
+    "构图=",
+    "镜头角度=",
+    "机运=",
+    "机位锚=",
+    "机位侧=",
+    "机位距=",
+    "机位变=",
+    "机位变因=",
+    "关联同格同可见=",
+    "纵深推=",
+    "载具档=",
+    "人载同向=",
+    "ENV变=",
+    "表情换环境评=",
+    "过肩配对=",
+    "框主=",
+    "看=",
+    "[DERIVED_ENV:",
+)
+
+
+def _is_prior_framing_plan_heading(line: str) -> bool:
+    compact = re.sub(r"[`#*\s【】\[\]]+", "", str(line or "").strip())
+    return any(compact == title or compact.startswith(title) for title in _PRIOR_FRAMING_PLAN_TITLES)
+
+
+def _is_prior_grid_map_body_line(line: str) -> bool:
+    text = str(line or "").strip()
+    if not text:
+        return True
+    if _ORPHAN_GRID_MAP_ROW.match(text):
+        return True
+    if text.startswith(_GRID_MAP_BODY_PREFIXES):
+        return True
+    return "宫格=" in text and "｜" in text
 _COVERAGE_AFTER_ENV = re.compile(
     r"(?:\s*【Beat→衍生ENV剧情覆盖矩阵】.*?【ENV覆盖综合】[^\r\n]*)",
     re.DOTALL,
@@ -1872,7 +2063,7 @@ def _main_env_for_staging(env_scene_block: str) -> str:
     cleaned = _DERIVED_ENV_EXTRACT_ANY.sub("", cleaned)
     cleaned = _DERIVED_ENV_EXTRACT_UNCLOSED.sub("", cleaned)
     cleaned = _COVERAGE_AFTER_ENV.sub("", cleaned)
-    return cleaned.strip()
+    return strip_prior_derived_environment_sections(cleaned)
 
 
 def strip_prior_derived_environment_sections(scene_text: str) -> str:
@@ -1886,8 +2077,23 @@ def strip_prior_derived_environment_sections(scene_text: str) -> str:
     stripped = _PRIOR_FRAMING_PLAN_BLOCK.sub("", stripped)
     kept: List[str] = []
     skipping = False
+    skipping_plan = False
     for line in stripped.replace("\r\n", "\n").splitlines():
         heading = line.strip()
+        if _is_prior_framing_plan_heading(heading):
+            skipping_plan = True
+            continue
+        if skipping_plan:
+            if _BEAT_OR_SCENE_BOUNDARY.match(heading) or heading.startswith("────【") or heading.startswith("【本场"):
+                skipping_plan = False
+            elif _is_prior_grid_map_body_line(heading):
+                continue
+            else:
+                skipping_plan = False
+        if skipping_plan:
+            continue
+        if _ORPHAN_GRID_MAP_ROW.match(heading):
+            continue
         if _PRIOR_DERIVED_ENV_HEADER.match(heading):
             skipping = True
             continue
@@ -2783,6 +2989,7 @@ async def run_scene_subskill_pipeline(
 
                 async def _run_enhance_step(prompt_file: str, step_name: str) -> None:
                     nonlocal current_block
+                    current_block = strip_prior_derived_environment_sections(current_block)
                     _mark_scene_subskill_step(
                         task_db,
                         project_id=project_id,
@@ -2807,6 +3014,8 @@ async def run_scene_subskill_pipeline(
                         fallback_special=special,
                         previous_block=current_block,
                     )
+                    if step_name in {"drama", "combat"}:
+                        current_block = strip_prior_derived_environment_sections(current_block)
                     called.append(step_name)
                     persist_scene_subskill_named_step(
                         db=task_db,

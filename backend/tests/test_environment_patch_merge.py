@@ -571,6 +571,43 @@ CHAR:[@掌柜]｜宫格=中2列×中2行｜方式=相对｜站位=上轮旧站�
     assert "【角色道具宫格分布图】" not in spliced
 
 
+def test_framing_splice_drops_wrapped_and_orphan_grid_map():
+    from app.services.scene_subskill_pipeline_runner import splice_environment_and_enhance_scene
+
+    env_scene = """[SCENE_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+【主环境】客栈大堂
+[ENV_BLOCK_END]
+[SCENE_END:EP01_SC01]"""
+    enhance = """[SCENE_START:EP01_SC01]
+【场景名称】客栈对峙
+[SCENE_CONTENT_START:EP01_SC01]
+drama body
+[BEAT_START:B1]
+掌柜拨算盘。
+`【角色道具宫格分布图】`
+CHAR:[@掌柜]｜宫格=中2列×中2行｜方式=相对｜站位=反引号旧站位
+机位=九宫外:南侧外｜望=北｜景别=MCU
+[BEAT_END:B1]
+[BEAT_START:B2]
+客人进门。
+CHAR:[@客人]｜宫格=西1列×南3行｜方式=相对｜站位=无标题孤儿旧站位
+[BEAT_END:B2]
+[SCENE_CONTENT_END:EP01_SC01]
+[SCENE_END:EP01_SC01]"""
+
+    spliced = splice_environment_and_enhance_scene("EP01_SC01", env_scene, enhance)
+    assert "drama body" in spliced
+    assert "掌柜拨算盘。" in spliced
+    assert "客人进门。" in spliced
+    assert "反引号旧站位" not in spliced
+    assert "无标题孤儿旧站位" not in spliced
+    assert "角色道具宫格分布图" not in spliced
+
+
 def test_trailing_framing_plan_ignores_echoed_prefix_grid_map():
     from app.services.scene_subskill_pipeline_runner import _splice_trailing_framing_payload
 

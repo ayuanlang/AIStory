@@ -12,7 +12,6 @@ from app.core.entity_token import strip_bilingual_name_aliases, subject_compare_
 from app.services.scene_no_utils import _canonicalize_scene_no, _find_active_scene_by_scene_no
 from app.services.script_analysis_flow.derived_env_ingest import (
     extract_derived_environment_names_from_scene_text,
-    rewrite_merged_derived_environment_names,
 )
 from app.services.script_analysis_flow.scene_cast import (
     extract_legacy_scene_cast_lines,
@@ -223,7 +222,7 @@ def build_workspace_scene_payload_from_staging(
         str(int(scene_order)) if scene_order else ""
     )
     scene_name = extract_scene_name_value_from_scene_text(source)
-    beats = rewrite_merged_derived_environment_names(extract_staging_visual_beats(source))
+    beats = extract_staging_visual_beats(source)
     derived_envs = extract_derived_environment_names_from_scene_text(source)
     char_names = collect_character_tokens(scene_id_text, source)
     prop_names = collect_prop_tokens(scene_id_text, source)

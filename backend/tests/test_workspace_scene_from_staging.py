@@ -162,7 +162,8 @@ CHAR:[@顾沉] 驾驶 PROP:[飞行器]。
         (line for line in appearing.splitlines() if "{登场实体}" in line),
         "",
     )
-    assert "Lan-Jing Aerial Transit Layer" not in appearing
+    assert "当前环境=ENV:[0度岚京高空交通层 (Lan-Jing Aerial Transit Layer) (Lan-Jing Aerial Transit Layer)]" in appearing
+    assert "Lan-Jing Aerial Transit Layer" not in entity_line
     assert entity_line.count("ENV:[0度岚京高空交通层]") == 1
     assert "ENV:[90度岚京高空交通层]" in entity_line
     assert "CHAR:[@顾沉]" in appearing

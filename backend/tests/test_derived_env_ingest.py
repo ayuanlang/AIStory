@@ -897,6 +897,33 @@ def test_canonicalize_unwraps_typed_env_token():
     assert "180度客栈大堂" in names
 
 
+def test_staging_gate_keeps_framing_llm_current_env():
+    from app.services.scene_subskill_pipeline_runner import (
+        assert_derived_framing_ready_for_staging,
+    )
+
+    source = (
+        "【主环境】飞行器驾驶舱｜日夜内外=夜/内\n"
+        "【主环境】霓虹摩天楼｜日夜内外=夜/外\n"
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度飞行器驾驶舱｜所属主环境=飞行器驾驶舱｜view_angle_from_main=0｜类型=第一刀｜同角切割父=无｜状态Delta=无\n"
+        "[DERIVED_ENV] 名称=0度霓虹摩天楼｜所属主环境=霓虹摩天楼｜view_angle_from_main=0｜类型=第一刀｜同角切割父=无｜状态Delta=无\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+        "[BEAT_STREAM_START]\n"
+        "[BEAT_START:14]\n"
+        "【角色道具宫格分布图】\n"
+        "机位=中2列×南3行｜望=北｜景别=EWS｜针对=PROP:[飞行器残骸]\n"
+        "当前环境=ENV:[0度霓虹摩天楼]｜[DERIVED_ENV:0度霓虹摩天楼]\n"
+        "载具档=道具沿用宿主\n"
+        "[BEAT_END:14]\n"
+        "[BEAT_STREAM_END]\n"
+    )
+    ready = assert_derived_framing_ready_for_staging(source, "EP01_SC01")
+    assert "当前环境=ENV:[0度霓虹摩天楼]" in ready
+    assert "[DERIVED_ENV:0度霓虹摩天楼]" in ready
+    assert "当前环境=ENV:[0度飞行器驾驶舱]" not in ready
+
+
 def test_canonicalize_strips_stacked_english_aliases():
     from app.services.script_analysis_flow.derived_env_ingest import (
         canonicalize_derived_environment_name,

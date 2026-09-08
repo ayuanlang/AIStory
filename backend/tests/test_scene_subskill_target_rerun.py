@@ -4,6 +4,7 @@ from app.services.scene_subskill_pipeline_runner import (
     _pick_aspect_ratio_from_mapping,
     _subskill_aspect_ratio_injection,
     filter_subskill_tasks_by_target_ids,
+    format_scene_rerun_account,
     is_timeout_like_error,
     merge_scene_blocks_into_script,
     payload_has_explicit_subskill_start,
@@ -301,6 +302,29 @@ def test_explicit_rerun_cleanup_plan_lists_business_downstream():
     assert staging_plan["clear_derived_env"] is False
 
 
+def test_scene_rerun_account_lists_every_store():
+    plan = scene_subskill_rerun_cleanup_plan("framing")
+    lines = format_scene_rerun_account(
+        scene_id="EP01_SC01",
+        plan=plan,
+        persist_steps={"drama": DRAMA_OK, "combat": "", "framing": FRAMING_STRIPPED},
+        removed_outputs=["现场编排稿", "建置入戏稿"],
+        sanitized_outputs=["文戏稿"],
+        workspace={"shots": 3},
+        derived_deleted=2,
+    )
+    text = "\n".join(lines)
+    assert "场次 EP01_SC01 从「场景现场编排」起重跑" in text
+    assert "清空 现场编排稿、建置入戏稿" in text
+    assert "保留 文戏优化稿" in text
+    assert "上游无成稿 武戏增强稿" in text
+    assert "上游稿已剔除上轮拍内图：文戏稿" in text
+    assert "整场合成稿：本场段落本轮结束后用新稿替换" in text
+    assert "该场分镜 3 条已标删" in text
+    assert "衍生环境 2 条已标删" in text
+    assert "不改：全局统筹、环境规划" in text
+
+
 def test_explicit_rerun_seeds_from_persisted_step_not_aggregate_staging():
     persist = {
         "drama": DRAMA_OK,
@@ -368,6 +392,43 @@ def test_framing_seed_strips_prior_grid_map_from_persist():
     assert "掌柜拨算盘。" in seeded
     assert "上轮旧宫格站位" not in seeded
     assert "【角色道具宫格分布图】" not in seeded
+
+
+def test_framing_seed_strips_backtick_and_orphan_grid_maps():
+    from app.services.scene_subskill_pipeline_runner import strip_prior_derived_environment_sections
+
+    polluted = (
+        "[SCENE_START:EP01_SC01]\n"
+        "文戏增强已完成的正文，足够长以便续跑时识别为可用落库，长度须超过一百字门槛，不得当成空壳。\n"
+        "[BEAT_START:B1]\n"
+        "掌柜拨算盘。\n"
+        "`【角色道具宫格分布图】`\n"
+        "基准=主环境:旧茶馆｜九宫与衍生无关\n"
+        "CHAR:[@掌柜]｜宫格=中2列×中2行｜方式=相对｜站位=反引号旧宫格\n"
+        "机位=九宫外:南侧外｜望=北｜景别=MCU｜当前环境=ENV:[0度旧茶馆]\n"
+        "[BEAT_END:B1]\n"
+        "[BEAT_START:B2]\n"
+        "客人进门。\n"
+        "### 角色道具宫格分布图\n"
+        "CHAR:[@客人]｜宫格=西1列×南3行｜方式=相对｜站位=井号旧宫格\n"
+        "[BEAT_END:B2]\n"
+        "[SCENE_END:EP01_SC01]"
+    )
+    stripped = strip_prior_derived_environment_sections(polluted)
+    assert "掌柜拨算盘。" in stripped
+    assert "客人进门。" in stripped
+    assert "反引号旧宫格" not in stripped
+    assert "井号旧宫格" not in stripped
+    assert "角色道具宫格分布图" not in stripped
+
+    combat_seed = seed_scene_block_for_start(
+        start_group="combat",
+        raw_scene_block=STAGING_OK,
+        persist_steps={"drama": polluted},
+    )
+    assert "掌柜拨算盘。" in combat_seed
+    assert "反引号旧宫格" not in combat_seed
+    assert "【角色道具宫格分布图】" not in combat_seed
 
 
 def test_filter_subskill_tasks_matches_canonical_and_tail():
