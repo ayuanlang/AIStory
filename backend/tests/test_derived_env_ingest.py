@@ -94,26 +94,30 @@ def test_first_cut_json_matches_environment_design_template():
     assert "所属主环境=客栈大堂" in prompt
     assert "angle_key=客栈大堂|180" in prompt
     assert QUAD_DEGREE_CONTRACT in prompt
-    assert "截取宫格=右下180度" in prompt
-    assert "右下180度格" in prompt
+    assert "截取宫格=左下180度" in prompt
+    assert "左下180度格" in prompt
     assert "只切割，不要改画" in prompt
     assert item["visual_dependencies"] == ["ENV:[客栈大堂]"]
     assert item["description_cn"] == ""
     assert item["dependency_strategy"]["type"] == "Type A"
     assert QUAD_DEGREE_CONTRACT in item["dependency_strategy"]["logic"]
-    assert "截取宫格=右下180度格" in item["dependency_strategy"]["logic"]
+    assert "截取宫格=左下180度格" in item["dependency_strategy"]["logic"]
 
 
 def test_parse_quad_degrees_from_locked_line_and_panel_titles():
     locked = parse_quad_degrees_from_prompt(
         "2×2 四宫格。" + QUAD_DEGREE_CONTRACT + "。[0度格-左上·北]"
     )
-    assert locked == {"左上": 0, "右上": 90, "右下": 180, "左下": 270}
+    assert locked == {"左上": 0, "右上": 90, "左下": 180, "右下": 270}
     from_titles = parse_quad_degrees_from_prompt(
-        "[0度格-左上·北] [90度格-右上·东] [180度格-右下·南] [270度格-左下·西]"
+        "[0度格-左上·北] [90度格-右上·东] [180度格-左下·南] [270度格-右下·西]"
     )
     assert from_titles == locked
     assert parse_quad_degrees_from_prompt("") == locked
+    legacy = parse_quad_degrees_from_prompt(
+        "四宫度数=左上0度｜右上90度｜右下180度｜左下270度"
+    )
+    assert legacy == {"左上": 0, "右上": 90, "右下": 180, "左下": 270}
     swapped = parse_quad_degrees_from_prompt(
         "四宫度数=左上180度｜右上270度｜右下0度｜左下90度"
     )
@@ -122,9 +126,15 @@ def test_parse_quad_degrees_from_locked_line_and_panel_titles():
 
 def test_resolve_grid_follows_existing_main_env_prompt():
     default_crop = resolve_grid_for_angle(180)
-    assert default_crop["token"] == "右下180度"
-    assert default_crop["grid"] == "右下180度格"
+    assert default_crop["token"] == "左下180度"
+    assert default_crop["grid"] == "左下180度格"
     assert default_crop["quad_line"] == QUAD_DEGREE_CONTRACT
+    legacy_crop = resolve_grid_for_angle(
+        180,
+        "四宫度数=左上0度｜右上90度｜右下180度｜左下270度。[180度格-右下·南]",
+    )
+    assert legacy_crop["token"] == "右下180度"
+    assert legacy_crop["grid"] == "右下180度格"
     existing = (
         "【四向拼图】四宫度数=左上90度｜右上0度｜右下270度｜左下180度。"
         "[90度格-左上] [0度格-右上] [270度格-右下] [180度格-左下]"
@@ -823,7 +833,7 @@ def test_special_note_injected_into_generation_prompt():
     assert look_up["visual_dependencies"] == ["ENV:[客栈大堂]"]
     warped = build_derived_environment_item(by_name["180度客栈大堂_变形"])
     assert "特别表述=变形:荷兰角地平线左低右高，立柱倾斜压迫" in warped["generation_prompt_cn"]
-    assert "右下180度格" in warped["generation_prompt_cn"]
+    assert "左下180度格" in warped["generation_prompt_cn"]
     assert "只切割，不要改画" not in warped["generation_prompt_cn"]
     assert "dutch angle" not in warped["negative_prompt_en"]
 
@@ -843,7 +853,7 @@ def test_look_up_special_keeps_first_cut_even_when_labeled_state():
     assert item["custom_attributes"]["derived_kind"] == "special"
     assert item["visual_dependencies"] == ["ENV:[豪华游艇甲板]"]
     assert prompt.startswith("所属主环境=豪华游艇甲板。angle_key=豪华游艇甲板|180。")
-    assert "豪华游艇甲板」四向拼图参考图的右下180度格" in prompt
+    assert "豪华游艇甲板」四向拼图参考图的左下180度格" in prompt
     assert "禁止只做平视宫格原样切割" in prompt
     assert "必须按现场编排特别形态改画" in prompt
     assert "特别表述=仰天:机位仰视" in prompt
@@ -862,7 +872,7 @@ def test_coverage_suffix_merges_into_degree_main_name():
     )
     assert item["name"] == "180度客栈大堂"
     assert item["visual_dependencies"] == ["ENV:[客栈大堂]"]
-    assert "右下180度格" in item["generation_prompt_cn"]
+    assert "左下180度格" in item["generation_prompt_cn"]
     assert "已切割的同角衍生" not in item["generation_prompt_cn"]
 
 

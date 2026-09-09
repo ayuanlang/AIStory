@@ -47,23 +47,20 @@ PLAN_ENV_NAME_PATTERN = re.compile(
 GRID_BY_ANGLE = {
     0: "左上0度格",
     90: "右上90度格",
-    180: "右下180度格",
-    270: "左下270度格",
+    180: "左下180度格",
+    270: "右下270度格",
 }
-QUAD_POS_ORDER = ("左上", "右上", "右下", "左下")
+QUAD_POS_ORDER = ("左上", "右上", "左下", "右下")
 LOCKED_QUAD_DEGREES = {
     "左上": 0,
     "右上": 90,
-    "右下": 180,
-    "左下": 270,
+    "左下": 180,
+    "右下": 270,
 }
-QUAD_DEGREE_CONTRACT = "四宫度数=左上0度｜右上90度｜右下180度｜左下270度"
-QUAD_DEGREE_LINE_PATTERN = re.compile(
-    r"四宫度数\s*[=：:]\s*"
-    r"左上\s*[=：:]?\s*(?P<tl>0|90|180|270)\s*度\s*[｜|]\s*"
-    r"右上\s*[=：:]?\s*(?P<tr>0|90|180|270)\s*度\s*[｜|]\s*"
-    r"右下\s*[=：:]?\s*(?P<br>0|90|180|270)\s*度\s*[｜|]\s*"
-    r"左下\s*[=：:]?\s*(?P<bl>0|90|180|270)\s*度",
+QUAD_DEGREE_CONTRACT = "四宫度数=左上0度｜右上90度｜左下180度｜右下270度"
+QUAD_DEGREE_LINE_PATTERN = re.compile(r"四宫度数\s*[=：:]\s*(?P<body>[^。\n]+)")
+QUAD_DEGREE_PAIR_PATTERN = re.compile(
+    r"(?P<pos>左上|右上|左下|右下)\s*[=：:]?\s*(?P<deg>0|90|180|270)\s*度"
 )
 PANEL_TITLE_PATTERN = re.compile(
     r"\[(?P<angle>0|90|180|270)度格-(?P<pos>左上|右上|右下|左下)"
@@ -125,17 +122,18 @@ def _token_label(position: str, angle: int) -> str:
 
 
 def parse_quad_degrees_from_prompt(prompt: str) -> Dict[str, int]:
-    """Extract 左上/右上/右下/左下 → 度数 from a main-env generation_prompt_cn."""
+    """Extract 左上/右上/左下/右下 → 度数 from a main-env generation_prompt_cn.
+
+    Accepts both the locked reading-order line and older clockwise listings.
+    """
     text = str(prompt or "")
     line = QUAD_DEGREE_LINE_PATTERN.search(text)
     if line:
         mapping = {
-            "左上": int(line.group("tl")),
-            "右上": int(line.group("tr")),
-            "右下": int(line.group("br")),
-            "左下": int(line.group("bl")),
+            match.group("pos"): int(match.group("deg"))
+            for match in QUAD_DEGREE_PAIR_PATTERN.finditer(line.group("body"))
         }
-        if set(mapping.values()) == {0, 90, 180, 270}:
+        if set(mapping) == set(QUAD_POS_ORDER) and set(mapping.values()) == {0, 90, 180, 270}:
             return mapping
     from_titles: Dict[str, int] = {}
     for match in PANEL_TITLE_PATTERN.finditer(text):
