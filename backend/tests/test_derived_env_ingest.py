@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 from app.services.script_analysis_flow.derived_env_ingest import (
+    QUAD_DEGREE_CONTRACT,
     build_derived_env_frame_anchor_injection,
     collect_derived_environment_jsons,
     extract_derived_environment_names_from_scene_text,
     parse_derived_env_extract_items,
+    parse_quad_degrees_from_prompt,
+    resolve_grid_for_angle,
     build_derived_environment_item,
     merge_derived_environment_groups,
 )
@@ -90,12 +93,53 @@ def test_first_cut_json_matches_environment_design_template():
     prompt = item["generation_prompt_cn"]
     assert "所属主环境=客栈大堂" in prompt
     assert "angle_key=客栈大堂|180" in prompt
+    assert QUAD_DEGREE_CONTRACT in prompt
+    assert "截取宫格=右下180度" in prompt
     assert "右下180度格" in prompt
     assert "只切割，不要改画" in prompt
     assert item["visual_dependencies"] == ["ENV:[客栈大堂]"]
     assert item["description_cn"] == ""
     assert item["dependency_strategy"]["type"] == "Type A"
+    assert QUAD_DEGREE_CONTRACT in item["dependency_strategy"]["logic"]
     assert "截取宫格=右下180度格" in item["dependency_strategy"]["logic"]
+
+
+def test_parse_quad_degrees_from_locked_line_and_panel_titles():
+    locked = parse_quad_degrees_from_prompt(
+        "2×2 四宫格。" + QUAD_DEGREE_CONTRACT + "。[0度格-左上·北]"
+    )
+    assert locked == {"左上": 0, "右上": 90, "右下": 180, "左下": 270}
+    from_titles = parse_quad_degrees_from_prompt(
+        "[0度格-左上·北] [90度格-右上·东] [180度格-右下·南] [270度格-左下·西]"
+    )
+    assert from_titles == locked
+    assert parse_quad_degrees_from_prompt("") == locked
+    swapped = parse_quad_degrees_from_prompt(
+        "四宫度数=左上180度｜右上270度｜右下0度｜左下90度"
+    )
+    assert swapped == {"左上": 180, "右上": 270, "右下": 0, "左下": 90}
+
+
+def test_resolve_grid_follows_existing_main_env_prompt():
+    default_crop = resolve_grid_for_angle(180)
+    assert default_crop["token"] == "右下180度"
+    assert default_crop["grid"] == "右下180度格"
+    assert default_crop["quad_line"] == QUAD_DEGREE_CONTRACT
+    existing = (
+        "【四向拼图】四宫度数=左上90度｜右上0度｜右下270度｜左下180度。"
+        "[90度格-左上] [0度格-右上] [270度格-右下] [180度格-左下]"
+    )
+    crop = resolve_grid_for_angle(180, existing)
+    assert crop["token"] == "左下180度"
+    assert crop["grid"] == "左下180度格"
+    assert "左下180度" in crop["quad_line"]
+    item = build_derived_environment_item(
+        {"name": "180度客栈大堂", "main": "客栈大堂", "angle": 180, "kind": "第一刀"},
+        main_prompt=existing,
+    )
+    assert "截取宫格=左下180度" in item["generation_prompt_cn"]
+    assert "左下180度格" in item["generation_prompt_cn"]
+    assert item["custom_attributes"]["grid_token"] == "左下180度"
 
 
 def test_build_item_persists_frame_anchors():

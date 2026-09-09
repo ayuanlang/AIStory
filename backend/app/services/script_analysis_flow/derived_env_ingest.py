@@ -50,9 +50,28 @@ GRID_BY_ANGLE = {
     180: "右下180度格",
     270: "左下270度格",
 }
+QUAD_POS_ORDER = ("左上", "右上", "右下", "左下")
+LOCKED_QUAD_DEGREES = {
+    "左上": 0,
+    "右上": 90,
+    "右下": 180,
+    "左下": 270,
+}
+QUAD_DEGREE_CONTRACT = "四宫度数=左上0度｜右上90度｜右下180度｜左下270度"
+QUAD_DEGREE_LINE_PATTERN = re.compile(
+    r"四宫度数\s*[=：:]\s*"
+    r"左上\s*[=：:]?\s*(?P<tl>0|90|180|270)\s*度\s*[｜|]\s*"
+    r"右上\s*[=：:]?\s*(?P<tr>0|90|180|270)\s*度\s*[｜|]\s*"
+    r"右下\s*[=：:]?\s*(?P<br>0|90|180|270)\s*度\s*[｜|]\s*"
+    r"左下\s*[=：:]?\s*(?P<bl>0|90|180|270)\s*度",
+)
+PANEL_TITLE_PATTERN = re.compile(
+    r"\[(?P<angle>0|90|180|270)度格-(?P<pos>左上|右上|右下|左下)"
+)
 
 FIRST_CUT_PROMPT = (
     "所属主环境={main}。angle_key={main}|{angle}。"
+    "{quad_line}。截取宫格={token}。"
     "请严格要求按对应主环境「{main}」四向拼图参考图，截取并放大其中对应的明确宫格位置（{grid}），"
     "不要重新描述画面细节，直接作为本镜头的最终画面。"
     "切割衍生环境时均按16:9固定比例，并保证高分辨率。只切割，不要改画。"
@@ -74,6 +93,7 @@ STATE_CUT_NEGATIVE = (
 )
 SPECIAL_CUT_PROMPT = (
     "所属主环境={main}。angle_key={main}|{angle}。"
+    "{quad_line}。截取宫格={token}。"
     "以对应主环境「{main}」四向拼图参考图的{grid}为空间与实体基准，继承该格陈设与材质，禁止另造房间。"
     "禁止只做平视宫格原样切割。"
     "必须按现场编排特别形态改画：特别表述={note}。"
@@ -86,6 +106,107 @@ DEFAULT_LOOK_UP_NOTE = "仰天:机位仰视，画面主体为该宫格已写天�
 DEFAULT_WARP_NOTE = "变形:按现场编排特别表述改透视"
 SOURCE_FLAG = "programmatic_derived_framing"
 SPECIAL_KIND_PREFIXES = ("仰天", "屋顶", "变形")
+
+
+def format_quad_degree_line(pos_to_angle: Optional[Dict[str, int]] = None) -> str:
+    mapping = pos_to_angle or LOCKED_QUAD_DEGREES
+    return (
+        "四宫度数="
+        + "｜".join(f"{pos}{int(mapping[pos])}度" for pos in QUAD_POS_ORDER)
+    )
+
+
+def _grid_label(position: str, angle: int) -> str:
+    return f"{position}{int(angle)}度格"
+
+
+def _token_label(position: str, angle: int) -> str:
+    return f"{position}{int(angle)}度"
+
+
+def parse_quad_degrees_from_prompt(prompt: str) -> Dict[str, int]:
+    """Extract 左上/右上/右下/左下 → 度数 from a main-env generation_prompt_cn."""
+    text = str(prompt or "")
+    line = QUAD_DEGREE_LINE_PATTERN.search(text)
+    if line:
+        mapping = {
+            "左上": int(line.group("tl")),
+            "右上": int(line.group("tr")),
+            "右下": int(line.group("br")),
+            "左下": int(line.group("bl")),
+        }
+        if set(mapping.values()) == {0, 90, 180, 270}:
+            return mapping
+    from_titles: Dict[str, int] = {}
+    for match in PANEL_TITLE_PATTERN.finditer(text):
+        from_titles[match.group("pos")] = int(match.group("angle"))
+    if set(from_titles) == set(QUAD_POS_ORDER) and set(from_titles.values()) == {0, 90, 180, 270}:
+        return from_titles
+    return dict(LOCKED_QUAD_DEGREES)
+
+
+def resolve_grid_for_angle(angle: int, main_prompt: str = "") -> Dict[str, str]:
+    """Resolve crop cell for N° from an existing main-env prompt, else the locked contract."""
+    mapping = parse_quad_degrees_from_prompt(main_prompt) if main_prompt else dict(LOCKED_QUAD_DEGREES)
+    angle_to_pos = {deg: pos for pos, deg in mapping.items()}
+    resolved = int(angle) if int(angle) in GRID_BY_ANGLE else 0
+    position = angle_to_pos.get(resolved) or next(
+        pos for pos, deg in LOCKED_QUAD_DEGREES.items() if deg == resolved
+    )
+    return {
+        "grid": _grid_label(position, resolved),
+        "token": _token_label(position, resolved),
+        "quad_line": format_quad_degree_line(mapping),
+        "position": position,
+        "angle": str(resolved),
+    }
+
+
+def load_main_environment_prompts(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    names: Sequence[str],
+) -> Dict[str, str]:
+    """Existing main-env generation_prompt_cn keyed by registered name."""
+    wanted = {_clean(name) for name in names if _clean(name)}
+    if not wanted or int(project_id or 0) <= 0:
+        return {}
+    keys = {value.lower() for value in wanted}
+    name_expr = func.lower(func.trim(func.coalesce(Entity.name, "")))
+    name_en_expr = func.lower(func.trim(func.coalesce(Entity.name_en, "")))
+    rows = (
+        db.query(Entity)
+        .filter(
+            Entity.project_id == int(project_id),
+            _active_entity_clause(),
+            func.lower(func.trim(func.coalesce(Entity.type, ""))) == "environment",
+            or_(name_expr.in_(keys), name_en_expr.in_(keys)),
+        )
+        .all()
+    )
+    by_name: Dict[str, str] = {}
+
+    def _consider(entity: Entity) -> None:
+        if _is_derived_environment_entity(entity):
+            return
+        prompt = _clean(getattr(entity, "generation_prompt_cn", None))
+        if not prompt:
+            return
+        for raw in (getattr(entity, "name", None), getattr(entity, "name_en", None)):
+            key = _clean(raw)
+            if key and key.lower() in keys and key not in by_name:
+                by_name[key] = prompt
+                wanted_match = next((name for name in wanted if name.lower() == key.lower()), key)
+                by_name[wanted_match] = prompt
+
+    episode_rows = [row for row in rows if int(getattr(row, "episode_id", 0) or 0) == int(episode_id or 0)]
+    for row in episode_rows:
+        _consider(row)
+    for row in rows:
+        _consider(row)
+    return by_name
 LOOK_UP_SUFFIXES = {"仰天", "仰视", "屋顶"}
 USAGE_MERGE_TOKENS = (
     "反打", "近景", "远景", "特写", "乙侧", "覆盖", "过肩", "空镜",
@@ -688,13 +809,20 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
     return list(by_name.values())
 
 
-def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
+def build_derived_environment_item(
+    item: Dict[str, Any],
+    *,
+    main_prompt: str = "",
+) -> Dict[str, Any]:
     raw_item = dict(item or {})
     main = _clean(raw_item.get("main") or raw_item.get("所属主环境"))
     name = canonicalize_derived_environment_name(raw_item.get("name"), {**raw_item, "main": main})
     main = main or _main_from_name(name)
     angle = _normalize_angle(item.get("angle") or item.get("view_angle_from_main"), name)
-    grid = GRID_BY_ANGLE.get(angle, "左上0度格")
+    crop = resolve_grid_for_angle(angle, main_prompt or _clean(raw_item.get("main_prompt")))
+    grid = crop["grid"]
+    token = crop["token"]
+    quad_line = crop["quad_line"]
     resolved = {**raw_item, "name": name, "main": main, "angle": angle}
     is_state = _is_state_row(resolved)
     parent = _clean(item.get("parent") or item.get("同角切割父"))
@@ -762,7 +890,14 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
         atmosphere = f"Same {angle}deg crop with state delta"
         visual_params = f"{lens}/Derived/State"
     elif special_note:
-        prompt = SPECIAL_CUT_PROMPT.format(main=main, angle=angle, grid=grid, note=special_note)
+        prompt = SPECIAL_CUT_PROMPT.format(
+            main=main,
+            angle=angle,
+            grid=grid,
+            token=token,
+            quad_line=quad_line,
+            note=special_note,
+        )
         empty_delta = _clean(resolved.get("empty_view_delta") or resolved.get("空镜差值"))
         if empty_delta.lower() not in _EMPTY_FIELD_MARKERS:
             prompt = f"{prompt}空镜差值={empty_delta}。"
@@ -770,17 +905,23 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
             prompt = f"{prompt}画面主体={background}。"
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
-            f"所属主环境={main}。angle_key={main}|{angle}。截取宫格={grid}。触发={trigger}。特别表述={special_note}。"
+            f"所属主环境={main}。angle_key={main}|{angle}。{quad_line}。截取宫格={grid}。触发={trigger}。特别表述={special_note}。"
         )
         deps = [f"ENV:[{main}]"]
         negative = FIRST_CUT_NEGATIVE
         atmosphere = f"Special {special_kind or 'plate'} from {grid}"
         visual_params = f"{lens}/Derived/Special/{special_kind or angle}"
     else:
-        prompt = FIRST_CUT_PROMPT.format(main=main, angle=angle, grid=grid)
+        prompt = FIRST_CUT_PROMPT.format(
+            main=main,
+            angle=angle,
+            grid=grid,
+            token=token,
+            quad_line=quad_line,
+        )
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
-            f"所属主环境={main}。截取宫格={grid}。触发={trigger}。"
+            f"所属主环境={main}。{quad_line}。截取宫格={grid}。触发={trigger}。"
         )
         deps = [f"ENV:[{main}]"]
         negative = FIRST_CUT_NEGATIVE
@@ -812,6 +953,8 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
             "main_environment": main,
             "view_angle_from_main": angle,
             "grid_cell": grid,
+            "grid_token": token,
+            "quad_degree_line": quad_line,
             "derived_kind": (
                 "state" if is_state else ("special" if special_note else "first_cut")
             ),
@@ -827,11 +970,30 @@ def build_derived_environment_item(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def group_derived_environment_jsons(items: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def group_derived_environment_jsons(
+    items: Sequence[Dict[str, Any]],
+    *,
+    main_prompts: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
     """One JSON string per main environment, environments[] = derived rows only."""
+    prompts = main_prompts or {}
     grouped: Dict[str, List[Dict[str, Any]]] = {}
+
+    def _prompt_for(name: str) -> str:
+        if not name:
+            return ""
+        if name in prompts:
+            return prompts[name]
+        lowered = name.lower()
+        for key, value in prompts.items():
+            if _clean(key).lower() == lowered:
+                return value
+        return ""
+
     for item in items or []:
-        payload = build_derived_environment_item(item)
+        raw = item or {}
+        main_name = _clean(raw.get("main") or raw.get("所属主环境")) or _main_from_name(_clean(raw.get("name")))
+        payload = build_derived_environment_item(item, main_prompt=_prompt_for(main_name))
         main = _clean(payload.get("base_name_en")) or _clean((payload.get("custom_attributes") or {}).get("main_environment"))
         if not main or not payload.get("name"):
             continue
@@ -857,8 +1019,15 @@ def group_derived_environment_jsons(items: Sequence[Dict[str, Any]]) -> List[Dic
     return result
 
 
-def collect_derived_environment_jsons(text: str) -> List[Dict[str, Any]]:
-    return group_derived_environment_jsons(parse_derived_env_extract_items(text))
+def collect_derived_environment_jsons(
+    text: str,
+    *,
+    main_prompts: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    return group_derived_environment_jsons(
+        parse_derived_env_extract_items(text),
+        main_prompts=main_prompts,
+    )
 
 
 def _angle_text(value: Any) -> str:
@@ -1425,7 +1594,19 @@ def ingest_derived_environments_from_framing(
     replace_existing_groups: bool = False,
     commit: bool = True,
 ) -> Dict[str, Any]:
-    groups = collect_derived_environment_jsons(scene_text)
+    parsed_items = parse_derived_env_extract_items(scene_text)
+    main_names = {
+        _clean(item.get("main") or item.get("所属主环境"))
+        for item in parsed_items
+        if _clean(item.get("main") or item.get("所属主环境"))
+    }
+    main_prompts = load_main_environment_prompts(
+        db,
+        project_id=int(project_id or 0),
+        episode_id=int(episode_id or 0),
+        names=sorted(main_names),
+    )
+    groups = group_derived_environment_jsons(parsed_items, main_prompts=main_prompts)
     created = 0
     updated = 0
     kept = 0
