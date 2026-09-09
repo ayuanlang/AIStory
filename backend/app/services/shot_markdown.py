@@ -1031,6 +1031,158 @@ def _collect_missing_shot_required_fields(row: Dict[str, Any]) -> List[str]:
     return missing_fields
 
 
+SHOT_GENERATION_INCOMPLETE_CODE = "SHOT_GENERATION_INCOMPLETE"
+_SHOT_MARKDOWN_REQUIRED_COLUMNS = 14
+_SHOT_HARD_INCOMPLETE_FINISH_REASONS = {"incomplete", "error"}
+
+
+def _normalize_shot_finish_reason(reason: Any) -> str:
+    return str(reason or "").strip().lower().replace("-", "_")
+
+
+def _markdown_table_row_is_closed(line: str) -> bool:
+    text = str(line or "").strip()
+    return bool(text) and text.startswith("|") and text.endswith("|") and text.count("|") >= 2
+
+
+def _shot_markdown_last_cell_is_entities(cell: Any) -> bool:
+    text = str(cell or "").strip()
+    if not text:
+        return True
+    if _looks_like_entities_cell(text):
+        return True
+    if _SHOT_ENTITY_TOKEN_RE.search(text) and not _looks_like_shot_video_prompt(text):
+        return True
+    return False
+
+
+def _looks_like_broken_shot_markdown_continuation(line: str) -> bool:
+    text = str(line or "").strip()
+    if not text or text.startswith("|") or text.startswith("#"):
+        return False
+    if text.startswith("```") or text.startswith("<br"):
+        return True
+    if _SHOT_VIDEO_ANCHOR_RE.search(text) or re.search(r"\(P\d+", text) or text.startswith("ENV:"):
+        return True
+    return False
+
+
+def _inspect_shot_markdown_table_block(block_lines: List[str]) -> List[str]:
+    errors: List[str] = []
+    if len(block_lines) < 3:
+        return ["markdown table missing data rows"]
+
+    header_line = str(block_lines[0] or "").strip()
+    sep_line = str(block_lines[1] or "").strip()
+    data_lines = [str(line or "").strip() for line in block_lines[2:] if str(line or "").strip()]
+
+    if not _markdown_table_row_is_closed(header_line):
+        errors.append("markdown header row is not closed")
+    header_cells = _split_markdown_row_escaped(header_line)
+    if len(header_cells) < _SHOT_MARKDOWN_REQUIRED_COLUMNS:
+        errors.append(
+            f"markdown header has {len(header_cells)} columns, need {_SHOT_MARKDOWN_REQUIRED_COLUMNS}"
+        )
+    header_norms = {_normalize_shot_markdown_col_key(cell) for cell in header_cells}
+    if "shotid" not in header_norms or "associatedentities" not in header_norms:
+        errors.append("markdown header is not the 14-column Shot List")
+
+    if not _markdown_table_row_is_closed(sep_line) or not _is_markdown_table_separator(sep_line):
+        errors.append("markdown separator row is incomplete")
+    sep_cells = _split_markdown_row_escaped(sep_line)
+    if len(sep_cells) < _SHOT_MARKDOWN_REQUIRED_COLUMNS:
+        errors.append(
+            f"markdown separator has {len(sep_cells)} columns, need {_SHOT_MARKDOWN_REQUIRED_COLUMNS}"
+        )
+
+    if not data_lines:
+        errors.append("markdown table has no data rows")
+
+    for idx, line in enumerate(data_lines, start=1):
+        if _is_shot_markdown_header_row(line) or _is_markdown_table_separator(line):
+            continue
+        if not _markdown_table_row_is_closed(line):
+            errors.append(f"markdown data row {idx} is not a closed | ... | row")
+            continue
+        cells = _split_markdown_row_escaped(line)
+        if len(cells) < _SHOT_MARKDOWN_REQUIRED_COLUMNS:
+            errors.append(
+                f"markdown data row {idx} has {len(cells)} cells, need {_SHOT_MARKDOWN_REQUIRED_COLUMNS}"
+            )
+            continue
+        if not _shot_markdown_last_cell_is_entities(cells[-1]):
+            errors.append(f"markdown data row {idx} is missing the Associated Entities column")
+
+    return errors
+
+
+def inspect_complete_shot_markdown_return(text: str) -> List[str]:
+    """Return errors when the LLM payload is not a complete Shot List markdown table."""
+    raw = str(text or "")
+    if not raw.strip():
+        return ["empty markdown"]
+
+    lines = [str(line or "") for line in raw.splitlines()]
+    blocks = _extract_shot_markdown_table_blocks(lines)
+    if not blocks:
+        return ["missing complete markdown table"]
+
+    block = max(blocks, key=lambda item: (_score_shot_markdown_table_block(item), len(item)))
+    errors = _inspect_shot_markdown_table_block(block)
+
+    last_table_line = str(block[-1] if block else "").strip()
+    seen_last = False
+    for line in lines:
+        stripped = str(line or "").strip()
+        if not seen_last:
+            if stripped and stripped == last_table_line:
+                seen_last = True
+            continue
+        if not stripped:
+            continue
+        if _looks_like_broken_shot_markdown_continuation(stripped):
+            errors.append("markdown table row continues after a line break; last row is not closed")
+        break
+    return errors
+
+
+def format_shot_generation_incomplete_detail(
+    errors: List[str],
+    *,
+    source_label: str = "Generate Shots",
+) -> str:
+    detail = "; ".join(str(item or "").strip() for item in (errors or [])[:5] if str(item or "").strip())
+    extra = len(errors or []) - 5
+    if extra > 0:
+        detail = f"{detail}; and {extra} more" if detail else f"{extra} more issues"
+    return f"{SHOT_GENERATION_INCOMPLETE_CODE}: {source_label} markdown return incomplete: {detail}"
+
+
+def collect_shot_generation_completeness_errors(
+    *,
+    markdown_text: str = "",
+    raw_text: str = "",
+    rows: Optional[List[Dict[str, Any]]] = None,
+    finish_reason: Any = None,
+    continuation_stopped_by_max_segments: bool = False,
+) -> List[str]:
+    """Fail generation unless the LLM returned a complete markdown Shot List.
+
+    Parse/apply tolerance pads missing cells and can skip a cut-off last row.
+    Completeness must inspect the raw markdown, not the padded parse result.
+    """
+    errors: List[str] = []
+    finish_norm = _normalize_shot_finish_reason(finish_reason)
+    if finish_norm in _SHOT_HARD_INCOMPLETE_FINISH_REASONS:
+        errors.append(f"finish_reason={finish_norm}")
+    if continuation_stopped_by_max_segments:
+        errors.append("continuation_stopped_by_max_segments")
+
+    source = str(raw_text or "").strip() or str(markdown_text or "").strip()
+    errors.extend(inspect_complete_shot_markdown_return(source))
+    return errors
+
+
 def _normalize_shot_business_id(value: Any) -> str:
     text = str(value or "").strip()
     if not text:

@@ -36,6 +36,8 @@ from app.services.shot_markdown import (
     _pick_shot_cell,
     _validate_shot_rows_for_apply_with_tolerance,
     _validate_shot_rows_or_raise,
+    collect_shot_generation_completeness_errors,
+    format_shot_generation_incomplete_detail,
     parse_shots_markdown_table,
     sanitize_shots_markdown_table_text,
 )
@@ -139,6 +141,26 @@ def _build_ai_shots_response_validator(
             return False, f"{source_label} returned 0 parsed rows; raw preview: {raw_preview}", None
         if table_line_count >= 4 and len(rows) > 0 and (len(rows) * 2) <= table_line_count:
             return False, f"{source_label} output may have lost rows during markdown parsing", None
+
+        diagnostics = (response_dict or {}).get("extraction_diagnostics") if isinstance(response_dict, dict) else {}
+        if not isinstance(diagnostics, dict):
+            diagnostics = {}
+        completeness_errors = collect_shot_generation_completeness_errors(
+            markdown_text=response_content,
+            raw_text=str(response_content_raw or ""),
+            rows=rows,
+            finish_reason=(response_dict or {}).get("finish_reason") if isinstance(response_dict, dict) else None,
+            continuation_stopped_by_max_segments=bool(
+                (response_dict or {}).get("continuation_stopped_by_max_segments")
+                if isinstance(response_dict, dict)
+                else False
+            ) or bool(diagnostics.get("continuation_stopped_by_max_segments")),
+        )
+        if completeness_errors:
+            return False, format_shot_generation_incomplete_detail(
+                completeness_errors,
+                source_label=source_label,
+            ), None
 
         # Require at least one structurally applyable row (Video Content present).
         # Without this, Logic-only / column-shifted tables pass parse and only fail

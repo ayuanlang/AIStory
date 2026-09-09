@@ -24,6 +24,25 @@ CHAR:[@林岳] 把 PROP:[信] 放在桌上。
 """
 
 
+def test_workspace_payload_reads_scene_name_from_name_source_when_staging_omits_it():
+    staging = """[BEAT_STREAM_START]
+[BEAT_START:1]
+────【建置】────
+当前环境=ENV:[0度客栈大堂]
+────【入戏】────
+对峙开始。
+[BEAT_END:1]
+[BEAT_STREAM_END]
+"""
+    payload = build_workspace_scene_payload_from_staging(
+        scene_id="EP01_SC02",
+        scene_order=2,
+        staging_text=staging,
+        name_source_text="[SCENE_START:EP01_SC02]\n【场景名称】客栈对峙｜夜·内｜夏｜晴｜正常叙事\n[SCENE_END:EP01_SC02]",
+    )
+    assert payload["scene_name"] == "客栈对峙·夜·内·夏·晴·正常叙事"
+
+
 def test_workspace_payload_extracts_beats_from_stream_only():
     staging = """[BEAT_STREAM_START]
 [BEAT_START:1]

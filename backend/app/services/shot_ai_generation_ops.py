@@ -42,6 +42,8 @@ from app.services.shot_markdown import (
     _validate_shot_rows_for_apply_with_tolerance,
     _validate_shot_rows_or_raise,
     _validate_shot_rows_roundtrip_or_raise,
+    collect_shot_generation_completeness_errors,
+    format_shot_generation_incomplete_detail,
     parse_shots_markdown_table,
     sanitize_shots_markdown_table_text,
 )
@@ -355,6 +357,35 @@ async def execute_ai_generate_shots(
             raise HTTPException(
                 status_code=502,
                 detail="Shot generation output may have lost rows during markdown parsing; regenerate before apply.",
+            )
+
+        diagnostics = response_dict.get("extraction_diagnostics") if isinstance(response_dict, dict) else {}
+        if not isinstance(diagnostics, dict):
+            diagnostics = {}
+        completeness_errors = collect_shot_generation_completeness_errors(
+            markdown_text=response_content,
+            raw_text=raw_text_original,
+            rows=shots_data,
+            finish_reason=response_dict.get("finish_reason") if isinstance(response_dict, dict) else None,
+            continuation_stopped_by_max_segments=bool(
+                response_dict.get("continuation_stopped_by_max_segments")
+                if isinstance(response_dict, dict)
+                else False
+            ) or bool(diagnostics.get("continuation_stopped_by_max_segments")),
+        )
+        if completeness_errors:
+            logger.warning(
+                "[ai_generate_shots] incomplete_llm_output scene_id=%s errors=%s finish_reason=%s",
+                scene_id,
+                completeness_errors[:5],
+                (response_dict or {}).get("finish_reason") if isinstance(response_dict, dict) else None,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=format_shot_generation_incomplete_detail(
+                    completeness_errors,
+                    source_label="Generate Shots",
+                ),
             )
 
         # Reject tables that cannot be applied (same structural rules as apply_ai_result).
@@ -688,6 +719,29 @@ async def execute_ai_regenerate_shots(
             raise HTTPException(
                 status_code=502,
                 detail="Shot regeneration output may have lost rows during markdown parsing; regenerate before apply.",
+            )
+
+        regenerate_diagnostics = response_dict.get("extraction_diagnostics") if isinstance(response_dict, dict) else {}
+        if not isinstance(regenerate_diagnostics, dict):
+            regenerate_diagnostics = {}
+        regenerate_completeness_errors = collect_shot_generation_completeness_errors(
+            markdown_text=response_content,
+            raw_text=raw_text_original,
+            rows=regenerated_rows,
+            finish_reason=response_dict.get("finish_reason") if isinstance(response_dict, dict) else None,
+            continuation_stopped_by_max_segments=bool(
+                response_dict.get("continuation_stopped_by_max_segments")
+                if isinstance(response_dict, dict)
+                else False
+            ) or bool(regenerate_diagnostics.get("continuation_stopped_by_max_segments")),
+        )
+        if regenerate_completeness_errors:
+            raise HTTPException(
+                status_code=502,
+                detail=format_shot_generation_incomplete_detail(
+                    regenerate_completeness_errors,
+                    source_label="Regenerate Shots",
+                ),
             )
 
         validated_rows = _validate_shot_rows_or_raise(

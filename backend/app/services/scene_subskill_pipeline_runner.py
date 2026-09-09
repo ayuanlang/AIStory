@@ -3107,6 +3107,7 @@ async def run_scene_subskill_pipeline(
                             status_code=422,
                             detail=f"STAGING_ENV_SCENE_MISSING:{scene_id}",
                         )
+                name_source_text = current_block
                 current_block = await _run_derived_framing_then_staging(
                     task_db=task_db,
                     user_principal=user_principal,
@@ -3135,6 +3136,7 @@ async def run_scene_subskill_pipeline(
                             scene_id=scene_id,
                             staging_text=current_block,
                             scene_order=int(task.get("scene_order") or 0) or None,
+                            name_source_text=name_source_text,
                         )
                     except Exception as import_exc:
                         logger.warning(

@@ -11,7 +11,7 @@ import ProjectStatusBar from '../../../components/ProjectStatusBar';
 import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
-import { parseScenesFromMarkdownTable } from '../../../lib/sceneTableParser';
+import { fillMissingSceneNames, parseScenesFromMarkdownTable } from '../../../lib/sceneTableParser';
 import {
     getStagingShotField,
     extractShotRegenMarker,
@@ -2113,7 +2113,10 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                  const inlineSceneContent = String(activeEpisode?.scene_content || '').trim();
                  if (inlineSceneContent) {
                      try {
-                         const quickPreview = parseScenesFromText(inlineSceneContent);
+                         const quickPreview = fillMissingSceneNames(
+                             parseScenesFromText(inlineSceneContent),
+                             activeEpisode,
+                         );
                          setScenes(quickPreview);
                      } catch (parseErr) {
                          console.error('[SceneManager] Failed to parse scene preview', parseErr);
@@ -2125,10 +2128,11 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                      if (dbScenes && dbScenes.length > 0) {
                          // Check for incomplete data (Schema Update Backfill)
                          const inContent = inlineSceneContent;
-                         if (inContent && dbScenes.some(s => !s.linked_characters && !s.key_props)) {
+                         const namedDbScenes = fillMissingSceneNames(dbScenes, activeEpisode);
+                         if (inContent && namedDbScenes.some(s => !s.linked_characters && !s.key_props)) {
                              const parsed = parseScenesFromText(inContent);
                              if (parsed.length > 0) {
-                                 const merged = dbScenes.map(dbS => {
+                                 const merged = namedDbScenes.map(dbS => {
                                      // Match by Scene Number
                                      const match = parsed.find(p => p.scene_no === dbS.scene_no);
                                      if (match) {
@@ -2140,26 +2144,27 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                                              key_props: dbS.key_props || match.key_props,
                                              environment_name: dbS.environment_name || match.environment_name,
                                              core_scene_info: dbS.core_scene_info || match.core_scene_info,
-                                             original_script_text: dbOriginalScriptText || matchOriginalScriptText
+                                             original_script_text: dbOriginalScriptText || matchOriginalScriptText,
+                                             scene_name: dbS.scene_name || match.scene_name,
                                          };
                                      }
                                      return dbS;
                                  });
-                                 setScenes(merged);
+                                 setScenes(fillMissingSceneNames(merged, activeEpisode));
                                  return;
                              }
                          }
-                         setScenes((dbScenes || []).map((scene) => ({
+                         setScenes(fillMissingSceneNames((dbScenes || []).map((scene) => ({
                              ...scene,
                              original_script_text: normalizeOriginalScriptText(scene?.original_script_text),
-                         })));
+                         })), activeEpisode));
                      } else {
                          // Only parse if DB is empty
-                         setScenes(inlineSceneContent ? parseScenesFromText(inlineSceneContent) : []);
+                         setScenes(inlineSceneContent ? fillMissingSceneNames(parseScenesFromText(inlineSceneContent), activeEpisode) : []);
                      }
                  } catch(e) {
                      console.error("Failed to load scenes from DB", e);
-                     const parsedFallback = inlineSceneContent ? parseScenesFromText(inlineSceneContent) : [];
+                     const parsedFallback = inlineSceneContent ? fillMissingSceneNames(parseScenesFromText(inlineSceneContent), activeEpisode) : [];
                      setScenes(parsedFallback);
                  } finally {
                      setSceneListLoading(false);
@@ -2181,7 +2186,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                 window.setTimeout(scheduleEntities, 0);
             }
         });
-    }, [activeEpisode?.id, activeEpisode?.scene_content, projectId]);
+    }, [activeEpisode?.id, activeEpisode?.scene_content, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, projectId]);
 
     const reloadScenesData = useCallback(async () => {
         if (!activeEpisode?.id) return;
@@ -2189,10 +2194,10 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         try {
             const dbScenes = await fetchScenes(activeEpisode.id);
             if (dbScenes && dbScenes.length > 0) {
-                setScenes((dbScenes || []).map((scene) => ({
+                setScenes(fillMissingSceneNames((dbScenes || []).map((scene) => ({
                     ...scene,
                     original_script_text: normalizeOriginalScriptText(scene?.original_script_text),
-                })));
+                })), activeEpisode));
             }
         } catch (error) {
             console.error('Failed to reload scenes', error);
@@ -2207,7 +2212,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                 console.error('Failed to reload scene entities', error);
             }
         }
-    }, [activeEpisode?.id, projectId]);
+    }, [activeEpisode?.id, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.scene_content, projectId]);
 
     useTabMediaRefreshEffect({
         tabMediaRefreshSignal,
@@ -3481,10 +3486,10 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                             targetScene = { ...bySceneNo, ...sceneToProcess, id: bySceneNo.id };
                             setEditingScene(targetScene);
                         } else {
-                            setScenes((latestScenes || []).map((scene) => ({
+                            setScenes(fillMissingSceneNames((latestScenes || []).map((scene) => ({
                                 ...scene,
                                 original_script_text: normalizeOriginalScriptText(scene?.original_script_text),
-                            })));
+                            })), activeEpisode));
                             setEditingScene(null);
                             throw new Error(t('目标场景已不存在，请刷新后重新选择场景再重生成。', 'Target scene no longer exists. Refresh and reselect the scene before regenerating.'));
                         }
@@ -3692,10 +3697,10 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                 if (activeEpisode?.id) {
                     try {
                         const latestScenes = await fetchScenes(activeEpisode.id);
-                        setScenes((latestScenes || []).map((scene) => ({
+                        setScenes(fillMissingSceneNames((latestScenes || []).map((scene) => ({
                             ...scene,
                             original_script_text: normalizeOriginalScriptText(scene?.original_script_text),
-                        })));
+                        })), activeEpisode));
                         const stillExists = (latestScenes || []).find((s) => s.id === sceneToProcess?.id);
                         if (!stillExists) {
                             setEditingScene(null);

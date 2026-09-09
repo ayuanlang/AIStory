@@ -213,6 +213,7 @@ def build_workspace_scene_payload_from_staging(
     scene_id: str,
     scene_order: Optional[int] = None,
     staging_text: str,
+    name_source_text: str = "",
 ) -> Dict[str, Any]:
     from app.services.script_analysis_flow import extract_scene_name_value_from_scene_text
 
@@ -222,6 +223,8 @@ def build_workspace_scene_payload_from_staging(
         str(int(scene_order)) if scene_order else ""
     )
     scene_name = extract_scene_name_value_from_scene_text(source)
+    if not scene_name:
+        scene_name = extract_scene_name_value_from_scene_text(name_source_text)
     beats = extract_staging_visual_beats(source)
     derived_envs = extract_derived_environment_names_from_scene_text(source)
     char_names = collect_character_tokens(scene_id_text, source)
@@ -296,6 +299,7 @@ def upsert_workspace_scene_from_staging(
     scene_id: str,
     staging_text: str,
     scene_order: Optional[int] = None,
+    name_source_text: str = "",
 ) -> Dict[str, Any]:
     from app.models.all_models import Scene
 
@@ -303,6 +307,7 @@ def upsert_workspace_scene_from_staging(
         scene_id=scene_id,
         scene_order=scene_order,
         staging_text=staging_text,
+        name_source_text=name_source_text,
     )
     scene_no = _clean(payload.get("scene_no"))
     if not scene_no:
@@ -314,9 +319,12 @@ def upsert_workspace_scene_from_staging(
         scene_no=scene_no,
         scene_id=scene_id,
     )
+    next_scene_name = _clean(payload.get("scene_name"))
+    if not next_scene_name and existing is not None:
+        next_scene_name = _clean(getattr(existing, "scene_name", ""))
     fields = {
         "scene_no": scene_no,
-        "scene_name": payload.get("scene_name"),
+        "scene_name": next_scene_name or None,
         "original_script_text": payload.get("original_script_text") or "",
         "equivalent_duration": payload.get("equivalent_duration"),
         "core_scene_info": payload.get("core_scene_info"),

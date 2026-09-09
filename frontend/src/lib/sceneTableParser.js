@@ -137,9 +137,24 @@ export function buildSceneTableHeaderMap(headers) {
         const normalized = normalizeSceneTableHeaderKey(header);
         if (!normalized) return;
         if (normalized.includes('episodeid') || normalized.includes('集id')) headerMap.episode_id = idx;
-        else if ((normalized.includes('sceneid') && !normalized.includes('sceneno')) || normalized.includes('场景id')) headerMap.scene_id = idx;
-        if (normalized.includes('sceneno') || normalized.includes('场次')) headerMap.scene_no = idx;
-        else if (normalized.includes('scenename') || normalized === 'title') headerMap.scene_name = idx;
+        else if (
+            (normalized.includes('sceneid') && !normalized.includes('sceneno') && !normalized.includes('scenename'))
+            || normalized.includes('场景id')
+        ) headerMap.scene_id = idx;
+        // "scenename".includes("sceneno") is true — match Scene Name before Scene No.
+        if (
+            normalized.includes('scenename')
+            || normalized.includes('场景名称')
+            || (normalized.includes('场景名') && !normalized.includes('场次'))
+            || normalized === 'title'
+        ) {
+            headerMap.scene_name = idx;
+        } else if (
+            (normalized.includes('sceneno') && !normalized.includes('scenename'))
+            || (normalized.includes('场次') && !normalized.includes('场景名'))
+        ) {
+            headerMap.scene_no = idx;
+        }
         else if (normalized.includes('equivalentduration')) headerMap.equivalent_duration = idx;
         else if (normalized.includes('coresceneinfo') || normalized.includes('coregoal')) headerMap.core_scene_info = idx;
         else if (
@@ -228,9 +243,11 @@ export function parseScenesFromMarkdownTable(text, options = {}) {
     const lines = String(text).split('\n').filter((line) => String(line || '').trim().includes('|'));
     const headerIdx = lines.findIndex((line) => {
         const normalized = normalizeSceneTableHeaderKey(line);
-        return normalized.includes('sceneno')
+        return normalized.includes('scenename')
+            || normalized.includes('sceneno')
             || normalized.includes('sceneid')
             || normalized.includes('场次')
+            || normalized.includes('场景名')
             || normalized.includes('title');
     });
     if (headerIdx < 0) return [];
@@ -282,6 +299,83 @@ export function parseScenesFromMarkdownTable(text, options = {}) {
     }
 
     return rows;
+}
+
+export function extractSceneNameValue(sceneText) {
+    const header = /【场景名称】\s*([^\r\n【]+)/.exec(String(sceneText || ''));
+    if (!header) return '';
+    return String(header[1] || '')
+        .replace(/[|｜]/g, '·')
+        .replace(/·{2,}/g, '·')
+        .replace(/^[ ·]+|[ ·]+$/g, '');
+}
+
+export function isBlankSceneName(value) {
+    const text = String(value || '').trim();
+    return !text || /^(none|null|n\/a|na|无|空)$/i.test(text);
+}
+
+export function collectSceneNamesFromAnalysisText(text) {
+    const source = String(text || '');
+    const names = {};
+    const sceneRe = /\[SCENE_START:([^\]]+)\]([\s\S]*?)\[SCENE_END(?::[^\]]+)?\]/gi;
+    let match = sceneRe.exec(source);
+    while (match) {
+        const sceneId = String(match[1] || '').trim().toUpperCase();
+        const name = extractSceneNameValue(match[2] || '');
+        if (sceneId && name) names[sceneId] = name;
+        match = sceneRe.exec(source);
+    }
+    return names;
+}
+
+function sceneIdCandidates(scene, episode) {
+    const ids = [];
+    const push = (value) => {
+        const text = String(value || '').trim().toUpperCase();
+        if (text && !ids.includes(text)) ids.push(text);
+    };
+    push(scene?.scene_id);
+    push(scene?.scene_no);
+    const no = String(scene?.scene_no || '').trim();
+    const epHint = String(episode?.episode_no || episode?.title || episode?.scene_content || '').match(/EP\s*0*(\d+)/i);
+    const numeric = no.match(/^(\d+)$/);
+    if (numeric) {
+        const ep = String(epHint?.[1] || '1').padStart(2, '0');
+        push(`EP${ep}_SC${String(numeric[1]).padStart(2, '0')}`);
+    }
+    return ids;
+}
+
+export function resolveSceneDisplayName(scene, nameBySceneId = {}, episode = null) {
+    const current = String(scene?.scene_name || '').trim();
+    if (!isBlankSceneName(current)) return current;
+    for (const key of sceneIdCandidates(scene, episode)) {
+        const found = nameBySceneId[key];
+        if (found && !isBlankSceneName(found)) return found;
+    }
+    return '';
+}
+
+export function fillMissingSceneNames(scenes, episode = null, extraNameBySceneId = {}) {
+    const parsedRows = parseScenesFromMarkdownTable(String(episode?.scene_content || ''));
+    const parsedByNo = {};
+    (parsedRows || []).forEach((row) => {
+        const key = String(row?.scene_no || '').trim().toUpperCase();
+        if (key && !isBlankSceneName(row?.scene_name)) parsedByNo[key] = String(row.scene_name).trim();
+    });
+    const analysisNames = {
+        ...collectSceneNamesFromAnalysisText(episode?.ai_scene_analysis_scene_markdown),
+        ...collectSceneNamesFromAnalysisText(episode?.ai_scene_analysis_result),
+        ...extraNameBySceneId,
+    };
+    return (scenes || []).map((scene) => {
+        if (!isBlankSceneName(scene?.scene_name)) return scene;
+        const fromParsed = parsedByNo[String(scene?.scene_no || '').trim().toUpperCase()];
+        const fromAnalysis = resolveSceneDisplayName(scene, analysisNames, episode);
+        const scene_name = fromParsed || fromAnalysis || scene?.scene_name || '';
+        return scene_name === scene?.scene_name ? scene : { ...scene, scene_name };
+    });
 }
 
 const SHOT_PIPE_MERGE_HEADER_ALIASES = [

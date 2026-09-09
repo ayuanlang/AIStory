@@ -14219,8 +14219,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ? t('供应商余额不足或无权调用该模型，请更换接口或联系管理员', 'vendor balance is insufficient or this model is not authorized')
                         : creditUserFailure
                             ? t('积分不足，请充值后再重跑', 'insufficient credits; please top up and rerun')
-                            : rawFailure.includes('COMPLETION_MARKER_MISSING')
-                                ? t('子技能自动重试后仍未完整返回', 'the subskill remained incomplete after automatic retry')
+                            : (rawFailure.includes('COMPLETION_MARKER_MISSING') || rawFailure.includes('SHOT_GENERATION_INCOMPLETE'))
+                                ? t('模型自动重试后仍未返回完整 Markdown', 'the model still did not return complete markdown after automatic retry')
                                 : rawFailure.includes('OUTPUT_PARSE_FAILED')
                                     ? t('返回的场景结构无法解析', 'the returned scene structure could not be parsed')
                                     : rawFailure.includes('OUTPUT_SCENE_MISMATCH')
