@@ -4,6 +4,7 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     build_derived_env_frame_anchor_injection,
     collect_derived_environment_jsons,
     extract_derived_environment_names_from_scene_text,
+    format_camera_switch_line,
     parse_derived_env_extract_items,
     parse_quad_degrees_from_prompt,
     resolve_grid_for_angle,
@@ -96,12 +97,25 @@ def test_first_cut_json_matches_environment_design_template():
     assert QUAD_DEGREE_CONTRACT in prompt
     assert "截取宫格=左下180度" in prompt
     assert "左下180度格" in prompt
+    assert "机位=望向=正南" in prompt
+    assert "远锚=该向后景最远可见主体" in prompt
+    assert "禁止重写桌椅朝向" in prompt
+    assert "禁以画外主体定位" in prompt
     assert "只切割，不要改画" in prompt
     assert item["visual_dependencies"] == ["ENV:[客栈大堂]"]
     assert item["description_cn"] == ""
     assert item["dependency_strategy"]["type"] == "Type A"
     assert QUAD_DEGREE_CONTRACT in item["dependency_strategy"]["logic"]
     assert "截取宫格=左下180度格" in item["dependency_strategy"]["logic"]
+
+
+def test_camera_switch_line_uses_cardinal_and_visible_far_anchor():
+    line = format_camera_switch_line(angle=90, far_anchor="雕花窗格", lens_profile="Standard")
+    assert "机位=望向=正东" in line
+    assert "远锚=雕花窗格" in line
+    assert "焦距=50mm标准" in line
+    assert "禁以画外主体定位" in line
+    assert "禁止重写桌椅朝向、左右对调、扇区换边" in line
 
 
 def test_parse_quad_degrees_from_locked_line_and_panel_titles():
@@ -172,6 +186,10 @@ def test_build_item_persists_frame_anchors():
     assert attrs["offscreen"] == "大门"
     assert item["anchor_description"] == "背景=柜台｜画左=楼梯口｜画右=账房窗｜画外=大门（不可见）"
     assert "只切割，不要改画" in item["generation_prompt_cn"]
+    assert "机位=望向=正北" in item["generation_prompt_cn"]
+    assert "远锚=柜台" in item["generation_prompt_cn"]
+    assert "禁止重写桌椅朝向、左右对调、扇区换边" in item["generation_prompt_cn"]
+    assert "远锚=大门" not in item["generation_prompt_cn"]
     assert "背景=柜台" not in item["generation_prompt_cn"]
 
 
@@ -821,6 +839,8 @@ def test_special_note_injected_into_generation_prompt():
     assert "生成提示=按主环境四向拼图截取0度宫格" in regular["generation_prompt_cn"]
     assert regular["custom_attributes"]["derived_kind"] == "first_cut"
     look_up = build_derived_environment_item(by_name["0度客栈大堂_仰天"])
+    assert "机位=望向=正北" in look_up["generation_prompt_cn"]
+    assert "禁止重写桌椅朝向" in look_up["generation_prompt_cn"]
     assert "特别表述=仰天:满幅夜空与檐口剪影，地面仅近端截断" in look_up["generation_prompt_cn"]
     assert "生成提示=按特别表述改俯仰" in look_up["generation_prompt_cn"]
     assert "空镜差值=满幅夜空，地面仅近端截断" in look_up["generation_prompt_cn"]

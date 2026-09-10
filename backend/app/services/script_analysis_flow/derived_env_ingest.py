@@ -66,9 +66,21 @@ PANEL_TITLE_PATTERN = re.compile(
     r"\[(?P<angle>0|90|180|270)度格-(?P<pos>左上|右上|右下|左下)"
 )
 
+LOOK_BY_ANGLE = {
+    0: "正北",
+    90: "正东",
+    180: "正南",
+    270: "正西",
+}
+LENS_FOCAL = {
+    "Wide": "24mm广角",
+    "Standard": "50mm标准",
+}
+
 FIRST_CUT_PROMPT = (
     "所属主环境={main}。angle_key={main}|{angle}。"
     "{quad_line}。截取宫格={token}。"
+    "{camera}"
     "请严格要求按对应主环境「{main}」四向拼图参考图，截取并放大其中对应的明确宫格位置（{grid}），"
     "不要重新描述画面细节，直接作为本镜头的最终画面。"
     "切割衍生环境时均按16:9固定比例，并保证高分辨率。只切割，不要改画。"
@@ -81,7 +93,8 @@ STATE_CUT_PROMPT = (
 )
 FIRST_CUT_NEGATIVE = (
     "people, person, human, dutch angle, tilted horizon, looking into a room corner, "
-    "re-described furniture layout, mirrored room, four-panel grid lines, 2x2 collage seams, "
+    "re-described furniture layout, rewritten furniture orientation, left-right furniture swap, "
+    "sector flip, mirrored room, four-panel grid lines, 2x2 collage seams, "
     "panel borders, quadrant labels, split-screen divider"
 )
 STATE_CUT_NEGATIVE = (
@@ -91,6 +104,7 @@ STATE_CUT_NEGATIVE = (
 SPECIAL_CUT_PROMPT = (
     "所属主环境={main}。angle_key={main}|{angle}。"
     "{quad_line}。截取宫格={token}。"
+    "{camera}"
     "以对应主环境「{main}」四向拼图参考图的{grid}为空间与实体基准，继承该格陈设与材质，禁止另造房间。"
     "禁止只做平视宫格原样切割。"
     "必须按现场编排特别形态改画：特别表述={note}。"
@@ -103,6 +117,22 @@ DEFAULT_LOOK_UP_NOTE = "仰天:机位仰视，画面主体为该宫格已写天�
 DEFAULT_WARP_NOTE = "变形:按现场编排特别表述改透视"
 SOURCE_FLAG = "programmatic_derived_framing"
 SPECIAL_KIND_PREFIXES = ("仰天", "屋顶", "变形")
+
+
+def format_camera_switch_line(
+    *,
+    angle: int,
+    far_anchor: str = "",
+    lens_profile: str = "",
+) -> str:
+    look = LOOK_BY_ANGLE.get(int(angle), "正北")
+    far = str(far_anchor or "").strip() or "该向后景最远可见主体"
+    focal = LENS_FOCAL.get(str(lens_profile or "").strip(), "")
+    focal_part = f"｜焦距={focal}" if focal else ""
+    return (
+        f"机位=望向={look}｜远锚={far}{focal_part}｜禁以画外主体定位。"
+        "禁止重写桌椅朝向、左右对调、扇区换边。"
+    )
 
 
 def format_quad_degree_line(pos_to_angle: Optional[Dict[str, int]] = None) -> str:
@@ -870,6 +900,11 @@ def build_derived_environment_item(
         references=references,
         forbidden=forbidden,
     )
+    camera = format_camera_switch_line(
+        angle=angle,
+        far_anchor=background,
+        lens_profile=lens,
+    )
     if is_state:
         prompt = STATE_CUT_PROMPT.format(main=main, angle=angle, parent=parent or _same_angle_parent(name, main, angle))
         if delta:
@@ -894,6 +929,7 @@ def build_derived_environment_item(
             grid=grid,
             token=token,
             quad_line=quad_line,
+            camera=camera,
             note=special_note,
         )
         empty_delta = _clean(resolved.get("empty_view_delta") or resolved.get("空镜差值"))
@@ -903,7 +939,7 @@ def build_derived_environment_item(
             prompt = f"{prompt}画面主体={background}。"
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
-            f"所属主环境={main}。angle_key={main}|{angle}。{quad_line}。截取宫格={grid}。触发={trigger}。特别表述={special_note}。"
+            f"所属主环境={main}。angle_key={main}|{angle}。{quad_line}。截取宫格={grid}。{camera}触发={trigger}。特别表述={special_note}。"
         )
         deps = [f"ENV:[{main}]"]
         negative = FIRST_CUT_NEGATIVE
@@ -916,10 +952,11 @@ def build_derived_environment_item(
             grid=grid,
             token=token,
             quad_line=quad_line,
+            camera=camera,
         )
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
-            f"所属主环境={main}。{quad_line}。截取宫格={grid}。触发={trigger}。"
+            f"所属主环境={main}。{quad_line}。截取宫格={grid}。{camera}触发={trigger}。"
         )
         deps = [f"ENV:[{main}]"]
         negative = FIRST_CUT_NEGATIVE
