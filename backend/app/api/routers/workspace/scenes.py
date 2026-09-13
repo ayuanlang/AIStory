@@ -572,14 +572,35 @@ async def regenerate_scene(
         ("type", "Type"),
         ("base_positioning", "Base Positioning"),
         ("language", "Language"),
+        ("style_mode", "Style Mode"),
         ("Global_Style", "Global Style"),
         ("tone", "Tone"),
         ("lighting", "Lighting"),
         ("borrowed_films", "Borrowed Films"),
     ):
         value = _project_info_str(key)
+        if key == "style_mode":
+            try:
+                from app.core.style_mode_catalog import resolve_style_mode
+                value = resolve_style_mode(value, _project_info_str("base_positioning"))
+            except Exception:
+                value = value or _project_info_str("base_positioning")
+        elif key == "base_positioning":
+            try:
+                from app.core.style_mode_catalog import resolve_style_mode
+                value = resolve_style_mode(value, _project_info_str("style_mode")) or value
+            except Exception:
+                pass
         if value:
             project_context_lines.append(f"{label}: {value}")
+            if key == "style_mode":
+                try:
+                    from app.core.style_mode_catalog import format_style_mode_injection
+                    spec = format_style_mode_injection(value)
+                    if spec:
+                        project_context_lines.append(spec)
+                except Exception:
+                    pass
 
     project_context_block = "\n".join(project_context_lines)
 

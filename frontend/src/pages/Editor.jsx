@@ -1244,7 +1244,9 @@ const Editor = ({
                 type: toText(pickValue(base, ['type', 'project_type', '类型'])),
                 language: toText(pickValue(base, ['language', 'lang', '语言'])),
                 base_positioning: toText(pickValue(base, ['base_positioning', 'positioning', '定位'])),
-                notes: toText(pickValue(base, ['notes', 'note', '备注'])),      
+                notes: toText(pickValue(base, ['notes', 'note', '备注'])),
+                style_mode: toText(pickValue(base, ['style_mode', 'styleMode', 'style_template', '基础风格模式', '风格模版', '剧本模式']))
+                    || toText(pickValue(base, ['base_positioning', 'positioning', '定位'])),
                 Global_Style: toText(pickValue(base, ['global_style', 'Global_Style', 'style', '风格'])),
                 borrowed_films: toStringArray(pickValue(base, ['borrowed_films', 'reference_films', '参考影片'])),
                 borrowed_films_note: toText(pickValue(base, ['borrowed_films_note', 'reference_films_note', '参考影片备注'])),

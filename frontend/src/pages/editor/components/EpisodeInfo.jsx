@@ -141,7 +141,6 @@ import {
     PROJECT_SCENE_ANALYSIS_DEFAULTS,
     normalizeProjectEpisodeType,
     normalizeProjectEpisodeLanguage,
-    normalizeProjectEpisodeBasePositioning,
     normalizeProjectSceneAnalysisEra,
     normalizeProjectSceneAnalysisSafety,
     normalizeProjectEpisodeGlobalStyle,
@@ -150,6 +149,8 @@ import {
     normalizeProjectEpisodeQuality,
     PROJECT_VIDEO_RESOLUTION_OPTIONS,
     normalizeProjectVideoResolution,
+    applyStyleModeDefaults,
+    syncProjectStyleFromPositioning,
 } from '../projectOptionConfig';
 
 // RefineControl moved to components/RefineControl.jsx
@@ -167,7 +168,7 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
         e_global_info: {
             script_title: "",
             series_episode: "",
-            base_positioning: "现代职场 / Modern Workplace",
+            base_positioning: "当代都市 / Contemporary Urban",
             type: "实拍（写实/电影感8K） / Live Action (Realism/Cinematic 8K)",
             Global_Style: "写实电影感，8k杰作 / Photorealistic, Cinematic Lighting, 8k, Masterpiece",
             tech_params: {
@@ -213,7 +214,7 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
              }
              merged.e_global_info.type = normalizeProjectEpisodeType(merged.e_global_info.type);
              merged.e_global_info.language = normalizeProjectEpisodeLanguage(merged.e_global_info.language);
-             merged.e_global_info.base_positioning = normalizeProjectEpisodeBasePositioning(merged.e_global_info.base_positioning);
+             Object.assign(merged.e_global_info, syncProjectStyleFromPositioning(merged.e_global_info));
              merged.e_global_info.era = normalizeProjectSceneAnalysisEra(merged.e_global_info.era);
              merged.e_global_info.broadcast_safety_level = normalizeProjectSceneAnalysisSafety(merged.e_global_info.broadcast_safety_level);
              merged.e_global_info.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.e_global_info.Global_Style);
@@ -300,7 +301,11 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
             ...sourceGlobalInfo,
             type: normalizeProjectEpisodeType(sourceGlobalInfo.type ?? info.e_global_info.type),
             language: normalizeProjectEpisodeLanguage(sourceGlobalInfo.language ?? info.e_global_info.language),
-            base_positioning: normalizeProjectEpisodeBasePositioning(sourceGlobalInfo.base_positioning ?? info.e_global_info.base_positioning),
+            ...syncProjectStyleFromPositioning({
+                ...info.e_global_info,
+                ...sourceGlobalInfo,
+                base_positioning: sourceGlobalInfo.base_positioning ?? info.e_global_info.base_positioning,
+            }),
             Global_Style: normalizeProjectEpisodeGlobalStyle(sourceGlobalInfo.Global_Style ?? info.e_global_info.Global_Style),
             ...(mappedTone !== undefined ? { tone: normalizeProjectEpisodeTone(mappedTone) } : {}),
             ...(mappedLighting !== undefined ? { lighting: normalizeProjectEpisodeLighting(mappedLighting) } : {}),
@@ -337,6 +342,13 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
     };
 
     const updateField = (key, value) => {
+        if (key === 'base_positioning') {
+            setInfo(prev => ({
+                ...prev,
+                e_global_info: applyStyleModeDefaults(prev.e_global_info, value),
+            }));
+            return;
+        }
         setInfo(prev => ({
             ...prev,
             e_global_info: {
@@ -345,8 +357,6 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
                     ? normalizeProjectEpisodeType(value)
                     : key === 'language'
                         ? normalizeProjectEpisodeLanguage(value)
-                        : key === 'base_positioning'
-                            ? normalizeProjectEpisodeBasePositioning(value)
                             : key === 'Global_Style'
                                 ? normalizeProjectEpisodeGlobalStyle(value)
                                 : key === 'tone'
@@ -464,7 +474,7 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
                         value={data.base_positioning} 
                         onChange={v => updateField('base_positioning', v)} 
                         list={PROJECT_EP_BASE_POSITIONING_OPTIONS}
-                        placeholder={t('例如：悬疑 / 惊悚', 'e.g. Mystery / Thriller')}
+                        placeholder={t('例如：武侠江湖 / 赛博朋克 / 古装战争', 'e.g. Wuxia Jianghu / Cyberpunk / Ancient War')}
                     />
                     
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

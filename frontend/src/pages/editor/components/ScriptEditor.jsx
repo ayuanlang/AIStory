@@ -4290,6 +4290,8 @@ import {
     normalizeProjectEpisodeTone,
     normalizeProjectEpisodeLighting,
     normalizeProjectEpisodeQuality,
+    formatStyleModeInjection,
+    resolveProjectStyleMode,
 } from '../projectOptionConfig';
 
 // RefineControl moved to components/RefineControl.jsx
@@ -8423,7 +8425,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const seriesEpisode = getInfoValue(['series_episode', 'episode']);
         const type = getInfoValue(['type']);
         const language = getInfoValue(['language']);
-        const basePositioning = getInfoValue(['base_positioning']);
+        const basePositioning = resolveProjectStyleMode(getInfoValue(['base_positioning', '剧本模式']));
+        const styleMode = resolveProjectStyleMode(
+            getInfoValue(['style_mode', 'styleMode', 'style_template', 'Style Mode', '基础风格模式', '风格模版', '剧本模式']),
+            basePositioning,
+        );
         const globalStyle = getInfoValue(['Global_Style', 'global_style']);
         const tone = getInfoValue(['tone']);
         const lighting = getInfoValue(['lighting']);
@@ -8435,6 +8441,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (type) basicInfoLines.push(`Type: ${type}`);
         if (language) basicInfoLines.push(`Language: ${language}`);
         if (basePositioning) basicInfoLines.push(`Base Positioning: ${basePositioning}`);
+        if (styleMode) {
+            basicInfoLines.push(`Style Mode (基础风格模式): ${styleMode}`);
+            const styleModeSpec = formatStyleModeInjection(styleMode);
+            if (styleModeSpec) basicInfoLines.push(styleModeSpec);
+        }
         if (globalStyle) basicInfoLines.push(`Global Style: ${globalStyle}`);
         if (tone) basicInfoLines.push(`Tone: ${tone}`);
         if (lighting) basicInfoLines.push(`Lighting: ${lighting}`);
@@ -8542,7 +8553,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const title = getInfoValue(['script_title', 'title']);
         const episode = getInfoValue(['series_episode', 'episode']);
         const type = getInfoValue(['type']);
-        const basePositioning = getInfoValue(['base_positioning']);
+        const basePositioning = resolveProjectStyleMode(getInfoValue(['base_positioning', '剧本模式']));
         if (title) metaParts.push(`Title: ${title}`);
         if (episode) metaParts.push(`Episode: ${episode}`);
         if (type) metaParts.push(`Type: ${type}`);
@@ -8561,6 +8572,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const verticalResolution = getVisualValue(['vertical_resolution']);
         const frameRate = getVisualValue(['frame_rate']);
         const quality = getVisualValue(['quality']);
+        const styleMode = resolveProjectStyleMode(
+            getInfoValue(['style_mode', 'styleMode', 'style_template', 'Style Mode', '基础风格模式', '风格模版', '剧本模式']),
+            basePositioning,
+        );
         const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
         const tone = getInfoValue(['tone', 'mood']);
         const lighting = getInfoValue(['lighting', 'light']);
@@ -8573,6 +8588,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (verticalResolution) metaParts.push(`Vertical Resolution: ${verticalResolution}`);
         if (frameRate) metaParts.push(`Frame Rate: ${frameRate}`);
         if (quality) metaParts.push(`Quality: ${quality}`);
+        if (styleMode) {
+            metaParts.push(`Style Mode (基础风格模式): ${styleMode}`);
+            const styleModeSpec = formatStyleModeInjection(styleMode);
+            if (styleModeSpec) metaParts.push(styleModeSpec);
+        }
         if (globalStyle) metaParts.push(`Global Style: ${globalStyle}`);
         if (borrowedFilms.length > 0) metaParts.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
         if (tone) metaParts.push(`Tone: ${tone}`);

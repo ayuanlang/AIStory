@@ -356,13 +356,20 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
                     return text
         return get_context_val(keys)
 
+    style_mode = get_context_val(["style_mode", "styleMode", "style_template", "Style Mode", "基础风格模式", "风格模版", "剧本模式"])
     global_style = get_context_val(["global_style", "Global_Style", "Global Style", "Style"]) or "Cinematic"
     borrowed_films = get_context_list(["borrowed_films", "borrowedFilms", "reference_films", "referenceFilms"])
 
     title = get_context_val(["script_title", "title"])
     episode_label = get_context_val(["series_episode", "episode"])
     project_type = get_context_val(["type", "genre", "category", "film_type"])
-    base_positioning = get_context_val(["base_positioning"])
+    base_positioning = get_context_val(["base_positioning", "剧本模式"])
+    try:
+        from app.core.style_mode_catalog import resolve_style_mode
+        style_mode = resolve_style_mode(style_mode, base_positioning)
+        base_positioning = resolve_style_mode(base_positioning, style_mode) or base_positioning
+    except Exception:
+        style_mode = style_mode or base_positioning
     project_language = get_context_val(["language", "project_language", "lang"])
     tone = get_context_val(["tone", "mood", "atmosphere"])
     lighting = get_context_val(["lighting", "light_style", "light"])
@@ -450,6 +457,15 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         project_context_lines.append(f"Language: {project_language}")
     else:
         project_context_lines.append("Language: (empty)")
+    if style_mode:
+        project_context_lines.append(f"Style Mode (基础风格模式): {style_mode}")
+        try:
+            from app.core.style_mode_catalog import format_style_mode_injection
+            spec = format_style_mode_injection(style_mode)
+            if spec:
+                project_context_lines.append(spec)
+        except Exception:
+            pass
     if global_style:
         project_context_lines.append(f"Global Style: {global_style}")
     if tone:
@@ -520,6 +536,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         "project_type": project_type,
         "type": project_type,
         "base_positioning": base_positioning,
+        "style_mode": style_mode,
         "project_language": project_language,
         "language": project_language,
         "global_style": global_style,

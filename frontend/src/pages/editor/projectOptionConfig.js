@@ -1,3 +1,5 @@
+import { PROJECT_STYLE_MODE_OPTIONS, normalizeProjectStyleMode } from './styleModeCatalog';
+
 export const PROJECT_EP_TYPE_OPTIONS = [
 
     "实拍真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
@@ -61,65 +63,7 @@ export const PROJECT_EP_LANGUAGE_OPTIONS = [
 
 
 
-export const PROJECT_EP_BASE_POSITIONING_OPTIONS = [
-
-    "短剧快节奏 / Short Drama",
-
-    "动作片 / Action Feature",
-
-    "爱情情感 / Romance / Emotional",
-
-    "悬疑惊悚 / Mystery / Thriller",
-
-    "喜剧轻快 / Comedy / Light",
-
-    "仙侠奇幻 / Xianxia / Fantasy",
-
-    "青春成长 / Youth Coming-of-Age",
-
-    "通用连续剧 / General Series",
-
-    "都市情感 / Urban Romance",
-
-    "都市轻喜剧 / Urban Light Comedy",
-
-    "情感治愈 / Emotional Healing Drama",
-
-    "浪漫爱情 / Romance",
-
-    "科幻冒险 / Sci-Fi Adventure",
-
-    "悬疑惊悚 / Mystery / Thriller",
-
-    "古装武侠 / Period / Wuxia",
-
-    "仙侠修真 / Xianxia",
-
-    "东方奇幻 / Eastern Fantasy",
-
-    "穿越 / Transmigration",
-
-    "奇幻史诗 / Fantasy Epic",
-
-    "现代职场 / Modern Workplace",
-
-    "校园青春 / High School / Youth",
-
-    "赛博朋克 / Cyberpunk",
-
-    "现实主义 / Realism",
-
-    "恐怖 / Horror",
-
-    "喜剧 / Comedy",
-
-    "剧情 / Drama",
-
-    "动作 / Action",
-
-    "历史 / Historical",
-
-];
+export const PROJECT_EP_BASE_POSITIONING_OPTIONS = PROJECT_STYLE_MODE_OPTIONS;
 
 
 
@@ -979,17 +923,7 @@ export const normalizeProjectEpisodeLanguage = (value) => {
 
 
 
-export const normalizeProjectEpisodeBasePositioning = (value) => {
-
-    const raw = String(value || '').trim();
-
-    if (!raw) return raw;
-
-    if (PROJECT_EP_BASE_POSITIONING_OPTIONS.includes(raw)) return raw;
-
-    return PROJECT_EP_BASE_POSITIONING_LEGACY_MAP[raw] || raw;
-
-};
+export const normalizeProjectEpisodeBasePositioning = (value) => normalizeProjectStyleMode(value);
 
 
 
@@ -1093,3 +1027,14 @@ export const PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS = ['首尾帧 / First and L
 export const PROJECT_EP_CREATIVITY_OPTIONS = ['正常 / Normal', '增加想象力 / Increase Imagination', '遵守剧本优先 / Strict to Script'];
 /** Seedance-2 aligned project canvas options; 16:9 / 9:16 first. */
 export const PROJECT_ASPECT_RATIO_OPTIONS = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'];
+
+export {
+    PROJECT_STYLE_MODE_CATALOG,
+    PROJECT_STYLE_MODE_OPTIONS,
+    normalizeProjectStyleMode,
+    findStyleMode,
+    formatStyleModeInjection,
+    applyStyleModeDefaults,
+    resolveProjectStyleMode,
+    syncProjectStyleFromPositioning,
+} from './styleModeCatalog';

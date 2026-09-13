@@ -152,13 +152,14 @@ import {
     PROJECT_SCENE_ANALYSIS_DEFAULTS,
     normalizeProjectEpisodeType,
     normalizeProjectEpisodeLanguage,
-    normalizeProjectEpisodeBasePositioning,
     normalizeProjectSceneAnalysisEra,
     normalizeProjectSceneAnalysisSafety,
     normalizeProjectEpisodeGlobalStyle,
     normalizeProjectEpisodeTone,
     normalizeProjectEpisodeLighting,
     normalizeProjectEpisodeQuality,
+    applyStyleModeDefaults,
+    syncProjectStyleFromPositioning,
 } from '../projectOptionConfig';
 
 // RefineControl moved to components/RefineControl.jsx
@@ -238,8 +239,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         expected_duration: "",
         max_shot_seconds: String(DEFAULT_MAX_SHOT_SECONDS),
         series_episode: "",
-        base_positioning: "现代职场 / Modern Workplace",
+        base_positioning: "当代都市 / Contemporary Urban",
         type: "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
+        style_mode: "当代都市 / Contemporary Urban",
         Global_Style: "",
         tech_params: {
             visual_standard: {
@@ -1053,7 +1055,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                      merged.script_title = stripStackedProductionScriptTitleSuffixes(merged.script_title);
                      merged.type = normalizeProjectEpisodeType(merged.type);
                      merged.language = normalizeProjectEpisodeLanguage(merged.language);
-                     merged.base_positioning = normalizeProjectEpisodeBasePositioning(merged.base_positioning);
+                     Object.assign(merged, syncProjectStyleFromPositioning(merged));
                      merged.era = normalizeProjectSceneAnalysisEra(merged.era);
                      merged.broadcast_safety_level = normalizeProjectSceneAnalysisSafety(merged.broadcast_safety_level);
                      merged.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.Global_Style);
@@ -1638,7 +1640,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 };
                 merged.type = normalizeProjectEpisodeType(merged.type);
                 merged.language = normalizeProjectEpisodeLanguage(merged.language);
-                merged.base_positioning = normalizeProjectEpisodeBasePositioning(merged.base_positioning);
+                Object.assign(merged, syncProjectStyleFromPositioning(merged));
                 merged.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.Global_Style);
                 merged.tone = normalizeProjectEpisodeTone(merged.tone);
                 merged.lighting = normalizeProjectEpisodeLighting(merged.lighting);
@@ -1986,7 +1988,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 };
                 merged.type = normalizeProjectEpisodeType(merged.type);
                 merged.language = normalizeProjectEpisodeLanguage(merged.language);
-                merged.base_positioning = normalizeProjectEpisodeBasePositioning(merged.base_positioning);
+                Object.assign(merged, syncProjectStyleFromPositioning(merged));
                 merged.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.Global_Style);
                 merged.tone = normalizeProjectEpisodeTone(merged.tone);
                 merged.lighting = normalizeProjectEpisodeLighting(merged.lighting);
@@ -2394,14 +2396,16 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     };
 
     const updateField = (key, value) => {
+        if (key === 'base_positioning') {
+            setInfo(prev => applyStyleModeDefaults(prev, value));
+            return;
+        }
         setInfo(prev => ({
             ...prev,
             [key]: key === 'type'
                 ? normalizeProjectEpisodeType(value)
                 : key === 'language'
                     ? normalizeProjectEpisodeLanguage(value)
-                    : key === 'base_positioning'
-                        ? normalizeProjectEpisodeBasePositioning(value)
                         : key === 'Global_Style'
                             ? normalizeProjectEpisodeGlobalStyle(value)
                             : key === 'tone'
@@ -2463,7 +2467,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         const resolvedScriptTitle = String(info?.script_title || project?.title || '').trim();
         const resolvedType = String(info?.type || '').trim();
         const resolvedLanguage = String(info?.language || '').trim();
-        const resolvedBasePositioning = String(info?.base_positioning || '').trim();
+        const resolvedBasePositioning = String(info?.base_positioning || info?.style_mode || '').trim();
         const resolvedGlobalStyle = String(info?.Global_Style || '').trim();
         return [
             { label: t('剧本标题', 'Script Title'), value: resolvedScriptTitle },
@@ -2472,7 +2476,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             { label: t('剧本模式 (基础定位)', 'Script Mode (Base Positioning)'), value: resolvedBasePositioning },
             { label: t('全局风格', 'Global Style'), value: resolvedGlobalStyle },
         ];
-    }, [info?.script_title, info?.type, info?.language, info?.base_positioning, info?.Global_Style, project?.title, t]);
+    }, [info?.script_title, info?.type, info?.language, info?.base_positioning, info?.style_mode, info?.Global_Style, project?.title, t]);
     const storyGeneratorMissingInfo = useMemo(() => {
         const missing = [];
         if (!String(info?.script_title || project?.title || '').trim()) missing.push(t('剧本标题', 'Script Title'));
@@ -2829,7 +2833,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             value={info.base_positioning}
                             onChange={v => updateField('base_positioning', v)}
                             list={PROJECT_EP_BASE_POSITIONING_OPTIONS}
-                            placeholder={t('例如：都市爱情 / 科幻', 'e.g. Urban Romance / Sci-Fi')}
+                            placeholder={t('例如：武侠江湖 / 赛博朋克 / 古装战争', 'e.g. Wuxia Jianghu / Cyberpunk / Ancient War')}
                         />
                         <InputGroup idPrefix={prefix}
                             label={t('年代', 'Era')}
@@ -3235,6 +3239,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         multi={true}
                         list={PROJECT_EP_GLOBAL_STYLE_OPTIONS}
                     />
+                    <p className="text-[11px] text-muted-foreground -mt-2">
+                        {t('剧本模式即基础风格模式。全局统筹默认继承；单场可按场景改选并传下游。空的全局风格/光线/色调会按该模式补入。', 'Script mode is the base visual style. Global orchestration inherits it; each scene may pick a different mode and pass it downstream. Empty global style / lighting / tone are filled from the mode.')}
+                    </p>
 
                     <div>
                         <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('借鉴影片（参考）', 'Borrowed Films (Ref)')}</label>

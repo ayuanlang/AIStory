@@ -112,6 +112,7 @@ import {
     normalizeProjectSceneAnalysisEra,
     normalizeProjectSceneAnalysisSafety,
     PROJECT_ASPECT_RATIO_OPTIONS,
+    applyStyleModeDefaults,
 } from './editor/projectOptionConfig';
 import { DEFAULT_MAX_SHOT_SECONDS, resolveMaxShotSeconds } from './editor/editorConstants';
 
@@ -300,7 +301,7 @@ const PROJECT_CREATE_PREFERRED_IMAGE_SIZE = '2K';
 const PROJECT_CREATE_PREFERRED_TYPE = '实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)';
 const PROJECT_CREATE_PREFERRED_COUNTRY_REGION = '欧美 / Europe & America';
 const PROJECT_CREATE_PREFERRED_LANGUAGE = '英文 / English';
-const PROJECT_CREATE_PREFERRED_BASE_POSITIONING = '古装武侠 / Period / Wuxia';
+const PROJECT_CREATE_PREFERRED_BASE_POSITIONING = '武侠江湖 / Wuxia Jianghu';
 const PROJECT_CREATE_PREFERRED_ERA = '古代';
 const PROJECT_CREATE_PREFERRED_LENS_PREFERENCE = '长镜头 / Long Take';
 const PROJECT_CREATE_DEFAULT_OPTIONS = {
@@ -1153,7 +1154,20 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                 expected_duration: String(newExpectedDuration || '').trim(),
                 max_shot_seconds: String(resolveMaxShotSeconds(newMaxShotSeconds)),
                 language: String(newLanguage || '').trim(),
-                base_positioning: String(newBasePositioning || '').trim(),
+                ...(() => {
+                    const applied = applyStyleModeDefaults({
+                        Global_Style: newGlobalStyle,
+                        lighting: newLighting,
+                        tone: newColorTone,
+                    }, newBasePositioning);
+                    return {
+                        base_positioning: String(applied.base_positioning || newBasePositioning || '').trim(),
+                        style_mode: String(applied.style_mode || newBasePositioning || '').trim(),
+                        Global_Style: String(applied.Global_Style || newGlobalStyle || '').trim(),
+                        lighting: String(applied.lighting || newLighting || '').trim(),
+                        tone: String(applied.tone || newColorTone || '').trim(),
+                    };
+                })(),
                 era: String(newEra || '').trim(),
                 season_occurrence: String(newSeasonOccurrence || '').trim(),
                 lens_preference: String(newLensPreference || '').trim(),
@@ -2446,7 +2460,13 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 <InputGroup label={t("语言", "Language")} value={newLanguage} onChange={setNewLanguage} list={projectCreateOptions.language} />
                                             </div>
                                             <div>
-                                                <InputGroup label={t("剧本模式 (基础定位)", "Script Mode (Base Positioning)")} value={newBasePositioning} onChange={setNewBasePositioning} list={projectCreateOptions.base_positioning} />
+                                                <InputGroup
+                                                    label={t("剧本模式 (基础定位)", "Script Mode (Base Positioning)")}
+                                                    value={newBasePositioning}
+                                                    onChange={setNewBasePositioning}
+                                                    list={projectCreateOptions.base_positioning}
+                                                    placeholder={t("例如：武侠江湖 / 赛博朋克 / 古装战争", "e.g. Wuxia Jianghu / Cyberpunk / Ancient War")}
+                                                />
                                             </div>
                                             <div>
                                                 <InputGroup label={t("画幅比例", "Aspect Ratio")} value={newAspectRatio} onChange={setNewAspectRatio} list={projectCreateOptions.aspect_ratio || PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS} />

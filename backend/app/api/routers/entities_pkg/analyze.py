@@ -492,7 +492,17 @@ async def _execute_analyze_entity_image(
     # Include Project Context for style consistency
     project_context = {}
     if project.global_info:
+         try:
+             from app.core.style_mode_catalog import resolve_style_mode
+             resolved_style = resolve_style_mode(
+                 project.global_info.get("style_mode"),
+                 project.global_info.get("base_positioning"),
+             )
+         except Exception:
+             resolved_style = project.global_info.get("style_mode") or project.global_info.get("base_positioning")
          project_context = {
+             "style_mode": resolved_style,
+             "base_positioning": project.global_info.get("base_positioning") or resolved_style,
              "Global_Style": project.global_info.get("Global_Style"),
              "Tone": project.global_info.get("tone")
          }

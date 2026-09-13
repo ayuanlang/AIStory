@@ -223,6 +223,8 @@ _VISUAL_BACKFILL_ROOT_KEYS = (
 _VISUAL_BACKFILL_CONTENT_KEYS = (
     "Global_Style",
     "global_style",
+    "style_mode",
+    "style_inheritance",
     "borrowed_films",
     "tone",
     "lighting",
