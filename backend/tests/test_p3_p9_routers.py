@@ -762,6 +762,17 @@ def test_shot_generation_prompts_and_episode_script_section():
     assert ctx_default.get("metadata", {}).get("max_shot_seconds") == 15
     ctx_custom = _build_project_prompt_context({"script_title": "X", "max_shot_seconds": "12"})
     assert "Max Shot Seconds (分镜最长秒数): 12" in str(ctx_custom.get("project_context_section") or "")
+    ctx_season = _build_project_prompt_context({
+        "script_title": "X",
+        "season_occurrence": "秋 / Autumn",
+        "time_of_day": "黄昏",
+        "climate": "晴",
+    })
+    season_section = str(ctx_season.get("project_context_section") or "")
+    assert "Season Occurrence (发生季节): 秋 / Autumn" in season_section
+    assert "Time of Day (默认时段): 黄昏" in season_section
+    assert "Climate / Weather (气候天气): 晴" in season_section
+    assert ctx_season.get("metadata", {}).get("season_occurrence") == "秋 / Autumn"
     assert shots._build_shot_prompts is _build_shot_prompts
     shots_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "shots.py"
     shot_ai_path = (

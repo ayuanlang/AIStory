@@ -205,6 +205,50 @@ def test_first_cut_anchor_description_empty_slots():
     assert item["anchor_description"] == ""
 
 
+def test_derived_anchor_description_uses_world_and_hang_when_visible():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        format_derived_anchor_description,
+        hang_visible_in_derived,
+        parse_derived_env_extract_items,
+        parse_main_environment_stage_anchors,
+    )
+
+    text = (
+        "────【主环境】────\n"
+        "【主环境】客栈大堂｜日夜内外=日/内\n"
+        "【活动空间】整体环境锚点=古代中国客栈｜主舞台区=柜台前｜"
+        "挂靠锚点=柜台｜锚点落=南｜动线=门到柜台\n"
+        "0度轴=北｜四向+中心：正北=0度=客栈大门｜正东=90度=雕花窗格｜"
+        "正南=180度=柜台｜正西=270度=贴墙木楼梯｜中心=八仙桌\n"
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜类型=第一刀\n"
+        "[DERIVED_ENV] 名称=180度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=180｜类型=第一刀\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+    )
+    stage = parse_main_environment_stage_anchors(text)
+    assert stage["客栈大堂"]["整体环境锚点"] == "古代中国客栈"
+    assert stage["客栈大堂"]["挂靠锚点"] == "柜台"
+    assert stage["客栈大堂"]["锚点落"] == "南"
+    assert hang_visible_in_derived("南", 180) is True
+    assert hang_visible_in_derived("南", 0) is False
+    assert hang_visible_in_derived("中", 90) is True
+
+    by_name = {item["name"]: item for item in parse_derived_env_extract_items(text)}
+    north = build_derived_environment_item(by_name["0度客栈大堂"])
+    south = build_derived_environment_item(by_name["180度客栈大堂"])
+    assert north["anchor_description"] == "整体环境锚点=古代中国客栈"
+    assert "挂靠锚点=" not in north["anchor_description"]
+    assert south["anchor_description"] == "整体环境锚点=古代中国客栈｜挂靠锚点=柜台"
+    assert north["custom_attributes"]["hang_visible"] is False
+    assert south["custom_attributes"]["hang_visible"] is True
+    assert format_derived_anchor_description(
+        world_anchor="古代中国客栈",
+        hang_anchor="柜台",
+        hang_visible=True,
+        background="客栈大门",
+    ) == "整体环境锚点=古代中国客栈｜挂靠锚点=柜台"
+
+
 def test_derived_anchors_copy_matching_main_env_angle_subjects():
     from app.services.script_analysis_flow.derived_env_ingest import (
         format_derived_anchor_description,

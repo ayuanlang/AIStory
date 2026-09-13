@@ -373,6 +373,29 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     project_notes = get_context_val(["notes"])
     region_culture = get_context_val(["region_culture", "region", "country", "culture", "country_region"])
     era_setting = get_context_val(["era", "era_setting", "period", "time_setting"])
+    season_occurrence = get_context_val([
+        "season_occurrence",
+        "season",
+        "季节",
+        "发生季节",
+        "Season",
+        "Season Occurrence",
+    ])
+    default_time_of_day = get_context_val([
+        "time_of_day",
+        "default_time_of_day",
+        "时段",
+        "默认时段",
+        "Time of Day",
+    ])
+    climate_weather = get_context_val([
+        "climate",
+        "weather",
+        "气候",
+        "天气",
+        "Climate",
+        "Weather",
+    ])
     shot_preference = get_context_val(["shot_preference", "lens_preference", "camera_preference"])
     max_shot_seconds = _parse_max_shot_seconds(get_context_val([
         "分镜最长秒数",
@@ -430,7 +453,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     if global_style:
         project_context_lines.append(f"Global Style: {global_style}")
     if tone:
-        project_context_lines.append(f"Tone: {tone}")
+        project_context_lines.append(f"Tone / Atmosphere (氛围): {tone}")
     if lighting:
         project_context_lines.append(f"Lighting: {lighting}")
     if color_palette:
@@ -441,6 +464,12 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         project_context_lines.append(f"Music Recommendation: {music_recommendation}")
     if era_setting:
         project_context_lines.append(f"Era / Period (年代): {era_setting}")
+    if season_occurrence:
+        project_context_lines.append(f"Season Occurrence (发生季节): {season_occurrence}")
+    if default_time_of_day:
+        project_context_lines.append(f"Time of Day (默认时段): {default_time_of_day}")
+    if climate_weather:
+        project_context_lines.append(f"Climate / Weather (气候天气): {climate_weather}")
     if region_culture:
         project_context_lines.append(f"Region / Country (国家地域): {region_culture}")
     if shot_preference:
@@ -501,6 +530,9 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         "music_recommendation": music_recommendation,
         "region_culture": region_culture,
         "era_setting": era_setting,
+        "season_occurrence": season_occurrence,
+        "time_of_day": default_time_of_day,
+        "climate": climate_weather,
         "broadcast_security_level": broadcast_security_level,
         "broadcast_safety_level": broadcast_security_level,
         "safety_broadcast_level": broadcast_security_level,
@@ -1178,9 +1210,9 @@ def _build_shot_prompts(
             f"镜末语言延续：本镜最后一个Beat为语言类（有非空台词的对白/OS/V.O./旁白/自白等）时，Duration在Duration0之后固定+1s（不参与封口判定，不得被下浮吃掉）；Video末秒须写说完后余韵定格，禁止卡音节切断。"
             f"合镜计时：Beat小计=建置串行+并行核Max(语言/动作/微表情/特效/运镜/音效)，禁止七类分项全额相加灌到MaxShotSeconds；同ENV的P2+建置=0s；跨P同一连续运镜只计一次；ENV微动/窗雨/雨丝/配乐特效=0s。无对白且无复杂动作且无宏大特效的建立/凝视合镜Duration落5–8（~可到9），禁止无撑满内容却填MaxShotSeconds。"
             f"景别构图与镜头角度：每镜只抄该拍【建置】拍摄键（缺则【取景锁定】）原文进Logic（景别继承/观察角度/构图规划）与Video落地句；合镜逐Beat抄各自锁档。禁止本层另选远近/构图/镜头角度。缺锁定标upstream_missing_framing回流。"
-            f"影视语言：焦距/跟焦/帧率/曝光三角/光比/色温/柔硬/色调须可回指Video两光影段与运镜段；点名后须接§四.4A预期效果（广角+深=环境铺满/近大远小/深景深/背景可读；中长焦+浅=背景放大/奶油虚化/主体脱离；Freeze=边缘冻结清晰；Grain=卤化银颗粒；高速另加BG拉丝）。高速追逐/飙车/急飞须点§四.4B技巧词：光学≥2（Background Motion Blur/Strong Parallax/Speed Tunnel/Ground Rush/Light Streak等）＋运镜≥2（Distance Lock Follow＋Follow/Lead/Car Mount/Hood Mount/Pursuit Cam/Drone Chase/Bank Follow/FPV Dive）＋构图落地≥1（灭点吸力/速度隧道框/运动前留白/追逃同轴/垂直层位叠，只实现已锁构图）；禁止只写Follow或背景糊了。打斗/仙攻/魔法须点§四.4C技巧词：光学≥2（Impact Flash/Dust Burst/Aura Attachment/Particle Lattice/Spatial Warp/Cast Glow/Rune Circle/Spell Beam Volume/Elemental Wash等）＋运镜≥2（Handheld Combat/Attack Axis Track/Whip/Crash Zoom/Bullet Time/Speed Ramp/Scale Contrast/Impact Shake/Orbit Cast/Follow Beam）＋构图落地≥1（攻击同轴/攻防同框/体量对比框/阵形满幅/阵盘铺地/咒束引导线，只实现已锁构图）；快相48/60fps，升格24fps+Ramp；禁止只写快速打斗/金光爆发/放了个魔法。"
+            f"影视语言：焦距/视角°/光学/运镜/构图/镜头位置/跟焦/帧率/快门速度/曝光三角/光比/色温/柔硬/色调须可回指Video；每项技术动作点名后须接§四.0该档执行效果（47°标准人眼=日常叙事对话全景纪实无畸变画面自然；84°广角=人物+环境融合近身动作透视自然扩张；107°超广角=大场景灾难宏大环境沉浸式空间感；29°中长焦=人物近景情绪特写背景柔和虚化；18°长焦=五官细节微表情极致压缩景深；8°超长焦=远距离观察偷窥画面扁平化；压迫光影=仅保留轮廓光高光眼神光勾勒层次，面部沉入压暗阴影；运镜/构图/机位距侧同样参数+效果）。光学须点名快门速度1/Xs（与帧率同核：24fps冻结=1/96s、微拖=1/48s；48fps冻结=1/192s、微拖=1/96s；60fps冻结=1/240s、微拖=1/120s），允许写1/48s等EXIF速度，禁止只写冻结/微拖不写速度。高速追逐/飙车/急飞须点§四.4B技巧词：光学≥2（Background Motion Blur/Strong Parallax/Speed Tunnel/Ground Rush/Light Streak等）＋运镜≥2（Distance Lock Follow＋Follow/Lead/Car Mount/Hood Mount/Pursuit Cam/Drone Chase/Bank Follow/FPV Dive）＋构图落地≥1（灭点吸力/速度隧道框/运动前留白/追逃同轴/垂直层位叠，只实现已锁构图）；禁止只写Follow或背景糊了。打斗/仙攻/魔法须点§四.4C技巧词：光学≥2（Impact Flash/Dust Burst/Aura Attachment/Particle Lattice/Spatial Warp/Cast Glow/Rune Circle/Spell Beam Volume/Elemental Wash等）＋运镜≥2（Handheld Combat/Attack Axis Track/Whip/Crash Zoom/Bullet Time/Speed Ramp/Scale Contrast/Impact Shake/Orbit Cast/Follow Beam）＋构图落地≥1（攻击同轴/攻防同框/体量对比框/阵形满幅/阵盘铺地/咒束引导线，只实现已锁构图）；快相48/60fps，升格24fps+Ramp；禁止只写快速打斗/金光爆发/放了个魔法。"
             f"美术锚=ENV CN四宫格同方向格，不另起无锚光。"
-            f"最终提示词镜头语言：Video五段须中英专业词并列点名（MCU/OTS/Eye-level/50mm Standard/Shallow DOF/Follow Focus/24fps/Key/Fill/Soft Light/Medium Contrast/Cool等）并接画面效果，禁止只点名mm/DOF/Freeze不写效果，禁止口语冲淡（有光/推近一点/背景糊了/电影感）。"
+            f"最终提示词镜头语言：Video五段须中英专业词并列点名（MCU/OTS/Eye-level/47°标准人眼/29°中长焦/Shallow DOF/Follow Focus/24fps/Key/Fill/Soft Light/Medium Contrast/Cool等）并接§四.0该档执行效果，禁止只点名mm/DOF/Freeze/三分/一臂/技法名不写效果，禁止口语冲淡（有光/推近一点/背景糊了/电影感）。光学视场闭集8°/18°/29°/47°/84°/107°必须写入Video，禁止把ENV名180度当视角档。"
             f"P段描述逻辑：一般一P对应一Beat，必须按播放时间序一一对应（时序不可变，禁止因卖点/高潮倒排Pn，禁止同一Shot把一Beat拆成多个P）；每个Pn必须标本镜内起止秒，写法=(Pn 0s–4s)，P1从0s起、相邻P首尾相接、末P止秒=本镜Duration，禁止只写(P1)无秒；同拍内CHAR/PROP按上游【卖点综合】【情绪峰谷综合】【叙事综合】的重点对象/峰谷承载/关键人物优先写到建置句序、主拍与Associated Entities前列，其余在场者仍须全覆盖；Video以运镜与动作流起笔（禁以ENV或全局风格起笔）；P1先写该拍入画角色/道具【建置】位置朝向，再写背景参考图为ENV:[…]，再写入戏/运镜/配音/音效；同ENV的P2+不重复全员落位，只写背景参考图为ENV:与入戏；相邻拍ENV:[…]名变时该Pn含该拍【建置】整句，并写「背景切换到参考图ENV:[新]」后再写入戏（含同主切角/换主/状态衍生；禁只写背景参考图为而不写切换到）；成稿顺序=运镜与动作流→两光影段→全局动态风格→物理文字→品质收束。"
             f"配乐与音效：上游【配乐】【音效】嵌在对应动作或运镜句上，与锚=/配合=同一瞬间同拍同频；禁止堆到段末或光影段；禁止因品质收束「无背景音乐」删已写入的配乐/音效。"
             f"光影两段（动态连续光影/焦点、光线连动弧光）不得省略。"

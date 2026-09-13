@@ -34,8 +34,8 @@ EVIDENCE_NAME_PATTERN = re.compile(
     re.IGNORECASE,
 )
 FRAMING_ENV_FIELD_PATTERN = re.compile(
-    r"【(?:Beat景别构图方案|取景锁定|Beat主体定位|角色道具宫格分布图)】(.*?)(?:"
-    r"【(?:景别构图综合|主体定位方案|取景锁定|Beat主体定位|角色道具宫格分布图|实体覆盖)】|"
+    r"【(?:Beat景别构图方案|取景锁定|Beat主体定位|角色道具世界分布图|角色道具宫格分布图)】(.*?)(?:"
+    r"【(?:景别构图综合|主体定位方案|取景锁定|Beat主体定位|角色道具世界分布图|角色道具宫格分布图|实体覆盖)】|"
     r"\[DERIVED_ENV_EXTRACT_START\]|\[BEAT_STREAM_START\])",
     re.IGNORECASE | re.DOTALL,
 )
@@ -406,6 +406,55 @@ def parse_main_environment_angle_subjects(text: str) -> Dict[str, Dict[str, str]
     return result
 
 
+_HANG_FALL_TO_ANGLE = {"北": 0, "东": 90, "南": 180, "西": 270}
+_STAGE_ANCHOR_KEYS = ("整体环境锚点", "挂靠锚点", "锚点落")
+_STAGE_ANCHOR_FIELD_PATTERN = re.compile(
+    r"(?:^|[｜|\s;；:：【】])(?P<key>整体环境锚点|挂靠锚点|锚点落)\s*[=：]\s*(?P<value>[^｜|\r\n]+)"
+)
+
+
+def parse_main_environment_stage_anchors(text: str) -> Dict[str, Dict[str, str]]:
+    """主环境名 → 整体环境锚点 / 挂靠锚点 / 锚点落（规划【活动空间】）。"""
+    source = str(text or "")
+    result: Dict[str, Dict[str, str]] = {}
+    for match in _MAIN_ENV_BLOCK_PATTERN.finditer(source):
+        name = _clean(match.group("name"))
+        body = str(match.group(0) or "")
+        if not name:
+            continue
+        row: Dict[str, str] = {}
+        for field in _STAGE_ANCHOR_FIELD_PATTERN.finditer(body):
+            key = _clean(field.group("key"))
+            value = _clean(field.group("value"))
+            if key and value and value.lower() not in _EMPTY_FIELD_MARKERS:
+                row[key] = value
+        if row:
+            result[name] = row
+    return result
+
+
+def hang_visible_in_derived(
+    hang_fall: str,
+    angle: int,
+    *,
+    look_up: bool = False,
+) -> bool:
+    """锚点落=北|东|南|西 → 仅该向正向可见；中 → 四向可见。仰天/屋顶不当正向。"""
+    fall = _clean(hang_fall)
+    if fall in {"中", "中部"}:
+        return True
+    if look_up:
+        return False
+    expected = _HANG_FALL_TO_ANGLE.get(fall)
+    if expected is None:
+        return False
+    try:
+        resolved = int(angle)
+    except (TypeError, ValueError):
+        return False
+    return resolved == expected
+
+
 def derived_frame_anchors_from_main(
     main: str,
     angle: int,
@@ -458,9 +507,19 @@ def format_derived_anchor_description(
     offscreen: str = "",
     references: Optional[Sequence[str]] = None,
     forbidden: Optional[Set[str]] = None,
+    world_anchor: str = "",
+    hang_anchor: str = "",
+    hang_visible: bool = False,
 ) -> str:
-    """Asset Anchor Description: 背景 / 画左 / 画右 / 画外（不可见）. Never 无."""
+    """Asset Anchor Description: 规划整体环境锚点 ± 可见挂靠；无规划时回退 背景/画左/画右/画外。"""
     del references
+    world = _clean(world_anchor)
+    hang = _anchor_slot(hang_anchor, forbidden)
+    if world:
+        parts = [f"整体环境锚点={world}"]
+        if hang_visible and hang:
+            parts.append(f"挂靠锚点={hang}")
+        return "｜".join(parts)
     blob = "｜".join(
         [
             str(background or ""),
@@ -808,9 +867,17 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
 
     forbidden = collect_subject_names_from_text(source)
     mains = parse_main_environment_angle_subjects(source)
+    stage_anchors = parse_main_environment_stage_anchors(source)
     for row in by_name.values():
         main = _clean(row.get("main") or row.get("所属主环境")) or _main_from_name(row.get("name") or "")
         angle = _normalize_angle(row.get("angle") or row.get("view_angle_from_main"), row.get("name") or "")
+        stage = stage_anchors.get(main) or {}
+        if stage.get("整体环境锚点"):
+            row["world_anchor"] = stage["整体环境锚点"]
+        if stage.get("挂靠锚点"):
+            row["hang_anchor"] = stage["挂靠锚点"]
+        if stage.get("锚点落"):
+            row["hang_fall"] = stage["锚点落"]
         copied = derived_frame_anchors_from_main(
             main,
             angle,
@@ -892,6 +959,14 @@ def build_derived_environment_item(
         item.get("references") or item.get("参照物"),
         forbidden=forbidden,
     )
+    world_anchor = _clean(raw_item.get("world_anchor") or raw_item.get("整体环境锚点"))
+    hang_anchor = _clean(raw_item.get("hang_anchor") or raw_item.get("挂靠锚点"))
+    hang_fall = _clean(raw_item.get("hang_fall") or raw_item.get("锚点落"))
+    hang_visible = hang_visible_in_derived(
+        hang_fall,
+        angle,
+        look_up=_row_looks_up(resolved),
+    )
     anchor = format_derived_anchor_description(
         background=background,
         frame_left=frame_left,
@@ -899,6 +974,9 @@ def build_derived_environment_item(
         offscreen=offscreen,
         references=references,
         forbidden=forbidden,
+        world_anchor=world_anchor,
+        hang_anchor=hang_anchor,
+        hang_visible=hang_visible,
     )
     camera = format_camera_switch_line(
         angle=angle,
@@ -1001,6 +1079,10 @@ def build_derived_environment_item(
             "frame_right": frame_right,
             "offscreen": offscreen,
             "references": "、".join(references),
+            "world_anchor": world_anchor,
+            "hang_anchor": hang_anchor,
+            "hang_fall": hang_fall,
+            "hang_visible": hang_visible,
         },
     }
 

@@ -35,6 +35,7 @@ import {
     getEpisodeAnalysisPipelineControl,
     getEpisodeAnalysisPipelineRemainingMs,
     clearEpisodeAnalysisPipelineControl,
+    clearEpisodeAnalysisPipelineStop,
 } from '../../../lib/analysisRunRegistry';
 import {
     findPromptInjectionRisks,
@@ -4370,7 +4371,7 @@ const collectStage1SlotTexts = (stageOutputsRaw) => {
     try {
         const payload = JSON.parse(raw);
         const outputs = ((payload?.stages || {}).stage1 || {}).outputs || {};
-        ['scene_split', 'raw_text', 'adapted_script', 'environment_plan'].forEach((key) => {
+        ['environment_plan', 'scene_split', 'raw_text', 'adapted_script'].forEach((key) => {
             const slot = outputs[key];
             if (slot && typeof slot === 'object') texts.push(String(slot.content || ''));
             else if (typeof slot === 'string') texts.push(slot);
@@ -4442,6 +4443,12 @@ const textHasEnvironmentPlanSignals = (text) => {
         || /【主环境】/.test(body);
 };
 
+const textHasMainEnvironmentSkeleton = (text) => {
+    const body = environmentPlanExtractedBody(text);
+    return /────【主环境】/.test(body)
+        || (/\[ENV_BLOCK_START/i.test(body) && /【主环境】/.test(body));
+};
+
 const textHasTaggedExtractItems = (text, tag) => {
     const source = String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '');
     if (!source) return false;
@@ -4484,6 +4491,8 @@ const resolveCategoryAssetSourceText = (candidates, category) => {
         return pickFirstMatchingText(candidates, (text) => textHasTaggedExtractItems(text, 'PROP'));
     }
     if (key === 'environments') {
+        const withSkeleton = pickFirstMatchingText(candidates, textHasMainEnvironmentSkeleton);
+        if (withSkeleton) return withSkeleton;
         return pickFirstMatchingText(candidates, (text) => textHasEnvironmentPlanSignals(text) || collectMainEnvironmentNames(text).length > 0);
     }
     return pickFirstMatchingText(candidates, hasAssetRerunExtractSignals);
@@ -18906,6 +18915,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const extractSourceCandidates = [
                     options?.extractSourceText,
                     explicitText,
+                    latestStage1NodeOutputsRef.current?.environment_plan,
+                    typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'environment_plan') : '',
+                    readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
                     latestStage1NodeOutputsRef.current?.scene_split,
                     typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '',
                     latestStage1RawTextRef.current,
@@ -19446,6 +19458,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const extractSourceCandidates = [
                         options?.extractSourceText,
                         explicitText,
+                        latestStage1NodeOutputsRef.current?.environment_plan,
+                        typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'environment_plan') : '',
+                        readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
                         latestStage1NodeOutputsRef.current?.scene_split,
                         typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '',
                         latestStage1RawTextRef.current,
@@ -24596,6 +24611,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         preserveLivePipeline = false,
     } = {}) => {
         analysisProgressDismissedRef.current = false;
+
+        // Always drop leftover Stop latches. Category / single-entity asset reruns
+        // used to pass preserveLivePipeline and skip this reset, so a prior Stop
+        // immediately aborted the new run as "stopped by user".
+        const episodeId = Number(activeEpisode?.id || latestActiveEpisodeIdRef.current || 0);
+        const leftoverLocalStop = Boolean(analysisStopRequestedRef.current);
+        const leftoverModuleStop = Boolean(episodeId && getEpisodeAnalysisPipelineControl(episodeId)?.stopRequested);
+        analysisStopRequestedRef.current = false;
+        analysisStopReasonRef.current = '';
+        const liveRun = episodeId ? getEpisodeAnalysisRun(episodeId) : null;
+        if (episodeId) {
+            if (preserveLivePipeline && liveRun?.promise) {
+                clearEpisodeAnalysisPipelineStop(episodeId);
+            } else {
+                armAnalysisPipelineDeadline(startedAt);
+            }
+        }
+        if ((leftoverLocalStop || leftoverModuleStop) && typeof onLog === 'function') {
+            onLog('[Stage Rerun] Cleared leftover stop latch from a previous run.', 'info');
+        }
+
         if (setRetryingPhase2) setIsRetryingPhase2(true);
         if (preserveLivePipeline) {
             const hint = String(message || '').trim();
@@ -24607,7 +24643,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             return;
         }
-        analysisStopRequestedRef.current = false;
         // Block stale session/progress snapshots from overwriting this rerun's UI.
         analysisRunInFlightRef.current = true;
         latestIsAnalyzingRef.current = Boolean(setAnalyzing || setRetryingPhase2);
@@ -24628,7 +24663,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             message: String(message || '').trim()
                 || t('正在重跑当前阶段...', 'Rerunning the current stage...'),
         });
-    }, [beginAnalysisTimer, resetAnalysisRunProgressLogs, t]);
+    }, [activeEpisode?.id, armAnalysisPipelineDeadline, beginAnalysisTimer, onLog, resetAnalysisRunProgressLogs, t]);
 
     const prepareSceneAnalysisResumeState = useCallback(async () => {
         const sceneAnalysisText = String(
@@ -30694,7 +30729,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setAnalyzing: false,
             setRetryingPhase2: true,
             runTag: 'phase2_retry',
-            preserveLivePipeline: overlayOnLiveRun || scopedCategoryRerun || siblingAssetLive,
+            // Only overlay when a sibling/live run is actually in flight.
+            // Scoped category / single-entity reruns must still reset the Stop latch.
+            preserveLivePipeline: overlayOnLiveRun || siblingAssetLive,
         });
         setRetryingAssetCategoryKeys(Array.from(new Set([
             ...retryingAssetCategoryKeys,

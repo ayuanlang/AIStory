@@ -67,6 +67,22 @@ export function requestEpisodeAnalysisPipelineStop(episodeId, reason = 'user') {
     return next;
 }
 
+/** Drop a leftover Stop latch without wiping deadline / supervisor of a still-live run. */
+export function clearEpisodeAnalysisPipelineStop(episodeId) {
+    const id = toEpisodeId(episodeId);
+    if (!id) return null;
+    const prev = analysisPipelineControlByEpisode.get(id);
+    if (!prev) return null;
+    const next = {
+        ...prev,
+        stopRequested: false,
+        stopReason: '',
+        updatedAt: Date.now(),
+    };
+    analysisPipelineControlByEpisode.set(id, next);
+    return next;
+}
+
 export function clearEpisodeAnalysisPipelineControl(episodeId) {
     const id = toEpisodeId(episodeId);
     if (!id) return;

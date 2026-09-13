@@ -17,6 +17,7 @@ from app.services.script_analysis_flow.environment_asset_brief import (
     build_environment_asset_design_brief,
     collect_ident_environment_names,
     environment_plan_has_ident,
+    pick_environment_plan_source_and_brief,
 )
 from app.services.script_analysis_flow.prop_asset_brief import (
     assemble_prop_asset_design_user_content,
@@ -64,6 +65,8 @@ def test_environment_brief_uses_plan_only_and_excludes_scene_analysis():
     assert "客栈大堂" in brief
     assert "environments[].name 必须与 IDENT [ENV] 名称= / name 逐字符完全一致" in brief
     assert "定位=夜内对峙大厅" in brief
+    assert "[ENV_BLOCK_START]" in brief
+    assert "────【主环境】────" in brief
     assert "【主环境】客栈大堂" in brief
     assert "【未落环境实体清单】空椅" in brief
     assert "0度客栈大堂" not in brief
@@ -71,6 +74,28 @@ def test_environment_brief_uses_plan_only_and_excludes_scene_analysis():
     assert "【卖点综合】" not in brief
     assert "不该进入环境设计简报" not in brief
     assert environment_plan_has_ident(_planned_script()) is True
+
+
+def test_environment_brief_wraps_bare_main_env_header():
+    script = """[ENV_SCENE_PATCH_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“大堂”
+定位=夜内对峙大厅
+目标=本场空镜须=建立压迫｜服务=无｜可见落点=大门
+情绪表达=主情绪=压迫｜空镜表达=灯下空堂｜光色倾向=暖灯｜构图倾向=纵深
+[SCENE_ENV_IDENT_END:EP01_SC01]
+────【主环境】────
+【主环境】客栈大堂｜日夜内外=夜·内｜主环境角色=当下主线
+【活动空间】主舞台=堂心
+────【未落环境实体清单】────
+【未落环境实体清单】空椅
+[ENV_SCENE_PATCH_END:EP01_SC01]
+"""
+    brief = build_environment_asset_design_brief(script)
+    assert "[ENV_BLOCK_START]" in brief
+    assert "────【主环境】────" in brief
+    assert "【主环境】客栈大堂" in brief
+    assert "【未落环境实体清单】空椅" in brief
 
 
 def test_environment_brief_empty_without_plan():
@@ -125,9 +150,147 @@ def test_environment_brief_reads_patches_outside_scene_split():
     assert "[环境规划开始]" in brief
     assert "客栈大堂" in brief
     assert "定位=夜内对峙大厅" in brief
+    assert "[ENV_BLOCK_START]" in brief
+    assert "────【主环境】────" in brief
     assert "【主环境】客栈大堂" in brief
     assert "这是全局统筹正文" not in brief
     assert environment_plan_has_ident(merged) is True
+
+
+def test_environment_brief_merges_ident_in_scenes_with_patch_main_env():
+    merged = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+【场景名称】客栈对峙
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“大堂”
+定位=夜内对峙大厅
+目标=本场空镜须=建立压迫｜服务=无｜可见落点=大门与空椅
+情绪表达=主情绪=压迫｜空镜表达=灯下空堂｜光色倾向=暖灯压暗｜构图倾向=纵深压迫
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[SCENE_CONTENT_START:EP01_SC01]
+场核正文
+[SCENE_CONTENT_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+
+[ENV_SCENE_PATCH_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“大堂”
+定位=夜内对峙大厅
+目标=本场空镜须=建立压迫｜服务=无｜可见落点=大门与空椅
+情绪表达=主情绪=压迫｜空镜表达=灯下空堂｜光色倾向=暖灯压暗｜构图倾向=纵深压迫
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+────【主环境】────
+【主环境】客栈大堂｜日夜内外=夜·内｜主环境角色=当下主线
+【活动空间】主舞台=堂心
+────【未落环境实体清单】────
+【未落环境实体清单】空椅
+[ENV_BLOCK_END]
+[ENV_SCENE_PATCH_END:EP01_SC01]
+"""
+    brief = build_environment_asset_design_brief(merged)
+    assert "[ENV_BLOCK_START]" in brief
+    assert "────【主环境】────" in brief
+    assert "【主环境】客栈大堂" in brief
+    assert "【活动空间】主舞台=堂心" in brief
+    assert "场核正文" not in brief
+    assert brief.count("[ENV_BLOCK_START]") == 1
+    assert brief.count("────【主环境】────") == 1
+    assert brief.count("【主环境】客栈大堂") == 1
+
+
+def test_environment_brief_does_not_duplicate_when_scene_and_patch_both_have_env():
+    env_block = """[ENV_BLOCK_START]
+────【主环境】────
+【主环境】客栈大堂｜日夜内外=夜·内｜主环境角色=当下主线
+【活动空间】主舞台=堂心
+────【未落环境实体清单】────
+【未落环境实体清单】空椅
+[ENV_BLOCK_END]"""
+    ident = """[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“大堂”
+定位=夜内对峙大厅
+目标=本场空镜须=建立压迫｜服务=无｜可见落点=大门
+情绪表达=主情绪=压迫｜空镜表达=灯下空堂｜光色倾向=暖灯｜构图倾向=纵深
+[SCENE_ENV_IDENT_END:EP01_SC01]"""
+    merged = f"""[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+{ident}
+{env_block}
+[SCENE_CONTENT_START:EP01_SC01]
+场核正文
+[SCENE_CONTENT_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+
+[ENV_SCENE_PATCH_START:EP01_SC01]
+{ident}
+{env_block}
+[ENV_SCENE_PATCH_END:EP01_SC01]
+"""
+    brief = build_environment_asset_design_brief(merged)
+    assert brief.count("[环境规划开始]") == 1
+    assert brief.count("[ENV_DESIGN_SCENE:EP01_SC01]") == 1
+    assert brief.count("[SCENE_ENV_IDENT_START:EP01_SC01]") == 1
+    assert brief.count("[ENV_BLOCK_START]") == 1
+    assert brief.count("────【主环境】────") == 1
+    assert brief.count("【主环境】客栈大堂") == 1
+    assert "【活动空间】主舞台=堂心" in brief
+    assert "场核正文" not in brief
+
+
+def test_environment_brief_keeps_two_distinct_main_envs_once_each():
+    script = """[ENV_SCENE_PATCH_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈门外｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“门外”
+[ENV] 名称=飞行器驾驶舱｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“驾驶舱”
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+────【主环境】────
+【主环境】客栈门外｜日夜内外=夜·外｜主环境角色=仓外
+────【主环境】────
+【主环境】飞行器驾驶舱｜日夜内外=夜·内｜主环境角色=仓内
+[ENV_BLOCK_END]
+[ENV_SCENE_PATCH_END:EP01_SC01]
+"""
+    brief = build_environment_asset_design_brief(script)
+    assert brief.count("────【主环境】────") == 2
+    assert brief.count("【主环境】客栈门外") == 1
+    assert brief.count("【主环境】飞行器驾驶舱") == 1
+
+
+def test_pick_environment_plan_prefers_main_env_over_ident_only():
+    ident_only = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“大堂”
+定位=夜内对峙大厅
+目标=本场空镜须=建立压迫｜服务=无｜可见落点=大门
+情绪表达=主情绪=压迫｜空镜表达=灯下空堂｜光色倾向=暖灯｜构图倾向=纵深
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+"""
+    planned = """[ENV_SCENE_PATCH_START:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“大堂”
+定位=夜内对峙大厅
+目标=本场空镜须=建立压迫｜服务=无｜可见落点=大门
+情绪表达=主情绪=压迫｜空镜表达=灯下空堂｜光色倾向=暖灯｜构图倾向=纵深
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+────【主环境】────
+【主环境】客栈大堂｜日夜内外=夜·内｜主环境角色=当下主线
+【活动空间】主舞台=堂心
+[ENV_BLOCK_END]
+[ENV_SCENE_PATCH_END:EP01_SC01]
+"""
+    source, brief = pick_environment_plan_source_and_brief(ident_only, planned)
+    assert source == planned.strip()
+    assert "[ENV_BLOCK_START]" in brief
+    assert "────【主环境】────" in brief
+    assert "【主环境】客栈大堂" in brief
 
 
 def test_environment_brief_reads_reuse_ident_patch_without_env_block():

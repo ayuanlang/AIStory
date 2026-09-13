@@ -104,7 +104,7 @@ _SUBSKILL_STEP_PROGRESS = {
     "staging": 82.0,
 }
 _BEAT_FRAMING_PLAN_PATTERN = re.compile(r"【Beat景别构图方案】")
-_BEAT_PLACEMENT_PATTERN = re.compile(r"【(?:Beat主体定位|角色道具宫格分布图)】")
+_BEAT_PLACEMENT_PATTERN = re.compile(r"【(?:Beat主体定位|角色道具世界分布图|角色道具宫格分布图)】")
 _LEGACY_COMBAT_PROMPTS = {
     "skills/scene_analysis_feature_stack/scene_planning_1_subskill_vfx.md": COMBAT_PROMPT,
     "skills/scene_analysis_feature_stack/scene_planning_1_subskill_xian_attack.md": COMBAT_PROMPT,
@@ -577,7 +577,8 @@ def persisted_subskill_step_usable(step_key: str, text: str) -> bool:
         return True
     if key == "framing":
         return (
-            "【角色道具宫格分布图】" in body
+            "【角色道具世界分布图】" in body
+            or "【角色道具宫格分布图】" in body
             or "【Beat主体定位】" in body
             or "【取景锁定】" in body
             or "[DERIVED_ENV" in body
@@ -607,7 +608,12 @@ def _looks_like_completed_drama(text: str) -> bool:
     body = str(text or "")
     if not persisted_subskill_step_usable("drama", body):
         return False
-    if "【角色道具宫格分布图】" in body or "【建置】" in body or "【入戏】" in body:
+    if (
+        "【角色道具世界分布图】" in body
+        or "【角色道具宫格分布图】" in body
+        or "【建置】" in body
+        or "【入戏】" in body
+    ):
         return False
     return any(hint in body for hint in _DRAMA_OUTPUT_HINTS)
 
@@ -867,7 +873,11 @@ def merge_scene_blocks_into_script(
     return "\n".join(part for part in parts if part)
 
 
-_GRID_MAP_HEADING = "【角色道具宫格分布图】"
+_GRID_MAP_HEADING = "【角色道具世界分布图】"
+_GRID_MAP_HEADING_ALIASES = (
+    "【角色道具世界分布图】",
+    "【角色道具宫格分布图】",
+)
 _GRID_MAP_REQUIRED_FIELDS = ("当前环境=", "景别=")
 _FRAMING_LOCK_HEADING = "【取景锁定】"
 _FRAMING_LOCK_REQUIRED_FIELDS = ("当前环境=", "景别=", "构图=", "镜头角度=")
@@ -893,7 +903,7 @@ def _iter_beat_bodies(source: str) -> List[Tuple[str, str]]:
 def _beat_has_framing_lock(body: str) -> bool:
     text = str(body or "")
     compact = text.replace(" ", "").replace("＝", "=")
-    if _GRID_MAP_HEADING in text:
+    if any(heading in text for heading in _GRID_MAP_HEADING_ALIASES):
         return all(field in compact for field in _GRID_MAP_REQUIRED_FIELDS)
     if _FRAMING_LOCK_HEADING not in text:
         return False
@@ -918,6 +928,7 @@ def _framing_lock_bodies_by_id(source: str) -> Dict[str, Tuple[str, str]]:
 
 
 _FRAMING_PLAN_HEADINGS = (
+    "【角色道具世界分布图】",
     "【角色道具宫格分布图】",
     "【主体定位方案】",
     "【宫格草稿】",
@@ -937,7 +948,10 @@ def _last_beat_stream_block(text: str) -> str:
 
 def _locked_beat_stream_from_text(text: str) -> str:
     stream = _last_beat_stream_block(text)
-    if stream and (_GRID_MAP_HEADING in stream or _FRAMING_LOCK_HEADING in stream):
+    if stream and (
+        any(heading in stream for heading in _GRID_MAP_HEADING_ALIASES)
+        or _FRAMING_LOCK_HEADING in stream
+    ):
         return stream
     chunks = [
         f"[BEAT_START:{beat_id}]\n{body.strip()}\n[BEAT_END:{beat_id}]"
@@ -1004,7 +1018,10 @@ def _splice_trailing_framing_payload(raw_text: str, scene_text: str, scene_id: s
         if extract:
             extras.append(str(extract.group(0) or "").strip())
     scene_has_lock = any(_beat_has_framing_lock(body) for _, body in _iter_beat_bodies(scene))
-    if not scene_has_lock and (_GRID_MAP_HEADING in trailing or _FRAMING_LOCK_HEADING in trailing):
+    if not scene_has_lock and (
+        any(heading in trailing for heading in _GRID_MAP_HEADING_ALIASES)
+        or _FRAMING_LOCK_HEADING in trailing
+    ):
         locked_stream = _locked_beat_stream_from_text(trailing)
         if locked_stream and locked_stream not in scene:
             extras.append(locked_stream)
@@ -1023,6 +1040,7 @@ def _framing_has_plan_and_extract(source: str) -> bool:
         _BEAT_PLACEMENT_PATTERN.search(text)
         or _FRAMING_LOCK_HEADING in text
         or _BEAT_FRAMING_PLAN_PATTERN.search(text)
+        or "【角色道具世界分布图】" in text
         or "【角色道具宫格分布图】" in text
         or "【主体定位方案】" in text
         or "【宫格草稿】" in text
@@ -1969,6 +1987,7 @@ _PRIOR_DERIVED_ENV_COVERAGE = re.compile(
 _PRIOR_ENV_COVERAGE_SUMMARY = re.compile(r"(?:\r?\n)?【ENV覆盖综合】[^\r\n]*")
 _PRIOR_DERIVED_ENV_LINE = re.compile(r"(?:\r?\n)?\[DERIVED_ENV\][^\r\n]*")
 _PRIOR_FRAMING_PLAN_TITLES = (
+    "角色道具世界分布图",
     "角色道具宫格分布图",
     "取景锁定",
     "Beat主体定位",
@@ -1978,10 +1997,10 @@ _PRIOR_FRAMING_PLAN_TITLES = (
 )
 _PRIOR_FRAMING_PLAN_BLOCK = re.compile(
     r"(?:\r?\n)?[ \t]*(?:`{1,3}|\*{1,2}|#{1,6}[ \t]*)?"
-    r"【?(?:角色道具宫格分布图|取景锁定|Beat主体定位|主体定位方案|宫格草稿|Beat景别构图方案)】?"
+    r"【?(?:角色道具世界分布图|角色道具宫格分布图|取景锁定|Beat主体定位|主体定位方案|宫格草稿|Beat景别构图方案)】?"
     r"(?:`{1,3}|\*{1,2})?[ \t]*"
     r".*?"
-    r"(?=(?:\r?\n[ \t]*(?:`{1,3}|\*{1,2}|#{1,6}[ \t]*)?【?(?:角色道具宫格分布图|取景锁定|Beat主体定位|主体定位方案|宫格草稿|Beat景别构图方案|建置|入戏|场记分析)】?)"
+    r"(?=(?:\r?\n[ \t]*(?:`{1,3}|\*{1,2}|#{1,6}[ \t]*)?【?(?:角色道具世界分布图|角色道具宫格分布图|取景锁定|Beat主体定位|主体定位方案|宫格草稿|Beat景别构图方案|建置|入戏|场记分析)】?)"
     r"|(?:\r?\n\[BEAT_END)"
     r"|(?:\r?\n\[BEAT_START)"
     r"|(?:\r?\n\[BEAT_STREAM_END)"
@@ -1995,7 +2014,7 @@ _BEAT_OR_SCENE_BOUNDARY = re.compile(
     re.IGNORECASE,
 )
 _ORPHAN_GRID_MAP_ROW = re.compile(
-    r"^(?:CHAR|PROP):\[[^\]]+\]\s*｜.*宫格="
+    r"^(?:CHAR|PROP):\[[^\]]+\]\s*｜.*(?:宫格=|方式=)"
 )
 _GRID_MAP_BODY_PREFIXES = (
     "基准=主环境",
@@ -2014,6 +2033,7 @@ _GRID_MAP_BODY_PREFIXES = (
     "机位变=",
     "机位变因=",
     "关联同格同可见=",
+    "关联同锚同可见=",
     "纵深推=",
     "载具档=",
     "人载同向=",
@@ -2039,7 +2059,13 @@ def _is_prior_grid_map_body_line(line: str) -> bool:
         return True
     if text.startswith(_GRID_MAP_BODY_PREFIXES):
         return True
-    return "宫格=" in text and "｜" in text
+    return (
+        "宫格=" in text
+        or "方式=相对" in text
+        or "方式=绝对" in text
+        or "方式=封闭" in text
+        or "方式=配饰" in text
+    ) and "｜" in text
 _COVERAGE_AFTER_ENV = re.compile(
     r"(?:\s*【Beat→衍生ENV剧情覆盖矩阵】.*?【ENV覆盖综合】[^\r\n]*)",
     re.DOTALL,

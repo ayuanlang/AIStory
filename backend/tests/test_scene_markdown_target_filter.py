@@ -80,6 +80,17 @@ def test_legacy_scene_name_drops_keys_and_moves_validation_out():
     )
 
 
+def test_scene_name_extracts_period_and_shichen_keys():
+    scene_text = (
+        "【场景名称】短名=客栈对峙｜时段=黄昏｜时辰=酉｜内外=外"
+        "｜季节=秋｜气候=晴｜叙事线=正常叙事"
+    )
+
+    assert extract_scene_name_value_from_scene_text(scene_text) == (
+        "客栈对峙·黄昏·酉·外·秋·晴·正常叙事"
+    )
+
+
 def test_extract_environment_names_from_main_env_block():
     scene_text = """
 [ENV_BLOCK_START]

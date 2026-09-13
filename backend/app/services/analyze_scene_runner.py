@@ -673,10 +673,15 @@ async def execute_analyze_scene(
                 env_brief,
             )
             logger.info(
-                "[analyze_scene] environment asset design user seed episode_id=%s env_brief=%s cover_brief=%s script_block=omitted",
+                "[analyze_scene] environment asset design user seed episode_id=%s env_brief=%s cover_brief=%s has_main_env=%s script_block=omitted",
                 getattr(request, "episode_id", None),
                 len(env_brief or ""),
                 len(cover_brief or ""),
+                bool(env_brief) and (
+                    "[ENV_BLOCK_START" in env_brief.upper()
+                    or "────【主环境】" in env_brief
+                    or "【主环境】" in env_brief
+                ),
             )
 
         elif is_prop_asset_design:

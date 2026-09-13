@@ -1872,6 +1872,8 @@ def extract_scene_name_value_from_scene_text(scene_text: str) -> str:
         "场景名",
         "日夜",
         "时间",
+        "时段",
+        "时辰",
         "内外",
         "季节",
         "气候",

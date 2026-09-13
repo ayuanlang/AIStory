@@ -17,6 +17,13 @@ _DERIVED_ENV_SECTION_PATTERN = re.compile(
     r"(?=(?:\r?\n\[ENV_BLOCK_END)|(?:\r?\n────【)|$)",
     re.DOTALL,
 )
+_MAIN_ENV_HEADER_LINE_RE = re.compile(r"^[ \t]*【主环境】", re.MULTILINE)
+_BARE_MAIN_ENV_SECTION_RE = re.compile(
+    r"────【主环境】────.*?"
+    r"(?=(?:\r?\n────【衍生环境】)|(?:\r?\n\[ENV_BLOCK_END)|(?:\r?\n\[SCENE_CONTENT)|"
+    r"(?:\r?\n\[ENV_SCENE_PATCH_END)|(?:\r?\n\[SCENE_END)|$)",
+    re.DOTALL | re.IGNORECASE,
+)
 _ENV_SCENE_PATCH_PATTERN = re.compile(
     r"`?\[ENV_SCENE_PATCH_START:([^\s\]]+)\]`?"
     r"(.*?)"
@@ -33,22 +40,147 @@ def environment_plan_has_ident(script_text: str) -> bool:
     return bool(parse_scene_env_ident_items(script_text))
 
 
+def text_has_main_env_skeleton(text: str) -> bool:
+    """True when the text still carries a real 【主环境】 skeleton, not IDENT-only."""
+    source = str(text or "")
+    return "────【主环境】" in source or bool(_MAIN_ENV_HEADER_LINE_RE.search(source))
+
+
+def _wrap_env_block_markers(body: str) -> str:
+    text = _clean(body)
+    if not text:
+        return ""
+    if "[ENV_BLOCK_START" not in text.upper():
+        text = f"[ENV_BLOCK_START]\n{text}"
+    if "[ENV_BLOCK_END" not in text.upper():
+        text = f"{text}\n[ENV_BLOCK_END]"
+    return text
+
+
+_ENV_BLOCK_SPLIT_RE = re.compile(r"(?=`?\[ENV_BLOCK_START)", re.IGNORECASE)
+_MAIN_ENV_NAME_LINE_RE = re.compile(r"^[ \t]*【主环境】[ \t]*(.+?)\s*$", re.MULTILINE)
+_MAIN_ENV_SECTION_SPLIT_RE = re.compile(r"(?=────【主环境】────)")
+
+
+def _main_env_name_keys(text: str) -> Tuple[str, ...]:
+    names: List[str] = []
+    seen: set = set()
+    for match in _MAIN_ENV_NAME_LINE_RE.finditer(str(text or "")):
+        raw = _clean(match.group(1)).split("｜")[0].split("|")[0]
+        key = normalize_environment_name(raw)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        names.append(key)
+    return tuple(names)
+
+
+def _env_piece_score(text: str) -> int:
+    source = str(text or "")
+    score = len(source)
+    if "[ENV_BLOCK_START" in source.upper():
+        score += 1000
+    if "────【主环境】" in source:
+        score += 1000
+    return score
+
+
+def _dedupe_inner_main_env_sections(piece: str) -> str:
+    text = _clean(piece)
+    if text.count("────【主环境】────") <= 1:
+        return text
+    prefix_parts: List[str] = []
+    sections: List[str] = []
+    for part in _MAIN_ENV_SECTION_SPLIT_RE.split(text):
+        chunk = str(part or "")
+        if not chunk.strip():
+            continue
+        if chunk.lstrip().startswith("────【主环境】"):
+            sections.append(chunk)
+        else:
+            prefix_parts.append(chunk)
+    if not sections:
+        return text
+    best: Dict[Tuple[str, ...], str] = {}
+    order: List[Tuple[str, ...]] = []
+    for section in sections:
+        key = _main_env_name_keys(section) or (re.sub(r"\s+", "", section),)
+        if key not in best:
+            order.append(key)
+        if key not in best or _env_piece_score(section) > _env_piece_score(best[key]):
+            best[key] = section
+    return "".join(prefix_parts) + "".join(best[key] for key in order)
+
+
+def _split_env_blocks(block: str) -> List[str]:
+    text = _clean(block)
+    if not text:
+        return []
+    if "[ENV_BLOCK_START" in text.upper():
+        parts = [part.strip() for part in _ENV_BLOCK_SPLIT_RE.split(text) if part.strip()]
+        return [_wrap_env_block_markers(_dedupe_inner_main_env_sections(part)) for part in parts]
+    if text_has_main_env_skeleton(text):
+        return [_wrap_env_block_markers(_dedupe_inner_main_env_sections(text))]
+    return []
+
+
+def _merge_unique_env_blocks(*blocks: object) -> str:
+    pieces: List[str] = []
+    for block in blocks:
+        pieces.extend(_split_env_blocks(_clean(block)))
+    pieces.sort(key=_env_piece_score, reverse=True)
+    kept: List[str] = []
+    used_names: set = set()
+    seen_anonymous: set = set()
+    for piece in pieces:
+        names = set(_main_env_name_keys(piece))
+        if names and names <= used_names:
+            continue
+        if not names:
+            norm = re.sub(r"\s+", "", piece)
+            if not norm or norm in seen_anonymous:
+                continue
+            seen_anonymous.add(norm)
+        kept.append(piece)
+        used_names.update(names)
+    return "\n\n".join(kept).strip()
+
+
 def extract_main_environment_block(scene_text: str) -> str:
     """IDENT-adjacent 【主环境】/【未落清单】 only; strip derived-env sections."""
     from app.services.script_analysis_flow import extract_env_block_from_scene_text
 
-    block = extract_env_block_from_scene_text(scene_text).strip()
-    if not block:
-        return ""
-    return _DERIVED_ENV_SECTION_PATTERN.sub("", block).strip()
+    source = str(scene_text or "")
+    block = extract_env_block_from_scene_text(source).strip()
+    if block:
+        cleaned = _DERIVED_ENV_SECTION_PATTERN.sub("", block).strip()
+        if text_has_main_env_skeleton(cleaned) and (
+            "────【主环境】" in cleaned or "────【主环境】" not in source
+        ):
+            return _merge_unique_env_blocks(cleaned)
+    bare_sections = [
+        _DERIVED_ENV_SECTION_PATTERN.sub("", match.group(0)).strip()
+        for match in _BARE_MAIN_ENV_SECTION_RE.finditer(source)
+    ]
+    wrapped = [
+        _wrap_env_block_markers(body)
+        for body in bare_sections
+        if text_has_main_env_skeleton(body)
+    ]
+    return _merge_unique_env_blocks(*wrapped)
 
 
-def _scene_brief_parts(scene_id: str, scene_text: str) -> List[str]:
+def _scene_brief_parts(scene_id: str, scene_text: str, extra_text: str = "") -> List[str]:
+    scene = _clean(scene_text)
+    extra = _clean(extra_text)
     parts: List[str] = []
-    ident = extract_scene_env_ident_block(scene_text, scene_id)
+    ident = extract_scene_env_ident_block(scene, scene_id) or extract_scene_env_ident_block(extra, scene_id)
     if ident:
         parts.append(ident)
-    env_block = extract_main_environment_block(scene_text)
+    env_block = _merge_unique_env_blocks(
+        extract_main_environment_block(scene),
+        extract_main_environment_block(extra),
+    )
     if env_block:
         parts.append(env_block)
     return parts
@@ -167,8 +299,13 @@ def align_environment_json_names_with_ident(
     return subjects_json
 
 
-def _append_scene_brief_chunk(scene_chunks: List[str], scene_id: str, scene_text: str) -> None:
-    parts = _scene_brief_parts(scene_id, scene_text)
+def _append_scene_brief_chunk(
+    scene_chunks: List[str],
+    scene_id: str,
+    scene_text: str,
+    extra_text: str = "",
+) -> None:
+    parts = _scene_brief_parts(scene_id, scene_text, extra_text)
     if not parts:
         return
     header = f"[ENV_DESIGN_SCENE:{scene_id}]" if scene_id else "[ENV_DESIGN_SCENE]"
@@ -188,18 +325,25 @@ def build_environment_asset_design_brief(adapted_script: str) -> str:
     except Exception:
         units = []
 
+    patches = _iter_env_scene_patches(script)
+    patch_by_lower = {scene_id.lower(): body for scene_id, body in patches}
+    used_patch_keys: set = set()
     scene_chunks: List[str] = []
     if units:
         for unit in units:
             scene_id = _clean(getattr(unit, "scene_id", "") or "")
             scene_text = str(getattr(unit, "scene_text", "") or "")
-            _append_scene_brief_chunk(scene_chunks, scene_id, scene_text)
+            patch_body = patch_by_lower.get(scene_id.lower(), "")
+            if scene_id and scene_id.lower() in patch_by_lower:
+                used_patch_keys.add(scene_id.lower())
+            _append_scene_brief_chunk(scene_chunks, scene_id, scene_text, patch_body)
 
-    # Asset rerun concatenates scene_split (SCENE markers, no plan) + environment_plan
-    # patches after SCENES_BLOCK_END. Scene units then have no IDENT/【主环境】.
-    if not scene_chunks:
-        for scene_id, body in _iter_env_scene_patches(script):
-            _append_scene_brief_chunk(scene_chunks, scene_id, body)
+    # Scene units may only have IDENT (split leftover / pipeline-stripped scenes).
+    # Always harvest leftover ENV_SCENE_PATCH blocks for the actual 【主环境】骨架.
+    for scene_id, body in patches:
+        if scene_id.lower() in used_patch_keys:
+            continue
+        _append_scene_brief_chunk(scene_chunks, scene_id, body)
 
     if not scene_chunks:
         _append_scene_brief_chunk(scene_chunks, "", script)
@@ -227,10 +371,29 @@ def assemble_environment_asset_design_user_content(*parts: object) -> str:
     return assemble_injection_parts(*parts)
 
 
+def _environment_brief_rank(brief: str) -> int:
+    text = str(brief or "")
+    if not text:
+        return -1
+    score = 0
+    if "[ENV_BLOCK_START" in text.upper():
+        score += 4
+    if "────【主环境】" in text:
+        score += 4
+    if text_has_main_env_skeleton(text):
+        score += 2
+    if "[SCENE_ENV_IDENT_START" in text.upper():
+        score += 1
+    return score
+
+
 def pick_environment_plan_source_and_brief(*sources: object) -> Tuple[str, str]:
-    """Return the first source that yields a main-env brief, plus that brief."""
+    """Prefer the source whose brief still has ENV_BLOCK / 【主环境】, not IDENT-only."""
     fallback = ""
     seen: set = set()
+    best_source = ""
+    best_brief = ""
+    best_rank = -1
     for source in sources:
         cleaned = _clean(source)
         if not cleaned or cleaned in seen:
@@ -239,6 +402,11 @@ def pick_environment_plan_source_and_brief(*sources: object) -> Tuple[str, str]:
         if not fallback:
             fallback = cleaned
         brief = build_environment_asset_design_brief(cleaned)
-        if brief:
-            return cleaned, brief
-    return fallback, ""
+        if not brief:
+            continue
+        rank = _environment_brief_rank(brief)
+        if rank > best_rank:
+            best_source, best_brief, best_rank = cleaned, brief, rank
+            if rank >= 8:
+                return best_source, best_brief
+    return (best_source or fallback), best_brief
