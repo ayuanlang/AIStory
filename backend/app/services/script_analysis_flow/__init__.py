@@ -2695,12 +2695,15 @@ def reset_downstream_progress_for_node_rerun(
     episode_id: int,
     node_key: str,
     scoped_scene_ids: Optional[List[str]] = None,
+    preserve_per_scene: bool = False,
 ) -> Dict[str, Any]:
     """Reset per-scene leftover success when an upstream flow node is rerun."""
     key = str(node_key or "").strip()
     pid = int(project_id or 0)
     eid = int(episode_id or 0)
     if pid <= 0 or eid <= 0 or not key:
+        return {"reset_count": 0}
+    if preserve_per_scene:
         return {"reset_count": 0}
     per_scene_names = list(_PER_SCENE_RESET_ON_RERUN.get(key, []))
     if not per_scene_names:

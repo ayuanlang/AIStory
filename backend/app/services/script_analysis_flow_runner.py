@@ -381,6 +381,10 @@ async def execute_scene_analysis_flow_node(
         )
         scoped_rerun = bool(target_scene_ids)
         start_from_step = str(raw_payload.get("start_from_step") or "").strip()
+        preserve_per_scene = bool(
+            raw_payload.get("preserve_per_scene")
+            or raw_payload.get("skip_per_scene_reset")
+        )
         if node_key == "scene_markdown" and target_scene_id:
             scoped_action_name = f"场景编排 · {target_scene_id}"
         elif node_key == "scene_subskill_pipeline" and target_scene_id:
@@ -450,7 +454,14 @@ async def execute_scene_analysis_flow_node(
                 runtime_meta={"business_event": "started"},
             )
             if not scoped_rerun:
-                for downstream_node in _FLOW_DOWNSTREAM_NODES.get(node_key, []):
+                downstream_nodes = list(_FLOW_DOWNSTREAM_NODES.get(node_key, []))
+                if preserve_per_scene:
+                    downstream_nodes = [
+                        name
+                        for name in downstream_nodes
+                        if name not in {"scene_subskill_pipeline", "storyboard_generation"}
+                    ]
+                for downstream_node in downstream_nodes:
                     upsert_pipeline_node_status(
                         db,
                         project_id=node_project_id,
@@ -466,6 +477,7 @@ async def execute_scene_analysis_flow_node(
                 episode_id=node_episode_id,
                 node_key=node_key,
                 scoped_scene_ids=target_scene_ids if scoped_rerun else None,
+                preserve_per_scene=preserve_per_scene,
             )
             db.commit()
 

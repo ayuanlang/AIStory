@@ -255,6 +255,35 @@ def test_mark_storyboard_generation_applied_demotes_episode_when_coverage_incomp
     assert calls[1]["runtime_meta"]["business_event"] == "started"
 
 
+def test_mark_storyboard_generation_applied_accepts_frontend_scene_marker(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import script_analysis_flow as flow
+
+    calls = []
+
+    def _upsert(_db, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(flow, "upsert_pipeline_node_status", _upsert)
+    monkeypatch.setattr(
+        flow,
+        "_episode_workspace_storyboard_coverage",
+        lambda *_args, **_kwargs: {"scene_count": 1, "with_shots": 1, "ok": True, "no_scenes": False},
+    )
+    flow.mark_storyboard_generation_applied(
+        object(),
+        project_id=9,
+        episode_id=3,
+        scene_marker="EP01_SC02",
+        shot_count=6,
+    )
+    assert [row.get("scene_id") for row in calls] == ["EP01_SC02", None]
+    assert calls[0]["status"] == "success"
+    assert calls[0]["runtime_meta"]["shot_count"] == 6
+    assert calls[0]["runtime_meta"]["business_event"] == "applied_from_workspace"
+
+
 def test_mark_storyboard_generation_started_writes_scene_and_episode_running(monkeypatch):
     from types import SimpleNamespace
     from app.services import script_analysis_flow as flow
@@ -338,6 +367,35 @@ def test_reset_downstream_progress_for_scene_split_clears_storyboard(monkeypatch
     assert summary["reset_count"] == 3
     assert calls[0]["node_name"] == "scene_subskill_scene"
     assert calls[0]["status"] == "queued"
+
+
+def test_reset_downstream_progress_preserves_per_scene_when_requested(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import script_analysis_flow as flow
+
+    existing = SimpleNamespace(node_name="scene_subskill_scene", scene_id="EP01_SC01")
+    monkeypatch.setattr(flow, "_iter_pipeline_nodes", lambda *_args, **_kwargs: [existing])
+    calls = []
+
+    def _upsert(_db, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(flow, "upsert_pipeline_node_status", _upsert)
+    monkeypatch.setattr(
+        flow,
+        "reset_storyboard_generation_nodes",
+        lambda *_args, **_kwargs: {"reset_count": 2},
+    )
+    summary = flow.reset_downstream_progress_for_node_rerun(
+        object(),
+        project_id=9,
+        episode_id=3,
+        node_key="scene_split",
+        preserve_per_scene=True,
+    )
+    assert summary["reset_count"] == 0
+    assert calls == []
 
 
 def test_mark_storyboard_generation_failed_writes_scene_node_only(monkeypatch):

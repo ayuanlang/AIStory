@@ -3926,6 +3926,9 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
     if (startFromStep) {
         analyze_payload.start_from_step = startFromStep;
     }
+    if (runtimeHooks?.preservePerScene === true || runtimeHooks?.preserve_per_scene === true) {
+        analyze_payload.preserve_per_scene = true;
+    }
     if (runtimeHooks?.skipEpisodePersist === true || runtimeHooks?.skip_episode_persist === true) {
         // Concurrent Stage 3 category calls share one episode field; frontend merges then persists.
         analyze_payload.skip_episode_persist = true;
@@ -4280,6 +4283,7 @@ export const resetSceneOrchestrationProgress = async (payload = {}) => (await ap
 export const resetEpisodeAnalysisProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/reset-episode', payload || {})).data;
 export const reportStoryboardGenerationFailed = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/storyboard-failed', payload || {})).data;
 export const reportStoryboardGenerationStarted = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/storyboard-started', payload || {})).data;
+export const reportStoryboardGenerationApplied = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/storyboard-applied', payload || {})).data;
 export const resetStoryboardGenerationProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/storyboard-reset', payload || {})).data;
 export const getEpisodeProgressSnapshot = async (episodeId) => (await api.get(`/prompts/scene-analysis/progress/episodes/${episodeId}`)).data;
 export const getProjectProgressOverview = async (projectId) => (await api.get(`/prompts/scene-analysis/progress/projects/${projectId}/overview`)).data;
