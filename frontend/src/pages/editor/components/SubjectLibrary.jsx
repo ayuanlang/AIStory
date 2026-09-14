@@ -3549,6 +3549,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         });
     }, [scopedEntities]);
 
+    const pendingBatchGenerateCounts = useMemo(() => {
+        const pending = (scopedEntities || []).filter((entity) => !String(entity?.image_url || '').trim());
+        const typeOf = (entity) => String(entity?.type || entity?.entity_type || entity?.subject_type || '').trim().toLowerCase();
+        return {
+            all: pending.length,
+            character: pending.filter((entity) => typeOf(entity) === 'character').length,
+            environment: pending.filter((entity) => typeOf(entity) === 'environment').length,
+            environment_main: pending.filter((entity) => isReusableMainEnvironmentAsset(entity)).length,
+            prop: pending.filter((entity) => typeOf(entity) === 'prop').length,
+            poster: pending.filter((entity) => {
+                const entityType = typeOf(entity);
+                return entityType === 'poster' || entityType === 'cover_poster';
+            }).length,
+        };
+    }, [scopedEntities]);
+
     // Create Entity
     const [isAnalyzingEntity, setIsAnalyzingEntity] = useState(false);
 
@@ -6694,7 +6710,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
     }, [clearSubjectEntityImageLocally, confirmUiMessage, isSubjectImageActionLocked, onLog, selectedEntity, showSubjectNotification, t]);
 
-    const handleBatchGenerateEntities = async () => {
+    const matchesBatchGenerateSubjectType = (entity, subjectType) => {
+        if (!subjectType) return true;
+        if (subjectType === 'environment_main') {
+            return isReusableMainEnvironmentAsset(entity);
+        }
+        const entityType = String(entity?.type || entity?.entity_type || entity?.subject_type || '').trim().toLowerCase();
+        if (subjectType === 'character') return entityType === 'character';
+        if (subjectType === 'environment') return entityType === 'environment';
+        if (subjectType === 'prop') return entityType === 'prop';
+        if (subjectType === 'cover_poster' || subjectType === 'poster') {
+            return entityType === 'poster' || entityType === 'cover_poster';
+        }
+        return entityType === String(subjectType).trim().toLowerCase();
+    };
+
+    const handleBatchGenerateEntities = async (subjectType = null) => {
         const MIN_BATCH_IMAGE_PROMPT_CHARS = 5;
         const runtimeSnapshot = getSubjectBatchSnapshot();
         if (runtimeSnapshot?.generate?.running && runtimeSnapshot?.generate?.scopeKey === subjectBatchScopeKey) {
@@ -6702,17 +6733,44 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             return;
         }
 
+        const typesZh = {
+            character: '角色',
+            environment: '环境',
+            environment_main: '主环境',
+            prop: '道具',
+            cover_poster: '海报',
+            poster: '海报',
+        };
+        const typesEn = {
+            character: 'characters',
+            environment: 'environments',
+            environment_main: 'main environments',
+            prop: 'props',
+            cover_poster: 'posters',
+            poster: 'posters',
+        };
+        const categoryZh = subjectType ? (typesZh[subjectType] || subjectType) : '主体';
+        const categoryEn = subjectType ? (typesEn[subjectType] || subjectType) : 'subjects';
+
         // Respect episode scope selector: "当前分集" only queues this episode's entities.
-        const toGenerate = scopedEntities.filter(e => !e.image_url);
+        const toGenerate = scopedEntities.filter((e) => !e.image_url && matchesBatchGenerateSubjectType(e, subjectType));
         if (toGenerate.length === 0) {
-            alert(t('当前范围内主体均已有图片。', 'All entities in the current scope already have images!'));
+            if (subjectType === 'environment_main') {
+                alert(t('当前范围内没有可生图的主环境。', 'No main environments in the current scope need image generation.'));
+            } else if (subjectType) {
+                alert(t(`当前范围内${categoryZh}均已有图片。`, `All ${categoryEn} in the current scope already have images.`));
+            } else {
+                alert(t('当前范围内主体均已有图片。', 'All entities in the current scope already have images!'));
+            }
             return;
         }
 
+        const scopeZh = entityEpisodeScope === 'current' ? '当前分集中' : '整个项目中';
+        const scopeEn = entityEpisodeScope === 'current' ? 'current episode' : 'whole project';
         if (!await confirmUiMessage(
             t(
-                `将为${entityEpisodeScope === 'current' ? '当前分集中' : '整个项目中'} ${toGenerate.length} 个主体批量生图。系统按场景→场景内依赖→整体依赖排队，并发不超过账号权限 ${SUBJECT_BATCH_PARALLEL_LIMIT}；依赖未就绪会等待重检，并最多进行 5 轮重排重试。是否继续？`,
-                `Batch generate images for ${toGenerate.length} subjects in the ${entityEpisodeScope === 'current' ? 'current episode' : 'whole project'}. Queue: scene → within-scene deps → global deps; concurrency capped at account limit ${SUBJECT_BATCH_PARALLEL_LIMIT}. Dependency waiters are re-checked, with up to 5 re-queue rounds. Continue?`
+                `将为${scopeZh} ${toGenerate.length} 个${categoryZh}批量生图。系统按场景→场景内依赖→整体依赖排队，并发不超过账号权限 ${SUBJECT_BATCH_PARALLEL_LIMIT}；依赖未就绪会等待重检，并最多进行 5 轮重排重试。是否继续？`,
+                `Batch generate images for ${toGenerate.length} ${categoryEn} in the ${scopeEn}. Queue: scene → within-scene deps → global deps; concurrency capped at account limit ${SUBJECT_BATCH_PARALLEL_LIMIT}. Dependency waiters are re-checked, with up to 5 re-queue rounds. Continue?`
             )
         )) return;
 
@@ -7697,17 +7755,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             >
                                 <Stethoscope className="w-4 h-4" />
                             </button>
+                            <div className="relative group/batchgen">
                              <button 
-                                onClick={handleBatchGenerateEntities}
+                                onClick={() => handleBatchGenerateEntities(null)}
                                 disabled={isBatchGeneratingEntities || isBatchReconstructingEntities}
-                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none hover:border-primary/50 disabled:opacity-50 transition-colors whitespace-nowrap"
+                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none hover:border-primary/50 disabled:opacity-50 transition-colors whitespace-nowrap relative pr-6"
                                 title={t(
                                     entityEpisodeScope === 'current'
-                                        ? '批量生成当前分集实体（场景/依赖排队，最多5轮重排）'
-                                        : '批量生成整个项目实体（场景/依赖排队，最多5轮重排）',
+                                        ? '批量生成当前分集实体（可分类；场景/依赖排队，最多5轮重排）'
+                                        : '批量生成整个项目实体（可分类；场景/依赖排队，最多5轮重排）',
                                     entityEpisodeScope === 'current'
-                                        ? 'Batch generate current-episode entities (scene/dependency queue, up to 5 re-queue rounds)'
-                                        : 'Batch generate whole-project entities (scene/dependency queue, up to 5 re-queue rounds)'
+                                        ? 'Batch generate current-episode entities (by category; scene/dependency queue, up to 5 re-queue rounds)'
+                                        : 'Batch generate whole-project entities (by category; scene/dependency queue, up to 5 re-queue rounds)'
                                 )}
                             >
                                  {isBatchGeneratingEntities ? (
@@ -7715,7 +7774,47 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                  ) : (
                                      <span className="whitespace-nowrap">{t('批量生图', 'Batch Generate Images')}</span>
                                  )}
+                                 <ChevronDown size={14} className="absolute right-1 top-1/2 -translate-y-1/2 text-white/50" />
                             </button>
+                                <div className="absolute right-0 top-full mt-1 w-44 bg-[#1C1C1F] border border-white/10 rounded shadow-xl opacity-0 invisible group-hover/batchgen:opacity-100 group-hover/batchgen:visible group-focus-within/batchgen:opacity-100 group-focus-within/batchgen:visible transition-all z-[100] py-1">
+                                    <div
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-primary hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                                        onClick={() => handleBatchGenerateEntities(null)}
+                                    >
+                                        {t('生成所有实体', 'Generate All Entities')} ({pendingBatchGenerateCounts.all})
+                                    </div>
+                                    <div
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-primary hover:bg-white/5 cursor-pointer whitespace-nowrap border-t border-white/5"
+                                        onClick={() => handleBatchGenerateEntities('character')}
+                                    >
+                                        {t('仅生成角色', 'Generate Characters')} ({pendingBatchGenerateCounts.character})
+                                    </div>
+                                    <div
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-primary hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                                        onClick={() => handleBatchGenerateEntities('environment')}
+                                    >
+                                        {t('仅生成环境', 'Generate Environments')} ({pendingBatchGenerateCounts.environment})
+                                    </div>
+                                    <div
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-primary hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                                        onClick={() => handleBatchGenerateEntities('environment_main')}
+                                    >
+                                        {t('仅生成主环境', 'Generate Main ENVs')} ({pendingBatchGenerateCounts.environment_main})
+                                    </div>
+                                    <div
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-primary hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                                        onClick={() => handleBatchGenerateEntities('prop')}
+                                    >
+                                        {t('仅生成道具', 'Generate Props')} ({pendingBatchGenerateCounts.prop})
+                                    </div>
+                                    <div
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-primary hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                                        onClick={() => handleBatchGenerateEntities('cover_poster')}
+                                    >
+                                        {t('仅生成海报', 'Generate Posters')} ({pendingBatchGenerateCounts.poster})
+                                    </div>
+                                </div>
+                            </div>
                             <button
                                 onClick={handleStopSubjectBatchTasks}
                                 disabled={!hasRunningSubjectBatchTask || isStoppingBatchGenerateEntities}
