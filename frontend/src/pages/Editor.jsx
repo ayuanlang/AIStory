@@ -7,7 +7,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, LayoutList, Copy, Image as ImageIcon, FolderOpen, Maximize2, Info, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, ArrowUp, Sparkles, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, LayoutList, Copy, Image as ImageIcon, FolderOpen, Maximize2, Info, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, ArrowUp, Sparkles, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw, Home } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -214,6 +214,7 @@ const Editor = ({
     initialEditingShotId = null,
     initialEditingShotSceneId = null,
     readOnly = false,
+    promoHost = null,
 }) => {
     const functionApiConfigs = useFunctionApis();
     const params = useParams();
@@ -229,9 +230,12 @@ const Editor = ({
     const pendingInitialEpisodeIdRef = useRef(initialEpisodeId);
     const [isEpisodeMenuOpen, setIsEpisodeMenuOpen] = useState(false);
     const resolveInitialEditorTab = () => {
+        const urlTab = typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search).get('tab')
+            : '';
         const raw = initialActiveTab === 'ep_info' || initialActiveTab === 'market_research'
             ? 'overview'
-            : initialActiveTab;
+            : (initialActiveTab || urlTab);
         return normalizeEditorTab(raw || initialProject?.global_info?.workflow_stage || 'overview');
     };
     const [activeTab, setActiveTab] = useState(resolveInitialEditorTab);
@@ -3832,6 +3836,7 @@ const Editor = ({
         : t('选择剧集', 'Select Episode');
 
     const MENU_ITEMS = [
+    ...(promoHost ? [{ id: 'planner', label: t('策划方案', 'Planner'), icon: Sparkles }] : []),
     { id: 'overview', label: '项目信息', icon: Briefcase },
     { id: 'script', label: '剧本', icon: FileText },
     { id: 'subjects', label: '资产', icon: Users },
@@ -3902,6 +3907,10 @@ const Editor = ({
     const [tabResetKey, setTabResetKey] = useState(0);
 
     const navigateTopMenu = (item) => {
+        if (item.id === 'planner') {
+            promoHost?.onOpenPlanner?.();
+            return;
+        }
         if (item.id === activeTab) {
             setTabResetKey(prev => prev + 1);
             bumpTabMediaRefresh(item.id);
@@ -3947,7 +3956,12 @@ const Editor = ({
                      )}
                      <div className="flex items-center gap-3 md:gap-4 min-w-0 w-full md:w-auto">
                         <h1 className="font-bold text-sm tracking-wide text-white flex items-center gap-2 min-w-0">
-                            <span className="text-primary hover:underline cursor-pointer truncate">{project ? project.title : `Project #${id}`}</span>
+                            {promoHost ? (
+                                <span className="shrink-0 text-[10px] uppercase tracking-[0.16em] text-primary/80 font-semibold">
+                                    {t('商业宣传片', 'Promo')}
+                                </span>
+                            ) : null}
+                            <span className="text-primary hover:underline cursor-pointer truncate">{promoHost?.promoTitle || (project ? project.title : `Project #${id}`)}</span>
                             {isReadOnlyView && (
                                 <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-violet-500/25 text-violet-100 border border-violet-300/35">
                                     {t('只读', 'Read-only')}
@@ -4048,7 +4062,7 @@ const Editor = ({
 
                 {/* Right: Actions */}
                 <div className="flex items-center gap-2 md:gap-3 flex-wrap md:flex-nowrap justify-end w-full md:w-auto">
-                    {!isReadOnlyView && (
+                    {!isReadOnlyView && !promoHost && (
                     <button
                         onClick={() => {
                             trackMenuAction('editor.action.generator', t('生成器', 'Generator'), () => setActiveTab('generator'));
@@ -4069,6 +4083,31 @@ const Editor = ({
                         <Languages className="w-4 h-4" />
                         <span className="text-xs font-medium hidden sm:block">{uiLang === 'zh' ? '中文' : 'EN'}</span>
                     </button>
+                    <button
+                        onClick={() => trackMenuAction('editor.back.home', t('网站首页', 'Website Home'), () => navigate('/'))}
+                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
+                        title={t('网站首页', 'Website Home')}
+                    >
+                        <Home className="w-4 h-4" />
+                        <span className="text-xs font-medium hidden sm:block">{t('网站首页', 'Home')}</span>
+                    </button>
+                    {(() => {
+                        if (promoHost) return null;
+                        const fromPromo = typeof window !== 'undefined'
+                            ? Number(new URLSearchParams(window.location.search).get('from_promo') || 0)
+                            : 0;
+                        if (!fromPromo) return null;
+                        return (
+                            <button
+                                onClick={() => navigate(`/promo/${fromPromo}?tab=script`)}
+                                className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
+                                title={t('返回宣传片', 'Back to promo')}
+                            >
+                                <ArrowLeft className="w-4 h-4" />
+                                <span className="text-xs font-medium hidden sm:block">{t('返回宣传片', 'Back to promo')}</span>
+                            </button>
+                        );
+                    })()}
                     <button
                         onClick={() => {
                             trackMenuAction('editor.back.projects', t('返回项目', 'Back to Projects'), () => {

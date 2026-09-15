@@ -1233,7 +1233,165 @@ export const getMarketIntelReport = async (projectId, reportId) => {
     return response.data;
 }
 
-// Project Story Generator (Global/Project) draft input persistence (no LLM call)
+export const fetchPromoProjects = async (skip = 0, limit = 100) => {
+    const response = await api.get(`/promo-projects/`, { params: { skip, limit } });
+    return response.data;
+};
+
+export const createPromoProject = async (data) => {
+    const payload = { ...(data || {}), kind: 'promo' };
+    try {
+        const response = await api.post('/promo-projects', payload);
+        return response.data;
+    } catch (error) {
+        const status = Number(error?.response?.status || 0);
+        if (status === 404 || status === 405) {
+            const fallback = await api.post('/projects/', payload);
+            if (fallback?.data?.kind === 'promo') return fallback.data;
+            const createdId = Number(fallback?.data?.id || 0);
+            if (createdId > 0) {
+                try { await api.delete(`/projects/${createdId}`); } catch (_) { /* ignore rollback */ }
+            }
+            throw Object.assign(new Error('宣传片接口尚未加载，请重启后端调试后再创建'), {
+                response: { data: { detail: '宣传片接口尚未加载，请重启后端调试后再创建' } },
+            });
+        }
+        throw error;
+    }
+};
+
+export const fetchPromoProject = async (id) => {
+    const response = await api.get(`/promo-projects/${id}`);
+    return response.data;
+};
+
+export const updatePromoProject = async (id, data) => {
+    const response = await api.put(`/promo-projects/${id}`, data || {});
+    return response.data;
+};
+
+export const deletePromoProject = async (id) => {
+    const response = await api.delete(`/promo-projects/${id}`);
+    return response.data;
+};
+
+export const fetchPromoEnterprises = async (params = {}) => {
+    const response = await api.get(`/promo-enterprises/`, { params });
+    return response.data;
+};
+
+export const createPromoEnterprise = async (data) => {
+    const response = await api.post(`/promo-enterprises/`, data || {});
+    return response.data;
+};
+
+export const updatePromoEnterprise = async (id, data) => {
+    const response = await api.put(`/promo-enterprises/${id}`, data || {});
+    return response.data;
+};
+
+export const deletePromoEnterprise = async (id) => {
+    const response = await api.delete(`/promo-enterprises/${id}`);
+    return response.data;
+};
+
+export const fetchPromoBrands = async (params = {}) => {
+    const response = await api.get(`/promo-brands/`, { params });
+    return response.data;
+};
+
+export const createPromoBrand = async (data) => {
+    const response = await api.post(`/promo-brands/`, data || {});
+    return response.data;
+};
+
+export const updatePromoBrand = async (id, data) => {
+    const response = await api.put(`/promo-brands/${id}`, data || {});
+    return response.data;
+};
+
+export const deletePromoBrand = async (id) => {
+    const response = await api.delete(`/promo-brands/${id}`);
+    return response.data;
+};
+
+export const fetchPromoCatalogAssets = async (params = {}) => {
+    const response = await api.get(`/promo-catalog-assets/`, { params });
+    return response.data;
+};
+
+export const createPromoCatalogAsset = async (data) => {
+    const response = await api.post(`/promo-catalog-assets/`, data || {});
+    return response.data;
+};
+
+export const updatePromoCatalogAsset = async (id, data) => {
+    const response = await api.put(`/promo-catalog-assets/${id}`, data || {});
+    return response.data;
+};
+
+export const deletePromoCatalogAsset = async (id) => {
+    const response = await api.delete(`/promo-catalog-assets/${id}`);
+    return response.data;
+};
+
+export const fetchPromoProducts = async (params = {}) => {
+    const response = await api.get(`/promo-products/`, { params });
+    return response.data;
+};
+
+export const createPromoProduct = async (data) => {
+    const response = await api.post(`/promo-products/`, data || {});
+    return response.data;
+};
+
+export const updatePromoProduct = async (id, data) => {
+    const response = await api.put(`/promo-products/${id}`, data || {});
+    return response.data;
+};
+
+export const deletePromoProduct = async (id) => {
+    const response = await api.delete(`/promo-products/${id}`);
+    return response.data;
+};
+
+export const generatePromoProjectPlanner = async (projectId, payload) => {
+    return await asyncLLMPost(`/promo-projects/${projectId}/planner/generate`, withScriptAnalysisApiPayload(payload));
+};
+
+export const generatePromoProjectScript = async (projectId, payload) => {
+    return await asyncLLMPost(`/promo-projects/${projectId}/scripts/generate`, withScriptAnalysisApiPayload(payload || {}));
+};
+
+export const fetchPromoProjectScript = async (projectId) => {
+    const response = await api.get(`/promo-projects/${projectId}/script`);
+    return response.data;
+};
+
+export const ensurePromoProjectScript = async (projectId) => {
+    const response = await api.post(`/promo-projects/${projectId}/script/ensure`);
+    return response.data;
+};
+
+export const savePromoProjectScript = async (projectId, payload) => {
+    const response = await api.put(`/promo-projects/${projectId}/script`, payload || {});
+    return response.data;
+};
+
+export const savePromoProjectPlannerInput = async (projectId, payload) => {
+    const response = await api.put(`/promo-projects/${projectId}/planner/input`, payload || {});
+    return response.data;
+};
+
+export const savePromoProjectPlannerResult = async (projectId, payload) => {
+    const response = await api.put(`/promo-projects/${projectId}/planner/result`, payload || {});
+    return response.data;
+};
+
+export const generateProjectPromoPlanner = generatePromoProjectPlanner;
+export const saveProjectPromoPlannerInput = savePromoProjectPlannerInput;
+export const saveProjectPromoPlannerResult = savePromoProjectPlannerResult;
+
 export const saveProjectStoryGeneratorGlobalInput = async (projectId, payload) => {
     const response = await api.put(`/projects/${projectId}/story_generator/global/input`, payload);
     return response.data;

@@ -3,9 +3,15 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     api,
     fetchProjects,
+    fetchPromoProjects,
     createProject,
+    createPromoProject,
+    fetchPromoBrands,
+    fetchPromoEnterprises,
+    fetchPromoProducts,
     createEpisode,
     updateProject,
+    deletePromoProject,
     getSettings,
     updateSetting,
     getSettingDefaults,
@@ -36,10 +42,12 @@ import {
 } from '../services/api';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import Editor from './Editor';
+import PromoEditor from './PromoEditor';
 import InputGroup from './editor/components/InputGroup';
 import SettingsPage from './Settings';
 import AssetsLibrary from '../components/AssetsLibrary';
 import KnowledgeLibrary from '../components/KnowledgeLibrary';
+import PromoCatalogManager, { clearPromoCatalogFocus, readPromoCatalogFocus, writePromoCatalogFocus } from './PromoCatalogManager';
 import { ProjectOverview } from './editor/components/ProjectOverview';
 import { 
     Plus, 
@@ -78,6 +86,8 @@ import {
     Eye,
     EyeOff,
     BookOpen,
+    Building2,
+    Home,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -377,7 +387,7 @@ const pickPreferredOrFirst = (options, preferred = '') => {
 
 const normalizeProjectCreateOptions = (payload) => {
     const safe = payload && typeof payload === 'object' ? payload : {};
-    const type = uniqueNonEmptyStrings(safe.type);
+    const type = uniqueNonEmptyStrings(safe.type).filter((item) => !/宣传|Promotion/i.test(String(item || '')));
     const countryRegion = uniqueNonEmptyStrings(safe.country_region);
     const language = uniqueNonEmptyStrings(safe.language);
     const basePositioning = uniqueNonEmptyStrings([
@@ -491,6 +501,10 @@ const createDefaultReviewRoundForm = () => ({
     entity_required: true,
     shot_required: true,
 });
+
+const getProjectKind = (project) => (project?.kind === 'promo' ? 'promo' : 'story');
+const getProjectKey = (project) => `${getProjectKind(project)}:${Number(project?.id) || 0}`;
+const isPromoProject = (project) => getProjectKind(project) === 'promo';
 
 const sortProjectsNewestFirst = (items = []) => {
     const safeList = Array.isArray(items) ? [...items] : [];
@@ -630,6 +644,15 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [isCreatingProjectSubmit, setIsCreatingProjectSubmit] = useState(false);
     const [isProjectBackupImporting, setIsProjectBackupImporting] = useState(false);
     const [newTitle, setNewTitle] = useState('');
+    const [newProjectKind, setNewProjectKind] = useState('story');
+    const [promoEnterprises, setPromoEnterprises] = useState([]);
+    const [promoProducts, setPromoProducts] = useState([]);
+    const [newPromoEnterpriseId, setNewPromoEnterpriseId] = useState('');
+    const [newPromoBrandId, setNewPromoBrandId] = useState('');
+    const [newPromoProductId, setNewPromoProductId] = useState('');
+    const [promoBrands, setPromoBrands] = useState([]);
+    const [promoCatalogFocus, setPromoCatalogFocus] = useState(null);
+    const [promoCatalogReturn, setPromoCatalogReturn] = useState(null);
     const [newDescription, setNewDescription] = useState('');
   const [newHasExistingAssets, setNewHasExistingAssets] = useState(false);
     const [newShareUsers, setNewShareUsers] = useState('');
@@ -666,6 +689,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [activeTab, setActiveTab] = useState(initialTab);
     const [selectedProject, setSelectedProject] = useState(null);
     const [selectedProjectId, setSelectedProjectId] = useState(null);
+    const [selectedProjectKind, setSelectedProjectKind] = useState('story');
     const [restoredEditorState, setRestoredEditorState] = useState(null);
     const [assetsScopeSnapshot, setAssetsScopeSnapshot] = useState(null);
     const [marketResearchProjectId, setMarketResearchProjectId] = useState(() => {
@@ -679,6 +703,64 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     });
     const [currentUser, setCurrentUser] = useState(null); // Simple user state to check permissions if we had endpoint
     const navigate = useNavigate();
+
+    const pendingCatalogOpenRef = useRef(false);
+    const openPromoCatalog = useCallback((focus = {}) => {
+        const nextFocus = { ...focus, key: Date.now() };
+        writePromoCatalogFocus(nextFocus);
+        setPromoCatalogFocus(nextFocus);
+        setPromoCatalogReturn({
+            returnProjectId: focus.returnProjectId || null,
+            returnPath: focus.returnPath || '',
+            returnCreateForm: !!focus.returnCreateForm,
+            project: focus.returnProject || null,
+        });
+        if (!focus.returnCreateForm) {
+            setSelectedProjectId(null);
+            setSelectedProject(null);
+            setSelectedProjectKind('story');
+        }
+        setActiveTab('promo_catalog');
+    }, []);
+
+    useEffect(() => {
+        const stored = readPromoCatalogFocus();
+        if (!stored) return;
+        pendingCatalogOpenRef.current = true;
+        openPromoCatalog(stored);
+    }, [openPromoCatalog]);
+
+    useEffect(() => {
+        if (activeTab === 'promo_catalog' && pendingCatalogOpenRef.current) {
+            pendingCatalogOpenRef.current = false;
+        }
+        if (activeTab === 'projects' && !pendingCatalogOpenRef.current) {
+            clearPromoCatalogFocus();
+        }
+    }, [activeTab]);
+
+    const handleReturnFromCatalog = useCallback(() => {
+        clearPromoCatalogFocus();
+        const ret = promoCatalogReturn || {};
+        if (ret.returnPath && String(ret.returnPath).startsWith('/promo/')) {
+            navigate(ret.returnPath);
+            return;
+        }
+        if (ret.returnCreateForm) {
+            setIsCreating(true);
+            setNewProjectKind('promo');
+            setActiveTab('projects');
+            return;
+        }
+        if (ret.returnProjectId) {
+            setSelectedProject(ret.project ? { ...ret.project, kind: 'promo' } : null);
+            setSelectedProjectKind('promo');
+            setSelectedProjectId(ret.returnProjectId);
+            setActiveTab('projects');
+            return;
+        }
+        setActiveTab('projects');
+    }, [navigate, promoCatalogReturn]);
 
     // Theme Logic - Moved to Parent for persistence on reload
     const [currentTheme, setCurrentTheme] = useState('default');
@@ -775,6 +857,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     }, []);
 
     useEffect(() => {
+        if (pendingCatalogOpenRef.current) return;
         if (initialTab === 'projects' || initialTab === 'assets' || initialTab === 'settings') {
             setActiveTab(initialTab);
             setSelectedProjectId(null);
@@ -785,10 +868,13 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         if (location.pathname === '/settings') {
             setActiveTab('settings');
             setSelectedProjectId(null);
-        } else if (location.pathname === '/projects' && initialTab === 'projects') {
+            return;
+        }
+        if (location.pathname === '/projects' && initialTab === 'projects') {
+            if (pendingCatalogOpenRef.current) return;
             setActiveTab('projects');
         }
-    }, [location.pathname, initialTab]);
+    }, [initialTab, location.pathname]);
 
     useEffect(() => {
         if (location.pathname !== '/projects') {
@@ -890,17 +976,23 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         try {
             const currentObjPage = isLoadMore ? projectPage + 1 : 0;
             const currentLimit = isLoadMore ? PROJECT_LIMIT : (projectPage + 1) * PROJECT_LIMIT;
-            const data = await fetchProjects(isLoadMore ? currentObjPage * PROJECT_LIMIT : 0, currentLimit);
+            const [storyData, promoData] = await Promise.all([
+                fetchProjects(isLoadMore ? currentObjPage * PROJECT_LIMIT : 0, currentLimit),
+                isLoadMore ? Promise.resolve([]) : fetchPromoProjects(0, 200).catch(() => []),
+            ]);
+            const storyRows = (Array.isArray(storyData) ? storyData : []).map((item) => ({ ...item, kind: 'story' }));
+            const promoRows = (Array.isArray(promoData) ? promoData : []).map((item) => ({ ...item, kind: 'promo' }));
+            const data = isLoadMore ? storyRows : [...promoRows, ...storyRows];
             const sorted = sortProjectsNewestFirst(data);
             
             if (isLoadMore) {
-                if (data.length < PROJECT_LIMIT) {
+                if (storyRows.length < PROJECT_LIMIT) {
                     setHasMoreProjects(false);
                 } else {
                     setHasMoreProjects(true);
                 }
             } else {
-                if (data.length < currentLimit) {
+                if (storyRows.length < currentLimit) {
                     setHasMoreProjects(false);
                 } else {
                     setHasMoreProjects(true);
@@ -913,19 +1005,19 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                 setProjects(prev => {
                     const tempViews = prev.filter((item) => item?.is_temp_view);
                     const nonTempPrev = prev.filter((item) => !item?.is_temp_view);
-                    const incomingIds = new Set(sorted.map((item) => Number(item?.id)));
+                    const incomingKeys = new Set(sorted.map((item) => getProjectKey(item)));
                     const mergedMembership = [
-                        ...nonTempPrev.filter((item) => !incomingIds.has(Number(item?.id))),
+                        ...nonTempPrev.filter((item) => !incomingKeys.has(getProjectKey(item))),
                         ...sorted,
                     ];
-                    const membershipIds = new Set(mergedMembership.map((item) => Number(item?.id)));
-                    const retainedTemp = tempViews.filter((item) => !membershipIds.has(Number(item?.id)));
+                    const membershipKeys = new Set(mergedMembership.map((item) => getProjectKey(item)));
+                    const retainedTemp = tempViews.filter((item) => !membershipKeys.has(getProjectKey(item)));
                     allProjects = [...retainedTemp, ...mergedMembership];
                     return allProjects;
                 });
             } else {
                 const membershipIds = new Set(
-                    sorted.map((item) => Number(item?.id)).filter((id) => Number.isFinite(id) && id > 0)
+                    storyRows.map((item) => Number(item?.id)).filter((id) => Number.isFinite(id) && id > 0)
                 );
                 // Drop temp-view ids that the user already owns or has shared access to.
                 let storedTempIds = readTempViewProjectIds().filter((id) => !membershipIds.has(id));
@@ -1051,10 +1143,11 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
 
     useEffect(() => {
         if (activeTab !== 'market_research' || !projects.length) return;
+        const storyProjects = projects.filter((item) => !isPromoProject(item));
         const exists = marketResearchProjectId
-            && projects.some((item) => Number(item?.id) === Number(marketResearchProjectId));
+            && storyProjects.some((item) => Number(item?.id) === Number(marketResearchProjectId));
         if (exists) return;
-        const firstId = Number(projects[0]?.id) || null;
+        const firstId = Number(storyProjects[0]?.id) || null;
         if (!firstId) return;
         setMarketResearchProjectId(firstId);
         try {
@@ -1083,8 +1176,45 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         };
     }, [activeTab, selectedProjectId, loadProjects]);
 
+    useEffect(() => {
+        if (!isCreating || newProjectKind !== 'promo') return undefined;
+        let cancelled = false;
+        (async () => {
+            try {
+                const enterpriseRows = await fetchPromoEnterprises().catch(() => []);
+                if (cancelled) return;
+                setPromoEnterprises(Array.isArray(enterpriseRows) ? enterpriseRows : []);
+                if (newPromoEnterpriseId) {
+                    const brandRows = await fetchPromoBrands({ enterprise_id: Number(newPromoEnterpriseId) }).catch(() => []);
+                    if (cancelled) return;
+                    setPromoBrands(Array.isArray(brandRows) ? brandRows : []);
+                    const productQuery = newPromoBrandId
+                        ? { brand_id: Number(newPromoBrandId) }
+                        : { enterprise_id: Number(newPromoEnterpriseId) };
+                    const productRows = await fetchPromoProducts(productQuery).catch(() => []);
+                    if (!cancelled) setPromoProducts(Array.isArray(productRows) ? productRows : []);
+                } else {
+                    setPromoBrands([]);
+                    setPromoProducts([]);
+                }
+            } catch {
+                if (!cancelled) {
+                    setPromoEnterprises([]);
+                    setPromoBrands([]);
+                    setPromoProducts([]);
+                }
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [activeTab, isCreating, newProjectKind, newPromoBrandId, newPromoEnterpriseId]);
+
     const resetCreateProjectForm = () => {
         setNewTitle('');
+        setNewProjectKind('story');
+        setNewPromoEnterpriseId('');
+        setNewPromoBrandId('');
+        setNewPromoProductId('');
+        setPromoBrands([]);
         setNewDescription('');
         setNewShareUsers('');
         setNewReviewerUsers('');
@@ -1124,6 +1254,33 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         if (!title) {
             setToast({ type: 'error', message: t('项目名称为必输项', 'Project Title is required') });
             setTimeout(() => setToast(null), 3000);
+            return;
+        }
+        if (newProjectKind === 'promo') {
+            setIsCreatingProjectSubmit(true);
+            try {
+                const created = await createPromoProject({
+                    title,
+                    description: String(newDescription || '').trim() || undefined,
+                    enterprise_id: Number(newPromoEnterpriseId) || null,
+                    brand_id: Number(newPromoBrandId) || null,
+                    product_id: Number(newPromoProductId) || null,
+                });
+                resetCreateProjectForm();
+                setIsCreating(false);
+                loadProjects();
+                if (created?.id) {
+                    setSelectedProject({ ...created, kind: 'promo' });
+                    setSelectedProjectKind('promo');
+                    setSelectedProjectId(created.id);
+                }
+            } catch (error) {
+                console.error('Failed to create promo project', error);
+                setToast({ type: 'error', message: error?.response?.data?.detail || t('创建项目失败，请重试', 'Failed to create project, please try again') });
+                setTimeout(() => setToast(null), 3000);
+            } finally {
+                setIsCreatingProjectSubmit(false);
+            }
             return;
         }
         if (!String(newType || '').trim()) {
@@ -1217,6 +1374,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         loadProjects();
         
         if (targetProjectId && newScriptText.trim()) {
+            setSelectedProjectKind('story');
             setSelectedProjectId(targetProjectId);
         }
         } catch (error) {
@@ -1283,6 +1441,13 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         } finally {
             setIsProjectBackupImporting(false);
         }
+    };
+
+    const goWebsiteHome = () => {
+        trackMenuAction('project_list.website_home', t('网站首页', 'Website Home'), () => {
+            clearPromoCatalogFocus();
+            navigate('/');
+        });
     };
 
     const handleLogout = () => {
@@ -1415,15 +1580,20 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         }
     };
 
-    const handleDeleteProject = async (e, projectId) => {
+    const handleDeleteProject = async (e, project) => {
         e.stopPropagation(); // Prevent opening the project
+        const projectId = Number(project?.id || project);
         if (!await confirmUiMessage(t(
             '确定要删除这个项目吗？项目将被标记为已删除并从列表中隐藏，数据仍保留在数据库中。',
             'Are you sure you want to delete this project? It will be marked as deleted and hidden from the list; data will remain in the database.'
         ))) return;
         
         try {
-            await deleteProject(projectId);
+            if (isPromoProject(project) || selectedProjectKind === 'promo') {
+                await deletePromoProject(projectId);
+            } else {
+                await deleteProject(projectId);
+            }
             setToast({ type: 'success', message: t('项目删除成功', 'Project deleted successfully') });
             setTimeout(() => setToast(null), 3000);
             loadProjects(); // Refresh list
@@ -1515,6 +1685,9 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
 
     const getProjectShareCountText = (project) => {
         if (!project) return '';
+        if (isPromoProject(project)) {
+            return t('商业宣传片项目', 'Commercial promo project');
+        }
         if (isTempViewProject(project)) {
             return t(`临时只读查看 · 项目号 #${project.id}`, `Temporary read-only view · Project #${project.id}`);
         }
@@ -1625,6 +1798,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
     };
 
     const handleOpenShareModal = async (event, project) => {
+        if (isPromoProject(project)) return;
         event.stopPropagation();
         if (!isProjectOwner(project)) return;
         setShareModalProject(project);
@@ -1916,7 +2090,9 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
 
     const activeTabTitle = activeTab === 'projects'
         ? t('我的项目', 'My Projects')
-        : activeTab === 'assets'
+        : activeTab === 'promo_catalog'
+            ? t('宣传主体', 'Promo Catalog')
+            : activeTab === 'assets'
             ? t('素材库', 'Assets Library')
             : activeTab === 'knowledge'
                 ? t('知识库', 'Knowledge Base')
@@ -1930,7 +2106,9 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
 
     const activeTabDescription = activeTab === 'projects'
         ? t('管理和编辑你的分镜脚本。', 'Manage and edit your storyboard scripts.')
-        : activeTab === 'assets'
+        : activeTab === 'promo_catalog'
+            ? t('管理企业、品牌、产品与服务及其图片/视频素材，供商业宣传片项目引用。', 'Manage enterprises, brands, offerings and their image/video assets for promo projects.')
+            : activeTab === 'assets'
             ? t('管理你生成的角色和场景素材。', 'Manage your generated characters and scenes.')
             : activeTab === 'knowledge'
                 ? t('肖像、服饰、美景与剧情经典参考，经审核后供创作检索。', 'Classic portrait, costume, scenery and plot references for creative retrieval after review.')
@@ -2004,6 +2182,12 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                     setActiveTab(id);
                     setRestoredEditorState(null);
                     setSelectedProjectId(null);
+                    if (id === 'promo_catalog') {
+                        setPromoCatalogReturn(null);
+                        setPromoCatalogFocus((prev) => (prev ? { ...prev, action: '', kind: '' } : null));
+                    } else {
+                        clearPromoCatalogFocus();
+                    }
                 });
             }}
         />
@@ -2011,16 +2195,33 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
 
     // If a project is selected, show the full-screen Editor immediately
     if (selectedProjectId) {
+        const closeSelected = (snapshot = null) => {
+            setSelectedProject(null);
+            setSelectedProjectId(null);
+            setSelectedProjectKind('story');
+            setRestoredEditorState(snapshot || null);
+        };
+        if (selectedProjectKind === 'promo' || isPromoProject(selectedProject)) {
+            return (
+                <PromoEditor
+                    projectId={selectedProjectId}
+                    initialProject={selectedProject}
+                    readOnly={isTempViewProject(selectedProject)}
+                    onClose={() => closeSelected(null)}
+                    onOpenCatalog={(focus) => openPromoCatalog({
+                        ...focus,
+                        returnProjectId: selectedProjectId,
+                        returnProject: selectedProject,
+                    })}
+                />
+            );
+        }
         return (
             <Editor
                 projectId={selectedProjectId}
                 initialProject={selectedProject}
                 readOnly={isTempViewProject(selectedProject)}
-                onClose={(snapshot = null) => {
-                    setSelectedProject(null);
-                    setSelectedProjectId(null);
-                    setRestoredEditorState(snapshot || null);
-                }}
+                onClose={closeSelected}
                 initialActiveTab={restoredEditorState?.activeTab}
                 initialEpisodeId={restoredEditorState?.activeEpisodeId ?? null}
                 initialEditingShotId={restoredEditorState?.editingShotId ?? null}
@@ -2047,10 +2248,15 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
             {/* Sidebar */}
             <aside className={`${isSidebarCollapsed ? 'w-20 p-3' : 'w-64 p-6'} hidden md:flex border-r bg-card/30 flex-col transition-all duration-300`}>
                 <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between'} mb-6 px-1`}>
-                    <div className={`flex items-center gap-2 ${isSidebarCollapsed ? 'justify-center' : ''}`}>
+                    <button
+                        type="button"
+                        onClick={goWebsiteHome}
+                        title={t('网站首页', 'Website Home')}
+                        className={`flex items-center gap-2 ${isSidebarCollapsed ? 'justify-center' : ''} hover:opacity-90 transition-opacity`}
+                    >
                     <img src="/woola-transparent.png?v=4" alt="Woola Story" className="w-8 h-8 object-contain" />
                         {!isSidebarCollapsed && <span className="text-xl font-bold tracking-tight">Woola Story</span>}
-                    </div>
+                    </button>
                     {!isSidebarCollapsed && (
                         <button
                             type="button"
@@ -2077,6 +2283,12 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                 )}
 
                 <div className="space-y-2 flex-1">
+                    <SidebarActionItem
+                        icon={Home}
+                        label={t('网站首页', 'Website Home')}
+                        compact={isSidebarCollapsed}
+                        onClick={goWebsiteHome}
+                    />
                     <SidebarItem id="projects" icon={Folder} label={t('我的项目', 'My Projects')} badgeCount={totalUnreadReviewCount} />
                     <SidebarActionItem
                         icon={RotateCcw}
@@ -2084,6 +2296,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                         compact={isSidebarCollapsed}
                         onClick={openTrashModal}
                     />
+                    <SidebarItem id="promo_catalog" icon={Building2} label={t('宣传主体', 'Promo Catalog')} />
                     <SidebarItem id="assets" icon={Image} label={t('素材库', 'Assets Library')} />
                     <SidebarItem id="knowledge" icon={BookOpen} label={t('知识库', 'Knowledge Base')} />
                     <SidebarItem id="market_research" icon={TrendingUp} label={t('行业分析', 'Industry')} />
@@ -2140,13 +2353,21 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
 
             <aside className={`fixed inset-y-0 left-0 z-50 w-[min(88vw,22rem)] border-r border-white/10 bg-card/95 backdrop-blur-xl flex flex-col p-5 transition-transform duration-300 md:hidden ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
                 <div className="flex items-center justify-between mb-6 gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setIsMobileSidebarOpen(false);
+                            goWebsiteHome();
+                        }}
+                        title={t('网站首页', 'Website Home')}
+                        className="flex items-center gap-3 min-w-0 text-left hover:opacity-90 transition-opacity"
+                    >
                         <img src="/woola-transparent.png?v=4" alt="Woola Story" className="w-8 h-8 object-contain" />
                         <div className="min-w-0">
                             <div className="font-semibold truncate">Woola Story</div>
-                            <div className="text-xs text-muted-foreground truncate">{activeTabTitle}</div>
+                            <div className="text-xs text-muted-foreground truncate">{t('网站首页', 'Website Home')}</div>
                         </div>
-                    </div>
+                    </button>
                     <button
                         type="button"
                         onClick={() => setIsMobileSidebarOpen(false)}
@@ -2158,7 +2379,15 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                 </div>
 
                 <div className="space-y-2 flex-1 overflow-y-auto pr-1">
+                    <SidebarActionItem
+                        icon={Home}
+                        label={t('网站首页', 'Website Home')}
+                        compact={false}
+                        mobile
+                        onClick={goWebsiteHome}
+                    />
                     <SidebarItem id="projects" icon={Folder} label={t('我的项目', 'My Projects')} compact={false} mobile badgeCount={totalUnreadReviewCount} />
+                    <SidebarItem id="promo_catalog" icon={Building2} label={t('宣传主体', 'Promo Catalog')} compact={false} mobile />
                     <SidebarItem id="assets" icon={Image} label={t('素材库', 'Assets Library')} compact={false} mobile />
                     <SidebarItem id="knowledge" icon={BookOpen} label={t('知识库', 'Knowledge Base')} compact={false} mobile />
                     <SidebarItem id="market_research" icon={TrendingUp} label={t('行业分析', 'Industry')} compact={false} mobile />
@@ -2389,7 +2618,21 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                     animate={{ opacity: 1, y: 0 }}
                                     className="h-full flex-1"
                                 >
-                                    <Editor projectId={selectedProjectId} initialProject={selectedProject} readOnly={isTempViewProject(selectedProject)} onClose={(snapshot = null) => { setSelectedProjectId(null); setSelectedProject(null); setRestoredEditorState(snapshot || null); }} />
+                                    {selectedProjectKind === 'promo' || isPromoProject(selectedProject) ? (
+                                        <PromoEditor
+                                            projectId={selectedProjectId}
+                                            initialProject={selectedProject}
+                                            readOnly={isTempViewProject(selectedProject)}
+                                            onClose={() => { setSelectedProjectId(null); setSelectedProject(null); setSelectedProjectKind('story'); setRestoredEditorState(null); }}
+                                            onOpenCatalog={(focus) => openPromoCatalog({
+                                                ...focus,
+                                                returnProjectId: selectedProjectId,
+                                                returnProject: selectedProject,
+                                            })}
+                                        />
+                                    ) : (
+                                        <Editor projectId={selectedProjectId} initialProject={selectedProject} readOnly={isTempViewProject(selectedProject)} onClose={(snapshot = null) => { setSelectedProjectId(null); setSelectedProject(null); setSelectedProjectKind('story'); setRestoredEditorState(snapshot || null); }} />
+                                    )}
                                 </motion.div>
                             ) : (
                             <>
@@ -2401,7 +2644,23 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                     >
                                         <div className="mb-4 pb-3 border-b border-white/10">
                                             <h3 className="text-lg sm:text-xl font-bold tracking-wide text-white">{t('新建项目', 'Create Project')}</h3>
-                                            <p className="text-xs sm:text-sm text-muted-foreground mt-1">{t('先填写核心字段，协作设置可按需展开。', 'Fill core fields first, and expand collaboration settings when needed.')}</p>
+                                            <p className="text-xs sm:text-sm text-muted-foreground mt-1">{t('先选择项目类型，再填写对应字段。', 'Choose the project kind first, then fill the matching fields.')}</p>
+                                            <div className="mt-3 flex flex-wrap gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setNewProjectKind('story')}
+                                                    className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${newProjectKind === 'story' ? 'bg-white text-black border-white' : 'bg-white/5 text-white/80 border-white/15 hover:bg-white/10'}`}
+                                                >
+                                                    {t('剧本项目', 'Script Project')}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setNewProjectKind('promo')}
+                                                    className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${newProjectKind === 'promo' ? 'bg-primary text-black border-primary' : 'bg-white/5 text-white/80 border-white/15 hover:bg-white/10'}`}
+                                                >
+                                                    {t('商业宣传片', 'Commercial Promo')}
+                                                </button>
+                                            </div>
                                         </div>
 
                                         <label className="block text-sm font-semibold tracking-wide text-primary mb-2">{t('项目标题', 'Project Title')}</label>
@@ -2427,6 +2686,116 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                             }} className="px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg font-medium hover:bg-secondary/80">{t('取消', 'Cancel')}</button>
                                         </div>
 
+                                        {newProjectKind === 'promo' ? (
+                                            <div className="mb-4 space-y-3">
+                                                <p className="text-xs text-muted-foreground">
+                                                    {t('项目只选择已有主体。新增或改资料请到宣传主体。', 'This project only selects existing catalog records. Create or edit them in Promo Catalog.')}
+                                                </p>
+                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                    {[
+                                                        {
+                                                            key: 'enterprise',
+                                                            label: t('企业', 'Enterprise'),
+                                                            value: newPromoEnterpriseId,
+                                                            options: promoEnterprises,
+                                                            disabled: false,
+                                                            empty: t('稍后在项目里选择', 'Choose later in the project'),
+                                                            onChange: (nextId) => {
+                                                                setNewPromoEnterpriseId(nextId);
+                                                                setNewPromoBrandId('');
+                                                                setNewPromoProductId('');
+                                                                setPromoBrands([]);
+                                                                setPromoProducts([]);
+                                                            },
+                                                            editDisabled: !newPromoEnterpriseId,
+                                                            createDisabled: false,
+                                                        },
+                                                        {
+                                                            key: 'brand',
+                                                            label: t('品牌（归属企业）', 'Brand (belongs to enterprise)'),
+                                                            value: newPromoBrandId,
+                                                            options: promoBrands,
+                                                            disabled: !newPromoEnterpriseId,
+                                                            empty: t('稍后在项目里选择', 'Choose later in the project'),
+                                                            onChange: (nextId) => {
+                                                                setNewPromoBrandId(nextId);
+                                                                setNewPromoProductId('');
+                                                            },
+                                                            editDisabled: !newPromoBrandId,
+                                                            createDisabled: !newPromoEnterpriseId,
+                                                        },
+                                                        {
+                                                            key: 'offering',
+                                                            label: t('产品与服务（归属品牌）', 'Product / service (belongs to brand)'),
+                                                            value: newPromoProductId,
+                                                            options: promoProducts,
+                                                            disabled: !newPromoBrandId,
+                                                            empty: t('稍后在项目里选择', 'Choose later in the project'),
+                                                            onChange: setNewPromoProductId,
+                                                            editDisabled: !newPromoProductId,
+                                                            createDisabled: !newPromoBrandId,
+                                                        },
+                                                    ].map((row) => (
+                                                        <div key={`create-catalog-${row.key}`}>
+                                                            <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{row.label}</label>
+                                                            <div className="flex flex-col gap-2">
+                                                                <select
+                                                                    className="w-full px-3 py-2.5 bg-background border border-white/15 rounded-lg outline-none"
+                                                                    value={row.value}
+                                                                    disabled={row.disabled}
+                                                                    onChange={(e) => row.onChange(e.target.value)}
+                                                                >
+                                                                    <option value="">{row.empty}</option>
+                                                                    {row.options.map((item) => (
+                                                                        <option key={`create-${row.key}-${item.id}`} value={String(item.id)}>{item.name}</option>
+                                                                    ))}
+                                                                </select>
+                                                                <div className="flex gap-2">
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={row.editDisabled}
+                                                                        onClick={() => openPromoCatalog({
+                                                                            enterpriseId: newPromoEnterpriseId,
+                                                                            brandId: newPromoBrandId,
+                                                                            productId: newPromoProductId,
+                                                                            kind: row.key,
+                                                                            action: 'edit',
+                                                                            returnCreateForm: true,
+                                                                        })}
+                                                                        className="flex-1 px-3 py-2 rounded-lg text-xs font-bold bg-white/10 hover:bg-white/20 disabled:opacity-40 flex items-center justify-center gap-1"
+                                                                    >
+                                                                        <Edit2 className="w-3 h-3" /> {t('编辑', 'Edit')}
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={row.createDisabled}
+                                                                        onClick={() => openPromoCatalog({
+                                                                            enterpriseId: newPromoEnterpriseId,
+                                                                            brandId: newPromoBrandId,
+                                                                            productId: newPromoProductId,
+                                                                            kind: row.key,
+                                                                            action: 'create',
+                                                                            returnCreateForm: true,
+                                                                        })}
+                                                                        className="flex-1 px-3 py-2 rounded-lg text-xs font-bold bg-white/10 hover:bg-white/20 disabled:opacity-40 flex items-center justify-center gap-1"
+                                                                    >
+                                                                        <Plus className="w-3 h-3" /> {t('新增', 'New')}
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('项目说明', 'Description')}</label>
+                                                <textarea
+                                                    className="w-full px-3 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none min-h-[6rem]"
+                                                    value={newDescription}
+                                                    onChange={(e) => setNewDescription(e.target.value)}
+                                                    placeholder={t('可选：品牌、产品或本片目标', 'Optional: brand, product, or campaign goal')}
+                                                />
+                                            </div>
+                                        ) : (
+                                        <>
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
                                             <div>
                                                 <InputGroup label={t("类型", "Type")} value={newType} onChange={setNewType} list={projectCreateOptions.type} />
@@ -2611,6 +2980,8 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 )}
                                             </AnimatePresence>
                                         </div>
+                                        </>
+                                        )}
 
 
 
@@ -2656,8 +3027,9 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                             <div onClick={() => {
                                                 setRestoredEditorState(null);
                                                 setSelectedProject(p);
+                                                setSelectedProjectKind(getProjectKind(p));
                                                 setSelectedProjectId(p.id);
-                                            }} key={p.id} className="cursor-pointer">
+                                            }} key={getProjectKey(p)} className="cursor-pointer">
                                                 <motion.div 
                                                     whileHover={{ y: -8, scale: 1.02 }}
                                                     transition={{ type: "spring", stiffness: 300, damping: 20 }}
@@ -2697,6 +3069,11 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                                 ? t('临时查看', 'Temp View')
                                                                 : (isProjectOwner(p) ? t('主理人', 'Owner') : t('共享', 'Shared'))}
                                                         </div>
+                                                        {isPromoProject(p) && (
+                                                            <div className="inline-flex items-center text-[10px] font-medium px-2 py-1 rounded-full border backdrop-blur-md bg-primary/20 text-primary border-primary/30">
+                                                                {t('宣传片', 'Promo')}
+                                                            </div>
+                                                        )}
                                                         {isTempViewProject(p) && (
                                                             <div className="inline-flex items-center text-[10px] font-medium px-2 py-1 rounded-full border backdrop-blur-md bg-black/40 text-white/70 border-white/15">
                                                                 #{p.id}
@@ -2724,7 +3101,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                                         <EyeOff className="w-4 h-4" />
                                                                     </button>
                                                                 )}
-                                                                {isProjectOwner(p) && !isTempViewProject(p) && (
+                                                                {isProjectOwner(p) && !isTempViewProject(p) && !isPromoProject(p) && (
                                                                     <button
                                                                         onClick={(e) => handleOpenShareModal(e, p)}
                                                                         className="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground hover:text-blue-400 hover:bg-white/10 rounded-lg transition-all"
@@ -2735,7 +3112,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                                 )}
                                                                 {isProjectOwner(p) && !isTempViewProject(p) && (
                                                                     <button 
-                                                                        onClick={(e) => handleDeleteProject(e, p.id)}
+                                                                        onClick={(e) => handleDeleteProject(e, p)}
                                                                         className="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground hover:text-red-500 hover:bg-white/10 rounded-lg transition-all"
                                                                         title={t('删除项目', 'Delete Project')}
                                                                     >
@@ -2744,6 +3121,11 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                                 )}
                                                             </div>
                                                         </div>
+                                                        {isPromoProject(p) ? (
+                                                            <p className="text-[11px] text-white/55 mt-1 truncate">
+                                                                {[p.enterprise?.name, p.brand?.name, p.product?.name].filter(Boolean).join(' / ') || t('未绑定企业 / 品牌 / 产品', 'No enterprise / brand / offering bound')}
+                                                            </p>
+                                                        ) : null}
                                                         
                                                         {/* Description & Footer - Reveal on Hover */}
                                                         <div className="max-h-0 opacity-0 group-hover:max-h-32 group-hover:opacity-100 overflow-hidden transition-all duration-500 ease-in-out">
@@ -2791,12 +3173,24 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                             )
                         )}
 
+                        {activeTab === 'promo_catalog' && (
+                            <div className="h-full bg-card/30 rounded-3xl border border-white/5 overflow-hidden">
+                                <PromoCatalogManager
+                                    t={t}
+                                    focus={promoCatalogFocus}
+                                    onFocusConsumed={() => setPromoCatalogFocus((prev) => (prev ? { ...prev, action: '', kind: '' } : null))}
+                                    returnTo={promoCatalogReturn}
+                                    onReturn={promoCatalogReturn ? handleReturnFromCatalog : undefined}
+                                />
+                            </div>
+                        )}
+
                         {activeTab === 'assets' && (
                             <div className="h-full bg-card/30 rounded-3xl border border-white/5 overflow-hidden">
                                 <AssetsLibrary
                                     projectId={assetsScopeSnapshot?.selectedProjectId ?? null}
                                     currentEpisodeId={assetsScopeSnapshot?.activeEpisodeId ?? null}
-                                    projectOptionsProp={projects}
+                                    projectOptionsProp={projects.filter((item) => !isPromoProject(item))}
                                 />
                             </div>
                         )}
@@ -2836,7 +3230,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 }}
                                                 className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-primary/40 min-w-[12rem]"
                                             >
-                                                {projects.map((item) => (
+                                                {projects.filter((item) => !isPromoProject(item)).map((item) => (
                                                     <option key={`market-research-project-${item.id}`} value={String(item.id)}>
                                                         {item.title || `#${item.id}`}
                                                     </option>
@@ -2853,8 +3247,9 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 isTabActive={activeTab === 'market_research'}
                                                 onTabChange={(tab) => {
                                                     if (tab !== 'generator') return;
-                                                    const target = projects.find((item) => Number(item.id) === Number(marketResearchProjectId)) || null;
+                                                    const target = projects.find((item) => Number(item.id) === Number(marketResearchProjectId) && !isPromoProject(item)) || null;
                                                     setSelectedProject(target);
+                                                    setSelectedProjectKind('story');
                                                     setRestoredEditorState({ activeTab: 'generator' });
                                                     setSelectedProjectId(marketResearchProjectId);
                                                 }}

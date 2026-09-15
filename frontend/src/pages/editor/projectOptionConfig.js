@@ -20,12 +20,6 @@ export const PROJECT_EP_TYPE_OPTIONS = [
 
     "纪录片 / Documentary",
 
-    "商品宣传 / Product Promotion",
-
-    "文旅宣传 / Cultural Tourism Promotion",
-
-    "企业宣传 / Corporate Promotion",
-
 ];
 
 

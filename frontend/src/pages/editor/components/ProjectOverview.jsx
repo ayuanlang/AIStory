@@ -475,9 +475,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             return;
         }
         setProjectTab((prev) => {
-            if (prev === 'promo_generator') return 'promo_generator';
-            // Legacy sub-tabs moved to project-list market_research entry
-            if (prev === 'trending_dramas' || prev === 'industry_analysis' || prev === 'market_research') {
+            if (prev === 'promo_generator' || prev === 'trending_dramas' || prev === 'industry_analysis' || prev === 'market_research') {
                 return 'story_generator';
             }
             return prev;
@@ -1099,7 +1097,16 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                          }
                      }
 
-                     if (merged.promo_generator_input && typeof merged.promo_generator_input === 'object') {
+                     if (merged.promo_planner_input && typeof merged.promo_planner_input === 'object') {
+                        const demand = merged.promo_planner_input.campaign_demand || {};
+                        setPromoInput(prev => ({
+                            ...prev,
+                            episodes_count: Number(demand.episodes_count || prev.episodes_count || 1) || 1,
+                            campaign_objective: demand.user_raw_text || prev.campaign_objective,
+                            conversion_cta: demand.cta || prev.conversion_cta,
+                            constraints: demand.constraint || prev.constraints,
+                        }));
+                     } else if (merged.promo_generator_input && typeof merged.promo_generator_input === 'object') {
                         setPromoInput(prev => ({
                             ...prev,
                             ...merged.promo_generator_input,
@@ -1392,53 +1399,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         };
     }, [id, globalStoryInput, isGeneratingGlobalStory, setGeneratorAutosaveState, t]);
 
-    // Auto-save Promo Generator draft inputs (debounced)
-    useEffect(() => {
-        if (!id) return;
-        if (mode !== 'generator' || projectTab !== 'promo_generator') return;
-        if (isGeneratingGlobalStory) return;
-
-        if (skipNextPromoAutosaveRef.current) {
-            skipNextPromoAutosaveRef.current = false;
-            return;
-        }
-
-        if (promoAutosaveTimerRef.current) {
-            clearTimeout(promoAutosaveTimerRef.current);
-        }
-
-        promoAutosaveTimerRef.current = setTimeout(async () => {
-            setGeneratorAutosaveState('saving', t('自动保存中...', 'Auto-saving...'));
-            try {
-                const payload = {
-                    mode: 'global',
-                    generator_kind: 'promo',
-                    promo_type: promoInput.promo_type,
-                    episodes_count: Number(promoInput.episodes_count || 0) || 0,
-                    campaign_objective: promoInput.campaign_objective || '',
-                    target_audience: promoInput.target_audience || '',
-                    key_message: promoInput.key_message || '',
-                    core_highlights: promoInput.core_highlights || '',
-                    credibility_proof: promoInput.credibility_proof || '',
-                    hook_opening: promoInput.hook_opening || '',
-                    conversion_cta: promoInput.conversion_cta || '',
-                    channel_context: promoInput.channel_context || '',
-                    constraints: promoInput.constraints || '',
-                };
-                await saveProjectStoryGeneratorGlobalInput(id, payload);
-                setGeneratorAutosaveState('saved', t('宣传输入已自动保存', 'Promo input auto-saved'));
-            } catch (e) {
-                console.error('[Promo Generator] Auto-save failed:', e);
-                setGeneratorAutosaveState('error', t('自动保存失败', 'Auto-save failed'));
-            }
-        }, 800);
-
-        return () => {
-            if (promoAutosaveTimerRef.current) {
-                clearTimeout(promoAutosaveTimerRef.current);
-            }
-        };
-    }, [id, mode, projectTab, promoInput, isGeneratingGlobalStory, setGeneratorAutosaveState, t]);
+    // Promo planner draft autosave lives in PromoPlanner (structured enterprise + assets + demand).
 
     // Auto-save editable generator results (framework markdown + relationships) (debounced)
     useEffect(() => {
@@ -1537,6 +1498,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     ...promoInput,
                     episodes_count: Number(promoInput.episodes_count || 0) || 0,
                 },
+                promo_planner_input: info.promo_planner_input || undefined,
+                promo_planner_result: info.promo_planner_result || undefined,
                 character_canon_input: {
                     name: canonName || '',
                     selected_tag_ids: Array.isArray(canonSelectedTagIds) ? canonSelectedTagIds : [],
@@ -2651,7 +2614,6 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const prefix = "proj-";
     const generatorTabs = [
         { id: 'story_generator', label: t('故事生成器', 'Story Generator') },
-        { id: 'promo_generator', label: t('宣传片生成器', 'Promo Generator') },
     ];
 
     const industryHistoryOptions = marketIntelHistory.filter((item) => item.report_kind === 'industry_analysis');
@@ -4445,148 +4407,6 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 </div>
                             )}
                         </div>
-                    </div>
-                </div>
-                )}
-
-                {mode === 'generator' && projectTab === 'promo_generator' && (
-                <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
-                    <div className="flex items-center justify-between gap-3">
-                        <h3 className="text-lg font-semibold text-primary">{t('宣传片生成器（企业 / 产品 / 文旅）', 'Promo Generator (Corporate / Product / Tourism)')}</h3>
-                        <div className="flex items-center gap-2">
-                            <button
-                                onClick={handleGeneratePromoFramework}
-                                disabled={isGeneratingGlobalStory}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingGlobalStory ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                            >
-                                {isGeneratingGlobalStory ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Sparkles className="w-4 h-4" /> {t('生成宣传框架', 'Generate Promo Framework')}</>}
-                            </button>
-                            <button
-                                onClick={handleGenerateEpisodeScripts}
-                                disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                            >
-                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-4 h-4" /> {t('全量生成分集', 'Generate All')}</>}
-                            </button>
-                            <div className="flex items-center bg-white/5 rounded-lg overflow-hidden border border-white/10">
-                                <input
-                                    type="number"
-                                    min="1"
-                                    placeholder={t('单集', 'Ep#')}
-                                    className="w-16 px-2 py-2 bg-transparent text-sm text-center outline-none text-white placeholder-white/30"
-                                    value={targetEpisodeNumberForGen}
-                                    onChange={e => setTargetEpisodeNumberForGen(e.target.value)}
-                                    disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
-                                />
-                                <button
-                                    onClick={() => handleGenerateEpisodeScripts({ specificEpisode: targetEpisodeNumberForGen })}
-                                    disabled={!targetEpisodeNumberForGen || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
-                                    className={`px-3 py-2 text-sm font-bold flex items-center bg-white/10 hover:bg-white/20 transition-colors ${(!targetEpisodeNumberForGen || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'opacity-50 cursor-not-allowed' : 'text-blue-300'}`}
-                                    title={t('仅生成填写的单个集数', 'Generate only the specified episode number')}
-                                >
-                                    {t('单集生成', 'Gen Single')}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('本集生成指导', 'This Episode Generation Guidance')}</label>
-                        <div className="text-[11px] text-muted-foreground/80 mb-1.5">
-                            {t('仅「单集生成」时作为最高优先写入用户提示词；全量生成不会注入。', 'Injected as highest-priority user brief only for single-episode generation; not used by Generate All.')}
-                        </div>
-                        <textarea
-                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-24 resize-none placeholder:text-white/25"
-                            value={globalStoryInput.episode_generation_guidance || ''}
-                            onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, episode_generation_guidance: e.target.value }))}
-                            disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
-                            placeholder={t('例如：本集强化反派压迫感；开场必须回收上集门铃声；高潮改在雨中对峙。', 'e.g. Heighten antagonist pressure; open by paying off last episode’s doorbell; move the climax to a rain confrontation.')}
-                        />
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <InputGroup
-                            idPrefix={prefix}
-                            label={t('宣传类型', 'Promo Type')}
-                            value={promoInput.promo_type}
-                            onChange={v => setPromoInput(prev => ({ ...prev, promo_type: v }))}
-                            list={[
-                                '企业宣传 / Corporate Promotion',
-                                '商品宣传 / Product Promotion',
-                                '文旅宣传 / Cultural Tourism Promotion',
-                            ]}
-                        />
-                        <InputGroup
-                            idPrefix={prefix}
-                            label={t('集数', 'Episodes Count')}
-                            value={String(promoInput.episodes_count || '')}
-                            onChange={v => setPromoInput(prev => ({ ...prev, episodes_count: Number(v || 0) }))}
-                            list={['1', '3', '5', '6', '8', '10', '12']}
-                        />
-
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('传播目标', 'Campaign Objective')}</label>
-                            <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.campaign_objective} onChange={(e) => setPromoInput(prev => ({ ...prev, campaign_objective: e.target.value }))} />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('目标受众', 'Target Audience')}</label>
-                            <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.target_audience} onChange={(e) => setPromoInput(prev => ({ ...prev, target_audience: e.target.value }))} />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('核心信息', 'Key Message')}</label>
-                            <textarea className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none" value={promoInput.key_message} onChange={(e) => setPromoInput(prev => ({ ...prev, key_message: e.target.value }))} />
-                        </div>
-                    </div>
-
-                    <div>
-                        <div className="flex items-center justify-between gap-3 mb-1">
-                            <label className="text-xs text-muted-foreground uppercase font-bold block">{t('已生成宣传框架（Markdown）', 'Generated Promo Framework (Markdown)')}</label>
-                            <div className="flex items-center gap-1 bg-black/20 border border-white/10 rounded-md p-1">
-                                <button
-                                    type="button"
-                                    onClick={() => setPromoFrameworkViewMode('preview')}
-                                    className={`px-2 py-1 rounded text-xs font-bold ${promoFrameworkViewMode === 'preview' ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
-                                >
-                                    {t('预览', 'Preview')}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setPromoFrameworkViewMode('edit')}
-                                    className={`px-2 py-1 rounded text-xs font-bold ${promoFrameworkViewMode === 'edit' ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
-                                >
-                                    {t('编辑', 'Edit')}
-                                </button>
-                            </div>
-                        </div>
-
-                        {promoFrameworkViewMode === 'edit' ? (
-                            <textarea
-                                ref={(el) => {
-                                    if (el) {
-                                        if (el.dataset.content === el.value) return;
-                                        const scrollParent = el.closest('.overflow-y-auto');
-                                        const scrollTopContainer = scrollParent ? scrollParent.scrollTop : 0;
-                                        const scrollTopWindow = window.scrollY;
-                                        el.style.height = 'auto';
-                                        el.style.height = el.scrollHeight + 'px';
-                                        el.dataset.content = el.value;
-                                        if (scrollParent) scrollParent.scrollTop = scrollTopContainer;
-                                        window.scrollTo(0, scrollTopWindow);
-                                    }
-                                }}
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full min-h-[14rem] resize-none overflow-hidden"
-                                value={info.promo_dna_global_md || ''}
-                                onChange={(e) => updateField('promo_dna_global_md', e.target.value)}
-                                placeholder={t('（生成后，宣传片全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, promo global framework will appear here. You can edit it and Save Changes.)')}
-                            />
-                        ) : (
-                            <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 h-56 overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1">
-                                {(info.promo_dna_global_md || '').trim()
-                                    ? <ReactMarkdown>{info.promo_dna_global_md}</ReactMarkdown>
-                                    : <div className="text-sm text-muted-foreground">{t('（生成后，宣传片全局框架会显示在这里。）', '(After generation, promo global framework will appear here.)')}</div>
-                                }
-                            </div>
-                        )}
                     </div>
                 </div>
                 )}

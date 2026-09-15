@@ -14,6 +14,10 @@ class ProjectCreate(BaseModel):
     aspectRatio: Optional[str] = None
     share_users: Optional[List[str]] = None
     reviewer_users: Optional[List[str]] = None
+    kind: Optional[str] = None
+    enterprise_id: Optional[int] = None
+    brand_id: Optional[int] = None
+    product_id: Optional[int] = None
 
 class ProjectUpdate(BaseModel):
     title: Optional[str] = None

@@ -165,9 +165,6 @@ _DEFAULT_PROJECT_COST_ESTIMATION_CONFIG: Dict[str, Any] = {
 			"CG动画 / CG Animation",
 			"混合媒介 / Mixed Media",
 			"纪录片 / Documentary",
-			"商品宣传 / Product Promotion",
-			"文旅宣传 / Cultural Tourism Promotion",
-			"企业宣传 / Corporate Promotion",
 		],
 		"country_region": [
 			"欧美 / Europe & America",

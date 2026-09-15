@@ -183,6 +183,8 @@ def _script_analysis_action_label(
         return "重新生成分镜"
     if ctx in {"generate_episode_scripts"}:
         return "生成分集剧本"
+    if ctx in {"generate_promo_script", "promo_planner_script"}:
+        return "生成宣传片成片脚本"
     if ctx in {"generate_project_character_profile"}:
         return "生成角色档案设定"
     fn = str(function_name or "").strip().lower()

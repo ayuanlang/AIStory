@@ -25,6 +25,7 @@ SHARED_HELPER_MODULES: Tuple[str, ...] = (
     "app.schemas.asset",
     "app.schemas.generation",
     "app.schemas.episode_requests",
+    "app.schemas.promo_planner",
     "app.services.asset_meta_utils",
     "app.services.model_invocation_billing",
     "app.services.generation_runtime.asset_registration",

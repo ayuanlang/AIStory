@@ -87,6 +87,25 @@ def _looks_like_promo_type(value: Any) -> bool:
 
 def _has_promo_generator_input(global_info: Any) -> bool:
     gi = dict(global_info or {})
+    planner_input = gi.get("promo_planner_input")
+    if isinstance(planner_input, dict):
+        enterprise = planner_input.get("enterprise_info") if isinstance(planner_input.get("enterprise_info"), dict) else {}
+        campaign = planner_input.get("campaign_demand") if isinstance(planner_input.get("campaign_demand"), dict) else {}
+        for value in (
+            enterprise.get("brand_name"),
+            enterprise.get("brand_intro"),
+            enterprise.get("product_info"),
+            campaign.get("user_raw_text"),
+            campaign.get("cta"),
+        ):
+            if str(value or "").strip():
+                return True
+        assets = enterprise.get("image_assets")
+        if isinstance(assets, list) and assets:
+            return True
+    if isinstance(gi.get("promo_planner_result"), dict) and gi.get("promo_planner_result"):
+        return True
+
     promo_input = gi.get("promo_generator_input")
     if not isinstance(promo_input, dict):
         return False

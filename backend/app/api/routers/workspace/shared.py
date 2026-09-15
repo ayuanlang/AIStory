@@ -338,6 +338,34 @@ def create_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    if str(getattr(project, "kind", "") or "").strip().lower() == "promo":
+        from app.models.all_models import PromoProject
+        from app.services.promo_planner import bind_promo_catalog, serialize_promo_project
+
+        title = str(project.title or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="title is required")
+        row = PromoProject(
+            title=title,
+            description=(project.description or "").strip() or None,
+            extra_info=dict(project.global_info or {}),
+            owner_id=current_user.id,
+        )
+        db.add(row)
+        db.flush()
+        bind_promo_catalog(
+            db,
+            row,
+            current_user,
+            enterprise_id=getattr(project, "enterprise_id", None),
+            brand_id=getattr(project, "brand_id", None),
+            product_id=getattr(project, "product_id", None),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return JSONResponse(serialize_promo_project(db, row, current_user))
+
     if not project.global_info:
         project.global_info = {}
 
@@ -514,6 +542,9 @@ def read_projects(
         ret = []
         for row in result:
             p = row[1]
+            hidden_info = p.global_info if isinstance(p.global_info, dict) else {}
+            if hidden_info.get("hidden_from_list") or hidden_info.get("source_promo_project_id"):
+                continue
             p.share_count = row[2]
             
             # Determine cover image

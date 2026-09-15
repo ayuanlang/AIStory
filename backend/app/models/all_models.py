@@ -29,6 +29,11 @@ class User(Base):
     groups = relationship("UserGroupMembership", back_populates="user", cascade="all, delete-orphan")
 
     projects = relationship("Project", back_populates="owner")
+    promo_projects = relationship("PromoProject", back_populates="owner")
+    promo_enterprises = relationship("PromoEnterprise", back_populates="owner")
+    promo_brands = relationship("PromoBrand", back_populates="owner")
+    promo_products = relationship("PromoProduct", back_populates="owner")
+    promo_catalog_assets = relationship("PromoCatalogAsset", back_populates="owner")
     shared_projects = relationship("ProjectShare", back_populates="user", cascade="all, delete-orphan")
     requested_asset_review_threads = relationship(
         "ProjectAssetReviewThread",
@@ -1113,3 +1118,199 @@ class KbEvalCase(Base):
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     created_at = Column(String, default=now_bj_iso, index=True)
     updated_at = Column(String, default=now_bj_iso)
+
+
+class PromoEnterprise(Base):
+    """Reusable commercial enterprise master."""
+    __tablename__ = "promo_enterprises"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), index=True)
+    name = Column(String, index=True, nullable=False)
+    intro = Column(Text, nullable=True)
+    extra_info = Column(JSON, default=dict)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(String, nullable=True)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+    owner = relationship("User", back_populates="promo_enterprises")
+    brands = relationship("PromoBrand", back_populates="enterprise")
+    products = relationship("PromoProduct", back_populates="enterprise")
+    promo_projects = relationship("PromoProject", back_populates="enterprise", foreign_keys="PromoProject.enterprise_id")
+
+
+@event.listens_for(PromoEnterprise, "before_update")
+def _promo_enterprise_set_updated_at(_mapper, _connection, target):
+    target.updated_at = now_bj_iso()
+
+
+class PromoBrand(Base):
+    """Reusable commercial brand belonging to one enterprise."""
+    __tablename__ = "promo_brands"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), index=True)
+    enterprise_id = Column(Integer, ForeignKey("promo_enterprises.id"), index=True, nullable=False)
+    name = Column(String, index=True, nullable=False)
+    intro = Column(Text, nullable=True)
+    extra_info = Column(JSON, default=dict)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(String, nullable=True)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+    owner = relationship("User", back_populates="promo_brands")
+    enterprise = relationship("PromoEnterprise", back_populates="brands")
+    products = relationship("PromoProduct", back_populates="brand")
+    promo_projects = relationship("PromoProject", back_populates="brand", foreign_keys="PromoProject.brand_id")
+
+
+@event.listens_for(PromoBrand, "before_update")
+def _promo_brand_set_updated_at(_mapper, _connection, target):
+    target.updated_at = now_bj_iso()
+
+
+class PromoProduct(Base):
+    """Reusable commercial product / service belonging to one brand."""
+    __tablename__ = "promo_products"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), index=True)
+    enterprise_id = Column(Integer, ForeignKey("promo_enterprises.id"), index=True, nullable=False)
+    brand_id = Column(Integer, ForeignKey("promo_brands.id"), index=True, nullable=True)
+    name = Column(String, index=True, nullable=False)
+    product_info = Column(Text, nullable=True)
+    core_selling_points = Column(JSON, default=list)
+    differentiation = Column(Text, nullable=True)
+    target_user = Column(Text, nullable=True)
+    pain_points = Column(JSON, default=list)
+    competitor_problem = Column(Text, nullable=True)
+    extra_info = Column(JSON, default=dict)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(String, nullable=True)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+    owner = relationship("User", back_populates="promo_products")
+    enterprise = relationship("PromoEnterprise", back_populates="products")
+    brand = relationship("PromoBrand", back_populates="products")
+    promo_projects = relationship("PromoProject", back_populates="product", foreign_keys="PromoProject.product_id")
+
+
+@event.listens_for(PromoProduct, "before_update")
+def _promo_product_set_updated_at(_mapper, _connection, target):
+    target.updated_at = now_bj_iso()
+
+
+class PromoProject(Base):
+    """Independent commercial promo-planner project (not a script/story project)."""
+    __tablename__ = "promo_projects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), index=True)
+    enterprise_id = Column(Integer, ForeignKey("promo_enterprises.id"), nullable=True, index=True)
+    brand_id = Column(Integer, ForeignKey("promo_brands.id"), nullable=True, index=True)
+    product_id = Column(Integer, ForeignKey("promo_products.id"), nullable=True, index=True)
+    description = Column(Text, nullable=True)
+    extra_info = Column(JSON, default=dict)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(String, nullable=True)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+    owner = relationship("User", back_populates="promo_projects")
+    enterprise = relationship("PromoEnterprise", back_populates="promo_projects", foreign_keys=[enterprise_id])
+    brand = relationship("PromoBrand", back_populates="promo_projects", foreign_keys=[brand_id])
+    product = relationship("PromoProduct", back_populates="promo_projects", foreign_keys=[product_id])
+    planner_input = relationship(
+        "PromoPlannerInput",
+        back_populates="promo_project",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    planner_result = relationship(
+        "PromoPlannerResult",
+        back_populates="promo_project",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    image_assets = relationship(
+        "PromoImageAsset",
+        back_populates="promo_project",
+        cascade="all, delete-orphan",
+    )
+
+
+@event.listens_for(PromoProject, "before_update")
+def _promo_project_set_updated_at(_mapper, _connection, target):
+    target.updated_at = now_bj_iso()
+
+
+class PromoPlannerInput(Base):
+    __tablename__ = "promo_planner_inputs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    promo_project_id = Column(Integer, ForeignKey("promo_projects.id"), unique=True, index=True, nullable=False)
+    enterprise_info = Column(JSON, default=dict)
+    campaign_demand = Column(JSON, default=dict)
+    updated_at = Column(String, default=now_bj_iso)
+
+    promo_project = relationship("PromoProject", back_populates="planner_input")
+
+
+class PromoPlannerResult(Base):
+    __tablename__ = "promo_planner_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    promo_project_id = Column(Integer, ForeignKey("promo_projects.id"), unique=True, index=True, nullable=False)
+    result = Column(JSON, default=dict)
+    promo_dna_md = Column(Text, nullable=True)
+    updated_at = Column(String, default=now_bj_iso)
+
+    promo_project = relationship("PromoProject", back_populates="planner_result")
+
+
+class PromoImageAsset(Base):
+    __tablename__ = "promo_image_assets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    promo_project_id = Column(Integer, ForeignKey("promo_projects.id"), index=True, nullable=False)
+    image_id = Column(String, index=True, nullable=False)
+    img_url = Column(String, nullable=False)
+    image_type = Column(String, default="product")
+    object_name = Column(String, default="")
+    user_remark = Column(String, default="")
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+    promo_project = relationship("PromoProject", back_populates="image_assets")
+
+
+class PromoCatalogAsset(Base):
+    """Image / video assets attached to enterprise, brand, or offering."""
+    __tablename__ = "promo_catalog_assets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    owner_kind = Column(String, index=True, nullable=False)  # enterprise | brand | offering
+    owner_entity_id = Column(Integer, index=True, nullable=False)
+    media_kind = Column(String, default="image", nullable=False)  # image | video
+    asset_type = Column(String, default="product")  # product | character | scene | prop
+    image_id = Column(String, index=True, nullable=False)
+    file_url = Column(String, nullable=False)
+    object_name = Column(String, default="")
+    user_remark = Column(String, default="")
+    extra_info = Column(JSON, default=dict)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(String, nullable=True)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+    owner = relationship("User", back_populates="promo_catalog_assets")
+
+
+@event.listens_for(PromoCatalogAsset, "before_update")
+def _promo_catalog_asset_set_updated_at(_mapper, _connection, target):
+    target.updated_at = now_bj_iso()

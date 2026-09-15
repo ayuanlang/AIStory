@@ -1266,6 +1266,14 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             ("script_progress_scene_units", getattr(models, "ScriptProgressSceneUnit", None)),
             ("script_progress_pipeline_nodes", getattr(models, "ScriptProgressPipelineNode", None)),
             ("script_progress_issues", getattr(models, "ScriptProgressIssue", None)),
+            ("promo_enterprises", getattr(models, "PromoEnterprise", None)),
+            ("promo_brands", getattr(models, "PromoBrand", None)),
+            ("promo_products", getattr(models, "PromoProduct", None)),
+            ("promo_projects", getattr(models, "PromoProject", None)),
+            ("promo_planner_inputs", getattr(models, "PromoPlannerInput", None)),
+            ("promo_planner_results", getattr(models, "PromoPlannerResult", None)),
+            ("promo_image_assets", getattr(models, "PromoImageAsset", None)),
+            ("promo_catalog_assets", getattr(models, "PromoCatalogAsset", None)),
             ("market_intel_reports", getattr(models, "MarketIntelReport", None)),
             ("kb_works", getattr(models, "KbWork", None)),
             ("kb_entries", getattr(models, "KbEntry", None)),
@@ -1282,6 +1290,15 @@ def check_and_migrate_tables(*, critical_only: bool = False):
                 _ensure_missing_table_columns(tname, tmodel, is_postgres=is_postgres)
             except Exception as e:
                 logger.error(f"Failed to ensure {tname} columns: {e}")
+
+        try:
+            from app.services.promo_planner import backfill_promo_brand_links
+            with SessionLocal() as session:
+                changed = backfill_promo_brand_links(session)
+                if changed:
+                    logger.info("Backfilled promo brand links: %s", changed)
+        except Exception as e:
+            logger.error(f"Failed to backfill promo brand links: {e}")
 
         try:
             _ensure_entities_episode_scoped_unique_indexes(is_postgres=is_postgres)

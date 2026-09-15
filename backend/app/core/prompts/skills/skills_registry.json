@@ -103,6 +103,20 @@
             ]
         },
         {
+            "id": "promo_generation",
+            "title": "Promo Planner (商业宣传片智能策划)",
+            "type": "promo",
+            "prompts": [
+                "skills/promo_generation/promo_planner_scheme.md",
+                "skills/promo_generation/promo_planner_image_analysis.md",
+                "skills/promo_generation/promo_planner_script.md"
+            ],
+            "legacy_refs": [
+                "promo_generator_global.txt",
+                "promo_generator_episode_script.md"
+            ]
+        },
+        {
             "id": "shot_prompt_modification",
             "title": "Shot Prompt Modification (分镜提示词修改)",
             "type": "storyboard",

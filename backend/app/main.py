@@ -1558,19 +1558,25 @@ if os.path.isdir(_FRONTEND_DIST):
     os.makedirs(os.path.join(_FRONTEND_DIST, "assets"), exist_ok=True)
     os.makedirs(os.path.join(_FRONTEND_DIST, "assets"), exist_ok=True)
     app.mount("/assets", StaticFiles(directory=os.path.join(_FRONTEND_DIST, "assets")), name="frontend-assets")
-    
-    @app.get("/{full_path:path}", include_in_schema=False)
-    async def serve_spa_frontend(full_path: str):
-        # 排除对 /api/v1/ 的前端拦截，将它留给正经的 API Router 处理
-        if full_path.startswith(settings.API_V1_STR.lstrip('/')):
-            return JSONResponse({"detail": "Not Found"}, status_code=404)
-            
+
+    _API_PREFIXES = (
+        settings.API_V1_STR if str(settings.API_V1_STR).startswith("/") else f"/{settings.API_V1_STR}",
+        "/api/",
+    )
+
+    def _is_api_path(path: str) -> bool:
+        raw = str(path or "")
+        return any(raw == prefix.rstrip("/") or raw.startswith(prefix if prefix.endswith("/") else f"{prefix}/") for prefix in _API_PREFIXES)
+
+    @app.middleware("http")
+    async def serve_spa_frontend(request: Request, call_next):
+        response = await call_next(request)
+        if response.status_code != 404 or request.method != "GET" or _is_api_path(request.url.path):
+            return response
+        full_path = request.url.path.lstrip("/")
         file_path = os.path.join(_FRONTEND_DIST, full_path)
-        # 如果命中了具体的静态文件诸如 favicon.ico，则返回它
         if full_path and os.path.isfile(file_path):
             return FileResponse(file_path)
-            
-        # 否则所有的前端路由（/about, /user）全部还给 React 的 index.html 自己去识别
         index_file = os.path.join(_FRONTEND_DIST, "index.html")
         if os.path.isfile(index_file):
             return FileResponse(index_file)

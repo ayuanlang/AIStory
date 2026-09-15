@@ -11,6 +11,7 @@ import { getMaintenanceStatus } from './services/api';
 const Home = lazyWithChunkReload(() => import('./pages/Home'));
 const ProjectList = lazyWithChunkReload(() => import('./pages/ProjectList'));
 const Editor = lazyWithChunkReload(() => import('./pages/Editor'));
+const PromoEditor = lazyWithChunkReload(() => import('./pages/PromoEditor'));
 const AdvancedAnalysisResult = lazyWithChunkReload(() => import('./pages/AdvancedAnalysisResult'));
 const Auth = lazyWithChunkReload(() => import('./pages/Auth'));
 const UserAdmin = lazyWithChunkReload(() => import('./pages/UserAdmin'));
@@ -209,11 +210,12 @@ function App() {
           <RechargeListener />
           <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">{loadingText}</div>}>
             <Routes>
-              <Route path="/" element={<PublicRoute><Home /></PublicRoute>} />
+              <Route path="/" element={<Home />} />
               <Route path="/auth" element={<PublicRoute bypassRedirect={allowAuthDuringMaintenance}><Auth /></PublicRoute>} />
               <Route path="/projects" element={<PrivateRoute><ProjectList /></PrivateRoute>} />
               <Route path="/settings" element={<PrivateRoute><ProjectList initialTab="settings" /></PrivateRoute>} />
               <Route path="/editor/:id" element={<PrivateRoute><Editor /></PrivateRoute>} />
+              <Route path="/promo/:id" element={<PrivateRoute><PromoEditor /></PrivateRoute>} />
               <Route path="/editor/:id/analysis" element={<PrivateRoute><AdvancedAnalysisResult /></PrivateRoute>} />
               <Route path="/admin/users" element={<SuperuserRoute><UserAdmin /></SuperuserRoute>} />
             </Routes>
