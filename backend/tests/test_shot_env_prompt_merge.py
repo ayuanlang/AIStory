@@ -76,6 +76,11 @@ def test_merge_derived_envs_that_share_one_main():
     assert "同一主环境族：主环境=ENV:[后巷]" not in text
     assert "【衍生环境信息】" in text
     assert "must not restate the environment plate" in text
+    assert "【主环境整份 generation_prompt_cn｜开篇世界锁+四向拼图宫格；光线只读当前衍生度数对应格】" in text
+    assert "【/主环境整份 generation_prompt_cn】" in text
+    assert "Lighting control MUST follow the current derived-degree ENV" in text
+    assert "光线控制只读当前拍衍生度数 ENV 对应宫格" in text
+    assert "主环境 generation_prompt_cn=" not in text
     assert (
         "ENV:[0度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0｜"
         "背景=柜台｜画左=楼梯口｜画右=账房窗"
@@ -137,3 +142,33 @@ def test_missing_main_prompt_blocks_storyboard_injection():
     ) == ""
     missing = collect_missing_main_env_prompt_names([main_empty, derived], _keys("0度客栈大堂"))
     assert missing
+
+
+def test_injects_full_main_env_prompt_with_grid_line_breaks():
+    main = _env(
+        id=40,
+        name="客栈大堂",
+        generation_prompt_cn=(
+            "【六面一次】主光=斜阳｜辅光=天花散射｜Key世界向=东南\n"
+            "【四向拼图】\n"
+            "[0度格-左上·北] 开篇斜射金光从画面右、靠近镜头、低打来。影子投向画面左、远离镜头。\n"
+            "[180度格-左下·南] 开篇斜阳从画面左、远离镜头、低打来。影子投向画面右、靠近镜头。"
+        ),
+    )
+    derived = _env(
+        id=41,
+        name="180度客栈大堂",
+        visual_dependencies=["ENV:[客栈大堂]"],
+        custom_attributes={"main_environment": "客栈大堂", "view_angle_from_main": 180},
+    )
+    text = _build_scene_subject_image_prompts_cn_section(
+        [main, derived],
+        _keys("180度客栈大堂"),
+        scene_id=22,
+    )
+    assert "[0度格-左上·北]" in text
+    assert "[180度格-左下·南]" in text
+    assert "\n[180度格-左下·南]" in text
+    assert "开篇斜阳从画面左、远离镜头、低打来。" in text
+    flattened = " ".join(main.generation_prompt_cn.split())
+    assert f"主环境 generation_prompt_cn={flattened}" not in text

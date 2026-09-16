@@ -573,6 +573,22 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     }
 
 
+def _preserve_env_generation_prompt_cn(raw: Any) -> str:
+    """Keep the full ENV design prompt, including four-panel line breaks."""
+    return str(raw or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _format_main_env_prompt_block(header_line: str, prompt_cn: str) -> str:
+    """Family header + intact main-ENV generation_prompt_cn (宫格 must stay readable)."""
+    return (
+        f"{header_line}\n"
+        "【主环境整份 generation_prompt_cn｜开篇世界锁+四向拼图宫格；"
+        "光线只读当前衍生度数对应格】\n"
+        f"{prompt_cn}\n"
+        "【/主环境整份 generation_prompt_cn】"
+    )
+
+
 def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
     return _build_project_prompt_context(project.global_info)
 
@@ -586,11 +602,13 @@ def _build_scene_subject_image_prompts_cn_section(
     """Inject main-ENV prompts for scene-linked environments.
 
     A scene may use a view/state derivative, but its optical source is the
-    derivative's main environment.  Inject that main ENV prompt and retain the
-    selected derivative -> main ENV mapping so the storyboard model knows which
-    view/state is actually in use. Multiple derivatives that resolve to the
-    same main ENV are merged into one family row (prompt injected once).
-    CHAR/PROP image prompts are intentionally excluded from this injection.
+    derivative's main environment.  Inject that main ENV's FULL
+    generation_prompt_cn (opening world lock + 【四向拼图】 four-panel grid)
+    and retain the selected derivative -> main ENV mapping so the storyboard
+    model knows which view/state is actually in use. Multiple derivatives that
+    resolve to the same main ENV are merged into one family (prompt injected
+    once, grid structure preserved). CHAR/PROP image prompts are intentionally
+    excluded from this injection.
     """
     if not subject_match_keys:
         return ""
@@ -687,9 +705,9 @@ def _build_scene_subject_image_prompts_cn_section(
         main_env_name = str(
             getattr(main_ent, "name", None) or getattr(main_ent, "name_en", None) or ""
         ).strip()
-        prompt_cn = re.sub(
-            r"\s+", " ", str(getattr(main_ent, "generation_prompt_cn", None) or "")
-        ).strip()
+        prompt_cn = _preserve_env_generation_prompt_cn(
+            getattr(main_ent, "generation_prompt_cn", None)
+        )
         if not prompt_cn or not main_env_name:
             continue
 
@@ -729,21 +747,22 @@ def _build_scene_subject_image_prompts_cn_section(
             if family["includes_main"]:
                 main_clause = f"{main_clause}（本场亦使用该主环境）"
             if len(derived_refs) > 1:
-                prompt_lines.append(
+                header = (
                     f"- 同一主环境族：主环境={main_ref} | "
-                    f"本场使用的衍生环境={derived_list}（{main_clause}） | "
-                    f"主环境 generation_prompt_cn={prompt_cn}"
+                    f"本场使用的衍生环境={derived_list}（{main_clause}）"
                 )
             else:
-                prompt_lines.append(
+                header = (
                     f"- 当前场景使用的衍生环境={derived_list} | "
-                    f"{main_clause} | "
-                    f"主环境 generation_prompt_cn={prompt_cn}"
+                    f"{main_clause}"
                 )
+            prompt_lines.append(_format_main_env_prompt_block(header, prompt_cn))
         else:
             prompt_lines.append(
-                f"- 当前场景环境={main_ref}（主环境） | "
-                f"主环境 generation_prompt_cn={prompt_cn}"
+                _format_main_env_prompt_block(
+                    f"- 当前场景环境={main_ref}（主环境）",
+                    prompt_cn,
+                )
             )
 
     if not prompt_lines:
@@ -771,12 +790,12 @@ def _build_scene_subject_image_prompts_cn_section(
 
     body_parts = [
         "# Scene Subject Image Prompts (CN)\n"
-        "Authoritative Chinese image-generation prompts for the MAIN ENVIRONMENT assets that "
-        "scene-linked ENVIRONMENT assets depend on (main-ENV generation_prompt_cn for optical anchoring). "
-        "Each row is one main-ENV family. When several scene-used ENV derivatives belong to the same main ENV, "
-        "they are merged into a single row that explicitly states they correspond to that same main ENV; "
-        "inject that main prompt once and do not treat those derivatives as unrelated spaces. "
-        "Preserve each derivative's declared view/state while using only the mapped main ENV prompt as its visual base. "
+        "Inject the FULL environment-asset-design generation_prompt_cn for each mapped main ENV "
+        "(opening world lock + 【四向拼图】 four-panel 宫格). Do not flatten or omit grid cells. "
+        "Each family injects that main prompt once. When several scene-used ENV derivatives belong "
+        "to the same main ENV, they are merged into one family that explicitly states they "
+        "correspond to that same main ENV; do not treat those derivatives as unrelated spaces. "
+        "Preserve each derivative's declared view/state. "
         "When a derived-environment info block is present, each used derivative lists 所属主环境 / view_angle "
         "and this camera's 背景 / 画左 / 画右 entity map for internal placement checks only "
         "(left/right flip after a cut — look up the new ENV row). "
@@ -784,9 +803,13 @@ def _build_scene_subject_image_prompts_cn_section(
         "entities in place of the words 画左/画右. "
         "Video Content must only cite 背景参考图为 ENV:[…] (or 背景切换到参考图 ENV:[…] on a name change) "
         "and must not restate the environment plate — no 远景/画左/画右 set-dressing, materials, or wall tours. "
-        "For every shot using a derivative ENV, design lighting direction, light color, color palette, and "
-        "background-object micro-motion from that derivative's corresponding directional panel in the mapped "
-        "main ENV four-panel reference, together with the derivative's declared visible-content boundary. "
+        "Lighting control MUST follow the current derived-degree ENV's corresponding 宫格 in this "
+        "injected main prompt: world lock 主光/辅光/点缀/源形/Key世界向 + that cell's 来光三轴/"
+        "受光半/影子投向 (+ the derivative's §C optical Delta if any). Keep Key/Fill/Rim side, "
+        "color, contrast, and soft/hard identical to that cell — do not invent lights or copy "
+        "another cell. In the two lighting sections, state the exposure effect of that lighting "
+        "on CHAR/PROP (key-side highlight, fill lift, shadow density, catchlight, over/under) "
+        "together with shutter speed 1/Xs + freeze/smear/grain. "
         "Write optics in the two lighting sections; do not turn the ENV plate into Video scenery prose. "
         "Do not invent lights, colors, background objects, or background actions outside those two sources; "
         "background micro-motion must be physically motivated by the visible object's material/state and the "
@@ -795,6 +818,9 @@ def _build_scene_subject_image_prompts_cn_section(
         "Translate ENV optics into dynamic video language; do not paste static framing/canvas instructions verbatim. "
         "Entity naming authority remains Scene Subject Index. "
         "Do not replace the used derivative with its main ENV name in shot output.\n"
+        "注入的是环境资产设计主环境整份 generation_prompt_cn（开篇世界锁+【四向拼图】四宫格），"
+        "宫格结构必须保持可读。光线控制只读当前拍衍生度数 ENV 对应宫格的光源与光线描述，"
+        "须与该格同核，并在两光影段说明曝光效果。\n"
     ]
     if derived_info_block:
         body_parts.append(derived_info_block + "\n")

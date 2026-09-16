@@ -34,7 +34,7 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 - 海报/封面不适用；无匹配行则正常新设计。
 
 ### 下游分镜依赖边界（工程契约 · 摘要）
-- 分镜光学锚定**仅**依赖 ENV `generation_prompt_cn`（见 environment 分型「下游分镜失效」与 `shot_generation.md`）。
+- 分镜光学锚定**仅**依赖 ENV 主环境**整份** `generation_prompt_cn`（开篇+四宫格；光线读当前衍生度数对应格；见 environment 分型「下游分镜失效」与 `shot_generation.md`）。
 - **重跑/清除 ENV** → 仅清**关联场**分镜并待 ENV 就绪后重跑；**禁止**全盘清无关场分镜。
 - **重跑 CHAR / PROP / 海报** → **不**清分镜、不使分镜失效。
 
