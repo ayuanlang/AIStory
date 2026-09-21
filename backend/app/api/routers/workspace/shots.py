@@ -600,6 +600,7 @@ def persist_shot_media(
         db_shot,
         slot=str(payload.slot or "video"),
         source_url_override=payload.source_url,
+        provider=payload.provider,
     )
     # Localization releases the request session; re-query before building response.
     refreshed = db.query(Shot).filter(Shot.id == shot_id).first()

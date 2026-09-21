@@ -1391,6 +1391,7 @@ def _recover_shot_video_from_provider_url(
             shot,
             slot="video",
             source_url_override=stable_url,
+            provider=(job or {}).get("provider"),
         )
         ok = bool(result) and (
             bool(result.get("persisted_url"))

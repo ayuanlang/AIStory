@@ -76,6 +76,7 @@ __all__ = [
     "_hydrate_video_job_record",
     "_is_durable_persisted_media_url",
     "_is_ephemeral_provider_media_url",
+    "_is_grsai_direct_oss_video_url",
     "_is_persisted_media_localization_success",
     "_is_provider_direct_oss_url",
     "_job_has_durable_result_url",
@@ -700,6 +701,49 @@ def _is_provider_direct_oss_url(
     )
 
 
+def _normalize_persist_provider_name(value: Any, *, category: str = "Video") -> str:
+    try:
+        return str(media_service._normalize_provider_name(value, category) or "").strip().lower()
+    except Exception:
+        return str(value or "").strip().lower()
+
+
+def _resolve_persist_provider(
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    notes: Optional[Dict[str, Any]] = None,
+    explicit_provider: Any = None,
+) -> str:
+    candidates = [
+        explicit_provider,
+        (metadata or {}).get("provider") if isinstance(metadata, dict) else None,
+        (notes or {}).get("provider") if isinstance(notes, dict) else None,
+        (notes or {}).get("video_provider") if isinstance(notes, dict) else None,
+    ]
+    video_meta = (notes or {}).get("video_metadata") if isinstance(notes, dict) else None
+    if isinstance(video_meta, dict):
+        candidates.append(video_meta.get("provider"))
+    for item in candidates:
+        normalized = _normalize_persist_provider_name(item)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _is_grsai_direct_oss_video_url(
+    url: Any,
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    notes: Optional[Dict[str, Any]] = None,
+    explicit_provider: Any = None,
+) -> bool:
+    raw = str(url or "").strip()
+    if not raw.lower().startswith(("http://", "https://")):
+        return False
+    provider = _resolve_persist_provider(metadata, notes=notes, explicit_provider=explicit_provider)
+    return provider == "grsai"
+
+
 def _persist_remote_video_result(
     current_user: User,
     media_url: Optional[str],
@@ -726,6 +770,16 @@ def _persist_remote_video_result(
             "[VideoResultNormalize] skip remote localization for managed oss url | user_id=%s url=%s",
             getattr(current_user, "id", None),
             raw,
+        )
+        return raw, updated_metadata, True
+    if _is_grsai_direct_oss_video_url(raw, updated_metadata):
+        updated_metadata["provider"] = "grsai"
+        updated_metadata["provider_direct_oss_url"] = True
+        logger.info(
+            "[VideoResultNormalize] skip copy for grsai oss url | user_id=%s url=%s force_configured_oss=%s",
+            getattr(current_user, "id", None),
+            raw,
+            bool(force_configured_oss),
         )
         return raw, updated_metadata, True
     if (not force_configured_oss) and _is_provider_direct_oss_url(raw, updated_metadata, db):
@@ -2185,6 +2239,7 @@ def _replace_legacy_temp_urls_in_shot_payload(
 class ShotPersistMediaRequest(BaseModel):
     slot: str = "video"
     source_url: Optional[str] = None
+    provider: Optional[str] = None
 
 
 class ShotVideoCleanupRequest(BaseModel):
@@ -2273,6 +2328,7 @@ def _persist_shot_media_slot(
     *,
     slot: str = "video",
     source_url_override: Optional[str] = None,
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     shot_id = int(getattr(shot, "id", 0) or 0)
     if shot_id <= 0:
@@ -2285,10 +2341,24 @@ def _persist_shot_media_slot(
     if not source_url:
         raise HTTPException(status_code=400, detail=f"Shot has no URL for slot={slot}")
 
+    slot_meta = dict(slot_meta or {})
+    resolved_provider = _resolve_persist_provider(slot_meta, notes=notes, explicit_provider=provider)
+    if resolved_provider:
+        slot_meta["provider"] = resolved_provider
+
     oss_enabled = oss_storage_service.is_enabled(db)
     already_on_configured_oss = _url_is_configured_oss_object(source_url, slot_meta, db)
     if (not oss_enabled) and _is_durable_persisted_media_url(source_url, slot_meta, db):
         already_on_configured_oss = True
+    if asset_type == "video" and _is_grsai_direct_oss_video_url(
+        source_url,
+        slot_meta,
+        notes=notes,
+        explicit_provider=resolved_provider,
+    ):
+        already_on_configured_oss = True
+        slot_meta["provider"] = "grsai"
+        slot_meta["provider_direct_oss_url"] = True
 
     if already_on_configured_oss:
         oss_ok = _oss_upload_succeeded_for_url(source_url, slot_meta, db) or already_on_configured_oss
@@ -2413,6 +2483,7 @@ def _persist_shot_media_slot(
         persist_ok = bool(
             _url_is_configured_oss_object(final_url, normalized_meta, db)
             or (oss_uploaded and not _is_ephemeral_provider_media_url(final_url))
+            or _is_grsai_direct_oss_video_url(final_url, normalized_meta)
         )
     if not persist_ok:
         error_detail = str(

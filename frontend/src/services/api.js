@@ -3892,6 +3892,7 @@ export const persistShotMedia = async (shotId, payload = {}) => {
     const response = await api.post(`/shots/${Number(shotId)}/persist-media`, {
         slot: payload.slot || 'video',
         ...(payload.source_url ? { source_url: payload.source_url } : {}),
+        ...(payload.provider ? { provider: payload.provider } : {}),
     });
     return response.data;
 };

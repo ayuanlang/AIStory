@@ -5788,12 +5788,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     return false;
                 }
 
+                const providerName = String(queryResult?.provider || '').trim().toLowerCase();
+                const isGrsaiDirectOss = providerName === 'grsai' || providerName === 'grsai-video';
                 const busyKey = `${stableShotId}:video`;
                 setShotGeneratingState(stableShotId, 'video', true);
                 setVideoStatuses((prev) => ({ ...prev, [stableShotId]: 're_downloading' }));
                 setShotMediaOssPersistBusy((prev) => ({ ...prev, [busyKey]: true }));
                 showNotification(
-                    t('正在处理重下载：下载远程文件并写入 OSS...', 'Re-download in progress: downloading remote file and saving to OSS...'),
+                    isGrsaiDirectOss
+                        ? t('正在更新视频链接（Grsai 已直传 OSS）...', 'Updating video URL (Grsai already stored to OSS)...')
+                        : t('正在处理重下载：下载远程文件并写入 OSS...', 'Re-download in progress: downloading remote file and saving to OSS...'),
                     'info'
                 );
 
@@ -5802,6 +5806,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     const persistResult = await persistShotMedia(stableShotId, {
                         slot: 'video',
                         source_url: sourceUrl,
+                        ...(providerName ? { provider: providerName } : {}),
                     });
                     const persistedUrl = String(
                         persistResult?.persisted_url
@@ -5861,7 +5866,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     Promise.resolve(refreshShots?.()).catch(() => {});
                     refreshShotAssetsMeta?.();
                     releaseShotVideoUi({ shotId: stableShotId, jobId: jobId || undefined });
-                    showNotification(t('视频已落盘并写入 OSS', 'Video downloaded and stored to OSS'), 'success');
+                    showNotification(
+                        isGrsaiDirectOss
+                            ? t('视频链接已更新', 'Video URL updated')
+                            : t('视频已落盘并写入 OSS', 'Video downloaded and stored to OSS'),
+                        'success'
+                    );
                     return true;
                 } catch (persistErr) {
                     const detail = persistErr?.response?.data?.detail || persistErr?.message || 'Unknown error';
@@ -5965,12 +5975,24 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const localShot = resolveLocalShot();
                 const existingVideoUrl = String(localShot?.video_url || '').trim();
                 if (existingVideoUrl) {
-                    const confirmed = await confirmUiMessage(t(
-                        '当前镜头已有视频文件。是否下载供应商任务结果并覆盖/更新？',
-                        'This shot already has a video. Download the provider result and update it?'
-                    ));
+                    const queryProvider = String(result?.provider || '').trim().toLowerCase();
+                    const isGrsaiDirectOss = queryProvider === 'grsai' || queryProvider === 'grsai-video';
+                    const confirmed = await confirmUiMessage(
+                        isGrsaiDirectOss
+                            ? t(
+                                '当前镜头已有视频。是否用供应商结果链接覆盖/更新？',
+                                'This shot already has a video. Update it with the provider result URL?'
+                            )
+                            : t(
+                                '当前镜头已有视频文件。是否下载供应商任务结果并覆盖/更新？',
+                                'This shot already has a video. Download the provider result and update it?'
+                            )
+                    );
                     if (!confirmed) {
-                        showNotification(t('已取消下载', 'Download cancelled'), 'info');
+                        showNotification(
+                            isGrsaiDirectOss ? t('已取消更新', 'Update cancelled') : t('已取消下载', 'Download cancelled'),
+                            'info'
+                        );
                         return;
                     }
                 }
