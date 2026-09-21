@@ -627,10 +627,13 @@ def empty_flower_text_spec() -> Dict[str, Any]:
         "en_size": "小",
         "mid_display": "中部必须艺术化组合设计，不限于印章/古体/英文小字/颜色",
         "product_name_layout": "画右竖排|画左竖排",
-        "cut_fusion": "优先段末切镜或段首开镜，不与动作抢镜；可黑屏专镜；有旁白则无花字",
+        "cut_fusion": "优先段末切镜或段首开镜，不与动作抢镜；可黑屏专镜或字卡专镜；有旁白则无花字",
         "cta_hold": "CTA可较长停留",
         "vo_xor": "有旁白时不出花字，花字低于旁白，禁同步以免分心",
-        "unity": "全片同套字形与字色字重；禁底部避字幕；每段最多一条花字；一个动作最多一条；有旁白时不出花字，花字低于旁白，禁同步；优先段末/段首切镜或黑屏专镜，不与动作抢镜；CTA可较长停留；中部必须艺术化组合（不限于印章/古体/英文小字/颜色），只改字级、落位与艺术手段",
+        "glyph_lock": "引号内逐字成形；含「X家」须见家，禁漏家、禁复写邻字、禁何乐乐享；店号/热线不进难认印章",
+        "seal_clear": "印=句外旁侧｜压字=禁｜替字=禁｜字印留空，禁止印面盖住任一花字",
+        "card_shot": "店号/品牌/热线走字卡专镜：企业场景底+字层先合成一张静帧，本镜Static Hold按静帧原样上屏；禁手写；禁字卡图与场景图当两张参考图分喂；字卡不是CHAR/PROP/ENV，不抽实体；衍生环境不挂字卡",
+        "unity": "全片同套字形与字色字重；禁底部避字幕；每段最多一条花字；一个动作最多一条；有旁白时不出花字，花字低于旁白，禁同步；优先段末/段首切镜或黑屏专镜或字卡专镜，不与动作抢镜；CTA可较长停留；中部必须艺术化组合（不限于印章/古体/英文小字/颜色），只改字级、落位与艺术手段",
         "spec_line": "",
     }
 
@@ -893,6 +896,9 @@ def _default_flower_slot(stage_key: str) -> Tuple[str, str]:
 
 
 _FLOWER_POS_RE = re.compile(r"位置=([^｜]+)")
+_FLOWER_QUOTE_RE = re.compile(r"[「\"]([^」\"]+)[」\"]")
+_FLOWER_PHONE_RE = re.compile(r"(?:\d{3,4}-?\d{5,8}|热线|电话)")
+_FLOWER_SCREEN_RE = re.compile(r"上屏=[^｜]+")
 _FLOWER_BOTTOM_TOKENS = {"底", "底部", "底部居中", "屏幕下方", "下方"}
 _FLOWER_MID_TOKENS = {"中", "中部", "画面中部", "中屏"}
 _FLOWER_SIDE_TOKENS = {"画右", "画左"}
@@ -934,6 +940,70 @@ def unique_flower_text_slot(text: Any) -> str:
     return compact[: match.start()] + f"位置={chosen}" + compact[match.end() :]
 
 
+def compose_flower_glyph_lock(text: Any) -> str:
+    compact = _text(text)
+    match = _FLOWER_QUOTE_RE.search(compact)
+    if not match:
+        return ""
+    source = match.group(1).strip()
+    glyphs = [ch for ch in source if not ch.isspace()]
+    if not glyphs:
+        return ""
+    joined = "/".join(glyphs)
+    if "家" in source:
+        return f"{joined}｜禁漏家｜禁复写邻字｜禁何乐乐享｜禁印代字"
+    return f"{joined}｜禁漏字｜禁复写邻字"
+
+
+def _append_flower_glyph_lock(compact: str) -> str:
+    text = _text(compact)
+    if not text or "逐字=" in text:
+        return text
+    lock = compose_flower_glyph_lock(text)
+    if not lock:
+        return text
+    return f"{text}｜逐字={lock}"
+
+
+def _append_flower_seal_clear(compact: str) -> str:
+    text = _text(compact)
+    if not text or "压字=" in text:
+        return text
+    return f"{text}｜印=句外旁侧｜压字=禁｜替字=禁"
+
+
+def flower_needs_title_card(text: Any) -> bool:
+    compact = _text(text)
+    if not compact:
+        return False
+    match = _FLOWER_QUOTE_RE.search(compact)
+    source = match.group(1).strip() if match else compact
+    if _FLOWER_PHONE_RE.search(source) or _FLOWER_PHONE_RE.search(compact):
+        return True
+    if any(mark in compact for mark in ("店号", "字号", "品牌名", "字卡专镜")):
+        return True
+    return "家" in source and "万家" not in source
+
+
+def _lift_flower_title_card(compact: str) -> str:
+    text = _text(compact)
+    if not text or not flower_needs_title_card(text):
+        return text
+    if _FLOWER_SCREEN_RE.search(text):
+        text = _FLOWER_SCREEN_RE.sub("上屏=字卡专镜", text)
+    else:
+        text = f"{text}｜上屏=字卡专镜"
+    if "字卡=" not in text:
+        text = f"{text}｜字卡=场景底+字层"
+    if "手写=" not in text:
+        text = f"{text}｜手写=禁"
+    return text
+
+
+def _append_flower_video_locks(compact: str) -> str:
+    return _append_flower_seal_clear(_append_flower_glyph_lock(_lift_flower_title_card(compact)))
+
+
 def _compose_stage_flower_text(stage_key: str, row: Dict[str, Any]) -> str:
     existing = _text(row.get("flower_text"))
     position, size = _default_flower_slot(stage_key)
@@ -948,20 +1018,23 @@ def _compose_stage_flower_text(stage_key: str, row: Dict[str, Any]) -> str:
         if "字级=" not in compact:
             compact = f"{compact}｜字级={size}"
         if "上屏=" not in compact:
-            compact = f"{compact}｜上屏=段末切镜"
+            compact = f"{compact}｜上屏={'字卡专镜' if flower_needs_title_card(compact) else '段末切镜'}"
         if "停留=" not in compact:
             compact = f"{compact}｜停留={'长' if stage_key == 'close' else '短'}"
         if "听=" not in compact:
             compact = f"{compact}｜听=无"
-        return unique_flower_text_slot(compact)
+        return _append_flower_video_locks(unique_flower_text_slot(compact))
     if not source:
         return ""
     quote = source.split("｜", 1)[0].strip(" 「」\"'")
     if len(quote) > 16:
         quote = quote[:16]
     hold = "长" if stage_key == "close" else "短"
-    return unique_flower_text_slot(
-        f"文案=「{quote}」｜位置={position}｜字级={size}｜上屏=段末切镜｜停留={hold}｜听=无"
+    screen = "字卡专镜" if flower_needs_title_card(quote) else "段末切镜"
+    return _append_flower_video_locks(
+        unique_flower_text_slot(
+            f"文案=「{quote}」｜位置={position}｜字级={size}｜上屏={screen}｜停留={hold}｜听=无"
+        )
     )
 
 
@@ -993,11 +1066,17 @@ def ensure_flower_text_spec(result: Dict[str, Any]) -> Dict[str, Any]:
     if not _text(spec.get("product_name_layout")):
         spec["product_name_layout"] = "画右竖排|画左竖排"
     if not _text(spec.get("cut_fusion")):
-        spec["cut_fusion"] = "优先段末切镜或段首开镜，不与动作抢镜；可黑屏专镜；有旁白则无花字"
+        spec["cut_fusion"] = "优先段末切镜或段首开镜，不与动作抢镜；可黑屏专镜或字卡专镜；有旁白则无花字"
     if not _text(spec.get("cta_hold")):
         spec["cta_hold"] = "CTA可较长停留"
     if not _text(spec.get("vo_xor")):
         spec["vo_xor"] = "有旁白时不出花字，花字低于旁白，禁同步以免分心"
+    if not _text(spec.get("glyph_lock")):
+        spec["glyph_lock"] = "引号内逐字成形；含「X家」须见家，禁漏家、禁复写邻字、禁何乐乐享；店号/热线不进难认印章"
+    if not _text(spec.get("seal_clear")):
+        spec["seal_clear"] = "印=句外旁侧｜压字=禁｜替字=禁｜字印留空，禁止印面盖住任一花字"
+    if not _text(spec.get("card_shot")):
+        spec["card_shot"] = "店号/品牌/热线走字卡专镜：企业场景底+字层先合成一张静帧，本镜Static Hold按静帧原样上屏；禁手写；禁字卡图与场景图当两张参考图分喂；字卡不是CHAR/PROP/ENV，不抽实体；衍生环境不挂字卡"
     if not _text(spec.get("unity")):
         spec["unity"] = "全片同套字形与字色字重；禁底部避字幕；每段最多一条花字；一个动作最多一条；有旁白时不出花字，花字低于旁白，禁同步；优先段末/段首切镜或黑屏专镜，不与动作抢镜；CTA可较长停留；中部必须艺术化组合（不限于印章/古体/英文小字/颜色），只改字级、落位与艺术手段"
     if _text(spec.get("spec_line")):
@@ -3153,7 +3232,7 @@ def _build_scheme_user_prompt(
         "goal_type=企业品牌宣传（情绪种草）时，吸睛/共鸣/价值禁止口播式介绍企业/品牌/产品（我们是/本产品是）；花字可以点产品名、Logo、slogan。口播自我介绍放到收口。其他诉求不套本条。\n"
         "campaign_demand.expect_duration 是用户锁定的预期时长，必须原样写入 overall_scheme.target_duration 与 video_positioning.duration。\n"
         "四段 stage_plan 的 duration、口播字数、花字条数必须合计落入该时长档；禁止输出 shots 字段，禁止写建议镜头或分镜表。禁止把短片写成分钟级讲解，也禁止把长片压成一句口号。\n"
-        "必须规划片内图形花字：project_visual_backfill.flower_text_spec 全片统一字体/字色/字重；吸睛/共鸣/价值/收口各段最多一条 flower_text，禁止底部落位以免与字幕重合。旁白优先：花字优先级低于旁白；copy 与 flower_text 可同段规划，但禁止同一拍同步上屏以免转移注意力；flower_text 须写 听=无，落地只挂无声的开镜/段末切镜/黑屏专镜。花字与切镜融合：优先写 上屏=段末切镜|段首开镜，不与动作抢镜；也可 上屏=黑屏专镜（满幅黑场只上花字，该拍无旁白，仍算该段唯一一条、场内一拍，不拆场）。一般内容位置=中、字级=中、停留=短；收口位置=中、字级=大；CTA 停留=长。close.flower_text 必须是一句有韵味的记忆句，禁止用打开预约等 CTA 动词冒充，CTA 不是第二条花字。中部花字须字数简洁、文化味强、内涵深（宜≤15字），必须单独做艺术化组合设计并写艺术=手段A+手段B+…（并不限于印章、古体字、英文小字、颜色；还可组合书法、烫金、霓虹、水墨、光晕等），禁止说明书或口播整句上中屏。花字不是对白硬字幕。古风/文化/文旅可适当用繁体、古体字体、印章体；品牌注册名与数字/网址保持原形。重点语句可配英文小字（英= + 英级=小），不得盖过中文。有产品名称时通常在画右或画左竖排（位置=画右|画左｜排向=竖），仍算该段唯一一条。\n"
+        "必须规划片内图形花字：project_visual_backfill.flower_text_spec 全片统一字体/字色/字重；吸睛/共鸣/价值/收口各段最多一条 flower_text，禁止底部落位以免与字幕重合。旁白优先：花字优先级低于旁白；copy 与 flower_text 可同段规划，但禁止同一拍同步上屏以免转移注意力；flower_text 须写 听=无，落地只挂无声的开镜/段末切镜/黑屏专镜/字卡专镜。花字与切镜融合：优先写 上屏=段末切镜|段首开镜，不与动作抢镜；也可 上屏=黑屏专镜或 上屏=字卡专镜（该拍无旁白，仍算该段唯一一条、场内一拍，不拆场）。店号/品牌/热线必须 上屏=字卡专镜｜字卡=场景底+字层｜手写=禁：企业场景底+字层先合成一张静帧，本镜 Static Hold 按原样上屏，禁止视频手写，禁止把字卡图与场景图当两张参考图分喂；字卡不是 CHAR/PROP/ENV。一般内容位置=中、字级=中、停留=短；收口位置=中、字级=大；CTA 停留=长。close.flower_text 必须是一句有韵味的记忆句，禁止用打开预约等 CTA 动词冒充，CTA 不是第二条花字。中部花字须字数简洁、文化味强、内涵深（宜≤15字），必须单独做艺术化组合设计并写艺术=手段A+手段B+…（并不限于印章、古体字、英文小字、颜色；还可组合书法、烫金、霓虹、水墨、光晕等），禁止说明书或口播整句上中屏。花字不是对白硬字幕。古风/文化/文旅可适当用繁体、古体字体、印章体；品牌注册名、店号（含「X家」）与数字/网址保持原形可扫读，须写 逐字=，禁漏家、禁复写邻字、禁何乐乐享。印章不压字：须写 印=句外旁侧｜压字=禁｜替字=禁，禁止印面盖住任一花字、禁止用印占字格。重点语句可配英文小字（英= + 英级=小），不得盖过中文。有产品名称时通常在画右或画左竖排（位置=画右|画左｜排向=竖），仍算该段唯一一条。\n"
         "必须先完整针对 campaign_demand.basic_intro 的本次宣传要点，写入 overall_scheme.promo_focus（要点=…｜来源=基本介绍|主体抽取）。基本介绍无要点时，按 goal_type 从企业/品牌/产品介绍抽取有用信息，禁止另起无关卖点。再总结 overall_scheme.selling_points（主=美食|美景|美物|美人|工艺|文化|高科技|历史沉淀｜次=…｜展现=哪段怎么拍）。四段必须充分展现每个已锁卖点。再锁 overall_scheme.visual_core 与主卖点同核（核=美食|美景|美人|科技|产品｜加码=充分特写|宏观特效|技术特效）。美食/美人/产品须充分特写，美景须宏观特效，科技须技术特效。有产品必须写特别描述（形制/材质/标识/高光）并给专拍特写，禁止只点品名。有 Logo/slogan 等企业元素必须给标识专拍特写，禁止远处小标一闪而过，禁止自造未提供的标识。主核在吸睛与价值专拍突出，禁止路过远景一带而过。\n"
         "配乐必须更响更重要：music_recommendation 写 音量=并重（收口可压过）与 权重=配乐主轴，禁止垫底几乎听不见。\n"
         "节奏只能是吸睛-共鸣-价值-收口，写入 narrative_plan.primary_model、content_mode.primary_mode、stage_plan 与 script_preview.beats。\n"
@@ -4253,7 +4332,7 @@ def _build_script_user_prompt(
         "企业/产品事实不编造。无上传素材时仍须写出完整可拍人物、空间与动作，禁止因无 object_name 而省略画面。已有素材不作场面约束；效果第一，发挥AI视频优势，须落地宏观大场面与精密拍摄。\n"
         "素材只消费文首「已有素材资源描述」：名称/类型/说明/外形不得漏条改名；说明写入对应角色/道具介绍。禁止另读主体全库、台账或解析原文。\n"
         "有已有素材资源描述时，写出「## 视觉还原（上传素材，供资产重生）」只准逐行抄该描述，禁止另补未写入的素材。\n"
-        "基调与风格服从 project_visual_backfill。必须写出 ## 花字规范（抄 flower_text_spec，含字形/强调体/英配/中屏艺术化组合/产品名画右或画左竖排/禁底部避字幕/切镜融合/旁白优先）。吸睛/共鸣/价值/收口各段最多一条花字。旁白优先：花字优先级低于旁白；本拍 口播: 非「无」→ 必须 花字: 无，禁止同一拍同步出花字以免转移注意力。花字只挂 口播: 无 的段首开镜、段末切镜或黑屏专镜，并写 听=无。花字与切镜融合：优先挂在该段段首开镜或段末切镜，不与动作抢镜；也可单独一拍黑屏专镜（动作主语=黑屏，只上花字，该拍无旁白），仍在同一场。其他拍写 花字: 无。一个动作最多一条花字。禁止位置=底/底部居中，以免与字幕重合；只写 位置=中|画右|画左。一般内容位置=中、字级=中、停留=短；收口位置=中、字级=大；CTA 停留=长。CTA 写 CTA= 不是第二条花字。最后一拍必须有一句有韵味的收口花字，禁止用 CTA 动词代替。中部花字须字少味厚、文化味强、内涵深，宜≤15字，必须写 艺术=手段A+手段B+…（并不限于印章、古体字、英文小字、颜色），禁止说明书或口播整句上中屏。古风/文化/文旅花字可繁体、古体或印章体。重点句可加 英=「短译」｜英级=小。有产品名时该条可 位置=画右|画左｜排向=竖，仍算该段唯一一条。必须抄 overall_scheme.promo_focus 与 selling_points 写入 ## 核心重点，节拍充分展现每个已锁卖点（美食/美景/美物/美人/工艺/文化/高科技/历史沉淀），禁止另起无关故事。必须抄 overall_scheme.visual_core 为画面核（与主卖点同核），并把主核加码写满：美食/美人/产品充分特写，美景观宏观特效，科技见技术特效。有产品必须特别描述形制材质标识并给专拍特写。有 Logo/slogan 等企业元素必须给标识特写，禁止远处小标一闪而过。配乐须并重够响（收口可压过），禁止垫底。必须按上游 stage_plan 的 content/sensory/copy/flower_text 拆镜并逐字核销；在此前提下认真分析全部对标内容，结合本案例综合实现各 Beat，写出 ## 对标综合与每拍 对标综合=（多部片名+手法→本案可见结果）。\n"
+        "基调与风格服从 project_visual_backfill。必须写出 ## 花字规范（抄 flower_text_spec，含字形/强调体/英配/中屏艺术化组合/产品名画右或画左竖排/禁底部避字幕/切镜融合/旁白优先/逐字锁/印章不压字/字卡专镜）。吸睛/共鸣/价值/收口各段最多一条花字。旁白优先：花字优先级低于旁白；本拍 口播: 非「无」→ 必须 花字: 无，禁止同一拍同步出花字以免转移注意力。花字只挂 口播: 无 的段首开镜、段末切镜、黑屏专镜或字卡专镜，并写 听=无。花字与切镜融合：优先挂在该段段首开镜或段末切镜，不与动作抢镜；也可单独一拍黑屏专镜或字卡专镜（该拍无旁白），仍在同一场。店号/品牌/热线必须 上屏=字卡专镜｜字卡=场景底+字层｜手写=禁，企业场景底+字层先合成一张静帧，本镜 Static Hold 按原样上屏，禁止视频手写，禁止双参考图分喂。其他拍写 花字: 无。一个动作最多一条花字。禁止位置=底/底部居中，以免与字幕重合；只写 位置=中|画右|画左。一般内容位置=中、字级=中、停留=短；收口位置=中、字级=大；CTA 停留=长。CTA 写 CTA= 不是第二条花字。最后一拍必须有一句有韵味的收口花字，禁止用 CTA 动词代替。中部花字须字少味厚、文化味强、内涵深，宜≤15字，必须写 艺术=手段A+手段B+…（并不限于印章、古体字、英文小字、颜色），禁止说明书或口播整句上中屏。古风/文化/文旅花字可繁体、古体或印章体。品牌名、店号（含「X家」）可扫读，须写 逐字=，禁漏家、禁复写邻字、禁何乐乐享。印章不压字：须写 印=句外旁侧｜压字=禁｜替字=禁，禁止印面盖住花字。重点句可加 英=「短译」｜英级=小。有产品名时该条可 位置=画右|画左｜排向=竖，仍算该段唯一一条。必须抄 overall_scheme.promo_focus 与 selling_points 写入 ## 核心重点，节拍充分展现每个已锁卖点（美食/美景/美物/美人/工艺/文化/高科技/历史沉淀），禁止另起无关故事。必须抄 overall_scheme.visual_core 为画面核（与主卖点同核），并把主核加码写满：美食/美人/产品充分特写，美景观宏观特效，科技见技术特效。有产品必须特别描述形制材质标识并给专拍特写。有 Logo/slogan 等企业元素必须给标识特写，禁止远处小标一闪而过。配乐须并重够响（收口可压过），禁止垫底。必须按上游 stage_plan 的 content/sensory/copy/flower_text 拆镜并逐字核销；在此前提下认真分析全部对标内容，结合本案例综合实现各 Beat，写出 ## 对标综合与每拍 对标综合=（多部片名+手法→本案可见结果）。\n"
         "场景可在视觉还原之上加美化光与贴边点缀装饰，不改空间身份、不占舞台净空。禁止照搬对方商标/Logo/吉祥物/注册口号。\n"
         "按时长控制篇幅，不拆场。只输出带 OUTPUT 标记的 Markdown 剧本。\n"
         f"{material_block}\n"

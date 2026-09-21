@@ -77,6 +77,9 @@ FLOWER_TEXT_SPEC_FIELDS = (
     ("cut_fusion", "切镜融合"),
     ("cta_hold", "CTA停留"),
     ("vo_xor", "旁白优先"),
+    ("glyph_lock", "逐字锁"),
+    ("seal_clear", "印章不压字"),
+    ("card_shot", "字卡专镜"),
     ("unity", "统一"),
 )
 
@@ -1134,7 +1137,7 @@ def format_promo_injection_body(brief: Any) -> str:
         f"切场={PROMO_SCENE_RULE}",
         f"节奏={PROMO_RHYTHM}",
         "四段=场内节拍，不是四场。跨空间/跨时段仍包在同一场。",
-        "花字闸=有旁白时不出花字，花字低于旁白，禁同步以免分心；只挂无声开镜/段末/黑屏专镜。",
+        "花字闸=有旁白时不出花字，花字低于旁白，禁同步以免分心；只挂无声开镜/段末/黑屏专镜/字卡专镜。含「X家」须逐字见家，禁漏家、禁复写邻字、禁何乐乐享。印章不压字：印=句外旁侧｜压字=禁｜替字=禁。店号/品牌/热线走字卡专镜：企业场景底+字层先合成一张静帧，本镜Static Hold按静帧原样上屏，禁手写、禁双参考图分喂；字卡不是CHAR/PROP/ENV。",
         f"素材策略={_text(data.get('promo_asset_strategy')) or '无上传素材时按剧本新构思抽取角色/道具/环境，后续补充或由AI生成。'}",
     ])
     material = _text(data.get("promo_existing_material"))

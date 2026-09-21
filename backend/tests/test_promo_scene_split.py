@@ -778,9 +778,15 @@ def test_promo_flower_text_is_planned_and_injected():
     assert "en_companion" in spec
     assert spec["product_name_layout"] == "画右竖排|画左竖排"
     assert spec["mid_display"] == "中部必须艺术化组合设计，不限于印章/古体/英文小字/颜色"
-    assert spec["cut_fusion"] == "优先段末切镜或段首开镜，不与动作抢镜；可黑屏专镜；有旁白则无花字"
+    assert spec["cut_fusion"] == "优先段末切镜或段首开镜，不与动作抢镜；可黑屏专镜或字卡专镜；有旁白则无花字"
+    assert "字卡专镜" in spec["card_shot"]
+    assert "场景底+字层" in spec["card_shot"]
     assert spec["cta_hold"] == "CTA可较长停留"
     assert spec["vo_xor"] == "有旁白时不出花字，花字低于旁白，禁同步以免分心"
+    assert "禁漏家" in spec["glyph_lock"]
+    assert "禁何乐乐享" in spec["glyph_lock"]
+    assert "压字=禁" in spec["seal_clear"]
+    assert "替字=禁" in spec["seal_clear"]
 
     merged = merge_planner_result(
         {
@@ -821,6 +827,28 @@ def test_promo_flower_text_is_planned_and_injected():
     assert "停留=长" in merged["stage_plan"]["close"]["flower_text"]
     assert "听=无" in merged["stage_plan"]["close"]["flower_text"]
     assert "打开预约" not in merged["stage_plan"]["close"]["flower_text"]
+    assert "逐字=" in merged["stage_plan"]["hook"]["flower_text"]
+    assert "压字=禁" in merged["stage_plan"]["hook"]["flower_text"]
+    assert "替字=禁" in merged["stage_plan"]["hook"]["flower_text"]
+    assert "逐字锁=" in spec["spec_line"]
+    assert "印章不压字=" in spec["spec_line"]
+    assert "禁漏家" in spec["spec_line"]
+    jia = merge_planner_result(
+        {
+            "stage_plan": {
+                "close": {"flower_text": "文案=「天地灵秀·何家乐享」｜位置=中｜字级=大"},
+            }
+        }
+    )["stage_plan"]["close"]["flower_text"]
+    assert "逐字=" in jia
+    assert "何/家/乐/享" in jia
+    assert "禁漏家" in jia
+    assert "禁何乐乐享" in jia
+    assert "禁印代字" in jia
+    assert "压字=禁" in jia
+    assert "上屏=字卡专镜" in jia
+    assert "字卡=场景底+字层" in jia
+    assert "手写=禁" in jia
 
     brief = collect_promo_brief({"source_promo_project_id": 9}, {}, merged)
     body = format_promo_injection_body(brief)
@@ -923,6 +951,15 @@ def test_promo_flower_text_is_planned_and_injected():
     assert "旁白优先" in script_user
     assert "听=无" in script_user
     assert "旁白优先=" in spec["spec_line"] or "有旁白时不出花字" in spec["spec_line"]
+    assert "逐字锁=" in spec["spec_line"]
+    assert "禁漏家" in scheme_sys
+    assert "禁何乐乐享" in script_sys
+    assert "逐字=" in script_sys
+    assert "印章不压字" in scheme_sys
+    assert "压字=禁" in script_sys
+    assert "字卡专镜" in scheme_sys
+    assert "字卡专镜" in script_sys
+    assert "手写=禁" in scheme_sys
 
 
 def test_promo_music_is_foreground_and_loud():

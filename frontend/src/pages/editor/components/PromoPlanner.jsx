@@ -502,9 +502,12 @@ const emptyFlowerTextSpec = () => ({
     align: '居中',
     max_line_chars: '12',
     mid_display: '中部必须艺术化组合设计，不限于印章/古体/英文小字/颜色',
-    cut_fusion: '优先段末切镜或段首开镜，不与动作抢镜；可黑屏专镜；有旁白则无花字',
+    cut_fusion: '优先段末切镜或段首开镜，不与动作抢镜；可黑屏专镜或字卡专镜；有旁白则无花字',
     cta_hold: 'CTA可较长停留',
     vo_xor: '有旁白时不出花字，花字低于旁白，禁同步以免分心',
+    glyph_lock: '引号内逐字成形；含「X家」须见家，禁漏家、禁复写邻字、禁何乐乐享；店号/热线不进难认印章',
+    seal_clear: '印=句外旁侧｜压字=禁｜替字=禁｜字印留空，禁止印面盖住任一花字',
+    card_shot: '店号/品牌/热线走字卡专镜：企业场景底+字层先合成一张静帧，本镜Static Hold按静帧原样上屏；禁手写；禁双参考图分喂；字卡不是CHAR/PROP/ENV',
     unity: '全片同套字形与字色字重；禁底部避字幕；每段最多一条花字；一个动作最多一条；有旁白时不出花字，花字低于旁白，禁同步；优先段末/段首切镜或黑屏专镜，不与动作抢镜；CTA可较长停留；中部必须艺术化组合（不限于印章/古体/英文小字/颜色），只改字级、落位与艺术手段',
     spec_line: '',
 });
@@ -2388,8 +2391,8 @@ function StagePlanEditor({
                                     onChange={(v) => patchResult(`${prefix}.flower_text`, v)}
                                     rows={2}
                                     placeholder={key === 'close'
-                                        ? t('文案=「有韵味的收口句」｜位置=中｜字级=大｜上屏=段末切镜|黑屏专镜｜停留=长｜听=无｜艺术=A+B', 'Copy | mid | large | end-cut or black card | silent | hold long')
-                                        : t('文案=「上屏短句」｜位置=中｜字级=中｜上屏=段末切镜|段首开镜|黑屏专镜｜停留=短｜听=无｜艺术=A+B', 'Copy | mid | medium | open/end cut or black card | silent | short')}
+                                        ? t('文案=「有韵味的收口句」｜位置=中｜字级=大｜上屏=段末切镜|黑屏专镜|字卡专镜｜停留=长｜听=无｜艺术=A+B｜逐字=…', 'Copy | mid | large | end-cut, black card or title card | silent | hold long | glyph lock')
+                                        : t('文案=「上屏短句」｜位置=中｜字级=中｜上屏=段末切镜|段首开镜|黑屏专镜|字卡专镜｜停留=短｜听=无｜艺术=A+B｜逐字=…', 'Copy | mid | medium | open/end cut, black or title card | silent | short | glyph lock')}
                                 />
                             </div>
                             <div>
@@ -2449,6 +2452,9 @@ function VisualBackfillEditor({ result, patchResult, t }) {
                                     <TextInput value={spec.cut_fusion} onChange={(v) => patchSpec('cut_fusion', v)} placeholder={t('切镜融合=段末/段首或黑屏专镜', 'Cut fusion')} />
                                     <TextInput value={spec.cta_hold} onChange={(v) => patchSpec('cta_hold', v)} placeholder={t('CTA停留=长', 'CTA hold')} />
                                     <TextInput value={spec.vo_xor} onChange={(v) => patchSpec('vo_xor', v)} placeholder={t('旁白优先=有旁白时不出花字', 'VO first: no flower text with narration')} />
+                                    <TextInput value={spec.glyph_lock} onChange={(v) => patchSpec('glyph_lock', v)} placeholder={t('逐字锁=含X家须见家，禁何乐乐享', 'Glyph lock: keep 家, no dropped or doubled characters')} />
+                                    <TextInput value={spec.seal_clear} onChange={(v) => patchSpec('seal_clear', v)} placeholder={t('印章不压字=印句外旁侧，压字=禁', 'Seal stays outside the letters')} />
+                                    <TextInput value={spec.card_shot} onChange={(v) => patchSpec('card_shot', v)} placeholder={t('字卡专镜=场景底+字层，手写=禁', 'Title card: scene still + type layer')} />
                                     <TextInput value={spec.unity} onChange={(v) => patchSpec('unity', v)} placeholder={t('统一说明', 'Unity')} />
                                 </div>
                                 <TextArea value={spec.spec_line} onChange={(v) => patchSpec('spec_line', v)} rows={2} placeholder={t('规范一行：字体=…｜字色=…｜正文级=中｜收口级=大｜正文位=画面中部｜收口位=画面中部｜禁底部避字幕', 'One-line spec')} />
