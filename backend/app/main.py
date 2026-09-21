@@ -1530,6 +1530,8 @@ from app.api.routers.workspace_residual import router as workspace_residual_rout
 app.include_router(workspace_residual_router, prefix=settings.API_V1_STR)
 from app.api.routers.projects_workspace import router as projects_workspace_router
 app.include_router(projects_workspace_router, prefix=settings.API_V1_STR)
+from app.api.routers.promo_projects import catalog_asset_router
+app.include_router(catalog_asset_router, prefix=settings.API_V1_STR)
 from app.api.routers.admin_queue import router as admin_queue_router
 app.include_router(admin_queue_router, prefix=settings.API_V1_STR)
 from app.api.routers.tasks import router as tasks_router

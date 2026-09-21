@@ -1051,6 +1051,20 @@ def test_promo_technique_lexicon_injected_into_scheme_and_script():
     assert "美化光" in script_sys
     assert "技术特效" in scheme_sys
     assert "技术特效" in script_sys
+    assert "救猫咪" in scheme_sys
+    assert "救猫咪" in script_sys
+    scheme_user = _build_scheme_user_prompt(
+        {"enterprise_info": {}, "campaign_demand": {"goal_type": "即时转化（引流获客）", "expect_duration": "15-30s"}},
+        {},
+        [],
+    )
+    script_user = _build_script_user_prompt(
+        title="试片",
+        planner_input={"enterprise_info": {}, "campaign_demand": {}},
+        planner_result=merge_planner_result({}),
+    )
+    assert "救猫咪" in scheme_user
+    assert "救猫咪" in script_user
 
 
 def test_planner_shots_left_to_script_writer_with_verbatim_checkout():

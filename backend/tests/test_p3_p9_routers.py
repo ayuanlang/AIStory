@@ -36,6 +36,14 @@ def test_projects_workspace_router_paths():
     assert "/shots/{shot_id}" in paths
 
 
+def test_promo_catalog_analyze_router_path():
+    paths = _paths("app.api.routers.promo_projects")
+    from app.api.routers.promo_projects import catalog_asset_router
+    analyze_paths = {getattr(r, "path", None) for r in catalog_asset_router.routes}
+    assert "/promo-catalog-assets/{asset_id}/analyze" in analyze_paths
+    assert "/promo-catalog-assets/{asset_id}/analyze" in paths
+
+
 def test_entities_assets_generate_paths():
     e = _paths("app.api.routers.entities")
     a = _paths("app.api.routers.assets")
@@ -78,6 +86,7 @@ def test_main_app_has_critical_routes():
         "/api/v1/users/me",
         "/api/v1/admin/queue/tasks",
         "/api/v1/settings/effective",
+        "/api/v1/promo-catalog-assets/{asset_id}/analyze",
     ]:
         assert p in paths
 

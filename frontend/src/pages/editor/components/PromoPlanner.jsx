@@ -108,7 +108,7 @@ const PROMO_GOAL_TYPE_DEFS = {
 };
 
 const PROMO_NARRATIVE_DEFS = {
-    [PROMO_UNIFIED_RHYTHM]: { zh: '全片统一四段：吸睛（美感/震撼+一句话钩子）→ 共鸣（客户代入，多镜推情绪）→ 价值（企业/品牌/产品解决方案）→ 收口（记忆点+清晰 CTA）。', en: 'Hook → empathy → value → close. Locked for every promo.' },
+    [PROMO_UNIFIED_RHYTHM]: { zh: '全片统一四段：吸睛（美感/震撼+一句话钩子）→ 共鸣（客户代入，可适当叠救猫咪式可亲动作）→ 价值（企业/品牌/产品解决方案）→ 收口（记忆点+清晰 CTA）。', en: 'Hook → empathy (with a Save-the-Cat likable beat) → value → close. Locked for every promo.' },
 };
 
 const PROMO_PRESENTATION_DEFS = {
@@ -2094,7 +2094,7 @@ export default function PromoPlanner({
                         />
                     </div>
                     <div className="text-xs text-white/55 bg-white/5 border border-white/10 rounded-md px-3 py-2">
-                        {t('统一节奏：吸睛 → 共鸣 → 价值 → 收口。各段秒数、口播与花字密度必须合计落入所选预期时长；镜头由编剧按四段内容拆镜并逐字核销。', 'Rhythm is locked: hook → empathy → value → close. Stage seconds, copy and flower-text must fit the duration. The script writer breaks shots and checks each stage verbatim.')}
+                        {t('统一节奏：吸睛 → 共鸣 → 价值 → 收口。共鸣可适当融合救猫咪式节拍（一次小而可亲的主动作，加强代入），不是第五段。各段秒数、口播与花字密度必须合计落入所选预期时长；镜头由编剧按四段内容拆镜并逐字核销。', 'Rhythm is locked: hook → empathy → value → close. Empathy may fold in a Save-the-Cat likable beat. Stage seconds, copy and flower-text must fit the duration. The script writer breaks shots and checks each stage verbatim.')}
                     </div>
                     <div>
                         <FieldLabel>{t('基本介绍', 'Basic intro')}</FieldLabel>

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -78,6 +78,8 @@ from app.services.promo_planner import (
 from app.services.task_manager import submit_async_endpoint as _submit_async
 
 router = _shared.router
+# Mounted from main.py so catalog analyze survives workspace-router reload gaps.
+catalog_asset_router = APIRouter(tags=["promo-catalog-assets"])
 
 
 @router.get("/promo-projects/", response_model=List[PromoProjectOut])
@@ -748,9 +750,12 @@ def create_promo_catalog_asset(
 
 
 @router.post("/promo-catalog-assets/{asset_id}/analyze")
+@router.post("/promo-catalog-assets/{asset_id}/analyze/", include_in_schema=False)
+@catalog_asset_router.post("/promo-catalog-assets/{asset_id}/analyze")
+@catalog_asset_router.post("/promo-catalog-assets/{asset_id}/analyze/", include_in_schema=False)
 async def analyze_promo_catalog_asset(
     asset_id: int,
-    req: Optional[PromoCatalogAssetAnalyzeRequest] = None,
+    req: Optional[PromoCatalogAssetAnalyzeRequest] = Body(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
