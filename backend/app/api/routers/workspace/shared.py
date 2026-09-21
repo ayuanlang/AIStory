@@ -340,15 +340,26 @@ def create_project(
 ):
     if str(getattr(project, "kind", "") or "").strip().lower() == "promo":
         from app.models.all_models import PromoProject
-        from app.services.promo_planner import bind_promo_catalog, serialize_promo_project
+        from app.services.promo_planner import (
+            bind_promo_catalog,
+            persist_promo_project_extra_info,
+            serialize_promo_project,
+        )
 
         title = str(project.title or "").strip()
         if not title:
             raise HTTPException(status_code=400, detail="title is required")
+        extra_info = persist_promo_project_extra_info(
+            dict(project.global_info or {}),
+            title=title,
+            description=project.description or "",
+            require_aspect_ratio=True,
+            require_type=True,
+        )
         row = PromoProject(
             title=title,
             description=(project.description or "").strip() or None,
-            extra_info=dict(project.global_info or {}),
+            extra_info=extra_info,
             owner_id=current_user.id,
         )
         db.add(row)

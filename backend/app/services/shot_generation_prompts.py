@@ -500,6 +500,21 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     if project_notes:
         project_context_lines.append(f"Project Notes: {project_notes}")
 
+    try:
+        from app.services.promo_context import (
+            collect_promo_brief,
+            format_promo_injection_body,
+            is_promo_project,
+        )
+
+        if is_promo_project(project_info):
+            promo_body = format_promo_injection_body(collect_promo_brief(project_info))
+            if promo_body:
+                project_context_lines.append("[商业宣传片]")
+                project_context_lines.extend(promo_body.splitlines())
+    except Exception:
+        pass
+
     project_context_lines.append("[Technical & Visual Parameters]")
     aspect_ratio = get_visual_val(["aspect_ratio", "aspectRatio"])
     image_size = get_visual_val(["image_size", "imageSize"])
@@ -1255,9 +1270,10 @@ def _build_shot_prompts(
             f"景别构图与镜头角度：每镜只抄该拍【建置】拍摄键（缺则【取景锁定】）原文进Logic（景别继承/观察角度/构图规划）与Video落地句；合镜逐Beat抄各自锁档。禁止本层另选远近/构图/镜头角度。缺锁定标upstream_missing_framing回流。"
             f"影视语言：焦距/视角°/光学/运镜/构图/镜头位置/跟焦/帧率/快门速度/曝光三角/光比/色温/柔硬/色调须可回指Video；每项技术动作点名后须接§四.0该档执行效果（47°标准人眼=日常叙事对话全景纪实无畸变画面自然；84°广角=人物+环境融合近身动作透视自然扩张；107°超广角=大场景灾难宏大环境沉浸式空间感；29°中长焦=人物近景情绪特写背景柔和虚化；18°长焦=五官细节微表情极致压缩景深；8°超长焦=远距离观察偷窥画面扁平化；压迫光影=仅保留轮廓光高光眼神光勾勒层次，面部沉入压暗阴影；运镜/构图/机位距侧同样参数+效果）。光学须点名快门速度1/Xs（与帧率同核：24fps冻结=1/96s、微拖=1/48s；48fps冻结=1/192s、微拖=1/96s；60fps冻结=1/240s、微拖=1/120s），允许写1/48s等EXIF速度，禁止只写冻结/微拖不写速度。高速追逐/飙车/急飞须点§四.4B技巧词：光学≥2（Background Motion Blur/Strong Parallax/Speed Tunnel/Ground Rush/Light Streak等）＋运镜≥2（Distance Lock Follow＋Follow/Lead/Car Mount/Hood Mount/Pursuit Cam/Drone Chase/Bank Follow/FPV Dive）＋构图落地≥1（灭点吸力/速度隧道框/运动前留白/追逃同轴/垂直层位叠，只实现已锁构图）；禁止只写Follow或背景糊了。打斗/仙攻/魔法须点§四.4C技巧词：光学≥2（Impact Flash/Dust Burst/Aura Attachment/Particle Lattice/Spatial Warp/Cast Glow/Rune Circle/Spell Beam Volume/Elemental Wash等）＋运镜≥2（Handheld Combat/Attack Axis Track/Whip/Crash Zoom/Bullet Time/Speed Ramp/Scale Contrast/Impact Shake/Orbit Cast/Follow Beam）＋构图落地≥1（攻击同轴/攻防同框/体量对比框/阵形满幅/阵盘铺地/咒束引导线，只实现已锁构图）；快相48/60fps，升格24fps+Ramp；禁止只写快速打斗/金光爆发/放了个魔法。"
             f"美术锚=ENV CN四宫格同方向格，不另起无锚光。"
-            f"最终提示词镜头语言：Video五段须中英专业词并列点名（MCU/OTS/Eye-level/47°标准人眼/29°中长焦/Shallow DOF/Follow Focus/24fps/Key/Fill/Soft Light/Medium Contrast/Cool等）并接§四.0该档执行效果，禁止只点名mm/DOF/Freeze/三分/一臂/技法名不写效果，禁止口语冲淡（有光/推近一点/背景糊了/电影感）。光学视场闭集8°/18°/29°/47°/84°/107°必须写入Video，禁止把ENV名180度当视角档。"
-            f"P段描述逻辑：一般一P对应一Beat，必须按播放时间序一一对应（时序不可变，禁止因卖点/高潮倒排Pn，禁止同一Shot把一Beat拆成多个P）；每个Pn必须标本镜内起止秒，写法=(Pn 0s–4s)，P1从0s起、相邻P首尾相接、末P止秒=本镜Duration，禁止只写(P1)无秒；同拍内CHAR/PROP按上游【卖点综合】【情绪峰谷综合】【叙事综合】的重点对象/峰谷承载/关键人物优先写到建置句序、主拍与Associated Entities前列，其余在场者仍须全覆盖；Video以运镜与动作流起笔（禁以ENV或全局风格起笔）；P1先写该拍入画角色/道具【建置】位置朝向，再写背景参考图为ENV:[…]，再写入戏/运镜/配音/音效；同ENV的P2+不重复全员落位，只写背景参考图为ENV:与入戏；相邻拍ENV:[…]名变时该Pn含该拍【建置】整句，并写「背景切换到参考图ENV:[新]」后再写入戏（含同主切角/换主/状态衍生；禁只写背景参考图为而不写切换到）；成稿顺序=运镜与动作流→两光影段→全局动态风格→物理文字→品质收束。"
+            f"最终提示词镜头语言：Video四段须中英专业词并列点名（MCU/OTS/Eye-level/47°标准人眼/29°中长焦/Shallow DOF/Follow Focus/24fps/Key/Fill/Soft Light/Medium Contrast/Cool等）并接§四.0该档执行效果，禁止只点名mm/DOF/Freeze/三分/一臂/技法名不写效果，禁止口语冲淡（有光/推近一点/背景糊了/电影感）。光学视场闭集8°/18°/29°/47°/84°/107°必须写入Video，禁止把ENV名180度当视角档。"
+            f"P段描述逻辑：一般一P对应一Beat，必须按播放时间序一一对应（时序不可变，禁止因卖点/高潮倒排Pn，禁止同一Shot把一Beat拆成多个P）；每个Pn必须标本镜内起止秒，写法=(Pn 0s–4s)，P1从0s起、相邻P首尾相接、末P止秒=本镜Duration，禁止只写(P1)无秒；同拍内CHAR/PROP按上游【卖点综合】【情绪峰谷综合】【叙事综合】的重点对象/峰谷承载/关键人物优先写到建置句序、主拍与Associated Entities前列，其余在场者仍须全覆盖；Video以运镜与动作流起笔（禁以ENV或全局风格起笔）；P1先写该拍入画角色/道具【建置】位置朝向，再写背景参考图为ENV:[…]，再写入戏/运镜/配音/音效；同ENV的P2+不重复全员落位，只写背景参考图为ENV:与入戏；相邻拍ENV:[…]名变时该Pn含该拍【建置】整句，并写「背景切换到参考图ENV:[新]」后再写入戏（含同主切角/换主/状态衍生；禁只写背景参考图为而不写切换到）；成稿顺序=运镜与动作流→两光影段→全局动态风格→品质收束；禁止另起物理文字段。"
             f"配乐与音效：上游【配乐】【音效】嵌在对应动作或运镜句上，与锚=/配合=同一瞬间同拍同频；禁止堆到段末或光影段；禁止因品质收束「无背景音乐」删已写入的配乐/音效。"
+            f"名牌与花字只写入运镜与动作流对应P段一次；禁止另起物理文字段（含写无或本段不复述字样）；品质收束禁止再抄【字样】或花字「文案」（再写会二次上屏），只许泛称已写名牌/花字；无字幕=禁对白硬字幕，不删已写名牌与花字。"
             f"光影两段（动态连续光影/焦点、光线连动弧光）不得省略。"
             f"上游放大应答：凡上游指导/峰值放大/低点放大/构图综合/运镜参考等要求下游加强放大的项，覆盖镜头须在已锁构图、运镜、俯仰视角三轴同时给出可核销应答（Logic填上游放大应答，Video有P段落点）；禁止为放大改锁档、禁止运镜参考推近却全程Static。"
             f"情节升格：是否升格认上游节奏(-/~)与情节源；本层只做帧率与时间测算差异化——升格段24fps+Slow Motion+Ramp，秒数按§三.5分项（~放、-只钉节点P）。禁止本层自判触发，禁止60fps冒充升格。"

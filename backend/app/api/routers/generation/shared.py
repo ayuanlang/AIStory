@@ -137,13 +137,16 @@ from app.services.generation_runtime.generation_errors import (  # noqa: E402,F4
     _is_generic_generation_error_text,
 )
 from app.services.generation_runtime.seedance_duration import (  # noqa: E402,F401
+    SEEDANCE_2_5_DURATION_WARN_SECONDS,
     SEEDANCE_DURATION_MAX_SECONDS,
     SEEDANCE_DURATION_MIN_SECONDS,
     _clamp_seedance_duration,
     _is_seedance2_base_model,
+    _is_seedance25_model_name,
     _is_seedance_model_name,
     _read_system_api_base_model_row,
     _resolve_shot_video_duration_value,
+    _seedance_duration_warn_max_seconds,
 )
 from app.services.generation_runtime.generation_filename import (  # noqa: E402,F401
     _build_generation_filename_base,

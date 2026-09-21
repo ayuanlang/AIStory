@@ -101,6 +101,7 @@ export const MODEL_OPTIONS = {
             { label: "Kling v1", value: "kling-v1" },
             { label: "Kling v1.5", value: "kling-v1-5" },
             { label: "Minimax Video", value: "minimax-video" },
+            { label: "MiniMax H3", value: "minimax-h3" },
             { label: "CogVideoX", value: "cogvideox" },
             { label: "Hunyuan Video (Tencent)", value: "hunyuan-video" }
         ],
@@ -148,11 +149,28 @@ export const isSeedanceVideoModelName = (...identityParts) => {
     return identityParts.some((part) => String(part || '').toLowerCase().includes('seedance'));
 };
 
+const SEEDANCE_25_RE = /(?:seedance|sd)[-_\s]*2(?:\.|[-_])5(?:$|[-_\s.]|p\b)/;
+
+/** True for Seedance 2.5 identities such as seedance-2.5 / sd-2.5-720p. */
+export const isSeedance25VideoModelName = (...identityParts) => {
+    const text = identityParts.map((part) => String(part || '').toLowerCase()).join(' ');
+    return SEEDANCE_25_RE.test(text);
+};
+
 export const SEEDANCE_DURATION_MIN_SECONDS = 4;
 export const SEEDANCE_DURATION_MAX_SECONDS = 15;
+export const SEEDANCE_2_5_DURATION_WARN_SECONDS = 30;
+
+export const seedanceDurationWarnMaxSeconds = (...identityParts) => {
+    return isSeedance25VideoModelName(...identityParts)
+        ? SEEDANCE_2_5_DURATION_WARN_SECONDS
+        : SEEDANCE_DURATION_MAX_SECONDS;
+};
 
 /**
- * Clamp Seedance video duration to [4, 15]. Preserves -1 (auto) and non-positive values.
+ * Clamp Seedance video duration to the 4s minimum only.
+ * Maximum is not rewritten; the submit UI asks the user to confirm over-limit values.
+ * Preserves -1 (auto) and non-positive values.
  * @returns {{ duration: number, clamped: boolean, original: number }}
  */
 export const clampSeedanceVideoDuration = (duration) => {
@@ -160,10 +178,7 @@ export const clampSeedanceVideoDuration = (duration) => {
     if (!Number.isFinite(original) || original <= 0) {
         return { duration: original, clamped: false, original };
     }
-    const clamped = Math.max(
-        SEEDANCE_DURATION_MIN_SECONDS,
-        Math.min(SEEDANCE_DURATION_MAX_SECONDS, original)
-    );
+    const clamped = Math.max(SEEDANCE_DURATION_MIN_SECONDS, original);
     return { duration: clamped, clamped: clamped !== original, original };
 };
 

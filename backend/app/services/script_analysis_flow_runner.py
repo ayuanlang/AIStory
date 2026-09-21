@@ -45,6 +45,7 @@ from app.services.script_analysis_llm_config import (
     _resolve_script_analysis_dropdown_order,
     _select_script_analysis_api_order,
 )
+from app.services.promo_context import is_promo_project, promo_scene_split_is_valid
 from app.services.subject_index_resolve import (
     _script_optimization_has_project_visual_backfill,
     _subject_index_has_cover_poster,
@@ -595,7 +596,14 @@ async def execute_scene_analysis_flow_node(
                         async_mode="0",
                     )
                     result_text = _extract_analysis_text_from_result(result)
-                    if _script_optimization_has_project_visual_backfill(result_text):
+                    backfill_ok = _script_optimization_has_project_visual_backfill(result_text)
+                    promo_meta = raw_payload.get("project_metadata")
+                    promo_ok = (
+                        promo_scene_split_is_valid(result_text, promo_meta)
+                        if node_key == "scene_split"
+                        else True
+                    )
+                    if backfill_ok and promo_ok:
                         if attempt > 1:
                             logger.info(
                                 "[剧本分析流程] 节点 %s 整段重跑后通过完整性校验 | attempt=%s switched_api=%s",
@@ -604,9 +612,15 @@ async def execute_scene_analysis_flow_node(
                                 switched,
                             )
                         break
+                    incomplete_reason = (
+                        "商业宣传片拆成多场"
+                        if backfill_ok and not promo_ok
+                        else "缺少 Project Visual Backfill（输出不完整）"
+                    )
                     logger.warning(
-                        "[剧本分析流程] 节点 %s 缺少 Project Visual Backfill（输出不完整） | attempt=%s/%s switched_api=%s",
+                        "[剧本分析流程] 节点 %s %s | attempt=%s/%s switched_api=%s",
                         node_key,
+                        incomplete_reason,
                         attempt,
                         max_attempts,
                         switched,

@@ -3843,7 +3843,9 @@ const Editor = ({
     { id: 'shots', label: '分镜', icon: Film },
     { id: 'scenes', label: '场景统计', icon: ImageIcon },
 ];
-    const activeMenuItem = MENU_ITEMS.find((item) => item.id === activeTab) || MENU_ITEMS[0];
+    const activeMenuItem = MENU_ITEMS.find((item) => item.id === activeTab)
+        || MENU_ITEMS.find((item) => item.id !== 'planner')
+        || MENU_ITEMS[0];
     const shouldRenderScriptTab = activeTab === 'script' || visitedTabs.has('script') || Boolean(assetRerunRequest);
     const shouldRenderSubjectsTab = activeTab === 'subjects' || visitedTabs.has('subjects');
     const shouldRenderScenesTab = activeTab === 'scenes' || visitedTabs.has('scenes');
@@ -3908,7 +3910,14 @@ const Editor = ({
 
     const navigateTopMenu = (item) => {
         if (item.id === 'planner') {
-            promoHost?.onOpenPlanner?.();
+            if (typeof promoHost?.onOpenPlanner === 'function') {
+                promoHost.onOpenPlanner();
+                return;
+            }
+            const promoId = Number(promoHost?.promoProjectId || 0);
+            if (promoId) {
+                navigate(`/promo/${promoId}`);
+            }
             return;
         }
         if (item.id === activeTab) {

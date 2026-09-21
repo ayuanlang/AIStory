@@ -854,6 +854,33 @@ async def execute_analyze_scene(
                         _estimate_tokens(meta_str),
                     )
 
+        if is_scene_split_stage:
+            try:
+                from app.services.promo_context import (
+                    build_promo_injection_section,
+                    resolve_promo_brief,
+                    user_content_has_promo_injection,
+                )
+
+                if not user_content_has_promo_injection(user_content):
+                    promo_project_id = int(getattr(request, "project_id", 0) or 0)
+                    if promo_project_id <= 0 and request_episode is not None:
+                        promo_project_id = int(getattr(request_episode, "project_id", 0) or 0)
+                    promo_brief = resolve_promo_brief(
+                        db,
+                        request.project_metadata if isinstance(request.project_metadata, dict) else {},
+                        project_id=promo_project_id or None,
+                    )
+                    promo_block = build_promo_injection_section(promo_brief)
+                    if promo_block:
+                        user_content = f"{promo_block}\n\n{user_content}"
+                        logger.info(
+                            "[analyze_scene] injected promo brief into scene_split chars=%s",
+                            len(promo_block),
+                        )
+            except Exception as promo_exc:
+                logger.warning("[analyze_scene] failed to inject promo brief: %s", promo_exc)
+
         catalog_project_id = int(getattr(request, "project_id", 0) or 0)
         if catalog_project_id <= 0 and request_episode is not None:
             catalog_project_id = int(getattr(request_episode, "project_id", 0) or 0)

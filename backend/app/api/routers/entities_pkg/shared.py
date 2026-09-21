@@ -137,6 +137,19 @@ def create_entity(
 
     _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url", db=db)
 
+    from app.services.promo_context import attach_promo_source_images_to_attrs
+
+    project_info = project.global_info if isinstance(getattr(project, "global_info", None), dict) else {}
+    incoming_attrs = attach_promo_source_images_to_attrs(
+        _asset_meta_to_dict(entity.custom_attributes),
+        name=entity.name,
+        entity_type=entity.type,
+        source_images=project_info.get("promo_source_images"),
+        extra_names=[entity.name_en, entity.base_name_en],
+    )
+    if incoming_attrs:
+        entity.custom_attributes = incoming_attrs
+
     normalized_name_candidates = set()
     for raw_name in (entity.name, entity.name_en):
         stable = str(raw_name or "").strip().lower()

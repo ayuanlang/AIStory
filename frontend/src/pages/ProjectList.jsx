@@ -1256,15 +1256,77 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
             setTimeout(() => setToast(null), 3000);
             return;
         }
+        if (!String(newType || '').trim() || String(newType || '').trim() === '商业宣传片') {
+            setToast({ type: 'error', message: t('类型为必输项，请选择实拍真人、二维或三维等', 'Type is required. Choose live action, 2D, or 3D, etc.') });
+            setTimeout(() => setToast(null), 3000);
+            return;
+        }
+        if (!String(newAspectRatio || '').trim()) {
+            setToast({ type: 'error', message: t('画幅比例为必输项', 'Aspect Ratio is required') });
+            setTimeout(() => setToast(null), 3000);
+            return;
+        }
+        const description = String(newDescription || '');
+        const appliedStyle = applyStyleModeDefaults({
+            Global_Style: newGlobalStyle,
+            lighting: newLighting,
+            tone: newColorTone,
+        }, newBasePositioning);
+        const global_info = {
+            script_title: title,
+            type: String(newType || '').trim(),
+            country_region: String(newCountryRegion || '').trim(),
+            expected_duration: String(newExpectedDuration || '').trim(),
+            max_shot_seconds: String(resolveMaxShotSeconds(newMaxShotSeconds)),
+            language: String(newLanguage || '').trim(),
+            base_positioning: String(appliedStyle.base_positioning || newBasePositioning || '').trim(),
+            style_mode: String(appliedStyle.style_mode || newBasePositioning || '').trim(),
+            Global_Style: String(appliedStyle.Global_Style || newGlobalStyle || '').trim(),
+            lighting: String(appliedStyle.lighting || newLighting || '').trim(),
+            tone: String(appliedStyle.tone || newColorTone || '').trim(),
+            era: String(newEra || '').trim(),
+            season_occurrence: String(newSeasonOccurrence || '').trim(),
+            lens_preference: String(newLensPreference || '').trim(),
+            broadcast_safety_level: String(newBroadcastSafetyLevel || '').trim(),
+            creativity: String(newCreativity || '').trim(),
+            notes: description,
+            tech_params: {
+                visual_standard: {
+                    aspect_ratio: String(newAspectRatio || '').trim(),
+                    image_size: String(newImageSize || '').trim(),
+                    resolution: String(newResolution || '').trim(),
+                    color_tone: String(newColorTone || '').trim(),
+                    global_style: String(newGlobalStyle || '').trim(),
+                    lighting: String(newLighting || '').trim(),
+                    project_seed: String(newProjectSeed || '').trim(),
+                    sound: Boolean(newVideoSoundEnabled),
+                },
+            },
+            management_collaboration: {
+                planned_completion_time: String(newPlannedCompletionTime || '').trim(),
+                budget: String(newBudget || '').trim(),
+            },
+            project_generation_defaults: {
+                sound: Boolean(newVideoSoundEnabled),
+                video_generation_preference: String(newVideoGenerationPreference || '').trim(),
+            },
+            aspect_ratio: String(newAspectRatio || '').trim(),
+            image_size: String(newImageSize || '').trim(),
+            video_sound: Boolean(newVideoSoundEnabled),
+            has_existing_assets: Boolean(newHasExistingAssets),
+            ...Object.fromEntries((Object.entries(newSceneAnalysisConfig || {}).map(([key, value]) => [key, String(value || '').trim()]))),
+        };
         if (newProjectKind === 'promo') {
             setIsCreatingProjectSubmit(true);
             try {
                 const created = await createPromoProject({
                     title,
-                    description: String(newDescription || '').trim() || undefined,
+                    description: description.trim() || undefined,
                     enterprise_id: Number(newPromoEnterpriseId) || null,
                     brand_id: Number(newPromoBrandId) || null,
                     product_id: Number(newPromoProductId) || null,
+                    extra_info: { global_info },
+                    global_info,
                 });
                 resetCreateProjectForm();
                 setIsCreating(false);
@@ -1283,17 +1345,6 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
             }
             return;
         }
-        if (!String(newType || '').trim()) {
-            setToast({ type: 'error', message: t('类型为必输项', 'Type is required') });
-            setTimeout(() => setToast(null), 3000);
-            return;
-        }
-        if (!String(newAspectRatio || '').trim()) {
-            setToast({ type: 'error', message: t('画幅比例为必输项', 'Aspect Ratio is required') });
-            setTimeout(() => setToast(null), 3000);
-            return;
-        }
-        const description = String(newDescription || '');
         const shareUsers = parseUserListInput(newShareUsers);
         const reviewerUsers = parseUserListInput(newReviewerUsers);
 
@@ -1304,60 +1355,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
             description,
             share_users: shareUsers,
             reviewer_users: reviewerUsers,
-            global_info: {
-                script_title: title,
-                type: String(newType || '').trim(),
-                country_region: String(newCountryRegion || '').trim(),
-                expected_duration: String(newExpectedDuration || '').trim(),
-                max_shot_seconds: String(resolveMaxShotSeconds(newMaxShotSeconds)),
-                language: String(newLanguage || '').trim(),
-                ...(() => {
-                    const applied = applyStyleModeDefaults({
-                        Global_Style: newGlobalStyle,
-                        lighting: newLighting,
-                        tone: newColorTone,
-                    }, newBasePositioning);
-                    return {
-                        base_positioning: String(applied.base_positioning || newBasePositioning || '').trim(),
-                        style_mode: String(applied.style_mode || newBasePositioning || '').trim(),
-                        Global_Style: String(applied.Global_Style || newGlobalStyle || '').trim(),
-                        lighting: String(applied.lighting || newLighting || '').trim(),
-                        tone: String(applied.tone || newColorTone || '').trim(),
-                    };
-                })(),
-                era: String(newEra || '').trim(),
-                season_occurrence: String(newSeasonOccurrence || '').trim(),
-                lens_preference: String(newLensPreference || '').trim(),
-                broadcast_safety_level: String(newBroadcastSafetyLevel || '').trim(),
-                creativity: String(newCreativity || '').trim(),
-                notes: description,
-                tech_params: {
-                    visual_standard: {
-                        aspect_ratio: String(newAspectRatio || '').trim(),
-                        image_size: String(newImageSize || '').trim(),
-                        resolution: String(newResolution || '').trim(),
-                        color_tone: String(newColorTone || '').trim(),
-                        global_style: String(newGlobalStyle || '').trim(),
-                        lighting: String(newLighting || '').trim(),
-                        project_seed: String(newProjectSeed || '').trim(),
-                        sound: Boolean(newVideoSoundEnabled),
-                    },
-                },
-
-                management_collaboration: {
-                    planned_completion_time: String(newPlannedCompletionTime || '').trim(),
-                    budget: String(newBudget || '').trim(),
-                },
-                project_generation_defaults: {
-                    sound: Boolean(newVideoSoundEnabled),
-                    video_generation_preference: String(newVideoGenerationPreference || '').trim(),
-                },
-                aspect_ratio: String(newAspectRatio || '').trim(),
-                image_size: String(newImageSize || '').trim(),
-                video_sound: Boolean(newVideoSoundEnabled),
-                has_existing_assets: Boolean(newHasExistingAssets),
-                ...Object.fromEntries((Object.entries(newSceneAnalysisConfig || {}).map(([key, value]) => [key, String(value || '').trim()]))),
-            },
+            global_info,
         });
         
         let targetProjectId = newProject?.id;
@@ -2655,7 +2653,10 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 </button>
                                                 <button
                                                     type="button"
-                                                    onClick={() => setNewProjectKind('promo')}
+                                                    onClick={() => {
+                                                        setNewProjectKind('promo');
+                                                        if (String(newType || '').trim() === '商业宣传片') setNewType('');
+                                                    }}
                                                     className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${newProjectKind === 'promo' ? 'bg-primary text-black border-primary' : 'bg-white/5 text-white/80 border-white/15 hover:bg-white/10'}`}
                                                 >
                                                     {t('商业宣传片', 'Commercial Promo')}
@@ -2786,16 +2787,8 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                         </div>
                                                     ))}
                                                 </div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('项目说明', 'Description')}</label>
-                                                <textarea
-                                                    className="w-full px-3 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none min-h-[6rem]"
-                                                    value={newDescription}
-                                                    onChange={(e) => setNewDescription(e.target.value)}
-                                                    placeholder={t('可选：品牌、产品或本片目标', 'Optional: brand, product, or campaign goal')}
-                                                />
                                             </div>
-                                        ) : (
-                                        <>
+                                        ) : null}
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
                                             <div>
                                                 <InputGroup label={t("类型", "Type")} value={newType} onChange={setNewType} list={projectCreateOptions.type} />
@@ -2871,6 +2864,8 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                             </select>
                                         </div>
 
+                                        {newProjectKind === 'story' ? (
+                                        <>
                                         <label className="block text-sm font-semibold tracking-wide text-primary mt-4 mb-2">{t('剧本内容（可选）', 'Script Content (Optional)')}</label>
                                         <textarea
                                             className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none resize-y min-h-[120px]"
@@ -2878,6 +2873,8 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                             onChange={e => setNewScriptText(e.target.value)}
                                             placeholder={t('输入剧本内容，创建项目后将自动生成第一集并导入此内容', 'Enter script content...')}
                                         />
+                                        </>
+                                        ) : null}
                                         <label className="block text-sm font-semibold tracking-wide text-primary mt-4 mb-2">{t('项目描述（可选）', 'Project Description (Optional)')}</label>
                                         <textarea
                                             className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none resize-y min-h-[84px]"
@@ -2887,6 +2884,8 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                         />
 
 
+                                        {newProjectKind === 'story' ? (
+                                        <>
                                         <div className="mb-6 pb-3 mt-4 border-t border-white/10 pt-6">
                                             <button onClick={() => setIsCreateCollaboratorsCollapsed(!isCreateCollaboratorsCollapsed)} className="w-full flex items-center justify-between mb-4">
                                                 <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
@@ -2955,7 +2954,9 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 )}
                                             </AnimatePresence>
                                         </div>
-<div className="mb-6 pb-3 mt-4 border-t border-white/10 pt-6">
+                                        </>
+                                        ) : null}
+                                        <div className="mb-6 pb-3 mt-4 border-t border-white/10 pt-6">
                                             <button onClick={() => setIsCreateTechVisualCollapsed(!isCreateTechVisualCollapsed)} className="w-full flex items-center justify-between">
                                                 <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
                                                     <Settings size={16} className="text-primary" />
@@ -2980,8 +2981,6 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 )}
                                             </AnimatePresence>
                                         </div>
-                                        </>
-                                        )}
 
 
 

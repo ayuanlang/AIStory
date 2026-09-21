@@ -1192,6 +1192,18 @@ def _execute_provider_task_query(
     if not api_key:
         raise HTTPException(status_code=400, detail=f"No api_key found for provider {provider or '-'}")
 
+    billing = job.get("billing_context") if isinstance(job.get("billing_context"), dict) else {}
+    result_meta = (
+        ((job.get("result") or {}).get("metadata") if isinstance(job.get("result"), dict) else {})
+        or {}
+    )
+    job_model = str(
+        billing.get("model")
+        or job.get("model")
+        or result_meta.get("model")
+        or ""
+    ).strip() or None
+
     fetched = media_service.fetch_provider_task_usage(
         task_id=provider_task_id,
         api_key=api_key,
@@ -1199,6 +1211,7 @@ def _execute_provider_task_query(
         provider=provider or None,
         refresh_if_missing=True,
         include_raw_response=True,
+        model=job_model,
     )
     raw_response = fetched.get("raw_response") if isinstance(fetched, dict) else None
     usage = {
@@ -1214,6 +1227,7 @@ def _execute_provider_task_query(
         provider=provider or None,
         kind="video",
         base_url=base_url or None,
+        model=job_model,
     )
     if not isinstance(poll_result, dict):
         poll_result = {}
@@ -1221,6 +1235,9 @@ def _execute_provider_task_query(
         raw_response = poll_result.get("raw")
 
     if not usage and not (isinstance(raw_response, dict) and raw_response) and not poll_result.get("url"):
+        err = str(poll_result.get("error") or "").strip()
+        if err:
+            raise HTTPException(status_code=502, detail=f"Provider task query failed: {err}")
         raise HTTPException(status_code=404, detail="No response from provider task query")
 
     provider_status = str(poll_result.get("status") or "").strip() or None

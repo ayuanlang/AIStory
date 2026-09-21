@@ -288,7 +288,11 @@ def test_generation_helper_service_modules():
         _sanitize_kie_tts_plan,
     )
     from app.services.generation_runtime.generation_errors import _format_generation_failure_detail
-    from app.services.generation_runtime.seedance_duration import _clamp_seedance_duration, _is_seedance_model_name
+    from app.services.generation_runtime.seedance_duration import (
+        _clamp_seedance_duration,
+        _is_seedance25_model_name,
+        _is_seedance_model_name,
+    )
     from app.services.generation_runtime.generation_filename import _sanitize_filename_part
     from app.services.generation_runtime.media_runtime_target import _build_runtime_llm_config
     from app.services.generation_runtime.callback_http import _normalize_callback_url
@@ -300,7 +304,13 @@ def test_generation_helper_service_modules():
     plan = _sanitize_kie_tts_plan({"text": "hello world"}, "fallback")
     assert isinstance(plan, dict)
     assert _format_generation_failure_detail({"error": "boom"}, "Generation failed")
-    assert _clamp_seedance_duration(20)[0] == 15.0
+    assert _clamp_seedance_duration(20)[0] == 20.0
+    assert _clamp_seedance_duration(20, "seedance-2")[0] == 20.0
+    assert _clamp_seedance_duration(20, "seedance-2.5")[0] == 20.0
+    assert _clamp_seedance_duration(30, "sd-2.5-720p")[0] == 30.0
+    assert _clamp_seedance_duration(2, "seedance-2.5")[0] == 4.0
+    assert _is_seedance25_model_name("星耀 sd-2.5 480p", "sd-2.5-480p")
+    assert not _is_seedance25_model_name("seedance-2", "sd-2-fast")
     assert _is_seedance_model_name("seedance-1.0")
     assert _sanitize_filename_part("a/b:c") == "a_b_c"
     cfg = _build_runtime_llm_config("p", "m", media_type="image")

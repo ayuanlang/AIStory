@@ -2600,6 +2600,41 @@
       "tags": null
     },
     {
+      "name": "Grsai MiniMax H3",
+      "category": "Video",
+      "provider": "grsai",
+      "base_url": "https://grsai.dakka.com.cn/v1",
+      "model": "minimax-h3",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "capability_flags": {
+          "reference_image_limit": 9,
+          "max_reference_images": 9,
+          "supports_last_frame": true
+        }
+      },
+      "config": {
+        "endpoint": "https://grsai.dakka.com.cn/v1/api/generate",
+        "query_endpoint": "https://grsai.dakka.com.cn/v1/api/result",
+        "oss-id": "69c890a3a0a438550965e9ff",
+        "oss-path": "file/videos/{yyyymm}/{user_id}",
+        "deprecated": false,
+        "provider_api_key_strategy": "random",
+        "enum_catalog": {
+          "resolution": ["480p", "768p", "1080p"],
+          "aspect_ratio": ["16:9", "9:16", "4:3", "3:4", "1:1"],
+          "duration": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+          "durations_seconds": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        }
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": null
+    },
+    {
       "name": "Kie Bytedance v1 Lite",
       "category": "Video",
       "provider": "kie",

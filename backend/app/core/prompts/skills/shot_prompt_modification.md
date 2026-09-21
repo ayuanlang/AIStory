@@ -49,4 +49,4 @@ Output ONLY:
 - Inside the markers: final prompt text only.
 
 ## 中文补充说明
-改写后的提示词必须继续遵循 skills/shot_generation.md 第八节「视频提示词要求」：五段 <br> 分隔的中文叙述体、保留 CHAR/PROP/ENV 标签、P1/P2/Pn 时序与每个 Pn 的本镜起止秒 `(Pn 0s–4s)`、禁止 Shot Logic 推演入正文。未要求改时长时禁止剥掉或改写 Pn 时间标注。
+改写后的提示词必须继续遵循 skills/shot_generation.md 第八节「视频提示词要求」：四段 <br> 分隔的中文叙述体（运镜与动作流 → 两光影 → 全局动态风格 → 品质收束）、保留 CHAR/PROP/ENV 标签、P1/P2/Pn 时序与每个 Pn 的本镜起止秒 `(Pn 0s–4s)`、禁止 Shot Logic 推演入正文、禁止另起物理文字段（名牌/花字/剧情字案写入对应 Pn）。未要求改时长时禁止剥掉或改写 Pn 时间标注。

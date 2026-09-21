@@ -17,12 +17,14 @@ from app.schemas.promo_planner import (
     PromoBrandCreate,
     PromoBrandOut,
     PromoBrandUpdate,
+    PromoCatalogAssetAnalyzeRequest,
     PromoCatalogAssetCreate,
     PromoCatalogAssetOut,
     PromoCatalogAssetUpdate,
     PromoEnterpriseCreate,
     PromoEnterpriseOut,
     PromoEnterpriseUpdate,
+    PromoAssetAnalyzeRequest,
     PromoPlannerGenerateRequest,
     PromoPlannerInputSaveRequest,
     PromoPlannerResultSaveRequest,
@@ -37,7 +39,8 @@ from app.schemas.promo_planner import (
 )
 from app.services.promo_planner import (
     bind_promo_catalog,
-    collect_catalog_image_assets,
+    analyze_and_persist_catalog_asset,
+    analyze_and_persist_promo_asset,
     generate_promo_planner_scheme,
     generate_promo_script,
     ensure_promo_linked_story_project,
@@ -47,8 +50,12 @@ from app.services.promo_planner import (
     normalize_image_type,
     normalize_media_kind,
     normalize_owner_kind,
+    persist_promo_project_extra_info,
     normalize_planner_input,
     persist_planner_state,
+    selected_planner_image_assets,
+    backfill_enterprise_catalog_from_projects,
+    sync_historical_promo_assets_to_enterprises,
     require_catalog_owner,
     require_promo_brand_access,
     require_promo_enterprise_access,
@@ -102,10 +109,20 @@ def create_promo_project(
     title = str(payload.title or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
+    incoming = dict(payload.extra_info or {})
+    if payload.global_info:
+        incoming["global_info"] = dict(payload.global_info)
+    extra_info = persist_promo_project_extra_info(
+        incoming,
+        title=title,
+        description=payload.description or "",
+        require_aspect_ratio=True,
+        require_type=True,
+    )
     row = PromoProject(
         title=title,
         description=(payload.description or "").strip() or None,
-        extra_info=dict(payload.extra_info or {}),
+        extra_info=extra_info,
         owner_id=current_user.id,
     )
     db.add(row)
@@ -149,8 +166,23 @@ def update_promo_project(
         row.title = title
     if payload.description is not None:
         row.description = str(payload.description or "").strip() or None
-    if payload.extra_info is not None:
-        row.extra_info = dict(payload.extra_info or {})
+    if payload.extra_info is not None or payload.global_info is not None:
+        incoming = dict(payload.extra_info or {})
+        if payload.global_info:
+            incoming["global_info"] = dict(payload.global_info)
+        row.extra_info = persist_promo_project_extra_info(
+            incoming,
+            title=row.title or "",
+            description=row.description or "",
+            current=dict(row.extra_info or {}),
+        )
+    elif payload.title is not None or payload.description is not None:
+        row.extra_info = persist_promo_project_extra_info(
+            {},
+            title=row.title or "",
+            description=row.description or "",
+            current=dict(row.extra_info or {}),
+        )
     if payload.enterprise_id is not None or payload.brand_id is not None or payload.product_id is not None:
         bind_promo_catalog(
             db,
@@ -181,6 +213,28 @@ def delete_promo_project(
     db.add(row)
     db.commit()
     return {"status": "deleted", "kind": "promo", "id": promo_project_id}
+
+
+@router.post("/promo-projects/{promo_project_id}/planner/analyze-asset")
+async def analyze_promo_project_asset(
+    promo_project_id: int,
+    req: PromoAssetAnalyzeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
+):
+    if async_mode == "1":
+        tid = _submit_async(
+            analyze_promo_project_asset,
+            user_id=current_user.id,
+            kind="promo_asset_analysis",
+            promo_project_id=promo_project_id,
+            req=req,
+            async_mode="0",
+        )
+        return JSONResponse({"task_id": tid, "async": True})
+    row = require_promo_project_access(db, promo_project_id, current_user)
+    return await analyze_and_persist_promo_asset(db, project=row, current_user=current_user, req=req)
 
 
 @router.post("/promo-projects/{promo_project_id}/planner/generate", response_model=PromoProjectOut)
@@ -223,18 +277,14 @@ def save_promo_project_planner_input(
         product_id=req.product_id,
         overlay=overlay,
     )
-    merged_assets = list(overlay.get("image_assets") or [])
-    catalog_assets = collect_catalog_image_assets(db, enterprise=enterprise, brand=brand, product=product)
-    seen = {item.get("image_id") or item.get("img_url") for item in merged_assets if isinstance(item, dict)}
-    for item in catalog_assets:
-        key = item.get("image_id") or item.get("img_url")
-        if key and key in seen:
-            continue
-        if key:
-            seen.add(key)
-        merged_assets.append(item)
     planner_input = normalize_planner_input(
-        snapshot_from_catalog(enterprise, product, brand=brand, image_assets=merged_assets, overlay=overlay),
+        snapshot_from_catalog(
+            enterprise,
+            product,
+            brand=brand,
+            image_assets=selected_planner_image_assets(overlay),
+            overlay=overlay,
+        ),
         req.campaign_demand,
     )
     persist_planner_state(db, row, planner_input=planner_input)
@@ -255,7 +305,10 @@ def save_promo_project_planner_result(
     state = load_planner_state(db, row)
     planner_input = state.get("promo_planner_input") or {}
     result = merge_planner_result(req.promo_planner_result or {})
-    markdown = (req.promo_dna_global_md or "").strip() or result_to_promo_markdown(result, planner_input)
+    incoming_md = (req.promo_dna_global_md or "").strip()
+    if not incoming_md and state.get("promo_planner_result") == result:
+        return serialize_promo_project(db, row, current_user)
+    markdown = incoming_md or result_to_promo_markdown(result, planner_input)
     persist_planner_state(db, row, planner_result=result, markdown=markdown)
     db.add(row)
     db.commit()
@@ -348,6 +401,8 @@ def list_promo_enterprises(
         .limit(limit)
         .all()
     )
+    sync_historical_promo_assets_to_enterprises(db, owner_id=current_user.id)
+    db.commit()
     return [serialize_promo_enterprise(db, row) for row in rows]
 
 
@@ -540,7 +595,7 @@ def list_promo_products(
     elif enterprise_id:
         query = query.filter(PromoProduct.enterprise_id == int(enterprise_id))
     rows = query.order_by(PromoProduct.updated_at.desc(), PromoProduct.id.desc()).offset(skip).limit(limit).all()
-    return [serialize_promo_product(row) for row in rows]
+    return [serialize_promo_product(row, db) for row in rows]
 
 
 @router.post("/promo-products/", response_model=PromoProductOut)
@@ -581,7 +636,7 @@ def create_promo_product(
     db.add(row)
     db.commit()
     db.refresh(row)
-    return serialize_promo_product(row)
+    return serialize_promo_product(row, db)
 
 
 @router.put("/promo-products/{product_id}", response_model=PromoProductOut)
@@ -621,7 +676,7 @@ def update_promo_product(
     db.add(row)
     db.commit()
     db.refresh(row)
-    return serialize_promo_product(row)
+    return serialize_promo_product(row, db)
 
 
 @router.delete("/promo-products/{product_id}")
@@ -649,7 +704,16 @@ def list_promo_catalog_assets(
     current_user: User = Depends(get_current_user),
 ):
     require_catalog_owner(db, current_user, owner_kind, owner_entity_id)
-    return list_catalog_assets(db, owner_kind=owner_kind, owner_entity_id=int(owner_entity_id))
+    kind = normalize_owner_kind(owner_kind)
+    if kind == "enterprise":
+        rows = backfill_enterprise_catalog_from_projects(
+            db,
+            enterprise_id=int(owner_entity_id),
+            owner_id=current_user.id,
+        )
+        db.commit()
+        return rows
+    return list_catalog_assets(db, owner_kind=kind, owner_entity_id=int(owner_entity_id))
 
 
 @router.post("/promo-catalog-assets/", response_model=PromoCatalogAssetOut)
@@ -681,6 +745,40 @@ def create_promo_catalog_asset(
     db.commit()
     db.refresh(row)
     return serialize_promo_catalog_asset(row)
+
+
+@router.post("/promo-catalog-assets/{asset_id}/analyze")
+async def analyze_promo_catalog_asset(
+    asset_id: int,
+    req: Optional[PromoCatalogAssetAnalyzeRequest] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
+):
+    if async_mode == "1":
+        tid = _submit_async(
+            analyze_promo_catalog_asset,
+            user_id=current_user.id,
+            kind="promo_catalog_asset_analysis",
+            asset_id=asset_id,
+            req=req or PromoCatalogAssetAnalyzeRequest(),
+            async_mode="0",
+        )
+        return JSONResponse({"task_id": tid, "async": True})
+    row = (
+        db.query(PromoCatalogAsset)
+        .filter(PromoCatalogAsset.id == asset_id, PromoCatalogAsset.is_deleted.is_(False))
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    require_catalog_owner(db, current_user, row.owner_kind, int(row.owner_entity_id))
+    return await analyze_and_persist_catalog_asset(
+        db,
+        row=row,
+        current_user=current_user,
+        req=req or PromoCatalogAssetAnalyzeRequest(),
+    )
 
 
 @router.put("/promo-catalog-assets/{asset_id}", response_model=PromoCatalogAssetOut)

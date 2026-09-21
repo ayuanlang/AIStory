@@ -27,6 +27,11 @@ def _is_seedance2_base_model(base_model: Any) -> bool:
 
 SEEDANCE_DURATION_MIN_SECONDS = 4.0
 SEEDANCE_DURATION_MAX_SECONDS = 15.0
+SEEDANCE_2_5_DURATION_WARN_SECONDS = 30.0
+_SEEDANCE_25_RE = re.compile(
+    r"(?:seedance|sd)[-_\s]*2(?:\.|[-_])5(?:$|[-_\s.]|p\b)",
+    re.IGNORECASE,
+)
 
 
 def _is_seedance_model_name(*identity_parts: Any) -> bool:
@@ -35,8 +40,26 @@ def _is_seedance_model_name(*identity_parts: Any) -> bool:
     return "seedance" in text
 
 
-def _clamp_seedance_duration(duration: Any) -> Tuple[Optional[float], bool]:
-    """Clamp Seedance duration to [4, 15]. Preserves None and <=0 (e.g. -1 auto)."""
+def _is_seedance25_model_name(*identity_parts: Any) -> bool:
+    """True for Seedance 2.5 identities such as seedance-2.5 / sd-2.5-720p."""
+    text = " ".join(str(part or "") for part in identity_parts).lower()
+    return bool(text and _SEEDANCE_25_RE.search(text))
+
+
+def _seedance_duration_warn_max_seconds(*identity_parts: Any) -> float:
+    """UI confirm threshold only. Seedance 2.5 warns at 30s; others warn at 15s."""
+    if _is_seedance25_model_name(*identity_parts):
+        return SEEDANCE_2_5_DURATION_WARN_SECONDS
+    return SEEDANCE_DURATION_MAX_SECONDS
+
+
+def _clamp_seedance_duration(duration: Any, *identity_parts: Any) -> Tuple[Optional[float], bool]:
+    """Clamp Seedance duration to the 4s minimum only.
+
+    Maximum is not rewritten here. The frontend asks the user to confirm
+    when duration exceeds 15s (or 30s for Seedance 2.5). Preserves None
+    and <=0 (e.g. -1 auto).
+    """
     if duration is None:
         return None, False
     try:
@@ -45,7 +68,7 @@ def _clamp_seedance_duration(duration: Any) -> Tuple[Optional[float], bool]:
         return None, False
     if value <= 0:
         return value, False
-    clamped = max(SEEDANCE_DURATION_MIN_SECONDS, min(SEEDANCE_DURATION_MAX_SECONDS, value))
+    clamped = max(SEEDANCE_DURATION_MIN_SECONDS, value)
     return clamped, clamped != value
 
 
@@ -80,8 +103,9 @@ def _resolve_shot_video_duration_value(
     if bool(sd2_auto_duration) and _is_seedance2_base_model(resolved_base_model):
         return -1.0
 
-    if _is_seedance_model_name(resolved_base_model, resolved_api_name, resolved_api_model):
-        clamped, _ = _clamp_seedance_duration(table_duration)
+    identity = (resolved_base_model, resolved_api_name, resolved_api_model)
+    if _is_seedance_model_name(*identity) or _is_seedance25_model_name(*identity):
+        clamped, _ = _clamp_seedance_duration(table_duration, *identity)
         if clamped is not None:
             return float(clamped)
     return table_duration

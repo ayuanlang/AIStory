@@ -30,6 +30,7 @@ _PROMPT_SKILL_ALIAS = {
     "promo_planner_scheme.md": "skill:promo_generation/promo_planner_scheme.md",
     "promo_planner_image_analysis.md": "skill:promo_generation/promo_planner_image_analysis.md",
     "promo_planner_script.md": "skill:promo_generation/promo_planner_script.md",
+    "promo_technique_lexicon.md": "skill:promo_generation/promo_technique_lexicon.md",
     "image_style_extractor.txt": "skill:image_style_extraction/image_style_extractor.txt",
     "voice_tts_planner_system.txt": "voice_tts_planner_system.txt",
     "voice_tts_planner_user.txt": "voice_tts_planner_user.txt",

@@ -16,6 +16,7 @@ import {
     updatePromoProduct,
 } from '../services/api';
 import PromoCatalogAssets from './editor/components/PromoCatalogAssets';
+import { SafeImage, getFullUrl } from './editor/editorHelpers';
 
 export const PROMO_CATALOG_FOCUS_KEY = 'promo_catalog_focus';
 
@@ -149,6 +150,23 @@ function EntityColumn({
                         <div className="flex-1 min-w-0">
                             <div className="text-sm text-white truncate">{item.name}</div>
                             {item.intro ? <div className="text-[11px] text-white/50 truncate">{item.intro}</div> : null}
+                            {Array.isArray(item.asset_previews) && item.asset_previews.length > 0 ? (
+                                <div className="flex items-center gap-1 mt-1">
+                                    {item.asset_previews.slice(0, 4).map((preview) => {
+                                        const url = preview.img_url || preview.file_url;
+                                        const isVideo = String(preview.media_kind || '') === 'video';
+                                        return (
+                                            <div key={preview.id || preview.img_url} className="w-12 h-12 rounded overflow-hidden bg-black/40 shrink-0">
+                                                {url && !isVideo ? <SafeImage src={url} alt="" className="w-full h-full object-cover" /> : null}
+                                                {url && isVideo ? <video src={getFullUrl(url)} className="w-full h-full object-cover" muted /> : null}
+                                            </div>
+                                        );
+                                    })}
+                                    <span className="text-[10px] text-white/50">{t(`${Number(item.asset_count || item.asset_previews.length)} 个素材`, `${Number(item.asset_count || item.asset_previews.length)} assets`)}</span>
+                                </div>
+                            ) : Number(item.asset_count || 0) > 0 ? (
+                                <div className="text-[10px] text-white/50 mt-1">{t(`${Number(item.asset_count)} 个素材`, `${Number(item.asset_count)} assets`)}</div>
+                            ) : null}
                         </div>
                         <button
                             type="button"
@@ -211,7 +229,14 @@ export default function PromoCatalogManager({ t, focus = null, onFocusConsumed, 
 
     const loadEnterprises = useCallback(async () => {
         const rows = await fetchPromoEnterprises().catch(() => []);
-        setEnterprises(Array.isArray(rows) ? rows : []);
+        const list = Array.isArray(rows) ? rows : [];
+        setEnterprises(list);
+        setEnterpriseId((current) => {
+            if (current && list.some((item) => String(item.id) === String(current))) return current;
+            const withAssets = list.find((item) => Number(item.asset_count || 0) > 0 || (item.asset_previews || []).length);
+            const next = withAssets || list[0];
+            return next ? String(next.id) : '';
+        });
     }, []);
 
     const loadBrands = useCallback(async (nextEnterpriseId) => {
@@ -448,7 +473,7 @@ export default function PromoCatalogManager({ t, focus = null, onFocusConsumed, 
                 <div>
                     <h2 className="text-lg font-semibold text-white">{t('企业 / 品牌 / 产品与服务', 'Enterprise / Brand / Offering')}</h2>
                     <p className="text-xs text-muted-foreground mt-1">
-                        {t('在这里新建和编辑企业、品牌、产品与服务及其素材。宣传片项目只选择已有主体。', 'Create and edit enterprises, brands, offerings and their assets here. Promo projects only select existing records.')}
+                        {t('这里是宣传主体素材库，保存企业/品牌/产品的全部素材。各宣传片项目再单独勾选要用的子集；项目内只用该项目选中的素材。', 'This is the subject library: all enterprise / brand / offering assets. Each promo project picks a subset; a project only uses what it selected.')}
                     </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -472,6 +497,21 @@ export default function PromoCatalogManager({ t, focus = null, onFocusConsumed, 
                     ) : null}
                 </div>
             </div>
+            {enterpriseId ? (
+                <div className="bg-black/20 border border-white/10 rounded-2xl p-4">
+                    <PromoCatalogAssets
+                        t={t}
+                        ownerKind="enterprise"
+                        ownerId={enterpriseId}
+                        disabled={busy}
+                        title={t('企业素材库（全部素材；各项目再勾选要用的）', 'Enterprise library (full set; projects pick a subset)')}
+                    />
+                </div>
+            ) : (
+                <div className="bg-black/20 border border-white/10 rounded-2xl px-4 py-3 text-xs text-white/50">
+                    {t('先选择或新建企业，即可看到并管理企业素材。', 'Select or create an enterprise to see its asset library.')}
+                </div>
+            )}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <EntityColumn
                     {...columnProps}
@@ -546,7 +586,6 @@ export default function PromoCatalogManager({ t, focus = null, onFocusConsumed, 
                             <div className="px-3 py-2 bg-black/30 rounded-lg text-sm whitespace-pre-wrap min-h-[4.5rem]">{selectedEnterprise?.intro || <span className="text-white/30">{t('无简介', 'No intro')}</span>}</div>
                         </>
                     )}
-                    <PromoCatalogAssets t={t} ownerKind="enterprise" ownerId={enterpriseId} disabled={busy} title={t('企业素材', 'Enterprise assets')} />
                 </div>
                 <div className="bg-black/20 border border-white/10 rounded-2xl p-4 space-y-3">
                     <div className="flex items-center justify-between gap-2">
@@ -575,7 +614,7 @@ export default function PromoCatalogManager({ t, focus = null, onFocusConsumed, 
                             <div className="px-3 py-2 bg-black/30 rounded-lg text-sm whitespace-pre-wrap min-h-[4.5rem]">{selectedBrand?.intro || <span className="text-white/30">{t('无简介', 'No intro')}</span>}</div>
                         </>
                     )}
-                    <PromoCatalogAssets t={t} ownerKind="brand" ownerId={brandId} disabled={busy} title={t('品牌素材', 'Brand assets')} />
+                    <PromoCatalogAssets t={t} ownerKind="brand" ownerId={brandId} disabled={busy} title={t('品牌素材库（全部）', 'Brand library (full set)')} />
                 </div>
                 <div className="bg-black/20 border border-white/10 rounded-2xl p-4 space-y-3">
                     <div className="flex items-center justify-between gap-2">
@@ -621,7 +660,7 @@ export default function PromoCatalogManager({ t, focus = null, onFocusConsumed, 
                             <ReadValue value={selectedProduct?.competitor_problem} empty={t('无竞品短板', 'No competitor gaps')} minHeight="3rem" />
                         </>
                     )}
-                    <PromoCatalogAssets t={t} ownerKind="offering" ownerId={productId} disabled={busy || !productId} title={t('产品与服务素材', 'Offering assets')} />
+                    <PromoCatalogAssets t={t} ownerKind="offering" ownerId={productId} disabled={busy || !productId} title={t('产品与服务素材库（全部）', 'Offering library (full set)')} />
                 </div>
             </div>
         </div>

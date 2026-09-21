@@ -98,6 +98,12 @@ def _resolve_poll_credentials(job: Dict[str, Any]) -> Tuple[str, str, str, str]:
     except Exception:
         system_api_id = None
 
+    model = str(
+        billing.get("model")
+        or job.get("model")
+        or meta.get("model")
+        or ""
+    ).strip()
     query_endpoint = str(
         meta.get("query_endpoint")
         or meta.get("queryEndpoint")
@@ -175,9 +181,22 @@ def _resolve_poll_credentials(job: Dict[str, Any]) -> Tuple[str, str, str, str]:
         query_endpoint = "https://www.runninghub.cn/openapi/v2/query"
     if ("ark" in provider_l or "seedance" in provider_l) and not query_endpoint:
         query_endpoint = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
-    if "grsai" in provider_l and not query_endpoint:
-        root = base_url or "https://grsaiapi.com"
-        query_endpoint = f"{root.rstrip('/')}/v1/draw/result"
+    if "grsai" in provider_l:
+        model_l = model.lower().replace("_", "-")
+        is_h3 = model_l == "minimax-h3" or model_l.startswith("minimax-h3/")
+        root = (base_url or "https://grsai.dakka.com.cn").rstrip("/")
+        if root.lower().endswith("/v1"):
+            root = root[:-3].rstrip("/")
+        endpoint_l = query_endpoint.lower()
+        if is_h3 and (
+            not query_endpoint
+            or "recordinfo" in endpoint_l
+            or "record-info" in endpoint_l
+            or "/draw/result" in endpoint_l
+        ):
+            query_endpoint = f"{root}/v1/api/result"
+        elif not query_endpoint:
+            query_endpoint = f"{root}/v1/draw/result"
     if ("nukoai" in provider_l or "nokoai" in provider_l or "nokuai" in provider_l) and not query_endpoint:
         root = base_url or "https://www.nukoai.com/api/ext/v1"
         query_endpoint = f"{root.rstrip('/')}/videos" if not root.rstrip("/").lower().endswith("/videos") else root
@@ -458,6 +477,17 @@ def _recovery_thread_main(kind: str, job_id: str) -> None:
                     attempt,
                     max_attempts,
                 )
+                billing = job.get("billing_context") if isinstance(job.get("billing_context"), dict) else {}
+                result_meta = (
+                    ((job.get("result") or {}).get("metadata") if isinstance(job.get("result"), dict) else {})
+                    or {}
+                )
+                job_model = str(
+                    billing.get("model")
+                    or job.get("model")
+                    or result_meta.get("model")
+                    or ""
+                ).strip() or None
                 poll_result = media_service.fetch_provider_task_result(
                     task_id=provider_task_id,
                     api_key=api_key,
@@ -465,6 +495,7 @@ def _recovery_thread_main(kind: str, job_id: str) -> None:
                     provider=provider or None,
                     kind=kind,
                     base_url=base_url or None,
+                    model=job_model,
                 )
                 if isinstance(poll_result, dict) and poll_result.get("url"):
                     if _apply_poll_success(kind, job_id, job, poll_result):

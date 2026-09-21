@@ -2238,6 +2238,8 @@ def init_system_api_settings(db):
     grsai_gpt_image_endpoint = "https://grsai.dakka.com.cn/v1/draw/completions"
     grsai_sora2_endpoint = "https://grsai.dakka.com.cn/v1/video/sora-video"
     grsai_veo_endpoint = "https://grsai.dakka.com.cn/v1/video/veo"
+    grsai_minimax_h3_endpoint = "https://grsai.dakka.com.cn/v1/api/generate"
+    grsai_minimax_h3_result_endpoint = "https://grsai.dakka.com.cn/v1/api/result"
     grsai_provider = "grsai"
 
     # Source list requested by user (from Grsai model catalog page).
@@ -2260,6 +2262,19 @@ def init_system_api_settings(db):
         {"category": "Video", "name": "veo3.1-pro", "model": "veo3.1-pro"},
         {"category": "Video", "name": "veo3.1-pro-1080p", "model": "veo3.1-pro-1080p"},
         {"category": "Video", "name": "veo3.1-pro-4k", "model": "veo3.1-pro-4k"},
+        {
+            "category": "Video",
+            "name": "minimax-h3",
+            "model": "minimax-h3",
+            "modality": {
+                "generation_modes": ["t2v", "i2v"],
+                "capability_flags": {
+                    "reference_image_limit": 9,
+                    "max_reference_images": 9,
+                    "supports_last_frame": True,
+                },
+            },
+        },
         {"category": "LLM", "name": "gemini-2.5-pro", "model": "gemini-2.5-pro"},
         {"category": "LLM", "name": "gemini-3-pro", "model": "gemini-3-pro"},
     ]
@@ -2326,13 +2341,29 @@ def init_system_api_settings(db):
             expected_endpoint = grsai_sora2_endpoint
         elif row_category == "video" and ("veo" in row_name or "veo" in row_model):
             expected_endpoint = grsai_veo_endpoint
+        elif row_category == "video" and ("minimax-h3" in row_name or "minimax-h3" in row_model):
+            expected_endpoint = grsai_minimax_h3_endpoint
 
         if expected_endpoint and cfg.get("endpoint") != expected_endpoint:
             cfg["endpoint"] = expected_endpoint
             row.config = cfg
             updated_existing += 1
+        if expected_endpoint == grsai_minimax_h3_endpoint and cfg.get("query_endpoint") != grsai_minimax_h3_result_endpoint:
+            cfg["query_endpoint"] = grsai_minimax_h3_result_endpoint
+            row.config = cfg
+            updated_existing += 1
 
-        if row_category == "image":
+        if row_category in {"image", "video"}:
+            default_oss_path = (
+                "file/videos/{yyyymm}/{user_id}"
+                if row_category == "video"
+                else "file/images/{yyyymm}/{user_id}"
+            )
+            legacy_oss_paths = (
+                {"file/videos", "file/videos/{user_id}"}
+                if row_category == "video"
+                else {"file/images", "file/images/{user_id}"}
+            )
             has_oss_id = bool(str(cfg.get("oss-id") or cfg.get("oss_id") or cfg.get("ossId") or "").strip())
             current_oss_path = str(cfg.get("oss-path") or cfg.get("oss_path") or cfg.get("ossPath") or "").strip()
             has_oss_path = bool(current_oss_path)
@@ -2340,14 +2371,11 @@ def init_system_api_settings(db):
             if not has_oss_id:
                 cfg["oss-id"] = "69c890a3a0a438550965e9ff"
             if not has_oss_path:
-                cfg["oss-path"] = "file/images/{yyyymm}/{user_id}"
+                cfg["oss-path"] = default_oss_path
                 oss_path_changed = True
-            elif "{yyyymm}" not in current_oss_path and current_oss_path in {
-                "file/images",
-                "file/images/{user_id}",
-            }:
+            elif "{yyyymm}" not in current_oss_path and current_oss_path in legacy_oss_paths:
                 # Align legacy grsai direct-write paths with OSS yyyymm layout.
-                cfg["oss-path"] = "file/images/{yyyymm}/{user_id}"
+                cfg["oss-path"] = default_oss_path
                 oss_path_changed = True
             if (not has_oss_id) or oss_path_changed:
                 row.config = cfg
@@ -2394,9 +2422,30 @@ def init_system_api_settings(db):
                 "oss-path": "file/images/{yyyymm}/{user_id}",
             }
         elif item["category"] == "Video" and "sora-2" in item["name"]:
-            config_payload = {"endpoint": grsai_sora2_endpoint}
+            config_payload = {
+                "endpoint": grsai_sora2_endpoint,
+                "oss-id": "69c890a3a0a438550965e9ff",
+                "oss-path": "file/videos/{yyyymm}/{user_id}",
+            }
         elif item["category"] == "Video" and "veo" in item["name"]:
-            config_payload = {"endpoint": grsai_veo_endpoint}
+            config_payload = {
+                "endpoint": grsai_veo_endpoint,
+                "oss-id": "69c890a3a0a438550965e9ff",
+                "oss-path": "file/videos/{yyyymm}/{user_id}",
+            }
+        elif item["category"] == "Video" and "minimax-h3" in item["name"]:
+            config_payload = {
+                "endpoint": grsai_minimax_h3_endpoint,
+                "query_endpoint": grsai_minimax_h3_result_endpoint,
+                "oss-id": "69c890a3a0a438550965e9ff",
+                "oss-path": "file/videos/{yyyymm}/{user_id}",
+                "enum_catalog": {
+                    "resolution": ["480p", "768p", "1080p"],
+                    "aspect_ratio": ["16:9", "9:16", "4:3", "3:4", "1:1"],
+                    "duration": list(range(1, 16)),
+                    "durations_seconds": list(range(1, 16)),
+                },
+            }
 
         db.add(SystemAPISetting(
             name=f"Grsai {item['name']}",
@@ -2417,6 +2466,43 @@ def init_system_api_settings(db):
         logger.info("Seeded %s grsai models into system_api_settings", added)
     else:
         logger.info("System grsai models already initialized")
+
+    # Enrich Grsai MiniMax H3 runtime enum catalog (1-15s / 480p|768p|1080p).
+    grsai_h3_row = db.query(SystemAPISetting).filter(
+        SystemAPISetting.provider == grsai_provider,
+        SystemAPISetting.model == "minimax-h3",
+    ).first()
+    if grsai_h3_row is not None:
+        h3_cfg = dict(grsai_h3_row.config or {}) if isinstance(grsai_h3_row.config, dict) else {}
+        h3_enum = h3_cfg.get("enum_catalog") if isinstance(h3_cfg.get("enum_catalog"), dict) else {}
+        h3_enum_updated = False
+        h3_enum_defaults = {
+            "resolution": ["480p", "768p", "1080p"],
+            "aspect_ratio": ["16:9", "9:16", "4:3", "3:4", "1:1"],
+            "duration": list(range(1, 16)),
+            "durations_seconds": list(range(1, 16)),
+        }
+        for key, values in h3_enum_defaults.items():
+            if not h3_enum.get(key):
+                h3_enum[key] = list(values)
+                h3_enum_updated = True
+        if h3_cfg.get("endpoint") != grsai_minimax_h3_endpoint:
+            h3_cfg["endpoint"] = grsai_minimax_h3_endpoint
+            h3_enum_updated = True
+        if h3_cfg.get("query_endpoint") != grsai_minimax_h3_result_endpoint:
+            h3_cfg["query_endpoint"] = grsai_minimax_h3_result_endpoint
+            h3_enum_updated = True
+        if not str(h3_cfg.get("oss-id") or h3_cfg.get("oss_id") or "").strip():
+            h3_cfg["oss-id"] = "69c890a3a0a438550965e9ff"
+            h3_enum_updated = True
+        if not str(h3_cfg.get("oss-path") or h3_cfg.get("oss_path") or "").strip():
+            h3_cfg["oss-path"] = "file/videos/{yyyymm}/{user_id}"
+            h3_enum_updated = True
+        if h3_enum_updated:
+            h3_cfg["enum_catalog"] = h3_enum
+            grsai_h3_row.config = h3_cfg
+            db.commit()
+            logger.info("Updated grsai minimax-h3 enum_catalog")
 
     # Seed baseline KIE models for system-level configuration.
     kie_provider = "kie"

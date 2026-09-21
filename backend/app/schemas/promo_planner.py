@@ -13,8 +13,12 @@ class PromoImageAssetIn(BaseModel):
     image_type: str = "product"  # product | character | scene | prop
     media_kind: str = "image"  # image | video
     owner_kind: str = "project"  # project | enterprise | brand | offering
+    owner_entity_id: Optional[int] = None
+    catalog_asset_id: Optional[int] = None
     object_name: str = ""
     user_remark: str = ""
+    analysis_status: str = ""
+    analysis_error: str = ""
 
 
 class PromoEnterpriseInfoIn(BaseModel):
@@ -46,6 +50,9 @@ class PromoEnterpriseInfoIn(BaseModel):
 
 class PromoCampaignDemandIn(BaseModel):
     user_raw_text: str = ""
+    basic_intro: str = ""
+    target_audience: str = ""
+    market_and_competitors: str = ""
     goal_type: str = ""
     narrative_model: str = ""
     presentation_form: str = ""
@@ -63,6 +70,18 @@ class PromoPlannerGenerateRequest(BaseModel):
     product_id: Optional[int] = None
     enterprise_info: PromoEnterpriseInfoIn = Field(default_factory=PromoEnterpriseInfoIn)
     campaign_demand: PromoCampaignDemandIn = Field(default_factory=PromoCampaignDemandIn)
+    image_asset_analysis: Optional[Dict[str, Any]] = None
+    force_reanalyze: bool = False
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
+
+
+class PromoAssetAnalyzeRequest(BaseModel):
+    asset: PromoImageAssetIn
+    enterprise_id: Optional[int] = None
+    brand_id: Optional[int] = None
+    product_id: Optional[int] = None
+    image_asset_analysis: Optional[Dict[str, Any]] = None
     function_name: Optional[str] = None
     system_api_id: Optional[int] = None
 
@@ -111,6 +130,8 @@ class PromoEnterpriseOut(BaseModel):
     owner_id: int
     brand_count: Optional[int] = 0
     product_count: Optional[int] = 0
+    asset_count: Optional[int] = 0
+    asset_previews: List[Dict[str, Any]] = Field(default_factory=list)
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -141,6 +162,8 @@ class PromoBrandOut(BaseModel):
     extra_info: Dict[str, Any] = Field(default_factory=dict)
     owner_id: int
     product_count: Optional[int] = 0
+    asset_count: Optional[int] = 0
+    asset_previews: List[Dict[str, Any]] = Field(default_factory=list)
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -201,6 +224,8 @@ class PromoProductOut(BaseModel):
     competitor_problem: Optional[str] = None
     extra_info: Dict[str, Any] = Field(default_factory=dict)
     owner_id: int
+    asset_count: Optional[int] = 0
+    asset_previews: List[Dict[str, Any]] = Field(default_factory=list)
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -231,6 +256,11 @@ class PromoCatalogAssetUpdate(BaseModel):
     extra_info: Optional[Dict[str, Any]] = None
 
 
+class PromoCatalogAssetAnalyzeRequest(BaseModel):
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
+
+
 class PromoCatalogAssetOut(BaseModel):
     id: int
     owner_id: int
@@ -245,6 +275,9 @@ class PromoCatalogAssetOut(BaseModel):
     object_name: str = ""
     user_remark: str = ""
     extra_info: Dict[str, Any] = Field(default_factory=dict)
+    analysis_status: str = ""
+    analysis_error: str = ""
+    image_asset_analysis: Dict[str, Any] = Field(default_factory=dict)
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -256,6 +289,7 @@ class PromoProjectCreate(BaseModel):
     title: str
     description: Optional[str] = None
     extra_info: Optional[Dict[str, Any]] = None
+    global_info: Optional[Dict[str, Any]] = None
     enterprise_id: Optional[int] = None
     brand_id: Optional[int] = None
     product_id: Optional[int] = None
@@ -265,6 +299,7 @@ class PromoProjectUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     extra_info: Optional[Dict[str, Any]] = None
+    global_info: Optional[Dict[str, Any]] = None
     enterprise_id: Optional[int] = None
     brand_id: Optional[int] = None
     product_id: Optional[int] = None
@@ -275,6 +310,7 @@ class PromoProjectOut(BaseModel):
     title: str
     description: Optional[str] = None
     extra_info: Dict[str, Any] = Field(default_factory=dict)
+    global_info: Dict[str, Any] = Field(default_factory=dict)
     owner_id: int
     enterprise_id: Optional[int] = None
     brand_id: Optional[int] = None

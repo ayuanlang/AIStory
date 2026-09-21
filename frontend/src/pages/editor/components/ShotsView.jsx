@@ -144,8 +144,11 @@ import {
     getSettingSourceByCategory,
     formatProviderModelEndpointError,
     isSeedance2VideoBaseModel,
+    isSeedance25VideoModelName,
     isSeedanceVideoModelName,
     clampSeedanceVideoDuration,
+    seedanceDurationWarnMaxSeconds,
+    SEEDANCE_DURATION_MIN_SECONDS,
 } from '../editorConfig';
 import {
     PROJECT_EP_TYPE_OPTIONS,
@@ -347,21 +350,26 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return apiList.find((item) => !item?.is_fallback) || apiList[0] || null;
     }, [functionApiConfigs, selectedVideoApiId]);
 
+    const selectedVideoApiIdentity = useMemo(() => ([
+        selectedGenerateVideosApi?.system_api_name,
+        selectedGenerateVideosApi?.system_api_model,
+        selectedGenerateVideosApi?.system_api_base_model,
+        selectedGenerateVideosApi?.alias,
+        selectedGenerateVideosApi?.name,
+        selectedGenerateVideosApi?.model,
+        selectedGenerateVideosApi?.provider,
+    ]), [selectedGenerateVideosApi]);
     const isSelectedVideoApiSeedance2 = useMemo(
         () => isSeedance2VideoBaseModel(selectedGenerateVideosApi?.system_api_base_model),
         [selectedGenerateVideosApi]
     );
+    const isSelectedVideoApiSeedance25 = useMemo(
+        () => isSeedance25VideoModelName(...selectedVideoApiIdentity),
+        [selectedVideoApiIdentity]
+    );
     const isSelectedVideoApiSeedance = useMemo(
-        () => isSeedanceVideoModelName(
-            selectedGenerateVideosApi?.system_api_name,
-            selectedGenerateVideosApi?.system_api_model,
-            selectedGenerateVideosApi?.system_api_base_model,
-            selectedGenerateVideosApi?.alias,
-            selectedGenerateVideosApi?.name,
-            selectedGenerateVideosApi?.model,
-            selectedGenerateVideosApi?.provider,
-        ),
-        [selectedGenerateVideosApi]
+        () => isSeedanceVideoModelName(...selectedVideoApiIdentity) || isSelectedVideoApiSeedance25,
+        [selectedVideoApiIdentity, isSelectedVideoApiSeedance25]
     );
     const isSd2AutoDurationActive = isSelectedVideoApiSeedance2 && sd2AutoDuration;
 
@@ -409,19 +417,38 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return duration;
     }, [isSd2AutoDurationActive, isSelectedVideoApiSeedance]);
 
+    const selectedSeedanceDurationWarnMax = seedanceDurationWarnMaxSeconds(...selectedVideoApiIdentity);
+
     const notifySeedanceDurationClampIfNeeded = useCallback((originalDuration, clampedDuration) => {
         const original = Number(originalDuration);
         const clamped = Number(clampedDuration);
         if (!Number.isFinite(original) || original <= 0) return;
         if (!Number.isFinite(clamped) || clamped === original) return;
-        if (original >= 4 && original <= 15) return;
-        const msg = t(
-            'Seedance最小时长必须为4，最大为15',
-            'Seedance minimum duration must be 4s, maximum 15s'
-        );
+        if (original >= SEEDANCE_DURATION_MIN_SECONDS) return;
+        const msg = t('Seedance最小时长必须为4', 'Seedance minimum duration must be 4s');
         notifyUiMessage(msg, 'warning');
         onLog?.(msg, 'warning');
     }, [t, onLog]);
+
+    const confirmSeedanceDurationOverLimitIfNeeded = useCallback(async (duration, { shotLabel = '' } = {}) => {
+        if (!isSelectedVideoApiSeedance || isSd2AutoDurationActive) return true;
+        const value = Number(duration);
+        if (!Number.isFinite(value) || value <= 0) return true;
+        const limit = selectedSeedanceDurationWarnMax;
+        if (value <= limit) return true;
+        const prefix = shotLabel ? `${shotLabel}\n` : '';
+        return confirmUiMessage(
+            t(
+                `${prefix}当前时长为 ${value} 秒，已超过 ${limit} 秒。确认后仍按 ${value} 秒提交，不会自动改短。是否仍要提交？`,
+                `${prefix}Duration is ${value}s, which exceeds ${limit}s. It will still be submitted as ${value}s and will not be shortened. Submit anyway?`
+            ),
+            {
+                title: t('时长超过建议上限', 'Duration exceeds recommended limit'),
+                confirmText: t('仍要提交', 'Submit Anyway'),
+                cancelText: t('取消', 'Cancel'),
+            }
+        );
+    }, [isSelectedVideoApiSeedance, isSd2AutoDurationActive, selectedSeedanceDurationWarnMax, t]);
 
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
     const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
@@ -9457,6 +9484,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             return;
         }
 
+        const rawTableDuration = (() => {
+            if (isSd2AutoDurationActive) return -1;
+            const normalized = String(shotSnapshot.duration ?? '').trim();
+            if (normalized === '-1') return 5;
+            const parsed = parseFloat(shotSnapshot.duration);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+        })();
+        const durParam = resolveShotVideoDurationParam(shotSnapshot.duration);
+        if (!(await confirmSeedanceDurationOverLimitIfNeeded(durParam))) {
+            return;
+        }
+
         let createdVideoJobId = '';
         let keepRunningUi = false;
         let ignoreAsyncJobCallbacks = false;
@@ -9561,16 +9600,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 ), 'warning');
             }
             
-            // Duration Logic: Seedance2 auto duration uses -1; otherwise use shot table duration.
-            // Seedance models clamp to [4, 15] and notify when out of range.
-            const rawTableDuration = (() => {
-                if (isSd2AutoDurationActive) return -1;
-                const normalized = String(editingShot.duration ?? '').trim();
-                if (normalized === '-1') return 5;
-                const parsed = parseFloat(editingShot.duration);
-                return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
-            })();
-            const durParam = resolveShotVideoDurationParam(editingShot.duration);
+            // Duration: Seedance2 auto uses -1. Over-limit values are confirmed above and not rewritten.
             if (isSelectedVideoApiSeedance) {
                 notifySeedanceDurationClampIfNeeded(rawTableDuration, durParam);
             }
@@ -11735,6 +11765,38 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     }
                 );
                 if (!proceedMissing) return;
+            }
+
+            if (isSelectedVideoApiSeedance && !isSd2AutoDurationActive) {
+                const overLimitShots = targetShots
+                    .map((shot) => {
+                        const shotLabel = String(shot?.shot_id || shot?.shot_name || shot?.id || '').trim()
+                            || t('未命名镜头', 'Unnamed shot');
+                        const duration = resolveShotVideoDurationParam(shot?.duration);
+                        return { shotLabel, duration };
+                    })
+                    .filter((item) => Number.isFinite(item.duration) && item.duration > selectedSeedanceDurationWarnMax);
+                if (overLimitShots.length > 0) {
+                    const preview = overLimitShots.slice(0, 8)
+                        .map((item) => `• ${item.shotLabel}: ${item.duration}s`)
+                        .join('\n');
+                    const moreCount = Math.max(0, overLimitShots.length - 8);
+                    const moreLine = moreCount > 0
+                        ? t(`\n…另有 ${moreCount} 个镜头也超过上限`, `\n…and ${moreCount} more shot(s) over the limit`)
+                        : '';
+                    const proceedOverLimit = await confirmUiMessage(
+                        t(
+                            `以下 ${overLimitShots.length} 个镜头时长已超过 ${selectedSeedanceDurationWarnMax} 秒。确认后仍按原时长提交，不会自动改短：\n${preview}${moreLine}\n\n是否仍要提交？`,
+                            `${overLimitShots.length} shot(s) exceed ${selectedSeedanceDurationWarnMax}s. They will still be submitted at the original duration and will not be shortened:\n${preview}${moreLine}\n\nSubmit anyway?`
+                        ),
+                        {
+                            title: t('时长超过建议上限', 'Duration exceeds recommended limit'),
+                            confirmText: t('仍要提交', 'Submit Anyway'),
+                            cancelText: t('取消', 'Cancel'),
+                        }
+                    );
+                    if (!proceedOverLimit) return;
+                }
             }
         }
 

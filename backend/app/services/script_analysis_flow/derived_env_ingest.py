@@ -1529,6 +1529,9 @@ def _upsert_environment_entity(
         .first()
     )
     attrs = dict(payload.get("custom_attributes") or {})
+    from app.services.promo_context import drop_promo_source_images_from_derived_env_attrs
+
+    attrs = drop_promo_source_images_from_derived_env_attrs(attrs)
     prompt = _clean(payload.get("generation_prompt_cn"))
     deps = list(payload.get("visual_dependencies") or [])
     strategy = payload.get("dependency_strategy") or {}
@@ -1574,7 +1577,7 @@ def _upsert_environment_entity(
         existing.visual_dependencies = deps or existing.visual_dependencies
         existing.dependency_strategy = strategy or existing.dependency_strategy
         existing_attrs.update(attrs)
-        existing.custom_attributes = existing_attrs
+        existing.custom_attributes = drop_promo_source_images_from_derived_env_attrs(existing_attrs)
     return "updated" if can_overwrite else "kept", int(existing.id)
 
 

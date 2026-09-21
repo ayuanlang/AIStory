@@ -78,9 +78,9 @@ from app.services.generation_runtime.project_generation_context import (
 )
 from app.services.generation_runtime.queue_config_runtime import _is_pure_callback_mode_enabled
 from app.services.generation_runtime.seedance_duration import (
-    SEEDANCE_DURATION_MAX_SECONDS,
     SEEDANCE_DURATION_MIN_SECONDS,
     _clamp_seedance_duration,
+    _is_seedance25_model_name,
     _is_seedance_model_name,
 )
 from app.services.generation_runtime.video_job_billing import (
@@ -607,9 +607,9 @@ async def _run_generate_video(
         if req.duration is not None and max_duration_cap is not None and max_duration_cap > 0:
             req.duration = float(min(float(req.duration), float(max_duration_cap)))
 
-        # Seedance hard range: [4, 15] seconds. Preserve -1 (auto duration).
+        # Seedance: min 4s only. Do not rewrite values above 15s/30s.
         pre_cfg_payload = (pre_api_cfg or {}).get("config") if isinstance((pre_api_cfg or {}).get("config"), dict) else {}
-        if _is_seedance_model_name(
+        seedance_identity = (
             reserve_provider,
             reserve_model,
             (pre_api_cfg or {}).get("name"),
@@ -618,18 +618,18 @@ async def _run_generate_video(
             pre_cfg_payload.get("base_model") if isinstance(pre_cfg_payload, dict) else None,
             getattr(req, "model", None),
             getattr(req, "provider", None),
-        ):
-            clamped_duration, was_clamped = _clamp_seedance_duration(req.duration)
+        )
+        if _is_seedance_model_name(*seedance_identity) or _is_seedance25_model_name(*seedance_identity):
+            clamped_duration, was_clamped = _clamp_seedance_duration(req.duration, *seedance_identity)
             if was_clamped and clamped_duration is not None:
                 logger.info(
                     "[GenerateVideo] Seedance duration clamped | from=%s to=%s provider=%s model=%s "
-                    "(min=%.0f max=%.0f)",
+                    "(min=%.0f max=none)",
                     req.duration,
                     clamped_duration,
                     reserve_provider,
                     reserve_model,
                     SEEDANCE_DURATION_MIN_SECONDS,
-                    SEEDANCE_DURATION_MAX_SECONDS,
                 )
                 req.duration = float(clamped_duration)
 
@@ -1350,6 +1350,7 @@ async def _run_generate_video(
             video_provider_options["_provider_task_id_callback"] = provider_task_id_callback
         if callable(provider_result_callback):
             video_provider_options["_provider_result_callback"] = provider_result_callback
+        video_provider_options["_request_user_id"] = int(getattr(current_user, "id", 0) or 0) or 1
         if (force_pure_callback_mode or _is_pure_callback_mode_enabled()) and provider_callback_ticket and provider_callback_url:
             # NukoAi is poll-only: no upstream webhook. Never enable pure callback.
             from app.services.media_service import media_service as _media_svc

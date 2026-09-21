@@ -2728,6 +2728,7 @@ class MediaGenerationService:
         provider: Optional[str] = None,
         refresh_if_missing: bool = True,
         include_raw_response: bool = False,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Query provider task usage and return normalized billing fields.
 
@@ -2760,6 +2761,29 @@ class MediaGenerationService:
             if ep_token:
                 stable_key = ep_token
         endpoint = str(query_endpoint or "").strip()
+        is_grsai_usage = (
+            "grsai" in provider_l
+            or "dakka.com" in endpoint.lower()
+            or "grsaiapi.com" in endpoint.lower()
+        )
+        if is_grsai_usage:
+            headers = {"Authorization": f"Bearer {stable_key}", "Content-Type": "application/json"}
+            queried = self._request_grsai_task_payload(
+                task_id=stable_task_id,
+                headers=headers,
+                query_endpoint=endpoint,
+                model=model,
+            )
+            raw_payload = queried.get("raw") if isinstance(queried.get("raw"), dict) else {}
+            usage = _normalize_provider_task_usage(_extract_provider_task_usage(raw_payload))
+            if usage:
+                parsed = self._parse_grsai_result_payload(raw_payload)
+                usage["raw_task"] = {
+                    "id": parsed.get("task_id") or stable_task_id,
+                    "status": parsed.get("status"),
+                    "model": model,
+                }
+            return _with_raw(usage, raw_payload)
         if not _is_kie_record_info_endpoint(endpoint, provider_l):
             endpoint = self._normalize_doubao_video_tasks_endpoint(query_endpoint)
         headers = {"Authorization": f"Bearer {stable_key}", "Content-Type": "application/json"}
@@ -2970,6 +2994,7 @@ class MediaGenerationService:
         provider: Optional[str] = None,
         kind: str = "image",
         base_url: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """One-shot provider task query for timeout/callback-supplement recovery.
 
@@ -3517,53 +3542,26 @@ class MediaGenerationService:
                 return _pack(raw_payload, status=status or "running", pending=True)
 
             if is_grsai:
-                poll_url = endpoint
-                if not poll_url or "recordInfo" in poll_url or "record-info" in poll_url:
-                    root = base
-                    if not root and endpoint:
-                        root = re.sub(r"/v1/(draw|video).*$", "", endpoint, flags=re.IGNORECASE)
-                        root = re.sub(r"/v1/?$", "", root).rstrip("/")
-                    if not root:
-                        root = "https://grsaiapi.com"
-                    poll_url = f"{root}/v1/draw/result"
-                endpoint = poll_url
-
-                def _grsai_post(use_proxy: bool = True):
-                    kwargs = {
-                        "headers": headers,
-                        "json": {"id": stable_task_id},
-                        "timeout": (10, 30),
-                        "verify": False,
-                    }
-                    if not use_proxy:
-                        kwargs["proxies"] = {"http": None, "https": None}
-                    return requests.post(poll_url, **kwargs)
-
-                try:
-                    resp = _grsai_post(True)
-                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
-                    resp = _grsai_post(False)
-                if resp is None or getattr(resp, "status_code", None) != 200:
-                    return {"error": f"grsai_http_{getattr(resp, 'status_code', None)}"}
-                try:
-                    raw_payload = resp.json() if resp.content else {}
-                except Exception:
-                    return {"error": "grsai_invalid_json"}
-                if not isinstance(raw_payload, dict):
-                    return {"error": "grsai_invalid_payload"}
-
-                data_block = raw_payload.get("data") if isinstance(raw_payload.get("data"), dict) else raw_payload
-                status = _normalize_status(
-                    (data_block.get("status") if isinstance(data_block, dict) else None)
-                    or raw_payload.get("status")
+                queried = self._request_grsai_task_payload(
+                    task_id=stable_task_id,
+                    headers=headers,
+                    query_endpoint=endpoint,
+                    base_url=base,
+                    model=model,
                 )
-                url = _pick_url(raw_payload)
+                if queried.get("error") and not isinstance(queried.get("raw"), dict):
+                    return {"error": queried.get("error")}
+                raw_payload = queried.get("raw") if isinstance(queried.get("raw"), dict) else {}
+                parsed = self._parse_grsai_result_payload(raw_payload)
+                status = _normalize_status(parsed.get("status") or raw_payload.get("status"))
+                url = str(parsed.get("media_url") or "").strip() or _pick_url(raw_payload)
                 if url and status not in {"failed", "canceled"}:
                     if oss_storage_service.is_managed_url(url):
                         url = str(oss_storage_service.refresh_url(url) or url)
                     return _pack(raw_payload, status="succeeded", url=url)
                 if status in {"failed", "canceled"}:
-                    return _pack(raw_payload, status=status, error=status)
+                    err_msg = str(parsed.get("error") or status).strip() or status
+                    return _pack(raw_payload, status=status, error=err_msg)
                 return _pack(raw_payload, status=status or "running", pending=True)
 
             if is_kie:
@@ -8008,6 +8006,12 @@ class MediaGenerationService:
                 if callable(_cb_val):
                     api_config[_cb_key] = _cb_val
 
+        if api_config is not None:
+            request_cfg = api_config.get("config") if isinstance(api_config.get("config"), dict) else {}
+            if not request_cfg.get("_request_user_id"):
+                request_cfg["_request_user_id"] = user_id
+                api_config["config"] = request_cfg
+
         _debug_log(
             "[MediaService][VoiceConfig] requested_provider=%s requested_model=%s resolved_provider=%s resolved_model=%s resolved_source=%s voice=%s language_code=%s"
             % (
@@ -8074,18 +8078,42 @@ class MediaGenerationService:
             fallback_candidate_limit=0,
         )
 
-        # Download 
+        # Download
         if not skip_download and result and "url" in result and result["url"]:
+            result_url = str(result.get("url") or "").strip()
             result_meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-            result["url"] = await asyncio.to_thread(
-                self._download_and_save,
-                result["url"],
-                filename_base,
-                user_id,
-                result_meta,
-                None,
-                str(result_meta.get("provider") or provider or "").strip() or None,
+            result_provider = str(
+                result.get("provider")
+                or result_meta.get("provider")
+                or provider
+                or ""
+            ).strip().lower()
+            # Grsai video APIs may already write directly to provider OSS (oss-id / oss-path).
+            skip_provider_direct_oss_download = bool(
+                result_provider == "grsai"
+                and result_url.lower().startswith(("http://", "https://"))
             )
+            if skip_provider_direct_oss_download:
+                logger.info(
+                    "[GenerateVideo] skip localization for provider-direct oss url | provider=%s user_id=%s url=%s",
+                    result_provider,
+                    user_id,
+                    _strip_query_from_log_url(result_url),
+                )
+                if isinstance(result.get("metadata"), dict):
+                    result["metadata"]["provider_direct_oss_url"] = True
+                else:
+                    result["metadata"] = {"provider_direct_oss_url": True, "provider": result_provider}
+            else:
+                result["url"] = await asyncio.to_thread(
+                    self._download_and_save,
+                    result["url"],
+                    filename_base,
+                    user_id,
+                    result_meta,
+                    None,
+                    str(result_meta.get("provider") or provider or "").strip() or None,
+                )
         if result and result.get("error"):
             error_provider = result.get("_attempt_provider") if isinstance(result, dict) else None
             result["error"] = self._vendor_failed_message(error_provider or provider, result.get("error"))
@@ -8759,6 +8787,358 @@ class MediaGenerationService:
             traceback.print_exc()
             return {"error": f"Vidu Exception: {str(e)}"}
              
+    def _build_grsai_direct_oss_headers(
+        self,
+        tool_conf: Optional[Dict[str, Any]] = None,
+        *,
+        asset_kind: str = "image",
+    ) -> Dict[str, str]:
+        tool_conf = tool_conf if isinstance(tool_conf, dict) else {}
+        request_user_id_raw = tool_conf.get("_request_user_id")
+        try:
+            request_user_id = int(request_user_id_raw or 1)
+        except Exception:
+            request_user_id = 1
+
+        oss_config = tool_conf.get("oss") if isinstance(tool_conf.get("oss"), dict) else {}
+        oss_id = str(
+            tool_conf.get("oss-id")
+            or tool_conf.get("oss_id")
+            or tool_conf.get("ossId")
+            or (oss_config.get("id") if isinstance(oss_config, dict) else "")
+            or os.getenv("GRSAI_OSS_ID")
+            or "69c890a3a0a438550965e9ff"
+            or ""
+        ).strip()
+
+        kind = "videos" if str(asset_kind or "").strip().lower() == "video" else "images"
+        env_path = os.getenv("GRSAI_OSS_VIDEO_PATH") if kind == "videos" else os.getenv("GRSAI_OSS_PATH")
+        if not env_path and kind == "videos":
+            env_path = os.getenv("GRSAI_OSS_PATH")
+        yyyymm = datetime.utcnow().strftime("%Y%m")
+        raw_oss_path = str(
+            tool_conf.get("oss-path")
+            or tool_conf.get("oss_path")
+            or tool_conf.get("ossPath")
+            or (oss_config.get("path") if isinstance(oss_config, dict) else "")
+            or env_path
+            or ""
+        ).strip()
+        if "{yyyymm}" in raw_oss_path:
+            raw_oss_path = raw_oss_path.replace("{yyyymm}", yyyymm)
+        if "{user_id}" in raw_oss_path:
+            oss_path = raw_oss_path.replace("{user_id}", str(request_user_id))
+        elif raw_oss_path:
+            normalized_oss_path = raw_oss_path.rstrip("/")
+            user_segment = f"/{request_user_id}"
+            if normalized_oss_path.endswith(user_segment):
+                oss_path = normalized_oss_path
+            else:
+                oss_path = f"{normalized_oss_path}{user_segment}"
+        else:
+            oss_path = f"file/{kind}/{yyyymm}/{request_user_id}"
+
+        path_parts = [p for p in str(oss_path).strip("/").split("/") if p]
+        user_str = str(request_user_id)
+        if path_parts and path_parts[-1] == user_str:
+            has_yyyymm_before_user = len(path_parts) >= 2 and bool(re.fullmatch(r"\d{6}", path_parts[-2] or ""))
+            if not has_yyyymm_before_user:
+                path_parts.insert(-1, yyyymm)
+                oss_path = "/".join(path_parts)
+        elif yyyymm not in path_parts:
+            path_parts.extend([yyyymm, user_str])
+            oss_path = "/".join(path_parts)
+
+        headers: Dict[str, str] = {}
+        if oss_id:
+            headers["oss-id"] = oss_id
+        if oss_path:
+            headers["oss-path"] = oss_path
+        return headers
+
+    def _is_grsai_minimax_h3_model(self, model: Any) -> bool:
+        text = str(model or "").strip().lower().replace("_", "-")
+        return text == "minimax-h3" or text.startswith("minimax-h3/")
+
+    def _grsai_api_root(self, endpoint: Optional[str] = None, base_url: Optional[str] = None) -> str:
+        root = str(base_url or "").strip()
+        if not root and endpoint:
+            root = re.sub(r"/v1/(draw|video|api).*$", "", str(endpoint), flags=re.IGNORECASE)
+            root = re.sub(r"/v1/?$", "", root).rstrip("/")
+        if root and not root.lower().startswith("http"):
+            root = f"https://{root.lstrip('/')}"
+        if root.lower().endswith("/v1"):
+            root = root[:-3].rstrip("/")
+        return root.rstrip("/") or "https://grsai.dakka.com.cn"
+
+    def _is_grsai_minimax_h3_query(self, endpoint: Any = None, model: Any = None) -> bool:
+        if model not in (None, ""):
+            return self._is_grsai_minimax_h3_model(model)
+        text = str(endpoint or "").strip().lower()
+        return (
+            "/v1/api/result" in text
+            or "/v1/api/generate" in text
+            or text.rstrip("/").endswith("/api/result")
+        )
+
+    def _resolve_grsai_poll_request(
+        self,
+        *,
+        task_id: str,
+        query_endpoint: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Build the exact HTTP request used by live grsai polling.
+
+        MiniMax H3: GET /v1/api/result?id=...
+        Sora / Veo / image: POST /v1/draw/result {"id": ...}
+        """
+        stable_task_id = str(task_id or "").strip()
+        endpoint = str(query_endpoint or "").strip()
+        is_h3 = self._is_grsai_minimax_h3_query(endpoint, model)
+        root = self._grsai_api_root(endpoint, base_url)
+        if is_h3:
+            if endpoint and "/api/result" in endpoint.lower() and "record" not in endpoint.lower():
+                url = endpoint.rstrip("/")
+            else:
+                url = f"{root}/v1/api/result"
+            return {"url": url, "method": "GET", "params": {"id": stable_task_id}}
+        endpoint_l = endpoint.lower()
+        if (
+            not endpoint
+            or "recordinfo" in endpoint_l
+            or "record-info" in endpoint_l
+            or "/api/result" in endpoint_l
+            or "/api/generate" in endpoint_l
+        ):
+            url = f"{root}/v1/draw/result"
+        else:
+            url = endpoint.rstrip("/")
+        return {"url": url, "method": "POST", "json": {"id": stable_task_id}}
+
+    def _request_grsai_task_payload(
+        self,
+        *,
+        task_id: str,
+        headers: Dict[str, str],
+        query_endpoint: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        spec = self._resolve_grsai_poll_request(
+            task_id=task_id,
+            query_endpoint=query_endpoint,
+            base_url=base_url,
+            model=model,
+        )
+        method = str(spec.get("method") or "POST").upper()
+        url = str(spec.get("url") or "").strip()
+        if not url or not str(task_id or "").strip():
+            return {"error": "grsai_missing_query_target"}
+
+        def _once(use_proxy: bool = True):
+            kwargs: Dict[str, Any] = {
+                "headers": headers,
+                "timeout": (10, 30),
+                "verify": False,
+            }
+            if spec.get("params"):
+                kwargs["params"] = spec.get("params")
+            if spec.get("json") is not None:
+                kwargs["json"] = spec.get("json")
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            if method == "GET":
+                return requests.get(url, **kwargs)
+            return requests.post(url, **kwargs)
+
+        try:
+            resp = _once(True)
+        except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+            resp = _once(False)
+        status_code = getattr(resp, "status_code", None) if resp is not None else None
+        logger.info(
+            "[TaskQuery] grsai poll | method=%s url=%s task_id=%s model=%s http=%s",
+            method,
+            url,
+            task_id,
+            model or None,
+            status_code,
+        )
+        # Live H3 polling also accepts 400 with a JSON body.
+        if resp is None or status_code not in {200, 400}:
+            return {"error": f"grsai_http_{status_code}"}
+        try:
+            raw_payload = resp.json() if getattr(resp, "content", None) else {}
+        except Exception:
+            return {"error": "grsai_invalid_json"}
+        if not isinstance(raw_payload, dict):
+            return {"error": "grsai_invalid_payload"}
+        return {"raw": raw_payload}
+
+    def _map_grsai_minimax_h3_aspect_ratio(self, value: Any) -> str:
+        text = str(value or "").strip().lower().replace(" ", "")
+        if text in {"portrait", "vertical", "9:16", "3:4", "2:3", "4:5", "5:6"}:
+            return "portrait"
+        pair = self._parse_resolution_pair(text)
+        if pair and pair[1] > pair[0]:
+            return "portrait"
+        return "landscape"
+
+    def _map_grsai_minimax_h3_resolution(
+        self,
+        value: Any,
+        *,
+        draft: bool = False,
+        width: Any = None,
+        height: Any = None,
+    ) -> str:
+        if draft:
+            return "480p"
+
+        text = str(value or "").strip().lower().replace(" ", "")
+        mapped = None
+        if text in {"sd"}:
+            mapped = "480p"
+        elif text in {"hd"}:
+            mapped = "768p"
+        else:
+            tier = self._parse_resolution_tier(text)
+            if tier is not None:
+                if tier <= 480:
+                    mapped = "480p"
+                elif tier <= 800:
+                    mapped = "768p"
+                else:
+                    mapped = "1080p"
+
+        short_edge = None
+        pair = self._parse_resolution_pair(text)
+        if pair:
+            short_edge = min(pair)
+        else:
+            try:
+                parsed_w = int(width) if width not in (None, "") else None
+                parsed_h = int(height) if height not in (None, "") else None
+            except Exception:
+                parsed_w = None
+                parsed_h = None
+            if parsed_w and parsed_h:
+                short_edge = min(int(parsed_w), int(parsed_h))
+
+        if mapped == "480p" and short_edge and short_edge >= 700:
+            return "768p"
+        if mapped:
+            return mapped
+        if short_edge:
+            if short_edge <= 500:
+                return "480p"
+            if short_edge <= 800:
+                return "768p"
+            return "1080p"
+        return "768p"
+
+    def _map_grsai_minimax_h3_duration(self, value: Any, *, resolution: str = "768p") -> int:
+        try:
+            parsed = int(round(float(value)))
+        except Exception:
+            parsed = 5
+        if parsed <= 0:
+            parsed = 5
+        max_duration = 10 if str(resolution or "").strip().lower() == "1080p" else 15
+        return max(1, min(max_duration, parsed))
+
+    def _collect_grsai_minimax_h3_audios(
+        self,
+        tool_conf: Optional[Dict[str, Any]] = None,
+        *,
+        extra_sources: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+        limit: int = 3,
+    ) -> List[str]:
+        refs: List[str] = []
+        seen: set = set()
+        source_dicts: List[Dict[str, Any]] = []
+        if isinstance(tool_conf, dict):
+            source_dicts.append(self._safe_json_dict(tool_conf))
+        if isinstance(extra_sources, dict):
+            source_dicts.append(self._safe_json_dict(extra_sources))
+        elif isinstance(extra_sources, list):
+            for item in extra_sources:
+                if isinstance(item, dict):
+                    source_dicts.append(self._safe_json_dict(item))
+
+        url_keys = (
+            "audios",
+            "audio_urls",
+            "audioUrls",
+            "reference_audio_urls",
+            "ref_audio_urls",
+            "referenceAudioUrls",
+        )
+        id_keys = ("audio_ids", "audioIds")
+        for source in source_dicts:
+            for key in url_keys:
+                if key in source:
+                    self._append_unique_reference_values(refs, seen, source.get(key))
+            for key in id_keys:
+                raw = source.get(key)
+                items = raw if isinstance(raw, list) else [raw]
+                for item in items:
+                    text = str(item or "").strip()
+                    if text.startswith(("http://", "https://", "data:")):
+                        self._append_unique_reference_values(refs, seen, text)
+
+        limited = self._limit_reference_input(refs, limit)
+        if isinstance(limited, list):
+            return limited
+        if isinstance(limited, str) and limited.strip():
+            return [limited.strip()]
+        return []
+
+    def _build_grsai_minimax_h3_payload(
+        self,
+        *,
+        prompt: str,
+        aspect_ratio: Any = None,
+        resolution: Any = None,
+        duration: Any = None,
+        images: Optional[List[str]] = None,
+        audios: Optional[List[str]] = None,
+        seed: Any = None,
+        reply_type: Any = "async",
+        draft: bool = False,
+        width: Any = None,
+        height: Any = None,
+    ) -> Dict[str, Any]:
+        mapped_resolution = self._map_grsai_minimax_h3_resolution(
+            resolution, draft=draft, width=width, height=height
+        )
+        mapped_duration = self._map_grsai_minimax_h3_duration(duration, resolution=mapped_resolution)
+        reply = str(reply_type or "async").strip().lower()
+        if reply not in {"json", "stream", "async"}:
+            reply = "async"
+        payload: Dict[str, Any] = {
+            "model": "minimax-h3",
+            "prompt": str(prompt or ""),
+            "aspectRatio": self._map_grsai_minimax_h3_aspect_ratio(aspect_ratio),
+            "resolution": mapped_resolution,
+            "duration": mapped_duration,
+            "replyType": reply,
+        }
+        cleaned_images = [str(item).strip() for item in (images or []) if str(item).strip()][:9]
+        if cleaned_images:
+            payload["images"] = cleaned_images
+        cleaned_audios = [str(item).strip() for item in (audios or []) if str(item).strip()][:3]
+        if cleaned_audios:
+            payload["audios"] = cleaned_audios
+        try:
+            if seed is not None and str(seed).strip() != "":
+                payload["seed"] = int(float(seed))
+        except Exception:
+            pass
+        return payload
+
     async def _handle_grsai_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         trace_id = None
         prompt = self._merge_negative_prompt(prompt, negative_prompt)
@@ -8831,9 +9211,9 @@ class MediaGenerationService:
         base_url = config.get("base_url") or "https://grsaiapi.com"
         
         # Robust stripping of Grsai specific paths to get the true base URL
-        # Remove /v1/draw/..., /v1/video/..., or just /v1 at the end
+        # Remove /v1/draw/..., /v1/video/..., /v1/api/..., or just /v1 at the end
         # This prevents "double pathing" if user pastes a full endpoint URL like .../v1/draw/nano-banana
-        base_url = re.sub(r'/v1/(draw|video).*$', '', base_url, flags=re.IGNORECASE)
+        base_url = re.sub(r'/v1/(draw|video|api).*$', '', base_url, flags=re.IGNORECASE)
         base_url = re.sub(r'/v1/?$', '', base_url).rstrip("/")
         
         # Image
@@ -8853,55 +9233,9 @@ class MediaGenerationService:
             
             final_model = model or "sora-image"
             payload = {"model": final_model, "prompt": prompt, "shutProgress": False}
-            oss_config = tool_conf.get("oss") if isinstance(tool_conf.get("oss"), dict) else {}
-            oss_id = str(
-                tool_conf.get("oss-id")
-                or tool_conf.get("oss_id")
-                or tool_conf.get("ossId")
-                or (oss_config.get("id") if isinstance(oss_config, dict) else "")
-                or os.getenv("GRSAI_OSS_ID")
-                or "69c890a3a0a438550965e9ff"
-                or ""
-            ).strip()
-            # Match OSS upload layout: .../{yyyymm}/{user_id}/...
-            yyyymm = datetime.utcnow().strftime("%Y%m")
-            raw_oss_path = str(
-                tool_conf.get("oss-path")
-                or tool_conf.get("oss_path")
-                or tool_conf.get("ossPath")
-                or (oss_config.get("path") if isinstance(oss_config, dict) else "")
-                or os.getenv("GRSAI_OSS_PATH")
-                or ""
-            ).strip()
-            if "{yyyymm}" in raw_oss_path:
-                raw_oss_path = raw_oss_path.replace("{yyyymm}", yyyymm)
-            if "{user_id}" in raw_oss_path:
-                oss_path = raw_oss_path.replace("{user_id}", str(request_user_id))
-            elif raw_oss_path:
-                normalized_oss_path = raw_oss_path.rstrip("/")
-                user_segment = f"/{request_user_id}"
-                if normalized_oss_path.endswith(user_segment):
-                    oss_path = normalized_oss_path
-                else:
-                    oss_path = f"{normalized_oss_path}{user_segment}"
-            else:
-                oss_path = f"file/images/{yyyymm}/{request_user_id}"
-            # Ensure yyyymm segment exists before user_id (covers legacy templates).
-            path_parts = [p for p in str(oss_path).strip("/").split("/") if p]
-            user_str = str(request_user_id)
-            if path_parts and path_parts[-1] == user_str:
-                has_yyyymm_before_user = len(path_parts) >= 2 and bool(re.fullmatch(r"\d{6}", path_parts[-2] or ""))
-                if not has_yyyymm_before_user:
-                    path_parts.insert(-1, yyyymm)
-                    oss_path = "/".join(path_parts)
-            elif yyyymm not in path_parts:
-                path_parts.extend([yyyymm, user_str])
-                oss_path = "/".join(path_parts)
-            grsai_extra_headers: Dict[str, str] = {}
-            if oss_id:
-                grsai_extra_headers["oss-id"] = oss_id
-            if oss_path:
-                grsai_extra_headers["oss-path"] = oss_path
+            grsai_extra_headers = self._build_grsai_direct_oss_headers(tool_conf, asset_kind="image")
+            oss_id = str(grsai_extra_headers.get("oss-id") or "").strip()
+            oss_path = str(grsai_extra_headers.get("oss-path") or "").strip()
             logger.info(
                 "[GrsaiTrace][%s] image submit headers | content_type=application/json auth_bearer=%s has_oss_id=%s has_oss_path=%s oss_id=%s oss_path=%s",
                 trace_id,
@@ -9066,6 +9400,23 @@ class MediaGenerationService:
         # Video
         elif gen_type == "video":
             model_lower = (model or "").lower()
+            if self._is_grsai_minimax_h3_model(model):
+                return await self._handle_grsai_minimax_h3_video(
+                    prompt=prompt,
+                    config=config,
+                    api_key=api_key,
+                    model=model,
+                    ref_image=ref_image,
+                    last_frame_url=last_frame_url,
+                    duration=duration,
+                    aspect_ratio=aspect_ratio,
+                    tool_conf=tool_conf,
+                    base_url=base_url,
+                    raw_endpoint=raw_endpoint,
+                    trace_id=trace_id,
+                    callback_ticket=callback_ticket,
+                    callback_url=callback_url,
+                )
             is_veo = "veo" in model_lower
             
             # Check if user provided a specific full endpoint (Prefer Map -> Then generic config)
@@ -9086,7 +9437,7 @@ class MediaGenerationService:
                      endpoint_suffix = "runway"
                  elif "luma" in model_lower:
                      endpoint_suffix = "luma"
-                 elif "hailuo" in model_lower or "minimax" in model_lower:
+                 elif ("hailuo" in model_lower or "minimax" in model_lower) and not self._is_grsai_minimax_h3_model(model_lower):
                      endpoint_suffix = "hailuo"
                  elif "cogvideo" in model_lower:
                      endpoint_suffix = "cogvideox"
@@ -9157,7 +9508,12 @@ class MediaGenerationService:
                 elif not is_veo:
                     payload["size"] = "854x480" if video_is_draft else "1280x720"
 
-            base_metadata = {"provider": "grsai", "model": final_model, "prompt": prompt}
+            base_metadata = {
+                "provider": "grsai",
+                "model": final_model,
+                "prompt": prompt,
+                "query_endpoint": result_url,
+            }
             
             # Grsai expects URLs or Base64
             # is_veo check moved up
@@ -9239,6 +9595,20 @@ class MediaGenerationService:
                 video_task_id_callback = tool_conf.get("_provider_task_id_callback")
             if not callable(video_task_id_callback):
                 video_task_id_callback = None
+            grsai_extra_headers = self._build_grsai_direct_oss_headers(tool_conf, asset_kind="video")
+            if grsai_extra_headers:
+                base_metadata["provider_direct_oss_url"] = True
+                base_metadata["grsai_oss_id"] = grsai_extra_headers.get("oss-id")
+                base_metadata["grsai_oss_path"] = grsai_extra_headers.get("oss-path")
+            logger.info(
+                "[GrsaiTrace][%s] video submit headers | content_type=application/json auth_bearer=%s has_oss_id=%s has_oss_path=%s oss_id=%s oss_path=%s",
+                trace_id,
+                bool(api_key),
+                bool(str(grsai_extra_headers.get("oss-id") or "").strip()),
+                bool(str(grsai_extra_headers.get("oss-path") or "").strip()),
+                str(grsai_extra_headers.get("oss-id") or "").strip(),
+                str(grsai_extra_headers.get("oss-path") or "").strip(),
+            )
             return await self._submit_and_poll_grsai(
                 endpoint,
                 payload,
@@ -9248,12 +9618,150 @@ class MediaGenerationService:
                 extra_metadata=base_metadata,
                 trace_id=trace_id,
                 task_id_callback=video_task_id_callback,
+                extra_headers=grsai_extra_headers,
                 pure_callback_mode=pure_callback_mode,
                 callback_enabled=callback_enabled,
                 callback_ticket=callback_ticket,
                 callback_url=callback_url,
             )
     
+    async def _handle_grsai_minimax_h3_video(
+        self,
+        *,
+        prompt,
+        config,
+        api_key,
+        model,
+        ref_image=None,
+        last_frame_url=None,
+        duration=5,
+        aspect_ratio=None,
+        tool_conf=None,
+        base_url="",
+        raw_endpoint="",
+        trace_id=None,
+        callback_ticket=None,
+        callback_url=None,
+    ):
+        tool_conf = tool_conf if isinstance(tool_conf, dict) else {}
+        clean_base = str(base_url or "").split("/v1")[0].rstrip("/")
+        if clean_base and not clean_base.startswith("http"):
+            clean_base = f"https://{clean_base}"
+        if not clean_base:
+            clean_base = "https://grsai.dakka.com.cn"
+
+        endpoint_map = tool_conf.get("endpointMap") if isinstance(tool_conf.get("endpointMap"), dict) else {}
+        mapped_endpoint = ""
+        if isinstance(endpoint_map, dict):
+            mapped_endpoint = str(endpoint_map.get(model) or endpoint_map.get("minimax-h3") or "").strip()
+        resolved_endpoint = str(mapped_endpoint or raw_endpoint or tool_conf.get("endpoint") or "").strip()
+        if resolved_endpoint and "/api/generate" in resolved_endpoint:
+            endpoint = resolved_endpoint.rstrip("/")
+        else:
+            endpoint = f"{clean_base}/v1/api/generate"
+
+        query_endpoint = str(tool_conf.get("query_endpoint") or "").strip()
+        if query_endpoint and "/api/result" in query_endpoint:
+            result_url = query_endpoint.rstrip("/")
+        elif "/v1/" in endpoint:
+            result_url = f"{endpoint.split('/v1/')[0]}/v1/api/result"
+        else:
+            result_url = f"{clean_base}/v1/api/result"
+
+        image_refs = self._collect_video_reference_image_urls(
+            ref_image,
+            tool_conf,
+            extra_sources=config if isinstance(config, dict) else None,
+            include_last_frame=True,
+            last_frame_url=last_frame_url,
+            limit=9,
+        )
+        resolved_images: List[str] = []
+        for item in image_refs:
+            resolved = await self._resolve_ref_for_api_async(item, force_data_uri_for_local=True)
+            if resolved:
+                resolved_images.append(str(resolved).strip())
+
+        audio_refs = self._collect_grsai_minimax_h3_audios(
+            tool_conf,
+            extra_sources=config if isinstance(config, dict) else None,
+            limit=3,
+        )
+        resolved_audios: List[str] = []
+        for item in audio_refs:
+            resolved = await self._resolve_ref_for_api_async(item, force_data_uri_for_local=True)
+            if resolved:
+                resolved_audios.append(str(resolved).strip())
+
+        is_draft = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
+        payload = self._build_grsai_minimax_h3_payload(
+            prompt=prompt,
+            aspect_ratio=aspect_ratio or tool_conf.get("aspect_ratio") or tool_conf.get("aspectRatio"),
+            resolution=tool_conf.get("resolution") or tool_conf.get("video_resolution"),
+            duration=duration if duration is not None else tool_conf.get("duration"),
+            images=resolved_images,
+            audios=resolved_audios,
+            seed=tool_conf.get("seed") if tool_conf.get("seed") is not None else tool_conf.get("seeds"),
+            reply_type=tool_conf.get("replyType") or tool_conf.get("reply_type") or "async",
+            draft=is_draft,
+            width=tool_conf.get("width"),
+            height=tool_conf.get("height"),
+        )
+        base_metadata = {
+            "provider": "grsai",
+            "model": payload.get("model") or "minimax-h3",
+            "prompt": prompt,
+            "submit_aspect_ratio": payload.get("aspectRatio"),
+            "submit_resolution": payload.get("resolution"),
+            "submit_duration": payload.get("duration"),
+            "query_endpoint": result_url,
+        }
+
+        video_task_id_callback = tool_conf.get("_grsai_task_id_callback")
+        if not callable(video_task_id_callback):
+            video_task_id_callback = tool_conf.get("_provider_task_id_callback")
+        if not callable(video_task_id_callback):
+            video_task_id_callback = None
+
+        debug_payload = _strip_base64_from_log(payload)
+        _debug_log(f"[Grsai][MiniMax-H3] Video Payload: {_format_payload_for_log(debug_payload)}")
+        grsai_extra_headers = self._build_grsai_direct_oss_headers(tool_conf, asset_kind="video")
+        if grsai_extra_headers:
+            base_metadata["provider_direct_oss_url"] = True
+            base_metadata["grsai_oss_id"] = grsai_extra_headers.get("oss-id")
+            base_metadata["grsai_oss_path"] = grsai_extra_headers.get("oss-path")
+        logger.info(
+            "[GrsaiTrace][%s] minimax-h3 submit prepared | endpoint=%s result_url=%s duration=%s resolution=%s aspect=%s images=%s audios=%s has_oss_id=%s has_oss_path=%s oss_path=%s",
+            trace_id,
+            endpoint,
+            result_url,
+            payload.get("duration"),
+            payload.get("resolution"),
+            payload.get("aspectRatio"),
+            len(payload.get("images") or []),
+            len(payload.get("audios") or []),
+            bool(str(grsai_extra_headers.get("oss-id") or "").strip()),
+            bool(str(grsai_extra_headers.get("oss-path") or "").strip()),
+            str(grsai_extra_headers.get("oss-path") or "").strip(),
+        )
+        return await self._submit_and_poll_grsai(
+            endpoint,
+            payload,
+            api_key,
+            result_url,
+            is_video=True,
+            extra_metadata=base_metadata,
+            trace_id=trace_id,
+            task_id_callback=video_task_id_callback,
+            extra_headers=grsai_extra_headers,
+            poll_method="GET",
+            # This generate API does not document webHook; always poll GET /v1/api/result.
+            pure_callback_mode=False,
+            callback_enabled=False,
+            callback_ticket=callback_ticket,
+            callback_url=callback_url,
+        )
+
     async def _submit_and_poll_grsai_legacy(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
@@ -18546,6 +19054,75 @@ class MediaGenerationService:
                 )
             return {"error": str(exc), "submit_failed": True}
 
+    def _parse_grsai_result_payload(self, payload: Any) -> Dict[str, Any]:
+        empty = {"task_id": None, "status": None, "media_url": None, "error": None, "progress": None}
+        if not isinstance(payload, dict):
+            return dict(empty)
+
+        def _first_media_url(block: Any) -> Optional[str]:
+            if not isinstance(block, dict):
+                return None
+            results = block.get("results")
+            if isinstance(results, list) and results:
+                first_result = results[0] if isinstance(results[0], dict) else {}
+                url = first_result.get("url") or first_result.get("imageUrl") or first_result.get("videoUrl")
+                if url:
+                    return str(url)
+            url = (
+                block.get("url")
+                or block.get("imageUrl")
+                or block.get("videoUrl")
+                or block.get("result_url")
+            )
+            return str(url) if url else None
+
+        data_block = payload.get("data")
+        if isinstance(data_block, list) and data_block:
+            first = data_block[0]
+            if isinstance(first, dict):
+                data_block = first
+            elif isinstance(first, str) and str(first).strip():
+                return {
+                    **empty,
+                    "task_id": str(first).strip(),
+                    "status": payload.get("status"),
+                    "media_url": _first_media_url(payload),
+                    "error": payload.get("error") or payload.get("msg") or payload.get("message"),
+                    "progress": payload.get("progress"),
+                }
+        if isinstance(data_block, str) and data_block.strip():
+            return {
+                **empty,
+                "task_id": data_block.strip(),
+                "status": payload.get("status"),
+                "media_url": _first_media_url(payload),
+                "error": payload.get("error") or payload.get("msg") or payload.get("message"),
+                "progress": payload.get("progress"),
+            }
+        if not isinstance(data_block, dict):
+            data_block = payload
+
+        task_id = (
+            data_block.get("id")
+            or data_block.get("task_id")
+            or data_block.get("taskId")
+            or payload.get("id")
+            or payload.get("task_id")
+            or payload.get("taskId")
+        )
+        status = data_block.get("status") or payload.get("status")
+        error = data_block.get("error") or payload.get("error") or payload.get("msg") or payload.get("message")
+        progress = data_block.get("progress")
+        if progress is None:
+            progress = payload.get("progress")
+        return {
+            "task_id": str(task_id).strip() if task_id else None,
+            "status": status,
+            "media_url": _first_media_url(data_block) or _first_media_url(payload),
+            "error": error,
+            "progress": progress,
+        }
+
     async def _submit_and_poll_grsai(
         self,
         url,
@@ -18561,6 +19138,7 @@ class MediaGenerationService:
         callback_enabled: bool = False,
         callback_ticket: Optional[str] = None,
         callback_url: Optional[str] = None,
+        poll_method: str = "POST",
     ):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         if extra_headers:
@@ -18688,32 +19266,46 @@ class MediaGenerationService:
             except Exception:
                 return {"error": "Invalid Grsai response", "details": resp.text[:1000], "submit_failed": True}
 
-            data_obj = data.get("data")
-            if data_obj is None:
-                msg = data.get("msg") or data.get("message") or "Unknown Error"
-                return {"error": f"API Error {data.get('code')}", "details": msg, "submit_failed": True}
-
-            task_id = None
-            if isinstance(data_obj, dict):
-                task_id = data_obj.get("id") or data_obj.get("task_id") or data_obj.get("taskId")
-                if not task_id and isinstance(data_obj.get("data"), dict):
-                    nested = data_obj.get("data") or {}
-                    task_id = nested.get("id") or nested.get("task_id") or nested.get("taskId")
-            elif isinstance(data_obj, str):
-                task_id = data_obj.strip()
-            elif isinstance(data_obj, list) and len(data_obj) > 0:
-                first = data_obj[0]
-                if isinstance(first, dict):
-                    task_id = first.get("id") or first.get("task_id") or first.get("taskId")
-                elif isinstance(first, str):
-                    task_id = first.strip()
-
+            parsed_submit = self._parse_grsai_result_payload(data)
+            task_id = parsed_submit.get("task_id")
             if not task_id:
-                task_id = data.get("id") or data.get("task_id") or data.get("taskId")
+                data_obj = data.get("data")
+                if isinstance(data_obj, dict):
+                    task_id = data_obj.get("id") or data_obj.get("task_id") or data_obj.get("taskId")
+                    if not task_id and isinstance(data_obj.get("data"), dict):
+                        nested = data_obj.get("data") or {}
+                        task_id = nested.get("id") or nested.get("task_id") or nested.get("taskId")
+                elif isinstance(data_obj, str):
+                    task_id = data_obj.strip()
+                elif isinstance(data_obj, list) and len(data_obj) > 0:
+                    first = data_obj[0]
+                    if isinstance(first, dict):
+                        task_id = first.get("id") or first.get("task_id") or first.get("taskId")
+                    elif isinstance(first, str):
+                        task_id = first.strip()
+                if not task_id:
+                    task_id = data.get("id") or data.get("task_id") or data.get("taskId")
 
+            submit_status_l = str(parsed_submit.get("status") or "").lower()
             if not task_id:
+                if data.get("data") is None and not data.get("status") and not data.get("results"):
+                    msg = data.get("msg") or data.get("message") or parsed_submit.get("error") or "Unknown Error"
+                    return {"error": f"API Error {data.get('code')}", "details": msg, "submit_failed": True}
                 logger.error("[GrsaiTrace][%s] submit missing_task_id | response=%s", trace_id, str(data)[:1000])
                 return {"error": "No Task ID", "details": data, "submit_failed": True}
+
+            if submit_status_l in {"failed", "error", "canceled", "cancelled", "violation"}:
+                if self._is_grsai_quota_or_throttle_error(data):
+                    return {
+                        "error": "Veo/Grsai 配额或频率受限",
+                        "details": "上游返回 429 RESOURCE_EXHAUSTED（请求过于频繁或额度耗尽）。请降低并发、等待冷却或提升配额后重试。",
+                        "submit_failed": True,
+                    }
+                return {
+                    "error": parsed_submit.get("error") or "Generation Failed",
+                    "details": data,
+                    "submit_failed": True,
+                }
 
             if callable(task_id_callback):
                 try:
@@ -18727,6 +19319,15 @@ class MediaGenerationService:
                         task_id,
                         callback_err,
                     )
+
+            if submit_status_l in {"succeeded", "success", "completed", "done"} and parsed_submit.get("media_url"):
+                resolved_media_url = str(parsed_submit.get("media_url"))
+                if oss_storage_service.is_managed_url(resolved_media_url):
+                    resolved_media_url = str(oss_storage_service.refresh_url(resolved_media_url) or resolved_media_url)
+                meta = {"raw": data, "submit_raw": data, "task_id": task_id, "taskId": task_id}
+                if extra_metadata:
+                    meta.update(extra_metadata)
+                return {"url": resolved_media_url, "metadata": meta}
 
             if pure_callback_mode and callback_enabled:
                 logger.info(
@@ -18755,10 +19356,16 @@ class MediaGenerationService:
                     "metadata": pending_meta,
                 }
 
+            effective_poll_method = str(poll_method or "POST").strip().upper()
+            if effective_poll_method not in {"GET", "POST"}:
+                effective_poll_method = "POST"
+
             for i in range(150):
                 await asyncio.sleep(5)
 
                 def _poll():
+                    if effective_poll_method == "GET":
+                        return requests.get(poll_url, params={"id": task_id}, headers=headers, timeout=(10, 30), verify=False)
                     return requests.post(poll_url, json={"id": task_id}, headers=headers, timeout=(10, 30), verify=False)
 
                 try:
@@ -18771,41 +19378,16 @@ class MediaGenerationService:
                         continue
                     return {"error": "Grsai poll failed", "details": last_error}
 
-                if p_resp.status_code == 200:
+                if p_resp.status_code in {200, 400}:
                     try:
                         p_data = p_resp.json()
                     except Exception:
                         continue
 
-                    data_block = p_data.get("data")
-                    status = None
-                    media_url = None
+                    parsed_poll = self._parse_grsai_result_payload(p_data)
+                    status_l = str(parsed_poll.get("status") or "").lower()
+                    media_url = parsed_poll.get("media_url")
 
-                    if isinstance(data_block, dict):
-                        status = data_block.get("status") or p_data.get("status")
-                        results = data_block.get("results")
-                        if isinstance(results, list) and results:
-                            first_result = results[0] if isinstance(results[0], dict) else {}
-                            media_url = first_result.get("url") or first_result.get("imageUrl") or first_result.get("videoUrl")
-                        if not media_url:
-                            media_url = (
-                                data_block.get("url")
-                                or data_block.get("imageUrl")
-                                or data_block.get("videoUrl")
-                                or data_block.get("result_url")
-                            )
-                    elif isinstance(data_block, list) and data_block:
-                        first_item = data_block[0]
-                        if isinstance(first_item, dict):
-                            status = first_item.get("status") or p_data.get("status")
-                            media_url = (
-                                first_item.get("url")
-                                or first_item.get("imageUrl")
-                                or first_item.get("videoUrl")
-                                or first_item.get("result_url")
-                            )
-
-                    status_l = str(status or "").lower()
                     if status_l in {"succeeded", "success", "completed", "done"} or (not status_l and media_url):
                         if media_url:
                             resolved_media_url = str(media_url)
@@ -18815,13 +19397,13 @@ class MediaGenerationService:
                             if extra_metadata:
                                 meta.update(extra_metadata)
                             return {"url": resolved_media_url, "metadata": meta}
-                    elif status_l in {"failed", "error", "canceled", "cancelled"}:
+                    elif status_l in {"failed", "error", "canceled", "cancelled", "violation"}:
                         if self._is_grsai_quota_or_throttle_error(p_data):
                             return {
                                 "error": "Veo/Grsai 配额或频率受限",
                                 "details": "任务失败原因为 429 RESOURCE_EXHAUSTED（上传图片或生成请求被限流/额度不足）。请稍后重试或调整账号配额。",
                             }
-                        return {"error": "Generation Failed", "details": p_data}
+                        return {"error": parsed_poll.get("error") or "Generation Failed", "details": p_data}
 
             last_error = "Timeout"
 

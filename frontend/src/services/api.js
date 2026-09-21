@@ -1335,6 +1335,10 @@ export const deletePromoCatalogAsset = async (id) => {
     return response.data;
 };
 
+export const analyzePromoCatalogAsset = async (id, payload = {}) => {
+    return await asyncLLMPost(`/promo-catalog-assets/${id}/analyze`, withScriptAnalysisApiPayload(payload || {}));
+};
+
 export const fetchPromoProducts = async (params = {}) => {
     const response = await api.get(`/promo-products/`, { params });
     return response.data;
@@ -1357,6 +1361,10 @@ export const deletePromoProduct = async (id) => {
 
 export const generatePromoProjectPlanner = async (projectId, payload) => {
     return await asyncLLMPost(`/promo-projects/${projectId}/planner/generate`, withScriptAnalysisApiPayload(payload));
+};
+
+export const analyzePromoProjectAsset = async (projectId, payload) => {
+    return await asyncLLMPost(`/promo-projects/${projectId}/planner/analyze-asset`, withScriptAnalysisApiPayload(payload || {}));
 };
 
 export const generatePromoProjectScript = async (projectId, payload) => {

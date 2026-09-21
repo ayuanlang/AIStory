@@ -46,16 +46,28 @@ const PromoEditor = ({
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
     const isReadOnlyView = Boolean(readOnly || initialProject?.is_temp_view || project?.is_temp_view);
-    const requestedTab = String(searchParams.get('tab') || 'planner');
-    const activeTab = PRODUCTION_TABS.has(requestedTab) ? requestedTab : 'planner';
+    const urlTab = String(searchParams.get('tab') || '');
+    const [hostView, setHostView] = useState(() => (
+        PRODUCTION_TABS.has(urlTab) ? urlTab : 'planner'
+    ));
+    const activeTab = PRODUCTION_TABS.has(hostView) ? hostView : 'planner';
     const linkedStoryId = Number(project?.linked_story_project_id || 0) || 0;
 
+    useEffect(() => {
+        const next = PRODUCTION_TABS.has(urlTab) ? urlTab : 'planner';
+        setHostView((prev) => (prev === next ? prev : next));
+    }, [urlTab]);
+
     const setActiveTab = useCallback((tab) => {
-        const next = new URLSearchParams(searchParams);
-        if (tab && tab !== 'planner') next.set('tab', tab);
-        else next.delete('tab');
-        setSearchParams(next, { replace: true });
-    }, [searchParams, setSearchParams]);
+        const next = PRODUCTION_TABS.has(tab) ? tab : 'planner';
+        setHostView(next);
+        setSearchParams((prev) => {
+            const params = new URLSearchParams(prev);
+            if (next !== 'planner') params.set('tab', next);
+            else params.delete('tab');
+            return params;
+        }, { replace: true });
+    }, [setSearchParams]);
 
     const loadProject = useCallback(async () => {
         if (!id) return;
@@ -105,6 +117,13 @@ const PromoEditor = ({
         function_name: 'script_analysis',
         system_api_id: Number(selectedScriptAnalysisApiId || 0) || null,
     }), [selectedScriptAnalysisApiId]);
+
+    const handlePlannerInfo = useCallback((updater) => {
+        setProject((prev) => {
+            const nextInfo = typeof updater === 'function' ? updater(prev || {}) : updater;
+            return { ...(prev || {}), ...(nextInfo || {}) };
+        });
+    }, []);
 
     const handleClose = () => {
         if (typeof onClose === 'function') {
@@ -295,12 +314,7 @@ const PromoEditor = ({
                             project={project}
                             onOpenCatalog={openCatalog}
                             info={project}
-                            setInfo={(updater) => {
-                                setProject((prev) => {
-                                    const nextInfo = typeof updater === 'function' ? updater(prev || {}) : updater;
-                                    return { ...(prev || {}), ...(nextInfo || {}) };
-                                });
-                            }}
+                            setInfo={handlePlannerInfo}
                             setProject={setProject}
                             onProjectUpdate={loadProject}
                             buildScriptAnalysisApiPayload={buildScriptAnalysisApiPayload}

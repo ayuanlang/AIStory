@@ -226,11 +226,86 @@ const buildEntityNameMap = (entities) => {
     return nameMap;
 };
 
+const isDirectImageRefToken = (value) => /^(https?:\/\/|\/uploads\/|\/static\/|data:image\/)/i.test(String(value || '').trim());
+
+const parseEntityCustomAttributes = (entity) => {
+    const raw = entity?.custom_attributes;
+    if (!raw) return {};
+    if (typeof raw === 'string') {
+        try {
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch {
+            return {};
+        }
+    }
+    return typeof raw === 'object' ? raw : {};
+};
+
+const uniqueTrimmedUrls = (values) => {
+    const urls = [];
+    const seen = new Set();
+    (Array.isArray(values) ? values : []).forEach((value) => {
+        const text = String(value || '').trim();
+        if (!text || seen.has(text)) return;
+        seen.add(text);
+        urls.push(text);
+    });
+    return urls;
+};
+
+const listProjectMatchedSourceImageUrls = (entity, projectInfo) => {
+    const rows = Array.isArray(projectInfo?.promo_source_images) ? projectInfo.promo_source_images : [];
+    const type = String(entity?.type || '').trim().toLowerCase();
+    const names = [entity?.name, entity?.name_en, entity?.base_name_en]
+        .map((item) => String(item || '').replace(/\s+/g, '').toLowerCase())
+        .filter(Boolean);
+    const urls = [];
+    rows.forEach((row) => {
+        const kind = String(row?.kind || '').trim().toLowerCase();
+        if (kind && type && kind !== type) return;
+        const aliases = [row?.name, ...(Array.isArray(row?.aliases) ? row.aliases : [])]
+            .map((item) => String(item || '').replace(/\s+/g, '').toLowerCase())
+            .filter(Boolean);
+        if (!aliases.some((alias) => names.includes(alias))) return;
+        (Array.isArray(row?.urls) ? row.urls : []).forEach((url) => urls.push(url));
+    });
+    return uniqueTrimmedUrls(urls);
+};
+
+const listEntityBoundSourceImageUrls = (entity) => {
+    const attrs = parseEntityCustomAttributes(entity);
+    if (attrs.source_images_overridden) {
+        return uniqueTrimmedUrls(attrs.source_image_urls);
+    }
+    if (!Array.isArray(attrs.source_image_urls)) return null;
+    return uniqueTrimmedUrls(attrs.source_image_urls);
+};
+
+const listMaterialSourceImageUrls = (entity, projectInfo) => {
+    const bound = listEntityBoundSourceImageUrls(entity);
+    if (bound) return bound;
+    return listProjectMatchedSourceImageUrls(entity, projectInfo);
+};
+
+const hasMaterialSourceImageContext = (entity, projectInfo) => {
+    if (listMaterialSourceImageUrls(entity, projectInfo).length > 0) return true;
+    if (Array.isArray(projectInfo?.promo_source_images) && projectInfo.promo_source_images.length > 0) return true;
+    if (projectInfo?.source_promo_project_id || projectInfo?.promo_single_scene) return true;
+    return Boolean(parseEntityCustomAttributes(entity).promo_source_attached);
+};
+
+const collectPromoSourceImageUrls = (entity, projectInfo) => uniqueTrimmedUrls([
+    ...listMaterialSourceImageUrls(entity, projectInfo),
+    ...parseVisualDependencies(entity?.visual_dependencies).filter(isDirectImageRefToken),
+]);
+
 const getEntityVisualDependencyTargets = (entity, allEntities, nameMap = null) => {
     const deps = parseVisualDependencies(entity?.visual_dependencies);
     const seen = new Set();
     const targets = [];
     deps.forEach((depRaw) => {
+        if (isDirectImageRefToken(depRaw)) return;
         const dep = normalizeEntityToken(depRaw);
         const target = resolveDependencyEntity(depRaw, allEntities)
             || nameMap?.get?.(dep)
@@ -559,6 +634,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [viewingEntityTab, setViewingEntityTab] = useState('generate');
     const [entityMediaRefTab, setEntityMediaRefTab] = useState('video');
     const [entityMediaRefUploading, setEntityMediaRefUploading] = useState(false);
+    const [materialSourceBusy, setMaterialSourceBusy] = useState(false);
+    const materialSourceFileInputRef = useRef(null);
+    const materialSourceActionRef = useRef(null);
     const [entityRefAudioPrompt, setEntityRefAudioPrompt] = useState('');
     const [isGeneratingEntityRefAudio, setIsGeneratingEntityRefAudio] = useState(false);
     const [entityRefAudioPromptByEntity, setEntityRefAudioPromptByEntity] = useState({});
@@ -4307,6 +4385,234 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
     }, [ENTITY_MEDIA_REF_CONFIG, handleFieldUpdate, t]);
 
+    const applyEntityLocalPatch = useCallback((entityId, patch) => {
+        const stableId = String(entityId || '').trim();
+        if (!stableId || !patch || typeof patch !== 'object') return;
+        const merge = (item) => (String(item?.id) === stableId ? { ...item, ...patch } : item);
+        setEntities((prev) => prev.map(merge));
+        setAllEntities((prev) => prev.map(merge));
+        setViewingEntity((prev) => (String(prev?.id) === stableId ? { ...prev, ...patch } : prev));
+        setSelectedEntity((prev) => (String(prev?.id) === stableId ? { ...prev, ...patch } : prev));
+    }, []);
+
+    const resolveMaterialSourceEntity = useCallback((entityOrId) => {
+        if (entityOrId && typeof entityOrId === 'object' && entityOrId.id != null) return entityOrId;
+        const stableId = String(entityOrId || '').trim();
+        if (!stableId) return null;
+        if (String(viewingEntity?.id) === stableId) return viewingEntity;
+        if (String(selectedEntity?.id) === stableId) return selectedEntity;
+        return (allEntities || []).find((item) => String(item?.id) === stableId)
+            || (entities || []).find((item) => String(item?.id) === stableId)
+            || null;
+    }, [allEntities, entities, selectedEntity, viewingEntity]);
+
+    const persistMaterialSourceImageUrls = useCallback(async (entityOrId, nextUrls, extraPatch = {}) => {
+        const entity = resolveMaterialSourceEntity(entityOrId);
+        if (!entity) return null;
+        const urls = uniqueTrimmedUrls(nextUrls);
+        const nextAttrs = {
+            ...parseEntityCustomAttributes(entity),
+            source_image_urls: urls,
+            source_images_overridden: true,
+        };
+        const nextVisualDeps = extraPatch.visual_dependencies !== undefined
+            ? extraPatch.visual_dependencies
+            : entity.visual_dependencies;
+        const localPatch = {
+            custom_attributes: nextAttrs,
+            ...(extraPatch.visual_dependencies !== undefined ? { visual_dependencies: nextVisualDeps } : {}),
+        };
+        applyEntityLocalPatch(entity.id, localPatch);
+        if (String(entity.id) === 'new') return { ...entity, ...localPatch };
+        const payload = {
+            source_image_urls: urls,
+            source_images_overridden: true,
+        };
+        if (extraPatch.visual_dependencies !== undefined) {
+            payload.visual_dependencies = extraPatch.visual_dependencies;
+        }
+        try {
+            const saved = await updateEntity(entity.id, payload);
+            const merged = {
+                ...entity,
+                ...(saved && typeof saved === 'object' ? saved : {}),
+                custom_attributes: saved?.custom_attributes ?? nextAttrs,
+                visual_dependencies: saved?.visual_dependencies ?? nextVisualDeps,
+            };
+            applyEntityLocalPatch(entity.id, {
+                custom_attributes: merged.custom_attributes,
+                visual_dependencies: merged.visual_dependencies,
+            });
+            return merged;
+        } catch (error) {
+            console.error(error);
+            showSubjectNotification(t('素材依赖图片保存失败', 'Failed to save material reference images'), 'error');
+            return null;
+        }
+    }, [applyEntityLocalPatch, resolveMaterialSourceEntity, showSubjectNotification, t]);
+
+    const commitMaterialSourceImageChange = useCallback(async (entityOrId, { oldUrl = '', newUrl = '', mode = 'replace' } = {}) => {
+        const entity = resolveMaterialSourceEntity(entityOrId);
+        if (!entity) return null;
+        const current = listMaterialSourceImageUrls(entity, project?.global_info);
+        const stableOld = String(oldUrl || '').trim();
+        const stableNew = String(newUrl || '').trim();
+        let nextUrls = current;
+        if (mode === 'remove') {
+            nextUrls = current.filter((url) => url !== stableOld);
+        } else if (mode === 'add') {
+            if (!stableNew) return entity;
+            nextUrls = uniqueTrimmedUrls([...current, stableNew]);
+        } else if (stableOld) {
+            if (!stableNew) return entity;
+            nextUrls = uniqueTrimmedUrls(current.map((url) => (url === stableOld ? stableNew : url)));
+        } else if (stableNew) {
+            nextUrls = uniqueTrimmedUrls([...current, stableNew]);
+        }
+        const extraPatch = {};
+        if (stableOld && (mode === 'remove' || stableNew)) {
+            const deps = parseVisualDependencies(entity.visual_dependencies);
+            if (deps.some((dep) => dep === stableOld)) {
+                extraPatch.visual_dependencies = deps
+                    .map((dep) => (dep === stableOld ? (mode === 'remove' ? '' : stableNew) : dep))
+                    .filter(Boolean);
+            }
+        }
+        return persistMaterialSourceImageUrls(entity, nextUrls, extraPatch);
+    }, [persistMaterialSourceImageUrls, project?.global_info, resolveMaterialSourceEntity]);
+
+    const startMaterialSourceFileAction = useCallback((entity, mode, oldUrl = '') => {
+        if (!entity?.id) return;
+        materialSourceActionRef.current = {
+            entityId: entity.id,
+            mode,
+            oldUrl: String(oldUrl || '').trim(),
+        };
+        materialSourceFileInputRef.current?.click();
+    }, []);
+
+    const handleMaterialSourceFileSelected = useCallback(async (event) => {
+        const file = event.target.files?.[0] || null;
+        const action = materialSourceActionRef.current;
+        materialSourceActionRef.current = null;
+        if (event.target) event.target.value = '';
+        if (!file || !action?.entityId) return;
+        setMaterialSourceBusy(true);
+        try {
+            const asset = await uploadAsset(file);
+            const url = String(asset?.url || '').trim();
+            if (!url) throw new Error('missing url');
+            await commitMaterialSourceImageChange(action.entityId, {
+                mode: action.mode,
+                oldUrl: action.oldUrl,
+                newUrl: url,
+            });
+        } catch (error) {
+            console.error(error);
+            showSubjectNotification(t('上传素材依赖图片失败', 'Failed to upload material reference image'), 'error');
+        } finally {
+            setMaterialSourceBusy(false);
+        }
+    }, [commitMaterialSourceImageChange, showSubjectNotification, t]);
+
+    const handlePickMaterialSourceFromLibrary = useCallback((entity, mode, oldUrl = '') => {
+        if (!entity?.id) return;
+        openMediaPicker((picked) => {
+            const url = String(typeof picked === 'object' ? (picked?.url || picked?.file_url) : picked || '').trim();
+            if (!url) return;
+            void commitMaterialSourceImageChange(entity.id, { mode, oldUrl, newUrl: url });
+        }, {
+            entityId: entity.id,
+            desiredAssetType: 'image',
+            lockAssetType: false,
+            allowMultiSelect: false,
+            disableShotFilter: true,
+            defaultSecondaryKind: 'entity',
+        });
+    }, [commitMaterialSourceImageChange, openMediaPicker]);
+
+    const renderMaterialSourceImages = (entity, wrapperClassName = '') => {
+        if (!entity || !hasMaterialSourceImageContext(entity, project?.global_info)) return null;
+        const urls = listMaterialSourceImageUrls(entity, project?.global_info);
+        const canEdit = Boolean(entity.id);
+        return (
+            <div className={wrapperClassName || undefined}>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                    <label className="text-[10px] uppercase font-bold text-muted-foreground block">{t('素材依赖图片', 'Material Reference Images')}</label>
+                    {materialSourceBusy && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-white/50">
+                            <Loader2 className="animate-spin" size={10} />
+                            {t('更新中', 'Updating')}
+                        </span>
+                    )}
+                </div>
+                <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
+                    {urls.map((url, idx) => (
+                        <div key={`${url}-${idx}`} className="flex-shrink-0 w-28 bg-black/40 border border-white/10 rounded-lg relative">
+                            <img src={getFullUrl(url)} alt={t('素材依赖图片', 'Material reference')} className="w-full h-20 object-cover rounded-t-lg" />
+                            {canEdit && (
+                                <>
+                                    <button
+                                        type="button"
+                                        disabled={materialSourceBusy}
+                                        title={t('移除这张素材依赖图片', 'Remove this material reference')}
+                                        onClick={() => void commitMaterialSourceImageChange(entity, { mode: 'remove', oldUrl: url })}
+                                        className="absolute -top-1.5 -right-1.5 z-20 h-5 w-5 rounded-full border bg-black/80 border-white/20 text-white/80 hover:text-white hover:bg-red-500/80 flex items-center justify-center shadow-sm disabled:opacity-50"
+                                    >
+                                        <X size={10} />
+                                    </button>
+                                    <div className="absolute inset-x-0 bottom-0 bg-black/70 flex gap-0.5 p-0.5">
+                                        <button
+                                            type="button"
+                                            disabled={materialSourceBusy}
+                                            title={t('从素材库替换', 'Replace from library')}
+                                            onClick={() => handlePickMaterialSourceFromLibrary(entity, 'replace', url)}
+                                            className="flex-1 px-0.5 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[9px] font-bold text-white inline-flex items-center justify-center gap-0.5 disabled:opacity-50"
+                                        >
+                                            <FolderOpen size={9} /> {t('库', 'Lib')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={materialSourceBusy}
+                                            title={t('上传替换', 'Upload to replace')}
+                                            onClick={() => startMaterialSourceFileAction(entity, 'replace', url)}
+                                            className="flex-1 px-0.5 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[9px] font-bold text-white inline-flex items-center justify-center gap-0.5 disabled:opacity-50"
+                                        >
+                                            <RefreshCw size={9} /> {t('替换', 'Replace')}
+                                        </button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    ))}
+                    {canEdit && (
+                        <div className="flex-shrink-0 w-28 h-20 bg-black/20 border border-dashed border-white/15 rounded-lg flex flex-col items-center justify-center gap-1 p-1">
+                            <button
+                                type="button"
+                                disabled={materialSourceBusy}
+                                onClick={() => handlePickMaterialSourceFromLibrary(entity, 'add')}
+                                className="w-full px-1 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-bold text-white inline-flex items-center justify-center gap-0.5 disabled:opacity-50"
+                            >
+                                <FolderOpen size={10} /> {t('素材库', 'Library')}
+                            </button>
+                            <button
+                                type="button"
+                                disabled={materialSourceBusy}
+                                onClick={() => startMaterialSourceFileAction(entity, 'add')}
+                                className="w-full px-1 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-bold text-white inline-flex items-center justify-center gap-0.5 disabled:opacity-50"
+                            >
+                                <Plus size={10} /> {t('上传', 'Upload')}
+                            </button>
+                        </div>
+                    )}
+                </div>
+                {urls.length === 0 && (
+                    <div className="text-[10px] text-white/40 -mt-1">{t('暂无素材依赖图片，可从素材库选择或上传替换。', 'No material references yet. Pick from the library or upload.')}</div>
+                )}
+            </div>
+        );
+    };
+
     const persistEntityRefAudioPrompt = useCallback((nextPrompt) => {
         const stablePrompt = String(nextPrompt || '');
         setEntityRefAudioPrompt(stablePrompt);
@@ -6390,6 +6696,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 allRefs.push(refImage.url);
             }
             if (depUrls.length > 0) allRefs.push(...depUrls);
+            collectPromoSourceImageUrls(activeEntity, project?.global_info).forEach((url) => allRefs.push(url));
             
             // Deduplicate
             const uniqueRefs = [...new Set(allRefs)];
@@ -6914,12 +7221,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 const depUrls = [];
                 const deps = parseVisualDependencies(entity.visual_dependencies);
                 deps.forEach(dep => {
+                    if (isDirectImageRefToken(dep)) {
+                        depUrls.push(dep);
+                        return;
+                    }
                     const target = resolveDependencyEntity(dep, allEntities);
 
                     if (target && urlMap.has(target.id)) {
                         depUrls.push(urlMap.get(target.id));
                     }
                 });
+                collectPromoSourceImageUrls(entity, project?.global_info).forEach((url) => depUrls.push(url));
                 const uniqueRefs = [...new Set(depUrls)];
 
                 if (onLog) {
@@ -7671,6 +7983,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
     return (
         <div className="p-6 h-full flex flex-col w-full relative">
+            <input
+                ref={materialSourceFileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleMaterialSourceFileSelected}
+            />
             <MarkdownHelpModal
                 open={manualModalOpen}
                 initialDocKey="assets"
@@ -8809,6 +9128,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                         const hiddenFields = ['id', 'project_id', 'image_url', 'video_url', 'audio_url', 'created_at', 'updated_at', 'name', 'name_en', 'description', 
                                             'author_id', 'role', 'archetype', 'gender', 'appearance_cn', 'clothing', 'generation_prompt_cn', 'generation_prompt_en', 'visual_dependencies', 'type', 'project', 'dependency_strategy', 'action_characteristics', 'anchor_description', 'custom_attributes'];
                                         hiddenFields.push('reference_image_urls', 'reference_video_urls', 'reference_audio_urls');
+                                        hiddenFields.push('source_image_urls', 'source_images_overridden', 'promo_source_attached');
                                         
                                         // Flatten custom_attributes into the view if they exist
                                         let mergedSource = { ...viewingEntity };
@@ -9083,6 +9403,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                             {/* Fast Generate Section */}
                                     {viewingEntity.id !== 'new' && (
                                         <div className="space-y-4 pt-4 border-t border-white/5">
+                                            {renderMaterialSourceImages(viewingEntity)}
                                             {/* Auto-detected Visual Dependencies */}
                                             {parseVisualDependencies(viewingEntity?.visual_dependencies).length > 0 && (
                                                 <div className="relative">
@@ -10031,6 +10352,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                             className="w-full h-32 bg-black/40 border border-white/10 rounded-lg p-4 text-sm focus:border-primary/50 outline-none resize-none mb-4"
                                         />
                                         
+                                        {renderMaterialSourceImages(selectedEntity, 'mb-4')}
                                         {/* Auto-detected Visual Dependencies */}
                                         {parseVisualDependencies(selectedEntity?.visual_dependencies).length > 0 && (
                                             <div className="mb-4">

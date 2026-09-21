@@ -124,6 +124,7 @@ def _base_node_specs() -> List[Dict[str, Any]]:
                 "frontend.stage1_project_context",
                 "frontend.reusable_subject_assets",
                 "backend.analyze_scene.project_metadata",
+                "backend.analyze_scene.promo_brief",
                 "backend.analyze_scene.project_main_environments",
                 "backend.analyze_scene.reuse_subject_assets",
                 "backend.analyze_scene.attention_notes",
