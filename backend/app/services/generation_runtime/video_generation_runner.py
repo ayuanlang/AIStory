@@ -1281,6 +1281,9 @@ async def _run_generate_video(
             last_frame_url=req.last_frame_url,
             start_frame_url=start_frame_url_for_roles,
         )
+        from app.services.flower_text_ass import strip_libass_glyphs_from_prompt
+
+        prompt_text = strip_libass_glyphs_from_prompt(prompt_text)
         image_tag_count = len(re.findall(r"@Image\d+", str(prompt_text or ""), flags=re.IGNORECASE))
         logger.info(
             "[GenerateVideo] prompt mapping done | shot_id=%s ref_mode=%s refs=%s lookup=%s image_tags=%s prompt_len=%s",
@@ -1312,12 +1315,14 @@ async def _run_generate_video(
                         model=resolved_video_model,
                         preserve_submitted_refs=bool(uses_submit_image_urls or has_explicit_visual_refs),
                     )
-                    patched_item["prompt"] = _ensure_video_frame_role_instructions(
-                        item_mapped,
-                        ref_mode=normalized_ref_mode,
-                        image_urls=final_image_urls_for_roles,
-                        last_frame_url=req.last_frame_url,
-                        start_frame_url=start_frame_url_for_roles,
+                    patched_item["prompt"] = strip_libass_glyphs_from_prompt(
+                        _ensure_video_frame_role_instructions(
+                            item_mapped,
+                            ref_mode=normalized_ref_mode,
+                            image_urls=final_image_urls_for_roles,
+                            last_frame_url=req.last_frame_url,
+                            start_frame_url=start_frame_url_for_roles,
+                        )
                     )
                 patched_multi_prompt.append(patched_item)
             req.multi_prompt = patched_multi_prompt
@@ -2056,7 +2061,7 @@ async def _run_generate_video(
                                     req_obj,
                                     final_meta,
                                 )
-                                await asyncio.to_thread(
+                                burned_url = await asyncio.to_thread(
                                     _bind_generated_media_to_shot,
                                     bg_db,
                                     bg_user,
@@ -2065,6 +2070,8 @@ async def _run_generate_video(
                                     bool(oss_uploaded and not ephemeral_binding),
                                     final_meta,
                                 )
+                                if burned_url:
+                                    bind_url = burned_url
 
                             if jid:
                                 with VIDEO_JOB_LOCK:
@@ -2153,7 +2160,7 @@ async def _run_generate_video(
                             result["url"] = bind_url
                             result["metadata"] = final_meta
                         await asyncio.to_thread(_register_asset_helper, db, current_user.id, bind_url, req, final_meta)
-                        await asyncio.to_thread(
+                        burned_url = await asyncio.to_thread(
                             _bind_generated_media_to_shot,
                             db,
                             current_user,
@@ -2162,6 +2169,8 @@ async def _run_generate_video(
                             bool(oss_uploaded and not ephemeral_binding),
                             final_meta,
                         )
+                        if burned_url:
+                            result["url"] = burned_url
 
         if reservation_tx_id is not None:
             final_meta = result.get("metadata") if isinstance(result, dict) else {}

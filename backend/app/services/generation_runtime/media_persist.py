@@ -2153,9 +2153,13 @@ def _sanitize_zip_entry_token(value: Any, fallback: str) -> str:
     return normalized or fallback
 
 
-def _build_shot_video_zip_entry_name(shot: Shot, index: int, video_url: str) -> str:
-    scene_token = _sanitize_zip_entry_token(getattr(shot, "scene_code", None) or f"scene_{getattr(shot, 'scene_id', index) or index}", f"scene_{index}")
-    shot_token = _sanitize_zip_entry_token(getattr(shot, "shot_id", None) or getattr(shot, "shot_name", None) or f"shot_{index}", f"shot_{index}")
+def _sanitize_download_filename(value: Any, fallback: str) -> str:
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(value or "").strip())
+    text = re.sub(r"\s+", " ", text).strip(" .")
+    return text or fallback
+
+
+def _shot_video_file_ext(video_url: str) -> str:
     ext = ".mp4"
     try:
         parsed = urllib.parse.urlparse(str(video_url or "").strip())
@@ -2164,7 +2168,30 @@ def _build_shot_video_zip_entry_name(shot: Shot, index: int, video_url: str) -> 
             ext = candidate
     except Exception:
         ext = ".mp4"
-    return f"{index:03d}_{scene_token}_{shot_token}{ext}"
+    return ext
+
+
+def _build_shot_video_zip_entry_name(
+    shot: Shot,
+    index: int,
+    video_url: str,
+    project_name: str = "",
+    used_names: Optional[set] = None,
+) -> str:
+    project_token = _sanitize_download_filename(project_name, "project")
+    shot_number = _sanitize_download_filename(getattr(shot, "shot_id", None), f"{index:03d}")
+    shot_name = _sanitize_download_filename(getattr(shot, "shot_name", None), "")
+    ext = _shot_video_file_ext(video_url)
+    if shot_name and shot_name != shot_number:
+        base = f"{project_token}_{shot_number}_{shot_name}"
+    else:
+        base = f"{project_token}_{shot_number}"
+    entry_name = f"{base}{ext}"
+    if used_names is not None and entry_name in used_names:
+        entry_name = f"{base}_{index:03d}{ext}"
+    if used_names is not None:
+        used_names.add(entry_name)
+    return entry_name
 
 
 def _cleanup_temp_download_file(file_path: str) -> None:

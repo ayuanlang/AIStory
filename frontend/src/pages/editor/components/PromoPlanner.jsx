@@ -507,7 +507,7 @@ const emptyFlowerTextSpec = () => ({
     vo_xor: '有旁白时不出花字，花字低于旁白，禁同步以免分心',
     glyph_lock: '引号内逐字成形；含「X家」须见家，禁漏家、禁复写邻字、禁何乐乐享；店号/热线不进难认印章',
     seal_clear: '印=句外旁侧｜压字=禁｜替字=禁｜字印留空，禁止印面盖住任一花字',
-    card_shot: '店号/品牌/热线走字卡专镜：企业场景底+字层先合成一张静帧，本镜Static Hold按静帧原样上屏；禁手写；禁双参考图分喂；字卡不是CHAR/PROP/ENV',
+    card_shot: '店号/品牌/热线走字卡专镜：场景底+字层由后期libass按引号逐字烧录（烧录=libass｜手写=禁），场景底只出画面；禁止视频模型描字；字卡不是CHAR/PROP/ENV',
     unity: '全片同套字形与字色字重；禁底部避字幕；每段最多一条花字；一个动作最多一条；有旁白时不出花字，花字低于旁白，禁同步；优先段末/段首切镜或黑屏专镜，不与动作抢镜；CTA可较长停留；中部必须艺术化组合（不限于印章/古体/英文小字/颜色），只改字级、落位与艺术手段',
     spec_line: '',
 });
@@ -2454,7 +2454,7 @@ function VisualBackfillEditor({ result, patchResult, t }) {
                                     <TextInput value={spec.vo_xor} onChange={(v) => patchSpec('vo_xor', v)} placeholder={t('旁白优先=有旁白时不出花字', 'VO first: no flower text with narration')} />
                                     <TextInput value={spec.glyph_lock} onChange={(v) => patchSpec('glyph_lock', v)} placeholder={t('逐字锁=含X家须见家，禁何乐乐享', 'Glyph lock: keep 家, no dropped or doubled characters')} />
                                     <TextInput value={spec.seal_clear} onChange={(v) => patchSpec('seal_clear', v)} placeholder={t('印章不压字=印句外旁侧，压字=禁', 'Seal stays outside the letters')} />
-                                    <TextInput value={spec.card_shot} onChange={(v) => patchSpec('card_shot', v)} placeholder={t('字卡专镜=场景底+字层，手写=禁', 'Title card: scene still + type layer')} />
+                                    <TextInput value={spec.card_shot} onChange={(v) => patchSpec('card_shot', v)} placeholder={t('字卡专镜=场景底+字层，烧录=libass，手写=禁', 'Title card: libass burn, no hand-drawn glyphs')} />
                                     <TextInput value={spec.unity} onChange={(v) => patchSpec('unity', v)} placeholder={t('统一说明', 'Unity')} />
                                 </div>
                                 <TextArea value={spec.spec_line} onChange={(v) => patchSpec('spec_line', v)} rows={2} placeholder={t('规范一行：字体=…｜字色=…｜正文级=中｜收口级=大｜正文位=画面中部｜收口位=画面中部｜禁底部避字幕', 'One-line spec')} />

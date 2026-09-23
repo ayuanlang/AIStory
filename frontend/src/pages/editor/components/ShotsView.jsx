@@ -27,7 +27,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Cpu, Timer, Scissors, RotateCcw, CaptionsOff, VolumeX, Eraser, Search } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Cpu, Timer, Scissors, RotateCcw, Captions, CaptionsOff, VolumeX, Eraser, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -129,6 +129,9 @@ import {
     persistShotMedia,
     estimateVideoCredits,
     cleanupShotVideo,
+    downloadEpisodeShotVideosZip,
+    burnShotFlowerText,
+    fetchFlowerBurnDraft,
     getCachedUserPreferences,
     getDraftModePreference,
     markAssetAsCurrentProjectAsset,
@@ -3107,6 +3110,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [assetDetailPreviewMode, setAssetDetailPreviewMode] = useState('fit');
     const [isEditingVideoPreviewArmed, setIsEditingVideoPreviewArmed] = useState(false);
     const [videoCleanupMenuOpen, setVideoCleanupMenuOpen] = useState(false);
+    const [isDownloadingShotVideos, setIsDownloadingShotVideos] = useState(false);
+    const [flowerBurnOpen, setFlowerBurnOpen] = useState(false);
+    const [flowerBurnLines, setFlowerBurnLines] = useState([]);
+    const [flowerBurnLoading, setFlowerBurnLoading] = useState(false);
     const [frameTrimModal, setFrameTrimModal] = useState(() => createInitialFrameTrimState());
     const [shotImageCfgDefault, setShotImageCfgDefault] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
     const [shotImageCfgValue, setShotImageCfgValue] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
@@ -10712,6 +10719,89 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     };
 
+    const emptyFlowerBurnLine = () => ({
+        text: '',
+        companion: '',
+        seal: '',
+        start: 0,
+        end: 4,
+        size: '大',
+        place: '中',
+    });
+
+    const patchFlowerBurnLine = (index, patch) => {
+        setFlowerBurnLines((prev) => prev.map((line, i) => (i === index ? { ...line, ...patch } : line)));
+    };
+
+    const openFlowerBurnEditor = async () => {
+        if (!editingShot) return;
+        const targetShotId = editingShot.id;
+        const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
+        if (targetGeneratingState.start || targetGeneratingState.end || isShotVideoUiRunning(targetShotId, targetGeneratingState)) return;
+        if (!String(editingShot.video_url || '').trim()) {
+            showNotification(t('当前镜头没有可烧录的视频。', 'No video found for this shot.'), 'warning');
+            return;
+        }
+        setVideoCleanupMenuOpen(false);
+        setFlowerBurnOpen(true);
+        setFlowerBurnLoading(true);
+        try {
+            const draft = await fetchFlowerBurnDraft(targetShotId);
+            const lines = Array.isArray(draft?.lines) && draft.lines.length ? draft.lines : [emptyFlowerBurnLine()];
+            setFlowerBurnLines(lines.map((line) => ({ ...emptyFlowerBurnLine(), ...line })));
+        } catch (e) {
+            setFlowerBurnLines([emptyFlowerBurnLine()]);
+            const detail = e?.response?.data?.detail || e?.message || '';
+            if (detail) showNotification(String(detail), 'warning');
+        } finally {
+            setFlowerBurnLoading(false);
+        }
+    };
+
+    const submitFlowerBurn = async () => {
+        if (!editingShot) return;
+        const targetShotId = editingShot.id;
+        const lines = (flowerBurnLines || []).filter((line) => (
+            String(line?.text || '').trim() || String(line?.companion || '').trim() || String(line?.seal || '').trim()
+        ));
+        if (!lines.length) {
+            showNotification(t('请先填写主文、热线或印章。', 'Enter a line, hotline, or seal first.'), 'warning');
+            return;
+        }
+        setShotGeneratingState(targetShotId, 'video', true, { forceRestartAt: true });
+        setVideoStatuses((prev) => ({ ...prev, [targetShotId]: 'burning_flower' }));
+        const stableTargetShotId = String(targetShotId || '').trim();
+        try {
+            const res = await burnShotFlowerText(targetShotId, { lines });
+            const nextUrl = String(res?.url || res?.shot?.video_url || '').trim();
+            if (!nextUrl) {
+                throw new Error(t('烧录结果缺少视频地址', 'Burn result missing video URL'));
+            }
+            if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(nextUrl);
+            const newData = { video_url: nextUrl };
+            setShots((prev) => (prev || []).map((shot) => (
+                String(shot?.id || '').trim() === stableTargetShotId ? { ...shot, ...newData } : shot
+            )));
+            setEditingShot((prev) => {
+                if (!prev || prev.id !== targetShotId) return prev;
+                return { ...prev, ...newData };
+            });
+            setFlowerBurnOpen(false);
+            onLog?.(t('烧录内容已写入成片。', 'Burned text written onto the video.'), 'success');
+            showNotification(t('烧录完成', 'Burn complete'), 'success');
+            refreshShotAssetsMeta();
+            Promise.resolve(refreshShots()).catch(() => {});
+            setIsEditingVideoPreviewArmed(true);
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            onLog?.(`${t('烧录失败', 'Flower burn failed')}: ${detail}`, 'error');
+            showNotification(`${t('烧录失败', 'Flower burn failed')}: ${detail}`, 'error');
+        } finally {
+            setShotGeneratingState(targetShotId, 'video', false);
+            setVideoStatuses((prev) => { const n = { ...prev }; delete n[targetShotId]; return n; });
+        }
+    };
+
     const handleForceStopShotVideo = useCallback(async (shotId) => {
         const stableShotId = String(shotId || '').trim();
         if (!stableShotId) return;
@@ -12155,6 +12245,37 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         setIsShotBatchProgressDismissed(false);
     }, [activeEpisode?.id]);
 
+    const handleDownloadAllShotVideos = async () => {
+        if (isDownloadingShotVideos) return;
+        if (!activeEpisode?.id) {
+            showNotification(t('当前没有剧集，无法下载视频。', 'No episode to download.'), 'warning');
+            return;
+        }
+        const videoCount = (shots || []).filter((shot) => String(shot?.video_url || '').trim()).length;
+        if (!videoCount) {
+            showNotification(t('当前没有可下载的分镜视频。', 'No shot videos to download.'), 'warning');
+            return;
+        }
+        setIsDownloadingShotVideos(true);
+        try {
+            const projectTitle = String(project?.title || project?.name || '').trim() || 'project';
+            const result = await downloadEpisodeShotVideosZip(activeEpisode.id, `${projectTitle}_分镜视频.zip`);
+            const completedCount = Number(result?.count || videoCount || 0);
+            const failureCount = Number(result?.failures || 0);
+            const message = failureCount > 0
+                ? t(`已下载 ${completedCount} 个视频，${failureCount} 个失败。`, `Downloaded ${completedCount} videos, ${failureCount} failed.`)
+                : t(`已下载 ${completedCount} 个视频。`, `Downloaded ${completedCount} videos.`);
+            showNotification(message, failureCount > 0 ? 'warning' : 'success');
+            onLog?.(message, failureCount > 0 ? 'warning' : 'success');
+        } catch (error) {
+            const detail = error?.response?.data?.detail || error?.message || 'unknown error';
+            showNotification(`${t('下载分镜视频失败', 'Failed to download shot videos')}: ${detail}`, 'error');
+            onLog?.(`${t('下载分镜视频失败', 'Failed to download shot videos')}: ${detail}`, 'error');
+        } finally {
+            setIsDownloadingShotVideos(false);
+        }
+    };
+
     return (
         <div className="flex flex-col h-full w-full p-6 overflow-hidden">
              {/* Header / Toolbar */}
@@ -12240,6 +12361,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             >
                                 <Video className="w-3.5 h-3.5" />
                                 {t('连续播放', 'Playlist')} ({orderedVideoShots.length})
+                            </button>
+                            <button
+                                onClick={handleDownloadAllShotVideos}
+                                disabled={isDownloadingShotVideos || orderedVideoShots.length === 0}
+                                className="px-3 py-1.5 bg-sky-500/10 hover:bg-sky-500/20 text-sky-200 rounded text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                                title={t('下载本集全部视频，文件名为项目名_分镜编号_分镜名', 'Download all videos in this episode as project_shot-number_shot-name')}
+                            >
+                                {isDownloadingShotVideos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                                {isDownloadingShotVideos ? t('下载中...', 'Downloading...') : t('下载全部视频', 'Download all videos')}
                             </button>
                         </div>
 
@@ -13306,9 +13436,144 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 <Eraser className="w-3.5 h-3.5 text-amber-200" />
                                                                 {t('字幕 + BGM', 'Subtitles + BGM')}
                                                             </button>
+                                                            <button
+                                                                type="button"
+                                                                className="w-full px-3 py-2 text-left text-[11px] text-white/85 hover:bg-white/10 flex items-center gap-2 border-t border-white/10"
+                                                                onClick={openFlowerBurnEditor}
+                                                            >
+                                                                <Captions className="w-3.5 h-3.5 text-amber-200" />
+                                                                {t('烧录文字', 'Burn text')}
+                                                            </button>
                                                         </div>
                                                     )}
                                                 </div>
+                                                {flowerBurnOpen && (
+                                                    <div
+                                                        className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
+                                                        onClick={() => { if (!flowerBurnLoading && videoStatuses[editingShot?.id] !== 'burning_flower') setFlowerBurnOpen(false); }}
+                                                    >
+                                                        <div
+                                                            className="w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-lg border border-white/15 bg-[#1a1b1f] shadow-2xl p-4"
+                                                            onClick={(e) => e.stopPropagation()}
+                                                        >
+                                                            <div className="flex items-center justify-between mb-3">
+                                                                <div className="text-sm font-semibold text-white">{t('编辑烧录内容', 'Edit burn text')}</div>
+                                                                <button type="button" className="text-white/50 hover:text-white" onClick={() => setFlowerBurnOpen(false)}>
+                                                                    <X className="w-4 h-4" />
+                                                                </button>
+                                                            </div>
+                                                            <p className="text-[11px] text-white/55 mb-3">
+                                                                {t('生成时已按文案自动烧录。可改主文、热线和印章，再烧一次。印章落在主文旁侧。', 'The line was burned automatically. Edit the line, hotline, or seal, then burn again. The seal sits beside the line.')}
+                                                            </p>
+                                                            {flowerBurnLoading ? (
+                                                                <div className="text-xs text-white/60 py-6 text-center">{t('正在读取…', 'Loading…')}</div>
+                                                            ) : flowerBurnLines.map((line, index) => (
+                                                                <div key={`flower-burn-${index}`} className="mb-3 rounded-md border border-white/10 p-3 space-y-2">
+                                                                    <label className="block text-[11px] text-white/70">
+                                                                        {t('主文', 'Main line')}
+                                                                        <textarea
+                                                                            value={line.text || ''}
+                                                                            onChange={(e) => patchFlowerBurnLine(index, { text: e.target.value })}
+                                                                            rows={2}
+                                                                            className="mt-1 w-full rounded bg-black/40 border border-white/10 px-2 py-1 text-sm text-white"
+                                                                        />
+                                                                    </label>
+                                                                    <label className="block text-[11px] text-white/70">
+                                                                        {t('热线 / 英文', 'Hotline / English')}
+                                                                        <input
+                                                                            value={line.companion || ''}
+                                                                            onChange={(e) => patchFlowerBurnLine(index, { companion: e.target.value })}
+                                                                            className="mt-1 w-full rounded bg-black/40 border border-white/10 px-2 py-1 text-sm text-white"
+                                                                        />
+                                                                    </label>
+                                                                    <label className="block text-[11px] text-white/70">
+                                                                        {t('印章', 'Seal')}
+                                                                        <input
+                                                                            value={line.seal || ''}
+                                                                            onChange={(e) => patchFlowerBurnLine(index, { seal: e.target.value })}
+                                                                            placeholder={t('可留空', 'Optional')}
+                                                                            className="mt-1 w-full rounded bg-black/40 border border-white/10 px-2 py-1 text-sm text-white"
+                                                                        />
+                                                                    </label>
+                                                                    <div className="grid grid-cols-4 gap-2">
+                                                                        <label className="text-[11px] text-white/70">
+                                                                            {t('开始秒', 'Start')}
+                                                                            <input
+                                                                                type="number"
+                                                                                min="0"
+                                                                                step="0.1"
+                                                                                value={line.start ?? 0}
+                                                                                onChange={(e) => patchFlowerBurnLine(index, { start: Number(e.target.value) })}
+                                                                                className="mt-1 w-full rounded bg-black/40 border border-white/10 px-2 py-1 text-sm text-white"
+                                                                            />
+                                                                        </label>
+                                                                        <label className="text-[11px] text-white/70">
+                                                                            {t('结束秒', 'End')}
+                                                                            <input
+                                                                                type="number"
+                                                                                min="0"
+                                                                                step="0.1"
+                                                                                value={line.end ?? 4}
+                                                                                onChange={(e) => patchFlowerBurnLine(index, { end: Number(e.target.value) })}
+                                                                                className="mt-1 w-full rounded bg-black/40 border border-white/10 px-2 py-1 text-sm text-white"
+                                                                            />
+                                                                        </label>
+                                                                        <label className="text-[11px] text-white/70">
+                                                                            {t('字级', 'Size')}
+                                                                            <select
+                                                                                value={line.size || '大'}
+                                                                                onChange={(e) => patchFlowerBurnLine(index, { size: e.target.value })}
+                                                                                className="mt-1 w-full rounded bg-black/40 border border-white/10 px-2 py-1 text-sm text-white"
+                                                                            >
+                                                                                <option value="大">{t('大', 'Large')}</option>
+                                                                                <option value="中">{t('中', 'Medium')}</option>
+                                                                                <option value="小">{t('小', 'Small')}</option>
+                                                                            </select>
+                                                                        </label>
+                                                                        <label className="text-[11px] text-white/70">
+                                                                            {t('位置', 'Place')}
+                                                                            <select
+                                                                                value={line.place || '中'}
+                                                                                onChange={(e) => patchFlowerBurnLine(index, { place: e.target.value })}
+                                                                                className="mt-1 w-full rounded bg-black/40 border border-white/10 px-2 py-1 text-sm text-white"
+                                                                            >
+                                                                                <option value="中">{t('中', 'Center')}</option>
+                                                                                <option value="画左">{t('画左', 'Left')}</option>
+                                                                                <option value="画右">{t('画右', 'Right')}</option>
+                                                                            </select>
+                                                                        </label>
+                                                                    </div>
+                                                                    {flowerBurnLines.length > 1 && (
+                                                                        <button
+                                                                            type="button"
+                                                                            className="text-[11px] text-white/50 hover:text-white"
+                                                                            onClick={() => setFlowerBurnLines((prev) => prev.filter((_, i) => i !== index))}
+                                                                        >
+                                                                            {t('删除这条', 'Remove line')}
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                            ))}
+                                                            <div className="flex items-center justify-between gap-2 mt-2">
+                                                                <button
+                                                                    type="button"
+                                                                    className="text-[11px] text-amber-200 hover:text-amber-100"
+                                                                    onClick={() => setFlowerBurnLines((prev) => [...prev, emptyFlowerBurnLine()])}
+                                                                >
+                                                                    {t('再加一条', 'Add a line')}
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    disabled={flowerBurnLoading || videoStatuses[editingShot?.id] === 'burning_flower'}
+                                                                    className="text-[12px] font-semibold px-3 py-1.5 rounded bg-amber-500/20 text-amber-100 hover:bg-amber-500/30 disabled:opacity-40"
+                                                                    onClick={submitFlowerBurn}
+                                                                >
+                                                                    {videoStatuses[editingShot?.id] === 'burning_flower' ? t('烧录中...', 'Burning...') : t('烧录', 'Burn')}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )}
 
                                                 <label className="flex items-center gap-1 text-[10px] text-gray-300 hover:text-white cursor-pointer select-none ml-1 mr-2">
                                                     <input 
@@ -15103,6 +15368,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         disabled: currentShotGenerating || !String(editingShot?.video_url || '').trim(),
                                                                         busy: currentShotGenerating && videoStatuses[editingShot.id] === 'upscaling',
                                                                         variant: 'success',
+                                                                    })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('烧录文字', 'Burn text'),
+                                                                        busyLabel: t('烧录中...', 'Burning...'),
+                                                                        onClick: openFlowerBurnEditor,
+                                                                        disabled: currentShotGenerating || !String(editingShot?.video_url || '').trim(),
+                                                                        busy: currentShotGenerating && videoStatuses[editingShot.id] === 'burning_flower',
+                                                                        variant: 'warning',
                                                                     })}
                                                                     {renderDetailActionButton({
                                                                         label: t('去除字幕', 'Remove Subtitles'),

@@ -142,8 +142,12 @@ def download_episode_shot_videos_zip(
     archive_dir = os.path.join(settings.UPLOAD_DIR, "_downloads")
     os.makedirs(archive_dir, exist_ok=True)
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    project_title = str(getattr(project, "title", None) or "").strip()
+    download_stem = _sanitize_download_filename(project_title, f"episode_{episode_id}")
+    download_name = f"{download_stem}_分镜视频.zip"
     archive_name = f"episode_{episode_id}_shot_videos_{timestamp}.zip"
     archive_path = os.path.join(archive_dir, archive_name)
+    used_entry_names = set()
 
     success_count = 0
     failure_count = 0
@@ -157,7 +161,13 @@ def download_episode_shot_videos_zip(
                 if not raw_url:
                     continue
 
-                entry_name = _build_shot_video_zip_entry_name(refreshed_shot, index, raw_url)
+                entry_name = _build_shot_video_zip_entry_name(
+                    refreshed_shot,
+                    index,
+                    raw_url,
+                    project_title,
+                    used_entry_names,
+                )
                 local_path = _resolve_local_upload_path_from_media_url(raw_url)
 
                 try:
@@ -195,7 +205,7 @@ def download_episode_shot_videos_zip(
         return FileResponse(
             archive_path,
             media_type="application/zip",
-            filename=archive_name,
+            filename=download_name,
             headers=headers,
             background=BackgroundTask(_cleanup_temp_download_file, archive_path),
         )
@@ -694,6 +704,93 @@ def cleanup_shot_video_local(
         "action": action,
         "remove_subtitle": bool(remove_subtitle),
         "remove_bgm": bool(remove_bgm),
+        "shot": {
+            "id": db_shot.id,
+            "video_url": db_shot.video_url,
+        },
+    }
+
+
+class FlowerBurnLineIn(BaseModel):
+    text: str = ""
+    companion: str = ""
+    seal: str = ""
+    start: float = 0
+    end: float = 4
+    size: str = "大"
+    place: str = "中"
+    vertical: bool = False
+
+
+class FlowerBurnRequest(BaseModel):
+    lines: List[FlowerBurnLineIn] = []
+
+
+def _shot_for_flower_burn(shot_id: int, db: Session, current_user: User) -> Shot:
+    db_shot = db.query(Shot).filter(Shot.id == shot_id, _active_shot_clause()).first()
+    if not db_shot:
+        raise HTTPException(status_code=404, detail="Shot not found")
+    scene = db.query(Scene).filter(Scene.id == db_shot.scene_id, _active_scene_clause()).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id, _active_episode_clause()).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    return db_shot
+
+
+@router.get("/shots/{shot_id}/flower-burn-draft", response_model=Dict[str, Any])
+def read_shot_flower_burn_draft(
+    shot_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Prefill the manual burn editor from the last edit, else from the shot script."""
+    from app.services.flower_text_ass import flower_burn_draft
+
+    db_shot = _shot_for_flower_burn(shot_id, db, current_user)
+    return flower_burn_draft(db_shot)
+
+
+@router.post("/shots/{shot_id}/flower-burn", response_model=Dict[str, Any])
+def burn_shot_flower_text(
+    shot_id: int,
+    payload: FlowerBurnRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Burn the edited lines, including an optional seal, with libass."""
+    from app.services.flower_text_ass import apply_flower_burn_to_shot, normalize_manual_burn_lines
+
+    db_shot = _shot_for_flower_burn(shot_id, db, current_user)
+    if not str(getattr(db_shot, "video_url", None) or "").strip():
+        raise HTTPException(status_code=400, detail="Shot has no video to burn")
+    lines = normalize_manual_burn_lines(payload.lines, getattr(db_shot, "duration", None))
+    if not lines:
+        raise HTTPException(status_code=400, detail="请先填写要烧录的主文、热线或印章")
+
+    try:
+        new_url = apply_flower_burn_to_shot(
+            db,
+            db_shot,
+            user_id=int(current_user.id or 0),
+            lines=lines,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        logger.error("Shot flower burn failed shot_id=%s err=%s", shot_id, exc)
+        raise HTTPException(status_code=500, detail=f"Flower burn failed: {exc}")
+
+    if not new_url:
+        raise HTTPException(status_code=500, detail="Flower burn returned empty url")
+    db.refresh(db_shot)
+    return {
+        "url": new_url,
+        "lines": lines,
         "shot": {
             "id": db_shot.id,
             "video_url": db_shot.video_url,

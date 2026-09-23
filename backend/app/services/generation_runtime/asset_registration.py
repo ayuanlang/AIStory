@@ -1009,19 +1009,47 @@ def _bind_generated_media_to_shot(
             shot.technical_notes = json.dumps(tech, ensure_ascii=False)
             changed = True
 
-    if not changed:
-        return
+    if changed:
+        db.add(shot)
+        db.commit()
+        logger.info(
+            "[ShotMediaBind] shot_id=%s asset_type=%s media_url=%s project_id=%s user_id=%s",
+            shot_id_int,
+            asset_type or None,
+            media_url,
+            getattr(shot, "project_id", None),
+            getattr(current_user, "id", None),
+        )
 
-    db.add(shot)
-    db.commit()
-    logger.info(
-        "[ShotMediaBind] shot_id=%s asset_type=%s media_url=%s project_id=%s user_id=%s",
-        shot_id_int,
-        asset_type or None,
-        media_url,
-        getattr(shot, "project_id", None),
-        getattr(current_user, "id", None),
-    )
+    if asset_type != "video":
+        return None
+    url_text = str(media_url or "")
+    persisted = bool(oss_uploaded_success) or url_text.startswith("/uploads/") or url_text.startswith("file:")
+    if not persisted:
+        return None
+    try:
+        from app.services.flower_text_ass import _notes, apply_flower_burn_to_shot
+
+        notes = _notes(shot)
+        already = str(notes.get("flower_ass_output_url") or "").strip()
+        if already and str(notes.get("flower_ass_source_url") or "") == url_text:
+            if str(getattr(shot, "video_url", None) or "") != already:
+                shot.video_url = already
+                db.add(shot)
+                db.commit()
+            return already
+        if already and url_text == already:
+            return already
+        return apply_flower_burn_to_shot(
+            db,
+            shot,
+            user_id=int(getattr(current_user, "id", 0) or 0),
+        )
+    except ValueError:
+        return None
+    except Exception:
+        logger.exception("[ShotMediaBind] flower libass burn skipped shot_id=%s", shot_id_int)
+        return None
 
 
 def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, media_url: Optional[str], oss_uploaded_success: Optional[bool] = None) -> None:

@@ -3907,6 +3907,20 @@ export const cleanupShotVideo = async (shotId, payload = {}) => {
     return response.data;
 };
 
+export const fetchFlowerBurnDraft = async (shotId) => {
+    const response = await api.get(`/shots/${Number(shotId)}/flower-burn-draft`);
+    return response.data;
+};
+
+export const burnShotFlowerText = async (shotId, payload = {}) => {
+    const response = await api.post(`/shots/${Number(shotId)}/flower-burn`, {
+        lines: Array.isArray(payload.lines) ? payload.lines : [],
+    }, {
+        timeout: Number(payload.timeout_ms || 10 * 60 * 1000),
+    });
+    return response.data;
+};
+
 export const persistEntityMedia = async (entityId, payload = {}) => {
     const response = await api.post(`/entities/${Number(entityId)}/persist-media`, {
         ...(payload.source_url ? { source_url: payload.source_url } : {}),

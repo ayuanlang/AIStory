@@ -849,6 +849,7 @@ def test_promo_flower_text_is_planned_and_injected():
     assert "上屏=字卡专镜" in jia
     assert "字卡=场景底+字层" in jia
     assert "手写=禁" in jia
+    assert "烧录=libass" in jia
 
     brief = collect_promo_brief({"source_promo_project_id": 9}, {}, merged)
     body = format_promo_injection_body(brief)
