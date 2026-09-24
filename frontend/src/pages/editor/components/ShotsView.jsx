@@ -9537,6 +9537,23 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             delete next[targetShotId];
             return next;
         });
+        // Mark this run so a newer server video_url can replace the previous file
+        // even when that file was bound moments ago.
+        tech.video_regen_started_at = new Date().toISOString();
+        tech.video_regen_previous_url = previousVideoUrl;
+        techDirty = true;
+        const stampedTechNotes = JSON.stringify(tech);
+        shotSnapshot = { ...shotSnapshot, technical_notes: stampedTechNotes };
+        setEditingShot((prev) => (
+            prev && String(prev.id) === String(targetShotId)
+                ? { ...prev, technical_notes: stampedTechNotes }
+                : prev
+        ));
+        setShots((prev) => prev.map((shot) => (
+            String(shot?.id || '') === String(targetShotId)
+                ? { ...shot, technical_notes: stampedTechNotes }
+                : shot
+        )));
         setShotGeneratingState(targetShotId, 'video', true, { forceRestartAt: true });
         onLog?.('Generating Video...', 'info');
         try {
@@ -9737,48 +9754,52 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             || data?.video_url
                             || ''
                         ).trim();
+                        const earlyUrlIsNew = Boolean(earlyUrl) && earlyUrl !== previousVideoUrl;
                         const terminalSuccess = ['succeeded', 'completed', 'done', 'success', 'storing_asset'].includes(nextStatus);
-                        // Unblock UI as soon as provider URL is published OR job is already terminal
-                        // (OSS may still be uploading in the background for poll-only providers).
-                        if (earlyUrl || terminalSuccess) {
+                        // Only the new file unblocks the player. A terminal status that still
+                        // points at the previous video must keep listening for the new URL.
+                        if (earlyUrlIsNew) {
                             ignoreAsyncJobCallbacks = true;
                             releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
-                            if (earlyUrl) {
-                                const stableTargetShotId = String(targetShotId || '').trim();
-                                const earlyDurable = isDurablePersistedMediaUrl(earlyUrl);
-                                const earlyPatched = mergeShotVideoOssPersistState(
-                                    { id: stableTargetShotId, video_url: earlyUrl },
-                                    { videoUrl: earlyUrl, ossUploaded: earlyDurable }
-                                );
-                                const earlyPatch = {
+                            const stableTargetShotId = String(targetShotId || '').trim();
+                            const earlyDurable = isDurablePersistedMediaUrl(earlyUrl);
+                            const bindEarlyVideo = (shot) => {
+                                const earlyPatched = mergeShotVideoOssPersistState(shot, {
+                                    videoUrl: earlyUrl,
+                                    ossUploaded: earlyDurable,
+                                });
+                                return {
+                                    ...shot,
                                     video_url: earlyUrl,
                                     technical_notes: earlyPatched.technical_notes,
                                 };
-                                setShots((prev) => prev.map((shot) => (
-                                    String(shot?.id || '') === stableTargetShotId
-                                        ? { ...shot, ...earlyPatch }
-                                        : shot
-                                )));
-                                setEditingShot((prev) => {
-                                    if (!prev || String(prev.id) !== stableTargetShotId) return prev;
-                                    return { ...prev, ...earlyPatch };
+                            };
+                            setShots((prev) => prev.map((shot) => (
+                                String(shot?.id || '') === stableTargetShotId
+                                    ? bindEarlyVideo(shot)
+                                    : shot
+                            )));
+                            setEditingShot((prev) => {
+                                if (!prev || String(prev.id) !== stableTargetShotId) return prev;
+                                return bindEarlyVideo(prev);
+                            });
+                            setIsEditingVideoPreviewArmed(true);
+                            if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(earlyUrl);
+                            triggerMediaReload();
+                            // Only PUT durable OSS URLs. Temp/provider/local paths are rejected
+                            // until persist-media / backend bg OSS finishes — keep those local-only.
+                            if (earlyDurable) {
+                                void onUpdateShot(targetShotId, { video_url: earlyUrl }).catch((err) => {
+                                    console.warn('[handleGenerateVideo] early shot bind patch failed:', err);
                                 });
-                                setIsEditingVideoPreviewArmed(true);
-                                if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(earlyUrl);
-                                triggerMediaReload();
-                                // Only PUT durable OSS URLs. Temp/provider/local paths are rejected
-                                // until persist-media / backend bg OSS finishes — keep those local-only.
-                                if (earlyDurable) {
-                                    void onUpdateShot(targetShotId, earlyPatch).catch((err) => {
-                                        console.warn('[handleGenerateVideo] early shot bind patch failed:', err);
-                                    });
-                                }
                             }
                             setVideoStatuses((prev) => {
                                 const next = { ...prev };
                                 delete next[targetShotId];
                                 return next;
                             });
+                        } else if (terminalSuccess) {
+                            return;
                         }
                     },
                 }, keyframeRequestUrls);
@@ -9801,7 +9822,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         console.warn('[handleGenerateVideo] job URL recovery failed:', jobUrlErr);
                     }
                 }
-                if (!resolvedVideoUrl) {
+                const videoStillPrevious = Boolean(
+                    resolvedVideoUrl
+                    && previousVideoUrl
+                    && resolvedVideoUrl === previousVideoUrl
+                );
+                if (!resolvedVideoUrl || videoStillPrevious) {
                     // Some providers finish asynchronously and do not return URL in immediate response.
                     // Force a server resync so UI still updates when the shot record has been updated.
                     // Never blank a local preview that on_job_status already bound.
@@ -10024,27 +10050,31 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             const resultUrl = extractVideoJobResultUrl(status);
                             if (resultUrl || phase === 'succeeded') {
                                 ignoreAsyncJobCallbacks = true;
-                                if (resultUrl) {
+                                const resultUrlIsNew = Boolean(resultUrl) && resultUrl !== previousVideoUrl;
+                                if (resultUrlIsNew) {
                                     const durableNow = isDurablePersistedMediaUrl(resultUrl);
-                                    const patchedShot = mergeShotVideoOssPersistState(
-                                        { id: targetShotId, video_url: resultUrl },
-                                        { videoUrl: resultUrl, ossUploaded: durableNow }
-                                    );
-                                    const patch = {
-                                        video_url: resultUrl,
-                                        technical_notes: patchedShot.technical_notes,
+                                    const bindRecoveredVideo = (shot) => {
+                                        const patchedShot = mergeShotVideoOssPersistState(shot, {
+                                            videoUrl: resultUrl,
+                                            ossUploaded: durableNow,
+                                        });
+                                        return {
+                                            ...shot,
+                                            video_url: resultUrl,
+                                            technical_notes: patchedShot.technical_notes,
+                                        };
                                     };
                                     setShots((prev) => prev.map((shot) => (
-                                        String(shot?.id || '') === String(targetShotId) ? { ...shot, ...patch } : shot
+                                        String(shot?.id || '') === String(targetShotId) ? bindRecoveredVideo(shot) : shot
                                     )));
                                     setEditingShot((prev) => (
-                                        prev && String(prev.id) === String(targetShotId) ? { ...prev, ...patch } : prev
+                                        prev && String(prev.id) === String(targetShotId) ? bindRecoveredVideo(prev) : prev
                                     ));
                                     setIsEditingVideoPreviewArmed(true);
                                     if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(resultUrl);
                                     triggerMediaReload();
                                     if (durableNow) {
-                                        void onUpdateShot(targetShotId, patch).catch(() => {});
+                                        void onUpdateShot(targetShotId, { video_url: resultUrl }).catch(() => {});
                                     } else {
                                         void syncShotVideoAfterOssPersist({
                                             shotId: targetShotId,
@@ -10053,6 +10083,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             previousVideoUrl,
                                         });
                                     }
+                                } else {
+                                    void syncShotVideoAfterOssPersist({
+                                        shotId: targetShotId,
+                                        jobId: createdVideoJobId,
+                                        previousVideoUrl,
+                                    });
                                 }
                                 releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                                 onLog?.(t('视频任务已完成。', 'Video job already completed.'), 'success');

@@ -4333,6 +4333,7 @@ class LLMService:
         category: str = "LLM",
         modality: Optional[str] = None,
         response_validator: Any = None,
+        before_attempt: Any = None,
     ) -> Dict[str, Any]:
         """generate_content with active-config×2 retry + 3 fallback candidates."""
         from app.services.agent_service import agent_service
@@ -4381,9 +4382,38 @@ class LLMService:
         last_err = ""
         last_failure_kind = "upstream"
 
+        async def _caller_allows_attempt(attempt_index: int) -> bool:
+            if before_attempt is None:
+                return True
+            try:
+                decision = before_attempt(attempt_index)
+                if hasattr(decision, "__await__"):
+                    decision = await decision
+                return bool(decision)
+            except Exception:
+                logger.warning("[llm_fallback] before_attempt failed; continue", exc_info=True)
+                return True
+
+        def _aborted_existing_payload(candidate_config: Dict[str, Any]) -> Dict[str, Any]:
+            return self._attach_routing_metadata(
+                {
+                    "content": "",
+                    "usage": {},
+                    "finish_reason": None,
+                    "_aborted_existing_shots": True,
+                },
+                candidate_config,
+            )
+
         with self._llm_log_trace(active_cfg_obj):
             # ── active config attempts ──
             for attempt in range(1, active_retry_attempts + 1):
+                if not await _caller_allows_attempt(attempt):
+                    logger.info(
+                        "[llm_fallback] skip attempt %d/%d: shots already stored | provider=%s model=%s",
+                        attempt, active_retry_attempts, config.get("provider"), config.get("model"),
+                    )
+                    return _aborted_existing_payload(config)
                 result = await self.generate_content(user_prompt, system_prompt, config, image_urls, video_urls)
                 content = str(result.get("content") or "")
                 validation_failed_this_attempt = False
@@ -4423,6 +4453,12 @@ class LLMService:
                 )
             for idx, fb_cfg in enumerate(fallbacks, 1):
                 fb_cfg = _copy_llm_log_trace_fields(config, fb_cfg)
+                if not await _caller_allows_attempt(active_retry_attempts + idx):
+                    logger.info(
+                        "[llm_fallback] skip fallback %d/%d: shots already stored | provider=%s model=%s",
+                        idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
+                    )
+                    return _aborted_existing_payload(config)
                 logger.info(
                     "[llm_fallback] trying fallback %d/%d | provider=%s model=%s",
                     idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),

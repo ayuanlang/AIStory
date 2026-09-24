@@ -765,13 +765,13 @@ export const collectMatchedEntityImageUrlsFromPrompt = ({
     preferredEpisodeId = null,
 }) => {
     return normalizeMediaRefList(
-        collectMatchedEntitiesFromPrompt({
+        omitMainEnvironmentsCoveredByDerivatives(collectMatchedEntitiesFromPrompt({
             promptText,
             associatedEntities,
             entityPool,
             includeAssociatedEntities,
             preferredEpisodeId,
-        }).map((entity) => entity?.image_url)
+        })).map((entity) => entity?.image_url)
     );
 };
 
@@ -782,13 +782,13 @@ export const buildShotVideoEntityRefSlots = ({
     includeAssociatedEntities = true,
     preferredEpisodeId = null,
 } = {}) => {
-    return collectMatchedEntitiesFromPrompt({
+    return omitMainEnvironmentsCoveredByDerivatives(collectMatchedEntitiesFromPrompt({
         promptText,
         associatedEntities,
         entityPool,
         includeAssociatedEntities,
         preferredEpisodeId,
-    }).map((entity) => {
+    })).map((entity) => {
         const imageUrl = String(entity?.image_url || '').trim();
         return {
             entityId: entity?.id,
@@ -848,13 +848,13 @@ export const buildShotVideoRefDisplayItems = ({
             });
     }
 
-    const matchedEntities = collectMatchedEntitiesFromPrompt({
+    const matchedEntities = omitMainEnvironmentsCoveredByDerivatives(collectMatchedEntitiesFromPrompt({
         promptText,
         associatedEntities,
         entityPool,
         includeAssociatedEntities,
         preferredEpisodeId,
-    });
+    }));
     const items = [];
     const usedUrls = new Set();
 
@@ -1155,6 +1155,71 @@ export const isDerivedEnvironmentAsset = (asset) => (
     && isEnvironmentAssetType(asset?.type)
     && !isReusableMainEnvironmentAsset(asset)
 );
+
+const entityNameKeys = (entity) => {
+    const keys = new Set();
+    [entity?.name, entity?.name_en, entity?.name_zh, entity?.subject_name, entity?.subject_name_exact]
+        .forEach((value) => {
+            const key = normalizeSubjectKey(value);
+            if (key) keys.add(key);
+        });
+    return keys;
+};
+
+const pushOwningMainNameKey = (keys, value) => {
+    const cleaned = String(value || '')
+        .trim()
+        .replace(/^(?:ENV|CHAR|PROP)\s*[:：]\s*/i, '')
+        .replace(/^\[@?|\]$/g, '')
+        .trim();
+    if (!cleaned) return;
+    const key = normalizeSubjectKey(cleaned);
+    if (key) keys.add(key);
+    const mainKey = normalizeSubjectKey(getMainEnvironmentName(cleaned));
+    if (mainKey) keys.add(mainKey);
+};
+
+const owningMainNameKeysForDerived = (entity) => {
+    const keys = new Set();
+    const attrs = parseEntityCustomAttributes(entity?.custom_attributes ?? entity?.customAttributes);
+    [
+        attrs?.main_environment,
+        attrs?.main_environment_name,
+        attrs?.['所属主环境'],
+        attrs?.owning_main_environment,
+    ].forEach((value) => pushOwningMainNameKey(keys, value));
+    parseVisualDependencies(entity?.visual_dependencies ?? entity?.visualDependencies)
+        .forEach((value) => pushOwningMainNameKey(keys, value));
+    [entity?.name, entity?.name_en, entity?.name_zh].forEach((value) => {
+        const mainKey = normalizeSubjectKey(getMainEnvironmentName(value));
+        const selfKey = normalizeSubjectKey(value);
+        if (mainKey && mainKey !== selfKey) keys.add(mainKey);
+    });
+    return keys;
+};
+
+/**
+ * Video refs already include the derivative plate. Drop that derivative's main
+ * four-grid so the same space is not uploaded twice.
+ */
+export const omitMainEnvironmentsCoveredByDerivatives = (entities) => {
+    const list = Array.isArray(entities) ? entities : [];
+    const derived = list.filter((entity) => isDerivedEnvironmentAsset(entity));
+    if (!derived.length) return list;
+    const covered = new Set();
+    derived.forEach((entity) => {
+        owningMainNameKeysForDerived(entity).forEach((key) => covered.add(key));
+    });
+    if (!covered.size) return list;
+    return list.filter((entity) => {
+        if (!isReusableMainEnvironmentAsset(entity)) return true;
+        const keys = entityNameKeys(entity);
+        for (const key of keys) {
+            if (covered.has(key)) return false;
+        }
+        return true;
+    });
+};
 
 /**
  * Extract `{location=云渊仙境(Cloud Abyss)}` entries from script text.
@@ -3638,6 +3703,18 @@ const pickShotVideoUrl = (prevUrl, nextUrl, nextDefined, options = {}) => {
     const nextBound = parseMediaBoundAtMs(nextMeta);
     const incomingIsCompact = options.incomingIsCompact === true;
 
+    // Regeneration stamp: the local file is still the pre-regen video.
+    // A different incoming URL is the new render — do not keep the old one
+    // just because it was bound recently. Never swap back to the pre-regen URL.
+    const regenStartedAtMs = Number(options.regenStartedAtMs);
+    const regenPreviousUrl = String(options.regenPreviousUrl || '').trim();
+    if (Number.isFinite(regenStartedAtMs) && regenStartedAtMs > 0 && (!prevBound || prevBound < regenStartedAtMs)) {
+        if (regenPreviousUrl && (nextTrim === regenPreviousUrl || (nextToken && nextToken === normalizeMediaUrlPathToken(regenPreviousUrl)))) {
+            return prevTrim;
+        }
+        return nextTrim;
+    }
+
     if (incomingIsCompact) {
         if (!prevDurable || prevMeta.ephemeral_binding || prevMeta.needs_persistence_retry) {
             return prevTrim;
@@ -3693,11 +3770,24 @@ export const mergeShotPreservingLocalMedia = (prevShot, incomingShot, options = 
     const nextImageDefined = Object.prototype.hasOwnProperty.call(incoming, 'image_url');
     const nextVideoDefined = Object.prototype.hasOwnProperty.call(incoming, 'video_url');
     merged.image_url = pickShotImageUrl(prev.image_url, incoming.image_url, nextImageDefined);
+    const regenStartedAtMs = Date.parse(String(prevTech?.video_regen_started_at || ''));
     merged.video_url = pickShotVideoUrl(prev.video_url, incoming.video_url, nextVideoDefined, {
         incomingIsCompact,
         prevMeta: prevTech?.video_metadata,
         nextMeta: nextTech?.video_metadata,
+        regenStartedAtMs,
+        regenPreviousUrl: prevTech?.video_regen_previous_url,
     });
+    const adoptedIncomingVideo = Boolean(
+        nextVideoDefined
+        && String(merged.video_url || '').trim()
+        && String(merged.video_url || '').trim() !== String(prev.video_url || '').trim()
+        && String(merged.video_url || '').trim() === String(incoming.video_url || '').trim()
+    );
+    const prevVideoBoundMs = parseMediaBoundAtMs(prevTech?.video_metadata);
+    const adoptedPreRegenVideo = adoptedIncomingVideo
+        && Number.isFinite(regenStartedAtMs)
+        && (!prevVideoBoundMs || prevVideoBoundMs < regenStartedAtMs);
     if (Object.prototype.hasOwnProperty.call(incoming, 'technical_notes')) {
         if (incomingIsCompact) {
             // Keep hydrated notes; only refresh compact-known media keys when present.
@@ -3749,7 +3839,32 @@ export const mergeShotPreservingLocalMedia = (prevShot, incomingShot, options = 
                 });
             }
 
+            const prevRegenMs = Date.parse(String(prevTech?.video_regen_started_at || ''));
+            const nextRegenMs = Date.parse(String(nextTech?.video_regen_started_at || ''));
+            if (Number.isFinite(prevRegenMs) && (!Number.isFinite(nextRegenMs) || prevRegenMs >= nextRegenMs)) {
+                mergedTech.video_regen_started_at = prevTech.video_regen_started_at;
+                if (prevTech?.video_regen_previous_url) {
+                    mergedTech.video_regen_previous_url = prevTech.video_regen_previous_url;
+                }
+            }
             merged.technical_notes = JSON.stringify(mergedTech);
+        }
+        if (adoptedPreRegenVideo) {
+            const stampedTech = parseShotTechnicalNotes(merged.technical_notes);
+            const stampedMeta = stampedTech.video_metadata && typeof stampedTech.video_metadata === 'object'
+                ? { ...stampedTech.video_metadata }
+                : {};
+            stampedMeta.media_bound_at = new Date().toISOString();
+            if (isDurablePersistedMediaUrl(merged.video_url)) {
+                stampedTech.video_oss_uploaded = true;
+                stampedMeta.oss_uploaded_success = true;
+                delete stampedMeta.ephemeral_binding;
+                delete stampedMeta.needs_persistence_retry;
+            }
+            stampedTech.video_metadata = stampedMeta;
+            delete stampedTech.video_regen_started_at;
+            delete stampedTech.video_regen_previous_url;
+            merged.technical_notes = JSON.stringify(stampedTech);
         }
     }
 

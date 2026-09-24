@@ -29,6 +29,7 @@ class AIShotGenRequest(BaseModel):
     shot_generation_features: Optional[Dict[str, Any]] = None
     function_name: Optional[str] = None
     system_api_id: Optional[int] = None
+    replace_existing: Optional[bool] = False
 
 
 class AIShotRegenerateRequest(BaseModel):

@@ -11525,22 +11525,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return Number.isFinite(resolved) && resolved > 0 ? resolved : 0;
         };
 
-        const pendingAfterSubskill = (
-            storyboardPendingAfterSubskillRef.current instanceof Set
-            && storyboardPendingAfterSubskillRef.current.size > 0
-            && isSceneIdInAllowlist(
-                stableMarker,
-                storyboardPendingAfterSubskillRef.current,
-                episodePrefix
-            )
-        );
-        const replaceIntent = {
-            force,
-            sceneMatrixRerun: Boolean(sceneMatrixRerunInFlightRef.current),
-            storyboardRerun: Boolean(isRerunningStoryboard),
-            pendingAfterSubskill,
-        };
-
         const completeFromExistingShots = (dbSceneId, existingCount) => {
             clearFlightPromise();
             storyboardKickoffByMarkerRef.current.add(stableMarker);
@@ -11569,10 +11553,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         // Existing shots must win before ENV parking. Import/restore used to write
         // waiting_env first, then never settle even when 分镜已齐套.
-        if (
-            shouldReuseExistingStoryboardShots(replaceIntent)
-            && typeof fetchShots === 'function'
-        ) {
+        if (!force && typeof fetchShots === 'function') {
             const reuseId = await resolveDbSceneIdForMarker(dbSceneIdHint || priorItem?.dbSceneId);
             if (reuseId) {
                 try {
@@ -11907,10 +11888,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
         const existingCount = Array.isArray(existingShots) ? existingShots.length : 0;
-        if (
-            existingCount > 0
-            && shouldReuseExistingStoryboardShots(replaceIntent)
-        ) {
+        if (existingCount > 0 && !force) {
             return completeFromExistingShots(dbSceneId, existingCount);
         }
 
@@ -11965,7 +11943,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         'info'
                     );
                 }
-                if (shouldReuseExistingStoryboardShots(replaceIntent) && typeof fetchShots === 'function') {
+                if (!force && typeof fetchShots === 'function') {
                     try {
                         const existingNow = await fetchShots(dbSceneId);
                         const existingNowCount = Array.isArray(existingNow) ? existingNow.length : 0;
@@ -11985,7 +11963,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
                 const result = await generateSceneShots(dbSceneId, {
                     function_name: 'script_analysis',
+                    ...(force ? { replace_existing: true } : {}),
                 });
+                if (result?.skipped_existing) {
+                    const kept = Number(result.existing_shot_count || 0);
+                    return completeFromExistingShots(dbSceneId, kept > 0 ? kept : 1);
+                }
                 const generatedRows = Array.isArray(result?.content) ? result.content : [];
                 if (!generatedRows.length) {
                     throw new Error(t('分镜返回为空（无可用镜头行）', 'Storyboard generation returned no shot rows'));
@@ -12083,7 +12066,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     );
                     return true;
                 }
-                if (shouldReuseExistingStoryboardShots(replaceIntent) && typeof fetchShots === 'function') {
+                if (!force && typeof fetchShots === 'function') {
                     try {
                         const leftoverShots = await fetchShots(dbSceneId);
                         const leftoverCount = Array.isArray(leftoverShots) ? leftoverShots.length : 0;
@@ -12135,7 +12118,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         fetchScenes,
         fetchShots,
         isEnvironmentAssetDesignReady,
-        isRerunningStoryboard,
         isStoryboardAutoStartEnabled,
         onLog,
         publishStoryboardTaskPanelStatus,
@@ -12239,7 +12221,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         sceneOrder: Number(node?.scene_order || 0) || deriveSceneOrderFromSceneId(sceneId),
                     })?.status || ''
                 ).trim().toLowerCase();
-                const needsResume = ['starting', 'generating', 'importing', 'waiting_env', 'waiting_import'].includes(progressStatus)
+                const needsResume = ['waiting_env', 'waiting_import'].includes(progressStatus)
                     || (progressStatus === 'failed' && isStoryboardRetryableKickoffError(
                         findStoryboardProgressItem(storyboardTaskProgressRef.current, sceneId)?.error
                     ));

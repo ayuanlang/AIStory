@@ -132,6 +132,9 @@ def _build_project_entity_lookup(
             "entity_id": row.id,
             "entity_type": entity_type,
             "episode_id": getattr(row, "episode_id", None),
+            "visual_dependencies": getattr(row, "visual_dependencies", None),
+            "dependency_strategy": getattr(row, "dependency_strategy", None),
+            "custom_attributes": getattr(row, "custom_attributes", None),
         }
         for key in _entity_lookup_alias_keys(row.name, row.name_en, canonical_name):
             # Prefer first writer after preference sort (current episode / best fallback).
@@ -773,6 +776,186 @@ def _limit_keyframes_for_video_mode(keyframes: Optional[List[str]], ref_mode: An
     return normalized_keyframes
 
 
+_ANGLE_DERIVATIVE_NAME_RE = re.compile(
+    r"(?:^(?:\d+|[０-９]+)\s*(?:度|°|º|deg(?:ree)?s?\b))"
+    r"|(?:(?:^|[_\s\-])(?:\d+|[０-９]+)\s*(?:度|°|º|deg(?:ree)?s?\b))",
+    re.IGNORECASE,
+)
+
+
+def _env_name_key(value: Any) -> str:
+    text = normalize_entity_token(value)
+    if not text:
+        return ""
+    text = re.sub(r"^(?:env|char|prop)\s*:\s*", "", text, flags=re.IGNORECASE).strip()
+    text = text.strip("[]").lstrip("@").strip()
+    return re.sub(r"[^\w\u4e00-\u9fff]", "", text)
+
+
+def _main_environment_name(env_name: Any) -> str:
+    stable = str(env_name or "").strip()
+    stable = re.sub(r"^(?:ENV|CHAR|PROP)\s*[:：]\s*", "", stable, flags=re.IGNORECASE).strip()
+    stable = stable.strip("[]").lstrip("@").strip()
+    stable = re.sub(r"^\d+\s*度", "", stable).strip()
+    stable = re.sub(r"^\d+\s*deg(?:ree)?s?\s*", "", stable, flags=re.IGNORECASE).strip()
+    cut = re.search(r"[-_\s]", stable)
+    if cut:
+        stable = stable[: cut.start()].strip()
+    return stable
+
+
+def _row_custom_attributes(row: Dict[str, Any]) -> Dict[str, Any]:
+    raw = row.get("custom_attributes")
+    if isinstance(raw, dict):
+        return raw
+    parsed = _safe_json_dict(raw)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _dependency_strategy_type(row: Dict[str, Any]) -> str:
+    raw = row.get("dependency_strategy")
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return ""
+        try:
+            raw = json.loads(text)
+        except Exception:
+            return text
+    if isinstance(raw, dict):
+        return str(raw.get("type") or "").strip()
+    return ""
+
+
+def _is_environment_entity_row(row: Dict[str, Any]) -> bool:
+    type_key = str(row.get("entity_type") or "").strip().lower()
+    if not type_key:
+        return False
+    return (
+        type_key in {"environment", "env"}
+        or "environment" in type_key
+        or "环境" in type_key
+        or "场景" in type_key
+    )
+
+
+def _is_angle_derivative_name(name: Any) -> bool:
+    raw = str(name or "").strip()
+    return bool(raw and _ANGLE_DERIVATIVE_NAME_RE.search(raw))
+
+
+def _visual_dependency_names(row: Dict[str, Any]) -> List[str]:
+    raw = row.get("visual_dependencies")
+    items: List[Any]
+    if isinstance(raw, list):
+        items = raw
+    elif isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            items = parsed if isinstance(parsed, list) else [raw]
+        except Exception:
+            items = re.split(r"[\n,，;；|]", raw)
+    else:
+        items = []
+    return [str(item or "").strip() for item in items if str(item or "").strip()]
+
+
+def _is_main_environment_row(row: Dict[str, Any]) -> bool:
+    if not _is_environment_entity_row(row):
+        return False
+    attrs = _row_custom_attributes(row)
+    if (
+        attrs.get("source") == "programmatic_derived_framing"
+        or attrs.get("derived_kind")
+        or attrs.get("所属主环境")
+        or attrs.get("owning_main_environment")
+    ):
+        return False
+    if any(_is_angle_derivative_name(name) for name in (row.get("name"), row.get("name_en"))):
+        return False
+    dep_type = _dependency_strategy_type(row)
+    if re.match(r"^baseline\s*definition$", dep_type, flags=re.IGNORECASE):
+        return True
+    if re.match(r"^type\s*[ab]$", dep_type, flags=re.IGNORECASE):
+        return False
+    has_env_dep = any(
+        re.match(r"^ENV\s*[:：\[]", name, flags=re.IGNORECASE)
+        for name in _visual_dependency_names(row)
+    )
+    if has_env_dep and not re.match(r"^style\s*reference$", dep_type, flags=re.IGNORECASE):
+        return False
+    return True
+
+
+def _is_derived_environment_row(row: Dict[str, Any]) -> bool:
+    return _is_environment_entity_row(row) and not _is_main_environment_row(row)
+
+
+def _push_owning_main_key(keys: set, value: Any) -> None:
+    cleaned = str(value or "").strip()
+    cleaned = re.sub(r"^(?:ENV|CHAR|PROP)\s*[:：]\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = cleaned.strip("[]").lstrip("@").strip()
+    if not cleaned:
+        return
+    key = _env_name_key(cleaned)
+    if key:
+        keys.add(key)
+    main_key = _env_name_key(_main_environment_name(cleaned))
+    if main_key:
+        keys.add(main_key)
+
+
+def _owning_main_name_keys(row: Dict[str, Any]) -> set:
+    keys: set = set()
+    attrs = _row_custom_attributes(row)
+    for field in ("main_environment", "main_environment_name", "所属主环境", "owning_main_environment"):
+        _push_owning_main_key(keys, attrs.get(field))
+    for name in _visual_dependency_names(row):
+        _push_owning_main_key(keys, name)
+    for name in (row.get("name"), row.get("name_en")):
+        main_key = _env_name_key(_main_environment_name(name))
+        self_key = _env_name_key(name)
+        if main_key and main_key != self_key:
+            keys.add(main_key)
+    return keys
+
+
+def _drop_main_environment_urls_covered_by_derivatives(
+    urls: List[str],
+    entity_lookup: Dict[str, Dict[str, Any]],
+) -> List[str]:
+    """Drop a main four-grid when its derivative plate is already a video ref."""
+    if not urls or not entity_lookup:
+        return urls
+    url_to_row: Dict[str, Dict[str, Any]] = {}
+    for row in _iter_unique_entity_rows(entity_lookup):
+        image_url = str(row.get("image_url") or "").strip()
+        if image_url and image_url not in url_to_row:
+            url_to_row[image_url] = row
+    ordered_rows = [url_to_row[url] for url in urls if url in url_to_row]
+    derived_rows = [row for row in ordered_rows if _is_derived_environment_row(row)]
+    if not derived_rows:
+        return urls
+    covered: set = set()
+    for row in derived_rows:
+        covered.update(_owning_main_name_keys(row))
+    if not covered:
+        return urls
+    dropped_urls = set()
+    for row in ordered_rows:
+        if not _is_main_environment_row(row):
+            continue
+        name_keys = {_env_name_key(row.get("name")), _env_name_key(row.get("name_en"))}
+        name_keys.discard("")
+        if name_keys.intersection(covered):
+            image_url = str(row.get("image_url") or "").strip()
+            if image_url:
+                dropped_urls.add(image_url)
+    if not dropped_urls:
+        return urls
+    return [url for url in urls if url not in dropped_urls]
+
+
 def _collect_video_prompt_entity_refs(
     prompt_candidates: List[str],
     entity_lookup: Dict[str, Dict[str, Any]],
@@ -785,7 +968,8 @@ def _collect_video_prompt_entity_refs(
         if not str(candidate_text or "").strip():
             continue
         refs.extend(collector(candidate_text, entity_lookup))
-    return _dedupe_media_ref_urls(refs)
+    refs = _dedupe_media_ref_urls(refs)
+    return _drop_main_environment_urls_covered_by_derivatives(refs, entity_lookup)
 
 
 def _is_video_media_ref_url(url: Any) -> bool:

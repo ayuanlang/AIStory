@@ -71,6 +71,57 @@ def _release_scene_shot_generation(scene_id: int) -> None:
         _SCENE_SHOT_GEN_IN_FLIGHT.discard(scene_id)
 
 
+def should_skip_scene_shot_llm(
+    *,
+    existing_shot_count: int,
+    replace_existing: bool,
+    attempt_index: int,
+) -> bool:
+    """Stop a model call once this scene already has shots.
+
+    The first attempt of an explicit replace may still run (the rerun deletes
+    shots first; if they are still there, that one call is the overwrite).
+    Later attempts — active retries and dropdown fallbacks — must not start
+    when shots are already stored.
+    """
+    if int(existing_shot_count or 0) <= 0:
+        return False
+    if int(attempt_index or 1) > 1:
+        return True
+    return not bool(replace_existing)
+
+
+def _count_active_shots(db: Session, scene_id: int) -> int:
+    from app.models.all_models import Shot
+    from app.services.soft_delete import _active_shot_clause
+
+    return int(
+        db.query(Shot)
+        .filter(Shot.scene_id == int(scene_id), _active_shot_clause())
+        .count()
+        or 0
+    )
+
+
+def _count_active_shots_fresh(scene_id: int) -> int:
+    from app.db.session import SessionLocal
+
+    fresh = SessionLocal()
+    try:
+        return _count_active_shots(fresh, int(scene_id))
+    finally:
+        fresh.close()
+
+
+def _skipped_existing_shots_payload(scene_id: int, existing_shot_count: int) -> Dict[str, Any]:
+    return {
+        "content": [],
+        "skipped_existing": True,
+        "existing_shot_count": int(existing_shot_count or 0),
+        "scene_id": int(scene_id),
+    }
+
+
 async def _emit_shot_event(on_event: Optional[Callable[[Dict[str, Any]], Any]], event: Dict[str, Any]) -> None:
     if not on_event:
         return
@@ -139,6 +190,20 @@ async def execute_ai_generate_shots(
             f"[ai_generate_shots] context scene_id={scene_id} episode_id={episode.id} project_id={project.id} "
             f"scene_no={persist_scene_no or ''}"
         )
+
+        replace_existing = bool(getattr(req, "replace_existing", False))
+        existing_shot_count = _count_active_shots(db, int(scene_id))
+        if should_skip_scene_shot_llm(
+            existing_shot_count=existing_shot_count,
+            replace_existing=replace_existing,
+            attempt_index=1,
+        ):
+            logger.info(
+                "[ai_generate_shots] skip_llm_existing_shots scene_id=%s count=%s",
+                scene_id,
+                existing_shot_count,
+            )
+            return _skipped_existing_shots_payload(int(scene_id), existing_shot_count)
 
         if req and req.user_prompt:
              user_input = req.user_prompt
@@ -229,6 +294,33 @@ async def execute_ai_generate_shots(
             billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
 
         _release_db_connection(db, "ai_generate_shots_llm_call")
+
+        async def _allow_shot_model_attempt(attempt_index: int) -> bool:
+            if int(attempt_index or 1) <= 1:
+                return True
+            try:
+                live_count = _count_active_shots_fresh(int(scene_id))
+            except Exception:
+                logger.warning(
+                    "[ai_generate_shots] fallback_shot_count_failed scene_id=%s",
+                    scene_id,
+                    exc_info=True,
+                )
+                return True
+            if should_skip_scene_shot_llm(
+                existing_shot_count=live_count,
+                replace_existing=replace_existing,
+                attempt_index=int(attempt_index or 1),
+            ):
+                logger.info(
+                    "[ai_generate_shots] skip_fallback_existing_shots scene_id=%s count=%s attempt=%s",
+                    scene_id,
+                    live_count,
+                    attempt_index,
+                )
+                return False
+            return True
+
         await _emit_shot_event(on_event, {
             "type": "phase",
             "phase": "generating",
@@ -247,7 +339,34 @@ async def execute_ai_generate_shots(
             ),
             context="ai_generate_shots",
             on_event=on_event,
+            before_attempt=_allow_shot_model_attempt,
         )
+        if response_dict.get("_aborted_existing_shots"):
+            live_count = existing_shot_count
+            try:
+                live_count = _count_active_shots_fresh(int(scene_id))
+            except Exception:
+                logger.warning(
+                    "[ai_generate_shots] aborted_shot_count_failed scene_id=%s",
+                    scene_id,
+                    exc_info=True,
+                )
+            if reservation_tx_id is not None:
+                try:
+                    billing_service.cancel_reservation(db, reservation_tx_id, "skipped_existing_shots")
+                except Exception:
+                    logger.warning(
+                        "[ai_generate_shots] cancel_reservation_failed scene_id=%s reservation_id=%s",
+                        scene_id,
+                        reservation_tx_id,
+                        exc_info=True,
+                    )
+            logger.info(
+                "[ai_generate_shots] aborted_fallback_existing_shots scene_id=%s count=%s",
+                scene_id,
+                live_count,
+            )
+            return _skipped_existing_shots_payload(int(scene_id), live_count)
         response_content_raw = response_dict.get("content", "")
         usage = response_dict.get("usage", {})
 

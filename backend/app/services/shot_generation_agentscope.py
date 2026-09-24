@@ -434,6 +434,7 @@ async def generate_shots_content(
     response_validator: Optional[Callable[..., Any]] = None,
     context: str = "ai_generate_shots",
     on_event: EventCallback = None,
+    before_attempt: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
     """Draft with shot_generation.md, then optionally AgentScope-polish Video CN."""
     await _emit(on_event, {
@@ -446,6 +447,7 @@ async def generate_shots_content(
         system_prompt,
         llm_config,
         response_validator=response_validator,
+        before_attempt=before_attempt,
     )
     draft_content = str((draft or {}).get("content") or "").strip()
     if not draft_content or draft_content.startswith("Error:"):
