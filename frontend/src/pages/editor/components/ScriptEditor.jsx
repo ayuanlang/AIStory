@@ -12848,7 +12848,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (promiseCount <= 0 && queued <= 0 && !withinGrace) {
                 // No tracked tasks after grace → treat as no storyboard work this run,
                 // unless workspace scenes are already imported and still have no shots.
-                if (Number(progress.started || 0) <= 0 && !liveWork) {
+                if (!scopedRerun && Number(progress.started || 0) <= 0 && !liveWork) {
                     const { count: missingShotCount } = autoStartEnabled
                         ? await countImportedScenesMissingShots()
                         : { count: 0 };
