@@ -35880,7 +35880,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 staging: ['staging'],
                             }[group] || [];
                             const doneAfter = { drama: 1, combat: 2, framing: 4, staging: 5 }[group] || 0;
-                            const groupCompleted = calledReady || persistReady || rank > doneAfter;
+                            // A live earlier step must not keep later groups on 已完成 via leftover
+                            // called_subskills / persisted text (建置仍显示完成，而文戏还在跑).
+                            const liveBeforeGroup = ['running', 'queued'].includes(status) && rank > 0 && rank <= doneAfter;
+                            const groupCompleted = (!liveBeforeGroup && (calledReady || persistReady)) || rank > doneAfter;
                             if (failed && groupActiveStep.includes(step)) {
                                 return {
                                     ready: false,
@@ -35952,6 +35955,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const liveKickoff = sceneHasLiveStoryboardKickoff(sceneId);
                             const node = findScenePipelineNode('storyboard_generation', sceneId);
                             const fromNode = stateFromPipelineNode(node);
+                            const storyboardNodeStatus = String(node?.status || '').trim().toLowerCase();
+                            const storyboardNodeEvent = String(node?.runtime_meta?.business_event || '').trim().toLowerCase();
+                            // Scene rerun queues storyboard_generation before 文戏 finishes.
+                            // queued is a placeholder, not generateSceneShots.
+                            const storyboardQueuedPlaceholder = storyboardNodeStatus === 'queued'
+                                || storyboardNodeEvent === 'queued';
                             const nodeTimedOut = /NODE_TIMEOUT|超过\s*\d+s\s*无进展|timed out after/i.test(
                                 String(node?.last_error_code || node?.last_error_message || node?.runtime_meta?.business_reason || '')
                             );
@@ -35959,12 +35968,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const pendingAfterSubskill = pendingSet instanceof Set
                                 && pendingSet.size > 0
                                 && isSceneIdInAllowlist(sceneId, pendingSet, episodePrefix);
+                            const subskillNode = findScenePipelineNode('scene_subskill_scene', sceneId);
+                            const subskillStatus = String(subskillNode?.status || '').trim().toLowerCase();
+                            const subskillStep = String(subskillNode?.runtime_meta?.current_step || '').trim().toLowerCase();
+                            const subskillActive = ['running', 'queued'].includes(subskillStatus);
+                            const subskillStillOpen = subskillActive && subskillStep !== 'completed';
                             if (
                                 workspaceSceneCount > 0
                                 && workspaceSceneCountWithShots >= workspaceSceneCount
                                 && !isRerunningStoryboard
                                 && !pendingAfterSubskill
                                 && !sceneMatrixRerunInFlightRef.current
+                                && !subskillStillOpen
+                                && !storyboardQueuedPlaceholder
                             ) {
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
@@ -35978,10 +35994,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 analysisTimerStartedAtRef.current,
                                 { requireRunClock: false }
                             );
-                            const subskillNode = findScenePipelineNode('scene_subskill_scene', sceneId);
-                            const subskillActive = ['running', 'queued'].includes(
-                                String(subskillNode?.status || '').trim().toLowerCase()
-                            );
+                            // 文戏/武戏/现场编排/建置仍在跑时，分镜只排队，不能显示成已开始运行。
+                            if (subskillStillOpen) {
+                                return { ready: false, active: false, failed: false, detail: '' };
+                            }
                             // This-run kickoff / LLM submit must win over leftover completed nodes.
                             if (STORYBOARD_IN_FLIGHT_STATUSES.includes(status) || STORYBOARD_IN_FLIGHT_STATUSES.includes(refStatus)) {
                                 return { ready: false, active: true, failed: false, detail: '' };
@@ -36048,6 +36064,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             }
                             if (
                                 fromNode.active
+                                && !storyboardQueuedPlaceholder
                                 && status !== 'failed'
                                 && refStatus !== 'completed'
                                 && !ignoreLeftoverStoryboard
