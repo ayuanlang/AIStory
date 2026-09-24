@@ -22,6 +22,7 @@ from app.services.promo_planner import (
     apply_analysis_status_to_assets,
     assets_needing_analysis,
     catalog_analysis_fields,
+    catalog_asset_as_planner_asset,
     merge_catalog_analysis_extra,
     serialize_promo_catalog_asset,
     slice_asset_analysis,
@@ -670,6 +671,60 @@ def test_existing_material_matches_project_library_only():
     )
     assert "开放式厨房" in brief["promo_existing_material"]
     assert "未选用仓库" not in brief["promo_existing_material"]
+
+
+def test_existing_material_refreshes_for_same_name_assets():
+    analysis = {
+        "global_visual_summary": "正门旧图和厨房混在一起",
+        "image_list": [
+            {"image_id": "old-door", "object_name": "泓林土菜馆正门", "image_type": "scene", "content_desc": "夜间旧门头"},
+            {"image_id": "new-door", "object_name": "泓林土菜馆正门", "image_type": "scene", "content_desc": "白天新门头"},
+            {"image_id": "kitchen", "object_name": "厨房", "image_type": "scene", "content_desc": "明档灶台"},
+        ],
+        "rebuild_subjects": [
+            {"kind": "environment", "object_name": "泓林土菜馆正门", "source_image_ids": ["old-door"], "rebuild_brief": "旧门头灯箱"},
+            {"kind": "environment", "object_name": "泓林土菜馆正门", "source_image_ids": ["new-door"], "rebuild_brief": "新门头石狮"},
+        ],
+    }
+    old_and_kitchen = [
+        {"image_id": "old-door", "object_name": "泓林土菜馆正门", "img_url": "https://example.com/old.jpg", "image_type": "scene"},
+        {"image_id": "kitchen", "object_name": "厨房", "img_url": "https://example.com/k.jpg", "image_type": "scene"},
+    ]
+    new_only = [
+        {
+            "image_id": "new-door",
+            "object_name": "泓林土菜馆正门",
+            "img_url": "https://example.com/new.jpg",
+            "image_type": "scene",
+            "image_asset_analysis": {
+                "image_list": [
+                    {"image_id": "new-door", "object_name": "泓林土菜馆正门", "image_type": "scene", "content_desc": "白天新门头"},
+                ],
+            },
+        },
+    ]
+    first = backfill_existing_material("手写备注", analysis, old_and_kitchen)
+    assert first.startswith("手写备注")
+    assert "夜间旧门头" in first
+    assert "明档灶台" in first
+    assert "白天新门头" not in first
+    assert "正门旧图和厨房混在一起" not in first
+    switched = backfill_existing_material(first, analysis, new_only)
+    assert switched.startswith("手写备注")
+    assert "白天新门头" in switched
+    assert "夜间旧门头" not in switched
+    assert "明档灶台" not in switched
+    assert switched.count("名称=泓林土菜馆正门") == 1
+    both = format_existing_material_from_analysis(
+        analysis,
+        [
+            {"image_id": "old-door", "object_name": "泓林土菜馆正门", "img_url": "https://example.com/old.jpg", "image_type": "scene"},
+            {"image_id": "new-door", "object_name": "泓林土菜馆正门", "img_url": "https://example.com/new.jpg", "image_type": "scene"},
+        ],
+    )
+    assert both.count("名称=泓林土菜馆正门") == 2
+    assert "夜间旧门头" in both
+    assert "白天新门头" in both
 
 
 def test_uploaded_asset_catalog_injects_metadata_into_skills():
@@ -1611,3 +1666,7 @@ def test_serialize_catalog_asset_exposes_analysis():
     assert out["analysis_status"] == "success"
     assert out["img_url"] == "/uploads/3/k.jpg"
     assert out["image_asset_analysis"]["image_list"][0]["rebuild_brief"] == "暖光厨房"
+    planner = catalog_asset_as_planner_asset(_Row())
+    assert planner["img_url"] == "/uploads/3/k.jpg"
+    assert planner["image_id"] == "kitchen-1"
+    assert planner["catalog_asset_id"] == 9

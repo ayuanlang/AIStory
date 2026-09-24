@@ -249,17 +249,18 @@ def asset_belongs_to_selection(item: Any, ids: Any, urls: Any, names: Any = None
     data = _as_dict(item)
     image_id = _text(data.get("image_id"))
     url = _text(data.get("img_url") or data.get("file_url"))
-    name = _text(data.get("object_name") or data.get("reference_name") or data.get("name_for_script"))
+    source_ids = [_text(value) for value in (data.get("source_image_ids") or []) if _text(value)]
     if image_id and image_id in (ids or set()):
         return True
     if url and url in (urls or set()):
         return True
-    if name and name in (names or set()):
-        return True
-    source_ids = [_text(value) for value in (data.get("source_image_ids") or []) if _text(value)]
     if source_ids and any(source_id in (ids or set()) for source_id in source_ids):
         return True
-    return False
+    # A row that already names a file must match that file. Display names collide across uploads.
+    if image_id or url or source_ids:
+        return False
+    name = _text(data.get("object_name") or data.get("reference_name") or data.get("name_for_script"))
+    return bool(name and name in (names or set()))
 
 
 def filter_analysis_to_selected_assets(analysis: Any, image_assets: Any) -> Dict[str, Any]:
@@ -1137,6 +1138,7 @@ def format_promo_injection_body(brief: Any) -> str:
         f"切场={PROMO_SCENE_RULE}",
         f"节奏={PROMO_RHYTHM}",
         "四段=场内节拍，不是四场。跨空间/跨时段仍包在同一场。",
+        "场景闸=自然环境可虚构。实际建筑只依据已提供素材与介绍已写信息，不创造没提到的楼层、房间、招牌、立面或陈设，保持真实。",
         "花字闸=有旁白时不出花字，花字低于旁白，禁同步以免分心；只挂无声开镜/段末/黑屏专镜/字卡专镜。含「X家」须逐字见家，禁漏家、禁复写邻字、禁何乐乐享。印章不压字：印=句外旁侧｜压字=禁｜替字=禁。店号/品牌/热线走字卡专镜：场景底+字层由后期libass按引号逐字烧录（烧录=libass｜手写=禁），场景底只出画面，禁止视频模型描字；印章另层不进字盒；字卡不是CHAR/PROP/ENV。企业素材产品出镜须花字=产品名，位置=画右|画左｜排向=竖，挂无声切镜。",
         f"素材策略={_text(data.get('promo_asset_strategy')) or '无上传素材时按剧本新构思抽取角色/道具/环境，后续补充或由AI生成。'}",
     ])

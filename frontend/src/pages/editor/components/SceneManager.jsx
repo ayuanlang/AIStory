@@ -274,13 +274,8 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         );
 
            if (isLockedManual) {
-               // 用户已手动调整后：以用户列表为准，但自动补充新通过@提及且未被显式删除的实体
-               activeRefs = [...tech[storageKey]];
-               for (const img of autoMatches) {
-                   if (!activeRefs.includes(img) && !deleted.has(img)) {
-                       activeRefs.push(img);
-                   }
-               }
+               // 手工调整后只保留用户列表。重新加载不再补回提示词里的原实体参考图，避免同一实体重复上传。
+               activeRefs = normalizeMediaRefList(tech[storageKey]).filter((url) => !deleted.has(url));
            } else if (isManualMode) {
                          // Manual but not locked: treat stored list as cache only.
                          // Recompute from current subject/entity latest images each reload.

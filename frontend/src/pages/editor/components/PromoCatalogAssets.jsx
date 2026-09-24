@@ -144,7 +144,6 @@ export default function PromoCatalogAssets({
             });
         } catch (err) {
             console.error('[PromoCatalogAssets] load failed', err);
-            setAssets([]);
         }
     }, [ownerId, ownerKind]);
 

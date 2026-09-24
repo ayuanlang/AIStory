@@ -1278,6 +1278,16 @@ const isSceneIdInAllowlist = (marker, allowlist, episodePrefix = 'EP01') => {
     return false;
 };
 
+/** Empty allowlists mean "not scoped yet". A live run must not pull in other scenes. */
+const isStoryboardMarkerInRunAllowlist = (marker, canonical, liveImported, episodePrefix) => {
+    const canonicalActive = canonical instanceof Set && canonical.size > 0;
+    const liveActive = liveImported instanceof Set && liveImported.size > 0;
+    if (!canonicalActive && !liveActive) return true;
+    const inAllowlist = canonicalActive && isSceneIdInAllowlist(marker, canonical, episodePrefix);
+    const inLiveImported = liveActive && isSceneIdInAllowlist(marker, liveImported, episodePrefix);
+    return Boolean(inAllowlist || inLiveImported);
+};
+
 const storyboardRerunCandidateMarkers = (item) => (
     [item?.sceneId, item?.canonicalSceneId, item?.rawSceneNo, item?.sceneCode]
         .map((value) => String(value || '').trim())
@@ -4667,7 +4677,7 @@ const EXTRACT_HEADER_KEYS = {
 
 const EXTRACT_LONG_TEXT_FIELDS = new Set([
     '定位', '外形', '衣着', '性情', '特定动作', '身份', '对白声线', '评价', '形态连续', '衍生',
-    '作用', '尺度', '材质', '形态', '情绪', '宿主',
+    '作用', '尺度', '材质', '形态', '情绪', '宿主', '环境规划',
 ]);
 
 const EXTRACT_FIELD_LABELS = {
@@ -4698,6 +4708,7 @@ const EXTRACT_FIELD_LABELS = {
     形态: { zh: '形态', en: 'Form' },
     情绪: { zh: '情绪', en: 'Mood' },
     宿主: { zh: '宿主', en: 'Host' },
+    环境规划: { zh: '环境规划', en: 'Environment Plan' },
 };
 
 const takeTaggedExtractBlock = (text, tag) => {
@@ -4880,6 +4891,98 @@ const cleanCollectedMainEnvironmentName = (raw) => {
     if (['none', 'null', 'nil', 'n/a', 'na', '无', '空'].includes(normalized)) return '';
     if (/主环境角色|活动空间|未落/.test(first)) return '';
     return first;
+};
+
+const sliceEnvironmentEditorText = (source, name) => {
+    const text = String(source || '').replace(/\r\n/g, '\n');
+    const wanted = String(name || '').trim();
+    if (!text || !wanted) return { text: '', slices: [] };
+    const lines = text.split('\n');
+    const nameMatches = (raw) => {
+        const titleName = String(raw || '').split(/[｜|]/)[0].trim();
+        if (!titleName || /^[─\-—\s]+$/.test(titleName)) return false;
+        return titleName === wanted;
+    };
+    let skeleton = '';
+    for (let i = 0; i < lines.length; i += 1) {
+        const title = String(lines[i] || '').match(/^\s*【主环境】\s*(.+)$/);
+        if (!title || !nameMatches(title[1])) continue;
+        let start = i;
+        for (let j = i; j >= Math.max(0, i - 4); j -= 1) {
+            if (/\[ENV_BLOCK_START\]/i.test(lines[j]) || /─+【主环境】/.test(lines[j])) {
+                start = j;
+                if (/\[ENV_BLOCK_START\]/i.test(lines[j])) break;
+            }
+        }
+        let end = lines.length;
+        for (let j = i + 1; j < lines.length; j += 1) {
+            if (/\[ENV_BLOCK_END\]/i.test(lines[j])) {
+                end = j + 1;
+                break;
+            }
+            if (/^\[ENV_BLOCK_START\]/i.test(lines[j])) {
+                end = j;
+                break;
+            }
+        }
+        skeleton = lines.slice(start, end).join('\n').trim();
+        break;
+    }
+    let ident = '';
+    for (let i = 0; i < lines.length; i += 1) {
+        const header = String(lines[i] || '').match(/^\s*\[ENV\]\s*名称\s*[=：:]\s*(.+)$/i);
+        if (!header || !nameMatches(header[1])) continue;
+        const chunk = [lines[i]];
+        for (let j = i + 1; j < lines.length; j += 1) {
+            if (/^\s*\[ENV\]/i.test(lines[j]) || /^\[SCENE_ENV_IDENT_END/i.test(lines[j]) || /^\[ENV_BLOCK_START\]/i.test(lines[j])) {
+                break;
+            }
+            chunk.push(lines[j]);
+        }
+        ident = chunk.join('\n').trim();
+        break;
+    }
+    const slices = [ident, skeleton].map((part) => String(part || '').trim()).filter(Boolean);
+    return { text: slices.join('\n\n'), slices };
+};
+
+const splitEnvironmentEditorText = (editedText, slices) => {
+    const edited = String(editedText || '').trim();
+    const parts = (Array.isArray(slices) ? slices : []).map((part) => String(part || '').trim()).filter(Boolean);
+    if (!edited || !parts.length) return [];
+    if (parts.length === 1) return [edited];
+    let rest = edited;
+    const nextParts = [];
+    for (let index = 0; index < parts.length - 1; index += 1) {
+        const head = parts[index + 1].split('\n').map((line) => line.trim()).find(Boolean) || '';
+        const at = head ? rest.indexOf(head) : -1;
+        if (at <= 0) return [];
+        nextParts.push(rest.slice(0, at).trim());
+        rest = rest.slice(at).trim();
+    }
+    nextParts.push(rest);
+    return nextParts.length === parts.length ? nextParts : [];
+};
+
+const applyEnvironmentPlanEntryPatches = (source, displayEntries, originalEntries) => {
+    let next = String(source || '').replace(/\r\n/g, '\n');
+    (displayEntries || []).forEach((entry) => {
+        if (entry?.sourceKind !== 'extract' || extractTagForRerunEntry(entry)) return;
+        if (String(entry?.type || '').trim().toLowerCase() === 'cover_poster') return;
+        const original = (originalEntries || []).find((item) => item?.key === entry.key);
+        const oldSlices = (Array.isArray(original?.planSlices) ? original.planSlices : [])
+            .map((part) => String(part || '').trim())
+            .filter(Boolean);
+        const newText = String(entry?.fields?.环境规划 || '').trim();
+        const newSlices = splitEnvironmentEditorText(newText, oldSlices);
+        if (!oldSlices.length || newSlices.length !== oldSlices.length) return;
+        oldSlices.forEach((oldSlice, index) => {
+            const newSlice = newSlices[index];
+            if (!oldSlice || !newSlice || oldSlice === newSlice || !next.includes(oldSlice)) return;
+            next = next.replace(oldSlice, newSlice);
+        });
+    });
+    return next;
 };
 
 const collectMainEnvironmentNames = (text) => {
@@ -11350,27 +11453,47 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return true;
         }
 
-        const kickoffHasActiveGenerate = storyboardKickoffPromisesRef.current?.has(stableMarker);
-
-        // Claim-before-await (same pattern as orchestration poller readyScenes):
-        // prevent poller×ensure / flush×residual races from double-starting scene 1.
-        // Lock by identity (EP01_SC02 / SC02 / "2") so alias markers cannot start twice.
-        // Do not write status=starting until shots are actually going to generate;
-        // re-entry/poll must not flip a settled success back to running.
-        if (!force) {
-            if (kickoffHasActiveGenerate) {
-                storyboardKickoffByMarkerRef.current.add(stableMarker);
-                storyboardKickoffByIdentityRef.current.add(identity);
-                return true;
+        // Publish a flight promise in the same turn as the claim, before any await.
+        // The poller re-walks every successful scene every 2s. A bare claim used to
+        // fall through during env/DB awaits, so scene 2 finishing re-POSTed scene 1
+        // and the same scene could start twice.
+        const sceneHasLiveFlight = () => storyboardKickoffCollectionMatchesScene(
+            storyboardKickoffPromisesRef.current,
+            stableMarker,
+            identity,
+        );
+        let settleFlight = null;
+        let flightPromise = null;
+        const clearFlightPromise = () => {
+            if (flightPromise && storyboardKickoffPromisesRef.current.get(stableMarker) === flightPromise) {
+                storyboardKickoffPromisesRef.current.delete(stableMarker);
             }
-            // waiting_env / starting-without-promise / bare claim: fall through and resume.
+            const settle = settleFlight;
+            settleFlight = null;
+            flightPromise = null;
+            settle?.();
+        };
+        const holdFlightPromise = () => {
+            if (sceneHasLiveFlight()) return;
+            flightPromise = new Promise((resolve) => {
+                settleFlight = resolve;
+            });
+            storyboardKickoffPromisesRef.current.set(stableMarker, flightPromise);
+        };
+
+        if (!force && sceneHasLiveFlight()) {
             storyboardKickoffByMarkerRef.current.add(stableMarker);
             storyboardKickoffByIdentityRef.current.add(identity);
+            return true;
         }
+        storyboardKickoffByMarkerRef.current.add(stableMarker);
+        storyboardKickoffByIdentityRef.current.add(identity);
+        holdFlightPromise();
 
         const releaseKickoffClaim = () => {
             storyboardKickoffByMarkerRef.current.delete(stableMarker);
             storyboardKickoffByIdentityRef.current.delete(identity);
+            clearFlightPromise();
         };
 
         const resolveDbSceneIdForMarker = async (hint = null) => {
@@ -11407,6 +11530,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
 
         const completeFromExistingShots = (dbSceneId, existingCount) => {
+            clearFlightPromise();
             storyboardKickoffByMarkerRef.current.add(stableMarker);
             storyboardKickoffByDbIdRef.current.add(dbSceneId);
             const skippedProgress = updateStoryboardTaskItem(stableMarker, {
@@ -11499,6 +11623,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     'info'
                 );
                 // Keep marker claimed so residual ensure skips this scene.
+                // Drop the flight promise so the next poll can re-check ENV once.
+                clearFlightPromise();
                 return false;
             }
         }
@@ -11615,6 +11741,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     'info'
                 );
                 // First park keeps claim so residual ensure skips; resume park releases above.
+                // Drop the flight promise so a later flush/poll can re-enter once.
+                clearFlightPromise();
                 return false;
             }
             releaseKickoffClaim();
@@ -11690,6 +11818,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     progressSnapshot: skippedProgress,
                 });
             }
+            clearFlightPromise();
             return true;
         }
         if (force) {
@@ -11771,6 +11900,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             && shouldReuseExistingStoryboardShots(replaceIntent)
         ) {
             return completeFromExistingShots(dbSceneId, existingCount);
+        }
+
+        // Another alias already owns this scene's flight. Do not replace its promise.
+        if (sceneHasLiveFlight() && storyboardKickoffPromisesRef.current.get(stableMarker) !== flightPromise) {
+            return true;
         }
 
         storyboardKickoffByMarkerRef.current.add(stableMarker);
@@ -11924,6 +12058,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
                 return true;
             } catch (err) {
+                const errMsgEarly = resolveStoryboardFailureMessage(err);
+                if (/storyboard_generation_already_running/i.test(errMsgEarly)) {
+                    onLog?.(
+                        t(
+                            `[分镜生成] ${stableMarker} 已有进行中的分镜生成，跳过重复调起`,
+                            `[Storyboard] ${stableMarker} already has a storyboard generation in flight; skipped duplicate`
+                        ),
+                        'info'
+                    );
+                    return true;
+                }
                 if (shouldReuseExistingStoryboardShots(replaceIntent) && typeof fetchShots === 'function') {
                     try {
                         const leftoverShots = await fetchShots(dbSceneId);
@@ -11962,7 +12107,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
         })();
+        const settleHeldFlight = settleFlight;
+        settleFlight = null;
+        flightPromise = null;
         storyboardKickoffPromisesRef.current.set(stableMarker, runPromise);
+        settleHeldFlight?.();
 
         return true;
     }, [
@@ -12096,7 +12245,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (!stableMarker) return;
                 // Parked waiting_env keeps a claim so residual ensure will not double-start.
                 // That claim must not block this designated resume path.
-                if (storyboardKickoffPromisesRef.current?.has(stableMarker)) return;
+                // An alias marker (EP01_SC02 vs SC02) shares one flight promise.
+                if (storyboardKickoffCollectionMatchesScene(
+                    storyboardKickoffPromisesRef.current,
+                    stableMarker,
+                    storyboardProgressIdentityKey(stableMarker, item),
+                )) return;
                 if (['starting', 'generating', 'importing'].includes(status)) return;
                 storyboardKickoffByMarkerRef.current.delete(stableMarker);
                 storyboardKickoffByIdentityRef.current.delete(storyboardProgressIdentityKey(stableMarker));
@@ -12218,7 +12372,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (['starting', 'generating', 'importing'].includes(priorStatus)) return;
             if (priorStatus === 'completed') return;
             if ((priorStatus === 'waiting_env' || priorStatus === 'waiting_import') && !resumeWaiting) return;
-            if (storyboardKickoffPromisesRef.current?.has(marker) && !resumeWaiting) return;
+            if (storyboardKickoffCollectionMatchesScene(
+                storyboardKickoffPromisesRef.current,
+                marker,
+                enqueueIdentity,
+            )) return;
             seenMarkers.add(marker);
             seenIdentities.add(enqueueIdentity);
             // Resolve db id only by exact marker match; never invent #dbId kickoffs.
@@ -12829,6 +12987,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 episodePrefix
             ) || raw;
             if (!marker) continue;
+            if (!isStoryboardMarkerInRunAllowlist(
+                marker,
+                orchestrationCanonicalSceneIdsRef.current,
+                orchestrationLiveImportedScenesRef.current,
+                episodePrefix,
+            )) continue;
             await registerSceneImportedAndKickoffStoryboard({
                 sceneId: marker,
                 sceneOrder: deriveSceneOrderFromSceneId(raw) || row?.scene_number,
@@ -15877,6 +16041,58 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.ai_stage_outputs,
         activeEpisode?.id,
         adaptationText,
+        onLog,
+        onUpdateEpisodeInfo,
+        parseStageOutputsObject,
+        t,
+    ]);
+
+    const persistEnvironmentPlanSource = useCallback(async (nextEnvironmentPlanText) => {
+        const next = String(nextEnvironmentPlanText || '').trim();
+        if (!next) {
+            throw new Error(t('环境规划内容不能为空。', 'Environment plan content cannot be empty.'));
+        }
+        abortIfPromptInjectionRisk(next);
+        if (!activeEpisode?.id || !onUpdateEpisodeInfo) return next;
+
+        const stageOutputs = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
+        const stages = (
+            stageOutputs.stages
+            && typeof stageOutputs.stages === 'object'
+            && !Array.isArray(stageOutputs.stages)
+        ) ? stageOutputs.stages : {};
+        const stage1 = (
+            stages.stage1
+            && typeof stages.stage1 === 'object'
+            && !Array.isArray(stages.stage1)
+        ) ? stages.stage1 : { key: 'stage1', outputs: {} };
+        const outputs = (
+            stage1.outputs
+            && typeof stage1.outputs === 'object'
+            && !Array.isArray(stage1.outputs)
+        ) ? stage1.outputs : {};
+        outputs.environment_plan = {
+            ...(outputs.environment_plan && typeof outputs.environment_plan === 'object' ? outputs.environment_plan : {}),
+            key: 'environment_plan',
+            kind: 'markdown',
+            content: next,
+        };
+        stage1.outputs = outputs;
+        stages.stage1 = stage1;
+        stageOutputs.stages = stages;
+        latestStage1NodeOutputsRef.current = {
+            ...latestStage1NodeOutputsRef.current,
+            environment_plan: next,
+        };
+        await onUpdateEpisodeInfo(activeEpisode.id, {
+            ai_stage_outputs: JSON.stringify(stageOutputs, null, 2),
+        });
+        onLog?.(t('已保存环境规划。', 'Saved environment plan.'), 'success');
+        return next;
+    }, [
+        abortIfPromptInjectionRisk,
+        activeEpisode?.ai_stage_outputs,
+        activeEpisode?.id,
         onLog,
         onUpdateEpisodeInfo,
         parseStageOutputsObject,
@@ -28354,6 +28570,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         episodePrefix
                     ) || raw;
                     if (!marker) continue;
+                    if (!isStoryboardMarkerInRunAllowlist(
+                        marker,
+                        orchestrationCanonicalSceneIdsRef.current,
+                        orchestrationLiveImportedScenesRef.current,
+                        episodePrefix,
+                    )) continue;
                     await registerSceneImportedAndKickoffStoryboard({
                         sceneId: marker,
                         sceneOrder: deriveSceneOrderFromSceneId(raw) || row?.scene_number,
@@ -31821,7 +32043,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!source) return [];
         const entries = [];
         const seen = new Set();
-        const pushEntry = ({ name, type, category, targetEntityTypes, sourceLine, sourceBlock, subjectNo, fields, fieldOrder }) => {
+        const pushEntry = ({ name, type, category, targetEntityTypes, sourceLine, sourceBlock, subjectNo, fields, fieldOrder, planSlices }) => {
             const displayName = String(name || '').trim();
             if (!displayName || isDummySubject(displayName)) return;
             const key = `${category}:${normalizeSubjectKey(displayName) || displayName}`;
@@ -31844,6 +32066,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 sourceLine: String(sourceLine || displayName).trim(),
                 sourceKind: 'extract',
                 sourceBlock: String(sourceBlock || sourceLine || '').trim(),
+                planSlices: Array.isArray(planSlices) ? planSlices : [],
             });
         };
 
@@ -31876,14 +32099,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
         });
         collectMainEnvironmentNames(source).forEach((name, idx) => {
+            const plan = sliceEnvironmentEditorText(source, name);
+            const planText = String(plan?.text || '').trim();
             pushEntry({
                 name,
                 type: 'environment',
                 category: 'environments',
                 targetEntityTypes: ['environments', 'posters', 'covers'],
-                sourceLine: `[ENV] 名称=${name}`,
-                sourceBlock: name,
+                sourceLine: planText.split('\n').find((line) => String(line || '').includes(name)) || `[ENV] 名称=${name}`,
+                sourceBlock: planText,
+                planSlices: plan?.slices || [],
                 subjectNo: `E${idx + 1}`,
+                fields: { 名称: name, 环境规划: planText },
+                fieldOrder: ['名称', '环境规划'],
             });
         });
         if (
@@ -32992,6 +33220,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const parsed = parseTaggedExtractItemFields(sourceSnippet, tag);
                 fields = { ...parsed.fields, ...fields };
                 fieldOrder = getExtractEditableFieldKeys(tag, fields, parsed.fieldOrder.length ? parsed.fieldOrder : fieldOrder);
+            } else if (!tag) {
+                const planText = String(fields.环境规划 || sourceSnippet || '').trim();
+                fields = { ...fields, 名称: String(fields.名称 || entry.name || '').trim(), 环境规划: planText };
+                fieldOrder = ['名称', '环境规划'];
             }
         } else if (sourceSnippet) {
             const reparsedEntries = parseSubjectIndexEntriesForAssetRerun(sourceSnippet);
@@ -33053,7 +33285,52 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return;
             }
             if (!tag) {
-                alert(t('实体类型无效，请选择可识别类型。', 'Invalid entity type. Please choose a supported type.'));
+                const nextPlan = String(fields.环境规划 || '').trim();
+                const oldPlan = String(originalEntry?.sourceBlock || displayEntry?.sourceBlock || '').trim();
+                if (String(originalEntry?.type || displayEntry?.type || '').trim().toLowerCase() === 'cover_poster') {
+                    setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }));
+                    return;
+                }
+                if (!nextPlan) {
+                    alert(t('环境规划内容不能为空。', 'Environment plan text cannot be empty.'));
+                    return;
+                }
+                setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }));
+                setIsSavingPhase2RerunSubjectIndex(true);
+                try {
+                    const envBase = String(
+                        latestStage1NodeOutputsRef.current?.environment_plan
+                        || getStageOutputContent('stage1', 'environment_plan')
+                        || ''
+                    ).trim();
+                    const patched = applyEnvironmentPlanEntryPatches(
+                        envBase,
+                        [{
+                            ...displayEntry,
+                            sourceKind: 'extract',
+                            type: originalEntry?.type || displayEntry?.type,
+                            fields: { ...fields, 环境规划: nextPlan },
+                        }],
+                        [originalEntry || displayEntry],
+                    );
+                    if (!patched || patched === envBase) {
+                        throw new Error(oldPlan
+                            ? t('没有找到可替换的环境规划段落。', 'Could not find the environment-plan section to replace.')
+                            : t('该环境没有可编辑的规划正文。', 'This environment has no editable plan text.'));
+                    }
+                    await persistEnvironmentPlanSource(patched);
+                    setPhase2RerunModal((prev) => {
+                        const nextEdits = { ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}) };
+                        delete nextEdits[entryKey];
+                        return { ...prev, subjectEdits: nextEdits, editingSubjectKey: '' };
+                    });
+                } catch (error) {
+                    console.error('Failed to persist environment plan edit from asset rerun modal:', error);
+                    onLog?.(t(`保存环境规划失败：${error?.message || error}`, `Failed to save environment plan: ${error?.message || error}`), 'error');
+                    alert(t('保存失败，请重试。', 'Save failed. Please try again.'));
+                } finally {
+                    setIsSavingPhase2RerunSubjectIndex(false);
+                }
                 return;
             }
             setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }));
@@ -33117,6 +33394,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         mapSubjectIndexTypeToRerunTarget,
         onLog,
         persistPhase2RerunSubjectIndexChanges,
+        persistEnvironmentPlanSource,
         persistSceneSplitExtractSource,
         phase2RerunDisplayEntries,
         phase2RerunModal?.subjectEdits,
@@ -33314,11 +33592,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const editingKey = String(phase2RerunModal.editingSubjectKey || '').trim();
         if (!editingKey) return;
         const frameId = window.requestAnimationFrame(() => {
+            const editorNode = document.querySelector('[data-phase2-rerun-editor]');
             const entryNode = Array.from(document.querySelectorAll('[data-phase2-rerun-entry-key]'))
                 .find((node) => String(node.getAttribute('data-phase2-rerun-entry-key') || '') === editingKey);
-            if (!entryNode || typeof entryNode.scrollIntoView !== 'function') return;
-            entryNode.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            const focusTarget = entryNode.querySelector('textarea, input');
+            const scrollTarget = editorNode || entryNode;
+            if (scrollTarget && typeof scrollTarget.scrollIntoView === 'function') {
+                scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+            const focusTarget = editorNode?.querySelector('textarea, input');
             if (focusTarget && typeof focusTarget.focus === 'function') {
                 focusTarget.focus({ preventScroll: true });
             }
@@ -33371,7 +33652,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 console.warn('Failed to persist extract edits before asset rerun:', error);
                 onLog?.(t(`保存提取描述失败：${error?.message || error}`, `Failed to save extract descriptions: ${error?.message || error}`), 'warning');
             }
+            const envBase = String(
+                latestStage1NodeOutputsRef.current?.environment_plan
+                || getStageOutputContent('stage1', 'environment_plan')
+                || ''
+            ).trim();
+            const patchedEnv = applyEnvironmentPlanEntryPatches(
+                envBase,
+                phase2RerunDisplayEntries,
+                phase2RerunSubjectEntries,
+            );
+            const normalizedEnvBase = envBase.replace(/\r\n/g, '\n');
             extractSourceText = patchedMerged;
+            if (patchedEnv && patchedEnv !== normalizedEnvBase) {
+                try {
+                    await persistEnvironmentPlanSource(patchedEnv);
+                } catch (error) {
+                    console.warn('Failed to persist environment plan edits before asset rerun:', error);
+                    onLog?.(t(`保存环境规划失败：${error?.message || error}`, `Failed to save environment plan: ${error?.message || error}`), 'warning');
+                }
+                const normalizedExtract = String(extractSourceText || '').replace(/\r\n/g, '\n');
+                extractSourceText = normalizedEnvBase && normalizedExtract.includes(normalizedEnvBase)
+                    ? normalizedExtract.replace(normalizedEnvBase, patchedEnv)
+                    : normalizedExtract;
+            }
         }
 
         let retryOptions = {
@@ -33436,6 +33740,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         getStageOutputContent,
         handleRetryPhase2,
         onLog,
+        persistEnvironmentPlanSource,
         persistSceneSplitExtractSource,
         persistSubjectIndexEdit,
         phase2RerunSubjectEntries,
@@ -37185,17 +37490,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             const isEditing = phase2RerunModal.editingSubjectKey === item.key;
                                             const active = isEditing
                                                 || (isSingleMode && phase2RerunModal.subjectKey === item.key);
-                                            const draft = phase2RerunModal.subjectEdits?.[item.key] || {};
                                             const isExtractEntry = item.sourceKind === 'extract';
-                                            const extractTag = isExtractEntry ? extractTagForRerunEntry(item) : '';
-                                            const draftFields = (draft.fields && typeof draft.fields === 'object')
-                                                ? draft.fields
-                                                : (isExtractEntry
-                                                    ? (item.fields || {})
-                                                    : normalizeSubjectIndexEntryFields(item.fields, item));
-                                            const editableFieldKeys = isExtractEntry
-                                                ? getExtractEditableFieldKeys(extractTag, draftFields, draft.fieldOrder || item.fieldOrder)
-                                                : SUBJECT_INDEX_STANDARD_HEADERS;
                                             return (
                                                 <div
                                                     key={item.key}
@@ -37242,77 +37537,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     </div>
                                                     <div className="mt-1 text-[11px] text-white/45 truncate">
                                                         {isExtractEntry
-                                                            ? (String(item.fields?.外形 || item.fields?.定位 || item.sourceLine || '').trim() || item.sourceLine)
+                                                            ? (String(item.fields?.外形 || item.fields?.定位 || item.fields?.环境规划 || item.sourceLine || '').trim() || item.sourceLine)
                                                             : item.sourceLine}
                                                     </div>
-                                                    {isEditing && (
-                                                        <div className="mt-2 rounded-md border border-white/10 bg-black/20 p-2 space-y-2">
-                                                            <div className="text-[11px] text-white/55">
-                                                                {isExtractEntry
-                                                                    ? t('可编辑全局统筹提取描述（外形、衣着、定位等）。保存后写入提取块，再确认重跑即可按新描述生成资产。', 'Edit scene-split extract fields (appearance, costume, positioning). Saving writes the extract; confirm rerun to generate assets from the new description.')
-                                                                    : t('可编辑 Subject Index 标准字段（编号、类型、中英文名、基准实体、依赖引用、实体属性、剧本覆盖）。', 'Edit standard Subject Index fields: no, type, names, base entity, dependency, attributes, coverage.')}
-                                                            </div>
-                                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                                                {editableFieldKeys.map((fieldKey) => {
-                                                                    const stableKey = String(fieldKey || '').trim();
-                                                                    if (!stableKey) return null;
-                                                                    const rawValue = String(draftFields[stableKey] ?? '');
-                                                                    const fieldLabel = isExtractEntry
-                                                                        ? EXTRACT_FIELD_LABELS[stableKey]
-                                                                        : SUBJECT_INDEX_FIELD_LABELS[stableKey];
-                                                                    const labelText = fieldLabel ? t(fieldLabel.zh, fieldLabel.en) : stableKey;
-                                                                    const isLongText = rawValue.length > 80
-                                                                        || (isExtractEntry
-                                                                            ? EXTRACT_LONG_TEXT_FIELDS.has(stableKey)
-                                                                            : SUBJECT_INDEX_LONG_TEXT_FIELDS.has(stableKey))
-                                                                        || /attributes|coverage|dependency/i.test(stableKey);
-                                                                    const spanClass = (stableKey === 'entity_attributes' || stableKey === 'script_entity_coverage' || EXTRACT_LONG_TEXT_FIELDS.has(stableKey))
-                                                                        ? 'sm:col-span-2'
-                                                                        : '';
-                                                                    return (
-                                                                        <label key={`${item.key}-${stableKey}`} className={`flex flex-col gap-1 ${spanClass}`}>
-                                                                            <span className="text-[11px] text-white/60">{labelText}</span>
-                                                                            {isLongText ? (
-                                                                                <textarea
-                                                                                    value={rawValue}
-                                                                                    onChange={(event) => updatePhase2RerunEntryEditField(item.key, stableKey, event.target.value)}
-                                                                                    rows={stableKey === 'entity_attributes' ? 5 : 3}
-                                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50 resize-y"
-                                                                                />
-                                                                            ) : (
-                                                                                <input
-                                                                                    value={rawValue}
-                                                                                    onChange={(event) => updatePhase2RerunEntryEditField(item.key, stableKey, event.target.value)}
-                                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50"
-                                                                                />
-                                                                            )}
-                                                                        </label>
-                                                                    );
-                                                                })}
-                                                            </div>
-                                                            <div className="flex items-center justify-end gap-2">
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => setPhase2RerunModal((prev) => {
-                                                                        const nextEdits = { ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}) };
-                                                                        delete nextEdits[item.key];
-                                                                        return { ...prev, editingSubjectKey: '', subjectEdits: nextEdits };
-                                                                    })}
-                                                                    className="px-2.5 py-1 text-[11px] rounded border border-white/15 bg-white/5 hover:bg-white/10 text-white/80"
-                                                                >
-                                                                    {t('取消', 'Cancel')}
-                                                                </button>
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => savePhase2RerunEntryEdit(item.key)}
-                                                                    disabled={isSavingPhase2RerunSubjectIndex}
-                                                                    className={`px-2.5 py-1 text-[11px] rounded border font-semibold ${isSavingPhase2RerunSubjectIndex ? 'border-emerald-400/15 bg-emerald-500/10 text-emerald-100/50 cursor-not-allowed' : 'border-emerald-400/30 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100'}`}
-                                                                >
-                                                                    {isSavingPhase2RerunSubjectIndex ? t('保存中...', 'Saving...') : t('保存', 'Save')}
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    )}
                                                 </div>
                                             );
                                         }) : (
@@ -37321,6 +37548,107 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             </div>
                                         )}
                                     </div>
+                                    {(() => {
+                                        const editingKey = String(phase2RerunModal.editingSubjectKey || '').trim();
+                                        if (!editingKey) return null;
+                                        const item = (phase2RerunDisplayEntries || []).find((entry) => entry.key === editingKey);
+                                        if (!item) return null;
+                                        const draft = phase2RerunModal.subjectEdits?.[item.key] || {};
+                                        const isExtractEntry = item.sourceKind === 'extract';
+                                        const extractTag = isExtractEntry ? extractTagForRerunEntry(item) : '';
+                                        const isEnvironmentEntry = isExtractEntry && !extractTag && String(item.type || '').toLowerCase() !== 'cover_poster';
+                                        const isCoverEntry = isExtractEntry && String(item.type || '').toLowerCase() === 'cover_poster';
+                                        const draftFields = (draft.fields && typeof draft.fields === 'object')
+                                            ? draft.fields
+                                            : (isExtractEntry
+                                                ? (item.fields || {})
+                                                : normalizeSubjectIndexEntryFields(item.fields, item));
+                                        const editableFieldKeys = isCoverEntry
+                                            ? ['名称']
+                                            : (isEnvironmentEntry
+                                                ? ['名称', '环境规划']
+                                                : (isExtractEntry
+                                                    ? getExtractEditableFieldKeys(extractTag, draftFields, draft.fieldOrder || item.fieldOrder)
+                                                    : SUBJECT_INDEX_STANDARD_HEADERS));
+                                        return (
+                                            <div data-phase2-rerun-editor="1" className="rounded-md border border-white/10 bg-black/20 p-3 space-y-2">
+                                                <div className="text-sm font-semibold text-white/90">
+                                                    {t('编辑', 'Edit')} · {item.name}
+                                                </div>
+                                                <div className="text-[11px] text-white/55">
+                                                    {isEnvironmentEntry
+                                                        ? t('可编辑该主环境的识别信息与【主环境】骨架。保存后写入环境规划，再确认重跑即可按新描述生成环境资产。', 'Edit this main environment’s ident and skeleton. Saving writes the environment plan; confirm rerun to regenerate the asset.')
+                                                        : (isCoverEntry
+                                                            ? t('封面海报由程序简报生成。这里只核对名称。', 'The cover poster is generated from the programmatic brief. Only the name is edited here.')
+                                                            : (isExtractEntry
+                                                                ? t('可编辑全局统筹提取描述（外形、衣着、定位等）。保存后写入提取块，再确认重跑即可按新描述生成资产。', 'Edit scene-split extract fields (appearance, costume, positioning). Saving writes the extract; confirm rerun to generate assets from the new description.')
+                                                                : t('可编辑 Subject Index 标准字段（编号、类型、中英文名、基准实体、依赖引用、实体属性、剧本覆盖）。', 'Edit standard Subject Index fields: no, type, names, base entity, dependency, attributes, coverage.')))}
+                                                </div>
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                    {editableFieldKeys.map((fieldKey) => {
+                                                        const stableKey = String(fieldKey || '').trim();
+                                                        if (!stableKey) return null;
+                                                        const rawValue = String(draftFields[stableKey] ?? item.fields?.[stableKey] ?? '');
+                                                        const fieldLabel = (isExtractEntry || isEnvironmentEntry)
+                                                            ? EXTRACT_FIELD_LABELS[stableKey]
+                                                            : SUBJECT_INDEX_FIELD_LABELS[stableKey];
+                                                        const labelText = fieldLabel ? t(fieldLabel.zh, fieldLabel.en) : stableKey;
+                                                        const isLongText = stableKey === '环境规划'
+                                                            || rawValue.length > 80
+                                                            || (isExtractEntry
+                                                                ? EXTRACT_LONG_TEXT_FIELDS.has(stableKey)
+                                                                : SUBJECT_INDEX_LONG_TEXT_FIELDS.has(stableKey))
+                                                            || /attributes|coverage|dependency/i.test(stableKey);
+                                                        const spanClass = (stableKey === 'entity_attributes' || stableKey === 'script_entity_coverage' || stableKey === '环境规划' || EXTRACT_LONG_TEXT_FIELDS.has(stableKey))
+                                                            ? 'sm:col-span-2'
+                                                            : '';
+                                                        return (
+                                                            <label key={`${item.key}-${stableKey}`} className={`flex flex-col gap-1 ${spanClass}`}>
+                                                                <span className="text-[11px] text-white/60">{labelText}</span>
+                                                                {isLongText ? (
+                                                                    <textarea
+                                                                        value={rawValue}
+                                                                        onChange={(event) => updatePhase2RerunEntryEditField(item.key, stableKey, event.target.value)}
+                                                                        rows={stableKey === '环境规划' ? 12 : (stableKey === 'entity_attributes' ? 5 : 3)}
+                                                                        className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50 resize-y"
+                                                                    />
+                                                                ) : (
+                                                                    <input
+                                                                        value={rawValue}
+                                                                        onChange={(event) => updatePhase2RerunEntryEditField(item.key, stableKey, event.target.value)}
+                                                                        className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50"
+                                                                    />
+                                                                )}
+                                                            </label>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setPhase2RerunModal((prev) => {
+                                                            const nextEdits = { ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}) };
+                                                            delete nextEdits[item.key];
+                                                            return { ...prev, editingSubjectKey: '', subjectEdits: nextEdits };
+                                                        })}
+                                                        className="px-2.5 py-1 text-[11px] rounded border border-white/15 bg-white/5 hover:bg-white/10 text-white/80"
+                                                    >
+                                                        {t('取消', 'Cancel')}
+                                                    </button>
+                                                    {!isCoverEntry ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => savePhase2RerunEntryEdit(item.key)}
+                                                            disabled={isSavingPhase2RerunSubjectIndex}
+                                                            className={`px-2.5 py-1 text-[11px] rounded border font-semibold ${isSavingPhase2RerunSubjectIndex ? 'border-emerald-400/15 bg-emerald-500/10 text-emerald-100/50 cursor-not-allowed' : 'border-emerald-400/30 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100'}`}
+                                                        >
+                                                            {isSavingPhase2RerunSubjectIndex ? t('保存中...', 'Saving...') : t('保存', 'Save')}
+                                                        </button>
+                                                    ) : null}
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             )}
                         </div>

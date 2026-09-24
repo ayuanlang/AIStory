@@ -815,20 +815,13 @@ def _resolve_shot_video_panel_image_refs(
     video_manual = bool(notes.get("video_ref_image_urls_manual") or notes.get("video_ref_image_urls_user_edited"))
 
     if video_manual and isinstance(notes.get("video_ref_image_urls"), list):
+        # Manual list is the only source of truth. Re-attaching prompt entity
+        # images on reload duplicates the same entity when the stored URL differs.
         refs = [
             str(x).strip()
             for x in (notes.get("video_ref_image_urls") or [])
             if str(x).strip() and str(x).strip() not in deleted
         ]
-        # Keep newly matched video-prompt entities unless explicitly deleted (frontend parity).
-        prompt_candidates = [
-            str(getattr(shot, "video_content", None) or "").strip(),
-            str(notes.get("video_prompt_cn") or "").strip(),
-            str(getattr(shot, "prompt", None) or "").strip(),
-        ]
-        for url in _collect_video_prompt_entity_refs(prompt_candidates, entity_lookup):
-            if url and url not in deleted and url not in refs:
-                refs.append(url)
         return _filter_image_media_ref_urls(refs)
 
     video_mode = _resolve_shot_video_mode(notes)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import traceback
 import asyncio
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
@@ -51,6 +52,24 @@ from app.services.user_model_preferences import _inject_user_advanced_llm_prefer
 
 logger = logging.getLogger("api_logger")
 
+# One in-flight generate per Scene.id. The editor poller can POST the same scene
+# again (and the other scene in the episode) before the first call returns.
+_SCENE_SHOT_GEN_GUARD = threading.Lock()
+_SCENE_SHOT_GEN_IN_FLIGHT: set[int] = set()
+
+
+def _acquire_scene_shot_generation(scene_id: int) -> bool:
+    with _SCENE_SHOT_GEN_GUARD:
+        if scene_id in _SCENE_SHOT_GEN_IN_FLIGHT:
+            return False
+        _SCENE_SHOT_GEN_IN_FLIGHT.add(scene_id)
+        return True
+
+
+def _release_scene_shot_generation(scene_id: int) -> None:
+    with _SCENE_SHOT_GEN_GUARD:
+        _SCENE_SHOT_GEN_IN_FLIGHT.discard(scene_id)
+
 
 async def _emit_shot_event(on_event: Optional[Callable[[Dict[str, Any]], Any]], event: Dict[str, Any]) -> None:
     if not on_event:
@@ -72,6 +91,7 @@ async def execute_ai_generate_shots(
     on_event: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ) -> Any:
     current_user_id = int(getattr(current_user, "id", 0) or 0)
+    acquired_shot_flight = False
     try:
         req_has_custom_user_prompt = bool(req and (req.user_prompt or "").strip())
         req_has_custom_system_prompt = bool(req and (req.system_prompt or "").strip())
@@ -85,6 +105,14 @@ async def execute_ai_generate_shots(
         if not scene:
             logger.warning(f"[ai_generate_shots] scene_not_found scene_id={scene_id} user_id={current_user_id}")
             raise HTTPException(status_code=404, detail="Scene not found")
+        if not _acquire_scene_shot_generation(int(scene_id)):
+            logger.warning(
+                "[ai_generate_shots] already_running scene_id=%s user_id=%s",
+                scene_id,
+                current_user_id,
+            )
+            raise HTTPException(status_code=409, detail="storyboard_generation_already_running")
+        acquired_shot_flight = True
             
         episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
         if not episode:
@@ -457,6 +485,9 @@ async def execute_ai_generate_shots(
             billing_service.log_failed_transaction(db, current_user_id, "llm_chat", p_log, m_log, str(e))
         except: pass
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if acquired_shot_flight:
+            _release_scene_shot_generation(int(scene_id))
 
 
 async def stream_execute_ai_generate_shots(

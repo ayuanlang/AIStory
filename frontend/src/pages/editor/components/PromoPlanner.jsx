@@ -212,14 +212,15 @@ const selectedAssetKeys = (assets = []) => {
 const rowMatchesSelectedAssets = (row, keys) => {
     const imageId = String(row?.image_id || '').trim();
     const url = String(row?.img_url || row?.file_url || '').trim();
-    const name = String(row?.object_name || row?.reference_name || row?.name_for_script || '').trim();
-    if (imageId && keys.ids.has(imageId)) return true;
-    if (url && keys.urls.has(url)) return true;
-    if (name && keys.names.has(name)) return true;
     const sourceIds = Array.isArray(row?.source_image_ids)
         ? row.source_image_ids.map((value) => String(value || '').trim()).filter(Boolean)
         : [];
-    return sourceIds.some((sourceId) => keys.ids.has(sourceId));
+    if (imageId && keys.ids.has(imageId)) return true;
+    if (url && keys.urls.has(url)) return true;
+    if (sourceIds.some((sourceId) => keys.ids.has(sourceId))) return true;
+    if (imageId || url || sourceIds.length) return false;
+    const name = String(row?.object_name || row?.reference_name || row?.name_for_script || '').trim();
+    return Boolean(name && keys.names.has(name));
 };
 
 const filterAnalysisToSelectedAssets = (analysis, assets) => {
@@ -243,14 +244,20 @@ const filterAnalysisToSelectedAssets = (analysis, assets) => {
 
 const materialRowKeys = (item) => {
     const keys = [];
-    ['image_id', 'object_name', 'reference_name', 'name_for_script', 'img_url', 'file_url'].forEach((field) => {
-        const value = String(item?.[field] || '').trim();
-        if (value && !keys.includes(value)) keys.push(value);
-    });
-    (Array.isArray(item?.source_image_ids) ? item.source_image_ids : []).forEach((value) => {
+    const push = (value) => {
         const text = String(value || '').trim();
         if (text && !keys.includes(text)) keys.push(text);
-    });
+    };
+    push(item?.image_id);
+    push(item?.img_url);
+    push(item?.file_url);
+    (Array.isArray(item?.source_image_ids) ? item.source_image_ids : []).forEach(push);
+    const hasFile = Boolean(String(item?.image_id || '').trim() || String(item?.img_url || item?.file_url || '').trim());
+    if (!hasFile) {
+        push(item?.object_name);
+        push(item?.reference_name);
+        push(item?.name_for_script);
+    }
     return keys;
 };
 
@@ -342,8 +349,42 @@ const formatOneMaterialLine = (item) => {
     return bits.join('；');
 };
 
+const analysisForSelectedAssets = (analysis, assets = []) => {
+    const data = analysis && typeof analysis === 'object' ? { ...analysis } : {};
+    const imageList = Array.isArray(data.image_list) ? [...data.image_list] : [];
+    const subjects = Array.isArray(data.rebuild_subjects) ? [...data.rebuild_subjects] : [];
+    (Array.isArray(assets) ? assets : []).forEach((asset) => {
+        const extra = asset?.image_asset_analysis;
+        if (!extra || typeof extra !== 'object') return;
+        if (Array.isArray(extra.image_list)) imageList.push(...extra.image_list);
+        if (Array.isArray(extra.rebuild_subjects)) subjects.push(...extra.rebuild_subjects);
+    });
+    return filterAnalysisToSelectedAssets({ ...data, image_list: imageList, rebuild_subjects: subjects }, assets);
+};
+
+const unionAssetAnalysis = (current, incoming) => {
+    const base = current && typeof current === 'object' ? current : {};
+    const extra = incoming && typeof incoming === 'object' ? incoming : {};
+    const mergeRows = (left, right) => uniqueMaterialRows(
+        { image_list: Array.isArray(right) ? right : [], rebuild_subjects: [] },
+        Array.isArray(left) ? left : [],
+    );
+    const imageList = mergeRows(base.image_list, extra.image_list);
+    const subjects = mergeRows(base.rebuild_subjects, extra.rebuild_subjects);
+    const incomingSummary = String(extra.global_visual_summary || '').trim();
+    return {
+        ...base,
+        ...extra,
+        image_list: imageList,
+        rebuild_subjects: subjects,
+        global_visual_summary: incomingSummary && incomingSummary !== String(base.global_visual_summary || '').trim()
+            ? ''
+            : (base.global_visual_summary || extra.global_visual_summary || ''),
+    };
+};
+
 const formatExistingMaterialFromAnalysis = (analysis, assets = []) => {
-    const data = filterAnalysisToSelectedAssets(analysis, Array.isArray(assets) ? assets : []);
+    const data = analysisForSelectedAssets(analysis, Array.isArray(assets) ? assets : []);
     const lines = [];
     const summary = String(data.global_visual_summary || '').trim();
     if (summary) lines.push(`综合视觉=${summary}`);
@@ -1108,9 +1149,9 @@ export default function PromoPlanner({
     const loadCatalog = useCallback(async (enterpriseId = selectedEnterpriseId, brandId = selectedBrandId) => {
         try {
             const [enterpriseRows, brandRows, productRows] = await Promise.all([
-                fetchPromoEnterprises().catch(() => []),
-                fetchPromoBrands(enterpriseId ? { enterprise_id: Number(enterpriseId) } : {}).catch(() => []),
-                fetchPromoProducts(brandId ? { brand_id: Number(brandId) } : (enterpriseId ? { enterprise_id: Number(enterpriseId) } : {})).catch(() => []),
+                fetchPromoEnterprises(),
+                fetchPromoBrands(enterpriseId ? { enterprise_id: Number(enterpriseId) } : {}),
+                fetchPromoProducts(brandId ? { brand_id: Number(brandId) } : (enterpriseId ? { enterprise_id: Number(enterpriseId) } : {})),
             ]);
             setEnterprises(Array.isArray(enterpriseRows) ? enterpriseRows : []);
             setBrands(Array.isArray(brandRows) ? brandRows : []);
@@ -1134,7 +1175,7 @@ export default function PromoPlanner({
             if (enterpriseId) requests.push(fetchPromoCatalogAssets({ owner_kind: 'enterprise', owner_entity_id: Number(enterpriseId) }));
             if (brandId) requests.push(fetchPromoCatalogAssets({ owner_kind: 'brand', owner_entity_id: Number(brandId) }));
             if (productId) requests.push(fetchPromoCatalogAssets({ owner_kind: 'offering', owner_entity_id: Number(productId) }));
-            const parts = await Promise.all(requests.map((item) => item.catch(() => [])));
+            const parts = await Promise.all(requests);
             const seen = new Set();
             const rows = [];
             parts.flat().forEach((item) => {
@@ -1146,7 +1187,6 @@ export default function PromoPlanner({
             setCatalogAssets(rows);
         } catch (err) {
             console.error('[PromoPlanner] subject assets load failed', err);
-            setCatalogAssets([]);
         }
     }, [selectedBrandId, selectedEnterpriseId, selectedProductId]);
 
@@ -1280,13 +1320,12 @@ export default function PromoPlanner({
 
     useEffect(() => {
         if (!hydratedRef.current) return;
-        const analysis = result?.image_asset_analysis;
         setCampaign((prev) => {
-            const filled = mergeExistingMaterialWithAnalysis(prev.existing_material, analysis, assets) || '';
+            const filled = mergeExistingMaterialWithAnalysis(prev.existing_material, result?.image_asset_analysis, readyAssets) || '';
             if (filled === (prev.existing_material || '')) return prev;
             return { ...prev, existing_material: filled };
         });
-    }, [result, assets]);
+    }, [result?.image_asset_analysis, readyAssets]);
 
     useEffect(() => {
         if (!projectId || !hydratedRef.current) return;
@@ -1577,7 +1616,7 @@ export default function PromoPlanner({
             skipResultSaveRef.current = true;
             setResult((prev) => {
                 const current = deepMerge(emptyPromoPlannerResult(), prev || {});
-                current.image_asset_analysis = deepMerge(current.image_asset_analysis || {}, catalogAnalysis);
+                current.image_asset_analysis = unionAssetAnalysis(current.image_asset_analysis, catalogAnalysis);
                 return current;
             });
             return;

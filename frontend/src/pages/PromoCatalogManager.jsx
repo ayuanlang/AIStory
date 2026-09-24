@@ -228,15 +228,19 @@ export default function PromoCatalogManager({ t, focus = null, onFocusConsumed, 
     );
 
     const loadEnterprises = useCallback(async () => {
-        const rows = await fetchPromoEnterprises().catch(() => []);
-        const list = Array.isArray(rows) ? rows : [];
-        setEnterprises(list);
-        setEnterpriseId((current) => {
-            if (current && list.some((item) => String(item.id) === String(current))) return current;
-            const withAssets = list.find((item) => Number(item.asset_count || 0) > 0 || (item.asset_previews || []).length);
-            const next = withAssets || list[0];
-            return next ? String(next.id) : '';
-        });
+        try {
+            const rows = await fetchPromoEnterprises();
+            const list = Array.isArray(rows) ? rows : [];
+            setEnterprises(list);
+            setEnterpriseId((current) => {
+                if (current && list.some((item) => String(item.id) === String(current))) return current;
+                const withAssets = list.find((item) => Number(item.asset_count || 0) > 0 || (item.asset_previews || []).length);
+                const next = withAssets || list[0];
+                return next ? String(next.id) : '';
+            });
+        } catch (error) {
+            console.error('[PromoCatalog] enterprises load failed', error);
+        }
     }, []);
 
     const loadBrands = useCallback(async (nextEnterpriseId) => {
@@ -244,8 +248,12 @@ export default function PromoCatalogManager({ t, focus = null, onFocusConsumed, 
             setBrands([]);
             return;
         }
-        const rows = await fetchPromoBrands({ enterprise_id: Number(nextEnterpriseId) }).catch(() => []);
-        setBrands(Array.isArray(rows) ? rows : []);
+        try {
+            const rows = await fetchPromoBrands({ enterprise_id: Number(nextEnterpriseId) });
+            setBrands(Array.isArray(rows) ? rows : []);
+        } catch (error) {
+            console.error('[PromoCatalog] brands load failed', error);
+        }
     }, []);
 
     const loadProducts = useCallback(async (nextBrandId) => {
@@ -253,8 +261,12 @@ export default function PromoCatalogManager({ t, focus = null, onFocusConsumed, 
             setProducts([]);
             return;
         }
-        const rows = await fetchPromoProducts({ brand_id: Number(nextBrandId) }).catch(() => []);
-        setProducts(Array.isArray(rows) ? rows : []);
+        try {
+            const rows = await fetchPromoProducts({ brand_id: Number(nextBrandId) });
+            setProducts(Array.isArray(rows) ? rows : []);
+        } catch (error) {
+            console.error('[PromoCatalog] products load failed', error);
+        }
     }, []);
 
     useEffect(() => {

@@ -1272,6 +1272,41 @@ def _guess_mime(path: str) -> str:
     return "image/jpeg"
 
 
+def _fetch_remote_image_data_url(url: str) -> str:
+    """Download an already-uploaded OSS image so vision models do not have to fetch a signed URL."""
+    import urllib.request
+
+    raw = _text(url)
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    request = urllib.request.Request(raw, headers={"User-Agent": "AIStory/promo-analysis"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        content_type = _text(response.headers.get("Content-Type")).split(";", 1)[0].lower()
+        payload = response.read((40 * 1024 * 1024) + 1)
+    if not payload or len(payload) > 40 * 1024 * 1024:
+        return ""
+    if not content_type.startswith("image/"):
+        if payload.startswith(b"\xff\xd8\xff"):
+            content_type = "image/jpeg"
+        elif payload.startswith(b"\x89PNG\r\n\x1a\n"):
+            content_type = "image/png"
+        elif payload.startswith(b"RIFF") and payload[8:12] == b"WEBP":
+            content_type = "image/webp"
+        else:
+            return ""
+    encoded = base64.b64encode(payload).decode("utf-8")
+    return f"data:{content_type};base64,{encoded}"
+
+
+async def _remote_image_as_data_url(url: str) -> str:
+    try:
+        return await asyncio.to_thread(_fetch_remote_image_data_url, url)
+    except Exception as exc:
+        logger.warning("promo planner failed to download remote image %s: %s", url[:180], exc)
+        return ""
+
+
 async def resolve_image_url_for_llm(img_url: str, db: Session) -> str:
     raw = _refresh_managed_media_url(_text(img_url), db)
     if not raw:
@@ -1282,7 +1317,15 @@ async def resolve_image_url_for_llm(img_url: str, db: Session) -> str:
         if parsed.hostname in {"localhost", "127.0.0.1", "0.0.0.0"}:
             path_part = parsed.path.lstrip("/")
         else:
-            return raw
+            data_url = await _remote_image_as_data_url(raw)
+            if data_url:
+                return data_url
+            refreshed = _refresh_managed_media_url(raw, db)
+            if refreshed and refreshed != raw:
+                data_url = await _remote_image_as_data_url(refreshed)
+                if data_url:
+                    return data_url
+            return refreshed or raw
     else:
         path_part = raw.lstrip("/")
     if not path_part:
@@ -1432,9 +1475,6 @@ def _material_row_keys(item: Dict[str, Any]) -> List[str]:
     keys = []
     for value in (
         item.get("image_id"),
-        item.get("object_name"),
-        item.get("reference_name"),
-        item.get("name_for_script"),
         item.get("img_url"),
         item.get("file_url"),
     ):
@@ -1445,6 +1485,12 @@ def _material_row_keys(item: Dict[str, Any]) -> List[str]:
         text = _text(source_id)
         if text and text not in keys:
             keys.append(text)
+    has_file = bool(_text(item.get("image_id")) or _text(item.get("img_url")) or _text(item.get("file_url")))
+    if not has_file:
+        for value in (item.get("object_name"), item.get("reference_name"), item.get("name_for_script")):
+            text = _text(value)
+            if text and text not in keys:
+                keys.append(text)
     return keys
 
 
@@ -1542,8 +1588,23 @@ def _format_one_material_line(item: Dict[str, Any]) -> str:
     return "；".join(bits)
 
 
+def _with_asset_analyses(analysis: Any, assets: Any) -> Dict[str, Any]:
+    data = dict(_as_dict(analysis))
+    if not isinstance(assets, list):
+        return data
+    image_list = [dict(row) for row in (data.get("image_list") or []) if isinstance(row, dict)]
+    subjects = [dict(row) for row in (data.get("rebuild_subjects") or []) if isinstance(row, dict)]
+    for asset in assets:
+        extra = _as_dict(_as_dict(asset).get("image_asset_analysis"))
+        image_list.extend(dict(row) for row in (extra.get("image_list") or []) if isinstance(row, dict))
+        subjects.extend(dict(row) for row in (extra.get("rebuild_subjects") or []) if isinstance(row, dict))
+    data["image_list"] = image_list
+    data["rebuild_subjects"] = subjects
+    return data
+
+
 def format_existing_material_from_analysis(analysis: Any, assets: Any = None) -> str:
-    data = _as_dict(analysis)
+    data = _with_asset_analyses(analysis, assets)
     if isinstance(assets, list):
         original_keys = _analysis_identity_set(data)
         data = filter_analysis_to_selected_assets(data, assets)
@@ -2010,8 +2071,34 @@ def serialize_promo_product(row: PromoProduct, db: Optional[Session] = None) -> 
     return data
 
 
+def _row_field(row: Any, name: str) -> Any:
+    if isinstance(row, dict):
+        return row.get(name)
+    return getattr(row, name, None)
+
+
 def catalog_asset_as_planner_asset(row: Any) -> Dict[str, Any]:
+    # ORM rows are not pydantic models. dump_model drops them to {}, which
+    # made analyze treat a just-uploaded file as having no URL.
     data = dump_model(row)
+    if not data and row is not None and not isinstance(row, dict):
+        data = {
+            "id": _row_field(row, "id"),
+            "image_id": _row_field(row, "image_id"),
+            "file_url": _row_field(row, "file_url"),
+            "img_url": _row_field(row, "img_url"),
+            "asset_type": _row_field(row, "asset_type"),
+            "image_type": _row_field(row, "image_type"),
+            "media_kind": _row_field(row, "media_kind"),
+            "object_name": _row_field(row, "object_name"),
+            "user_remark": _row_field(row, "user_remark"),
+            "owner_kind": _row_field(row, "owner_kind"),
+            "owner_entity_id": _row_field(row, "owner_entity_id"),
+            "extra_info": _row_field(row, "extra_info"),
+            "analysis_status": _row_field(row, "analysis_status"),
+            "analysis_error": _row_field(row, "analysis_error"),
+            "image_asset_analysis": _row_field(row, "image_asset_analysis"),
+        }
     url = _text(data.get("file_url") or data.get("img_url"))
     extra = _as_dict(data.get("extra_info"))
     analysis = _as_dict(extra.get("image_asset_analysis") or data.get("image_asset_analysis"))
@@ -3241,7 +3328,7 @@ def _build_scheme_user_prompt(
         "共鸣可适当融合救猫咪式节拍：看见一次小而可亲的主动作（扶/让/递/停下来帮），加强代入；不是第五段、不另起长剧、不拆场。15s以内只落一个微动作；更长可加主题点题或一瞬犹豫。禁止真救猫当主线（宠物题材除外）。empathy.technique_assoc 可用 内容核=救猫咪。\n"
         "对标片的情节、配色、拍摄与剪辑技巧均可借鉴并转译到本企业；do_not_copy 只写对方商标/Logo/吉祥物/注册口号等易混淆标识，禁止把桥段、配色、镜头技法列为禁项。\n"
         "企业/品牌/产品事实不编造；未提供的奖项/数据/证言留空并写入 supplement_suggestions。\n"
-        "无上传素材时必须新构思可拍剧情，stage_plan.content/sensory / script_preview / material_list / comprehensive_assets 不得空；禁止输出 shots。画面标后续补充或由 AI 生成。有已有素材资源描述时只消费该段每一条，外形/材质/空间/说明不得漏条、改名、压成一句空形容。禁止把未写进已有素材资源描述的主体库素材当已有素材。已有素材绝不当场面约束；效果第一，发挥AI视频优势，无传统预算与拍摄风险限制，须充分联想宏观大场面与精密拍摄。\n"
+        "无上传素材时必须新构思可拍剧情，stage_plan.content/sensory / script_preview / material_list / comprehensive_assets 不得空；禁止输出 shots。画面标后续补充或由 AI 生成。有已有素材资源描述时只消费该段每一条，外形/材质/空间/说明不得漏条、改名、压成一句空形容。禁止把未写进已有素材资源描述的主体库素材当已有素材。已有素材绝不当场面约束；效果第一，发挥AI视频优势，无传统预算与拍摄风险限制，须充分联想宏观大场面与精密拍摄。自然环境允许虚构。实际建筑只依据已提供素材与介绍已写信息，不创造没提到的楼层、房间、立面或陈设，保持真实性。\n"
         f"{material_block}\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )
@@ -3659,6 +3746,8 @@ async def analyze_and_persist_catalog_asset(
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
+    # release_db closes the session during the LLM call and detaches this row.
+    asset_row_id = int(asset.get("catalog_asset_id") or row.id)
     piece, warnings = await analyze_one_promo_asset(
         db,
         current_user=user_snap,
@@ -3668,7 +3757,7 @@ async def analyze_and_persist_catalog_asset(
     )
     row = (
         db.query(PromoCatalogAsset)
-        .filter(PromoCatalogAsset.id == int(row.id), PromoCatalogAsset.is_deleted.is_(False))
+        .filter(PromoCatalogAsset.id == asset_row_id, PromoCatalogAsset.is_deleted.is_(False))
         .first()
     )
     if not row:
@@ -4331,7 +4420,7 @@ def _build_script_user_prompt(
         "在策划内容完整落地的前提下，必须认真分析 benchmark_films 全部条目（title/why_picked/techniques/content_borrow）以及 borrowed_films_note / borrowed_films_scene_refs，写出 ## 对标综合：每部片如何转成<本案例>现场、服务哪些 Beat；四段各拍须综合多部对标实现，禁止只点一部、禁止漏片、禁止只抄片名。对标服务于核销，不得另起故事或冲掉策划信息。\n"
         "上游 goal_type=企业品牌宣传（情绪种草）时，前三段禁止口播式介绍企业/品牌/产品；花字可以点产品名、Logo、slogan。口播自我介绍放到收口。\n"
         "全剧恰好一场，四段都写进同一场节拍流，禁止按时长或空间拆成多场。\n"
-        "企业/产品事实不编造。无上传素材时仍须写出完整可拍人物、空间与动作，禁止因无 object_name 而省略画面。已有素材不作场面约束；效果第一，发挥AI视频优势，须落地宏观大场面与精密拍摄。\n"
+        "企业/产品事实不编造。无上传素材时仍须写出完整可拍人物、空间与动作，禁止因无 object_name 而省略画面。已有素材不作场面约束；效果第一，发挥AI视频优势，须落地宏观大场面与精密拍摄。自然环境允许虚构。实际建筑只依据已提供素材与介绍已写信息，不创造没提到的楼层、房间、立面或陈设，保持真实性。\n"
         "素材只消费文首「已有素材资源描述」：名称/类型/说明/外形不得漏条改名；说明写入对应角色/道具介绍。禁止另读主体全库、台账或解析原文。\n"
         "有已有素材资源描述时，写出「## 视觉还原（上传素材，供资产重生）」只准逐行抄该描述，禁止另补未写入的素材。\n"
         "基调与风格服从 project_visual_backfill。必须写出 ## 花字规范（抄 flower_text_spec，含字形/强调体/英配/中屏艺术化组合/产品名画右或画左竖排/禁底部避字幕/切镜融合/旁白优先/逐字锁/印章不压字/字卡专镜）。吸睛/共鸣/价值/收口各段最多一条花字。旁白优先：花字优先级低于旁白；本拍 口播: 非「无」→ 必须 花字: 无，禁止同一拍同步出花字以免转移注意力。花字只挂 口播: 无 的段首开镜、段末切镜、黑屏专镜或字卡专镜，并写 听=无。花字与切镜融合：优先挂在该段段首开镜或段末切镜，不与动作抢镜；也可单独一拍黑屏专镜或字卡专镜（该拍无旁白），仍在同一场。店号/品牌/热线必须 上屏=字卡专镜｜字卡=场景底+字层｜烧录=libass｜手写=禁，场景底只出画面，字层由后期 libass 按引号逐字烧录，禁止视频模型描这些字。其他拍写 花字: 无。一个动作最多一条花字。禁止位置=底/底部居中，以免与字幕重合；只写 位置=中|画右|画左。一般内容位置=中、字级=中、停留=短；收口位置=中、字级=大；CTA 停留=长。CTA 写 CTA= 不是第二条花字。最后一拍必须有一句有韵味的收口花字，禁止用 CTA 动词代替。中部花字须字少味厚、文化味强、内涵深，宜≤15字，必须写 艺术=手段A+手段B+…（并不限于印章、古体字、英文小字、颜色），禁止说明书或口播整句上中屏。古风/文化/文旅花字可繁体、古体或印章体。品牌名、店号（含「X家」）可扫读，须写 逐字=，禁漏家、禁复写邻字、禁何乐乐享。印章不压字：须写 印=句外旁侧｜压字=禁｜替字=禁，禁止印面盖住花字。重点句可加 英=「短译」｜英级=小。企业素材产品出镜拍花字必须是产品名，位置=画右|画左｜排向=竖｜字级=大，听=无，仍算该段唯一一条；未出镜不另起。必须抄 overall_scheme.promo_focus 与 selling_points 写入 ## 核心重点，节拍充分展现每个已锁卖点（美食/美景/美物/美人/工艺/文化/高科技/历史沉淀），禁止另起无关故事。必须抄 overall_scheme.visual_core 为画面核（与主卖点同核），并把主核加码写满：美食/美人/产品充分特写，美景观宏观特效，科技见技术特效。有产品必须特别描述形制材质标识并给专拍特写。有 Logo/slogan 等企业元素必须给标识特写，禁止远处小标一闪而过。配乐须并重够响（收口可压过），禁止垫底。必须按上游 stage_plan 的 content/sensory/copy/flower_text 拆镜并逐字核销；在此前提下认真分析全部对标内容，结合本案例综合实现各 Beat，写出 ## 对标综合与每拍 对标综合=（多部片名+手法→本案可见结果）。\n"

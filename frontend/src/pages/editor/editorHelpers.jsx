@@ -1709,15 +1709,9 @@ export const resolveShotVideoActiveRefs = ({
     const deletedRefSet = new Set(Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : []);
     activeRefs = activeRefs.filter((url) => !deletedRefSet.has(url));
 
-    // Manual panel is source of truth, but newly prompt-matched entity images still join
-    // as additional refs unless the user explicitly deleted that URL.
-    if (usingStoredVideoRefs) {
-        for (const url of promptEntityRefs) {
-            const ref = String(url || '').trim();
-            if (!ref || deletedRefSet.has(ref) || activeRefs.includes(ref)) continue;
-            activeRefs.push(ref);
-        }
-    }
+    // Manual list is the only source of truth. Do not re-attach prompt entity
+    // images on reload — those URLs often differ from the adjusted refs and
+    // get uploaded again for the same entity.
 
     const shouldInjectAdditionalAutoRefs = Boolean(includeAdditionalAutoRefs && !isManualOverride);
     if (shouldInjectAdditionalAutoRefs && Array.isArray(additionalAutoRefs)) {
