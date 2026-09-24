@@ -11387,6 +11387,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             episodePrefix
         );
 
+        const rerunScope = storyboardSingleRerunScopeRef.current;
+        if (
+            !force
+            && rerunScope instanceof Set
+            && rerunScope.size > 0
+            && !isSceneIdInAllowlist(stableMarker, rerunScope, episodePrefix)
+        ) {
+            return false;
+        }
+
         // Reject kickoffs outside this run's scene-orchestration Scene ID set.
         // Live-imported markers are always in-run (streaming 2.2 used to overwrite the
         // allowlist with a single scene and skip the other imported fields).
@@ -11481,7 +11491,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             storyboardKickoffPromisesRef.current.set(stableMarker, flightPromise);
         };
 
-        if (!force && sceneHasLiveFlight()) {
+        // Includes force reruns. A second POST while this scene is already generating
+        // comes back as already_running and was being stored as a failure.
+        if (sceneHasLiveFlight()) {
             storyboardKickoffByMarkerRef.current.add(stableMarker);
             storyboardKickoffByIdentityRef.current.add(identity);
             return true;
@@ -12059,7 +12071,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return true;
             } catch (err) {
                 const errMsgEarly = resolveStoryboardFailureMessage(err);
-                if (/storyboard_generation_already_running/i.test(errMsgEarly)) {
+                const duplicateInFlight = /storyboard_generation_already_running/i.test(errMsgEarly)
+                    || Number(err?.errorCode || err?.response?.status || 0) === 409;
+                if (duplicateInFlight) {
                     onLog?.(
                         t(
                             `[分镜生成] ${stableMarker} 已有进行中的分镜生成，跳过重复调起`,
@@ -12210,6 +12224,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const workspaceImport = (meta.workspace_import && typeof meta.workspace_import === 'object')
                 ? meta.workspace_import
                 : {};
+            const storyboardNode = list.find((row) => (
+                isStoryboardPipelineNodeName(row?.node_name)
+                && isSceneIdInAllowlist(
+                    String(row?.scene_id || '').trim(),
+                    expandSceneIdAllowlist([sceneId], episodePrefix),
+                    episodePrefix
+                )
+            ));
+            const storyboardNodeStatus = String(storyboardNode?.status || '').trim().toLowerCase();
+            if (['success', 'warning'].includes(storyboardNodeStatus)) {
+                const progressStatus = String(
+                    findStoryboardProgressItem(storyboardTaskProgressRef.current, sceneId, {
+                        sceneOrder: Number(node?.scene_order || 0) || deriveSceneOrderFromSceneId(sceneId),
+                    })?.status || ''
+                ).trim().toLowerCase();
+                const needsResume = ['starting', 'generating', 'importing', 'waiting_env', 'waiting_import'].includes(progressStatus)
+                    || (progressStatus === 'failed' && isStoryboardRetryableKickoffError(
+                        findStoryboardProgressItem(storyboardTaskProgressRef.current, sceneId)?.error
+                    ));
+                if (!needsResume) continue;
+            }
             // Only kick storyboard after a real 建置+入戏 body. Incomplete staging
             // (missing end marker) must stay failed and must not open this gate.
             await registerSceneImportedAndKickoffStoryboard({
@@ -12243,6 +12278,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (!recoverable) return;
                 const stableMarker = String(marker || '').trim();
                 if (!stableMarker) return;
+                const flushScope = storyboardSingleRerunScopeRef.current;
+                if (flushScope instanceof Set && flushScope.size > 0) {
+                    const flushPrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+                    if (!isSceneIdInAllowlist(stableMarker, flushScope, flushPrefix)) return;
+                }
                 // Parked waiting_env keeps a claim so residual ensure will not double-start.
                 // That claim must not block this designated resume path.
                 // An alias marker (EP01_SC02 vs SC02) shares one flight promise.
@@ -12279,7 +12319,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (ok) started += 1;
         }
         return { started, total: queued.length, reason };
-    }, [enqueuePendingStoryboardKickoff, kickoffStoryboardForImportedScene]);
+    }, [activeEpisode, enqueuePendingStoryboardKickoff, kickoffStoryboardForImportedScene]);
 
     useEffect(() => {
         flushPendingStoryboardKickoffsRef.current = flushPendingStoryboardKickoffs;
@@ -12612,7 +12652,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // window so we do not mark analysis complete before shot tasks register.
         const autoStartEnabled = await isStoryboardAutoStartEnabled();
         const graceMs = 20 * 1000;
-        if (autoStartEnabled) {
+        if (autoStartEnabled && !scopedRerun) {
             await kickoffStoryboardsFromSuccessfulStagingNodes(
                 Array.isArray(diagnosticsPipelineNodesRef.current) ? diagnosticsPipelineNodesRef.current : []
             );
@@ -16902,6 +16942,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const storyboardKickoffByIdentityRef = useRef(new Set());
     const storyboardKickoffByDbIdRef = useRef(new Set());
     const storyboardKickoffPromisesRef = useRef(new Map());
+    /** While a single-scene storyboard rerun is active, automatic kickoffs stay inside this set. */
+    const storyboardSingleRerunScopeRef = useRef(null);
     /** Pending storyboard kickoffs waiting for environment visual assets. */
     const pendingStoryboardKickoffsRef = useRef([]);
     /** Short-lived cache of ENV entities for storyboard gate checks (rerun / kickoff). */
@@ -30553,13 +30595,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         latestIsAnalyzingRef.current = false;
 
         let started = 0;
+        const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+        const scopeMarkers = expandSceneIdAllowlist(
+            targets.map((item) => String(item?.sceneId || '').trim()).filter(Boolean),
+            episodePrefix,
+        );
+        if (rerunMode === 'single') {
+            storyboardSingleRerunScopeRef.current = scopeMarkers;
+        }
         try {
             if (rerunMode === 'single') {
                 orchestrationCanonicalSceneIdsRef.current = mergeSceneIdAllowlist(
                     orchestrationCanonicalSceneIdsRef.current,
                     targets.map((item) => String(item?.sceneId || '').trim()).filter(Boolean),
-                    resolveEpisodeSceneIdPrefix(activeEpisode)
+                    episodePrefix
                 );
+                const prevProgress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
+                const nextItems = {};
+                Object.entries(prevProgress.items || {}).forEach(([marker, item]) => {
+                    if (!isSceneIdInAllowlist(marker, scopeMarkers, episodePrefix)) return;
+                    nextItems[marker] = item;
+                });
+                const scopedProgress = normalizeStoryboardTaskProgress({
+                    ...prevProgress,
+                    items: nextItems,
+                });
+                storyboardTaskProgressRef.current = scopedProgress;
+                setStoryboardTaskProgress(scopedProgress);
             }
             // Clear existing shot temp for selected scenes before force regenerate/replace.
             const pid = Number(projectId || activeEpisode?.project_id || 0);
@@ -30684,7 +30746,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const waitResult = await awaitPendingStoryboardTasks({
                 importReport: null,
                 ensureResidual: false,
-                scopedRerun: sceneMatrixRerunInFlightRef.current,
+                scopedRerun: rerunMode === 'single' || sceneMatrixRerunInFlightRef.current,
             });
             const progress = normalizeStoryboardTaskProgress(
                 waitResult?.progress || storyboardTaskProgressRef.current
@@ -30707,6 +30769,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 error: '',
             }));
         } finally {
+            if (rerunMode === 'single') {
+                storyboardSingleRerunScopeRef.current = null;
+            }
             setIsRerunningStoryboard(false);
             if (!sceneMatrixRerunInFlightRef.current) {
                 analysisRunInFlightRef.current = false;
