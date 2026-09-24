@@ -63,7 +63,7 @@ import {
     filterGlobalReuseDropdownAssets,
     isAssetFromEpisode,
 } from '../reuseEnvAssets';
-import { hasSuccessfulPipelineNode, shouldRejectLeftoverStagingKickoff } from '../analysisRestartGuards';
+import { hasSuccessfulPipelineNode, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff } from '../analysisRestartGuards';
 
 import { 
     fetchProject, 
@@ -4311,6 +4311,7 @@ const resolveAnalysisProgressDisplayState = ({
     storyboardProgress = null,
     hasOpenStoryboardWork = false,
     userStopped = false,
+    sceneMatrixRerunLive = false,
 } = {}) => {
     const normalizedPhase = String(phase || '').trim().toLowerCase() || 'idle';
     const normalizedReport = String(reportStatus || '').trim().toLowerCase();
@@ -4324,6 +4325,7 @@ const resolveAnalysisProgressDisplayState = ({
         || isRetryingPhase2
         || isRerunningStoryboard
         || storyboardUnresolved
+        || sceneMatrixRerunLive
     );
 
     if (isLive) {
@@ -6721,6 +6723,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // Kickoff promise/queue refs are declared later; progress counters cover the settled case.
             hasOpenStoryboardWork: isStoryboardProgressUnresolved(progress),
             userStopped,
+            sceneMatrixRerunLive: Boolean(sceneMatrixRerun),
         });
     }, [
         activeEpisode?.id,
@@ -6731,6 +6734,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         isRetryingPhase2,
         isRerunningStoryboard,
         isStoppingAnalysisTask,
+        sceneMatrixRerun,
         storyboardTaskProgress,
     ]);
 
@@ -6971,6 +6975,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
+        if (sceneMatrixRerunInFlightRef.current) return;
+
         if (terminalPhase || terminalReport) {
             // Never heal-away live flags while any pipeline lock is held — leftover
             // terminal report/phase from a prior run is common on repeated reruns.
@@ -7035,6 +7041,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     useEffect(() => {
         if (isAnalyzing) return;
+        if (sceneMatrixRerunInFlightRef.current) return;
 
         const reportStatus = String(analysisUiReport?.status || '').trim().toLowerCase();
         if (!reportStatus || reportStatus === 'running') return;
@@ -11396,6 +11403,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ) {
             return false;
         }
+        // Scene rerun queues storyboard before 文戏/现场编排/建置. Do not POST
+        // ai_generate_shots for that placeholder; the rerun finishes with an explicit call.
+        const pendingAfterSubskill = storyboardPendingAfterSubskillRef.current;
+        if (
+            !force
+            && pendingAfterSubskill instanceof Set
+            && pendingAfterSubskill.size > 0
+            && isSceneIdInAllowlist(stableMarker, pendingAfterSubskill, episodePrefix)
+        ) {
+            return false;
+        }
 
         // Reject kickoffs outside this run's scene-orchestration Scene ID set.
         // Live-imported markers are always in-run (streaming 2.2 used to overwrite the
@@ -12215,6 +12233,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 )
             ));
             const storyboardNodeStatus = String(storyboardNode?.status || '').trim().toLowerCase();
+            const pendingAfterSubskill = storyboardPendingAfterSubskillRef.current;
+            if (
+                pendingAfterSubskill instanceof Set
+                && pendingAfterSubskill.size > 0
+                && isSceneIdInAllowlist(sceneId, pendingAfterSubskill, episodePrefix)
+            ) {
+                continue;
+            }
+            if (shouldHoldStoryboardKickoffForQueuedPlaceholder(node, storyboardNode)) {
+                continue;
+            }
             if (['success', 'warning'].includes(storyboardNodeStatus)) {
                 const progressStatus = String(
                     findStoryboardProgressItem(storyboardTaskProgressRef.current, sceneId, {
@@ -35836,18 +35865,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const persistReady = Boolean(persistKey && String(persistSteps[persistKey] || '').trim());
                             const sawLiveThisRerun = sceneMatrixLiveSeenRef.current.has(String(sceneId || '').trim());
                             // Poll has not picked up the reset yet: only the start group spins.
-                            // After this-run actually ran, a terminal success must keep finished nodes completed.
+                            // Leftover 建置/分步稿 must not stay 已完成 while 文戏 is restarting.
                             if (isThisSceneRerun && !liveRerunNode && !sawLiveThisRerun) {
-                                if (persistReady) {
-                                    return { ready: true, active: false, failed: false, detail: '' };
-                                }
                                 return group === startGroup ? started : waiting;
                             }
                             if (!node) {
                                 if (isThisSceneRerun) {
-                                    if (persistReady) {
-                                        return { ready: true, active: false, failed: false, detail: '' };
-                                    }
                                     return group === startGroup ? started : waiting;
                                 }
                                 if (persistReady) {
@@ -35882,7 +35905,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const doneAfter = { drama: 1, combat: 2, framing: 4, staging: 5 }[group] || 0;
                             // A live earlier step must not keep later groups on 已完成 via leftover
                             // called_subskills / persisted text (建置仍显示完成，而文戏还在跑).
-                            const liveBeforeGroup = ['running', 'queued'].includes(status) && rank > 0 && rank <= doneAfter;
+                            // Rank 0 (reset to running before current_step lands) still counts.
+                            const liveBeforeGroup = isThisSceneRerun
+                                ? (['running', 'queued'].includes(status) && rank <= doneAfter)
+                                : (['running', 'queued'].includes(status) && rank > 0 && rank <= doneAfter);
                             const groupCompleted = (!liveBeforeGroup && (calledReady || persistReady)) || rank > doneAfter;
                             if (failed && groupActiveStep.includes(step)) {
                                 return {
@@ -35973,6 +35999,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const subskillStep = String(subskillNode?.runtime_meta?.current_step || '').trim().toLowerCase();
                             const subskillActive = ['running', 'queued'].includes(subskillStatus);
                             const subskillStillOpen = subskillActive && subskillStep !== 'completed';
+                            const thisRunGeneratingStatus = ['starting', 'generating', 'importing'].includes(status)
+                                || ['starting', 'generating', 'importing'].includes(refStatus);
+                            // Queued after a 文戏 rerun is a placeholder. Leftover success must not
+                            // keep 分镜 on 已完成, and must not look like generateSceneShots has started.
+                            if ((pendingAfterSubskill || storyboardQueuedPlaceholder) && !thisRunGeneratingStatus) {
+                                return { ready: false, active: false, failed: false, detail: '' };
+                            }
                             if (
                                 workspaceSceneCount > 0
                                 && workspaceSceneCountWithShots >= workspaceSceneCount

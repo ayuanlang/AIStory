@@ -1,6 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isThisRunPipelineNode, shouldRejectLeftoverStagingKickoff } from './analysisRestartGuards.js';
+import {
+    isThisRunPipelineNode,
+    shouldHoldStoryboardKickoffForQueuedPlaceholder,
+    shouldRejectLeftoverStagingKickoff,
+} from './analysisRestartGuards.js';
 
 describe('analysisRestartGuards', () => {
     it('rejects leftover staging nodes after a full restart clock starts', () => {
@@ -64,6 +68,43 @@ describe('analysisRestartGuards', () => {
             node: { updated_at: '2026-09-18T17:10:00.000Z' },
             runStartedAt: 0,
         }), false);
+    });
+
+    it('holds shot kickoff while queued storyboard is newer than leftover staging', () => {
+        const staging = {
+            status: 'success',
+            ended_at: '2026-09-25T00:30:00',
+            updated_at: '2026-09-25T00:30:00',
+        };
+        const queued = {
+            status: 'queued',
+            updated_at: '2026-09-25T01:25:11',
+            runtime_meta: { business_event: 'queued', rerun_cleared: true },
+        };
+        assert.equal(shouldHoldStoryboardKickoffForQueuedPlaceholder(staging, queued), true);
+    });
+
+    it('releases shot kickoff after this-run staging finishes later than the queue', () => {
+        const staging = {
+            status: 'success',
+            started_at: '2026-09-25T01:25:11',
+            ended_at: '2026-09-25T01:40:00',
+            updated_at: '2026-09-25T01:40:00',
+        };
+        const queued = {
+            status: 'queued',
+            started_at: '2026-09-25T01:25:11',
+            updated_at: '2026-09-25T01:25:11',
+            runtime_meta: { business_event: 'queued', rerun_cleared: true },
+        };
+        assert.equal(shouldHoldStoryboardKickoffForQueuedPlaceholder(staging, queued), false);
+    });
+
+    it('does not hold kickoff when storyboard is already a finished node', () => {
+        assert.equal(shouldHoldStoryboardKickoffForQueuedPlaceholder(
+            { status: 'success', ended_at: '2026-09-25T00:30:00' },
+            { status: 'success', updated_at: '2026-09-25T00:46:58' },
+        ), false);
     });
 
     it('parses naive Beijing timestamps as this-run nodes', () => {

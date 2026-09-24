@@ -42,6 +42,32 @@ export function shouldRejectLeftoverStagingKickoff({
     return true;
 }
 
+function pipelineNodeInstant(node, fields) {
+    for (const field of fields) {
+        const ts = parsePipelineNodeTime({ [field]: node?.[field] });
+        if (ts) return ts;
+    }
+    return 0;
+}
+
+/**
+ * A rerun queues storyboard_generation before 文戏 finishes. That queued row is a
+ * placeholder. Kick off shots only after this run's 建置 success is newer than the queue.
+ * Leftover staging success from the previous run must not open generateSceneShots.
+ */
+export function shouldHoldStoryboardKickoffForQueuedPlaceholder(stagingNode, storyboardNode) {
+    const status = String(storyboardNode?.status || '').trim().toLowerCase();
+    const event = String(storyboardNode?.runtime_meta?.business_event || '').trim().toLowerCase();
+    const placeholder = status === 'queued'
+        || event === 'queued'
+        || Boolean(storyboardNode?.runtime_meta?.rerun_cleared);
+    if (!placeholder) return false;
+    const queuedAt = pipelineNodeInstant(storyboardNode, ['updated_at', 'started_at']);
+    const stagingDoneAt = pipelineNodeInstant(stagingNode, ['ended_at', 'updated_at']);
+    if (!queuedAt || !stagingDoneAt) return true;
+    return stagingDoneAt <= queuedAt;
+}
+
 export function isSuccessfulPipelineNode(node, names = []) {
     const name = String(node?.node_name || '').trim();
     if (names.length && !names.includes(name)) return false;
