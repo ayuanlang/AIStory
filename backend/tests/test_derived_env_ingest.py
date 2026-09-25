@@ -46,9 +46,10 @@ def test_parse_derived_env_tags_and_extract_block():
 def test_frame_anchor_injection_lists_named_sides():
     block = build_derived_env_frame_anchor_injection(SAMPLE)
     assert block.startswith("【衍生环境画幅锚】")
-    assert "画外=镜头后对向主体，明确不可见" in block
-    assert "选角与建置/入戏禁止点名画外主体" in block
-    assert "宫格参照=画外时，落位改写为离镜头近处中间主体" in block
+    assert "本块由现场编排 [DERIVED_ENV_EXTRACT_START] 裁出" in block
+    assert "可见环境主体=该行背景、画左、画右、可见内容白名单" in block
+    assert "挂靠的角色与道具" in block
+    assert "宫格参照=画外时" not in block
     assert (
         "ENV:[0度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0｜"
         "背景=柜台｜画左=楼梯口｜画右=账房窗"
@@ -78,6 +79,22 @@ def test_frame_anchor_injection_keeps_main_when_sides_missing():
 
 def test_frame_anchor_injection_empty_when_no_derived():
     assert build_derived_env_frame_anchor_injection("无衍生") == ""
+
+
+def test_frame_anchor_injection_keeps_subject_visibility():
+    text = (
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜"
+        "背景=柜台｜画左=楼梯｜画右=窗｜可见内容白名单=柜台:正面｜"
+        "画外=正门｜不可见内容=后院门\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+    )
+    block = build_derived_env_frame_anchor_injection(text)
+    assert "可见内容白名单=柜台:正面" in block
+    assert "不可见内容=后院门" in block
+    assert "画外=正门（不可见）" in block
+    assert "不改锚" in block
+    assert "离开上一具挂靠物" in block
 
 
 def test_first_cut_json_matches_environment_design_template():
@@ -325,7 +342,8 @@ def test_derived_anchors_copy_matching_main_env_angle_subjects():
     injection = build_derived_env_frame_anchor_injection(text)
     assert "画外=红木柜台与酒架（不可见）" in injection
     assert "画外=客栈大门（不可见）" in injection
-    assert "选角与建置/入戏禁止点名画外主体" in injection
+    assert "挂靠的角色与道具" in injection
+    assert "禁止点名画外主体" not in injection
 
 
 def test_sample_ingest_writes_frame_and_reference_anchors():

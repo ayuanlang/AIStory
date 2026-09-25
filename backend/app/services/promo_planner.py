@@ -2169,6 +2169,27 @@ def merge_catalog_analysis_extra(
     return current
 
 
+def assign_catalog_file_url(row: Any, file_url: str, media_kind: Any = None) -> bool:
+    """Point a catalog asset at a new file. A real URL change drops the old parse."""
+    next_url = _text(file_url)
+    if not next_url:
+        return False
+    changed = _text(getattr(row, "file_url", "")) != next_url
+    row.file_url = next_url
+    if media_kind is not None:
+        row.media_kind = normalize_media_kind(media_kind)
+    if not changed:
+        return False
+    extra = dict(_as_dict(getattr(row, "extra_info", None)))
+    extra.pop("image_asset_analysis", None)
+    extra.pop("analysis", None)
+    extra["analysis_status"] = ANALYSIS_STATUS_PENDING
+    extra["analysis_error"] = ""
+    row.extra_info = extra
+    flag_modified(row, "extra_info")
+    return True
+
+
 def write_catalog_analysis(
     row: PromoCatalogAsset,
     analysis: Any,

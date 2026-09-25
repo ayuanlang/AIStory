@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Eye, Image as ImageIcon, Loader2, RefreshCw, Trash2, Upload, Video, X } from 'lucide-react';
+import { Eye, Image as ImageIcon, Loader2, RefreshCw, Replace, Trash2, Upload, Video, X } from 'lucide-react';
 import { SafeImage, getFullUrl } from '../editorHelpers';
 import {
     analyzePromoCatalogAsset,
@@ -116,6 +116,8 @@ export default function PromoCatalogAssets({
     const [dragOver, setDragOver] = useState(false);
     const [previewAsset, setPreviewAsset] = useState(null);
     const fileInputRef = useRef(null);
+    const replaceInputRef = useRef(null);
+    const replaceTargetRef = useRef(null);
     const assetsRef = useRef([]);
 
     useEffect(() => {
@@ -255,6 +257,58 @@ export default function PromoCatalogAssets({
         }
     };
 
+    const replacePhoto = async (file) => {
+        const asset = replaceTargetRef.current;
+        replaceTargetRef.current = null;
+        if (!asset?.id || !file || disabled) return;
+        if (!isAcceptedMedia(file)) {
+            alert(t('仅支持 jpg / png / webp / mp4 / webm / mov', 'Only jpg / png / webp / mp4 / webm / mov'));
+            return;
+        }
+        if (file.size > MAX_MB * 1024 * 1024) {
+            alert(t(`单文件不超过 ${MAX_MB}MB`, `Max ${MAX_MB}MB per file`));
+            return;
+        }
+        const mediaKind = mediaKindOf(file);
+        setBusy(true);
+        try {
+            const uploaded = await uploadAsset(file, {
+                type: mediaKind,
+                asset_type: 'promo_catalog_asset',
+                remark: `promo_catalog_replace:${ownerKind}:${ownerId}:${asset.image_id || asset.id}`,
+            });
+            const url = String(uploaded?.url || '').trim();
+            if (!url) throw new Error(t('上传成功但未返回地址', 'Upload succeeded but no URL returned'));
+            const updated = await updatePromoCatalogAsset(asset.id, {
+                file_url: url,
+                img_url: url,
+                media_kind: mediaKind,
+            });
+            const next = {
+                ...asset,
+                ...updated,
+                file_url: url,
+                img_url: url,
+                media_kind: mediaKind,
+                analysis_status: ANALYSIS_STATUS_PENDING,
+                analysis_error: '',
+                image_asset_analysis: {},
+            };
+            const list = (assetsRef.current || []).map((item) => (
+                Number(item.id) === Number(asset.id) ? next : item
+            ));
+            assetsRef.current = list;
+            setAssets(list);
+            setPreviewAsset((prev) => (prev && Number(prev.id) === Number(asset.id) ? next : prev));
+            setBusy(false);
+            await analyzeOne(next);
+        } catch (err) {
+            alert(err?.response?.data?.detail || err?.message || t('更换失败', 'Replace failed'));
+        } finally {
+            setBusy(false);
+        }
+    };
+
     const handleFiles = async (fileList) => {
         const files = Array.from(fileList || []);
         for (const file of files) {
@@ -330,6 +384,17 @@ export default function PromoCatalogAssets({
                 <div className="text-[11px] text-muted-foreground mt-1">{t(`jpg / png / webp / mp4 / webm / mov，单文件不超过 ${MAX_MB}MB`, `jpg / png / webp / mp4 / webm / mov, max ${MAX_MB}MB`)}</div>
             </div>
             <input ref={fileInputRef} type="file" accept={PROMO_MEDIA_ACCEPT} multiple className="hidden" onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
+            <input
+                ref={replaceInputRef}
+                type="file"
+                accept={PROMO_MEDIA_ACCEPT}
+                className="hidden"
+                onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) replacePhoto(file);
+                    e.target.value = '';
+                }}
+            />
             {assets.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     {assets.map((asset) => {
@@ -378,13 +443,25 @@ export default function PromoCatalogAssets({
                                     {status === ANALYSIS_STATUS_FAILED && asset.analysis_error ? (
                                         <div className="text-[11px] text-red-300 break-words">{asset.analysis_error}</div>
                                     ) : null}
-                                    <div className="flex gap-1.5">
+                                    <div className="flex flex-wrap gap-1.5">
                                         <button
                                             type="button"
                                             className="flex-1 text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 flex items-center justify-center gap-1"
                                             onClick={() => setPreviewAsset(asset)}
                                         >
                                             <Eye className="w-3 h-3" /> {t('查看', 'View')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="flex-1 text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 disabled:opacity-40 flex items-center justify-center gap-1"
+                                            disabled={disabled || busy || status === ANALYSIS_STATUS_ANALYZING}
+                                            title={t('更换后会自动重新解析', 'Re-analyzes automatically after replace')}
+                                            onClick={() => {
+                                                replaceTargetRef.current = asset;
+                                                replaceInputRef.current?.click();
+                                            }}
+                                        >
+                                            <Replace className="w-3 h-3" /> {t('更换照片', 'Replace photo')}
                                         </button>
                                         <button
                                             type="button"
@@ -431,6 +508,18 @@ export default function PromoCatalogAssets({
                                 {normalizeAnalysisStatus(previewAsset.analysis_status) === ANALYSIS_STATUS_ANALYZING ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
                                 {t('解析', 'Analysis')}：{analysisStatusLabel(normalizeAnalysisStatus(previewAsset.analysis_status), t)}
                             </span>
+                            <button
+                                type="button"
+                                className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 disabled:opacity-40 flex items-center gap-1"
+                                disabled={disabled || busy || normalizeAnalysisStatus(previewAsset.analysis_status) === ANALYSIS_STATUS_ANALYZING}
+                                title={t('更换后会自动重新解析', 'Re-analyzes automatically after replace')}
+                                onClick={() => {
+                                    replaceTargetRef.current = previewAsset;
+                                    replaceInputRef.current?.click();
+                                }}
+                            >
+                                <Replace className="w-3 h-3" /> {t('更换照片', 'Replace photo')}
+                            </button>
                             <button
                                 type="button"
                                 className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 disabled:opacity-40 flex items-center gap-1"

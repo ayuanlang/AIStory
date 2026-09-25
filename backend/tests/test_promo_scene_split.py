@@ -20,6 +20,7 @@ from app.services.promo_planner import (
     EXISTING_MATERIAL_ANALYSIS_MARK,
     PROMO_PROJECT_TYPE,
     apply_analysis_status_to_assets,
+    assign_catalog_file_url,
     assets_needing_analysis,
     catalog_analysis_fields,
     catalog_asset_as_planner_asset,
@@ -1638,6 +1639,34 @@ def test_catalog_analysis_fields_and_share_merge():
     assert fields["image_asset_analysis"]["image_list"][0]["content_desc"] == "开放式厨房全景"
     kept = merge_catalog_analysis_extra(extra, asset, {"image_list": [{"image_id": "kitchen-1", "analysis_status": "failed"}]})
     assert catalog_analysis_fields(kept, asset)["analysis_status"] == "success"
+
+
+def test_assign_catalog_file_url_clears_stale_analysis():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    row = SimpleNamespace(
+        file_url="/uploads/3/old.jpg",
+        media_kind="image",
+        extra_info={
+            "analysis_status": "success",
+            "analysis_error": "",
+            "image_asset_analysis": {"image_list": [{"image_id": "a", "content_desc": "旧图"}]},
+        },
+    )
+    with patch("app.services.promo_planner.flag_modified") as flagged:
+        same = assign_catalog_file_url(row, "/uploads/3/old.jpg", media_kind="image")
+        assert same is False
+        assert row.extra_info["analysis_status"] == "success"
+        flagged.assert_not_called()
+        changed = assign_catalog_file_url(row, "/uploads/3/new.jpg", media_kind="video")
+    assert changed is True
+    assert row.file_url == "/uploads/3/new.jpg"
+    assert row.media_kind == "video"
+    assert row.extra_info["analysis_status"] == "pending"
+    assert row.extra_info["analysis_error"] == ""
+    assert "image_asset_analysis" not in row.extra_info
+    flagged.assert_called_once()
 
 
 def test_serialize_catalog_asset_exposes_analysis():

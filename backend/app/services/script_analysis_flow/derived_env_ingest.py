@@ -1165,8 +1165,10 @@ def format_derived_env_info_line(
     frame_right: str = "",
     offscreen: str = "",
     view_angle: Any = None,
+    visible_whitelist: str = "",
+    invisible: str = "",
 ) -> str:
-    """One derived-ENV row: this camera's 背景/画左/画右 + 画外（不可见）."""
+    """One derived-ENV row: visible subjects + offscreen subjects for staging."""
     parts = [f"ENV:[{_clean(name)}]"]
     main_name = _clean(main)
     if main_name:
@@ -1180,9 +1182,15 @@ def format_derived_env_info_line(
         parts.append(f"画左={_clean(frame_left)}")
     if _clean(frame_right):
         parts.append(f"画右={_clean(frame_right)}")
+    whitelist = _clean(visible_whitelist)
+    if whitelist:
+        parts.append(f"可见内容白名单={whitelist}")
     off = format_offscreen_anchor(offscreen)
     if off:
         parts.append(f"画外={off}")
+    hidden = _clean(invisible)
+    if hidden:
+        parts.append(f"不可见内容={hidden}")
     return "｜".join(parts)
 
 
@@ -1199,6 +1207,10 @@ def derived_env_info_fields_from_mapping(item: Dict[str, Any]) -> Dict[str, Any]
         "frame_left": _clean(item.get("frame_left") or item.get("画左")),
         "frame_right": _clean(item.get("frame_right") or item.get("画右")),
         "offscreen": _strip_offscreen_mark(item.get("offscreen") or item.get("画外")),
+        "visible_whitelist": _clean(
+            item.get("visible_whitelist") or item.get("可见内容白名单")
+        ),
+        "invisible": _clean(item.get("invisible") or item.get("不可见内容")),
         "view_angle": view_angle,
     }
 
@@ -1219,6 +1231,10 @@ def derived_env_info_fields_from_entity(ent: Any, *, fallback_main: str = "") ->
         "frame_left": _clean(attrs.get("frame_left") or attrs.get("画左")),
         "frame_right": _clean(attrs.get("frame_right") or attrs.get("画右")),
         "offscreen": _strip_offscreen_mark(attrs.get("offscreen") or attrs.get("画外")),
+        "visible_whitelist": _clean(
+            attrs.get("visible_whitelist") or attrs.get("可见内容白名单")
+        ),
+        "invisible": _clean(attrs.get("invisible") or attrs.get("不可见内容")),
         "view_angle": attrs.get("view_angle_from_main"),
     }
 
@@ -1240,7 +1256,9 @@ def build_derived_env_info_block(
         frame_left = _clean(fields.get("frame_left"))
         frame_right = _clean(fields.get("frame_right"))
         offscreen = _clean(fields.get("offscreen"))
-        if not (main or background or frame_left or frame_right or offscreen):
+        whitelist = _clean(fields.get("visible_whitelist"))
+        invisible = _clean(fields.get("invisible"))
+        if not (main or background or frame_left or frame_right or offscreen or whitelist or invisible):
             continue
         seen.add(name)
         lines.append(
@@ -1252,16 +1270,19 @@ def build_derived_env_info_block(
                 frame_right=frame_right,
                 offscreen=offscreen,
                 view_angle=fields.get("view_angle"),
+                visible_whitelist=whitelist,
+                invisible=invisible,
             )
         )
     if not lines:
         return ""
     return (
         f"{heading}\n"
-        "每行=该镜头下的画左/画右对应实体（切角须改查新 ENV，左右会换）。"
-        "画外=镜头后对向主体，明确不可见；选角与建置/入戏禁止点名画外主体。"
-        "建置仍按相对/绝对/封闭写，只把「画左」「画右」换成该行可见实体，禁止把画外实体写入画面句。"
-        "宫格参照=画外时，落位改写为离镜头近处中间主体（优先四周=中）的某侧旁。\n"
+        "本块由现场编排 [DERIVED_ENV_EXTRACT_START] 裁出，供建置与入戏判断本角可见性。切角须改查新 ENV。\n"
+        "可见环境主体=该行背景、画左、画右、可见内容白名单。不可见环境主体=该行画外、不可见内容。\n"
+        "挂靠的角色与道具：锚落在不可见环境主体上，且距锚为贴身或一臂 → 暂不可见，不进建置，不改锚。"
+        "离挂靠较远或体量伸出仍可见，锚名仍用原具名。"
+        "挂靠改到另一具，只当该角色明确移动离开上一具挂靠物。切角或挂靠不可见都不改锚。\n"
         + "\n".join(lines)
     )
 

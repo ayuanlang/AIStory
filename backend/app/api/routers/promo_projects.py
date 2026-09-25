@@ -62,6 +62,7 @@ from app.services.promo_planner import (
     require_promo_product_access,
     require_promo_project_access,
     result_to_promo_markdown,
+    assign_catalog_file_url,
     serialize_promo_brand,
     serialize_promo_catalog_asset,
     serialize_promo_enterprise,
@@ -801,18 +802,23 @@ def update_promo_catalog_asset(
     if not row:
         raise HTTPException(status_code=404, detail="Asset not found")
     require_catalog_owner(db, current_user, row.owner_kind, int(row.owner_entity_id))
-    if payload.media_kind is not None:
-        row.media_kind = normalize_media_kind(payload.media_kind)
     if payload.asset_type is not None:
         row.asset_type = normalize_image_type(payload.asset_type)
     file_url = _text(payload.file_url or payload.img_url)
+    file_changed = False
     if file_url:
-        row.file_url = file_url
+        file_changed = assign_catalog_file_url(
+            row,
+            file_url,
+            media_kind=payload.media_kind if payload.media_kind is not None else None,
+        )
+    elif payload.media_kind is not None:
+        row.media_kind = normalize_media_kind(payload.media_kind)
     if payload.object_name is not None:
         row.object_name = _text(payload.object_name)
     if payload.user_remark is not None:
         row.user_remark = _text(payload.user_remark)
-    if payload.extra_info is not None:
+    if payload.extra_info is not None and not file_changed:
         row.extra_info = dict(payload.extra_info or {})
     db.add(row)
     db.commit()
