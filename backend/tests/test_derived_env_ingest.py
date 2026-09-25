@@ -95,6 +95,7 @@ def test_frame_anchor_injection_keeps_subject_visibility():
     assert "画外=正门（不可见）" in block
     assert "不改锚" in block
     assert "离开上一具挂靠物" in block
+    assert "面向镜头" in block
 
 
 def test_first_cut_json_matches_environment_design_template():
