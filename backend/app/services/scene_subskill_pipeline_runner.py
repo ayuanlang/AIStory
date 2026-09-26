@@ -71,6 +71,17 @@ from app.services.subject_index_resolve import (
 
 logger = logging.getLogger("api_logger")
 
+
+class SceneSubskillCancelled(Exception):
+    """Parent analysis task was canceled; do not start the next scene step."""
+
+
+def _raise_if_parent_task_cancelled() -> None:
+    from app.services.task_manager import is_current_task_cancel_requested
+
+    if is_current_task_cancel_requested():
+        raise SceneSubskillCancelled()
+
 DRAMA_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_drama_standardization.md"
 COMBAT_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md"
 FRAMING_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_derived_framing.md"
@@ -1235,6 +1246,8 @@ def _mark_scene_subskill_step(
 ) -> None:
     if int(project_id or 0) <= 0 or int(episode_id or 0) <= 0:
         return
+    if str(status or "").strip().lower() == "running":
+        _raise_if_parent_task_cancelled()
     meta = {
         "business_event": "step",
         "current_step": step_name,
@@ -2407,6 +2420,8 @@ async def _call_scene_subskill(
     from app.api.routers.prompts.analyze_scene import analyze_scene  # noqa: WPS433
     from app.services.script_analysis_flow_runner import build_script_analysis_retry_api_attempts
 
+    _raise_if_parent_task_cancelled()
+
     prompt_file = _LEGACY_COMBAT_PROMPTS.get(str(prompt_file or "").replace("\\", "/"), prompt_file)
 
     _original_api_id, api_attempts = build_script_analysis_retry_api_attempts(
@@ -2974,6 +2989,7 @@ async def run_scene_subskill_pipeline(
                 }
             task_db = SessionLocal()
             try:
+                _raise_if_parent_task_cancelled()
                 project_id = int(raw_payload.get("project_id") or 0)
                 if project_id > 0 and node_episode_id > 0:
                     upsert_pipeline_node_status(
@@ -3153,6 +3169,7 @@ async def run_scene_subskill_pipeline(
                     entity_token_brief=str(task.get("entity_token_brief") or ""),
                 )
                 current_block = assert_staging_output_complete(current_block, scene_id)
+                _raise_if_parent_task_cancelled()
                 if project_id > 0 and node_episode_id > 0:
                     workspace_import = {}
                     try:
@@ -3195,7 +3212,7 @@ async def run_scene_subskill_pipeline(
                     "called_subskills": called,
                     "routes": task.get("routes") or {},
                 }
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, SceneSubskillCancelled):
                 project_id = int(raw_payload.get("project_id") or 0)
                 if project_id > 0 and node_episode_id > 0:
                     upsert_pipeline_node_status(

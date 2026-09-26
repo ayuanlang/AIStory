@@ -63,7 +63,7 @@ import {
     filterGlobalReuseDropdownAssets,
     isAssetFromEpisode,
 } from '../reuseEnvAssets';
-import { hasSuccessfulPipelineNode, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff } from '../analysisRestartGuards';
+import { hasSuccessfulPipelineNode, isThisRunPipelineNode, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff } from '../analysisRestartGuards';
 
 import { 
     fetchProject, 
@@ -2623,6 +2623,18 @@ const isEpisodeAnalysisUserStopRequested = (episodeId, {
     if (localStopRequested && String(localStopReason || '').trim() === 'user') return true;
     const control = getEpisodeAnalysisPipelineControl(episodeId);
     return Boolean(control?.stopRequested && String(control?.stopReason || '').trim() === 'user');
+};
+
+/** Previous-run shot kickoffs must not POST after Stop or a newer analysis clock. */
+const isStoryboardKickoffBlocked = ({
+    epoch = 0,
+    currentEpoch = 0,
+    episodeId = 0,
+    localStopRequested = false,
+    localStopReason = '',
+} = {}) => {
+    if (Number(epoch) !== Number(currentEpoch)) return true;
+    return isEpisodeAnalysisUserStopRequested(episodeId, { localStopRequested, localStopReason });
 };
 
 const markPipelineNodesCanceledLocally = (nodes) => (
@@ -5225,6 +5237,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisStopRequestedRef = useRef(false);
     /** 'user' | 'timeout' | '' — why stop was armed (shared by manual stop + pipeline deadline). */
     const analysisStopReasonRef = useRef('');
+    /** Bumped on Stop and on a new full analysis so in-flight 分镜 POSTs from the previous run die. */
+    const analysisKickoffEpochRef = useRef(0);
+    const storyboardKickoffEpochBlocked = (epoch = analysisKickoffEpochRef.current) => isStoryboardKickoffBlocked({
+        epoch,
+        currentEpoch: analysisKickoffEpochRef.current,
+        episodeId: Number(latestActiveEpisodeIdRef.current || activeEpisode?.id || 0),
+        localStopRequested: analysisStopRequestedRef.current,
+        localStopReason: analysisStopReasonRef.current,
+    });
     const lastLoadedAnalysisRef = useRef(null);
     const latestAssetRawTextRef = useRef('');
     const latestAnalysisRawTextRef = useRef('');
@@ -10640,30 +10661,44 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             analysisFullRestartGateRef.current = false;
             return true;
         }
-        const envNodeDone = hasSuccessfulPipelineNode(
-            diagnosticsPipelineNodesRef.current,
-            'asset_design_environment'
-        );
         const envLlmLiveNow = (
             phase2InFlightCategoriesRef.current.has('environments')
             || (Array.isArray(liveAssetDesignTaskKeys) && liveAssetDesignTaskKeys.includes('environment'))
             || (Array.isArray(retryingAssetCategoryKeys) && retryingAssetCategoryKeys.includes('environments'))
         );
         const promptsReady = countDbMainEnvironmentEntitiesWithPrompt(episodeOwnedEntities) > 0;
-        const thisRunStagingReady = hasSuccessfulPipelineNode(
-            diagnosticsPipelineNodesRef.current,
-            'scene_subskill_scene'
-        );
         // Full restart: leftover library rows / empty plan must not open the gate
         // before this-run ENV design calls markEnvironmentAssetDesignReady.
         if (analysisFullRestartGateRef.current) {
-            // 美术指导 can look complete from leftover library rows while the gate
-            // is still armed. Open only when this-run ENV actually finished, or
-            // this-run 建置 is in and ENV is no longer generating.
+            // A previous run's asset_design_environment success is still in the
+            // snapshot while 全局统筹 of the new run has just started. That must
+            // not open 分镜. Only ENV this run actually launched can.
+            const thisRunEnvNodeDone = (diagnosticsPipelineNodesRef.current || []).some((node) => (
+                String(node?.node_name || '').trim() === 'asset_design_environment'
+                && ['success', 'warning'].includes(String(node?.status || '').trim().toLowerCase())
+                && isThisRunPipelineNode(node, analysisTimerStartedAtRef.current)
+                && environmentAssetDesignLaunchedRef.current
+            ));
+            const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+            const stagingSceneInThisRun = (diagnosticsPipelineNodesRef.current || []).some((node) => {
+                if (String(node?.node_name || '').trim() !== 'scene_subskill_scene') return false;
+                if (!['success', 'warning'].includes(String(node?.status || '').trim().toLowerCase())) return false;
+                const sceneId = String(node?.scene_id || '').trim();
+                if (!sceneId) return false;
+                const canonical = orchestrationCanonicalSceneIdsRef.current;
+                const liveImported = orchestrationLiveImportedScenesRef.current;
+                const inAllowlist = canonical instanceof Set
+                    && canonical.size > 0
+                    && isSceneIdInAllowlist(sceneId, canonical, episodePrefix);
+                const inLive = liveImported instanceof Set
+                    && liveImported.size > 0
+                    && isSceneIdInAllowlist(sceneId, liveImported, episodePrefix);
+                return inAllowlist || inLive;
+            });
             const canOpenThisRun = (
-                envNodeDone
+                thisRunEnvNodeDone
                 || (environmentAssetDesignLaunchedRef.current && promptsReady && !envLlmLiveNow)
-                || (thisRunStagingReady && promptsReady && !envLlmLiveNow && !environmentAssetDesignPendingRef.current)
+                || (stagingSceneInThisRun && promptsReady && !envLlmLiveNow && !environmentAssetDesignPendingRef.current)
             );
             if (canOpenThisRun) {
                 environmentAssetReadyRef.current = true;
@@ -11387,6 +11422,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     } = {}) => {
         const incomingMarker = String(markerSceneId || '').trim();
         if (!incomingMarker) return false;
+        const kickoffEpoch = analysisKickoffEpochRef.current;
+        if (storyboardKickoffEpochBlocked(kickoffEpoch)) return false;
         const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
         const stableMarker = canonicalizeSceneUnitId(
             incomingMarker,
@@ -11915,6 +11952,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return true;
         }
 
+        if (storyboardKickoffEpochBlocked(kickoffEpoch)) {
+            releaseKickoffClaim();
+            return false;
+        }
         storyboardKickoffByMarkerRef.current.add(stableMarker);
         storyboardKickoffByDbIdRef.current.add(dbSceneId);
         const startingProgress = updateStoryboardTaskItem(stableMarker, {
@@ -11972,6 +12013,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         // Continue to generate; failure path below still heals if shots exist.
                     }
                 }
+                if (storyboardKickoffEpochBlocked(kickoffEpoch)) {
+                    throw new Error('storyboard_kickoff_superseded');
+                }
                 const generatingProgress = updateStoryboardTaskItem(stableMarker, { status: 'generating' });
                 publishStoryboardTaskPanelStatus({
                     markerSceneId: stableMarker,
@@ -11982,10 +12026,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const result = await generateSceneShots(dbSceneId, {
                     function_name: 'script_analysis',
                     ...(force ? { replace_existing: true } : {}),
+                }, {
+                    onTaskCreated: (taskId) => {
+                        const stableTaskId = String(taskId || '').trim();
+                        if (!stableTaskId) return;
+                        if (storyboardKickoffEpochBlocked(kickoffEpoch)) {
+                            void stopAsyncTask(stableTaskId);
+                            return;
+                        }
+                        activeAnalysisTaskIdsRef.current.add(stableTaskId);
+                    },
                 });
                 if (result?.skipped_existing) {
                     const kept = Number(result.existing_shot_count || 0);
                     return completeFromExistingShots(dbSceneId, kept > 0 ? kept : 1);
+                }
+                if (storyboardKickoffEpochBlocked(kickoffEpoch)) {
+                    throw new Error('storyboard_kickoff_superseded');
                 }
                 const generatedRows = Array.isArray(result?.content) ? result.content : [];
                 if (!generatedRows.length) {
@@ -12071,6 +12128,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
                 return true;
             } catch (err) {
+                if (/storyboard_kickoff_superseded/i.test(String(err?.message || err || ''))) {
+                    releaseKickoffClaim();
+                    return false;
+                }
                 const errMsgEarly = resolveStoryboardFailureMessage(err);
                 const duplicateInFlight = /storyboard_generation_already_running/i.test(errMsgEarly)
                     || Number(err?.errorCode || err?.response?.status || 0) === 409;
@@ -12168,12 +12229,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [activeEpisode, kickoffStoryboardForImportedScene]);
 
     const kickoffStoryboardsFromSuccessfulStagingNodes = useCallback(async (nodes = []) => {
-        if (isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
-            localStopRequested: analysisStopRequestedRef.current,
-            localStopReason: analysisStopReasonRef.current,
-        })) return;
+        const kickoffEpoch = analysisKickoffEpochRef.current;
+        if (storyboardKickoffEpochBlocked(kickoffEpoch)) return;
         const autoStart = await isStoryboardAutoStartEnabled();
-        if (!autoStart) return;
+        if (!autoStart || storyboardKickoffEpochBlocked(kickoffEpoch)) return;
         const list = Array.isArray(nodes) ? nodes : [];
         for (const node of list) {
             if (String(node?.node_name || '').trim() !== 'scene_subskill_scene') continue;
@@ -12188,13 +12247,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 (canonical instanceof Set && canonical.size > 0)
                 || (liveImported instanceof Set && liveImported.size > 0)
             );
+            const sceneInThisRunAllowlist = allowlistActive && (
+                (canonical instanceof Set && canonical.size > 0 && isSceneIdInAllowlist(sceneId, canonical, episodePrefix))
+                || (liveImported instanceof Set && liveImported.size > 0 && isSceneIdInAllowlist(sceneId, liveImported, episodePrefix))
+            );
             if (!pipelineNodeHasStagingImportBody({ ...node, status: 'success' })) {
                 const workspaceId = Number(node?.runtime_meta?.workspace_import?.workspace_scene_id || 0);
                 const thisRunNode = !shouldRejectLeftoverStagingKickoff({
                     fullRestartGate: analysisFullRestartGateRef.current,
                     node,
                     runStartedAt: analysisTimerStartedAtRef.current,
-                    inThisRunAllowlist: allowlistActive,
+                    inThisRunAllowlist: sceneInThisRunAllowlist,
                 });
                 if (!(workspaceId > 0 && thisRunNode)) continue;
             }
@@ -12211,10 +12274,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 fullRestartGate: analysisFullRestartGateRef.current,
                 node,
                 runStartedAt: analysisTimerStartedAtRef.current,
-                inThisRunAllowlist: allowlistActive && (
-                    (canonical instanceof Set && canonical.size > 0 && isSceneIdInAllowlist(sceneId, canonical, episodePrefix))
-                    || (liveImported instanceof Set && liveImported.size > 0 && isSceneIdInAllowlist(sceneId, liveImported, episodePrefix))
-                ),
+                inThisRunAllowlist: sceneInThisRunAllowlist,
             })) {
                 continue;
             }
@@ -12258,6 +12318,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             // Only kick storyboard after a real 建置+入戏 body. Incomplete staging
             // (missing end marker) must stay failed and must not open this gate.
+            if (storyboardKickoffEpochBlocked(kickoffEpoch)) return;
             await registerSceneImportedAndKickoffStoryboard({
                 sceneId,
                 sceneOrder: Number(node?.scene_order || meta.scene_order || 0) || deriveSceneOrderFromSceneId(sceneId),
@@ -12276,6 +12337,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [kickoffStoryboardsFromSuccessfulStagingNodes]);
 
     const flushPendingStoryboardKickoffs = useCallback(async (reason = '') => {
+        const kickoffEpoch = analysisKickoffEpochRef.current;
+        if (storyboardKickoffEpochBlocked(kickoffEpoch)) return { started: 0, total: 0, reason };
         // Re-queue stranded waiting_env / ENV-blocked failures when env is ready but the
         // pending list was emptied by a prior flush that failed without updating status
         // (e.g. stale Scene.id), or ENV was retried after a hard block.
@@ -12320,6 +12383,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let started = 0;
         const dropStaleHint = /stranded|env-ready|env-subtask|failed-route|retry/i.test(String(reason || ''));
         for (const item of queued) {
+            if (storyboardKickoffEpochBlocked(kickoffEpoch)) break;
             const ok = await kickoffStoryboardForImportedScene({
                 ...item,
                 // Drop stale db hint on stranded recovery so resolve walks current workspace.
@@ -12368,8 +12432,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const ensureStoryboardTasksForImportedScenes = useCallback(async (importReport = null) => {
+        const kickoffEpoch = analysisKickoffEpochRef.current;
+        if (storyboardKickoffEpochBlocked(kickoffEpoch)) {
+            return { started: 0, skipped: true, totalTracked: storyboardKickoffByDbIdRef.current.size };
+        }
         const autoStart = await isStoryboardAutoStartEnabled();
-        if (!autoStart) {
+        if (!autoStart || storyboardKickoffEpochBlocked(kickoffEpoch)) {
             return { started: 0, skipped: true, totalTracked: storyboardKickoffByDbIdRef.current.size };
         }
 
@@ -12509,6 +12577,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         let started = 0;
         for (const item of pending) {
+            if (storyboardKickoffEpochBlocked(kickoffEpoch)) break;
             const ok = await kickoffStoryboardForImportedScene({
                 ...item,
                 resumeQueued: Boolean(item.resumeQueued),
@@ -14686,6 +14755,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         let loadInFlight = false;
         const loadPipelineNodes = async () => {
+            const loadEpoch = analysisKickoffEpochRef.current;
             if (!episodeId) {
                 if (mounted) {
                     diagnosticsPipelineNodesRef.current = [];
@@ -14701,6 +14771,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             try {
                 const snapshot = await getEpisodeProgressSnapshot(episodeId);
                 if (!mounted || epoch !== diagnosticsEpochRef.current) return;
+                if (storyboardKickoffEpochBlocked(loadEpoch)) {
+                    if (timer) {
+                        window.clearInterval(timer);
+                        timer = null;
+                    }
+                    return;
+                }
                 const nodes = Array.isArray(snapshot?.pipeline_nodes) ? snapshot.pipeline_nodes : [];
                 const units = Array.isArray(snapshot?.scene_units) ? snapshot.scene_units : [];
                 applySnapshot(nodes, units);
@@ -14721,7 +14798,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     isStoryboardPipelineNodeName(node?.node_name)
                     && ['queued', 'running'].includes(String(node?.status || '').trim().toLowerCase())
                 ));
-                const envNodeDone = hasSuccessfulPipelineNode(nodes, 'asset_design_environment');
+                const envNodeDone = (Array.isArray(nodes) ? nodes : []).some((node) => (
+                    String(node?.node_name || '').trim() === 'asset_design_environment'
+                    && ['success', 'warning'].includes(String(node?.status || '').trim().toLowerCase())
+                    && isThisRunPipelineNode(node, analysisTimerStartedAtRef.current)
+                    && environmentAssetDesignLaunchedRef.current
+                ));
                 if (envNodeDone && (analysisFullRestartGateRef.current || !environmentAssetReadyRef.current)) {
                     analysisFullRestartGateRef.current = false;
                     environmentAssetReadyRef.current = true;
@@ -14793,6 +14875,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const retryCount = Number(node?.retry_count || 0);
             const fingerprint = `${status}|${retryCount}|${currentStep}|${String(node?.updated_at || '')}`;
             const stateKey = [nodeName, sceneId, String(node?.asset_type || '').trim()].filter(Boolean).join(':');
+            if (isSceneSubskillNode && analysisFullRestartGateRef.current) {
+                const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+                const canonical = orchestrationCanonicalSceneIdsRef.current;
+                const liveImported = orchestrationLiveImportedScenesRef.current;
+                const inThisRun = (
+                    (canonical instanceof Set && canonical.size > 0 && isSceneIdInAllowlist(sceneId, canonical, episodePrefix))
+                    || (liveImported instanceof Set && liveImported.size > 0 && isSceneIdInAllowlist(sceneId, liveImported, episodePrefix))
+                );
+                if (!inThisRun) {
+                    nextMap[stateKey] = {
+                        status,
+                        retryCount,
+                        fingerprint,
+                        currentStep,
+                    };
+                    return;
+                }
+            }
             const previous = previousMap[stateKey];
             nextMap[stateKey] = { status, retryCount, fingerprint, currentStep };
             if (previous?.fingerprint === fingerprint) return;
@@ -17280,6 +17380,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, []);
 
     const resetEpisodeDiagnosticsProgress = useCallback(async () => {
+        analysisKickoffEpochRef.current += 1;
         analysisTrustLiveDownstreamOnlyRef.current = true;
         analysisFullRestartGateRef.current = true;
         // Bump the run clock first so leftover completed items cannot look like this-run.
@@ -17961,6 +18062,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const stopMessage = String(message || '').trim()
             || t('已请求停止当前剧本分析任务。', 'Stop requested for the current scene analysis task.');
 
+        analysisKickoffEpochRef.current += 1;
         analysisStopRequestedRef.current = true;
         analysisStopReasonRef.current = 'user';
         analysisAwaitingStoryboardRef.current = false;
@@ -23911,6 +24013,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisEntryLockRef.current = true;
         analysisClaimTokenRef.current = claim.token;
         analysisProgressDismissedRef.current = false;
+        analysisKickoffEpochRef.current += 1;
+        const supersededTaskIds = Array.from(new Set([
+            ...Array.from(activeAnalysisTaskIdsRef.current || []),
+            String(activeAnalysisTaskId || '').trim(),
+        ].filter(Boolean)));
+        if (supersededTaskIds.length > 0) {
+            void Promise.allSettled(supersededTaskIds.map((taskId) => stopAsyncTask(taskId)));
+        }
         analysisStopRequestedRef.current = false;
         analysisStopReasonRef.current = '';
         analysisTrustLiveDownstreamOnlyRef.current = true;

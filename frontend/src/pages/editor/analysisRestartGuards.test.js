@@ -23,20 +23,20 @@ describe('analysisRestartGuards', () => {
         }), true);
     });
 
-    it('keeps this-run staging nodes after the restart clock', () => {
+    it('rejects staging that finishes after the new clock but is not in this run', () => {
         const runStartedAt = Date.parse('2026-09-18T16:57:49.000Z');
-        const thisRun = {
+        const latePreviousRun = {
             node_name: 'scene_subskill_scene',
             status: 'success',
-            scene_id: 'EP01_SC01',
+            scene_id: 'EP01_SC02',
             updated_at: '2026-09-18T17:10:00.000Z',
         };
-        assert.equal(isThisRunPipelineNode(thisRun, runStartedAt), true);
+        assert.equal(isThisRunPipelineNode(latePreviousRun, runStartedAt), true);
         assert.equal(shouldRejectLeftoverStagingKickoff({
             fullRestartGate: true,
-            node: thisRun,
+            node: latePreviousRun,
             runStartedAt,
-        }), false);
+        }), true);
     });
 
     it('allows this-run allowlist scenes even if the staging timestamp looks old', () => {

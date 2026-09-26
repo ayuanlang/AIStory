@@ -9,6 +9,7 @@ Completed results are kept for a limited TTL so memory doesn't grow unbounded.
 """
 
 import asyncio
+import contextvars
 import logging
 import threading
 import time
@@ -22,6 +23,12 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# Visible to the worker thread that runs submit()/submit_async_endpoint().
+_current_task_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "aistory_async_task_id",
+    default="",
+)
 
 # How long (seconds) completed/failed results stay in memory before eviction.
 _RESULT_TTL = max(60, int(os.getenv("ASYNC_TASK_RESULT_TTL_SECONDS", "300") or 300))
@@ -382,6 +389,19 @@ def _get_or_load_task_record(task_id: str) -> Optional["_TaskRecord"]:
     return rec
 
 
+def is_current_task_cancel_requested() -> bool:
+    """True when the task running on this worker thread was canceled.
+
+    Scene pipelines call this between scenes. Cancel only flips a flag; the
+    worker otherwise keeps writing the next scene into the new analysis.
+    """
+    task_id = str(_current_task_id.get() or "").strip()
+    if not task_id:
+        return False
+    rec = _get_or_load_task_record(task_id)
+    return bool(rec and getattr(rec, "cancel_requested", False))
+
+
 def _resolve_task_result_for_client(rec: "_TaskRecord") -> Any:
     result = rec.result
     if not _is_truncated_task_result(result):
@@ -481,6 +501,7 @@ def submit(fn: Callable[[], Any], *, user_id: Optional[int] = None, kind: str = 
     def _worker():
         rec.status = "running"
         _save_task_to_db(rec)
+        token = _current_task_id.set(task_id)
         try:
             if rec.cancel_requested:
                 rec.status = "canceled"
@@ -516,6 +537,7 @@ def submit(fn: Callable[[], Any], *, user_id: Optional[int] = None, kind: str = 
             _save_task_to_db(rec, result_override=full_for_db)
             if rec.status == "completed" and full_for_db is not None:
                 rec.result = _compact_task_result(full_for_db)
+            _current_task_id.reset(token)
 
     _executor.submit(_worker)
 

@@ -24,6 +24,8 @@ export function isThisRunPipelineNode(node, runStartedAt, slackMs = THIS_RUN_PIP
 
 /**
  * Full restart must ignore last-run staging success until this-run scenes exist.
+ * A fresh updated_at is not proof of this run: the previous task keeps writing
+ * 建置 nodes after Stop / a new 全局统筹 has already started.
  * Do not use trustLiveDownstreamOnly here — that flag stays true for the whole
  * analysis and would block this-run 建置 after 美术指导 finishes.
  */
@@ -38,7 +40,8 @@ export function shouldRejectLeftoverStagingKickoff({
     const runAt = Number(runStartedAt || 0);
     // No run clock: cannot prove leftover, so do not block this-run 建置.
     if (runAt <= 0) return false;
-    if (isThisRunPipelineNode(node, runStartedAt)) return false;
+    // Ignore node; a previous run's late completion is timestamped after this clock.
+    void node;
     return true;
 }
 
