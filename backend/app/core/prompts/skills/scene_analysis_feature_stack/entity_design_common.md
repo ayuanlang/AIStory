@@ -44,7 +44,7 @@ Subject Index 是输出侧实体名的**唯一合法来源**。凡实体名—�
 
 - **[Node 1] World Bible**：读 `Project Context.Type` / `Genre` / `Base Positioning` / `Global_Style` / Visual Backfill（`tone`/`lighting`/`borrowed_films`/`color_palette`/`color_spectrum`）/ 时代地域；统一视觉体系，禁反向题材化。礼法时地见 §1.2。动笔前按 §1.5 **继承已锁色卡**一次定全项目大光比+主冷暖四层色谱（**缺 `color_palette` 时本实体 CHAR/PROP/ENV 必须主动按顶级大片锁卡**，禁只写冷暖标签），再按 §1.3 主光源先行。题材气质（喜剧明亮/情感温润/仙侠空灵/写实材质可信/恐怖可压暗但仍可读）**不得**单独触发真人专属；渲染三选一**仅** §1.6。正向词按 §1.6 互斥套用（真人：真实体征/物理材质/自然光学——Character 定妆改走 character §2.0/§2.3；三维→各分型三维节；二维→各分型二维节；未命中默认真人并在 logic 标注）。
 - **[Node 2] 选角**：characters 索引 → 反同质化、合理头身比；真人见 character §2.0–§2.3。复用 Index `entity_attributes`；**Index 已写明任何要素须按 §1.3 零缺失回写入 `generation_prompt_cn`**（CHAR 纯换装衍生的未改面貌/身材除外，见 §1.3 例外）。
-- **[Node 3] 美术指导**：环境/道具美术深化与材质补足（Stage 1/2.1 不预写高级美术细节）；环境另须四向深化，增补边界见 environment §2.5。不得重定义抽取边界、Clean Plate 归属、Subject 分类。
+- **[Node 3] 美术指导**：环境/道具美术深化与材质补足（Stage 1/2.1 不预写高级美术细节）；环境另须四向深化，增补边界见 environment §2.5。依赖参考图的角色、道具、环境主体，其外形（颜色、形状、大小、材质、纹样）和这些外形的变化，只在美术指导的参考图里完成（角色定妆、道具美术、环境资产）。文戏、武戏、现场编排、建置与入戏、生成分镜不写这些。不依赖参考图的，包括特效，其颜色、形状、大小和纹样仍由武戏与分镜写。不得重定义抽取边界、Clean Plate 归属、Subject 分类。
 - **[Node 4] 封装 TD**：清单只读——禁新增/拆分/合并/重命名；缺口标「上游待补（回流 Stage 2）」。`subject_type` 归一后唯一数组归属：`character→characters[]`，`prop→props[]`，`environment→environments[]`，`cover_poster→posters[]`；单实体单归属。**命名终检先于其他**：`name`↔`subject_name_zh`，`name_en`/`base_name_en`↔`subject_name_en`，依赖名↔Index；任一字不等→废弃。遗漏/错分/重复/全入角色数组/Index 要素未进 prompt → Final Consistency Report 废弃重算。
 
 ---
