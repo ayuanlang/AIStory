@@ -371,11 +371,53 @@ def test_sample_ingest_writes_frame_and_reference_anchors():
     }
     zero = by_name["0度客栈大堂"]["anchor_description"]
     assert zero == "简要特征=柜台"
+    assert by_name["180度客栈大堂"]["anchor_description"] == "简要特征=正门"
     assert "画左=" not in zero
     assert "楼梯口" not in zero
     assert "账房窗" not in zero
     assert "参照物=" not in zero
     assert by_name["0度客栈大堂"]["generation_prompt_cn"].startswith("所属主环境=客栈大堂")
+
+
+def test_chosen_reference_subjects_cover_explicit_env_anchors():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        collect_chosen_reference_subjects,
+        parse_derived_env_extract_items,
+    )
+
+    text = (
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=0｜"
+        "类型=第一刀｜背景=客栈大门｜画左=贴墙木楼梯｜画右=雕花窗格｜画外=红木柜台\n"
+        "[DERIVED_ENV] 名称=180度客栈大堂｜所属主环境=客栈大堂｜view_angle_from_main=180｜"
+        "类型=第一刀｜背景=红木柜台｜画左=雕花窗格｜画右=贴墙木楼梯｜画外=客栈大门\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+        "[BEAT_START:1]\n"
+        "CHAR:[@掌柜]｜方式=相对｜站位=锚=八仙桌＋东｜锚=原点\n"
+        "当前环境=ENV:[0度客栈大堂]｜[DERIVED_ENV:0度客栈大堂]\n"
+        "机位锚=客栈大门+CHAR:[@掌柜]\n"
+        "[BEAT_END:1]\n"
+        "[BEAT_START:2]\n"
+        "CHAR:[@掌柜]｜方式=相对｜锚=雕花窗格｜锚=PROP:[算盘]\n"
+        "当前环境=ENV:[0度客栈大堂]｜[DERIVED_ENV:0度客栈大堂]\n"
+        "[BEAT_END:2]\n"
+        "[BEAT_START:3]\n"
+        "CHAR:[@客人]｜方式=相对｜锚=红木柜台｜锚=CHAR:[@掌柜]\n"
+        "当前环境=ENV:[180度客栈大堂]｜[DERIVED_ENV:180度客栈大堂]\n"
+        "[BEAT_END:3]\n"
+    )
+    chosen = collect_chosen_reference_subjects(text)
+    assert chosen["0度客栈大堂"] == ["八仙桌", "客栈大门", "雕花窗格"]
+    assert chosen["180度客栈大堂"] == ["红木柜台"]
+    by_name = {item["name"]: item for item in parse_derived_env_extract_items(text)}
+    zero = build_derived_environment_item(by_name["0度客栈大堂"])
+    reverse = build_derived_environment_item(by_name["180度客栈大堂"])
+    assert zero["anchor_description"] == "简要特征=八仙桌，客栈大门，雕花窗格"
+    assert "贴墙木楼梯" not in zero["anchor_description"]
+    assert "掌柜" not in zero["anchor_description"]
+    assert reverse["anchor_description"] == "简要特征=红木柜台"
+    assert "八仙桌" not in reverse["anchor_description"]
+    assert zero["custom_attributes"]["chosen_references"] == "八仙桌、客栈大门、雕花窗格"
 
 
 def test_derived_env_anchors_drop_character_and_prop_content():

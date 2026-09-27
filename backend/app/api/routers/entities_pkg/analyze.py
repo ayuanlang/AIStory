@@ -216,7 +216,7 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
         common
         + "衍生环境 generation_prompt_cn 格式（强制，截取放大；第一刀只切割，不写几何/楼底）：\n"
         "- §A（仅 logic）：所属主环境= + 四宫度数=左上0度｜右上90度｜左下180度｜右下270度 + 截取宫格（左上0度/右上90度/左下180度/右下270度，与 N 同核）；禁写开篇拓扑/楼底。主环境资产已存在时，用正则匹配其 `四宫度数=` 后按该行度数裁切对应宫格。\n"
-        "- anchor_description（强制）：只写该衍生环境正面的 2–3 个简要主体特征，句式 `简要特征=半开厚重木门，旧石灰墙`。正面=本角所对的那一面。禁止整体环境锚点、禁止挂靠锚点、禁止背景=/画左=/画右=/画外=，禁止从侧面或画外凑数。\n"
+        "- anchor_description（强制）：不另选。照抄程序已从现场编排写入的 `简要特征=`。那是本场选用该衍生时点名的环境参考主体，须全部保留。没有这串时才写该角正面最多 3 个简要主体名。禁止整体环境锚点、禁止挂靠锚点、禁止背景=/画左=/画右=/画外=。\n"
         "- §B 第一刀：所属主环境={名}。angle_key={名}|{N}。四宫度数=左上0度｜右上90度｜左下180度｜右下270度。截取宫格={左上0度|右上90度|左下180度|右下270度}。机位=望向={正北|正东|正南|正西}｜远锚={该向后景最远可见主体}｜禁以画外主体定位。禁止重写桌椅朝向、左右对调、扇区换边。请严格要求按对应主环境「{名}」四向拼图参考图，截取并放大其中对应的明确宫格位置（{宫格}），不要重新描述画面细节，直接作为本镜头的最终画面。切割衍生环境时均按16:9固定比例，并保证高分辨率。只切割，不要改画。成稿须为单张完整镜头：禁止保留四向拼图的宫格分割线、宫格边框、格标/角标、十字拼缝或任何拼图装配痕迹。\n"
         "- §B 衍生的衍生：所属主环境={名}。angle_key={名}|{N}。以已切割的同角衍生「{同角已切割衍生名}」参考图为本镜头最终画面。16:9，高分辨率。不要改构图，不要重切宫格，不要描述未改实体。禁止画回宫格分割线、格标或拼缝。禁止复述陈设/开篇拓扑/坡向。\n"
         "- 依赖图（最高；对应必须准确）：第一刀视角衍生 visual_dependencies 必须且仅能 [\"ENV:[所属主环境名]\"]。衍生的衍生必须且仅能 [\"ENV:[同角已切割衍生名]\"]（如 ENV:[0度港口办公室]），N 必须与本行相同；禁止挂他角切割图；禁止在已有同角切割时回挂主环境四向拼图；禁止 CHAR/PROP/海报/他主。对应参考图未就绪不得当无参考文生。\n"
@@ -327,7 +327,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
     anchor_placeholder = (
         "3-5 English anchor phrases"
         if is_main_env
-        else "简要特征=正面主体甲，正面主体乙"
+        else "简要特征=已选用的环境参考主体"
     )
     deps_rule = (
         "visual_dependencies must be [] and type=BaselineDefinition, unless this is a floor-split style-dependent main environment: then type=StyleReference and visual_dependencies=[\"ENV:[风格父主环境名]\"] (another main ENV only; still write a full independent four-direction prompt)."

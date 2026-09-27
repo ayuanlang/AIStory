@@ -526,6 +526,119 @@ def _front_brief_features(value: Any, forbidden: Optional[Set[str]] = None) -> L
     return features
 
 
+_BEAT_BLOCK_PATTERN = re.compile(
+    r"\[BEAT_START:[^\]]*\](.*?)\[BEAT_END:[^\]]*\]",
+    re.DOTALL,
+)
+_CAMERA_ANCHOR_PATTERN = re.compile(r"机位锚\s*=\s*([^｜|\r\n]+)")
+# `站位=锚=` is the staging form. `=` is a delimiter here; 机位锚/距锚/挂靠锚点
+# still fail because the character before 锚 is not a delimiter.
+_STAGING_ANCHOR_PATTERN = re.compile(r"(?:^|[｜|\s=])锚\s*=\s*([^｜|\r\n]+)")
+_ANCHOR_NAME_SPLIT = re.compile(r"[+＋]")
+_GLUED_ANCHOR_FIELD = re.compile(r"(?:距锚|侧|辅|偏|层|距种)\s*=.*$")
+_NOT_REFERENCE_SUBJECT = re.compile(
+    r"^(?:原点|无|承上|同上|见上|东|南|西|北|贴身|一臂|两步|三步|五步|"
+    r"主位|客位|床头|床尾|近门一侧|远门一侧|近窗一侧|里侧|客侧|固着侧|"
+    r"[东西南北](?:面|侧)?(?:偏[东西南北])?(?:[\d.]+米)?)$"
+)
+
+
+def _reference_subject_names(value: Any, forbidden: Optional[Set[str]] = None) -> List[str]:
+    """Environment fixtures explicitly named as 参考主体. Drop people, props, origin."""
+    text = unwrap_typed_environment_name(_clean(value))
+    if not text or text.lower() in _EMPTY_FIELD_MARKERS:
+        return []
+    names: List[str] = []
+    seen: Set[str] = set()
+    for part in _ANCHOR_NAME_SPLIT.split(text):
+        name = unwrap_typed_environment_name(_clean(_GLUED_ANCHOR_FIELD.sub("", part)))
+        if not name or name.lower() in _EMPTY_FIELD_MARKERS or "=" in name:
+            continue
+        if _NOT_REFERENCE_SUBJECT.match(name):
+            continue
+        if not _is_env_fixture_name(name, forbidden):
+            continue
+        if name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+def _derived_env_names_in_text(blob: str) -> List[str]:
+    names: List[str] = []
+    seen: Set[str] = set()
+    for match in DERIVED_ENV_TAG_PATTERN.finditer(blob):
+        name = canonicalize_derived_environment_name(match.group(1))
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    if names:
+        return names
+    for match in _CURRENT_ENV_FIELD_PATTERN.finditer(blob):
+        name = canonicalize_derived_environment_name(match.group(2))
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+def _remember_reference_subjects(
+    bucket: Dict[str, List[str]],
+    env_names: Sequence[str],
+    subjects: Sequence[str],
+) -> None:
+    for env_name in env_names:
+        chosen = bucket.setdefault(env_name, [])
+        for subject in subjects:
+            if subject not in chosen:
+                chosen.append(subject)
+
+
+def _subjects_in_blob(blob: str, forbidden: Optional[Set[str]] = None) -> List[str]:
+    names: List[str] = []
+    seen: Set[str] = set()
+    for pattern in (_STAGING_ANCHOR_PATTERN, _CAMERA_ANCHOR_PATTERN):
+        for match in pattern.finditer(blob):
+            for name in _reference_subject_names(match.group(1), forbidden):
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+    return names
+
+
+def collect_chosen_reference_subjects(text: str) -> Dict[str, List[str]]:
+    """Env subjects used as 参考主体 on beats that selected each derived environment."""
+    source = str(text or "")
+    forbidden = collect_subject_names_from_text(source)
+    chosen: Dict[str, List[str]] = {}
+    covered: List[Tuple[int, int]] = []
+    for match in _BEAT_BLOCK_PATTERN.finditer(source):
+        covered.append(match.span())
+        block = match.group(1) or ""
+        _remember_reference_subjects(
+            chosen,
+            _derived_env_names_in_text(block),
+            _subjects_in_blob(block, forbidden),
+        )
+    extract_spans = [match.span() for match in DERIVED_ENV_EXTRACT_BLOCK_PATTERN.finditer(source)]
+
+    def _inside(spans: Sequence[Tuple[int, int]], index: int) -> bool:
+        return any(start <= index < end for start, end in spans)
+
+    for line_match in re.finditer(r"^.*$", source, re.MULTILINE):
+        if _inside(covered, line_match.start()) or _inside(extract_spans, line_match.start()):
+            continue
+        line = line_match.group(0)
+        if "[DERIVED_ENV:" not in line and "当前环境=" not in line:
+            continue
+        _remember_reference_subjects(
+            chosen,
+            _derived_env_names_in_text(line),
+            _subjects_in_blob(line, forbidden),
+        )
+    return chosen
+
+
 def format_derived_anchor_description(
     *,
     background: str = "",
@@ -537,10 +650,19 @@ def format_derived_anchor_description(
     world_anchor: str = "",
     hang_anchor: str = "",
     hang_visible: bool = False,
+    chosen_references: Optional[Sequence[str]] = None,
 ) -> str:
-    """特征锚点：只写该衍生环境正面的 2–3 个简要主体特征。"""
+    """特征锚点：覆盖本场选用该衍生时点名的环境参考主体；没有时才退回正面 2–3 个。"""
     del frame_left, frame_right, offscreen, references, world_anchor, hang_anchor, hang_visible
-    features = _front_brief_features(background, forbidden)
+    features: List[str] = []
+    seen: Set[str] = set()
+    for raw in chosen_references or ():
+        for name in _reference_subject_names(raw, forbidden):
+            if name not in seen:
+                seen.add(name)
+                features.append(name)
+    if not features:
+        features = _front_brief_features(background, forbidden)
     if not features:
         return ""
     return "简要特征=" + "，".join(features)
@@ -902,6 +1024,14 @@ def parse_derived_env_extract_items(text: str) -> List[Dict[str, Any]]:
         if "references" in row:
             row["references"] = ""
 
+    chosen_by_env = collect_chosen_reference_subjects(source)
+    for row in by_name.values():
+        name = canonicalize_derived_environment_name(
+            _clean(row.get("name")),
+            row,
+        )
+        row["chosen_references"] = list(chosen_by_env.get(name) or [])
+
     return list(by_name.values())
 
 
@@ -968,16 +1098,22 @@ def build_derived_environment_item(
         angle,
         look_up=_row_looks_up(resolved),
     )
+    chosen_references = [
+        _clean(name)
+        for name in (raw_item.get("chosen_references") or [])
+        if _clean(name)
+    ]
     anchor = format_derived_anchor_description(
         background=background,
         frame_left=frame_left,
         frame_right=frame_right,
         offscreen=offscreen,
         references=references,
-        forbidden=forbidden,
+        forbidden=forbidden | collect_subject_names_from_text("｜".join(chosen_references)),
         world_anchor=world_anchor,
         hang_anchor=hang_anchor,
         hang_visible=hang_visible,
+        chosen_references=chosen_references,
     )
     camera = format_camera_switch_line(
         angle=angle,
@@ -1084,6 +1220,7 @@ def build_derived_environment_item(
             "hang_anchor": hang_anchor,
             "hang_fall": hang_fall,
             "hang_visible": hang_visible,
+            "chosen_references": "、".join(chosen_references),
         },
     }
 
