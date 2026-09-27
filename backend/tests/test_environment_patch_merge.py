@@ -316,6 +316,8 @@ def test_reused_environment_opening_is_rewritten_for_downstream():
     assert "南墙正中一扇木门" in injected
     assert "左上0度格" not in injected
     assert "重新描述" in injected
+    assert "门窗开闭按本场场头重裁" in injected
+    assert "位置变了的物品改落点" in injected
 
     reused_items = [
         {
