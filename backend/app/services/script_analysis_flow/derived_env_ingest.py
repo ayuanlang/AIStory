@@ -499,6 +499,33 @@ def format_offscreen_anchor(value: Any, forbidden: Optional[Set[str]] = None) ->
     return f"{text}{_OFFSCREEN_MARK}"
 
 
+_FRONT_FEATURE_SPLIT = re.compile(r"[,，、+/＋]|以及|和|与")
+_MAX_FRONT_FEATURES = 3
+
+
+def _front_brief_features(value: Any, forbidden: Optional[Set[str]] = None) -> List[str]:
+    """Up to three short subject features on the facing side. No sides, no offscreen."""
+    text = _clean(value)
+    if not text or text.lower() in _EMPTY_FIELD_MARKERS:
+        return []
+    blocked = set(forbidden or ()) | collect_subject_names_from_text(text)
+    features: List[str] = []
+    seen: Set[str] = set()
+    for part in _FRONT_FEATURE_SPLIT.split(text):
+        name = _strip_offscreen_mark(part)
+        if not name or name.lower() in _EMPTY_FIELD_MARKERS or "=" in name:
+            continue
+        if not _is_env_fixture_name(name, blocked):
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        features.append(name)
+        if len(features) >= _MAX_FRONT_FEATURES:
+            break
+    return features
+
+
 def format_derived_anchor_description(
     *,
     background: str = "",
@@ -511,38 +538,12 @@ def format_derived_anchor_description(
     hang_anchor: str = "",
     hang_visible: bool = False,
 ) -> str:
-    """Asset Anchor Description: 规划整体环境锚点 ± 可见挂靠；无规划时回退 背景/画左/画右/画外。"""
-    del references
-    world = _clean(world_anchor)
-    hang = _anchor_slot(hang_anchor, forbidden)
-    if world:
-        parts = [f"整体环境锚点={world}"]
-        if hang_visible and hang:
-            parts.append(f"挂靠锚点={hang}")
-        return "｜".join(parts)
-    blob = "｜".join(
-        [
-            str(background or ""),
-            str(frame_left or ""),
-            str(frame_right or ""),
-            str(offscreen or ""),
-        ]
-    )
-    blocked = set(forbidden or ()) | collect_subject_names_from_text(blob)
-    parts: List[str] = []
-    bg = _anchor_slot(background, blocked)
-    left = _anchor_slot(frame_left, blocked)
-    right = _anchor_slot(frame_right, blocked)
-    off = format_offscreen_anchor(offscreen, blocked)
-    if bg:
-        parts.append(f"背景={bg}")
-    if left:
-        parts.append(f"画左={left}")
-    if right:
-        parts.append(f"画右={right}")
-    if off:
-        parts.append(f"画外={off}")
-    return "｜".join(parts)
+    """特征锚点：只写该衍生环境正面的 2–3 个简要主体特征。"""
+    del frame_left, frame_right, offscreen, references, world_anchor, hang_anchor, hang_visible
+    features = _front_brief_features(background, forbidden)
+    if not features:
+        return ""
+    return "简要特征=" + "，".join(features)
 
 
 def _parse_field_line(raw: str) -> Dict[str, str]:
