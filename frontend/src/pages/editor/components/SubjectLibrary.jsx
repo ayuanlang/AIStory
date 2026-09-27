@@ -332,18 +332,102 @@ const formatEntityDependencyLabel = (entry) => {
     return target?.name || target?.name_en || token || String(target?.id || '');
 };
 
-/** First visual dependency that already has a bound image. Same type wins. */
-const pickBoundReuseDependency = (entity, entityPool) => {
-    const hostId = String(entity?.id || '').trim();
-    const hostType = String(entity?.type || '').trim().toLowerCase();
-    const bound = getEntityVisualDependencyTargets(entity, entityPool).filter(({ entity: target }) => {
-        if (!target) return false;
-        if (hostId && String(target.id || '').trim() === hostId) return false;
-        return Boolean(String(target?.image_url || '').trim());
+const dependencyTypeHint = (token) => {
+    const raw = String(token || '').trim();
+    if (/^CHAR\s*[:：]/i.test(raw)) return 'character';
+    if (/^PROP\s*[:：]/i.test(raw)) return 'prop';
+    if (/^ENV\s*[:：]/i.test(raw)) return 'environment';
+    return '';
+};
+
+const entityNameKeySet = (entity) => {
+    const keys = new Set();
+    [entity?.name, entity?.name_en].forEach((value) => {
+        const key = normalizeSubjectKeyForDeps(value);
+        if (key) keys.add(key);
     });
-    if (!bound.length) return null;
-    const sameType = bound.find(({ entity: target }) => String(target?.type || '').trim().toLowerCase() === hostType);
-    return (sameType || bound[0]).entity;
+    return keys;
+};
+
+const reuseSourceRankBetter = (next, prev) => {
+    if (next.distance !== prev.distance) return next.distance < prev.distance;
+    if (next.prior !== prev.prior) return next.prior < prev.prior;
+    if (next.sameType !== prev.sameType) return next.sameType < prev.sameType;
+    return next.id > prev.id;
+};
+
+/**
+ * Same-named subject in the nearest other episode.
+ * The dependency row itself is not the source; only its name is.
+ * Caller must already confirm the candidate's current image is a live asset reference.
+ */
+const pickNearestEpisodeSameNameReuseSource = (entity, entityPool, episodeNumberOf, isReusableSource) => {
+    const hostId = String(entity?.id || '').trim();
+    const hostEpisodeId = String(entity?.episode_id || '').trim();
+    const hostEpisodeNumber = Number(episodeNumberOf?.(hostEpisodeId) || 0);
+    const hostType = String(entity?.type || '').trim().toLowerCase();
+    if (!hostEpisodeNumber) return null;
+
+    const specs = [];
+    parseVisualDependencies(entity?.visual_dependencies).forEach((token) => {
+        if (isDirectImageRefToken(token)) return;
+        const boundId = parseDependencyEntityId(token);
+        if (boundId) {
+            const bound = (entityPool || []).find((item) => String(item?.id || '').trim() === boundId);
+            if (!bound) return;
+            const keys = entityNameKeySet(bound);
+            if (!keys.size) return;
+            specs.push({
+                keys,
+                typeHint: String(bound?.type || '').trim().toLowerCase(),
+            });
+            return;
+        }
+        const key = normalizeSubjectKeyForDeps(token);
+        if (!key) return;
+        specs.push({
+            keys: new Set([key]),
+            typeHint: dependencyTypeHint(token),
+        });
+    });
+    if (!specs.length) return null;
+
+    let best = null;
+    specs.forEach((spec) => {
+        (entityPool || []).forEach((candidate) => {
+            if (!candidate || candidate.is_deleted) return;
+            const candidateId = String(candidate?.id || '').trim();
+            if (!candidateId || candidateId === hostId) return;
+            const candidateEpisodeId = String(candidate?.episode_id || '').trim();
+            if (!candidateEpisodeId || candidateEpisodeId === hostEpisodeId) return;
+            const candidateType = String(candidate?.type || '').trim().toLowerCase();
+            if (spec.typeHint && candidateType && candidateType !== spec.typeHint) return;
+            const keys = entityNameKeySet(candidate);
+            let nameHit = false;
+            for (const key of keys) {
+                if (spec.keys.has(key)) {
+                    nameHit = true;
+                    break;
+                }
+            }
+            if (!nameHit) return;
+            if (typeof isReusableSource === 'function' && !isReusableSource(candidate)) return;
+            const candidateEpisodeNumber = Number(episodeNumberOf?.(candidateEpisodeId) || 0);
+            if (!candidateEpisodeNumber) return;
+            const distance = Math.abs(candidateEpisodeNumber - hostEpisodeNumber);
+            if (!distance) return;
+            const rank = {
+                distance,
+                prior: candidateEpisodeNumber < hostEpisodeNumber ? 0 : 1,
+                sameType: hostType && candidateType === hostType ? 0 : 1,
+                id: Number(candidate.id) || 0,
+            };
+            if (!best || reuseSourceRankBetter(rank, best.rank)) {
+                best = { entity: candidate, rank };
+            }
+        });
+    });
+    return best?.entity || null;
 };
 
 const topoSortEntitiesByVisualDependencies = (entities, allEntities, nameMap) => {
@@ -2959,7 +3043,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             setAssets(imageAssets);
 
             const currentProjectKey = String(projectId || '').trim();
-            if (!currentProjectKey) return;
+            if (!currentProjectKey) return imageAssets;
 
             const hasCurrentProjectAssets = imageAssets.some((asset) => {
                 const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
@@ -2968,8 +3052,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             if (hasCurrentProjectAssets) {
                 setAssetProjectFilter(currentProjectKey);
             }
+            return imageAssets;
         } catch (e) {
             console.error(e);
+            return [];
         } finally {
             setAssetsLoading(false);
         }
@@ -7037,15 +7123,63 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const scopeLabel = entityEpisodeScope === 'current'
             ? t('当前分集', 'the current episode')
             : t('整个项目', 'the whole project');
+        const episodeList = Array.isArray(episodes) ? episodes : [];
+        const episodeNumberOf = (episodeId) => {
+            const id = String(episodeId || '').trim();
+            if (!id) return null;
+            const idx = episodeList.findIndex((ep) => String(ep?.id || '').trim() === id);
+            if (idx < 0) return null;
+            const ep = episodeList[idx];
+            if (!ep || ep.is_deleted) return null;
+            return resolveEpisodeNumber(ep, idx);
+        };
+        const urlsShareToken = (leftUrl, rightUrl) => {
+            const left = collectAssetUrlTokens(leftUrl);
+            const right = collectAssetUrlTokens(rightUrl);
+            for (const token of left) {
+                if (right.has(token)) return true;
+            }
+            return false;
+        };
+        const liveAssets = (await loadAssets()) || [];
+        const findLiveReferencedAsset = (candidate) => {
+            if (!candidate || candidate.is_deleted) return null;
+            const imageUrl = String(candidate?.image_url || '').trim();
+            if (!imageUrl) return null;
+            const entityId = String(candidate?.id || '').trim();
+            let best = null;
+            let bestScore = -1;
+            liveAssets.forEach((asset) => {
+                if (!asset || asset.is_deleted) return;
+                const assetUrl = String(asset?.url || '').trim();
+                if (!assetUrl || !urlsShareToken(imageUrl, assetUrl)) return;
+                const assetEntityId = String(getAssetEntityId(asset) || '').trim();
+                if (assetEntityId && entityId && assetEntityId !== entityId) return;
+                const score = assetEntityId === entityId ? 2 : 1;
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = asset;
+                }
+            });
+            return best;
+        };
+
         const candidates = [];
         let alreadyReused = 0;
         let lockedCount = 0;
         (scopedEntities || []).forEach((entity) => {
-            const source = pickBoundReuseDependency(entity, allEntities);
+            const source = pickNearestEpisodeSameNameReuseSource(
+                entity,
+                allEntities,
+                episodeNumberOf,
+                (candidate) => Boolean(findLiveReferencedAsset(candidate))
+            );
             if (!source) return;
-            const sourceUrl = String(source.image_url || '').trim();
+            const liveAsset = findLiveReferencedAsset(source);
+            const sourceUrl = String(liveAsset?.url || '').trim();
+            if (!sourceUrl) return;
             const currentUrl = String(entity?.image_url || '').trim();
-            if (sourceUrl && currentUrl && sourceUrl === currentUrl) {
+            if (currentUrl && urlsShareToken(currentUrl, sourceUrl)) {
                 alreadyReused += 1;
                 return;
             }
@@ -7064,15 +7198,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         if (!candidates.length) {
             const detailParts = [];
             if (alreadyReused > 0) {
-                detailParts.push(t(`${alreadyReused} 个已是依赖图`, `${alreadyReused} already use the dependency image`));
+                detailParts.push(t(`${alreadyReused} 个已是最近一集同名图`, `${alreadyReused} already use the nearest same-name image`));
             }
             if (lockedCount > 0) {
                 detailParts.push(t(`${lockedCount} 个图片任务进行中`, `${lockedCount} have a running image job`));
             }
             showSubjectNotification(
                 t(
-                    `没有可自动复用的主体。需要资产依赖已解析，且依赖资产已绑定图片。${detailParts.length ? `（${detailParts.join('，')}）` : ''}`,
-                    `No subjects to auto-reuse. A dependency must resolve to an asset that already has an image.${detailParts.length ? ` (${detailParts.join(', ')})` : ''}`
+                    `没有可自动复用的主体。需要已有资产依赖，且最近一集存在同名、未删除、并仍引用着当前图片的主体。${detailParts.length ? `（${detailParts.join('，')}）` : ''}`,
+                    `No subjects to auto-reuse. A dependency name must match a non-deleted subject in the nearest episode whose current image is still a live asset.${detailParts.length ? ` (${detailParts.join(', ')})` : ''}`
                 ),
                 'warning'
             );
@@ -7085,8 +7219,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         if (alreadyReused > 0) extraNotes.push(t(`已跳过同图 ${alreadyReused} 个`, `skipped ${alreadyReused} already matching`));
         if (lockedCount > 0) extraNotes.push(t(`图片任务中跳过 ${lockedCount} 个`, `skipped ${lockedCount} with a running image job`));
         const confirmed = await confirmUiMessage(t(
-            `将把${scopeLabel}内 ${candidates.length} 个已绑定依赖图的主体设为复用：用依赖资产的图片和锚点替换当前图。空图 ${emptyCount} 个，覆盖已有图 ${replaceCount} 个。${extraNotes.length ? `${extraNotes.join('，')}。` : ''}是否继续？`,
-            `Set ${candidates.length} subjects in ${scopeLabel} that have a bound dependency image to reuse: replace the current image and anchor with the dependency asset. ${emptyCount} empty, ${replaceCount} will overwrite an existing image. ${extraNotes.length ? `${extraNotes.join(', ')}. ` : ''}Continue?`
+            `将把${scopeLabel}内 ${candidates.length} 个已有资产依赖的主体设为复用：采用最近一集同名主体当前仍被引用、且未删除的图片。空图 ${emptyCount} 个，覆盖已有图 ${replaceCount} 个。${extraNotes.length ? `${extraNotes.join('，')}。` : ''}是否继续？`,
+            `Set ${candidates.length} subjects in ${scopeLabel} that have asset dependencies to reuse the nearest episode's same-named subject, using only its current non-deleted image. ${emptyCount} empty, ${replaceCount} will overwrite an existing image. ${extraNotes.length ? `${extraNotes.join(', ')}. ` : ''}Continue?`
         ));
         if (!confirmed) return;
 
@@ -7097,6 +7231,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             for (const item of candidates) {
                 const entityName = item.entity?.name || item.entity?.name_en || item.entity?.id;
                 const sourceName = item.source?.name || item.source?.name_en || item.source?.id;
+                const sourceEpisode = resolveEpisodeDisplayLabelById(item.source?.episode_id);
                 const anchor = item.source?.anchor_description;
                 const extraFields = (typeof anchor === 'string' && anchor.trim())
                     ? { anchor_description: anchor }
@@ -7110,8 +7245,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     successCount += 1;
                     onLog?.(
                         t(
-                            `自动复用：${entityName} ← ${sourceName}`,
-                            `Auto reuse: ${entityName} ← ${sourceName}`
+                            `自动复用：${entityName} ← ${sourceEpisode} ${sourceName}`,
+                            `Auto reuse: ${entityName} ← ${sourceEpisode} ${sourceName}`
                         ),
                         'success'
                     );
@@ -8281,11 +8416,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                 className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-white outline-none hover:border-primary/50 disabled:opacity-50 transition-colors flex items-center justify-center"
                                 title={t(
                                     entityEpisodeScope === 'current'
-                                        ? '自动复用：当前分集里，依赖资产已绑定图片的主体，全部改用该依赖的图片和锚点'
-                                        : '自动复用：整个项目里，依赖资产已绑定图片的主体，全部改用该依赖的图片和锚点',
+                                        ? '自动复用：当前分集里已有资产依赖的主体，改用最近一集同名主体当前仍引用的未删除图片'
+                                        : '自动复用：整个项目里已有资产依赖的主体，改用最近一集同名主体当前仍引用的未删除图片',
                                     entityEpisodeScope === 'current'
-                                        ? 'Auto reuse: in the current episode, copy each bound dependency image and anchor onto every subject that depends on it'
-                                        : 'Auto reuse: across the project, copy each bound dependency image and anchor onto every subject that depends on it'
+                                        ? 'Auto reuse: for current-episode subjects with asset dependencies, copy the nearest episode’s same-named subject using only its current non-deleted image'
+                                        : 'Auto reuse: for project subjects with asset dependencies, copy the nearest episode’s same-named subject using only its current non-deleted image'
                                 )}
                                 aria-label={t('自动复用', 'Auto Reuse')}
                             >

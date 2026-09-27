@@ -503,9 +503,13 @@ _FRONT_FEATURE_SPLIT = re.compile(r"[,，、+/＋]|以及|和|与")
 _MAX_FRONT_FEATURES = 3
 
 
-def _front_brief_features(value: Any, forbidden: Optional[Set[str]] = None) -> List[str]:
-    """Up to three short subject features on the facing side. No sides, no offscreen."""
-    text = _clean(value)
+def _brief_feature_names(
+    value: Any,
+    forbidden: Optional[Set[str]] = None,
+    limit: Optional[int] = None,
+) -> List[str]:
+    """Short environment-subject names in a frame slot. No appearance, no people."""
+    text = _strip_offscreen_mark(value)
     if not text or text.lower() in _EMPTY_FIELD_MARKERS:
         return []
     blocked = set(forbidden or ()) | collect_subject_names_from_text(text)
@@ -521,9 +525,61 @@ def _front_brief_features(value: Any, forbidden: Optional[Set[str]] = None) -> L
             continue
         seen.add(name)
         features.append(name)
-        if len(features) >= _MAX_FRONT_FEATURES:
+        if limit is not None and len(features) >= limit:
             break
     return features
+
+
+def _front_brief_features(value: Any, forbidden: Optional[Set[str]] = None) -> List[str]:
+    """Up to three short subject features on the facing side. No sides, no offscreen."""
+    return _brief_feature_names(value, forbidden, limit=_MAX_FRONT_FEATURES)
+
+
+_FACE_SLOTS = (
+    ("background", "正面"),
+    ("frame_left", "左侧面"),
+    ("frame_right", "右侧面"),
+    ("offscreen", "机位后不可见"),
+)
+
+
+def _face_positions(
+    *,
+    background: str = "",
+    frame_left: str = "",
+    frame_right: str = "",
+    offscreen: str = "",
+    forbidden: Optional[Set[str]] = None,
+) -> Dict[str, str]:
+    """Map a frame-slot subject name to 正面 / 左侧面 / 右侧面 / 机位后不可见."""
+    slots = {
+        "background": background,
+        "frame_left": frame_left,
+        "frame_right": frame_right,
+        "offscreen": offscreen,
+    }
+    located: Dict[str, str] = {}
+    for key, label in _FACE_SLOTS:
+        whole = _strip_offscreen_mark(slots[key])
+        names = _brief_feature_names(slots[key], forbidden)
+        if (
+            whole
+            and whole not in names
+            and "=" not in whole
+            and whole.lower() not in _EMPTY_FIELD_MARKERS
+            and _is_env_fixture_name(whole, forbidden)
+        ):
+            located.setdefault(whole, label)
+        for name in names:
+            located.setdefault(name, label)
+    return located
+
+
+def _feature_with_position(name: str, positions: Dict[str, str]) -> str:
+    label = positions.get(name) or ""
+    if not label:
+        return name
+    return f"{name}（{label}）"
 
 
 _BEAT_BLOCK_PATTERN = re.compile(
@@ -652,8 +708,8 @@ def format_derived_anchor_description(
     hang_visible: bool = False,
     chosen_references: Optional[Sequence[str]] = None,
 ) -> str:
-    """特征锚点：覆盖本场选用该衍生时点名的环境参考主体；没有时才退回正面 2–3 个。"""
-    del frame_left, frame_right, offscreen, references, world_anchor, hang_anchor, hang_visible
+    """特征锚点：选用的环境参考主体，每条只写名称和所在面；没有时才退回正面。"""
+    del references, world_anchor, hang_anchor, hang_visible
     features: List[str] = []
     seen: Set[str] = set()
     for raw in chosen_references or ():
@@ -665,7 +721,14 @@ def format_derived_anchor_description(
         features = _front_brief_features(background, forbidden)
     if not features:
         return ""
-    return "简要特征=" + "，".join(features)
+    positions = _face_positions(
+        background=background,
+        frame_left=frame_left,
+        frame_right=frame_right,
+        offscreen=offscreen,
+        forbidden=forbidden,
+    )
+    return "简要特征=" + "，".join(_feature_with_position(name, positions) for name in features)
 
 
 def _parse_field_line(raw: str) -> Dict[str, str]:

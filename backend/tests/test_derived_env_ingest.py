@@ -202,7 +202,9 @@ def test_build_item_persists_frame_anchors():
     assert attrs["frame_left"] == "楼梯口"
     assert attrs["frame_right"] == "账房窗"
     assert attrs["offscreen"] == "大门"
-    assert item["anchor_description"] == "简要特征=柜台"
+    assert item["anchor_description"] == "简要特征=柜台（正面）"
+    assert "楼梯口" not in item["anchor_description"]
+    assert "大门" not in item["anchor_description"]
     assert "画左=" not in item["anchor_description"]
     assert "画外=" not in item["anchor_description"]
     assert "只切割，不要改画" in item["generation_prompt_cn"]
@@ -256,10 +258,10 @@ def test_derived_anchor_description_uses_world_and_hang_when_visible():
     by_name = {item["name"]: item for item in parse_derived_env_extract_items(text)}
     north = build_derived_environment_item(by_name["0度客栈大堂"])
     south = build_derived_environment_item(by_name["180度客栈大堂"])
-    assert north["anchor_description"] == "简要特征=客栈大门"
+    assert north["anchor_description"] == "简要特征=客栈大门（正面）"
     assert "整体环境锚点=" not in north["anchor_description"]
     assert "挂靠锚点=" not in north["anchor_description"]
-    assert south["anchor_description"] == "简要特征=柜台"
+    assert south["anchor_description"] == "简要特征=柜台（正面）"
     assert "整体环境锚点=" not in south["anchor_description"]
     assert north["custom_attributes"]["hang_visible"] is False
     assert south["custom_attributes"]["hang_visible"] is True
@@ -272,7 +274,7 @@ def test_derived_anchor_description_uses_world_and_hang_when_visible():
         frame_left="贴墙木楼梯",
         frame_right="雕花窗格",
         offscreen="红木柜台",
-    ) == "简要特征=客栈大门"
+    ) == "简要特征=客栈大门（正面）"
     assert format_derived_anchor_description(
         world_anchor="古代中国客栈",
         hang_anchor="柜台",
@@ -280,7 +282,7 @@ def test_derived_anchor_description_uses_world_and_hang_when_visible():
     ) == ""
     assert format_derived_anchor_description(
         background="红木柜台与酒架、雕花窗、石狮、匾额",
-    ) == "简要特征=红木柜台，酒架，雕花窗"
+    ) == "简要特征=红木柜台（正面），酒架（正面），雕花窗（正面）"
 
 
 def test_derived_anchors_copy_matching_main_env_angle_subjects():
@@ -331,7 +333,7 @@ def test_derived_anchors_copy_matching_main_env_angle_subjects():
     assert look_up["offscreen"] == "红木柜台与酒架"
 
     built = build_derived_environment_item(zero)
-    assert built["anchor_description"] == "简要特征=客栈大门"
+    assert built["anchor_description"] == "简要特征=客栈大门（正面）"
     assert built["custom_attributes"]["offscreen"] == "红木柜台与酒架"
     assert "无" not in built["anchor_description"]
     assert "画左=" not in built["anchor_description"]
@@ -342,11 +344,11 @@ def test_derived_anchors_copy_matching_main_env_angle_subjects():
     assert "红木柜台" not in built["anchor_description"]
     assert "八仙桌" not in built["anchor_description"]
     reverse_built = build_derived_environment_item(reverse)
-    assert reverse_built["anchor_description"] == "简要特征=红木柜台，酒架"
+    assert reverse_built["anchor_description"] == "简要特征=红木柜台（正面），酒架（正面）"
     assert "客栈大门" not in reverse_built["anchor_description"]
     assert "雕花窗格" not in reverse_built["anchor_description"]
     look_up_built = build_derived_environment_item(look_up)
-    assert look_up_built["anchor_description"] == "简要特征=通高梁架"
+    assert look_up_built["anchor_description"] == "简要特征=通高梁架（正面）"
     assert "画外=" not in look_up_built["anchor_description"]
     assert "红木柜台" not in look_up_built["anchor_description"]
     assert format_derived_anchor_description(
@@ -370,8 +372,8 @@ def test_sample_ingest_writes_frame_and_reference_anchors():
         for row in group["payload"]["environments"]
     }
     zero = by_name["0度客栈大堂"]["anchor_description"]
-    assert zero == "简要特征=柜台"
-    assert by_name["180度客栈大堂"]["anchor_description"] == "简要特征=正门"
+    assert zero == "简要特征=柜台（正面）"
+    assert by_name["180度客栈大堂"]["anchor_description"] == "简要特征=正门（正面）"
     assert "画左=" not in zero
     assert "楼梯口" not in zero
     assert "账房窗" not in zero
@@ -401,23 +403,29 @@ def test_chosen_reference_subjects_cover_explicit_env_anchors():
         "CHAR:[@掌柜]｜方式=相对｜锚=雕花窗格｜锚=PROP:[算盘]\n"
         "当前环境=ENV:[0度客栈大堂]｜[DERIVED_ENV:0度客栈大堂]\n"
         "[BEAT_END:2]\n"
+        "[BEAT_START:4]\n"
+        "CHAR:[@掌柜]｜方式=相对｜锚=贴墙木楼梯｜锚=红木柜台\n"
+        "当前环境=ENV:[0度客栈大堂]｜[DERIVED_ENV:0度客栈大堂]\n"
+        "[BEAT_END:4]\n"
         "[BEAT_START:3]\n"
         "CHAR:[@客人]｜方式=相对｜锚=红木柜台｜锚=CHAR:[@掌柜]\n"
         "当前环境=ENV:[180度客栈大堂]｜[DERIVED_ENV:180度客栈大堂]\n"
         "[BEAT_END:3]\n"
     )
     chosen = collect_chosen_reference_subjects(text)
-    assert chosen["0度客栈大堂"] == ["八仙桌", "客栈大门", "雕花窗格"]
+    assert chosen["0度客栈大堂"] == ["八仙桌", "客栈大门", "雕花窗格", "贴墙木楼梯", "红木柜台"]
     assert chosen["180度客栈大堂"] == ["红木柜台"]
     by_name = {item["name"]: item for item in parse_derived_env_extract_items(text)}
     zero = build_derived_environment_item(by_name["0度客栈大堂"])
     reverse = build_derived_environment_item(by_name["180度客栈大堂"])
-    assert zero["anchor_description"] == "简要特征=八仙桌，客栈大门，雕花窗格"
-    assert "贴墙木楼梯" not in zero["anchor_description"]
+    assert zero["anchor_description"] == (
+        "简要特征=八仙桌，客栈大门（正面），雕花窗格（右侧面），"
+        "贴墙木楼梯（左侧面），红木柜台（机位后不可见）"
+    )
     assert "掌柜" not in zero["anchor_description"]
-    assert reverse["anchor_description"] == "简要特征=红木柜台"
+    assert reverse["anchor_description"] == "简要特征=红木柜台（正面）"
     assert "八仙桌" not in reverse["anchor_description"]
-    assert zero["custom_attributes"]["chosen_references"] == "八仙桌、客栈大门、雕花窗格"
+    assert zero["custom_attributes"]["chosen_references"] == "八仙桌、客栈大门、雕花窗格、贴墙木楼梯、红木柜台"
 
 
 def test_derived_env_anchors_drop_character_and_prop_content():
@@ -444,7 +452,7 @@ def test_derived_env_anchors_drop_character_and_prop_content():
     item = parse_derived_env_extract_items(dirty)[0]
     built = build_derived_environment_item(item)
     anchor = built["anchor_description"]
-    assert anchor == "简要特征=二楼雕花栏杆"
+    assert anchor == "简要特征=二楼雕花栏杆（正面）"
     assert "客栈大门" not in anchor
     assert "柜台" not in anchor
     assert "二楼客房木门" not in anchor
