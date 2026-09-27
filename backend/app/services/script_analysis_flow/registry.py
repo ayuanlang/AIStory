@@ -174,6 +174,8 @@ def _base_node_specs() -> List[Dict[str, Any]]:
                 "backend.environment_plan.scene_join_before_framing",
                 "backend.derived_framing.before_staging",
                 "backend.derived_env_ingest.after_framing",
+                # Staging LLM only: wait for asset_design_environment, then inject each main ENV quad.
+                "backend.environment_asset_quad.before_staging",
             ],
             "auto_start": True,
             "fan_out": "per_scene",

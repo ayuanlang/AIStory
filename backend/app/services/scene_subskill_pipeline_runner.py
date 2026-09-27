@@ -88,7 +88,7 @@ COMBAT_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_c
 FRAMING_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_derived_framing.md"
 STAGING_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_staging_env.md"
 # Hard contract: after enhance + main-env splice, these LLM steps are serial and complete.
-PIPELINE_CONTRACT_VERSION = "framing-before-staging-v3"
+PIPELINE_CONTRACT_VERSION = "asset-quad-before-staging-v4"
 SCENE_SUBSKILL_POST_ENV_STEPS: Tuple[Tuple[str, str], ...] = (
     ("derived_framing", FRAMING_PROMPT),
     ("staging", STAGING_PROMPT),
@@ -113,6 +113,7 @@ _SUBSKILL_STEP_PROGRESS = {
     "xian": 34.0,
     "wait_env": 48.0,
     "derived_framing": 58.0,
+    "wait_env_asset": 70.0,
     "staging": 82.0,
 }
 _BEAT_FRAMING_PLAN_PATTERN = re.compile(r"【Beat景别构图方案】")
@@ -166,6 +167,7 @@ _SUBSKILL_START_ALIASES = {
     "framing_opt": "framing",
     "derived_framing": "framing",
     "wait_env": "framing",
+    "wait_env_asset": "staging",
     "staging": "staging",
     "staging_opt": "staging",
     "staging_env": "staging",
@@ -1398,15 +1400,16 @@ def _heartbeat_environment_wait(
         if row is None:
             continue
         meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
-        if str(meta.get("current_step") or "").strip() != "wait_env":
+        step_name = str(meta.get("current_step") or "").strip()
+        if step_name not in {"wait_env", "wait_env_asset"}:
             continue
         _mark_scene_subskill_step(
             db,
             project_id=int(project_id),
             episode_id=int(episode_id),
             scene_id=sid,
-            step_name="wait_env",
-            step_label="等待主环境注入",
+            step_name=step_name,
+            step_label="等待环境资产四宫格" if step_name == "wait_env_asset" else "等待主环境注入",
         )
 
 
@@ -2358,6 +2361,242 @@ async def await_environment_planned_script(
     )
 
 
+_QUAD_CELL_MARKERS = (
+    "【四向拼图】",
+    "[0度格-左上",
+    "[90度格-右上",
+    "[180度格-左下",
+    "[270度格-右下",
+)
+_MAIN_ENV_NAME_LINE_RE = re.compile(r"^[ \t]*【主环境】[ \t]*(.+?)\s*$", re.MULTILINE)
+_DEGREE_ENV_NAME_RE = re.compile(r"^\d+\s*度")
+
+
+def environment_asset_quad_ready(prompt: str) -> bool:
+    """True when a main-env generation_prompt_cn still carries the locked four cells."""
+    text = str(prompt or "")
+    return all(marker in text for marker in _QUAD_CELL_MARKERS)
+
+
+def collect_staging_main_environment_names(env_scene: str) -> List[str]:
+    """Main-env display names this scene must match to an asset-design quad."""
+    from app.services.script_analysis_flow.environment_reuse import (
+        normalize_environment_name,
+        parse_scene_env_ident_items,
+    )
+
+    names: List[str] = []
+    seen: set = set()
+
+    def add(raw: Any) -> None:
+        text = str(raw or "").strip().strip("`\"'“”‘’")
+        text = re.split(r"[｜|]", text, maxsplit=1)[0].strip()
+        text = re.sub(r"^(?:ENV\s*[:=＝]\s*)", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"^\[+|\]+$", "", text).strip()
+        if not text or text in {"无", "空", "N/A", "n/a", "none", "None", "-"}:
+            return
+        if _DEGREE_ENV_NAME_RE.match(text):
+            return
+        key = normalize_environment_name(text)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        names.append(text)
+
+    for match in _MAIN_ENV_NAME_LINE_RE.finditer(str(env_scene or "")):
+        add(match.group(1))
+    for item in parse_scene_env_ident_items(str(env_scene or "")):
+        add(item.get("matched_name") or item.get("name"))
+        add(item.get("name"))
+    return names
+
+
+def build_environment_asset_quad_injection(prompts_by_name: Dict[str, str]) -> str:
+    """Wrap each main-env generation_prompt_cn so staging can read one cell per beat."""
+    blocks: List[str] = []
+    for name, prompt in prompts_by_name.items():
+        body = str(prompt or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not environment_asset_quad_ready(body):
+            continue
+        blocks.append(f"【主环境四宫格】{name}\n{body}\n【/主环境四宫格】")
+    if not blocks:
+        return ""
+    intro = (
+        "以下是环境资产设计已锁定的主环境四宫格（开篇世界锁 + 【四向拼图】）。"
+        "每个 Beat 只读本拍当前环境所属主环境里、度数与本拍望向相同的那一格："
+        "0度=[0度格-左上·北]，90度=[90度格-右上·东]，180度=[180度格-左下·南]，270度=[270度格-右下·西]。"
+        "角色与道具的开拍定位和本拍走位，按这一格的正面、左侧面、右侧面、中部已写出的环境主体画面位置来转换。"
+        "左侧面对应画面左，右侧面对应画面右，正面对应远离镜头的那一面，中部对应舞台中部。"
+        "落点必须落在这一格已经写好的件旁。禁止改用邻格。禁止把格内环境句子抄进建置或入戏。"
+    )
+    return wrap_injection_section("环境资产四宫格", intro + "\n\n" + "\n\n".join(blocks))
+
+
+def _asset_design_environment_status(db: Session, episode_id: int) -> str:
+    rows = (
+        db.query(ScriptProgressPipelineNode)
+        .filter(
+            ScriptProgressPipelineNode.episode_id == int(episode_id),
+            ScriptProgressPipelineNode.node_name == "asset_design_environment",
+        )
+        .all()
+    )
+    statuses = [str(getattr(row, "status", "") or "").strip().lower() for row in rows]
+    if any(status in {"success", "warning"} for status in statuses):
+        return "success"
+    if any(status in {"failed", "blocked"} for status in statuses):
+        return "failed"
+    if any(status == "running" for status in statuses):
+        return "running"
+    return statuses[0] if statuses else ""
+
+
+def _load_ready_environment_asset_quads(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    main_names: List[str],
+) -> Dict[str, str]:
+    from app.services.script_analysis_flow.derived_env_ingest import load_main_environment_prompts
+
+    loaded = load_main_environment_prompts(
+        db,
+        project_id=int(project_id),
+        episode_id=int(episode_id),
+        names=main_names,
+    )
+    ready: Dict[str, str] = {}
+    for name in main_names:
+        prompt = str(loaded.get(name) or "")
+        if not prompt:
+            folded = {key.lower(): value for key, value in loaded.items()}
+            prompt = str(folded.get(name.lower()) or "")
+        if environment_asset_quad_ready(prompt):
+            ready[name] = prompt
+    return ready
+
+
+async def await_environment_asset_quad_injection(
+    *,
+    project_id: int,
+    episode_id: int,
+    env_scene: str,
+    scene_id: str = "",
+    explicit_text: str = "",
+    timeout_seconds: float = _ENV_PLAN_WAIT_SECONDS,
+) -> str:
+    """Block staging until each scene main-env has an asset-design four-cell prompt."""
+    explicit = str(explicit_text or "").strip()
+    if explicit and (
+        "环境资产四宫格开始" in explicit or environment_asset_quad_ready(explicit)
+    ):
+        if "环境资产四宫格开始" in explicit:
+            return explicit
+        return build_environment_asset_quad_injection({"本场主环境": explicit})
+
+    main_names = collect_staging_main_environment_names(env_scene)
+    sid = str(scene_id or "").strip()
+    if not main_names:
+        raise HTTPException(
+            status_code=422,
+            detail=f"STAGING_ENVIRONMENT_ASSET_NAMES_MISSING:{sid}",
+        )
+    if int(project_id or 0) <= 0 or int(episode_id or 0) <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail=f"STAGING_ENVIRONMENT_ASSET_MISSING:{sid}",
+        )
+
+    deadline = time.monotonic() + float(timeout_seconds)
+    last_status = ""
+    empty_polls = 0
+    logger.info(
+        "[scene_subskill_pipeline] waiting for environment asset quads before staging scene=%s mains=%s",
+        sid,
+        main_names,
+    )
+    while time.monotonic() < deadline:
+        poll_db = SessionLocal()
+        try:
+            last_status = _asset_design_environment_status(poll_db, int(episode_id))
+            ready = _load_ready_environment_asset_quads(
+                poll_db,
+                project_id=int(project_id),
+                episode_id=int(episode_id),
+                main_names=main_names,
+            )
+            if len(ready) == len(main_names):
+                logger.info(
+                    "[scene_subskill_pipeline] environment asset quads ready scene=%s mains=%s status=%s",
+                    sid,
+                    list(ready),
+                    last_status or "prompt_ready",
+                )
+                return build_environment_asset_quad_injection(ready)
+            if last_status == "failed":
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"STAGING_ENVIRONMENT_ASSET_FAILED:{sid}:{last_status}",
+                )
+            if last_status == "success":
+                empty_polls += 1
+                if empty_polls >= _ENV_PLAN_EMPTY_GRACE_POLLS:
+                    missing = [name for name in main_names if name not in ready]
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"STAGING_ENVIRONMENT_ASSET_EMPTY:{sid}:{','.join(missing)}",
+                    )
+            else:
+                empty_polls = 0
+            _heartbeat_environment_wait(
+                poll_db,
+                project_id=int(project_id or 0),
+                episode_id=int(episode_id),
+                scene_ids=[sid] if sid else None,
+            )
+            if int(project_id or 0) > 0:
+                poll_db.commit()
+        finally:
+            _release_db_connection(poll_db)
+        await asyncio.sleep(_ENV_PLAN_POLL_SECONDS)
+    raise HTTPException(
+        status_code=422,
+        detail=f"STAGING_ENVIRONMENT_ASSET_TIMEOUT:{sid}:{last_status or 'pending'}",
+    )
+
+
+async def _attach_environment_asset_quads(
+    staging_input: str,
+    *,
+    task_db: Session,
+    project_id: int,
+    episode_id: int,
+    scene_id: str,
+    env_scene: str,
+    explicit_text: str = "",
+) -> str:
+    """Staging prerequisite: inject the asset-design quad before the staging LLM."""
+    _mark_scene_subskill_step(
+        task_db,
+        project_id=project_id,
+        episode_id=episode_id,
+        scene_id=scene_id,
+        step_name="wait_env_asset",
+        step_label="等待环境资产四宫格",
+    )
+    quad = await await_environment_asset_quad_injection(
+        project_id=project_id,
+        episode_id=episode_id,
+        env_scene=env_scene,
+        scene_id=scene_id,
+        explicit_text=explicit_text,
+    )
+    if quad and quad not in staging_input:
+        return f"{quad}\n\n{staging_input}"
+    return staging_input
+
+
 def _subskill_parse_failure_code(exc: HTTPException) -> str:
     detail = str(getattr(exc, "detail", "") or "")
     if "OUTPUT_PARSE_FAILED" in detail or "OUTPUT_SCENE_MISMATCH" in detail:
@@ -2612,14 +2851,22 @@ async def _run_derived_framing_then_staging(
         main_env = _main_env_for_staging(env_scene)
         if main_env and "【主环境】" not in current_block:
             staging_scene = f"{main_env}\n\n{current_block}"
-        current_input = _with_derived_env_frame_anchors(
-            _wrap_single_scene_input(
-                staging_scene,
-                comprehensive_info,
-                project_tail,
-                entity_token_brief,
+        current_input = await _attach_environment_asset_quads(
+            _with_derived_env_frame_anchors(
+                _wrap_single_scene_input(
+                    staging_scene,
+                    comprehensive_info,
+                    project_tail,
+                    entity_token_brief,
+                ),
+                current_block,
             ),
-            current_block,
+            task_db=task_db,
+            project_id=project_id,
+            episode_id=episode_id,
+            scene_id=scene_id,
+            env_scene=env_scene or current_block,
+            explicit_text=str(raw_payload.get("environment_asset_quad_text") or ""),
         )
         prompt_file = STAGING_PROMPT
         _mark_scene_subskill_step(
@@ -2710,14 +2957,22 @@ async def _run_derived_framing_then_staging(
             main_env = _main_env_for_staging(env_scene or framing_block)
             if main_env and "【主环境】" not in current_block:
                 staging_scene = f"{main_env}\n\n{current_block}"
-            current_input = _with_derived_env_frame_anchors(
-                _wrap_single_scene_input(
-                    staging_scene,
-                    comprehensive_info,
-                    project_tail,
-                    entity_token_brief,
+            current_input = await _attach_environment_asset_quads(
+                _with_derived_env_frame_anchors(
+                    _wrap_single_scene_input(
+                        staging_scene,
+                        comprehensive_info,
+                        project_tail,
+                        entity_token_brief,
+                    ),
+                    current_block,
                 ),
-                current_block,
+                task_db=task_db,
+                project_id=project_id,
+                episode_id=episode_id,
+                scene_id=scene_id,
+                env_scene=env_scene or framing_block or current_block,
+                explicit_text=str(raw_payload.get("environment_asset_quad_text") or ""),
             )
         _mark_scene_subskill_step(
             task_db,
