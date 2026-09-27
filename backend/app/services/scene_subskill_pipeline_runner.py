@@ -849,6 +849,8 @@ def merge_scene_blocks_into_script(
     """Replace matching Scene blocks in an existing Stage-1 script; keep other scenes."""
     updates: Dict[str, Tuple[str, str]] = {}
     for item in updated_items or []:
+        if item.get("failed"):
+            continue
         sid = str(item.get("scene_id") or "").strip()
         block = str(item.get("scene_block") or "").strip()
         if sid and block:
@@ -1103,9 +1105,113 @@ def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> s
     return source
 
 
+_CHAR_REF_RE = re.compile(r"CHAR:\[@[^\]]+\]")
+_INVISIBLE_CHAR_RE = re.compile(
+    r"本拍主体=((?:CHAR:\[@[^\]]+\])|(?:PROP:\[[^\]]+\]))[^\n]*可见=暂不可见"
+)
+_VISIBLE_SUBJECT_RE = re.compile(
+    r"本拍主体=((?:CHAR:\[@[^\]]+\])|(?:PROP:\[[^\]]+\]))[^\n]*可见=画内"
+)
+_SILENCE_SPLIT_RE = re.compile(r"[|｜]\s*闭嘴\s*[|｜]")
+_BEAT_SPAN_RE = re.compile(r"\[BEAT_START:\d+\].*?\[BEAT_END:\d+\]", re.DOTALL)
+_FACE_TOKEN_RE = re.compile(
+    r"(面朝着|面向着|面向|朝着|眼睛看着|看着)\s*((?:CHAR:\[@[^\]]+\])|(?:PROP:\[[^\]]+\]))"
+)
+_GAZE_AT_RE = re.compile(r"眼神在([^，。；\n]{1,24})上")
+_HOLD_RE = re.compile(r"(?:拿着|拈着|举着|握着|捧着)([^，。；\n]{0,16})")
+_BRACED_RE = re.compile(r"(\{[^}]*\})")
+
+
+def _silence_side_without_invisible(side: str, invisible: set[str]) -> str:
+    """Drop 暂不可见 listeners from one 闭嘴 side. Empty side becomes 无."""
+    kept: List[str] = []
+    for part in re.split(r"[，,]", side):
+        tokens = _CHAR_REF_RE.findall(part)
+        if tokens and all(token in invisible for token in tokens):
+            continue
+        if tokens:
+            piece = _CHAR_REF_RE.sub(lambda match: "" if match.group(0) in invisible else match.group(0), part)
+            piece = piece.strip(" ：:\t")
+            if piece and piece != "画内全员":
+                kept.append(piece)
+            continue
+        text = part.strip()
+        if text:
+            kept.append(text)
+    result = "，".join(kept).strip(" ，,")
+    return result or "无"
+
+
+def _map_outside_braces(text: str, rewrite) -> str:
+    parts = _BRACED_RE.split(text)
+    return "".join(part if part.startswith("{") and part.endswith("}") else rewrite(part) for part in parts)
+
+
+def _rewrite_invisible_facing(text: str, invisible: set[str]) -> str:
+    def repl(match: re.Match) -> str:
+        if match.group(2) not in invisible:
+            return match.group(0)
+        if match.group(1) in ("眼睛看着", "看着"):
+            return "看向镜头"
+        return "面对镜头"
+
+    rewritten = _map_outside_braces(text, lambda part: _FACE_TOKEN_RE.sub(repl, part))
+    rewritten = rewritten.replace("面对镜头，身体正面朝着镜头", "面对镜头")
+    rewritten = rewritten.replace("身体正面朝着镜头，面对镜头", "面对镜头")
+    return rewritten
+
+
+def _rewrite_offscreen_gaze(text: str, visible: set[str]) -> str:
+    holds = " ".join(_HOLD_RE.findall(text))
+
+    def repl(match: re.Match) -> str:
+        target = match.group(1).strip()
+        if any(token in target for token in visible):
+            return match.group(0)
+        if target and target in holds:
+            return match.group(0)
+        return "眼神看向镜头"
+
+    return _map_outside_braces(text, lambda part: _GAZE_AT_RE.sub(repl, part))
+
+
+def _rewrite_beat_silence(beat: str) -> str:
+    note_at = beat.find("────【场记分析】────")
+    prose = beat if note_at < 0 else beat[:note_at]
+    tail = "" if note_at < 0 else beat[note_at:]
+    ledger = tail or beat
+    invisible = set(_INVISIBLE_CHAR_RE.findall(ledger))
+    visible = set(_VISIBLE_SUBJECT_RE.findall(ledger))
+    if not invisible:
+        return beat
+    prose = _rewrite_offscreen_gaze(prose, visible)
+    lines: List[str] = []
+    for line in prose.splitlines(keepends=True):
+        ending = line[len(line.rstrip("\r\n")) :]
+        body = line[: len(line) - len(ending)]
+        pieces = _SILENCE_SPLIT_RE.split(body, maxsplit=1)
+        if len(pieces) == 2:
+            separator = _SILENCE_SPLIT_RE.search(body)
+            mark = separator.group(0) if separator else "| 闭嘴 |"
+            head = _rewrite_invisible_facing(pieces[0], invisible).rstrip()
+            body = head + " " + mark + " " + _silence_side_without_invisible(pieces[1], invisible)
+        else:
+            body = _rewrite_invisible_facing(body, invisible)
+        lines.append(body + ending)
+    return "".join(lines) + tail
+
+
+def strip_invisible_silence_listeners(text: str) -> str:
+    """Omit 闭嘴 names that the same beat's 场记 marks 可见=暂不可见."""
+    body = str(text or "")
+    if "[BEAT_START:" in body:
+        return _BEAT_SPAN_RE.sub(lambda match: _rewrite_beat_silence(match.group(0)), body)
+    return _rewrite_beat_silence(body)
+
+
 def assert_staging_output_complete(text: str, scene_id: str = "") -> str:
     """Refuse framing or truncated text after 建置与入戏. End marker is stripped before persist."""
-    body = str(text or "").strip()
+    body = strip_invisible_silence_listeners(str(text or "")).strip()
     sid = str(scene_id or "").strip() or "-"
     if "【建置】" not in body or "【入戏】" not in body:
         raise HTTPException(status_code=422, detail=f"STAGING_OUTPUT_INCOMPLETE:{sid}")
@@ -2242,6 +2348,31 @@ def _scene_block_from_script(script_text: str, scene_id: str) -> str:
     except Exception:
         return ""
     return ""
+
+
+def resolve_env_scene_for_staging(
+    env_script: str,
+    scene_id: str,
+    env_catalog: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Environment-plan scene block required before 建置与入戏.
+
+    Staging-only reruns must read this block from the environment plan.
+    The framing draft no longer carries 【主环境】, so using it as the env
+    source makes the asset-quad gate fail immediately.
+    """
+    sid = str(scene_id or "").strip()
+    env_scene = _ensure_reused_main_env_block(
+        _scene_block_from_script(env_script, sid),
+        sid,
+        env_catalog,
+    )
+    if not env_scene or not extract_environment_planning_sections(env_scene):
+        raise HTTPException(
+            status_code=422,
+            detail=f"STAGING_ENV_SCENE_MISSING:{sid}",
+        )
+    return env_scene
 
 
 def load_environment_planned_script(db: Session, episode_id: int) -> str:
@@ -3421,7 +3552,6 @@ async def run_scene_subskill_pipeline(
                         await _run_enhance_step(COMBAT_PROMPT, "combat")
 
                 env_script = ""
-                env_scene = ""
                 if scene_start == "staging":
                     try:
                         env_script = load_environment_planned_script(
@@ -3429,7 +3559,9 @@ async def run_scene_subskill_pipeline(
                         )
                     except Exception:
                         env_script = ""
-                if scene_start != "staging":
+                    if not str(env_script or "").strip():
+                        env_script = await env_plan_task
+                else:
                     _mark_scene_subskill_step(
                         task_db,
                         project_id=project_id,
@@ -3439,16 +3571,11 @@ async def run_scene_subskill_pipeline(
                         step_label="等待主环境注入",
                     )
                     env_script = await env_plan_task
-                    env_scene = _ensure_reused_main_env_block(
-                        _scene_block_from_script(env_script, scene_id),
-                        scene_id,
-                        env_catalog,
-                    )
-                    if not env_scene or not extract_environment_planning_sections(env_scene):
-                        raise HTTPException(
-                            status_code=422,
-                            detail=f"STAGING_ENV_SCENE_MISSING:{scene_id}",
-                        )
+                env_scene = resolve_env_scene_for_staging(
+                    env_script,
+                    scene_id,
+                    env_catalog,
+                )
                 name_source_text = current_block
                 current_block = await _run_derived_framing_then_staging(
                     task_db=task_db,
@@ -3537,6 +3664,8 @@ async def run_scene_subskill_pipeline(
             except Exception as exc:
                 project_id = int(raw_payload.get("project_id") or 0)
                 timed_out = is_timeout_like_error(exc)
+                detail = getattr(exc, "detail", None)
+                error_text = detail.strip() if isinstance(detail, str) and detail.strip() else str(exc)
                 if project_id > 0 and node_episode_id > 0:
                     upsert_pipeline_node_status(
                         task_db,
@@ -3554,7 +3683,7 @@ async def run_scene_subskill_pipeline(
                             "current_step": str((locals().get("called") or [""])[-1] if locals().get("called") else ""),
                         },
                         error_code="SCENE_SUBSKILL_TIMEOUT" if timed_out else "SCENE_SUBSKILL_SCENE_FAILED",
-                        error_message=str(exc),
+                        error_message=error_text,
                     )
                     task_db.commit()
                 return int(task.get("scene_order") or 0), {
@@ -3565,7 +3694,7 @@ async def run_scene_subskill_pipeline(
                     "routes": task.get("routes") or {},
                     "failed": True,
                     "timed_out": timed_out,
-                    "error": str(exc),
+                    "error": error_text,
                 }
             finally:
                 _release_db_connection(task_db)

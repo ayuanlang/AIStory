@@ -279,6 +279,53 @@ def test_staging_output_complete_rejects_framing_fallback():
         raise AssertionError("framing text must not pass as staging")
 
 
+def test_staging_drops_invisible_silence_names():
+    from app.services.scene_subskill_pipeline_runner import assert_staging_output_complete
+
+    beat = """
+[BEAT_START:6]
+────【建置】────
+她面对镜头。
+────【入戏】────
+开口 | CHAR:[@赵桂香] | voice_type=对白｜tone=上扬 | {哟，知夏还没找着啊？} | 闭嘴 | CHAR:[@赵桂芬], CHAR:[@林知夏（荷兰猪）]
+────【场记分析】────
+本拍主体=CHAR:[@赵桂芬]|世界位=单人床东偏北一臂|在场=是|可见=暂不可见|因=镜头后
+本拍主体=CHAR:[@林知夏（荷兰猪）]|世界位=单人床东沿面上|在场=是|可见=暂不可见|因=镜头后
+【场记分析结束】
+[BEAT_END:6]
+"""
+    fixed = assert_staging_output_complete(beat, "EP01_SC01")
+    assert "| 闭嘴 | 无" in fixed
+    assert "闭嘴 | CHAR:[@赵桂芬]" not in fixed
+    assert "林知夏（荷兰猪）" in fixed.split("────【场记分析】────", 1)[1]
+
+
+def test_staging_rewrites_invisible_facing_and_gaze():
+    from app.services.scene_subskill_pipeline_runner import assert_staging_output_complete
+
+    beat = """
+────【建置】────
+她面朝着 CHAR:[@赵桂芬]，身体正面朝着镜头，下巴扬着。
+────【入戏】────
+眼神在散落衣物上迅速睃巡。
+开口 | CHAR:[@赵桂香] | voice_type=对白 | {哟，知夏还没找着啊？} | 闭嘴 | CHAR:[@赵桂芬], CHAR:[@林知夏（荷兰猪）]
+────【场记分析】────
+本拍主体=CHAR:[@赵桂香]|世界位=房门|在场=是|可见=画内|因=本拍主拍
+本拍主体=CHAR:[@赵桂芬]|世界位=单人床东偏北一臂|在场=是|可见=暂不可见|因=镜头后
+本拍主体=CHAR:[@林知夏（荷兰猪）]|世界位=单人床东沿面上|在场=是|可见=暂不可见|因=镜头后
+"""
+    fixed = assert_staging_output_complete(beat, "EP01_SC01")
+    prose, note = fixed.split("────【场记分析】────", 1)
+    assert "面对镜头" in prose
+    assert "面朝着 CHAR:[@赵桂芬]" not in prose
+    assert "CHAR:[@赵桂芬]" not in prose
+    assert "眼神看向镜头" in prose
+    assert "散落衣物" not in prose
+    assert "| 闭嘴 | 无" in prose
+    assert "知夏还没找着啊" in prose
+    assert "CHAR:[@赵桂芬]" in note
+
+
 def test_staging_beat_stream_only_is_usable_without_scene_wrappers():
     assert persisted_subskill_step_usable("staging", STAGING_BEAT_STREAM_ONLY)
     assert not persisted_subskill_step_usable("framing", STAGING_BEAT_STREAM_ONLY)
@@ -439,6 +486,51 @@ def test_filter_subskill_tasks_matches_canonical_and_tail():
     assert [row["scene_id"] for row in filter_subskill_tasks_by_target_ids(tasks, ["EP01_SC02"])] == ["EP01_SC02"]
     assert [row["scene_id"] for row in filter_subskill_tasks_by_target_ids(tasks, ["SC01"])] == ["EP01_SC01"]
     assert filter_subskill_tasks_by_target_ids(tasks, ["EP01_SC09"]) == []
+
+
+def test_merge_skips_failed_scene_so_previous_draft_stays():
+    merged = merge_scene_blocks_into_script(
+        BASE_SCRIPT,
+        [{"scene_id": "EP01_SC02", "scene_block": "应丢弃的失败稿", "failed": True}],
+    )
+    assert "SC02旧正文" in merged
+    assert "应丢弃的失败稿" not in merged
+
+
+def test_staging_rerun_reads_main_env_from_environment_plan_not_framing():
+    from fastapi import HTTPException
+
+    from app.services.scene_subskill_pipeline_runner import (
+        collect_staging_main_environment_names,
+        resolve_env_scene_for_staging,
+    )
+
+    env_plan = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+【场景名称】客栈对峙
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否｜来源=新建
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+【主环境】客栈大堂
+[ENV_BLOCK_END]
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+"""
+    framing_only = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+【取景锁定】当前环境=ENV:[0度客栈大堂] 景别=MS
+[SCENE_END:EP01_SC01]
+[SCENES_BLOCK_END]
+"""
+    env_scene = resolve_env_scene_for_staging(env_plan, "EP01_SC01")
+    assert collect_staging_main_environment_names(env_scene) == ["客栈大堂"]
+    try:
+        resolve_env_scene_for_staging(framing_only, "EP01_SC01")
+    except HTTPException as exc:
+        assert "STAGING_ENV_SCENE_MISSING" in str(exc.detail)
+    else:
+        raise AssertionError("framing draft must not satisfy the staging environment gate")
 
 
 def test_merge_scene_blocks_keeps_other_scenes_and_tail():

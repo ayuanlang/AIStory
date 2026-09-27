@@ -31250,6 +31250,47 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             const output = String(extractAnalysisTextFromResult(result) || '').trim();
             if (!output) throw new Error(t('节点未返回内容。', 'The node returned no output.'));
+            const pipelinePayload = (
+                result && typeof result === 'object' && (
+                    Array.isArray(result.per_scene_outputs) || Array.isArray(result.failed_scene_ids)
+                )
+            )
+                ? result
+                : (
+                    result?.result && typeof result.result === 'object'
+                    && (
+                        Array.isArray(result.result.per_scene_outputs)
+                        || Array.isArray(result.result.failed_scene_ids)
+                    )
+                        ? result.result
+                        : null
+                );
+            const failedSceneRow = (
+                Array.isArray(pipelinePayload?.per_scene_outputs) ? pipelinePayload.per_scene_outputs : []
+            ).find((item) => (
+                item?.failed
+                && sceneUnitIdsMatch(
+                    String(item?.scene_id || ''),
+                    targetSceneId,
+                    deriveSceneOrderFromSceneId(targetSceneId),
+                    episodePrefix
+                )
+            ));
+            const failedSceneListed = (
+                Array.isArray(pipelinePayload?.failed_scene_ids) ? pipelinePayload.failed_scene_ids : []
+            ).some((sceneId) => sceneUnitIdsMatch(
+                String(sceneId || ''),
+                targetSceneId,
+                deriveSceneOrderFromSceneId(targetSceneId),
+                episodePrefix
+            ));
+            if (failedSceneRow || failedSceneListed) {
+                const reason = String(failedSceneRow?.error || failedSceneRow?.error_message || '').trim();
+                throw new Error(reason || t(
+                    `${targetSceneId} ${label}未完成，已停止，不会重跑分镜。`,
+                    `${targetSceneId} ${label} did not finish, so storyboard was not rerun.`
+                ));
+            }
             clearAnalysisTaskMarker(activeEpisode.id);
             latestStage1RawTextRef.current = output;
             const adapted = String(extractStage1AdaptedScriptBody(output) || output).trim();
