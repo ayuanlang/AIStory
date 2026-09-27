@@ -245,6 +245,40 @@ def test_scene_env_ident_parse_and_reuse_decision():
     assert "[复用衍生环境开始]" in derived
     assert "`180度客栈大堂`" in derived
 
+    from app.services.script_analysis_flow.environment_reuse import (
+        build_reused_main_environment_injection,
+    )
+
+    bedroom_catalog = [
+        {
+            "name": "林知夏卧室",
+            "normalized": "林知夏卧室",
+            "generation_prompt_cn": (
+                "【定位】夜色卧室，南墙正中一扇木门。\n"
+                "【六面一次】床在北墙。\n"
+                "【四向拼图】格子"
+            ),
+            "env_block": "",
+            "derivatives": [
+                {
+                    "name": "0度林知夏卧室",
+                    "view_angle_from_main": 0,
+                    "generation_prompt_cn": "view_angle summary",
+                }
+            ],
+        }
+    ]
+    bedroom_items = [{"name": "林知夏卧室", "reuse": True, "matched_name": "林知夏卧室"}]
+    main_injection = build_reused_main_environment_injection(bedroom_items, bedroom_catalog)
+    assert "[复用主环境开始]" in main_injection
+    assert "所属主环境=林知夏卧室" in main_injection
+    assert "南墙正中一扇木门" in main_injection
+    assert "【四向拼图】" not in main_injection
+    assert "[复用衍生环境开始]" not in main_injection
+    assert "0度林知夏卧室" not in main_injection
+    assert "view_angle" not in main_injection
+    assert "已声明衍生名" not in main_injection
+
 
 def test_reused_environment_opening_is_rewritten_for_downstream():
     from app.services.script_analysis_flow.environment_reuse import (

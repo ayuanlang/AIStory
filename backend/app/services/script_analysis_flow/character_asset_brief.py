@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List
+from typing import Dict, List, Set
 
 from app.core.prompt_injection import assemble_injection_parts, wrap_injection_section
 
@@ -243,6 +243,47 @@ def format_reused_character_appearance_block(rows: List[Dict[str, str]]) -> str:
 
 def _character_name_key(value: object) -> str:
     return re.sub(r"[\s_*`'\"“”‘’]+", "", _clean(value)).lower()
+
+
+def collect_reused_character_name_keys(
+    db: object,
+    *,
+    project_id: int,
+    episode_id: int = 0,
+) -> Set[str]:
+    """Name keys of character assets from other episodes. This episode's own assets stay new."""
+    try:
+        project_id_int = int(project_id or 0)
+    except Exception:
+        return set()
+    if project_id_int <= 0 or db is None:
+        return set()
+    try:
+        current_episode_id = int(episode_id or 0)
+    except Exception:
+        current_episode_id = 0
+    from app.models.all_models import Entity
+    from app.services.soft_delete import _active_entity_clause
+
+    entities = (
+        db.query(Entity)
+        .filter(
+            Entity.project_id == project_id_int,
+            Entity.type == "character",
+            _active_entity_clause(),
+        )
+        .all()
+    )
+    keys: Set[str] = set()
+    for entity in entities:
+        entity_episode = int(getattr(entity, "episode_id", 0) or 0)
+        if current_episode_id > 0 and entity_episode == current_episode_id:
+            continue
+        for alias in (getattr(entity, "name", None), getattr(entity, "name_en", None)):
+            key = _character_name_key(alias)
+            if key:
+                keys.add(key)
+    return keys
 
 
 def build_reused_character_appearance_injection(

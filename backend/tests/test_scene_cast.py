@@ -82,9 +82,10 @@ def test_build_scene_entity_token_brief():
     assert "中文项目用 裸名+标签" in brief
     assert "物理文字标签" in brief
     assert "不是对白硬字幕" in brief
-    assert "紧跟该人【建置】可见面整句" in brief
+    assert "只有字幕=待落的本集新角色" in brief
     assert "禁把多名牌攒到建置段末或入戏一起写" in brief
-    assert "换主环境时另打环境名牌" in brief
+    assert "复用场景（复用=是｜来源=项目库|上集|本集）禁止打环境名牌" in brief
+    assert "复用角色（上集或项目库已有）禁止打角色名牌" in brief
     assert "落位=顶部中央" in brief
     assert "时间可空" in brief
     assert "禁止套成【名】日】" in brief
@@ -363,3 +364,57 @@ def test_env_nameplate_time_label_explicit_only():
     brief = build_scene_entity_token_brief(script, "EP01_SC01")
     assert "时间=重生第一天早上9点" in brief
     assert "字样=【龙门风月客栈】日" not in brief
+
+
+def test_reused_environment_and_return_visit_have_no_nameplate():
+    from app.services.script_analysis_flow.scene_cast import collect_scene_env_nameplate_names
+
+    script = """
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=龙门风月客栈｜复用=是｜来源=项目库｜匹配主环境=龙门风月客栈｜依据=原文
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC02]
+[ENV] 名称=清河城茶摊｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文
+[SCENE_ENV_IDENT_END:EP01_SC02]
+[SCENE_ENV_IDENT_START:EP01_SC03]
+[ENV] 名称=清河城茶摊｜复用=是｜来源=本集｜匹配主环境=清河城茶摊｜依据=原文
+[ENV] 名称=龙门风月客栈｜复用=是｜来源=本集｜匹配主环境=龙门风月客栈｜依据=原文
+[SCENE_ENV_IDENT_END:EP01_SC03]
+【主环境】龙门风月客栈
+"""
+    assert collect_scene_env_nameplate_names(script, "EP01_SC01", script) == []
+    assert collect_scene_env_nameplate_names(script, "EP01_SC02", script) == ["清河城茶摊"]
+    assert collect_scene_env_nameplate_names(script, "EP01_SC03", script) == []
+
+
+def test_reused_character_does_not_get_nameplate():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP02_SC01]
+[SCENE_CAST_START:EP02_SC01]
+【本场角色】在场=CHAR:[@沈青]，CHAR:[@林岳]｜待入画=无｜群演=无
+【本场道具】在场=无｜待入画=无
+[SCENE_CAST_END:EP02_SC01]
+[SCENE_END:EP02_SC01]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=女主｜适用场=EP02_SC01
+衣着=青衫常服
+复用=是
+标签=江湖侠客
+标签_en=Jianghu Knight
+[CHAR] 名称=林岳｜名称_en=Lin Yue｜番位=男主｜适用场=EP02_SC01
+衣着=布衫
+标签=客栈掌柜
+标签_en=Innkeeper
+[CHAR_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    brief = build_scene_entity_token_brief(
+        script,
+        "EP02_SC01",
+        reused_character_names={"林岳"},
+    )
+    tag_section = brief.split("【本场角色标签】")[-1]
+    assert "CHAR:[@沈青]" in tag_section
+    assert "CHAR:[@林岳]" in tag_section
+    assert "字幕=待落" not in tag_section
+    assert tag_section.count("字幕=无") >= 2

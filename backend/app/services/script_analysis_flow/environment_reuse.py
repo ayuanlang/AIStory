@@ -21,6 +21,7 @@ logger = logging.getLogger("api_logger")
 
 PROJECT_MAIN_ENV_LABEL = "项目主环境名"
 REUSED_DERIVED_ENV_LABEL = "复用衍生环境"
+REUSED_MAIN_ENV_LABEL = "复用主环境"
 SELECTED_GLOBAL_ENV_LABEL = "用户选定全局环境"
 
 SCENE_ENV_IDENT_START_TOKEN = "[SCENE_ENV_IDENT_START"
@@ -892,6 +893,67 @@ def rewrite_reused_ident_positioning(
 
 def ident_still_defers_reuse(ident: str) -> bool:
     return any(_IDENT_INHERIT_POSITIONING.match(line) for line in str(ident or "").splitlines())
+
+
+def _framing_main_prose_is_thin(text: str) -> bool:
+    raw = str(text or "").strip()
+    if environment_text_is_inherit_placeholder(raw):
+        return True
+    return (
+        "这是已锁定的同一处空间" in raw
+        and "【六面一次】" not in raw
+        and "【四向与中心】" not in raw
+    )
+
+
+def framing_reused_main_environment_prose(
+    name: str,
+    catalog_item: Optional[Dict[str, Any]],
+    episode_block: str = "",
+) -> str:
+    """Readable main-env body for framing. Derivative rows are not included."""
+    candidates: List[str] = []
+    for block in (
+        str(episode_block or ""),
+        str((catalog_item or {}).get("env_block") or ""),
+    ):
+        cleaned = _strip_derived_environment_section(block).strip()
+        if cleaned and not _framing_main_prose_is_thin(cleaned):
+            candidates.append(cleaned)
+    opening = catalog_item_asset_opening(catalog_item)
+    if opening and not any(opening in item for item in candidates):
+        if not candidates:
+            candidates.append(opening)
+    if not candidates:
+        description = str((catalog_item or {}).get("description") or "").strip()
+        if description and not environment_text_is_inherit_placeholder(description):
+            candidates.append(description)
+    return "\n\n".join(candidates)
+
+
+def build_reused_main_environment_injection(
+    items: Sequence[Dict[str, Any]],
+    catalog: Sequence[Dict[str, Any]],
+    *,
+    episode_env_blocks: Optional[Dict[str, str]] = None,
+) -> str:
+    """Inject reused main-environment prose for framing. No derivative name list."""
+    sections: List[str] = []
+    for name in scene_reused_environment_names(items):
+        catalog_item = find_catalog_environment(catalog, name)
+        local_block = str((episode_env_blocks or {}).get(normalize_environment_name(name)) or "")
+        prose = framing_reused_main_environment_prose(name, catalog_item, local_block)
+        if not prose:
+            continue
+        sections.append(f"所属主环境={name}\n{prose}")
+    if not sections:
+        return ""
+    return wrap_injection_section(
+        REUSED_MAIN_ENV_LABEL,
+        "以下是本场复用主环境的正文，只读。"
+        "按此空间锁站位与望向；禁止另起空间，禁止把正文收成继承或复用。\n\n"
+        + "\n\n".join(sections),
+    )
 
 
 def build_reused_derived_environment_injection(

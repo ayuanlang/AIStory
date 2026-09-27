@@ -29,6 +29,7 @@ from app.services.script_analysis_flow import (
     SCENES_BLOCK_START_TOKEN,
     SPECIAL_SCENE_ANALYSIS_PATTERN,
     SceneMarkerParseError,
+    build_scene_entity_token_brief,
     build_scene_subskill_task_payloads,
     coerce_target_scene_ids_for_orchestration,
     extract_env_block_from_scene_text,
@@ -53,7 +54,7 @@ from app.services.script_analysis_flow.derived_env_ingest import (
 from app.core.time_utils import now_bj_iso
 from app.services.script_analysis_flow.environment_reuse import (
     SCENE_ENV_IDENT_PATTERN,
-    build_reused_derived_environment_injection,
+    build_reused_main_environment_injection,
     build_reused_environment_patch,
     collect_episode_env_blocks_by_name,
     collect_project_main_environment_catalog,
@@ -2591,8 +2592,18 @@ async def _run_derived_framing_then_staging(
     called: List[str],
     skip_framing: bool = False,
     entity_token_brief: str = "",
+    reused_character_names: Optional[List[str]] = None,
 ) -> str:
     """Framing LLM must succeed before staging LLM is allowed to start."""
+    if str(env_script or "").strip():
+        refreshed = build_scene_entity_token_brief(
+            env_script,
+            scene_id,
+            env_scene or "",
+            reused_character_names=reused_character_names,
+        )
+        if refreshed:
+            entity_token_brief = refreshed
     if skip_framing:
         current_block = assert_derived_framing_ready_for_staging(enhance_block, scene_id)
         if "derived_framing" not in called:
@@ -2669,7 +2680,7 @@ async def _run_derived_framing_then_staging(
         for name, block in collect_episode_env_blocks_by_name(env_script).items()
     }
     ident_items = parse_scene_env_ident_items(env_scene or framing_block, scene_id)
-    derived_block = build_reused_derived_environment_injection(
+    main_env_block = build_reused_main_environment_injection(
         ident_items,
         env_catalog,
         episode_env_blocks=episode_env_blocks,
@@ -2680,8 +2691,8 @@ async def _run_derived_framing_then_staging(
         project_tail,
         entity_token_brief,
     )
-    if derived_block:
-        framing_input = f"{derived_block}\n\n{framing_input}"
+    if main_env_block:
+        framing_input = f"{main_env_block}\n\n{framing_input}"
     first_step, first_prompt = SCENE_SUBSKILL_POST_ENV_STEPS[0]
     if first_step != "derived_framing" or first_prompt != FRAMING_PROMPT:
         raise HTTPException(status_code=500, detail="SCENE_SUBSKILL_CONTRACT_INVALID")
@@ -2816,6 +2827,33 @@ async def run_scene_subskill_pipeline(
         getattr(current_user, "is_active", USER_ACTIVE_LEVEL_DEFAULT),
     )
     project_id = int(raw_payload.get("project_id") or 0)
+    if project_id > 0:
+        try:
+            from app.services.script_analysis_flow.character_asset_brief import (
+                collect_reused_character_name_keys,
+            )
+
+            reused_character_names = collect_reused_character_name_keys(
+                db,
+                project_id=project_id,
+                episode_id=int(node_episode_id or 0),
+            )
+        except Exception as reuse_exc:
+            logger.warning(
+                "[scene_subskill_pipeline] failed to load reused characters: %s",
+                reuse_exc,
+            )
+            reused_character_names = set()
+        if reused_character_names:
+            for task in tasks:
+                scene_id = str(task.get("scene_id") or "")
+                task["reused_character_names"] = sorted(reused_character_names)
+                task["entity_token_brief"] = build_scene_entity_token_brief(
+                    script_text,
+                    scene_id,
+                    str(task.get("scene_text") or ""),
+                    reused_character_names=reused_character_names,
+                )
     persist_map: Dict[str, Dict[str, str]] = {}
     pipeline_rows: Dict[str, Dict[str, str]] = {}
     fallback_scripts: List[str] = []
@@ -3129,6 +3167,13 @@ async def run_scene_subskill_pipeline(
 
                 env_script = ""
                 env_scene = ""
+                if scene_start == "staging":
+                    try:
+                        env_script = load_environment_planned_script(
+                            task_db, int(node_episode_id or 0)
+                        )
+                    except Exception:
+                        env_script = ""
                 if scene_start != "staging":
                     _mark_scene_subskill_step(
                         task_db,
@@ -3167,6 +3212,7 @@ async def run_scene_subskill_pipeline(
                     called=called,
                     skip_framing=scene_start == "staging",
                     entity_token_brief=str(task.get("entity_token_brief") or ""),
+                    reused_character_names=list(task.get("reused_character_names") or []),
                 )
                 current_block = assert_staging_output_complete(current_block, scene_id)
                 _raise_if_parent_task_cancelled()

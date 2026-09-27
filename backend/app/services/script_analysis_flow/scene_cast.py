@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List
+from typing import Dict, Iterable, List, Optional, Set
 
 from app.core.prompt_injection import wrap_injection_section
 from app.services.script_analysis_flow.character_asset_brief import (
     CHAR_ITEM_PATTERN,
+    _character_name_key,
     extract_char_extract_blocks,
     extract_char_field,
     parse_char_extract_records,
@@ -338,10 +339,25 @@ def _same_scene_id(left: str, right: str) -> bool:
     return bool(left) and bool(right) and _clean(left).lower() == _clean(right).lower()
 
 
-_ENV_IDENT_NAME_PATTERN = re.compile(
-    r"\[ENV\][^\n]*名称\s*=\s*([^｜\|\r\n]+)",
-    re.IGNORECASE,
-)
+def _character_marked_reused(
+    name: str,
+    record_text: str,
+    base_name: str,
+    reused_character_names: Optional[Iterable[str]],
+) -> bool:
+    explicit = extract_char_field(record_text, "复用")
+    if explicit in {"是", "yes", "y", "true", "复用"}:
+        return True
+    if not reused_character_names:
+        return False
+    keys = {_character_name_key(item) for item in reused_character_names}
+    for raw in (name, base_name):
+        key = _character_name_key(raw)
+        if key and key in keys:
+            return True
+    return False
+
+
 _MAIN_ENV_HEADER_NAME_PATTERN = re.compile(
     r"(?m)^[ \t]*【主环境】[ \t]*([^｜\|\r\n]+)"
 )
@@ -419,24 +435,33 @@ def _env_nameplate_bare_name(raw: str) -> str:
 def collect_scene_env_nameplate_names(
     script: str, scene_id: str, scene_text: str = ""
 ) -> List[str]:
-    """Registered main-env names for this scene; strip 日夜内外 tails."""
+    """New main-env names for this scene only. Reused spaces get no nameplate."""
     from app.services.script_analysis_flow.environment_reuse import (
         parse_scene_env_ident_items,
     )
 
+    already: Set[str] = set()
     names: List[str] = []
-    seen = set()
 
-    def add(raw: str) -> None:
+    def allow(raw: str) -> None:
         bare = _env_nameplate_bare_name(raw)
-        if not bare or bare in seen:
+        if not bare or bare in already:
             return
-        seen.add(bare)
+        already.add(bare)
         names.append(bare)
 
-    for item in parse_scene_env_ident_items(script, scene_id):
-        add(str(item.get("name") or ""))
-        add(str(item.get("matched_name") or ""))
+    for item in parse_scene_env_ident_items(script):
+        bare = _env_nameplate_bare_name(str(item.get("name") or ""))
+        matched = _env_nameplate_bare_name(str(item.get("matched_name") or ""))
+        keys = [key for key in (bare, matched) if key]
+        if item.get("reuse"):
+            already.update(keys)
+            continue
+        if not bare or bare in already:
+            continue
+        already.add(bare)
+        if _same_scene_id(str(item.get("scene_id") or ""), scene_id):
+            names.append(bare)
     body = str(scene_text or "").strip()
     if not body and scene_id:
         start = f"[SCENE_START:{scene_id}]"
@@ -448,11 +473,16 @@ def collect_scene_env_nameplate_names(
             body = script[i:j]
     if body:
         for item in parse_scene_env_ident_items(body, scene_id):
-            add(str(item.get("name") or ""))
-        for match in _ENV_IDENT_NAME_PATTERN.finditer(body):
-            add(match.group(1))
+            bare = _env_nameplate_bare_name(str(item.get("name") or ""))
+            matched = _env_nameplate_bare_name(str(item.get("matched_name") or ""))
+            if item.get("reuse"):
+                blocked = {key for key in (bare, matched) if key}
+                already.update(blocked)
+                names[:] = [name for name in names if name not in blocked]
+                continue
+            allow(bare)
         for match in _MAIN_ENV_HEADER_NAME_PATTERN.finditer(body):
-            add(match.group(1))
+            allow(match.group(1))
     return names
 
 
@@ -473,7 +503,12 @@ def scene_cast_token_names(cast_text: str) -> Dict[str, List[str]]:
     return {"characters": chars, "props": props}
 
 
-def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: str = "") -> str:
+def build_scene_entity_token_brief(
+    full_script: str,
+    scene_id: str,
+    scene_text: str = "",
+    reused_character_names: Optional[Iterable[str]] = None,
+) -> str:
     """Whitelist for drama-onward CHAR/PROP standard expression."""
     script = str(full_script or "")
     cast = extract_scene_cast_block(script, scene_id)
@@ -499,8 +534,8 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         "名单外保持自然语言，禁止另起未列出名。"
         "设置 voice_identity 必须先读【本场对白声线】：有声线则写入该角色 voice_identity；"
         "禁把声线标签写入台词。"
-        "建置须读【本场角色标签】：字幕=待落 且本拍该人首次正面/¾可读时，"
-        "按项目语言选一侧字样，紧跟该人【建置】可见面整句写 "
+        "建置须读【本场角色标签】：只有字幕=待落的本集新角色，且本拍时机合适时，"
+        "按项目语言选一侧字样，紧跟该人【入戏】主动作写 "
         "画面打出物理文字标签：【{裸名}】{标签}】｜字体={标签字体}｜字色={标签字色}。"
         "一人一句，禁把多名牌攒到建置段末或入戏一起写。"
         "此为片内图形名牌（物理文字），不是对白硬字幕；禁写成画幅底部白字黑边。"
@@ -513,14 +548,15 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         "蒙面/易容/面具/面罩等见不到真脸：字幕必须=无，连裸名也不打，禁为蒙面态补名牌。"
         "名牌条件=须真脸 则等该人真脸正面/¾可读后再挂；全场未见真脸则不写、不标缺口。"
         "字体/字色为无或待补则跟 Global_Style 补一书体+具名色。"
-        "字幕=已过|无 则不写。"
-        "换主环境时另打环境名牌："
+        "字幕=已过|无、复用角色（上集或项目库已有）禁止打角色名牌。"
+        "环境名牌只打本集新建主环境，且该主名在本集第一次进入时打一次："
         "只写 画面打出物理文字标签：【{主环境注册名}】｜落位=顶部中央｜字体=…｜字色=…；"
         "原文有明确时间（早上9点、重生第一天）则【注册名】{时间}】，时间可空。"
         "禁止套成【名】日】【名】外】【名】夜·内】【名】日·外】；"
         "第二段只许明确时刻/故事日，禁日/夜/晨/昏/内/外/季节/气候，禁自拟三年前。"
-        "禁止用【场景名称】（常带·日·外）推日夜。有【本场环境名牌】则抄字样=【注册名】与时间=。"
-        "本场B1与场内换主各打一次；同主切角/仅状态衍生不打。"
+        "禁止用【场景名称】（常带·日·外）推日夜。有【本场环境名牌】才抄字样=【注册名】与时间=。"
+        "复用场景（复用=是｜来源=项目库|上集|本集）禁止打环境名牌，回切已见空间也不打。"
+        "未列入【本场环境名牌】的主环境禁止打。同主切角/仅状态衍生不打。"
         "挂入戏起笔（新环境落定后、角色主动作前）；不算动作；禁挂建置、禁画幅底部。"
     )
     body = (
@@ -562,6 +598,8 @@ def build_scene_entity_token_brief(full_script: str, scene_id: str, scene_text: 
         elif nameplate_mode == "无":
             subtitle = "无"
         elif _is_outfit_variant(name, text, all_record_names):
+            subtitle = "无"
+        elif _character_marked_reused(name, text, base_name, reused_character_names):
             subtitle = "无"
         else:
             debut = (_parse_applicable_scenes(text) or [None])[0] or _first_cast_scene(script, name)

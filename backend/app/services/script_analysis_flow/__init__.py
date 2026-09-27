@@ -737,7 +737,10 @@ def parse_special_scene_analysis_blocks(script_text: str) -> Dict[str, Dict[str,
     return parsed
 
 
-def build_scene_subskill_task_payloads(script_text: str) -> List[Dict[str, Any]]:
+def build_scene_subskill_task_payloads(
+    script_text: str,
+    reused_character_names: Optional[Set[str]] = None,
+) -> List[Dict[str, Any]]:
     """Programmatically split Stage-1 output into independent per-scene task payloads."""
     comprehensive_info = extract_comprehensive_info_block(script_text)
     units = parse_scene_units_from_markers(script_text)
@@ -766,7 +769,9 @@ def build_scene_subskill_task_payloads(script_text: str) -> List[Dict[str, Any]]
                     script_text,
                     unit.scene_id,
                     unit.scene_text,
+                    reused_character_names=reused_character_names,
                 ),
+                "reused_character_names": sorted(reused_character_names or []),
                 "special_analysis": special_text,
                 "routes": routing,
                 "call_vfx": bool((routing.get("VFX") or {}).get("hit")),
