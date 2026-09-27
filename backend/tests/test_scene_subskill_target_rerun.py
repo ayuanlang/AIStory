@@ -295,7 +295,8 @@ def test_staging_drops_invisible_silence_names():
 [BEAT_END:6]
 """
     fixed = assert_staging_output_complete(beat, "EP01_SC01")
-    assert "| 闭嘴 | 无" in fixed
+    assert "| 闭嘴 | 其他人均闭嘴" in fixed
+    assert "| 闭嘴 | 无" not in fixed
     assert "闭嘴 | CHAR:[@赵桂芬]" not in fixed
     assert "林知夏（荷兰猪）" in fixed.split("────【场记分析】────", 1)[1]
 
@@ -321,7 +322,8 @@ def test_staging_rewrites_invisible_facing_and_gaze():
     assert "CHAR:[@赵桂芬]" not in prose
     assert "眼神看向镜头" in prose
     assert "散落衣物" not in prose
-    assert "| 闭嘴 | 无" in prose
+    assert "| 闭嘴 | 其他人均闭嘴" in prose
+    assert "| 闭嘴 | 无" not in prose
     assert "知夏还没找着啊" in prose
     assert "CHAR:[@赵桂芬]" in note
 

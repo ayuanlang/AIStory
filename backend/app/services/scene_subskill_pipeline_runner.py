@@ -1139,7 +1139,9 @@ def _silence_side_without_invisible(side: str, invisible: set[str]) -> str:
         if text:
             kept.append(text)
     result = "，".join(kept).strip(" ，,")
-    return result or "无"
+    if result in {"", "无", "其他人", "无其他画内角色"}:
+        return "其他人均闭嘴"
+    return result
 
 
 def _map_outside_braces(text: str, rewrite) -> str:
