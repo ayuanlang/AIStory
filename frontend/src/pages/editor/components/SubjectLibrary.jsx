@@ -332,6 +332,20 @@ const formatEntityDependencyLabel = (entry) => {
     return target?.name || target?.name_en || token || String(target?.id || '');
 };
 
+/** First visual dependency that already has a bound image. Same type wins. */
+const pickBoundReuseDependency = (entity, entityPool) => {
+    const hostId = String(entity?.id || '').trim();
+    const hostType = String(entity?.type || '').trim().toLowerCase();
+    const bound = getEntityVisualDependencyTargets(entity, entityPool).filter(({ entity: target }) => {
+        if (!target) return false;
+        if (hostId && String(target.id || '').trim() === hostId) return false;
+        return Boolean(String(target?.image_url || '').trim());
+    });
+    if (!bound.length) return null;
+    const sameType = bound.find(({ entity: target }) => String(target?.type || '').trim().toLowerCase() === hostType);
+    return (sameType || bound[0]).entity;
+};
+
 const topoSortEntitiesByVisualDependencies = (entities, allEntities, nameMap) => {
     if (!Array.isArray(entities) || entities.length <= 1) return [...(entities || [])];
 
@@ -546,6 +560,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [generating, setGenerating] = useState(false);
     const [uploadState, setUploadState] = useState('idle'); // idle, uploading, analyzing, completed
     const [assetReuseBusy, setAssetReuseBusy] = useState(false);
+    const [isAutoReusingAssets, setIsAutoReusingAssets] = useState(false);
     const [prompt, setPrompt] = useState('');
     const [promptDrafts, setPromptDrafts] = useState({ cn: '', en: '' });
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
@@ -7017,6 +7032,105 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
     }, [clearSubjectEntityImageLocally, confirmUiMessage, isSubjectImageActionLocked, onLog, selectedEntity, showSubjectNotification, t]);
 
+    const handleAutoReuseBoundDependencies = async () => {
+        if (isAutoReusingAssets) return;
+        const scopeLabel = entityEpisodeScope === 'current'
+            ? t('当前分集', 'the current episode')
+            : t('整个项目', 'the whole project');
+        const candidates = [];
+        let alreadyReused = 0;
+        let lockedCount = 0;
+        (scopedEntities || []).forEach((entity) => {
+            const source = pickBoundReuseDependency(entity, allEntities);
+            if (!source) return;
+            const sourceUrl = String(source.image_url || '').trim();
+            const currentUrl = String(entity?.image_url || '').trim();
+            if (sourceUrl && currentUrl && sourceUrl === currentUrl) {
+                alreadyReused += 1;
+                return;
+            }
+            if (isSubjectImageActionLocked(entity)) {
+                lockedCount += 1;
+                return;
+            }
+            candidates.push({
+                entity,
+                source,
+                sourceUrl,
+                willReplace: Boolean(currentUrl),
+            });
+        });
+
+        if (!candidates.length) {
+            const detailParts = [];
+            if (alreadyReused > 0) {
+                detailParts.push(t(`${alreadyReused} 个已是依赖图`, `${alreadyReused} already use the dependency image`));
+            }
+            if (lockedCount > 0) {
+                detailParts.push(t(`${lockedCount} 个图片任务进行中`, `${lockedCount} have a running image job`));
+            }
+            showSubjectNotification(
+                t(
+                    `没有可自动复用的主体。需要资产依赖已解析，且依赖资产已绑定图片。${detailParts.length ? `（${detailParts.join('，')}）` : ''}`,
+                    `No subjects to auto-reuse. A dependency must resolve to an asset that already has an image.${detailParts.length ? ` (${detailParts.join(', ')})` : ''}`
+                ),
+                'warning'
+            );
+            return;
+        }
+
+        const replaceCount = candidates.filter((item) => item.willReplace).length;
+        const emptyCount = candidates.length - replaceCount;
+        const extraNotes = [];
+        if (alreadyReused > 0) extraNotes.push(t(`已跳过同图 ${alreadyReused} 个`, `skipped ${alreadyReused} already matching`));
+        if (lockedCount > 0) extraNotes.push(t(`图片任务中跳过 ${lockedCount} 个`, `skipped ${lockedCount} with a running image job`));
+        const confirmed = await confirmUiMessage(t(
+            `将把${scopeLabel}内 ${candidates.length} 个已绑定依赖图的主体设为复用：用依赖资产的图片和锚点替换当前图。空图 ${emptyCount} 个，覆盖已有图 ${replaceCount} 个。${extraNotes.length ? `${extraNotes.join('，')}。` : ''}是否继续？`,
+            `Set ${candidates.length} subjects in ${scopeLabel} that have a bound dependency image to reuse: replace the current image and anchor with the dependency asset. ${emptyCount} empty, ${replaceCount} will overwrite an existing image. ${extraNotes.length ? `${extraNotes.join(', ')}. ` : ''}Continue?`
+        ));
+        if (!confirmed) return;
+
+        setIsAutoReusingAssets(true);
+        let successCount = 0;
+        let failedCount = 0;
+        try {
+            for (const item of candidates) {
+                const entityName = item.entity?.name || item.entity?.name_en || item.entity?.id;
+                const sourceName = item.source?.name || item.source?.name_en || item.source?.id;
+                const anchor = item.source?.anchor_description;
+                const extraFields = (typeof anchor === 'string' && anchor.trim())
+                    ? { anchor_description: anchor }
+                    : {};
+                const updated = await updateEntityImage(item.sourceUrl, false, item.entity, {
+                    skipAnalyze: true,
+                    notify: false,
+                    extraFields,
+                });
+                if (updated) {
+                    successCount += 1;
+                    onLog?.(
+                        t(
+                            `自动复用：${entityName} ← ${sourceName}`,
+                            `Auto reuse: ${entityName} ← ${sourceName}`
+                        ),
+                        'success'
+                    );
+                } else {
+                    failedCount += 1;
+                }
+            }
+            showSubjectNotification(
+                t(
+                    `自动复用完成：成功 ${successCount}，失败 ${failedCount}`,
+                    `Auto reuse finished: ${successCount} succeeded, ${failedCount} failed`
+                ),
+                failedCount > 0 ? 'warning' : 'success'
+            );
+        } finally {
+            setIsAutoReusingAssets(false);
+        }
+    };
+
     const matchesBatchGenerateSubjectType = (entity, subjectType) => {
         if (!subjectType) return true;
         if (subjectType === 'environment_main') {
@@ -8158,6 +8272,27 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                     <Loader2 size={16} className="animate-spin" />
                                 ) : (
                                     <LinkIcon size={16} />
+                                )}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleAutoReuseBoundDependencies}
+                                disabled={isAutoReusingAssets}
+                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-white outline-none hover:border-primary/50 disabled:opacity-50 transition-colors flex items-center justify-center"
+                                title={t(
+                                    entityEpisodeScope === 'current'
+                                        ? '自动复用：当前分集里，依赖资产已绑定图片的主体，全部改用该依赖的图片和锚点'
+                                        : '自动复用：整个项目里，依赖资产已绑定图片的主体，全部改用该依赖的图片和锚点',
+                                    entityEpisodeScope === 'current'
+                                        ? 'Auto reuse: in the current episode, copy each bound dependency image and anchor onto every subject that depends on it'
+                                        : 'Auto reuse: across the project, copy each bound dependency image and anchor onto every subject that depends on it'
+                                )}
+                                aria-label={t('自动复用', 'Auto Reuse')}
+                            >
+                                {isAutoReusingAssets ? (
+                                    <Loader2 size={16} className="animate-spin" />
+                                ) : (
+                                    <Copy size={16} />
                                 )}
                             </button>
                             <TabMediaRefreshButton
