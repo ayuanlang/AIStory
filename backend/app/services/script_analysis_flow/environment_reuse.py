@@ -503,6 +503,76 @@ def find_catalog_environment(
     return None
 
 
+_ENV_GRID_MARK = "【四向拼图】"
+_ENV_OPENING_HINTS = ("【定位】", "【六面一次】", "六面一次")
+_INHERIT_PLACEHOLDER_MARKERS = (
+    "继承项目库",
+    "复用项目库主环境",
+    "四向+中心：继承项目库",
+    "四向+中心:继承项目库",
+)
+_IDENT_INHERIT_POSITIONING = re.compile(
+    r"^\s*定位\s*[=：:]\s*(?:继承原定义|继承项目库|继承|复用项目库|复用)\s*$"
+)
+
+
+def crop_environment_asset_opening(prompt: str) -> str:
+    """Keep the environment asset's opening world lock; drop the four-grid tail."""
+    text = str(prompt or "").strip()
+    if not text:
+        return ""
+    grid_at = text.find(_ENV_GRID_MARK)
+    if grid_at > 0:
+        return text[:grid_at].strip()
+    if any(token in text for token in _ENV_OPENING_HINTS):
+        return text
+    return ""
+
+
+def environment_text_is_inherit_placeholder(text: str) -> bool:
+    """True when a reused skeleton only tells downstream to inherit or reuse."""
+    raw = str(text or "")
+    if not raw.strip():
+        return True
+    return any(marker in raw for marker in _INHERIT_PLACEHOLDER_MARKERS)
+
+
+def _opening_positioning_sentence(opening: str) -> str:
+    text = str(opening or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"【定位】\s*(.*?)(?=【|$)", text, flags=re.DOTALL)
+    chunk = match.group(1) if match else text
+    sentence = re.sub(r"\s+", " ", chunk).strip(" -\n")
+    return sentence[:360]
+
+
+def catalog_item_asset_opening(item: Optional[Dict[str, Any]]) -> str:
+    if not item:
+        return ""
+    return crop_environment_asset_opening(item.get("generation_prompt_cn") or "")
+
+
+def _reuse_source_prose(
+    catalog_item: Optional[Dict[str, Any]],
+    episode_block: str = "",
+) -> str:
+    opening = catalog_item_asset_opening(catalog_item)
+    if opening:
+        return opening
+    description = str((catalog_item or {}).get("description") or "").strip()
+    if description and not environment_text_is_inherit_placeholder(description):
+        return description
+    for block in (
+        str((catalog_item or {}).get("env_block") or ""),
+        str(episode_block or ""),
+    ):
+        cleaned = _strip_derived_environment_section(block)
+        if cleaned and not environment_text_is_inherit_placeholder(cleaned):
+            return cleaned
+    return ""
+
+
 def _truncate_env_text(value: Any, limit: int = 280) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     if not text:
@@ -522,7 +592,11 @@ def _original_definition_excerpt(item: Dict[str, Any]) -> str:
     )
 
 
-def _catalog_item_injection_lines(item: Dict[str, Any]) -> List[str]:
+def _catalog_item_injection_lines(
+    item: Dict[str, Any],
+    *,
+    include_asset_opening: bool = False,
+) -> List[str]:
     name = _clean_env_name(item.get("name"))
     if not name:
         return []
@@ -530,8 +604,20 @@ def _catalog_item_injection_lines(item: Dict[str, Any]) -> List[str]:
     episode_tag = str(item.get("episode_tag") or "").strip()
     extra = f"｜集={episode_tag}" if episode_tag and "EP" not in source_label else ""
     lines = [f"- {name}｜来源={source_label}{extra}"]
+    opening = catalog_item_asset_opening(item) if include_asset_opening else ""
     definition = _original_definition_excerpt(item)
+    if opening and not str(item.get("env_block") or "").strip():
+        prompt_flat = re.sub(r"\s+", " ", str(item.get("generation_prompt_cn") or "")).strip()
+        if definition and definition.rstrip("…") and definition.rstrip("…") in prompt_flat:
+            definition = ""
     lines.append(f"  原定义={definition or '无'}")
+    if opening:
+        lines.append("  资产开篇:")
+        lines.extend(f"    {line}" if line.strip() else "" for line in opening.splitlines())
+        lines.append(
+            "  复用生成=在上述资产开篇上重写本场【主环境】与定位；对照剧本只改明确要求的差异；"
+            "禁止抛开开篇全新生成；成稿必须重新描述空间与主体，禁止只写继承原定义或复用。"
+        )
     derived_names = [
         _clean_env_name(row.get("name"))
         for row in (item.get("derivatives") or [])
@@ -565,7 +651,9 @@ def build_project_main_environment_injection(
     if for_planning:
         lines = [
             "当前项目已登记的主环境（含项目库与本集之前各集；已删除的不计入）。环境规划必须先读本清单及原定义，再做场景勘探。",
-            "同空间必须复用：沿用原名，继承原定义，禁止另起同义空壳或重写骨架。",
+            "同空间必须复用注册名，禁止另起同义空壳。",
+            "给出「资产开篇」时：必须在该开篇上复用生成本场【主环境】与定位，对照剧本只改明确差异，禁止全新生成。",
+            "输出必须把空间、四向主体和落位重新描述成可下游阅读的正文。禁止只写继承原定义、继承项目库或复用。",
             "复用只对照下列清单。日夜/时段/时辰/天气/季节不同不另起名；本场时地写在 IDENT，不改注册名。",
         ]
     else:
@@ -575,7 +663,7 @@ def build_project_main_environment_injection(
             "复用只对照下列清单。日夜/时段/时辰/天气/季节不同不另起名。禁止同空间另起近义名。本场时地写在 IDENT。",
         ]
     for item in usable:
-        lines.extend(_catalog_item_injection_lines(item))
+        lines.extend(_catalog_item_injection_lines(item, include_asset_opening=for_planning))
     return wrap_injection_section(PROJECT_MAIN_ENV_LABEL, "\n".join(lines))
 
 
@@ -609,24 +697,31 @@ def synthesize_reused_env_block(
     *,
     main_name: str,
     catalog_item: Optional[Dict[str, Any]] = None,
+    episode_block: str = "",
 ) -> str:
+    """Write a readable main-env block. Never emit an inherit/reuse-only stub."""
     existing = _strip_derived_environment_section(
         str((catalog_item or {}).get("env_block") or "")
     )
-    if existing:
+    if existing and not environment_text_is_inherit_placeholder(existing):
         return existing
+    local = _strip_derived_environment_section(episode_block)
+    if local and not environment_text_is_inherit_placeholder(local):
+        return local
+    source = _reuse_source_prose(catalog_item, episode_block)
+    basis = "已按资产开篇重新描述"
+    if not source or environment_text_is_inherit_placeholder(source):
+        source = f"{main_name}。这是已锁定的同一处空间，四向主体与落位按该注册名写出。"
+        basis = "注册名已锁定"
     return "\n".join(
         [
             "[ENV_BLOCK_START]",
             "────【主环境】────",
-            f"【主环境】{main_name}｜日夜内外=继承项目库｜主环境角色=当下主线",
-            "【活动空间】复用项目库主环境；0°轴/四向/固定清单继承既有资产，禁止重定坐标。",
-            "0度轴=继承项目库｜四向+中心：继承项目库",
-            "地面=继承项目库｜空中/屋顶=继承项目库｜通高=继承｜风格依赖=无",
-            "头尾双锚=继承项目库｜固定实体=继承项目库",
-            "背景微动件=继承项目库|无",
+            f"【主环境】{main_name}｜日夜内外=见下方重新描述｜主环境角色=当下主线",
+            "【活动空间】",
+            source,
             "────【未落环境实体清单】────",
-            f"- 无｜依据=复用项目库｜开场在场｜归属主环境={main_name}｜全局性道具=否",
+            f"- 无｜依据={basis}｜开场在场｜归属主环境={main_name}｜全局性道具=否",
             "[ENV_BLOCK_END]",
         ]
     )
@@ -651,7 +746,11 @@ def build_reused_environment_patch(
         seen.add(key)
         local_block = str((episode_env_blocks or {}).get(key) or "").strip()
         catalog_item = find_catalog_environment(catalog, name)
-        block = local_block or synthesize_reused_env_block(main_name=name, catalog_item=catalog_item)
+        block = synthesize_reused_env_block(
+            main_name=name,
+            catalog_item=catalog_item,
+            episode_block=local_block,
+        )
         if block and block not in blocks:
             blocks.append(block)
     if not blocks:
@@ -675,6 +774,124 @@ def merge_reused_and_new_env_blocks(reused_patch: str, new_patch: str) -> str:
     if reused_block and new_block:
         return f"{reused_block}\n\n{new_block}".strip()
     return (new_block or reused_block or str(new_patch or reused_patch or "")).strip()
+
+
+def _main_env_sections(block: str) -> Dict[str, str]:
+    sections: Dict[str, str] = {}
+    for part in re.split(r"(?=【主环境】)", str(block or "")):
+        match = re.search(r"【主环境】\s*([^｜\|\r\n]+)", part)
+        if not match:
+            continue
+        key = normalize_environment_name(_clean_env_name(match.group(1)))
+        if key:
+            sections[key] = part
+    return sections
+
+
+def reused_items_needing_description(
+    body: str,
+    items: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Reused mains whose written skeleton is missing or only says inherit/reuse."""
+    from app.services.script_analysis_flow import extract_env_block_from_scene_text
+
+    sections = _main_env_sections(extract_env_block_from_scene_text(body))
+    needing: List[Dict[str, Any]] = []
+    for item in items or []:
+        if not item.get("reuse"):
+            continue
+        name = _clean_env_name(item.get("matched_name") or item.get("name"))
+        key = normalize_environment_name(name)
+        section = sections.get(key) or ""
+        if not section or environment_text_is_inherit_placeholder(section):
+            needing.append(item)
+    return needing
+
+
+def strip_placeholder_reused_sections(body: str, items: Sequence[Dict[str, Any]]) -> str:
+    """Drop inherit/reuse-only main sections so a written description can replace them."""
+    from app.services.script_analysis_flow import extract_env_block_from_scene_text
+
+    source = str(body or "")
+    block = extract_env_block_from_scene_text(source)
+    if not block:
+        return source
+    drop_keys = {
+        normalize_environment_name(_clean_env_name(item.get("matched_name") or item.get("name")))
+        for item in items or []
+        if item.get("reuse")
+    }
+    drop_keys.discard("")
+    if not drop_keys:
+        return source
+    kept: List[str] = []
+    for key, section in _main_env_sections(block).items():
+        if key in drop_keys and environment_text_is_inherit_placeholder(section):
+            continue
+        cleaned = re.sub(r"\[ENV_BLOCK_(?:START|END)\]", "", section).strip()
+        if cleaned:
+            kept.append(cleaned)
+    if not kept:
+        stripped = source.replace(block, "").strip()
+        return re.sub(r"\n{3,}", "\n\n", stripped)
+    rebuilt = "[ENV_BLOCK_START]\n" + "\n".join(kept).strip() + "\n[ENV_BLOCK_END]"
+    if "[ENV_BLOCK_START" not in rebuilt.upper():
+        rebuilt = "[ENV_BLOCK_START]\n" + rebuilt + "\n[ENV_BLOCK_END]"
+    replaced = source.replace(block, rebuilt, 1)
+    return re.sub(r"\n{3,}", "\n\n", replaced).strip()
+
+
+def rewrite_reused_ident_positioning(
+    ident: str,
+    items: Sequence[Dict[str, Any]],
+    catalog: Sequence[Dict[str, Any]],
+    episode_env_blocks: Optional[Dict[str, str]] = None,
+) -> str:
+    """Replace 定位=继承/复用 with a sentence taken from the reused asset."""
+    text = str(ident or "")
+    if not text.strip():
+        return text
+    reused_by_name = {}
+    for item in items or []:
+        if not item.get("reuse"):
+            continue
+        name = _clean_env_name(item.get("matched_name") or item.get("name"))
+        key = normalize_environment_name(name)
+        if key:
+            reused_by_name[key] = name
+    if not reused_by_name:
+        return text
+    lines = text.splitlines()
+    rewritten: List[str] = []
+    pending_name = ""
+    for line in lines:
+        if re.match(r"^\s*\[ENV\]", line, flags=re.IGNORECASE):
+            payload = re.sub(r"^\s*\[ENV\]\s*", "", line, count=1, flags=re.IGNORECASE)
+            fields = _parse_env_line_fields(payload)
+            pending_name = _clean_env_name(_env_field(fields, "名称", "name"))
+            rewritten.append(line)
+            continue
+        if pending_name and _IDENT_INHERIT_POSITIONING.match(line):
+            key = normalize_environment_name(pending_name)
+            if key in reused_by_name:
+                catalog_item = find_catalog_environment(catalog, pending_name)
+                episode_block = str((episode_env_blocks or {}).get(key) or "")
+                sentence = _opening_positioning_sentence(
+                    catalog_item_asset_opening(catalog_item)
+                ) or _opening_positioning_sentence(_reuse_source_prose(catalog_item, episode_block))
+                if sentence:
+                    rewritten.append(f"定位={sentence}")
+                    pending_name = ""
+                    continue
+        if line.strip() and not line.strip().startswith("定位"):
+            if re.match(r"^\s*(目标|情绪表达|时地|风格)\s*=", line):
+                pending_name = ""
+        rewritten.append(line)
+    return "\n".join(rewritten)
+
+
+def ident_still_defers_reuse(ident: str) -> bool:
+    return any(_IDENT_INHERIT_POSITIONING.match(line) for line in str(ident or "").splitlines())
 
 
 def build_reused_derived_environment_injection(
@@ -871,12 +1088,13 @@ def format_selected_global_environment_injection(catalog: Sequence[Dict[str, Any
         "以下主环境来自剧本页「全局资产」勾选（已删除不计入）。",
         "必须先把本集勘探出的拍摄环境与本清单逐条对照，找出可对应项：",
         "名称相同、同空间别称、或原定义空间类型与本场包络同一处即命中。",
-        "命中且 SCENE_ENV_IDENT 已标 复用=是 → 只锁注册名，继承原定义，禁止重写骨架。",
-        "命中但识别为新建 → 写骨架时必须参考本条名称/原定义/已有衍生，禁止另起同义空壳。",
+        "命中且 SCENE_ENV_IDENT 已标 复用=是 → 沿用注册名，并按资产开篇或原定义把【主环境】与定位重新描述。",
+        "对照剧本只改明确差异，禁止抛开已有资产全新生成，禁止只写继承原定义或复用。",
+        "命中但识别为新建 → 写骨架时必须参考本条名称/原定义/资产开篇/已有衍生，禁止另起同义空壳。",
         "未命中才按新建设计；未对应的勾选项不得硬塞进无关场。",
     ]
     for item in usable:
-        lines.extend(_catalog_item_injection_lines(item))
+        lines.extend(_catalog_item_injection_lines(item, include_asset_opening=True))
     return wrap_injection_section(SELECTED_GLOBAL_ENV_LABEL, "\n".join(lines))
 
 

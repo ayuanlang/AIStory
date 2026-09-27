@@ -236,12 +236,84 @@ def test_scene_env_ident_parse_and_reuse_decision():
     patch = build_reused_environment_patch("EP02_SC03", reused_items, catalog)
     assert "[ENV_SCENE_PATCH_START:EP02_SC03]" in patch
     assert "【主环境】客栈大堂" in patch
+    assert "继承项目库" not in patch
+    assert "复用项目库" not in patch
     assert "────【衍生环境】────" not in patch
     assert "`0度客栈大堂`" not in patch
 
     derived = build_reused_derived_environment_injection(reused_items, catalog)
     assert "[复用衍生环境开始]" in derived
     assert "`180度客栈大堂`" in derived
+
+
+def test_reused_environment_opening_is_rewritten_for_downstream():
+    from app.services.script_analysis_flow.environment_reuse import (
+        build_project_main_environment_injection,
+        build_reused_environment_patch,
+        crop_environment_asset_opening,
+        rewrite_reused_ident_positioning,
+    )
+    from app.services.script_analysis_flow.character_asset_brief import (
+        crop_character_appearance,
+        format_reused_character_appearance_block,
+    )
+
+    prompt = (
+        "【定位】\n- 夜色客栈大堂，南墙正中一扇木门。\n"
+        "【六面一次】\n- 六面一次。场径=北6｜东5｜南6｜西5。\n"
+        "【四向拼图】\n- 左上0度格只切画面。"
+    )
+    opening = crop_environment_asset_opening(prompt)
+    assert "南墙正中一扇木门" in opening
+    assert "【四向拼图】" not in opening
+
+    catalog = [
+        {
+            "name": "客栈大堂",
+            "normalized": "客栈大堂",
+            "source_label": "项目库",
+            "generation_prompt_cn": prompt,
+            "env_block": "",
+            "derivatives": [],
+        }
+    ]
+    injected = build_project_main_environment_injection(catalog, for_planning=True)
+    assert "资产开篇:" in injected
+    assert "南墙正中一扇木门" in injected
+    assert "左上0度格" not in injected
+    assert "重新描述" in injected
+
+    reused_items = [
+        {
+            "name": "客栈大堂",
+            "reuse": True,
+            "matched_name": "客栈大堂",
+        }
+    ]
+    patch = build_reused_environment_patch("EP02_SC03", reused_items, catalog)
+    assert "【主环境】客栈大堂" in patch
+    assert "南墙正中一扇木门" in patch
+    assert "继承项目库" not in patch
+    assert "【四向拼图】" not in patch
+
+    ident = """[SCENE_ENV_IDENT_START:EP02_SC03]
+[ENV] 名称=客栈大堂｜复用=是｜来源=项目库｜匹配主环境=客栈大堂｜依据=原文：“回客栈”
+定位=继承原定义
+目标=本场空镜须=灯下空堂｜服务=无｜可见落点=木门
+[SCENE_ENV_IDENT_END:EP02_SC03]"""
+    rewritten = rewrite_reused_ident_positioning(ident, reused_items, catalog)
+    assert "定位=继承原定义" not in rewritten
+    assert "夜色客栈大堂" in rewritten
+
+    appearance = crop_character_appearance(
+        "【其他】四视图。\n【相貌】\n- 窄长脸，眉骨平，瞳色深褐。\n【衣着】\n- 青衫。\n【光线】\n- 柔光。"
+    )
+    assert "窄长脸" in appearance
+    assert "青衫" not in appearance
+    block = format_reused_character_appearance_block([{"name": "林晚晚", "appearance": appearance}])
+    assert "[复用角色相貌开始]" in block
+    assert "重新写成" in block
+    assert "禁止成稿只写继承" in block
 
 
 def test_missing_env_ident_defaults_to_new_planning():

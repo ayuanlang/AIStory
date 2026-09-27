@@ -798,7 +798,27 @@ async def execute_analyze_scene(
                 )
             )
             char_brief = build_character_asset_design_brief(brief_source)
-            user_content = assemble_character_asset_design_user_content(char_brief)
+            appearance_block = ""
+            try:
+                from app.services.script_analysis_flow.character_asset_brief import (
+                    build_reused_character_appearance_injection,
+                )
+
+                appearance_project_id = int(getattr(request, "project_id", 0) or 0)
+                if appearance_project_id <= 0 and request_episode is not None:
+                    appearance_project_id = int(getattr(request_episode, "project_id", 0) or 0)
+                appearance_block = build_reused_character_appearance_injection(
+                    db,
+                    project_id=appearance_project_id,
+                    script_text=brief_source,
+                    episode_id=int(getattr(request, "episode_id", 0) or 0),
+                )
+            except Exception as appearance_exc:
+                logger.warning(
+                    "[analyze_scene] failed to inject reused character appearance: %s",
+                    appearance_exc,
+                )
+            user_content = assemble_character_asset_design_user_content(appearance_block, char_brief)
             logger.info(
                 "[analyze_scene] character asset design user seed episode_id=%s char_brief=%s script_block=omitted prop_brief=omitted request_has_block=%s",
                 getattr(request, "episode_id", None),

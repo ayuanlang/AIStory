@@ -328,7 +328,19 @@ def _build_prior_entity_generation_prompts_block(
         if not matched:
             continue
         best = max(matched, key=_entity_episode_sort_tuple)
-        prompt_cn = re.sub(r"\s+", " ", str(getattr(best, "generation_prompt_cn", None) or "")).strip()
+        raw_prompt = str(getattr(best, "generation_prompt_cn", None) or "").strip()
+        prompt_field = "generation_prompt_cn"
+        if entity_type == "character":
+            from app.services.script_analysis_flow.character_asset_brief import crop_character_appearance
+
+            cropped_appearance = crop_character_appearance(raw_prompt)
+            if cropped_appearance:
+                prompt_cn = cropped_appearance
+                prompt_field = "相貌"
+            else:
+                prompt_cn = re.sub(r"\s+", " ", raw_prompt).strip()
+        else:
+            prompt_cn = re.sub(r"\s+", " ", raw_prompt).strip()
         if not prompt_cn:
             continue
 
@@ -363,7 +375,7 @@ def _build_prior_entity_generation_prompts_block(
             else (f"episode_id={ep_id_int}" if ep_id_int > 0 else "episode=project")
         )
         prompt_lines.append(
-            f"- {subject_ref} | source={episode_label} | entity_id={getattr(best, 'id', '')} | generation_prompt_cn={prompt_cn}"
+            f"- {subject_ref} | source={episode_label} | entity_id={getattr(best, 'id', '')} | {prompt_field}={prompt_cn}"
         )
 
     if not prompt_lines:
@@ -378,9 +390,8 @@ def _build_prior_entity_generation_prompts_block(
         "## Mandatory reuse rules (read carefully)\n"
         "1) **Stable / identity attributes MUST follow the injected prior prompt** as the authoritative "
         "visual reference. Evolve from it; do not invent a conflicting redesign.\n"
-        "   - Character: facial bone structure, facial features, skin undertone, body proportions, "
-        "silhouette, race/ethnicity cues, and other appearance-identity anchors. Even for aging, injury, "
-        "or state variants, evolve from the prior appearance description (same person continuity).\n"
+        "   - Character: only the original 【相貌】 is injected. Rewrite that appearance into the new "
+        "【相貌】 prose. Aging or injury must evolve from it. Do not output only 继承/复用/同貌.\n"
         "   - Prop: core form, structure, material family, distinctive markings, and recognition anchors.\n"
         "   - Environment: spatial identity, key fixed fixtures, layout anchors, and recognisable "
         "architectural/set DNA.\n"
