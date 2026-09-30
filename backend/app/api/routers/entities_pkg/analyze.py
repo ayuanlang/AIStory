@@ -1218,3 +1218,232 @@ def apply_entity_analysis(
     db.refresh(entity)
     return entity
 
+
+class EnvironmentConsistencyBody(BaseModel):
+    prompt: Optional[str] = None
+
+
+@router.post("/entities/{entity_id}/environment-consistency")
+async def check_environment_consistency(
+    entity_id: int,
+    payload: Optional[EnvironmentConsistencyBody] = None,
+    system_api_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Compare an environment image with the prompt used to generate it.
+
+    When they disagree, rewrite that prompt (or the owning main-environment
+    prompt for a crop shot) so world physics matches the picture.
+    """
+    from app.services.promo_planner import resolve_image_url_for_llm
+    from app.services.script_analysis_flow.environment_consistency import (
+        ConsistencyApplyError,
+        apply_consistency_writes,
+        build_consistency_messages,
+        classify_checked_prompt,
+        entity_consistency_payload,
+        find_owning_main_environment,
+        is_environment_entity,
+        parse_consistency_payload,
+        plan_consistency_writes,
+        resolve_checked_prompt,
+    )
+
+    entity = db.query(Entity).filter(Entity.id == entity_id, _active_entity_clause()).first()
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    _require_project_access(db, entity.project_id, current_user)
+    if not is_environment_entity(entity):
+        raise HTTPException(status_code=400, detail="一致性检查只用于主环境和衍生环境。")
+    if not str(getattr(entity, "image_url", "") or "").strip():
+        raise HTTPException(status_code=400, detail="还没有生成图片，无法做一致性检查。")
+
+    checked_prompt = resolve_checked_prompt(entity, getattr(payload, "prompt", None))
+    if not checked_prompt:
+        raise HTTPException(status_code=400, detail="没有可对照的生成提示词。")
+    kind = classify_checked_prompt(entity, checked_prompt)
+    main_entity = find_owning_main_environment(db, entity) if kind != "main" else entity
+    if kind != "main" and main_entity is None:
+        raise HTTPException(status_code=400, detail="找不到所属主环境，无法核对世界物理。")
+
+    llm_config, selected_dropdown_id, _, _ = _resolve_script_analysis_dropdown_llm_config(
+        db,
+        current_user.id,
+        "script_analysis",
+        system_api_id,
+        context="environment_consistency",
+    )
+    api_provider = str(llm_config.get("provider") or "").strip() or None
+    api_model = str(llm_config.get("model") or "").strip() or None
+    api_api_key = str(llm_config.get("api_key") or "").strip() or None
+    api_base_url = str(llm_config.get("base_url") or "").strip() or None
+    raw_api_config = llm_config.get("config")
+    api_config = dict(raw_api_config) if isinstance(raw_api_config, dict) else {}
+    if not api_provider or not api_model:
+        raise HTTPException(status_code=400, detail="剧本分析的模型下拉没有可用的视觉模型。")
+
+    reservation_tx = None
+    reservation_tx_id: Optional[int] = None
+    if not billing_service.is_token_pricing(db, "analysis_character", api_provider, api_model):
+        cost = billing_service.estimate_cost(db, "analysis_character", api_provider, api_model)
+        billing_service.check_can_proceed(current_user, cost)
+
+    image_url_final = await resolve_image_url_for_llm(str(entity.image_url or ""), db)
+    if not image_url_final:
+        raise HTTPException(status_code=400, detail="生成图片无法读取，暂时不能做一致性检查。")
+
+    messages = build_consistency_messages(
+        image_url=image_url_final,
+        entity=entity,
+        main_entity=main_entity,
+        checked_prompt=checked_prompt,
+        kind=kind,
+    )
+    call_config = {
+        "provider": api_provider,
+        "api_key": api_api_key,
+        "base_url": api_base_url,
+        "model": api_model,
+        "config": {
+            **api_config,
+            "__resolved_user_id": current_user.id,
+            "__resolved_user_name": current_user.username,
+            "__resolved_project_id": entity.project_id,
+            "__resolved_action": "环境一致性检查",
+            "__selected_system_api_id": selected_dropdown_id,
+        },
+    }
+    main_entity_id = int(getattr(main_entity, "id", 0) or 0)
+    current_user_id = int(getattr(current_user, "id", 0) or 0)
+
+    if billing_service.is_token_pricing(db, "analysis_character", api_provider, api_model):
+        est = billing_service.estimate_reserve_tokens_from_messages(messages)
+        estimated_image_tokens = 1000
+        est_input = int(est.get("input_tokens", 0) or 0) + estimated_image_tokens
+        est_output = int(math.ceil(float(est_input) * billing_service.RESERVE_OUTPUT_RATIO)) if est_input > 0 else 0
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "analysis_character",
+            api_provider,
+            api_model,
+            {
+                "item": "environment_consistency_check",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
+                "estimated_image_tokens": estimated_image_tokens,
+                "input_tokens": est_input,
+                "output_tokens": est_output,
+                "total_tokens": int(est_input + est_output),
+            },
+        )
+        try:
+            reservation_tx_id = int(getattr(reservation_tx, "id", 0) or 0) or None
+        except Exception:
+            reservation_tx_id = None
+
+    had_reservation = bool(reservation_tx_id)
+    _release_db_connection(db, "environment_consistency_llm_call")
+    reservation_tx = None
+
+    try:
+        llm_response = await llm_service.chat_completion_with_fallback(messages, call_config)
+        result_content = str((llm_response or {}).get("content", "") or "")
+        usage = (llm_response or {}).get("usage", {}) if isinstance(llm_response, dict) else {}
+        try:
+            parsed = parse_consistency_payload(result_content)
+        except ConsistencyApplyError:
+            repair = await llm_service.chat_completion_with_fallback(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是严格的 JSON 整理器。把用户文本转成一个 JSON 对象。"
+                            "第一个字符必须是 {，最后一个字符必须是 }。"
+                            "保留 consistent、summary、revised_prompt、revised_main_prompt。"
+                            "不要 Markdown，不要解释。"
+                        ),
+                    },
+                    {"role": "user", "content": result_content[:120000]},
+                ],
+                call_config,
+            )
+            repair_usage = (repair or {}).get("usage", {}) if isinstance(repair, dict) else {}
+            if isinstance(usage, dict) and isinstance(repair_usage, dict):
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens"):
+                    if key in repair_usage:
+                        try:
+                            usage[key] = int(usage.get(key, 0) or 0) + int(repair_usage.get(key, 0) or 0)
+                        except Exception:
+                            pass
+            parsed = parse_consistency_payload(str((repair or {}).get("content", "") or ""))
+
+        entity = db.query(Entity).filter(Entity.id == entity_id).first()
+        if not entity:
+            raise HTTPException(status_code=404, detail="Entity not found")
+        main_entity = db.query(Entity).filter(Entity.id == main_entity_id).first() if main_entity_id else None
+        if current_user_id > 0:
+            reloaded_user = db.query(User).filter(User.id == current_user_id).first()
+            if reloaded_user is not None:
+                current_user = reloaded_user
+
+        plan = plan_consistency_writes(entity, main_entity, checked_prompt, parsed)
+        entities_by_id = {int(entity.id): entity}
+        if main_entity is not None:
+            entities_by_id[int(main_entity.id)] = main_entity
+        touched = apply_consistency_writes(entities_by_id, plan["writes"])
+        if touched:
+            db.commit()
+            for row in entities_by_id.values():
+                if int(row.id) in touched:
+                    db.refresh(row)
+
+        billing_details = _build_standard_billing_details(
+            item="environment_consistency_check",
+            usage_payload=usage if isinstance(usage, dict) else None,
+            extra_details={
+                "entity_id": entity_id,
+                "request_scope": "environment_consistency",
+                "checked_kind": kind,
+            },
+            routing_payload=llm_response if isinstance(llm_response, dict) else None,
+        )
+        if had_reservation:
+            current_input = billing_details.get("prompt_tokens", billing_details.get("input_tokens", 0))
+            if current_input < 200:
+                billing_details["input_tokens"] = int(current_input or 0) + 1000
+                billing_details["prompt_tokens"] = billing_details["input_tokens"]
+                if "total_tokens" in billing_details:
+                    billing_details["total_tokens"] = int(billing_details.get("total_tokens") or 0) + 1000
+        _finalize_model_invocation_billing(
+            db=db,
+            current_user=current_user,
+            task_type="analysis_character",
+            provider=api_provider,
+            model=api_model,
+            reservation_tx=None,
+            reservation_tx_id=reservation_tx_id,
+            item="environment_consistency_check",
+            usage_payload=usage if isinstance(usage, dict) else None,
+            extra_details=billing_details,
+            routing_payload=llm_response if isinstance(llm_response, dict) else None,
+        )
+        return {
+            "consistent": bool(plan["consistent"]),
+            "summary": plan["summary"],
+            "checked_kind": plan["kind"],
+            "updated_targets": plan["updated_targets"],
+            "updated": [entity_consistency_payload(entities_by_id[item_id]) for item_id in touched],
+        }
+    except ConsistencyApplyError as exc:
+        _cancel_reservation_quietly(db, reservation_tx_id, str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HTTPException as exc:
+        _cancel_reservation_quietly(db, reservation_tx_id, str(exc.detail))
+        raise
+    except Exception as exc:
+        logger.error("Environment consistency check failed: %s", exc, exc_info=True)
+        _cancel_reservation_quietly(db, reservation_tx_id, str(exc))
+        raise HTTPException(status_code=502, detail="一致性检查失败，提示词没有改动。") from exc
+

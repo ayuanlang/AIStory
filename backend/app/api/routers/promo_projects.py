@@ -63,6 +63,8 @@ from app.services.promo_planner import (
     require_promo_project_access,
     result_to_promo_markdown,
     assign_catalog_file_url,
+    apply_catalog_extra_info,
+    normalize_catalog_scene_extra,
     serialize_promo_brand,
     serialize_promo_catalog_asset,
     serialize_promo_enterprise,
@@ -742,7 +744,7 @@ def create_promo_catalog_asset(
         file_url=file_url,
         object_name=_text(payload.object_name),
         user_remark=_text(payload.user_remark),
-        extra_info=dict(payload.extra_info or {}),
+        extra_info=normalize_catalog_scene_extra(payload.extra_info),
     )
     db.add(row)
     db.commit()
@@ -819,7 +821,7 @@ def update_promo_catalog_asset(
     if payload.user_remark is not None:
         row.user_remark = _text(payload.user_remark)
     if payload.extra_info is not None and not file_changed:
-        row.extra_info = dict(payload.extra_info or {})
+        apply_catalog_extra_info(row, payload.extra_info)
     db.add(row)
     db.commit()
     db.refresh(row)

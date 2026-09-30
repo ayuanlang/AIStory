@@ -49,9 +49,14 @@ def test_injection_keeps_grid_cells_readable():
 
 
 def test_pipeline_contract_injects_quad_before_staging():
-    assert PIPELINE_CONTRACT_VERSION == "asset-quad-before-staging-v4"
+    assert PIPELINE_CONTRACT_VERSION == "asset-quad-before-staging-v5"
     registry = get_script_analysis_flow_registry()
     nodes = {str(node.get("key")): node for node in (registry.get("nodes") or [])}
     chain = nodes["scene_subskill_pipeline"].get("injection_chain") or []
     assert "backend.environment_asset_quad.before_staging" in chain
     assert nodes["asset_design_environment"].get("depends_on") == ["environment_plan"]
+    assert nodes["asset_design_environment_quad"].get("depends_on") == ["asset_design_environment"]
+    assert nodes["asset_design_environment_quad"].get("prompt_file") == (
+        "skills/scene_analysis_feature_stack/environment_quad_prompt.md"
+    )
+    assert "asset_design_environment_quad" in (nodes["storyboard_generation"].get("depends_on") or [])

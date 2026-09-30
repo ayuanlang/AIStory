@@ -63,6 +63,7 @@ _FLOW_NODE_ACTION_LABELS = {
     "asset_design_character": "角色资产设计",
     "asset_design_prop": "道具资产设计",
     "asset_design_environment": "环境资产设计",
+    "asset_design_environment_quad": "主环境四宫格",
 }
 _FLOW_DOWNSTREAM_NODES = {
     "scene_split": [
@@ -73,6 +74,9 @@ _FLOW_DOWNSTREAM_NODES = {
     ],
     "environment_plan": [
         "asset_design_environment",
+    ],
+    "asset_design_environment": [
+        "asset_design_environment_quad",
     ],
     # Storyboard is frontend-owned (per-scene generateSceneShots after staging+ENV).
     # Queuing a backend placeholder here left storyboard_generation stuck in queued
@@ -331,6 +335,7 @@ async def execute_scene_analysis_flow_node(
         "asset_design_character",
         "asset_design_prop",
         "asset_design_environment",
+        "asset_design_environment_quad",
     }
     if node_key in {"assets_extraction", "scene_markdown"}:
         node_project_id = int(request.project_id or 0)
@@ -816,6 +821,48 @@ async def execute_scene_analysis_flow_node(
                     db.commit()
                     raise
                 result = _mark_analysis_result_persisted(result, int(node_episode_id))
+
+        if node_key == "asset_design_environment_quad" and node_project_id > 0 and node_episode_id > 0:
+            from app.services.script_analysis_flow.derived_env_ingest import (  # noqa: WPS433
+                DEGREE_NAME_PATTERN,
+                apply_main_environment_quad_prompts,
+                main_environment_quad_prompt_ready,
+            )
+
+            subjects = {}
+            if isinstance(result, dict):
+                raw_subjects = result.get("subjects_json")
+                if isinstance(raw_subjects, dict):
+                    subjects = raw_subjects
+            rows = subjects.get("environments") if isinstance(subjects, dict) else None
+            named_rows = [
+                row for row in (rows or [])
+                if isinstance(row, dict) and str(row.get("name") or "").strip()
+                and not DEGREE_NAME_PATTERN.match(str(row.get("name") or "").strip())
+            ]
+            ready_rows = [
+                row for row in named_rows
+                if main_environment_quad_prompt_ready(row.get("generation_prompt_cn"))
+            ]
+            applied = apply_main_environment_quad_prompts(
+                db,
+                project_id=node_project_id,
+                episode_id=node_episode_id,
+                rows=ready_rows,
+            )
+            if not named_rows or len(ready_rows) != len(named_rows) or len(applied.get("updated") or []) != len(ready_rows):
+                upsert_pipeline_node_status(
+                    db,
+                    project_id=node_project_id,
+                    episode_id=node_episode_id,
+                    script_id=f"episode:{node_episode_id}",
+                    node_name=node_key,
+                    status="failed",
+                    error_code="ENVIRONMENT_QUAD_NOT_APPLIED",
+                    error_message="four-grid prompt was not written onto every main environment",
+                )
+                db.commit()
+                raise HTTPException(status_code=422, detail="ENVIRONMENT_QUAD_NOT_APPLIED")
 
         if node_project_id > 0 and node_episode_id > 0:
             if node_key != "scene_markdown":

@@ -88,7 +88,7 @@ COMBAT_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_c
 FRAMING_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_derived_framing.md"
 STAGING_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_staging_env.md"
 # Hard contract: after enhance + main-env splice, these LLM steps are serial and complete.
-PIPELINE_CONTRACT_VERSION = "asset-quad-before-staging-v4"
+PIPELINE_CONTRACT_VERSION = "asset-quad-before-staging-v5"
 SCENE_SUBSKILL_POST_ENV_STEPS: Tuple[Tuple[str, str], ...] = (
     ("derived_framing", FRAMING_PROMPT),
     ("staging", STAGING_PROMPT),
@@ -2073,6 +2073,25 @@ def environment_plan_terminal_without_payload(
     )
 
 
+def persisted_environment_plan_for_scene_rerun(
+    persisted_text: str,
+    explicit_text: str = "",
+) -> str:
+    """Saved main-env script for a scene-only rerun.
+
+    That rerun does not execute environment_plan. The stored plan is the
+    injection source. A stale running or queued node must not park the scene
+    on 等待主环境注入.
+    """
+    persisted = str(persisted_text or "").strip()
+    if script_has_environment_blocks(persisted):
+        return persisted
+    explicit = str(explicit_text or "").strip()
+    if script_has_environment_blocks(explicit):
+        return explicit
+    return ""
+
+
 def _ensure_reused_main_env_block(
     env_scene: str,
     scene_id: str,
@@ -2424,14 +2443,36 @@ async def await_environment_planned_script(
     timeout_seconds: float = _ENV_PLAN_WAIT_SECONDS,
     project_id: int = 0,
     scene_ids: Optional[List[str]] = None,
+    reuse_persisted: bool = False,
 ) -> str:
     """Wait for the environment_plan node of this episode, then return its merged script.
 
-    Scene-split leftovers and previous-run adaptation must not unlock framing.
+    A full analysis still waits for this run's environment_plan success. Scene-split
+    leftovers and previous-run adaptation must not unlock framing in that case.
+    A scene-only rerun sets ``reuse_persisted`` and uses the saved plan immediately.
     ``fallback_text`` is ignored for readiness; it is kept only for call-site compat.
     """
     del fallback_text
     explicit = str(explicit_text or "").strip()
+    if reuse_persisted and int(episode_id or 0) > 0:
+        poll_db = SessionLocal()
+        try:
+            persisted = load_environment_planned_script(poll_db, int(episode_id))
+            resolved = persisted_environment_plan_for_scene_rerun(persisted, explicit)
+            if resolved:
+                logger.info(
+                    "[scene_subskill_pipeline] scene rerun reuses saved environment plan episode_id=%s chars=%s",
+                    episode_id,
+                    len(resolved),
+                )
+                return resolved
+            last_status = _environment_plan_node_status(poll_db, int(episode_id))
+        finally:
+            _release_db_connection(poll_db)
+        raise HTTPException(
+            status_code=422,
+            detail=f"STAGING_ENVIRONMENT_PLAN_EMPTY:{last_status or 'missing'}",
+        )
     if int(episode_id or 0) <= 0:
         if script_has_environment_blocks(explicit):
             return explicit
@@ -2565,12 +2606,12 @@ def build_environment_asset_quad_injection(prompts_by_name: Dict[str, str]) -> s
     return wrap_injection_section("环境资产四宫格", intro + "\n\n" + "\n\n".join(blocks))
 
 
-def _asset_design_environment_status(db: Session, episode_id: int) -> str:
+def _pipeline_node_status(db: Session, episode_id: int, node_name: str) -> str:
     rows = (
         db.query(ScriptProgressPipelineNode)
         .filter(
             ScriptProgressPipelineNode.episode_id == int(episode_id),
-            ScriptProgressPipelineNode.node_name == "asset_design_environment",
+            ScriptProgressPipelineNode.node_name == node_name,
         )
         .all()
     )
@@ -2582,6 +2623,17 @@ def _asset_design_environment_status(db: Session, episode_id: int) -> str:
     if any(status == "running" for status in statuses):
         return "running"
     return statuses[0] if statuses else ""
+
+
+def _asset_design_environment_status(db: Session, episode_id: int) -> str:
+    """Staging waits on the four-grid node. Design-only success is not quad-ready."""
+    quad_status = _pipeline_node_status(db, episode_id, "asset_design_environment_quad")
+    if quad_status:
+        return quad_status
+    design_status = _pipeline_node_status(db, episode_id, "asset_design_environment")
+    if design_status in {"failed", "blocked"}:
+        return design_status
+    return ""
 
 
 def _load_ready_environment_asset_quads(
@@ -3395,6 +3447,7 @@ async def run_scene_subskill_pipeline(
             explicit_text=str(raw_payload.get("environment_planned_text") or ""),
             project_id=int(project_id or 0),
             scene_ids=[str(task.get("scene_id") or "") for task in tasks],
+            reuse_persisted=bool(explicit_start),
         )
     )
 
@@ -3454,6 +3507,8 @@ async def run_scene_subskill_pipeline(
                 called: List[str] = list(scene_resume.called) if scene_resume else []
                 call_vfx = bool(task.get("call_vfx"))
                 call_xian = bool(task.get("call_xian"))
+                if explicit_start:
+                    await env_plan_task
 
                 async def _run_enhance_step(prompt_file: str, step_name: str) -> None:
                     nonlocal current_block
@@ -3564,14 +3619,15 @@ async def run_scene_subskill_pipeline(
                     if not str(env_script or "").strip():
                         env_script = await env_plan_task
                 else:
-                    _mark_scene_subskill_step(
-                        task_db,
-                        project_id=project_id,
-                        episode_id=node_episode_id,
-                        scene_id=scene_id,
-                        step_name="wait_env",
-                        step_label="等待主环境注入",
-                    )
+                    if not env_plan_task.done():
+                        _mark_scene_subskill_step(
+                            task_db,
+                            project_id=project_id,
+                            episode_id=node_episode_id,
+                            scene_id=scene_id,
+                            step_name="wait_env",
+                            step_label="等待主环境注入",
+                        )
                     env_script = await env_plan_task
                 env_scene = resolve_env_scene_for_staging(
                     env_script,

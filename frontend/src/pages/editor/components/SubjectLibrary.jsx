@@ -21,6 +21,16 @@ import {
 
 import { generateEntityFromText, generateEntityFromImage, generateEntityDerived } from '../../../services/api';
 import { isReusableMainEnvironmentAsset } from '../reuseEnvAssets';
+import {
+    DERIVED_GRID_REGEN_NEGATIVE,
+    gridCropPixels,
+    isEnvironmentEntity,
+    isGridCropDerivedEntity,
+    isMainEnvironmentEntity,
+    planDerivedGridRegen,
+    readSavedGridRegenPrompt,
+    resolveSubmittedGridRegenPrompt,
+} from '../derivedGridRegen';
 import { 
     fetchProject, 
     updateProject,
@@ -73,6 +83,7 @@ import {
     fetchMe,
     fetchShot,
     analyzeEntityImage,
+    checkEnvironmentImageConsistency,
     applySceneAIResult,
     updateSceneLatestAIResult,
     getSceneLatestAIResult,
@@ -642,6 +653,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [showImageModal, setShowImageModal] = useState(false);
     const [imageModalTab, setImageModalTab] = useState('library'); // library, upload, generate
     const [generating, setGenerating] = useState(false);
+    const [environmentConsistency, setEnvironmentConsistency] = useState({ entityId: '', running: false, text: '', tone: '' });
     const [uploadState, setUploadState] = useState('idle'); // idle, uploading, analyzing, completed
     const [assetReuseBusy, setAssetReuseBusy] = useState(false);
     const [isAutoReusingAssets, setIsAutoReusingAssets] = useState(false);
@@ -652,6 +664,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
     const [refImage, setRefImage] = useState(null);
     const [inheritAppearance, setInheritAppearance] = useState(true);
+    const [derivedImageGenMode, setDerivedImageGenMode] = useState('crop');
+    const [gridRegenPreparing, setGridRegenPreparing] = useState(false);
+    const [gridRegenPromptDrafts, setGridRegenPromptDrafts] = useState({});
+    const [gridRegenPromptSaving, setGridRegenPromptSaving] = useState(false);
+    const gridRegenPromptDirtyRef = useRef({});
+    const gridRegenSaveFlightRef = useRef({});
+    const derivedGridRegenPlan = useMemo(() => {
+        if (!isGridCropDerivedEntity(selectedEntity)) return null;
+        return planDerivedGridRegen(selectedEntity, allEntities);
+    }, [selectedEntity, allEntities]);
+    useEffect(() => {
+        setDerivedImageGenMode('crop');
+    }, [selectedEntity?.id]);
     /** Dependency tokens excluded from this generation's asset-reference refs (session-only). */
     const [excludedVisualDepKeys, setExcludedVisualDepKeys] = useState([]);
     const [isUploadingRef, setIsUploadingRef] = useState(false);
@@ -666,6 +691,24 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [includeHistoricalEpisodeAssets, setIncludeHistoricalEpisodeAssets] = useState(false);
     const [imageSelectAction, setImageSelectAction] = useState('direct_use');
     const [viewingEntity, setViewingEntity] = useState(null);
+    const viewingGridRegenPlan = useMemo(() => {
+        if (!isGridCropDerivedEntity(viewingEntity)) return null;
+        return planDerivedGridRegen(viewingEntity, allEntities);
+    }, [viewingEntity, allEntities]);
+    useEffect(() => {
+        setDerivedImageGenMode('crop');
+    }, [viewingEntity?.id]);
+    useEffect(() => {
+        const syncDraft = (entity, plan) => {
+            const entityId = String(entity?.id || '').trim();
+            if (!entityId || !plan?.ok) return;
+            if (gridRegenPromptDirtyRef.current[entityId]) return;
+            const next = readSavedGridRegenPrompt(entity) || String(plan.regenPrompt || '');
+            setGridRegenPromptDrafts((prev) => (prev[entityId] === next ? prev : { ...prev, [entityId]: next }));
+        };
+        syncDraft(selectedEntity, derivedGridRegenPlan);
+        syncDraft(viewingEntity, viewingGridRegenPlan);
+    }, [selectedEntity, derivedGridRegenPlan, viewingEntity, viewingGridRegenPlan]);
     const [entityDetailLinkedAsset, setEntityDetailLinkedAsset] = useState(null);
     const [entityMetaProbing, setEntityMetaProbing] = useState(false);
     const [historyList, setHistoryList] = useState([]);
@@ -6712,7 +6755,40 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         } 
     };
 
-    const handleGenerate = async (entityOverride = null, customRefs = null, customPrompt = null, extraProviderOptions = null) => {
+    const submittedImagePromptKind = (entity, promptText) => {
+        const text = String(promptText || '');
+        if (isMainEnvironmentEntity(entity)) return 'main';
+        if (text.includes('只切割') || text.includes('不要重切宫格')) return 'crop';
+        if (isGridCropDerivedEntity(entity)) return 'regen';
+        return 'derived';
+    };
+
+    const rememberSubmittedImagePrompt = (entity, promptText, kind) => {
+        const entityId = String(entity?.id || '').trim();
+        const value = String(promptText || '').trim();
+        if (!entityId || entityId === 'new' || !value || !isEnvironmentEntity(entity)) return;
+        const attrs = parseEntityCustomAttributes(entity);
+        if (
+            String(attrs.last_submitted_image_prompt || '').trim() === value
+            && String(attrs.last_submitted_image_prompt_kind || '') === kind
+        ) {
+            return;
+        }
+        updateEntity(entityId, {
+            last_submitted_image_prompt: value,
+            last_submitted_image_prompt_kind: kind,
+        }).then((saved) => {
+            const nextAttrs = {
+                ...attrs,
+                ...(saved?.custom_attributes && typeof saved.custom_attributes === 'object' ? saved.custom_attributes : {}),
+                last_submitted_image_prompt: value,
+                last_submitted_image_prompt_kind: kind,
+            };
+            applyEntityLocalPatch(entityId, { custom_attributes: nextAttrs });
+        }).catch((error) => console.error(error));
+    };
+
+    const handleGenerate = async (entityOverride = null, customRefs = null, customPrompt = null, extraProviderOptions = null, generationOptions = null) => {
         const activeEntity = entityOverride || selectedEntity;
         if (generating || !!(activeEntity?.id && subjectImageJobs[String(activeEntity.id)])) return;
         const targetEntityId = Number(activeEntity?.id || 0);
@@ -6724,6 +6800,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         if (!promptToUse) return;
 
         const entityNameMap = buildEntityNameMap(allEntities);
+        const omitDependencyEntityIds = new Set(
+            (generationOptions?.omitDependencyEntityIds || []).map((id) => String(id || '').trim()).filter(Boolean)
+        );
+        const negativePromptOverride = String(generationOptions?.negativePromptOverride || '').trim();
+        const promptEntity = negativePromptOverride
+            ? {
+                ...activeEntity,
+                negative_prompt_en: negativePromptOverride,
+                custom_attributes: {
+                    ...parseEntityCustomAttributes(activeEntity),
+                    negative_prompt_en: negativePromptOverride,
+                },
+            }
+            : activeEntity;
         const excludedDepKeySet = new Set(
             (excludedVisualDepKeys || []).map((key) => String(key || '').trim()).filter(Boolean)
         );
@@ -6763,13 +6853,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         // Use allEntities for resolution
         const processedPrompt = processPrompt(promptToUse, epInfo, allEntities);
         const finalPrompt = prependEntityGlobalStyleToPromptHead(processedPrompt, { injectIfMissing: true });
-        
-        // Update UI to show processed prompt (in case var replacement happened)
-        setPrompt(finalPrompt);
-        setPromptDrafts(prev => ({
-            ...prev,
-            cn: finalPrompt,
-        }));
+
+        if (!generationOptions?.keepPromptDraft) {
+            // Update UI to show processed prompt (in case var replacement happened)
+            setPrompt(finalPrompt);
+            setPromptDrafts(prev => ({
+                ...prev,
+                cn: finalPrompt,
+            }));
+        }
 
         try {
             // Resolve Visual Dependencies
@@ -6779,6 +6871,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                  deps.forEach(dep => {
                      if (excludedDepKeySet.has(String(dep || '').trim())) return;
                      const target = resolveDependencyEntity(dep, allEntities);
+                     if (target && omitDependencyEntityIds.has(String(target.id || ''))) return;
 
                      if (target && target.image_url) {
                          depUrls.push(target.image_url);
@@ -6819,7 +6912,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = buildEntityImageGenerationPrompts(
                 effectiveFinalPrompt,
                 effectivePromptToUse,
-                activeEntity,
+                promptEntity,
                 allEntities
             );
 
@@ -6841,6 +6934,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
             const jobId = String(submitResult?.job_id || '').trim();
             if (!jobId) throw new Error('Missing image job id');
+            rememberSubmittedImagePrompt(activeEntity, submissionPrompt, submittedImagePromptKind(activeEntity, submissionPrompt));
 
             if (isMountedRef.current) {
                 updateSubjectImageJobsAndStorage(prev => ({
@@ -6864,6 +6958,361 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 setGenerating(false);
             }
         }
+    };
+
+    const derivedGridRegenErrorText = (errorCode) => {
+        if (errorCode === 'missing_angle') {
+            return t('这个衍生环境没有可识别的度数，无法按宫格重生。', 'This derived environment has no recognizable view angle, so grid regen is unavailable.');
+        }
+        if (errorCode === 'missing_main') {
+            return t('找不到所属主环境，无法拆出对应宫格提示词。', 'The owning main environment was not found, so the grid prompt cannot be extracted.');
+        }
+        if (errorCode === 'missing_main_prompt') {
+            return t('所属主环境还没有四宫格提示词。', 'The main environment does not have a four-grid prompt yet.');
+        }
+        if (errorCode === 'missing_cell') {
+            return t('主环境提示词里拆不出这一格的正文。', 'The matching grid-cell prompt could not be extracted from the main environment prompt.');
+        }
+        if (errorCode === 'missing_main_image') {
+            return t('所属主环境还没有图片，无法参照对应宫格。', 'The main environment has no image yet, so that grid cell cannot be used as a reference.');
+        }
+        return t('暂时不能按宫格重生。', 'Grid regen is unavailable right now.');
+    };
+
+    const cropMainEnvironmentGridCell = useCallback(async (imageUrl, position) => {
+        const response = await fetch(getFullUrl(imageUrl));
+        if (!response.ok) {
+            throw new Error(`failed to download main environment image (${response.status})`);
+        }
+        const blob = await response.blob();
+        const image = await new Promise((resolve, reject) => {
+            const objectUrl = URL.createObjectURL(blob);
+            const element = new Image();
+            element.onload = () => {
+                URL.revokeObjectURL(objectUrl);
+                resolve(element);
+            };
+            element.onerror = () => {
+                URL.revokeObjectURL(objectUrl);
+                reject(new Error('failed to decode main environment image'));
+            };
+            element.src = objectUrl;
+        });
+        const sourceWidth = Number(image.naturalWidth || image.width || 0);
+        const sourceHeight = Number(image.naturalHeight || image.height || 0);
+        if (!sourceWidth || !sourceHeight) {
+            throw new Error('main environment image dimensions unavailable');
+        }
+        const rect = gridCropPixels(sourceWidth, sourceHeight, position);
+        const canvas = document.createElement('canvas');
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('canvas context unavailable');
+        context.drawImage(image, rect.x, rect.y, rect.width, rect.height, 0, 0, rect.width, rect.height);
+        const outBlob = await new Promise((resolve, reject) => {
+            canvas.toBlob((value) => {
+                if (!value) {
+                    reject(new Error('failed to encode grid cell'));
+                    return;
+                }
+                resolve(value);
+            }, 'image/jpeg', 0.95);
+        });
+        const file = new File([outBlob], `grid-cell-${position || 'cell'}.jpg`, { type: 'image/jpeg' });
+        const uploaded = await uploadAsset(file, {
+            asset_type: 'subject',
+            remark: 'derived_grid_regen_ref',
+        });
+        const url = String(uploaded?.url || '').trim();
+        if (!url) throw new Error('grid cell upload missing url');
+        return url;
+    }, [uploadAsset]);
+
+    const gridRegenPromptFor = (entity, plan) => {
+        const entityId = String(entity?.id || '').trim();
+        const draft = entityId && Object.prototype.hasOwnProperty.call(gridRegenPromptDrafts, entityId)
+            ? gridRegenPromptDrafts[entityId]
+            : undefined;
+        return resolveSubmittedGridRegenPrompt(entity, plan, draft);
+    };
+
+    const saveGridRegenPrompt = (entity, text, plan, options = {}) => {
+        const entityId = String(entity?.id || '').trim();
+        if (!entityId || entityId === 'new') return Promise.resolve(false);
+        const inflight = gridRegenSaveFlightRef.current[entityId];
+        if (inflight) return inflight;
+        const job = saveGridRegenPromptNow(entity, text, plan, options);
+        gridRegenSaveFlightRef.current[entityId] = job;
+        job.finally(() => {
+            if (gridRegenSaveFlightRef.current[entityId] === job) {
+                delete gridRegenSaveFlightRef.current[entityId];
+            }
+        });
+        return job;
+    };
+
+    const saveGridRegenPromptNow = async (entity, text, plan, { notify = false } = {}) => {
+        const entityId = String(entity?.id || '').trim();
+        if (!entityId || entityId === 'new') return false;
+        const value = String(text || '').trim();
+        const built = String(plan?.regenPrompt || '').trim();
+        if (!value) {
+            showSubjectNotification(t('重生修正提示词不能为空。', 'The regen prompt cannot be empty.'), 'warning');
+            return false;
+        }
+        const payloadValue = value === built ? null : value;
+        const current = readSavedGridRegenPrompt(entity);
+        if ((payloadValue || '') === current) {
+            gridRegenPromptDirtyRef.current[entityId] = false;
+            if (notify) {
+                showSubjectNotification(t('重生修正提示词已保存。', 'Regen prompt saved.'), 'success');
+            }
+            return true;
+        }
+        setGridRegenPromptSaving(true);
+        try {
+            const saved = await updateEntity(entityId, { grid_regen_prompt: payloadValue });
+            const nextAttrs = {
+                ...parseEntityCustomAttributes(entity),
+                ...(saved?.custom_attributes && typeof saved.custom_attributes === 'object' ? saved.custom_attributes : {}),
+            };
+            if (payloadValue) nextAttrs.grid_regen_prompt = payloadValue;
+            else delete nextAttrs.grid_regen_prompt;
+            applyEntityLocalPatch(entityId, { custom_attributes: nextAttrs });
+            gridRegenPromptDirtyRef.current[entityId] = false;
+            setGridRegenPromptDrafts((prev) => ({ ...prev, [entityId]: value }));
+            if (notify) {
+                showSubjectNotification(t('重生修正提示词已保存。', 'Regen prompt saved.'), 'success');
+            }
+            return true;
+        } catch (error) {
+            const detail = error?.response?.data?.detail || error?.message || t('未知错误', 'Unknown error');
+            showSubjectNotification(`${t('保存重生修正提示词失败', 'Failed to save regen prompt')}: ${detail}`, 'error');
+            return false;
+        } finally {
+            if (isMountedRef.current) setGridRegenPromptSaving(false);
+        }
+    };
+
+    const restoreGridRegenPrompt = async (entity, plan) => {
+        const entityId = String(entity?.id || '').trim();
+        const built = String(plan?.regenPrompt || '');
+        if (!entityId || !built.trim()) return;
+        const hadSaved = Boolean(readSavedGridRegenPrompt(entity));
+        gridRegenPromptDirtyRef.current[entityId] = false;
+        setGridRegenPromptDrafts((prev) => ({ ...prev, [entityId]: built }));
+        if (!hadSaved) return;
+        const saved = await saveGridRegenPrompt(entity, built, plan);
+        if (saved) {
+            showSubjectNotification(t('已恢复为拆出的原文。', 'Restored the extracted prompt.'), 'success');
+        }
+    };
+
+    const renderDerivedGridRegenEditor = (entity, plan) => {
+        if (derivedImageGenMode !== 'regen') return null;
+        if (!plan?.ok) {
+            return <div className="text-[11px] text-amber-200">{derivedGridRegenErrorText(plan?.errorCode)}</div>;
+        }
+        const entityId = String(entity?.id || '').trim();
+        const built = String(plan.regenPrompt || '');
+        const value = Object.prototype.hasOwnProperty.call(gridRegenPromptDrafts, entityId)
+            ? gridRegenPromptDrafts[entityId]
+            : (readSavedGridRegenPrompt(entity) || built);
+        const changed = String(value || '').trim() !== built.trim();
+        return (
+            <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                    <div className="text-[10px] text-white/50">{plan.mainName} · {plan.grid}</div>
+                    <div className="flex items-center gap-1">
+                        {changed && (
+                            <button
+                                type="button"
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => { void restoreGridRegenPrompt(entity, plan); }}
+                                disabled={gridRegenPromptSaving}
+                                className="rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-bold text-white/70 hover:bg-white/10 disabled:opacity-50"
+                            >
+                                {t('恢复拆出原文', 'Restore extracted')}
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => { void saveGridRegenPrompt(entity, value, plan, { notify: true }); }}
+                            disabled={gridRegenPromptSaving || !String(value || '').trim()}
+                            className="rounded border border-primary/40 bg-primary/15 px-2 py-1 text-[10px] font-bold text-primary hover:bg-primary/25 disabled:opacity-50"
+                        >
+                            {gridRegenPromptSaving ? t('保存中', 'Saving') : t('保存', 'Save')}
+                        </button>
+                    </div>
+                </div>
+                <textarea
+                    value={value}
+                    onChange={(event) => {
+                        const nextText = event.target.value;
+                        gridRegenPromptDirtyRef.current[entityId] = true;
+                        setGridRegenPromptDrafts((prev) => ({ ...prev, [entityId]: nextText }));
+                    }}
+                    onBlur={(event) => { void saveGridRegenPrompt(entity, event.target.value, plan); }}
+                    className="max-h-72 min-h-[9rem] w-full resize-y rounded border border-white/10 bg-black/40 p-2 text-[11px] leading-relaxed text-white/80 outline-none focus:border-primary/50"
+                />
+            </div>
+        );
+    };
+
+    const handleGenerateFromPage = async (entityOverride = null, planOverride = null) => {
+        const targetEntity = entityOverride || selectedEntity;
+        const regenRequested = derivedImageGenMode === 'regen' && isGridCropDerivedEntity(targetEntity);
+        if (!regenRequested) {
+            if (entityOverride) {
+                await handleGenerate(entityOverride, null, getEntityPromptByLang(entityOverride, effectivePromptSubmitLang));
+            } else {
+                await handleGenerate();
+            }
+            return;
+        }
+        const plan = planOverride || planDerivedGridRegen(targetEntity, allEntities);
+        if (gridRegenPreparing || generating || subjectImageJobs[String(targetEntity?.id || '')]) return;
+        if (!plan?.ok) {
+            showSubjectNotification(derivedGridRegenErrorText(plan?.errorCode), 'warning');
+            return;
+        }
+        const regenPromptText = gridRegenPromptFor(targetEntity, plan);
+        if (!regenPromptText) {
+            showSubjectNotification(t('重生修正提示词不能为空。', 'The regen prompt cannot be empty.'), 'warning');
+            return;
+        }
+        setGridRegenPreparing(true);
+        try {
+            if (gridRegenPromptDirtyRef.current[String(targetEntity?.id || '')]) {
+                const saved = await saveGridRegenPrompt(targetEntity, regenPromptText, plan);
+                if (!saved) return;
+            }
+            onLog?.(
+                t(
+                    `正在裁出${plan.grid}，并按该格提示词修正生成：${plan.mainName}`,
+                    `Cropping ${plan.grid} and regenerating from that cell prompt: ${plan.mainName}`
+                ),
+                'process'
+            );
+            const cropUrl = await cropMainEnvironmentGridCell(
+                plan.mainEntity.image_url,
+                plan.position
+            );
+            const refs = [cropUrl];
+            if (refImage?.url) refs.push(refImage.url);
+            await handleGenerate(
+                targetEntity,
+                refs,
+                regenPromptText,
+                { aspect_ratio: '16:9' },
+                {
+                    omitDependencyEntityIds: [plan.mainEntity.id],
+                    negativePromptOverride: DERIVED_GRID_REGEN_NEGATIVE,
+                    keepPromptDraft: true,
+                }
+            );
+        } catch (error) {
+            const detail = error?.response?.data?.detail || error?.message || t('未知错误', 'Unknown error');
+            showSubjectNotification(`${t('宫格重生失败', 'Grid regen failed')}: ${detail}`, 'error');
+            onLog?.(t(`宫格重生失败：${detail}`, `Grid regen failed: ${detail}`), 'error');
+        } finally {
+            if (isMountedRef.current) setGridRegenPreparing(false);
+        }
+    };
+
+    const consistencyDetailText = (error) => {
+        const detail = error?.response?.data?.detail;
+        if (typeof detail === 'string' && detail.trim()) return detail.trim();
+        if (detail && typeof detail === 'object') {
+            const message = String(detail.message || detail.detail || '').trim();
+            if (message) return message;
+        }
+        return String(error?.message || '').trim() || t('一致性检查失败', 'Consistency check failed');
+    };
+
+    const handleEnvironmentConsistencyCheck = async (entity) => {
+        const entityId = String(entity?.id || '').trim();
+        if (!entityId || entityId === 'new' || !isEnvironmentEntity(entity)) return;
+        if (!String(entity?.image_url || '').trim()) {
+            showSubjectNotification(t('还没有生成图片，无法做一致性检查。', 'There is no generated image to check.'), 'warning');
+            return;
+        }
+        const attrs = parseEntityCustomAttributes(entity);
+        const prompt = String(attrs.last_submitted_image_prompt || entity?.generation_prompt_cn || '').trim();
+        if (!prompt) {
+            showSubjectNotification(t('没有可对照的生成提示词。', 'There is no generation prompt to compare.'), 'warning');
+            return;
+        }
+        setEnvironmentConsistency({ entityId, running: true, text: '', tone: '' });
+        try {
+            const result = await checkEnvironmentImageConsistency(entityId, { prompt });
+            const rows = Array.isArray(result?.updated) ? result.updated : [];
+            rows.forEach((row) => {
+                const rowId = String(row?.id || '').trim();
+                if (!rowId) return;
+                const patch = {};
+                if (typeof row.generation_prompt_cn === 'string') patch.generation_prompt_cn = row.generation_prompt_cn;
+                if (typeof row.description === 'string') patch.description = row.description;
+                if (row.custom_attributes && typeof row.custom_attributes === 'object') {
+                    patch.custom_attributes = row.custom_attributes;
+                    if (Object.prototype.hasOwnProperty.call(row.custom_attributes, 'grid_regen_prompt')) {
+                        setGridRegenPromptDrafts((prev) => ({
+                            ...prev,
+                            [rowId]: String(row.custom_attributes.grid_regen_prompt || ''),
+                        }));
+                    }
+                }
+                applyEntityLocalPatch(rowId, patch);
+                if (typeof row.generation_prompt_cn === 'string' && String(selectedEntity?.id) === rowId) {
+                    setPrompt(row.generation_prompt_cn);
+                    setPromptDrafts((prev) => ({ ...prev, cn: row.generation_prompt_cn }));
+                }
+            });
+            const summary = String(result?.summary || '').trim();
+            const targets = Array.isArray(result?.updated_targets) ? result.updated_targets.filter(Boolean) : [];
+            const text = result?.consistent
+                ? (summary || t('图片与生成时的提示词一致。', 'The image matches the prompt used to generate it.'))
+                : `${summary || t('已按图片更新提示词。', 'The prompt was updated to match the image.')}${targets.length ? `（${targets.join('、')}）` : ''}`;
+            setEnvironmentConsistency({ entityId, running: false, text, tone: result?.consistent ? 'ok' : 'changed' });
+            showSubjectNotification(text, 'success');
+        } catch (error) {
+            const message = consistencyDetailText(error);
+            setEnvironmentConsistency({ entityId, running: false, text: message, tone: 'error' });
+            showSubjectNotification(message, 'error');
+        }
+    };
+
+    const renderEnvironmentConsistencyControls = (entity) => {
+        if (!isEnvironmentEntity(entity) || String(entity?.id || '') === 'new') return null;
+        const entityId = String(entity?.id || '');
+        const hasImage = Boolean(String(entity?.image_url || '').trim());
+        const running = environmentConsistency.running && environmentConsistency.entityId === entityId;
+        const note = environmentConsistency.entityId === entityId ? String(environmentConsistency.text || '') : '';
+        const tone = environmentConsistency.entityId === entityId ? environmentConsistency.tone : '';
+        const noteClass = tone === 'error'
+            ? 'text-red-200'
+            : tone === 'changed'
+                ? 'text-amber-100'
+                : 'text-emerald-100';
+        return (
+            <div className="flex flex-col items-end gap-1">
+                {note ? <div className={`text-[11px] leading-relaxed ${noteClass}`}>{note}</div> : null}
+                <button
+                    type="button"
+                    onClick={() => { void handleEnvironmentConsistencyCheck(entity); }}
+                    disabled={!hasImage || running}
+                    title={hasImage
+                        ? t('把这张图和生成时的提示词交给模型核对，不一致就改提示词。', 'Send this image and the prompt used to generate it to the model. Update the prompt when they disagree.')
+                        : t('生成图片后才能检查。', 'Generate an image before checking.')}
+                    className="self-end inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/5 px-4 py-2 text-sm font-bold text-white/80 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    {running ? <Loader2 className="animate-spin" size={16} /> : <Stethoscope size={16} />}
+                    {running ? t('检查中...', 'Checking...') : t('一致性检查', 'Consistency check')}
+                </button>
+            </div>
+        );
     };
 
     const handleForceStopSubjectImage = useCallback(async (entityOverride = null) => {
@@ -9654,6 +10103,33 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
                                     {viewingEntityTab === 'generate' && (
                                         <div className="space-y-6">
+                                            {isGridCropDerivedEntity(viewingEntity) && (
+                                                <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-2">
+                                                    <div className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">{t('宫格生图方式', 'Grid image mode')}</div>
+                                                    <div className="flex gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setDerivedImageGenMode('crop')}
+                                                            className={`flex-1 rounded-md px-3 py-2 text-xs font-bold border ${derivedImageGenMode === 'crop' ? 'bg-primary/20 text-primary border-primary/50' : 'bg-black/40 text-white/70 border-white/10 hover:bg-white/10'}`}
+                                                        >
+                                                            {t('裁剪宫格', 'Crop cell')}
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setDerivedImageGenMode('regen')}
+                                                            className={`flex-1 rounded-md px-3 py-2 text-xs font-bold border ${derivedImageGenMode === 'regen' ? 'bg-primary/20 text-primary border-primary/50' : 'bg-black/40 text-white/70 border-white/10 hover:bg-white/10'}`}
+                                                        >
+                                                            {t('重生修正', 'Regen from cell')}
+                                                        </button>
+                                                    </div>
+                                                    <p className="text-[11px] leading-relaxed text-white/60">
+                                                        {derivedImageGenMode === 'regen'
+                                                            ? t('下面是提交给生图模型的重生修正提示词，可直接修改。离开输入框或点保存后写入该衍生环境，裁剪宫格仍用原来的资产提示词。', 'The text below is the regen prompt sent to the image model. Edit it, then leave the field or click Save. Crop mode still uses the original asset prompt.')
+                                                            : t('按当前提示词截取主环境四向拼图里的对应宫格。', 'Crop the matching cell from the main environment four-grid using the current prompt.')}
+                                                    </p>
+                                                    {renderDerivedGridRegenEditor(viewingEntity, viewingGridRegenPlan)}
+                                                </div>
+                                            )}
                                             {/* Technical / Prompt */}
                                             <div className="space-y-2">
                                                 <div className="grid grid-cols-1 gap-3">
@@ -10247,7 +10723,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
                                 </div>
                                 
-                                <div className="p-4 border-t border-white/10 bg-black/20 flex justify-end gap-3">
+                                <div className="p-4 border-t border-white/10 bg-black/20 flex flex-col gap-2">
+                                    {viewingEntityTab === 'generate' ? renderEnvironmentConsistencyControls(viewingEntity) : null}
+                                    <div className="flex justify-end gap-3">
                                     <button 
                                         onClick={(e) => handleDeleteEntity(e, viewingEntity)}
                                         className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-md text-sm font-bold transition-colors flex items-center gap-2"
@@ -10257,19 +10735,33 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                     {viewingEntityTab === 'generate' && (
                                         <button 
                                             onClick={() => {
-                                                handleGenerate(viewingEntity, null, getEntityPromptByLang(viewingEntity, effectivePromptSubmitLang));
+                                                handleGenerateFromPage(viewingEntity, viewingGridRegenPlan);
                                             }}
-                                            disabled={viewingEntityImageLocked || generating}
+                                            disabled={
+                                                viewingEntityImageLocked
+                                                || generating
+                                                || gridRegenPreparing
+                                                || (
+                                                    derivedImageGenMode === 'regen' && isGridCropDerivedEntity(viewingEntity)
+                                                        ? (!viewingGridRegenPlan?.ok || !gridRegenPromptFor(viewingEntity, viewingGridRegenPlan))
+                                                        : !String(getEntityPromptByLang(viewingEntity, effectivePromptSubmitLang) || '').trim()
+                                                )
+                                            }
                                             className="px-4 py-2 bg-primary hover:bg-primary/90 text-black rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                         >
-                                            {(generating || viewingEntityImageLocked) ? (
+                                            {(generating || gridRegenPreparing || viewingEntityImageLocked) ? (
                                                 <RefreshCw className="animate-spin" size={16} />
                                             ) : (
                                                 <Wand2 size={16} />
                                             )}
-                                            {(generating || viewingEntityImageLocked) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}
+                                            {(generating || gridRegenPreparing || viewingEntityImageLocked)
+                                                ? t('生成中...', 'Generating...')
+                                                : (derivedImageGenMode === 'regen' && isGridCropDerivedEntity(viewingEntity)
+                                                    ? t('重生修正', 'Regen from cell')
+                                                    : t('生成图片', 'Generate Image'))}
                                         </button>
                                     )}
+                                    </div>
                                 </div>
                             </div>
                         </motion.div>
@@ -10611,6 +11103,33 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                 </button>
                                             </div>
                                         )}
+                                        {isGridCropDerivedEntity(selectedEntity) && (
+                                            <div className="mb-4 rounded-lg border border-white/10 bg-black/20 p-3 space-y-2">
+                                                <div className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">{t('宫格生图方式', 'Grid image mode')}</div>
+                                                <div className="flex gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setDerivedImageGenMode('crop')}
+                                                        className={`flex-1 rounded-md px-3 py-2 text-xs font-bold border ${derivedImageGenMode === 'crop' ? 'bg-primary/20 text-primary border-primary/50' : 'bg-black/40 text-white/70 border-white/10 hover:bg-white/10'}`}
+                                                    >
+                                                        {t('裁剪宫格', 'Crop cell')}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setDerivedImageGenMode('regen')}
+                                                        className={`flex-1 rounded-md px-3 py-2 text-xs font-bold border ${derivedImageGenMode === 'regen' ? 'bg-primary/20 text-primary border-primary/50' : 'bg-black/40 text-white/70 border-white/10 hover:bg-white/10'}`}
+                                                    >
+                                                        {t('重生修正', 'Regen from cell')}
+                                                    </button>
+                                                </div>
+                                                <p className="text-[11px] leading-relaxed text-white/60">
+                                                    {derivedImageGenMode === 'regen'
+                                                        ? t('下面是提交给生图模型的重生修正提示词，可直接修改。离开输入框或点保存后写入该衍生环境，裁剪宫格仍用原来的资产提示词。', 'The text below is the regen prompt sent to the image model. Edit it, then leave the field or click Save. Crop mode still uses the original asset prompt.')
+                                                        : t('按当前提示词截取主环境四向拼图里的对应宫格。', 'Crop the matching cell from the main environment four-grid using the current prompt.')}
+                                                </p>
+                                                {renderDerivedGridRegenEditor(selectedEntity, derivedGridRegenPlan)}
+                                            </div>
+                                        )}
                                         <textarea
                                             value={prompt}
                                             onChange={(e) => {
@@ -10851,18 +11370,34 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                  )}
                                         </div>
 
+                                        {renderEnvironmentConsistencyControls(selectedEntity)}
                                         <div className="flex justify-end items-center gap-2">
                                             <button
-                                                onClick={handleGenerate}
-                                                disabled={generating || selectedEntityHasRunningImageJob || !String(promptDrafts.cn || getEntityPromptByLang(selectedEntity, 'cn') || '').trim()}
+                                                onClick={handleGenerateFromPage}
+                                                disabled={
+                                                    generating
+                                                    || gridRegenPreparing
+                                                    || selectedEntityHasRunningImageJob
+                                                    || (
+                                                        derivedImageGenMode === 'regen' && isGridCropDerivedEntity(selectedEntity)
+                                                            ? (!derivedGridRegenPlan?.ok || !gridRegenPromptFor(selectedEntity, derivedGridRegenPlan))
+                                                            : !String(promptDrafts.cn || getEntityPromptByLang(selectedEntity, 'cn') || '').trim()
+                                                    )
+                                                }
                                                 className="flex items-center space-x-2 bg-primary text-black px-6 py-2 rounded-lg font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                                             >
-                                                {generating || selectedEntityHasRunningImageJob ? (
+                                                {generating || gridRegenPreparing || selectedEntityHasRunningImageJob ? (
                                                     <RefreshCw className="animate-spin" size={18} />
                                                 ) : (
                                                     <Wand2 size={18} />
                                                 )}
-                                                <span>{(generating || selectedEntityHasRunningImageJob) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}</span>
+                                                <span>
+                                                    {(generating || gridRegenPreparing || selectedEntityHasRunningImageJob)
+                                                        ? t('生成中...', 'Generating...')
+                                                        : (derivedImageGenMode === 'regen' && isGridCropDerivedEntity(selectedEntity)
+                                                            ? t('重生修正', 'Regen from cell')
+                                                            : t('生成图片', 'Generate Image'))}
+                                                </span>
                                             </button>
                                         </div>
 

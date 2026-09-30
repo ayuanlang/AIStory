@@ -30,6 +30,7 @@ SKILL_WATERMARKS: Dict[str, Dict[str, Any]] = {
     "entity_character": {"code": "CHR", "tokens": ("K7SC", "V9AT")},
     "entity_prop": {"code": "PRP", "tokens": ("M3XE", "D6BL")},
     "entity_environment": {"code": "EN3", "tokens": ("F5HR", "I8QW")},
+    "environment_quad": {"code": "EQ4", "tokens": ("R4NK", "B7YM")},
     "shot_generation": {"code": "SHT", "tokens": ("O2TY", "L9CU")},
 }
 
@@ -42,6 +43,7 @@ _WATERMARK_PATH_KEYS: tuple[tuple[str, str], ...] = (
     ("scene_planning_1_subskill_staging_env", "staging"),
     ("scene_planning_2_1_assets_extraction", "assets_extraction"),
     ("scene_planning_2_2_beats_generation", "beats"),
+    ("environment_quad_prompt", "environment_quad"),
     ("entity_design_environment_and_poster", "entity_environment"),
     ("entity_design_character", "entity_character"),
     ("entity_design_prop", "entity_prop"),

@@ -3772,6 +3772,17 @@ export const resolveScriptAnalysisSystemApiId = (functionName = 'script_analysis
     return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
 };
 
+export const checkEnvironmentImageConsistency = async (entityId, { prompt, systemApiId } = {}) => {
+    const finalApiId = systemApiId || resolveScriptAnalysisSystemApiId('script_analysis', null);
+    const params = new URLSearchParams();
+    if (finalApiId) params.append('system_api_id', String(finalApiId));
+    let url = `/entities/${entityId}/environment-consistency`;
+    const qs = params.toString();
+    if (qs) url += `?${qs}`;
+    const response = await api.post(url, { prompt: String(prompt || '') });
+    return response.data;
+};
+
 export const analyzeEntityImage = async (entityId, functionName = null, systemApiId = null, options = {}) => {
     try {
         const resolvedFunctionName = String(functionName || 'script_analysis').trim() || 'script_analysis';
@@ -4106,6 +4117,12 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
     const startFromStep = String(runtimeHooks?.startFromStep || runtimeHooks?.start_from_step || '').trim();
     if (startFromStep) {
         analyze_payload.start_from_step = startFromStep;
+    }
+    const environmentPlannedText = String(
+        runtimeHooks?.environmentPlannedText || runtimeHooks?.environment_planned_text || ''
+    ).trim();
+    if (environmentPlannedText) {
+        analyze_payload.environment_planned_text = environmentPlannedText;
     }
     if (runtimeHooks?.preservePerScene === true || runtimeHooks?.preserve_per_scene === true) {
         analyze_payload.preserve_per_scene = true;

@@ -274,6 +274,8 @@ class PromoCatalogAssetOut(BaseModel):
     image_type: str = "product"
     object_name: str = ""
     user_remark: str = ""
+    scene_group_id: str = ""
+    view_direction: str = ""
     extra_info: Dict[str, Any] = Field(default_factory=dict)
     analysis_status: str = ""
     analysis_error: str = ""

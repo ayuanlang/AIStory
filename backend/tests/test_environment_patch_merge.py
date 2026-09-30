@@ -489,6 +489,18 @@ def test_framing_waits_for_environment_plan_node_success():
     assert environment_plan_terminal_without_payload("success", ident_only, "") is False
 
 
+def test_scene_rerun_reuses_saved_environment_plan_without_node_success():
+    from app.services.scene_subskill_pipeline_runner import (
+        persisted_environment_plan_for_scene_rerun,
+    )
+
+    planned = "[ENV_BLOCK_START]\n【主环境】客栈大堂\n[ENV_BLOCK_END]"
+    explicit = "[SCENE_ENV_IDENT_START:EP01_SC01]\n【主环境】前厅\n[SCENE_ENV_IDENT_END:EP01_SC01]"
+    assert persisted_environment_plan_for_scene_rerun(planned, explicit) == planned
+    assert persisted_environment_plan_for_scene_rerun("", explicit) == explicit
+    assert persisted_environment_plan_for_scene_rerun("[SCENE_START:EP01_SC01]", "") == ""
+
+
 def test_reuse_ident_backfills_inherited_main_env_block():
     from app.services.scene_subskill_pipeline_runner import _ensure_reused_main_env_block
 

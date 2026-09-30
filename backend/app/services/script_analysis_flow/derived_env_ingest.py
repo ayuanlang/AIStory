@@ -190,6 +190,40 @@ def resolve_grid_for_angle(angle: int, main_prompt: str = "") -> Dict[str, str]:
     }
 
 
+def extract_grid_cell_prompt(main_prompt: str, angle: int) -> Dict[str, str]:
+    """Slice the four-grid cell whose degree matches ``angle``.
+
+    Crop position follows ``resolve_grid_for_angle``. ``cell_prompt`` is empty
+    when that cell title is absent. The slice runs from the matching panel
+    title up to the next panel title.
+    """
+    crop = resolve_grid_for_angle(int(angle), main_prompt or "")
+    text = str(main_prompt or "")
+    matches = list(PANEL_TITLE_PATTERN.finditer(text))
+    target_angle = int(crop["angle"])
+    target_pos = str(crop["position"])
+    chosen = next(
+        (
+            match
+            for match in matches
+            if int(match.group("angle")) == target_angle and match.group("pos") == target_pos
+        ),
+        None,
+    )
+    if chosen is None:
+        chosen = next(
+            (match for match in matches if int(match.group("angle")) == target_angle),
+            None,
+        )
+    cell = ""
+    if chosen is not None:
+        start = chosen.start()
+        later = [item.start() for item in matches if item.start() > start]
+        end = min(later) if later else len(text)
+        cell = text[start:end].strip()
+    return {**crop, "cell_prompt": cell}
+
+
 def load_main_environment_prompts(
     db: Session,
     *,
@@ -1723,6 +1757,65 @@ def rewrite_merged_derived_environment_names(text: str) -> str:
     for raw in sorted(replacements, key=len, reverse=True):
         source = source.replace(raw, replacements[raw])
     return source
+
+
+_QUAD_FINAL_MARKERS = (
+    "【六面一次】",
+    "【四向拼图】",
+    "[0度格-左上",
+    "[90度格-右上",
+    "[180度格-左下",
+    "[270度格-右下",
+)
+
+
+def main_environment_quad_prompt_ready(prompt: str) -> bool:
+    """True when a main-env prompt keeps the opening and the four grid cells."""
+    text = str(prompt or "")
+    return all(marker in text for marker in _QUAD_FINAL_MARKERS)
+
+
+def apply_main_environment_quad_prompts(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    rows: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Write the final four-grid prompt onto existing main-environment rows."""
+    updated: List[str] = []
+    missing: List[str] = []
+    skipped: List[str] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        name = _clean(row.get("name"))
+        prompt = _clean(row.get("generation_prompt_cn"))
+        if not name:
+            continue
+        if DEGREE_NAME_PATTERN.match(name) or not main_environment_quad_prompt_ready(prompt):
+            skipped.append(name or "")
+            continue
+        name_expr = func.lower(func.trim(func.coalesce(Entity.name, "")))
+        existing = (
+            db.query(Entity)
+            .filter(
+                Entity.project_id == int(project_id),
+                Entity.episode_id == int(episode_id),
+                _active_entity_clause(),
+                func.lower(func.trim(func.coalesce(Entity.type, ""))) == "environment",
+                name_expr == name.lower(),
+            )
+            .first()
+        )
+        if existing is None:
+            missing.append(name)
+            continue
+        existing.generation_prompt_cn = prompt
+        existing.description = prompt
+        existing.narrative_description = prompt
+        updated.append(name)
+    return {"updated": updated, "missing": missing, "skipped": skipped}
 
 
 def _upsert_environment_entity(

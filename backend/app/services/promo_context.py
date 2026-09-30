@@ -882,7 +882,27 @@ def _rebuild_slot_pairs(item: Dict[str, Any]) -> List[tuple]:
     return pairs
 
 
+_MAIN_ENV_PROMPT_MARKS = ("【定位】", "【六面一次】", "【构图】")
+
+
+def main_environment_prompt_text(*candidates: Any) -> str:
+    for candidate in candidates:
+        text = _visual_clause(candidate)
+        if text and all(mark in text for mark in _MAIN_ENV_PROMPT_MARKS):
+            return text
+    return ""
+
+
 def compose_rebuild_brief(item: Dict[str, Any]) -> str:
+    kind = _text(item.get("kind")).lower()
+    if kind in {"environment", "scene"}:
+        kept = main_environment_prompt_text(
+            item.get("space_layout"),
+            item.get("rebuild_brief"),
+            item.get("environment_detail"),
+        )
+        if kept:
+            return kept
     pairs = _rebuild_slot_pairs(item)
     composed = "｜".join(f"{key}={value}" for key, value in pairs)
     current = _visual_clause(item.get("rebuild_brief"))
@@ -926,7 +946,11 @@ def fatten_rebuild_subject(item: Dict[str, Any], matches: List[Dict[str, Any]]) 
         if not _visual_clause(item.get("clothing_or_material")) and char_detail and char_detail != _visual_clause(item.get("appearance")):
             item["clothing_or_material"] = char_detail
     elif kind in {"environment", "scene"}:
-        item["space_layout"] = merge_visual_text(item.get("space_layout"), env_detail)
+        env_prompt = main_environment_prompt_text(env_detail, item.get("space_layout"), own_brief, row_brief)
+        if env_prompt:
+            item["space_layout"] = env_prompt
+        else:
+            item["space_layout"] = merge_visual_text(item.get("space_layout"), env_detail)
         item["appearance"] = merge_visual_text(item.get("appearance"), own_brief, row_brief, content_desc)
         if not _visual_clause(item.get("appearance")):
             item["appearance"] = _visual_clause(item.get("space_layout"))

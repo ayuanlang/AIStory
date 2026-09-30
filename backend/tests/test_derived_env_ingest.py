@@ -6,6 +6,8 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     extract_derived_environment_names_from_scene_text,
     format_camera_switch_line,
     parse_derived_env_extract_items,
+    extract_grid_cell_prompt,
+    main_environment_quad_prompt_ready,
     parse_quad_degrees_from_prompt,
     resolve_grid_for_angle,
     build_derived_environment_item,
@@ -182,6 +184,51 @@ def test_resolve_grid_follows_existing_main_env_prompt():
     assert "截取宫格=左下180度" in item["generation_prompt_cn"]
     assert "左下180度格" in item["generation_prompt_cn"]
     assert item["custom_attributes"]["grid_token"] == "左下180度"
+
+
+def test_extract_grid_cell_prompt_slices_matching_panel():
+    prompt = (
+        "【四向拼图】\n"
+        "2×2 四宫格。" + QUAD_DEGREE_CONTRACT + "。\n"
+        "[0度格-左上·北]\n左侧面：床在画面左。\n"
+        "[90度格-右上·东]\n正面：窗。\n"
+        "[180度格-左下·南]\n正面：门在远处。\n"
+        "[270度格-右下·西]\n正面：柜。\n"
+    )
+    cell = extract_grid_cell_prompt(prompt, 180)
+    assert cell["position"] == "左下"
+    assert cell["grid"] == "左下180度格"
+    assert cell["cell_prompt"].startswith("[180度格-左下·南]")
+    assert "门在远处" in cell["cell_prompt"]
+    assert "床在画面左" not in cell["cell_prompt"]
+    assert "正面：柜" not in cell["cell_prompt"]
+    legacy = (
+        "四宫度数=左上0度｜右上90度｜右下180度｜左下270度。\n"
+        "[0度格-左上·北]\n北。\n"
+        "[180度格-右下·南]\n南门。\n"
+        "[90度格-右上·东]\n东窗。\n"
+        "[270度格-左下·西]\n西柜。\n"
+    )
+    legacy_cell = extract_grid_cell_prompt(legacy, 180)
+    assert legacy_cell["position"] == "右下"
+    assert legacy_cell["grid"] == "右下180度格"
+    assert "南门" in legacy_cell["cell_prompt"]
+    assert "东窗" not in legacy_cell["cell_prompt"]
+    assert extract_grid_cell_prompt("只有开篇", 90)["cell_prompt"] == ""
+
+
+def test_main_environment_quad_prompt_requires_opening_and_four_cells():
+    opening = "【六面一次】\n北壁=封闭面。\n"
+    cells = (
+        "【四向拼图】\n"
+        "[0度格-左上·北]\n"
+        "[90度格-右上·东]\n"
+        "[180度格-左下·南]\n"
+        "[270度格-右下·西]\n"
+    )
+    assert main_environment_quad_prompt_ready(opening + cells) is True
+    assert main_environment_quad_prompt_ready(opening) is False
+    assert main_environment_quad_prompt_ready(cells) is False
 
 
 def test_build_item_persists_frame_anchors():

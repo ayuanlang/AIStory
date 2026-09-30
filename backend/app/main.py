@@ -1,4 +1,4 @@
-# Reload stamp: scene_subskill contract asset-quad-before-staging-v4
+# Reload stamp: scene_subskill contract asset-quad-before-staging-v5
 from contextlib import asynccontextmanager
 from typing import Iterable, Tuple, Dict, Any, List
 from datetime import datetime

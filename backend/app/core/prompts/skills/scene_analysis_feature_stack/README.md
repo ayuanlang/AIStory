@@ -11,7 +11,8 @@ Live prompt files for the script-analysis flow (`script_analysis_flow/registry.p
 | `scene_subskill_pipeline` | `scene_planning_1_subskill_drama_standardization.md` → `combat?` → `derived_framing` → `staging_env` | per-scene；武戏只注入 `combat.md` |
 | `asset_design_character` | `entity_design_character.md` + inject `entity_design_common.md` | |
 | `asset_design_prop` | `entity_design_prop.md` + inject `entity_design_common.md` | |
-| `asset_design_environment` | `entity_design_environment_and_poster.md` + inject `entity_design_common.md` | |
+| `asset_design_environment` | `entity_design_environment_and_poster.md` + inject `entity_design_common.md` | 只设计主环境开篇，止于【构图】 |
+| `asset_design_environment_quad` | `environment_quad_prompt.md` | 把主环境开篇转成四宫格最后提示词 |
 | `storyboard_generation` | `skills/shot_generation.md` | 分镜间切法权威；执行场际已锁切法 |
 
 ## Kept but not a live node

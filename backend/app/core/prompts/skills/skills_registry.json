@@ -82,13 +82,15 @@
                 "skills/scene_analysis_feature_stack/entity_design_common.md",
                 "skills/scene_analysis_feature_stack/entity_design_character.md",
                 "skills/scene_analysis_feature_stack/entity_design_prop.md",
-                "skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md"
+                "skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md",
+                "skills/scene_analysis_feature_stack/environment_quad_prompt.md"
             ],
             "legacy_refs": [
                 "skills/scene_analysis_feature_stack/entity_design_common.md",
                 "skills/scene_analysis_feature_stack/entity_design_character.md",
                 "skills/scene_analysis_feature_stack/entity_design_prop.md",
-                "skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md"
+                "skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md",
+                "skills/scene_analysis_feature_stack/environment_quad_prompt.md"
             ]
         },
         {

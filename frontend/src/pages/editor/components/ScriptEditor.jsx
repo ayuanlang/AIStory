@@ -2995,10 +2995,17 @@ const countDbMainEnvironmentEntities = (dbEntities) => (
     (Array.isArray(dbEntities) ? dbEntities : []).filter(isMainEnvironmentCompletenessAsset).length
 );
 
+const MAIN_ENV_QUAD_MARKERS = ['【四向拼图】', '[0度格-左上', '[90度格-右上', '[180度格-左下', '[270度格-右下'];
+
+const mainEnvironmentPromptHasQuad = (prompt) => {
+    const text = String(prompt || '');
+    return text.includes('【六面一次】') && MAIN_ENV_QUAD_MARKERS.every((marker) => text.includes(marker));
+};
+
 const countDbMainEnvironmentEntitiesWithPrompt = (dbEntities) => (
     (Array.isArray(dbEntities) ? dbEntities : []).filter((entity) => (
         isMainEnvironmentCompletenessAsset(entity)
-        && Boolean(String(entity?.generation_prompt_cn || '').trim())
+        && mainEnvironmentPromptHasQuad(entity?.generation_prompt_cn)
     )).length
 );
 
@@ -4118,6 +4125,7 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
         [/\benvironment_plan\b/gi, t('环境规划', 'environment plan')],
         [/\bscene_subskill_pipeline\b/gi, t('逐场优化', 'per-scene refinement')],
         [/\bassets_extraction\b/gi, t('资产清单', 'asset inventory')],
+        [/\basset_design_environment_quad\b/gi, t('主环境四宫格', 'main environment four-grid')],
         [/\basset_design_environment\b/gi, t('环境资产设计', 'environment asset design')],
         [/\basset_design_character\b/gi, t('角色资产设计', 'character asset design')],
         [/\basset_design_prop\b/gi, t('道具资产设计', 'prop asset design')],
@@ -14849,6 +14857,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             asset_design_character: t('角色资产设计', 'Character asset design'),
             asset_design_prop: t('道具资产设计', 'Prop asset design'),
             asset_design_environment: t('环境资产设计', 'Environment asset design'),
+            asset_design_environment_quad: t('主环境四宫格', 'Main environment four-grid'),
             storyboard_generation: t('分镜生成', 'Storyboard generation'),
         };
         const previousMap = diagnosticsNodeLogStateRef.current || {};
@@ -20307,6 +20316,74 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // skip_episode_persist avoids concurrent overwrite of ai_entity_design_result (frontend merges).
             // Failed / incomplete categories auto-retry until DB coverage, user stop, or pipeline timeout.
             const episodeIdForAssetSubtasks = activeEpisode?.id || null;
+            const runEnvironmentQuadConversion = async (environments, traceId) => {
+                const mains = (Array.isArray(environments) ? environments : []).filter((item) => (
+                    isMainEnvironmentCompletenessAsset({ ...item, type: item?.type || 'environment' })
+                    && String(item?.name || '').trim()
+                    && String(item?.generation_prompt_cn || '').trim()
+                ));
+                if (!mains.length) return false;
+                const pending = mains.filter((item) => !mainEnvironmentPromptHasQuad(item.generation_prompt_cn));
+                if (!pending.length) return true;
+                const quadPromptRes = await fetchPrompt(
+                    'skills/scene_analysis_feature_stack/environment_quad_prompt.md'
+                ).catch(() => null);
+                const quadPrompt = String(quadPromptRes?.content || '').trim();
+                if (!quadPrompt) {
+                    onLog?.('[Stage 3 Asset Design] 四宫格技能缺失，主环境停在设计稿。', 'error');
+                    return false;
+                }
+                const source = pending.map((item) => (
+                    `【主环境设计稿】${String(item.name).trim()}\n${String(item.generation_prompt_cn).trim()}\n【/主环境设计稿】`
+                )).join('\n\n');
+                onLog?.(
+                    `[Stage 3 Asset Design] 开始四宫格转换 mains=${pending.length} trace_id=${traceId}`,
+                    'info'
+                );
+                throwIfAnalysisStopped();
+                try {
+                    const res = await runScriptAnalysisFlowAnalyzeNode(
+                        'asset_design_environment_quad',
+                        source,
+                        quadPrompt,
+                        null,
+                        episodeIdForAssetSubtasks,
+                        analysisAttentionNotes,
+                        selectedReuseSubjectAssets,
+                        {
+                            skipEpisodePersist: true,
+                            analysisTraceId: `${traceId}-quad`,
+                        },
+                        projectId,
+                        'script_analysis',
+                        scriptAnalysisApiId,
+                        'environment_quad'
+                    );
+                    const text = extractAnalysisTextFromResult(res);
+                    const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
+                    const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
+                    const readyCount = returned.filter((item) => (
+                        pending.some((row) => String(row?.name || '').trim() === String(item?.name || '').trim())
+                        && mainEnvironmentPromptHasQuad(item?.generation_prompt_cn)
+                    )).length;
+                    if (readyCount < pending.length) {
+                        onLog?.(
+                            `[Stage 3 Asset Design] 四宫格转换未写满四格 got=${readyCount}/${pending.length}`,
+                            'error'
+                        );
+                        return false;
+                    }
+                    await refreshEpisodeOwnedEntities();
+                    onLog?.(`[Stage 3 Asset Design] 四宫格最后提示词已写回 mains=${readyCount}`, 'success');
+                    return true;
+                } catch (quadErr) {
+                    onLog?.(
+                        `[Stage 3 Asset Design] 四宫格转换失败: ${quadErr?.message || quadErr}`,
+                        'error'
+                    );
+                    return false;
+                }
+            };
             const runOneAssetSubtask = async (pData, index, roundTag = '') => {
                     throwIfAnalysisStopped();
                     const subtaskTraceId = `${phase2BatchTraceId}-${pData.key || `slot${index + 1}`}${roundTag}`;
@@ -20441,16 +20518,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         );
                         const envSkipHasMain = pData.key !== 'environments'
                             || hasPersistedEnvironmentAssetDesign();
-                        if (envSkipHasMain && pData.key && !assetsLlmDoneKeys.includes(pData.key)) {
+                        let envQuadOk = true;
+                        if (pData.key === 'environments' && envSkipHasMain) {
+                            envQuadOk = await runEnvironmentQuadConversion(episodeOwnedEntities, subtaskTraceId);
+                        }
+                        if (envSkipHasMain && envQuadOk && pData.key && !assetsLlmDoneKeys.includes(pData.key)) {
                             assetsLlmDoneKeys.push(pData.key);
                         }
-                        if (envSkipHasMain) {
+                        if (envSkipHasMain && envQuadOk) {
                             markAssetCategoryPersisted(pData.key, {
                                 highlightHint: buildAssetReadyHint(pData.key),
                             });
                         }
-                        if (pData.key === 'environments' && envSkipHasMain) {
+                        if (pData.key === 'environments' && envSkipHasMain && envQuadOk) {
                             markEnvironmentAssetDesignReady(`env-skip-existing:${subtaskTraceId}`);
+                        } else if (pData.key === 'environments' && envSkipHasMain && !envQuadOk) {
+                            return {
+                                key: pData.key,
+                                traceId: subtaskTraceId,
+                                importSessionId: subtaskImportSessionId,
+                                result: null,
+                                analysisText: '',
+                                subjectsJson: null,
+                                hasImportableSubjects: false,
+                                subtaskImportReport: null,
+                                subtaskImportError: 'environment_quad_not_ready',
+                                skippedExisting: false,
+                            };
                         } else if (pData.key === 'environments') {
                             onLog?.(
                                 t(
@@ -20704,6 +20798,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             });
                         }
 
+                        if (pData.key === 'environments' && !subtaskImportError && subtaskHasImportableSubjects) {
+                            const quadOk = await runEnvironmentQuadConversion(subtaskPayload.environments, subtaskTraceId);
+                            if (!quadOk) subtaskImportError = 'environment_quad_not_ready';
+                        }
+
                         const readyCounts = subtaskImportReport?.importedSubjectCounts || {};
                         const readyCountedImported = (
                             Number(readyCounts.character || 0)
@@ -20874,6 +20973,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     + Number(counts.environment || 0)
                     + Number(counts.poster || 0)
                 );
+                if (key === 'environments' && !subtaskImportError) {
+                    const quadOk = await runEnvironmentQuadConversion(subtaskPayload.environments, subtaskTraceId);
+                    if (!quadOk) subtaskImportError = 'environment_quad_not_ready';
+                }
                 const assetImportReady = Boolean(
                     !subtaskImportError
                     && subtaskImportReport
@@ -31232,6 +31335,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     {
                         targetSceneIds: [targetSceneId],
                         startFromStep: resolvedStartFrom,
+                        environmentPlannedText: liveEnvPlan,
                         onTaskCreated: (taskId) => {
                             const stableTaskId = String(taskId || '').trim();
                             setActiveAnalysisTaskId(stableTaskId);

@@ -399,6 +399,80 @@ def normalize_image_type(value: Any) -> str:
     return mapping.get(_text(value), "product")
 
 
+VIEW_DIRECTION_LABELS = {
+    "north": "北壁",
+    "east": "东壁",
+    "south": "南壁",
+    "west": "西壁",
+}
+_VIEW_DIRECTION_ALIASES = {
+    "north": "north",
+    "n": "north",
+    "北": "north",
+    "北壁": "north",
+    "正面": "north",
+    "east": "east",
+    "e": "east",
+    "东": "east",
+    "东壁": "east",
+    "south": "south",
+    "s": "south",
+    "南": "south",
+    "南壁": "south",
+    "背面": "south",
+    "west": "west",
+    "w": "west",
+    "西": "west",
+    "西壁": "west",
+}
+
+
+def normalize_view_direction(value: Any) -> str:
+    raw = _text(value)
+    return _VIEW_DIRECTION_ALIASES.get(raw) or _VIEW_DIRECTION_ALIASES.get(raw.lower()) or ""
+
+
+def view_direction_label(value: Any) -> str:
+    return VIEW_DIRECTION_LABELS.get(normalize_view_direction(value), "")
+
+
+def scene_group_id_of(asset: Any) -> str:
+    data = _as_dict(asset)
+    extra = _as_dict(data.get("extra_info"))
+    return _text(data.get("scene_group_id") or extra.get("scene_group_id"))
+
+
+def view_direction_of(asset: Any) -> str:
+    data = _as_dict(asset)
+    extra = _as_dict(data.get("extra_info"))
+    return normalize_view_direction(data.get("view_direction") or extra.get("view_direction"))
+
+
+def normalize_catalog_scene_extra(extra: Any) -> Dict[str, Any]:
+    data = dict(_as_dict(extra))
+    if "scene_group_id" in data:
+        data["scene_group_id"] = _text(data.get("scene_group_id"))
+    if "view_direction" in data:
+        data["view_direction"] = normalize_view_direction(data.get("view_direction"))
+    return data
+
+
+def apply_catalog_extra_info(row: Any, incoming: Any) -> None:
+    """Merge catalog extra fields. Changing the scene group or wall drops the old parse."""
+    previous = dict(_as_dict(getattr(row, "extra_info", None)))
+    patch = normalize_catalog_scene_extra(incoming)
+    prev_group = scene_group_id_of({"extra_info": previous})
+    prev_dir = view_direction_of({"extra_info": previous})
+    merged = {**previous, **patch}
+    if prev_group != scene_group_id_of({"extra_info": merged}) or prev_dir != view_direction_of({"extra_info": merged}):
+        merged.pop("image_asset_analysis", None)
+        merged.pop("analysis", None)
+        merged["analysis_status"] = ANALYSIS_STATUS_PENDING
+        merged["analysis_error"] = ""
+    row.extra_info = merged
+    flag_modified(row, "extra_info")
+
+
 def normalize_media_kind(value: Any) -> str:
     raw = _text(value).lower()
     if raw in PROMO_MEDIA_KINDS:
@@ -2116,6 +2190,8 @@ def catalog_asset_as_planner_asset(row: Any) -> Dict[str, Any]:
         "analysis_status": _text(extra.get("analysis_status") or data.get("analysis_status")),
         "analysis_error": _text(extra.get("analysis_error") or data.get("analysis_error")),
         "image_asset_analysis": analysis,
+        "scene_group_id": scene_group_id_of({"scene_group_id": data.get("scene_group_id"), "extra_info": extra}),
+        "view_direction": view_direction_of({"view_direction": data.get("view_direction"), "extra_info": extra}),
     }
 
 
@@ -2232,6 +2308,8 @@ def serialize_promo_catalog_asset(row: PromoCatalogAsset) -> Dict[str, Any]:
         "img_url": url,
         "object_name": row.object_name or "",
         "user_remark": row.user_remark or "",
+        "scene_group_id": scene_group_id_of({"extra_info": extra}),
+        "view_direction": view_direction_of({"extra_info": extra}),
         "extra_info": extra,
         "analysis_status": fields["analysis_status"],
         "analysis_error": fields["analysis_error"],
@@ -2239,6 +2317,35 @@ def serialize_promo_catalog_asset(row: PromoCatalogAsset) -> Dict[str, Any]:
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
+
+
+def catalog_scene_group_rows(db: Session, row: PromoCatalogAsset) -> List[PromoCatalogAsset]:
+    """Scene photos that share one scene_group_id under the same owner."""
+    asset = catalog_asset_as_planner_asset(row)
+    group_id = scene_group_id_of(asset)
+    if not group_id or asset.get("image_type") != "scene":
+        return [row]
+    rows = (
+        db.query(PromoCatalogAsset)
+        .filter(
+            PromoCatalogAsset.is_deleted.is_(False),
+            PromoCatalogAsset.owner_kind == row.owner_kind,
+            PromoCatalogAsset.owner_entity_id == int(row.owner_entity_id),
+        )
+        .order_by(PromoCatalogAsset.id.asc())
+        .all()
+    )
+    members = []
+    for item in rows:
+        planner = catalog_asset_as_planner_asset(item)
+        if planner.get("image_type") != "scene":
+            continue
+        if scene_group_id_of(planner) != group_id:
+            continue
+        if not _text(planner.get("img_url")):
+            continue
+        members.append(item)
+    return members or [row]
 
 
 def list_catalog_assets(
@@ -3149,6 +3256,8 @@ def build_uploaded_asset_catalog(assets: Any, analysis: Any = None) -> List[Dict
                 "media_kind": media_kind,
                 "media_kind_label": MEDIA_KIND_LABELS.get(media_kind, "图片"),
                 "user_remark": _text(asset.get("user_remark") or parsed.get("user_remark")),
+                "view_direction": view_direction_of(asset) or view_direction_of(parsed),
+                "scene_group_id": scene_group_id_of(asset) or scene_group_id_of(parsed),
                 "owner_kind": _text(asset.get("owner_kind")) or "project",
                 "img_url": _text(asset.get("img_url") or parsed.get("img_url")),
                 "content_desc": _text(parsed.get("content_desc")),
@@ -3210,6 +3319,7 @@ def format_uploaded_asset_catalog_text(catalog: Any) -> str:
             f"（{_text(row.get('image_type')) or 'product'}）"
             f"｜媒介={_text(row.get('media_kind_label')) or media_kind_label(row.get('media_kind'))}"
             f"｜说明={_text(row.get('user_remark')) or '无'}"
+            f"{_scene_direction_suffix(row)}"
             f"｜image_id={_text(row.get('image_id')) or '无'}"
         )
         extras = []
@@ -3230,31 +3340,71 @@ def format_uploaded_asset_catalog_text(catalog: Any) -> str:
     return "\n".join(lines)
 
 
+def _scene_direction_suffix(item: Any) -> str:
+    data = _as_dict(item)
+    if normalize_image_type(data.get("image_type")) != "scene" and not view_direction_of(data) and not scene_group_id_of(data):
+        return ""
+    bits = f"｜方向={view_direction_label(data.get('view_direction')) or '未标'}"
+    group_id = scene_group_id_of(data)
+    if group_id:
+        bits += f"｜场景组={group_id}"
+    return bits
+
+
+def scene_group_image_ids(items: Any) -> Dict[str, set]:
+    buckets: Dict[str, set] = {}
+    rows = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+    for item in rows:
+        if normalize_image_type(item.get("image_type")) != "scene":
+            continue
+        group_id = scene_group_id_of(item)
+        image_id = _text(item.get("image_id"))
+        if not group_id or not image_id:
+            continue
+        buckets.setdefault(group_id, set()).add(image_id)
+    return {group_id: ids for group_id, ids in buckets.items() if len(ids) >= 2}
+
+
 def _build_image_analysis_user_prompt(
     vision_items: List[Dict[str, Any]],
     assets: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     catalog = build_uploaded_asset_catalog(assets or vision_items)
+    grouped = scene_group_image_ids(assets or vision_items)
+    group_id = next(iter(grouped), "")
+    if group_id:
+        opening = (
+            f"请按系统约定解析下列图片与视频关键帧。本请求是同一场景组（scene_group_id={group_id}）的多张场景图，"
+            "它们是同一间房的不同朝向，必须合成一份主环境开篇，禁止拆成多个环境。视频多帧仍合并为同一 image_id。媒体按顺序附在本消息后。"
+        )
+    else:
+        opening = "请按系统约定解析下列图片与视频关键帧。本请求通常只有一条素材；视频多帧仍合并为同一 image_id。媒体按顺序附在本消息后。"
     lines = [
-        "请按系统约定解析下列图片与视频关键帧。本请求通常只有一条素材；视频多帧仍合并为同一 image_id。媒体按顺序附在本消息后。",
-        "下列「上传素材台账」是用户权威元数据：名称=object_name、类型=image_type、说明=user_remark、媒介=media_kind。",
+        opening,
+        "下列「上传素材台账」是用户权威元数据：名称=object_name、类型=image_type、说明=user_remark、媒介=media_kind、方向=正对的壁。",
         "解析只补画面可见细节；禁止改名、改类型、丢说明。说明未在画面出现也必须原样回传到 user_remark，并在 rebuild_brief 点明「用户说明=…」。",
         "同一 image_id 的多帧属于同一条视频，须合并成一条 image_list 与对应 rebuild_subjects。",
         "必须拆出可重生的场景、道具、产品、人物，写出可核销外形/材质/空间细节。",
         "禁止解析水印：图库/平台/版权/预览水印、半透明斜向字、四角版权行、叠字署名一律当不存在，不得写入任何字段，也不得当作品牌标识。物体本身的印刷/铭刻文字仍须写。",
         "场景图（类型=场景）只重生环境，图内人物/道具/产品不另抽 CHAR/PROP，character_detail 与 prop_detail 写无。",
+        "场景的 environment_detail、rebuild_brief、space_layout 必须是同一份主环境开篇：从【定位】写到【构图】，含【六面一次】与北东南西四壁。禁止【四向拼图】和画面左/画面右。看不见的壁写未见。",
+        "场景朝向默认正面：方向=未标、且说明没写背面/反打/背对时，正对镜头的那面写入北壁，禁止写成背面或南壁；画面左是西壁，画面右是东壁，镜头后方写南壁=未见。说明明文是背面时才把正对面写入南壁。",
+        "附画面若写了方向=北壁/东壁/南壁/西壁，正对镜头的那一整面写入该壁，不再套用默认正面。",
         "每条 rebuild_brief 与分槽必须写满可见细节：轮廓/形制、材质、主辅色、标识或文字、尺度或体态、光色；人物加骨相五官发型衣着；环境加围合地面天花主陈设。禁止一句空形容。非场景条的同类型同框主体进入 rebuild_subjects。",
-        "",
-        format_uploaded_asset_catalog_text(catalog),
-        "",
-        "附后画面与台账对应关系：",
     ]
+    if group_id:
+        lines.append(
+            "同一场景组只输出一份主环境开篇。每张图的方向=是这张照片正对的壁；某一侧只带出邻壁一角时，只补充能看清的部分，禁止覆盖另一张已标明的正对壁。"
+            "没有照片的壁写未见。方向=未标的组内照片不独占一壁。image_list 写一条即可。"
+        )
+    lines.extend(["", format_uploaded_asset_catalog_text(catalog), "", "附后画面与台账对应关系："])
     for idx, item in enumerate(vision_items, 1):
         name = _text(item.get("object_name")) or _text(item.get("image_id")) or f"第{idx}条"
         lines.append(
             f"附画面{idx} → 名称={name}｜类型={image_type_label(item.get('image_type'))}"
             f"｜媒介={media_kind_label(item.get('media_kind'))}"
             f"｜说明={_text(item.get('user_remark')) or '无'}"
+            f"{_scene_direction_suffix(item)}"
             f"｜帧={item.get('frame_label') or '单张'}"
             f"｜image_id={_text(item.get('image_id')) or '无'}"
         )
@@ -3527,6 +3677,83 @@ async def _resolve_promo_asset_vision(asset: Dict[str, Any], db: Session) -> Tup
     return [(meta, url)], ""
 
 
+def _shared_environment_text(parsed: Any) -> str:
+    data = _as_dict(parsed)
+    fallback = ""
+    for row in data.get("image_list") if isinstance(data.get("image_list"), list) else []:
+        item = _as_dict(row)
+        for key in ("environment_detail", "rebuild_brief", "content_desc"):
+            text = _text(item.get(key))
+            if "【定位】" in text and "【构图】" in text:
+                return text
+            if text and not fallback:
+                fallback = text
+    for raw in data.get("rebuild_subjects") if isinstance(data.get("rebuild_subjects"), list) else []:
+        item = _as_dict(raw)
+        for key in ("space_layout", "rebuild_brief"):
+            text = _text(item.get(key))
+            if "【定位】" in text and "【构图】" in text:
+                return text
+            if text and not fallback:
+                fallback = text
+    return fallback
+
+
+def distribute_scene_group_analysis(parsed: Any, members: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Copy one four-wall environment prompt onto every photo in the scene group."""
+    data = _as_dict(parsed)
+    shared = _shared_environment_text(data)
+    ready = [item for item in members if isinstance(item, dict) and _text(item.get("image_id"))]
+    member_ids = [_text(item.get("image_id")) for item in ready]
+    incoming_list = [_as_dict(row) for row in (data.get("image_list") or []) if isinstance(row, dict)]
+    base_row = dict(incoming_list[0]) if incoming_list else {}
+    subjects: List[Dict[str, Any]] = []
+    for raw in data.get("rebuild_subjects") if isinstance(data.get("rebuild_subjects"), list) else []:
+        item = dict(_as_dict(raw))
+        if not item:
+            continue
+        item["source_image_ids"] = member_ids
+        if shared and _text(item.get("kind")) in {"environment", "scene", ""}:
+            if "【定位】" not in _text(item.get("space_layout")):
+                item["space_layout"] = shared
+            if "【定位】" not in _text(item.get("rebuild_brief")):
+                item["rebuild_brief"] = shared
+        subjects.append(item)
+    if not subjects and shared:
+        name = _text(ready[0].get("object_name")) if ready else ""
+        subjects.append(
+            {
+                "kind": "environment",
+                "object_name": name,
+                "name_for_script": name,
+                "source_image_ids": member_ids,
+                "space_layout": shared,
+                "rebuild_brief": shared,
+            }
+        )
+    pieces: Dict[str, Dict[str, Any]] = {}
+    for asset in ready:
+        image_id = _text(asset.get("image_id"))
+        row = dict(base_row)
+        row["image_id"] = image_id
+        row["image_type"] = "scene"
+        row["object_name"] = asset.get("object_name") or row.get("object_name") or ""
+        row["user_remark"] = asset.get("user_remark") or row.get("user_remark") or ""
+        if shared:
+            row["environment_detail"] = shared
+            row["rebuild_brief"] = shared
+        pieces[image_id] = merge_single_asset_analysis(
+            {},
+            asset,
+            {
+                "image_list": [row],
+                "rebuild_subjects": subjects,
+                "global_visual_summary": _text(data.get("global_visual_summary")),
+            },
+        )
+    return pieces
+
+
 async def analyze_one_promo_asset(
     db: Session,
     *,
@@ -3563,6 +3790,57 @@ async def analyze_one_promo_asset(
     if not image_row_is_success(row):
         warnings.append(f"{'视频' if normalize_media_kind(asset.get('media_kind')) == 'video' else '图片'} {_text(asset.get('object_name') or asset.get('image_id'))} 识别不完整")
     return merged, warnings
+
+
+async def analyze_scene_group_assets(
+    db: Session,
+    *,
+    current_user: Any,
+    llm_config: Dict[str, Any],
+    assets: List[Dict[str, Any]],
+    billing_lock: Any = None,
+    release_db: bool = False,
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str], List[str]]:
+    """One vision call for a labeled scene group. The same four walls are written onto each photo."""
+    warnings: List[str] = []
+    errors: Dict[str, str] = {}
+    ready: List[Dict[str, Any]] = []
+    vision: List[Tuple[Dict[str, Any], str]] = []
+    for asset in assets:
+        part, resolve_error = await _resolve_promo_asset_vision(asset, db)
+        image_id = _text(asset.get("image_id"))
+        if resolve_error or not part:
+            message = resolve_error or "无法读取"
+            if image_id:
+                errors[image_id] = message
+            warnings.append(message)
+            continue
+        vision.extend(part)
+        ready.append(asset)
+    if not ready:
+        return {}, errors, warnings
+    try:
+        parsed, _resp = await _run_json_llm(
+            db,
+            current_user=current_user,
+            llm_config=llm_config,
+            system_prompt=_resolve_prompt_text("promo_planner_image_analysis.md"),
+            user_prompt=_build_image_analysis_user_prompt([item[0] for item in vision], assets=ready),
+            image_urls=[item[1] for item in vision],
+            billing_item="promo_planner_image_analysis",
+            release_db=release_db,
+            billing_lock=billing_lock,
+        )
+    except Exception as exc:
+        logger.warning("promo scene-group analysis failed: %s", exc)
+        message = str(exc)
+        warnings.append(message)
+        for asset in ready:
+            image_id = _text(asset.get("image_id"))
+            if image_id:
+                errors[image_id] = message
+        return {}, errors, warnings
+    return distribute_scene_group_analysis(parsed, ready), errors, warnings
 
 
 async def analyze_promo_images(
@@ -3767,34 +4045,65 @@ async def analyze_and_persist_catalog_asset(
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
-    # release_db closes the session during the LLM call and detaches this row.
+    # release_db closes the session during the LLM call and detaches these rows.
+    member_rows = catalog_scene_group_rows(db, row)
+    member_assets = [catalog_asset_as_planner_asset(item) for item in member_rows]
+    member_ids = [int(item.id) for item in member_rows]
     asset_row_id = int(asset.get("catalog_asset_id") or row.id)
-    piece, warnings = await analyze_one_promo_asset(
-        db,
-        current_user=user_snap,
-        llm_config=llm_config,
-        asset=asset,
-        release_db=True,
-    )
-    row = (
+    pieces: Dict[str, Dict[str, Any]] = {}
+    errors: Dict[str, str] = {}
+    if len(member_assets) >= 2:
+        pieces, errors, warnings = await analyze_scene_group_assets(
+            db,
+            current_user=user_snap,
+            llm_config=llm_config,
+            assets=member_assets,
+            release_db=True,
+        )
+    else:
+        piece, warnings = await analyze_one_promo_asset(
+            db,
+            current_user=user_snap,
+            llm_config=llm_config,
+            asset=asset,
+            release_db=True,
+        )
+        pieces[_text(asset.get("image_id"))] = piece
+    rows = (
         db.query(PromoCatalogAsset)
-        .filter(PromoCatalogAsset.id == asset_row_id, PromoCatalogAsset.is_deleted.is_(False))
-        .first()
+        .filter(PromoCatalogAsset.id.in_(member_ids), PromoCatalogAsset.is_deleted.is_(False))
+        .all()
     )
-    if not row:
+    by_id = {int(item.id): item for item in rows}
+    if asset_row_id not in by_id:
         raise HTTPException(status_code=404, detail="Asset not found")
-    analysis_row = _analysis_row_for(piece, asset)
-    write_catalog_analysis(
-        row,
-        piece,
-        status=analysis_row.get("analysis_status") or ANALYSIS_STATUS_FAILED,
-        error=_text(analysis_row.get("analysis_error")),
-        overwrite=True,
-    )
-    db.add(row)
+    for item in rows:
+        planner = catalog_asset_as_planner_asset(item)
+        image_id = _text(planner.get("image_id"))
+        piece = pieces.get(image_id) or {}
+        error = errors.get(image_id, "")
+        if not piece and error:
+            piece = merge_single_asset_analysis({}, planner, {}, error=error)
+        if not piece:
+            continue
+        analysis_row = _analysis_row_for(piece, planner)
+        write_catalog_analysis(
+            item,
+            piece,
+            status=analysis_row.get("analysis_status") or ANALYSIS_STATUS_FAILED,
+            error=_text(analysis_row.get("analysis_error") or error),
+            overwrite=True,
+        )
+        db.add(item)
     db.commit()
-    db.refresh(row)
+    for item in rows:
+        db.refresh(item)
+    row = by_id[asset_row_id]
+    primary = catalog_asset_as_planner_asset(row)
+    piece = pieces.get(_text(primary.get("image_id"))) or {}
+    analysis_row = _analysis_row_for(piece, primary)
     serialized = serialize_promo_catalog_asset(row)
+    group_assets = [serialize_promo_catalog_asset(item) for item in rows]
     return {
         **serialized,
         "analysis_status": serialized.get("analysis_status") or ANALYSIS_STATUS_FAILED,
@@ -3803,9 +4112,10 @@ async def analyze_and_persist_catalog_asset(
         "rebuild_subjects": [
             item
             for item in (piece.get("rebuild_subjects") or [])
-            if _text(asset.get("image_id")) in [_text(value) for value in (_as_dict(item).get("source_image_ids") or [])]
+            if _text(primary.get("image_id")) in [_text(value) for value in (_as_dict(item).get("source_image_ids") or [])]
         ],
-        "image_asset_analysis": piece,
+        "image_asset_analysis": piece or serialized.get("image_asset_analysis") or {},
+        "group_assets": group_assets,
         "warnings": warnings,
     }
 

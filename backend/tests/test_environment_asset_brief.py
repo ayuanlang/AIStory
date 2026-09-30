@@ -335,7 +335,9 @@ def test_environment_design_starts_from_environment_plan_only():
     assert storyboard.get("depends_on") == [
         "scene_subskill_pipeline",
         "asset_design_environment",
+        "asset_design_environment_quad",
     ]
+    assert nodes["asset_design_environment_quad"].get("depends_on") == ["asset_design_environment"]
     assert "scene_subskill_pipeline" not in (env_design.get("depends_on") or [])
     assert "assets_extraction" not in (env_design.get("depends_on") or [])
     assert "assets_extraction" not in (char_design.get("depends_on") or [])

@@ -20,8 +20,11 @@ from app.services.promo_planner import (
     EXISTING_MATERIAL_ANALYSIS_MARK,
     PROMO_PROJECT_TYPE,
     apply_analysis_status_to_assets,
+    apply_catalog_extra_info,
     assign_catalog_file_url,
     assets_needing_analysis,
+    catalog_scene_group_rows,
+    distribute_scene_group_analysis,
     catalog_analysis_fields,
     catalog_asset_as_planner_asset,
     merge_catalog_analysis_extra,
@@ -1494,7 +1497,52 @@ def test_scene_image_subjects_are_not_extracted_as_char_or_prop():
         assets=[{"object_name": "开放式厨房", "image_type": "scene", "media_kind": "image", "user_remark": "全景", "img_url": "https://x/k.jpg"}],
     )
     assert "场景图（类型=场景）只重生环境" in prompt
+    assert "主环境开篇" in prompt
+    assert "默认正面" in prompt
     assert "本请求通常只有一条素材" in prompt
+
+
+def test_scene_analysis_keeps_main_environment_prompt():
+    prompt = (
+        "【定位】\n- 项目类型为真人实拍。后厨。\n"
+        "【六面一次】\n- 六面一次。下=防滑地砖｜上=铝扣板｜中=中岛｜场径=北3米｜主光=顶灯\n"
+        "【北壁】\n- 北壁=猛火灶\n【东壁】\n- 东壁=碗碟架\n"
+        "【南壁】\n- 南壁=未见\n【西壁】\n- 西壁=调料架\n"
+        "【光学说明】\n- 主光=顶灯\n【色彩说明】\n- 主色=冷白\n【构图】\n- 构图倾向=对称"
+    )
+    analysis = enrich_rebuild_analysis(
+        {
+            "image_list": [
+                {
+                    "image_id": "img-k",
+                    "object_name": "后厨",
+                    "image_type": "scene",
+                    "environment_detail": prompt,
+                    "rebuild_brief": prompt,
+                    "character_detail": "无",
+                    "prop_detail": "无",
+                }
+            ],
+            "rebuild_subjects": [
+                {
+                    "kind": "environment",
+                    "object_name": "后厨",
+                    "source_image_ids": ["img-k"],
+                    "space_layout": "一句摘要",
+                    "rebuild_brief": "暖黄厨房",
+                }
+            ],
+        }
+    )
+    subject = next(row for row in analysis["rebuild_subjects"] if row.get("object_name") == "后厨")
+    assert subject["space_layout"].startswith("【定位】")
+    assert "【构图】" in subject["rebuild_brief"]
+    assert "【四向拼图】" not in subject["rebuild_brief"]
+    assert subject["rebuild_brief"] == prompt
+    text = format_visual_rebuild_lines(analysis)
+    assert "ENV:后厨" in text
+    assert "【北壁】" in text
+    assert "南壁=未见" in text
 
 
 def test_merge_single_asset_analysis_keeps_other_rows():
@@ -1699,3 +1747,136 @@ def test_serialize_catalog_asset_exposes_analysis():
     assert planner["img_url"] == "/uploads/3/k.jpg"
     assert planner["image_id"] == "kitchen-1"
     assert planner["catalog_asset_id"] == 9
+
+
+def test_scene_group_prompt_uses_labeled_walls():
+    assets = [
+        {
+            "object_name": "后厨",
+            "image_type": "scene",
+            "media_kind": "image",
+            "image_id": "north-1",
+            "view_direction": "north",
+            "scene_group_id": "kitchen-a",
+            "user_remark": "",
+        },
+        {
+            "object_name": "后厨",
+            "image_type": "scene",
+            "media_kind": "image",
+            "image_id": "east-1",
+            "view_direction": "东壁",
+            "scene_group_id": "kitchen-a",
+            "user_remark": "",
+        },
+    ]
+    prompt = _build_image_analysis_user_prompt(assets, assets=assets)
+    assert "同一场景组" in prompt
+    assert "scene_group_id=kitchen-a" in prompt
+    assert "方向=北壁" in prompt
+    assert "方向=东壁" in prompt
+    assert "没有照片的壁写未见" in prompt
+    assert "本请求通常只有一条素材" not in prompt
+
+
+def test_distribute_scene_group_analysis_copies_four_walls():
+    walls = (
+        "【定位】\n- 后厨。\n【六面一次】\n- 六面一次。下=地砖｜上=铝扣板｜中=灶台｜场径=北3米｜主光=顶灯\n"
+        "【北壁】\n- 北壁=灶台\n【东壁】\n- 东壁=碗架\n【南壁】\n- 南壁=未见\n【西壁】\n- 西壁=调料架\n"
+        "【光学说明】\n- 主光=顶灯\n【色彩说明】\n- 主色=冷白\n【构图】\n- 构图倾向=对称"
+    )
+    pieces = distribute_scene_group_analysis(
+        {
+            "image_list": [
+                {
+                    "image_id": "north-1",
+                    "content_desc": "后厨四面",
+                    "environment_detail": walls,
+                    "rebuild_brief": walls,
+                    "image_type": "scene",
+                }
+            ],
+            "rebuild_subjects": [
+                {
+                    "kind": "environment",
+                    "object_name": "后厨",
+                    "source_image_ids": ["north-1"],
+                    "space_layout": walls,
+                    "rebuild_brief": walls,
+                }
+            ],
+            "global_visual_summary": "冷白后厨",
+        },
+        [
+            {"image_id": "north-1", "object_name": "后厨", "image_type": "scene", "media_kind": "image", "view_direction": "north"},
+            {"image_id": "east-1", "object_name": "后厨", "image_type": "scene", "media_kind": "image", "view_direction": "east"},
+        ],
+    )
+    east = pieces["east-1"]["image_list"][0]
+    assert east["image_id"] == "east-1"
+    assert "东壁=碗架" in east["environment_detail"]
+    assert "南壁=未见" in east["rebuild_brief"]
+    assert east["analysis_status"] == "success"
+    ids = set(pieces["east-1"]["rebuild_subjects"][0]["source_image_ids"])
+    assert ids == {"north-1", "east-1"}
+
+
+def test_apply_catalog_extra_info_clears_analysis_when_direction_changes():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    row = SimpleNamespace(
+        extra_info={
+            "scene_group_id": "kitchen-a",
+            "view_direction": "north",
+            "analysis_status": "success",
+            "analysis_error": "",
+            "image_asset_analysis": {"image_list": [{"image_id": "n", "rebuild_brief": "旧解析"}]},
+        }
+    )
+    with patch("app.services.promo_planner.flag_modified"):
+        apply_catalog_extra_info(row, {"view_direction": "东"})
+    assert row.extra_info["view_direction"] == "east"
+    assert row.extra_info["scene_group_id"] == "kitchen-a"
+    assert row.extra_info["analysis_status"] == "pending"
+    assert "image_asset_analysis" not in row.extra_info
+
+
+def test_catalog_scene_group_rows_keeps_same_room():
+    from types import SimpleNamespace
+
+    def _row(**kwargs):
+        base = {
+            "owner_kind": "enterprise",
+            "owner_entity_id": 2,
+            "media_kind": "image",
+            "object_name": "后厨",
+            "user_remark": "",
+            "asset_type": "scene",
+        }
+        base.update(kwargs)
+        return SimpleNamespace(**base)
+
+    north = _row(id=1, image_id="n", file_url="/n.jpg", extra_info={"scene_group_id": "g1", "view_direction": "north"})
+    east = _row(id=2, image_id="e", file_url="/e.jpg", extra_info={"scene_group_id": "g1", "view_direction": "east"})
+    product = _row(id=3, image_id="p", file_url="/p.jpg", asset_type="product", extra_info={"scene_group_id": "g1"})
+    other = _row(id=4, image_id="o", file_url="/o.jpg", extra_info={"scene_group_id": "g2", "view_direction": "south"})
+
+    class _Query:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [north, east, product, other]
+
+    class _Db:
+        def query(self, model):
+            return _Query()
+
+    members = catalog_scene_group_rows(_Db(), east)
+    assert [item.image_id for item in members] == ["n", "e"]
+    solo = _row(id=5, image_id="s", file_url="/s.jpg", extra_info={})
+    assert catalog_scene_group_rows(_Db(), solo) == [solo]

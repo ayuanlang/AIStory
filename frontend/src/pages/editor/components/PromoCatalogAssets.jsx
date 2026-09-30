@@ -17,6 +17,23 @@ export const PROMO_ASSET_TYPES = [
     { value: 'prop', zh: '道具', en: 'Prop' },
 ];
 
+const SCENE_VIEW_DIRECTIONS = [
+    { value: '', zh: '未标方向（默认正面）', en: 'Unlabeled (front)' },
+    { value: 'north', zh: '北壁', en: 'North wall' },
+    { value: 'east', zh: '东壁', en: 'East wall' },
+    { value: 'south', zh: '南壁', en: 'South wall' },
+    { value: 'west', zh: '西壁', en: 'West wall' },
+];
+const SCENE_GROUP_DIRECTION_CYCLE = ['north', 'east', 'south', 'west'];
+
+const sceneGroupIdOf = (asset) => String(asset?.scene_group_id || asset?.extra_info?.scene_group_id || '').trim();
+const viewDirectionOf = (asset) => String(asset?.view_direction || asset?.extra_info?.view_direction || '').trim();
+const isSceneAsset = (asset) => (asset?.asset_type || asset?.image_type) === 'scene';
+const directionLabel = (value, t) => {
+    const found = SCENE_VIEW_DIRECTIONS.find((item) => item.value === value);
+    return found ? t(found.zh, found.en) : t('未标方向', 'Unlabeled');
+};
+
 export const PROMO_MEDIA_ACCEPT = 'image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov';
 const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp'];
 const VIDEO_EXTS = ['mp4', 'webm', 'mov'];
@@ -115,7 +132,9 @@ export default function PromoCatalogAssets({
     const [busy, setBusy] = useState(false);
     const [dragOver, setDragOver] = useState(false);
     const [previewAsset, setPreviewAsset] = useState(null);
+    const [groupDrafts, setGroupDrafts] = useState({});
     const fileInputRef = useRef(null);
+    const sceneGroupInputRef = useRef(null);
     const replaceInputRef = useRef(null);
     const replaceTargetRef = useRef(null);
     const assetsRef = useRef([]);
@@ -166,41 +185,57 @@ export default function PromoCatalogAssets({
         };
     }, [load]);
 
+    const sceneGroupMates = (asset, list = assetsRef.current || []) => {
+        const gid = sceneGroupIdOf(asset);
+        if (!gid || !isSceneAsset(asset)) return [asset];
+        const mates = list.filter((item) => isSceneAsset(item) && sceneGroupIdOf(item) === gid);
+        return mates.length ? mates : [asset];
+    };
+
     const analyzeOne = async (asset) => {
         if (!asset?.id || disabled) return;
         const current = (assetsRef.current || []).find((item) => Number(item.id) === Number(asset.id)) || asset;
         if (normalizeAnalysisStatus(current.analysis_status) === ANALYSIS_STATUS_ANALYZING) return;
         if (!(current.img_url || current.file_url)) return;
+        const mates = sceneGroupMates(current);
+        const mateIds = new Set(mates.map((item) => Number(item.id)));
         setAssets((prev) => prev.map((item) => (
-            Number(item.id) === Number(asset.id)
+            mateIds.has(Number(item.id))
                 ? { ...item, analysis_status: ANALYSIS_STATUS_ANALYZING, analysis_error: '' }
                 : item
         )));
         setPreviewAsset((prev) => (
-            prev && Number(prev.id) === Number(asset.id)
+            prev && mateIds.has(Number(prev.id))
                 ? { ...prev, analysis_status: ANALYSIS_STATUS_ANALYZING, analysis_error: '' }
                 : prev
         ));
         try {
             const data = await analyzePromoCatalogAsset(asset.id, {});
-            const next = {
-                ...current,
-                ...data,
-                analysis_status: normalizeAnalysisStatus(data?.analysis_status, ANALYSIS_STATUS_FAILED),
-                analysis_error: String(data?.analysis_error || '').trim(),
-                image_asset_analysis: data?.image_asset_analysis || current.image_asset_analysis || {},
+            const returned = Array.isArray(data?.group_assets) ? data.group_assets : [];
+            const byId = new Map(returned.map((item) => [Number(item.id), item]));
+            const applyRow = (item) => {
+                const nextRow = byId.get(Number(item.id));
+                if (!nextRow && Number(item.id) !== Number(asset.id)) return item;
+                const source = nextRow || { ...item, ...data };
+                return {
+                    ...item,
+                    ...source,
+                    analysis_status: normalizeAnalysisStatus(source.analysis_status, ANALYSIS_STATUS_FAILED),
+                    analysis_error: String(source.analysis_error || '').trim(),
+                    image_asset_analysis: source.image_asset_analysis || item.image_asset_analysis || {},
+                };
             };
-            setAssets((prev) => prev.map((item) => (Number(item.id) === Number(asset.id) ? next : item)));
-            setPreviewAsset((prev) => (prev && Number(prev.id) === Number(asset.id) ? next : prev));
+            setAssets((prev) => prev.map(applyRow));
+            setPreviewAsset((prev) => (prev ? applyRow(prev) : prev));
         } catch (err) {
             const message = err?.response?.data?.detail || err?.message || t('解析失败', 'Analysis failed');
             setAssets((prev) => prev.map((item) => (
-                Number(item.id) === Number(asset.id)
+                mateIds.has(Number(item.id))
                     ? { ...item, analysis_status: ANALYSIS_STATUS_FAILED, analysis_error: String(message) }
                     : item
             )));
             setPreviewAsset((prev) => (
-                prev && Number(prev.id) === Number(asset.id)
+                prev && mateIds.has(Number(prev.id))
                     ? { ...prev, analysis_status: ANALYSIS_STATUS_FAILED, analysis_error: String(message) }
                     : prev
             ));
@@ -212,24 +247,31 @@ export default function PromoCatalogAssets({
             const status = normalizeAnalysisStatus(item.analysis_status);
             return (item.img_url || item.file_url) && status !== ANALYSIS_STATUS_SUCCESS && status !== ANALYSIS_STATUS_ANALYZING;
         });
+        const seenGroups = new Set();
         for (const item of targets) {
+            const gid = sceneGroupIdOf(item);
+            if (isSceneAsset(item) && gid) {
+                if (seenGroups.has(gid)) continue;
+                seenGroups.add(gid);
+            }
             await analyzeOne(item);
         }
     };
 
-    const uploadOne = async (file) => {
-        if (!ownerId || disabled) return;
+    const uploadOne = async (file, options = {}) => {
+        if (!ownerId || disabled) return null;
         if (!isAcceptedMedia(file)) {
             alert(t('仅支持 jpg / png / webp / mp4 / webm / mov', 'Only jpg / png / webp / mp4 / webm / mov'));
-            return;
+            return null;
         }
         if (file.size > MAX_MB * 1024 * 1024) {
             alert(t(`单文件不超过 ${MAX_MB}MB`, `Max ${MAX_MB}MB per file`));
-            return;
+            return null;
         }
         const imageId = newImageId();
         const mediaKind = mediaKindOf(file);
-        setBusy(true);
+        const manageBusy = options.manageBusy !== false;
+        if (manageBusy) setBusy(true);
         try {
             const uploaded = await uploadAsset(file, {
                 type: mediaKind,
@@ -242,18 +284,22 @@ export default function PromoCatalogAssets({
                 owner_kind: ownerKind,
                 owner_entity_id: Number(ownerId),
                 media_kind: mediaKind,
-                asset_type: 'product',
+                asset_type: options.assetType || 'product',
                 image_id: imageId,
                 file_url: url,
                 img_url: url,
-                object_name: file.name.replace(/\.[^.]+$/, ''),
+                object_name: options.objectName || file.name.replace(/\.[^.]+$/, ''),
+                extra_info: options.extraInfo || undefined,
             });
             setAssets((prev) => [created, ...prev.filter((item) => Number(item.id) !== Number(created.id))]);
-            analyzeOne(created);
+            assetsRef.current = [created, ...(assetsRef.current || []).filter((item) => Number(item.id) !== Number(created.id))];
+            if (options.autoAnalyze !== false) analyzeOne(created);
+            return created;
         } catch (err) {
             alert(err?.response?.data?.detail || err?.message || t('上传失败', 'Upload failed'));
+            return null;
         } finally {
-            setBusy(false);
+            if (manageBusy) setBusy(false);
         }
     };
 
@@ -314,6 +360,47 @@ export default function PromoCatalogAssets({
         for (const file of files) {
             await uploadOne(file);
         }
+    };
+
+    const handleSceneGroupFiles = async (fileList) => {
+        const files = Array.from(fileList || []);
+        if (!files.length || !ownerId || disabled) return;
+        const groupId = `scene-${Date.now()}`;
+        const baseName = String(files[0]?.name || '场景').replace(/\.[^.]+$/, '');
+        setBusy(true);
+        const created = [];
+        try {
+            for (let index = 0; index < files.length; index += 1) {
+                const row = await uploadOne(files[index], {
+                    manageBusy: false,
+                    autoAnalyze: false,
+                    assetType: 'scene',
+                    objectName: baseName,
+                    extraInfo: {
+                        scene_group_id: groupId,
+                        view_direction: SCENE_GROUP_DIRECTION_CYCLE[index] || '',
+                    },
+                });
+                if (row) created.push(row);
+            }
+        } finally {
+            setBusy(false);
+        }
+        if (created[0]) await analyzeOne(created[0]);
+    };
+
+    const patchSceneMeta = (asset, next) => {
+        const extra = { ...(asset.extra_info || {}) };
+        if (Object.prototype.hasOwnProperty.call(next, 'view_direction')) extra.view_direction = next.view_direction;
+        if (Object.prototype.hasOwnProperty.call(next, 'scene_group_id')) extra.scene_group_id = next.scene_group_id;
+        patchAsset(asset, {
+            extra_info: extra,
+            view_direction: extra.view_direction || '',
+            scene_group_id: extra.scene_group_id || '',
+            analysis_status: ANALYSIS_STATUS_PENDING,
+            analysis_error: '',
+            image_asset_analysis: {},
+        });
     };
 
     const patchAsset = async (asset, patch) => {
@@ -383,7 +470,17 @@ export default function PromoCatalogAssets({
                 <div className="text-xs text-white/80">{t('拖拽或点击上传图片 / 视频', 'Drop or click to upload images / videos')}</div>
                 <div className="text-[11px] text-muted-foreground mt-1">{t(`jpg / png / webp / mp4 / webm / mov，单文件不超过 ${MAX_MB}MB`, `jpg / png / webp / mp4 / webm / mov, max ${MAX_MB}MB`)}</div>
             </div>
+            <button
+                type="button"
+                disabled={disabled || busy}
+                onClick={() => sceneGroupInputRef.current?.click()}
+                className="w-full text-xs px-3 py-2 rounded-lg border border-white/15 hover:border-white/30 disabled:opacity-40"
+            >
+                {t('上传场景组（多张，按北、东、南、西标注）', 'Upload a scene group (north, east, south, west)')}
+                <div className="text-[11px] text-muted-foreground mt-1">{t('第1张北壁，第2张东壁，第3张南壁，第4张西壁。多出来的先不标，上传后可改。同组照片会合成四面墙。', '1st north, 2nd east, 3rd south, 4th west. Extras stay unlabeled until you set them. The group is read as one room.')}</div>
+            </button>
             <input ref={fileInputRef} type="file" accept={PROMO_MEDIA_ACCEPT} multiple className="hidden" onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
+            <input ref={sceneGroupInputRef} type="file" accept={PROMO_MEDIA_ACCEPT} multiple className="hidden" onChange={(e) => { handleSceneGroupFiles(e.target.files); e.target.value = ''; }} />
             <input
                 ref={replaceInputRef}
                 type="file"
@@ -417,6 +514,16 @@ export default function PromoCatalogAssets({
                                             {isVideo ? <Video className="w-7 h-7" /> : <ImageIcon className="w-7 h-7" />}
                                         </div>
                                     )}
+                                    {isSceneAsset(asset) && viewDirectionOf(asset) ? (
+                                        <div className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/60 text-white">
+                                            {directionLabel(viewDirectionOf(asset), t)}
+                                        </div>
+                                    ) : null}
+                                    {isSceneAsset(asset) && sceneGroupIdOf(asset) ? (
+                                        <div className="absolute bottom-2 left-2 max-w-[70%] truncate text-[10px] px-1.5 py-0.5 rounded bg-black/60 text-white/80">
+                                            {sceneGroupIdOf(asset)}
+                                        </div>
+                                    ) : null}
                                     <div className={`absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1 ${analysisStatusClass(status)}`}>
                                         {status === ANALYSIS_STATUS_ANALYZING ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
                                         {analysisStatusLabel(status, t)}
@@ -440,6 +547,37 @@ export default function PromoCatalogAssets({
                                         onChange={(e) => patchAsset(asset, { object_name: e.target.value })}
                                         placeholder={t('命名，如主视觉 / 厨师', 'Name, e.g. hero / chef')}
                                     />
+                                    {isSceneAsset(asset) ? (
+                                        <>
+                                            <select
+                                                className="w-full bg-black/30 border border-white/10 rounded-md px-2 py-1 text-xs"
+                                                value={viewDirectionOf(asset)}
+                                                disabled={disabled || status === ANALYSIS_STATUS_ANALYZING}
+                                                onChange={(e) => patchSceneMeta(asset, { view_direction: e.target.value })}
+                                            >
+                                                {SCENE_VIEW_DIRECTIONS.map((opt) => (
+                                                    <option key={opt.value || 'unset'} value={opt.value}>{t(opt.zh, opt.en)}</option>
+                                                ))}
+                                            </select>
+                                            <input
+                                                className="w-full bg-black/30 border border-white/10 rounded-md px-2 py-1 text-xs"
+                                                value={groupDrafts[asset.id] ?? sceneGroupIdOf(asset)}
+                                                disabled={disabled || status === ANALYSIS_STATUS_ANALYZING}
+                                                onChange={(e) => setGroupDrafts((prev) => ({ ...prev, [asset.id]: e.target.value }))}
+                                                onBlur={(e) => {
+                                                    const value = e.target.value.trim();
+                                                    setGroupDrafts((prev) => {
+                                                        const next = { ...prev };
+                                                        delete next[asset.id];
+                                                        return next;
+                                                    });
+                                                    if (value === sceneGroupIdOf(asset)) return;
+                                                    patchSceneMeta(asset, { scene_group_id: value });
+                                                }}
+                                                placeholder={t('场景组名，同组填同一个', 'Scene group, same name joins photos')}
+                                            />
+                                        </>
+                                    ) : null}
                                     {status === ANALYSIS_STATUS_FAILED && asset.analysis_error ? (
                                         <div className="text-[11px] text-red-300 break-words">{asset.analysis_error}</div>
                                     ) : null}
@@ -494,6 +632,8 @@ export default function PromoCatalogAssets({
                             <div className="text-sm font-semibold text-white">{previewAsset.object_name || t('未命名素材', 'Untitled asset')}</div>
                             <div className="text-[11px] text-white/50 mt-0.5">
                                 {previewAsset.media_kind || 'image'} · {previewAsset.asset_type || previewAsset.image_type || 'product'}
+                                {isSceneAsset(previewAsset) ? ` · ${directionLabel(viewDirectionOf(previewAsset), t)}` : ''}
+                                {isSceneAsset(previewAsset) && sceneGroupIdOf(previewAsset) ? ` · ${sceneGroupIdOf(previewAsset)}` : ''}
                             </div>
                         </div>
                         <div className="bg-black/40 rounded-xl overflow-hidden max-h-[46vh] flex items-center justify-center">

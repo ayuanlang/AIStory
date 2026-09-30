@@ -11,6 +11,7 @@ DEFAULT_STAGE3_AUTO_START: Dict[str, bool] = {
     "asset_design_character": True,
     "asset_design_prop": True,
     "asset_design_environment": True,
+    "asset_design_environment_quad": True,
 }
 
 
@@ -218,7 +219,7 @@ def _base_node_specs() -> List[Dict[str, Any]]:
             # Per imported scene: staging workspace import + asset_design_environment
             # (environments + posters/covers) must both be ready before shot generation.
             # Character/prop design is intentionally not a dependency.
-            "depends_on": ["scene_subskill_pipeline", "asset_design_environment"],
+            "depends_on": ["scene_subskill_pipeline", "asset_design_environment", "asset_design_environment_quad"],
             "outputs": ["shots_markdown", "shot_rows"],
             "persist_targets": ["scene.ai_shots_result", "shot_rows"],
             "executor": "shot_generation.batch_per_scene",
@@ -266,8 +267,22 @@ def _base_node_specs() -> List[Dict[str, Any]]:
             "persist_targets": ["episode.ai_entity_design_result", "entity_rows.environment", "entity_rows.poster"],
             "injection_chain": ["frontend.entity_design_common_prompt", "frontend.asset_design_project_context", "backend.environment_plan_brief", "backend.cover_poster_brief", "backend.analyze_scene.project_metadata"],
             "auto_start": True,
-            "fan_out": None,
+            "fan_out": ["asset_design_environment_quad"],
+            "fan_out_mode": "after_complete",
             "status": "planned",
+        },
+        {
+            "key": "asset_design_environment_quad",
+            "phase": 3,
+            "title": "主环境四宫格",
+            "prompt_file": "skills/scene_analysis_feature_stack/environment_quad_prompt.md",
+            "depends_on": ["asset_design_environment"],
+            "outputs": ["subjects_json.environments"],
+            "persist_targets": ["entity_rows.environment.generation_prompt_cn"],
+            "injection_chain": ["backend.environment_design_drafts"],
+            "auto_start": True,
+            "fan_out": None,
+            "status": "routable_existing_executor",
         },
     ]
 
