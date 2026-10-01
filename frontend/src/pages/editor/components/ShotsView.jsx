@@ -2,6 +2,7 @@
 
 import PromptMentionTextarea from './PromptMentionTextarea';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import TunePromptAgentModal from "./TunePromptAgentModal";
 import { MediaPickerModal, MediaDetailModal } from './MediaModals';
 import { ImportModal } from './ImportModal';
@@ -10773,7 +10774,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (!editingShot) return;
         const targetShotId = editingShot.id;
         const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
-        if (targetGeneratingState.start || targetGeneratingState.end || isShotVideoUiRunning(targetShotId, targetGeneratingState)) return;
+        if (targetGeneratingState.start || targetGeneratingState.end || isShotVideoUiRunning(targetShotId, targetGeneratingState)) {
+            showNotification(t('当前镜头正在生成，请稍后再烧录。', 'This shot is still generating. Burn text after it finishes.'), 'warning');
+            return;
+        }
         if (!String(editingShot.video_url || '').trim()) {
             showNotification(t('当前镜头没有可烧录的视频。', 'No video found for this shot.'), 'warning');
             return;
@@ -13483,9 +13487,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         </div>
                                                     )}
                                                 </div>
-                                                {flowerBurnOpen && (
+                                                {flowerBurnOpen && createPortal(
                                                     <div
-                                                        className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
+                                                        className="fixed inset-0 z-[160] bg-black/60 flex items-center justify-center p-4"
                                                         onClick={() => { if (!flowerBurnLoading && videoStatuses[editingShot?.id] !== 'burning_flower') setFlowerBurnOpen(false); }}
                                                     >
                                                         <div
@@ -13608,7 +13612,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 </button>
                                                             </div>
                                                         </div>
-                                                    </div>
+                                                    </div>,
+                                                    document.body
                                                 )}
 
                                                 <label className="flex items-center gap-1 text-[10px] text-gray-300 hover:text-white cursor-pointer select-none ml-1 mr-2">

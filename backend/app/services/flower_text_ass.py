@@ -26,6 +26,7 @@ _GLYPH_LOCK_RE = re.compile(r"逐字=[^｜|\n]+")
 _VOICE_RE = re.compile(r"(?:Voiceover|旁白|口播)\s*[:：]\s*(.+)", re.IGNORECASE)
 _FONT_MAP = {
     "楷体": "KaiTi",
+    "华文楷体": "KaiTi",
     "宋体": "SimSun",
     "黑体": "SimHei",
     "微软雅黑": "Microsoft YaHei",
@@ -33,15 +34,29 @@ _FONT_MAP = {
     "simsun": "SimSun",
     "simhei": "SimHei",
 }
+_DESIGNATED_COPY_RE = re.compile(
+    r"(?:画幅叠出片内图形花字|片内图形花字|文案)\s*[=＝]?\s*「([^」]+)」"
+)
+_REAL_BURN_MARK_RE = re.compile(r"(?<!标记)烧录=libass")
 _SIZE_RATIO = {"大": 0.072, "中": 0.050, "小": 0.032}
 _ASS_FILTER_CACHE: Optional[bool] = None
 
 
+def _usable_copy(quote: str) -> bool:
+    text = str(quote or "").strip()
+    return len(text) > 1 and text not in {"家", "无", "X家"}
+
+
+def _is_hotline_copy(quote: str) -> bool:
+    text = str(quote or "").strip()
+    return bool(text and (_PHONE_RE.search(text) or "热线" in text or "电话" in text))
+
+
 def _quote_needs_exact_burn(quote: str) -> bool:
     text = str(quote or "").strip()
-    if not text:
+    if not _usable_copy(text):
         return False
-    if _PHONE_RE.search(text) or "热线" in text or "电话" in text:
+    if _is_hotline_copy(text):
         return True
     if "家" in text and "万家" not in text:
         return True
@@ -56,22 +71,26 @@ def _block_has_voiceover(block: str) -> bool:
     return False
 
 
+def _append_unique(parts: List[str], text: str) -> None:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return
+    for existing in parts:
+        if cleaned == existing or cleaned in existing or existing in cleaned:
+            return
+    parts.append(cleaned)
+
+
 def _block_needs_libass(block: str) -> bool:
     text = str(block or "")
     if not text.strip() or _block_has_voiceover(text):
         return False
-    marked = "烧录=libass" in text or "上屏=字卡专镜" in text
-    has_flower = "花字" in text or "文案=" in text or "画幅叠出" in text
-    if not marked and not has_flower:
+    main, companion = _pick_main_and_companion(text)
+    if not main and not companion and not _seal_text(text):
         return False
-    if marked and (_QUOTE_RE.search(text) or _PHONE_RE.search(text)):
-        if any(_quote_needs_exact_burn(a or b) for a, b in _QUOTE_RE.findall(text)):
-            return True
-        if _PHONE_RE.search(text):
-            return True
-        if "店号" in text or "品牌" in text or "热线" in text or "电话" in text:
-            return True
-    return any(_quote_needs_exact_burn(a or b) for a, b in _QUOTE_RE.findall(text))
+    if _DESIGNATED_COPY_RE.search(text) or "上屏=字卡专镜" in text:
+        return True
+    return _REAL_BURN_MARK_RE.search(text) is not None
 
 
 def _iter_blocks(script: str):
@@ -98,31 +117,37 @@ def _parse_duration(value: Any, default: float = 4.0) -> float:
 
 
 def _pick_main_and_companion(block: str) -> tuple[str, str]:
+    designated = [quote.strip() for quote in _DESIGNATED_COPY_RE.findall(block) if _usable_copy(quote)]
     quotes = [a or b for a, b in _QUOTE_RE.findall(block)]
-    en_quotes = [a or b for a, b in _EN_RE.findall(block)]
+    en_quotes = [a or b for a, b in _EN_RE.findall(block) if _usable_copy(a or b)]
     phones = _PHONE_RE.findall(block)
     main = ""
-    for quote in quotes:
-        if _quote_needs_exact_burn(quote) and "家" in quote and "万家" not in quote:
-            main = quote.strip()
+    for quote in designated:
+        if not _is_hotline_copy(quote):
+            main = quote
             break
     if not main:
         for quote in quotes:
-            if _quote_needs_exact_burn(quote) and quote.strip() not in en_quotes:
-                if not _PHONE_RE.fullmatch(quote.strip()):
-                    main = quote.strip()
-                    break
-    if not main and phones:
+            cleaned = quote.strip()
+            if not _usable_copy(cleaned) or _is_hotline_copy(cleaned):
+                continue
+            if _quote_needs_exact_burn(cleaned) and "家" in cleaned and "万家" not in cleaned:
+                main = cleaned
+                break
+    if not main and phones and not any(_is_hotline_copy(quote) for quote in designated):
         main = phones[0]
     companion_parts: List[str] = []
+    for quote in designated:
+        if quote != main and _is_hotline_copy(quote):
+            _append_unique(companion_parts, quote)
     for quote in en_quotes:
-        cleaned = quote.strip()
-        if cleaned and cleaned != main:
-            companion_parts.append(cleaned)
+        if quote != main:
+            _append_unique(companion_parts, quote)
     for phone in phones:
-        if phone != main and phone not in companion_parts:
-            label = "垂询热线：" if "热线" in block or "电话" in block else ""
-            companion_parts.append(f"{label}{phone}" if label and not phone.startswith(label) else phone)
+        if phone == main or any(phone in part for part in companion_parts):
+            continue
+        label = "垂询热线：" if ("热线" in block or "电话" in block) else ""
+        _append_unique(companion_parts, f"{label}{phone}" if label else phone)
     return main, "\n".join(companion_parts)
 
 
@@ -146,7 +171,7 @@ def _place_and_size(block: str) -> tuple[str, str, bool, str]:
 
 
 def extract_libass_events(script: str, duration: Any = None) -> List[Dict[str, Any]]:
-    """Critical flower lines only. Poetic lines and voiced shots stay with the picture."""
+    """On-screen flower copy. Voiced shots and the quality-footer 「家」 stay off the burn."""
     fallback = _parse_duration(duration, 4.0)
     events: List[Dict[str, Any]] = []
     for start, end, block in _iter_blocks(script):
@@ -496,7 +521,7 @@ def apply_flower_burn_to_shot(db: Any, shot: Any, user_id: int = 0, lines: Any =
         if saved_source and video_url == str(notes.get("flower_ass_output_url") or ""):
             source_url = saved_source
     else:
-        events = extract_libass_events(getattr(shot, "video_content", None), duration)
+        events = extract_shot_libass_events(shot)
     if not events:
         raise ValueError("没有可烧录的文字")
     result = burn_flower_text_video(
@@ -519,6 +544,30 @@ def apply_flower_burn_to_shot(db: Any, shot: Any, user_id: int = 0, lines: Any =
     return new_url
 
 
+def _shot_copy_texts(shot: Any) -> List[str]:
+    notes = _notes(shot)
+    texts: List[str] = []
+    for value in (
+        getattr(shot, "video_content", None),
+        notes.get("video_prompt_cn"),
+        getattr(shot, "prompt", None),
+    ):
+        text = str(value or "").strip()
+        if text and text not in texts:
+            texts.append(text)
+    return texts
+
+
+def extract_shot_libass_events(shot: Any) -> List[Dict[str, Any]]:
+    """Read the shot script, then the Chinese video prompt. video_content is often empty."""
+    duration = getattr(shot, "duration", None)
+    for text in _shot_copy_texts(shot):
+        events = extract_libass_events(text, duration)
+        if events:
+            return events
+    return []
+
+
 def flower_burn_draft(shot: Any) -> Dict[str, Any]:
     notes = _notes(shot)
     saved = notes.get("flower_ass_draft")
@@ -526,7 +575,8 @@ def flower_burn_draft(shot: Any) -> Dict[str, Any]:
         lines = normalize_manual_burn_lines(saved, getattr(shot, "duration", None))
         if lines:
             return {"lines": lines, "source": "draft"}
+    events = extract_shot_libass_events(shot)
     return {
-        "lines": suggest_flower_burn_lines(getattr(shot, "video_content", None), getattr(shot, "duration", None)),
+        "lines": events or [_blank_burn_line(getattr(shot, "duration", None))],
         "source": "script",
     }

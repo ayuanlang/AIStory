@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
+import json
+
 from app.services.flower_text_ass import (
     build_ass,
     extract_libass_events,
+    flower_burn_draft,
     normalize_manual_burn_lines,
     strip_libass_glyphs_from_prompt,
 )
@@ -16,11 +19,10 @@ SCRIPT = """
 
 def test_libass_events_keep_shop_name_and_hotline_exact():
     events = extract_libass_events(SCRIPT, duration=16)
-    assert len(events) == 1
-    event = events[0]
-    assert event["text"] == "天地灵秀·何家乐享"
+    assert [event["text"] for event in events] == ["一盏灯，照见山河", "天地灵秀·何家乐享"]
+    event = events[1]
     assert "家" in event["text"]
-    assert "0599-2323239" in event["companion"]
+    assert event["companion"].count("0599-2323239") == 1
     assert "Hejia" in event["companion"]
     assert event["start"] == 8.0
     assert event["end"] == 12.0
@@ -28,13 +30,17 @@ def test_libass_events_keep_shop_name_and_hotline_exact():
     assert event["seal"] == "乐章"
 
 
-def test_voiceover_and_poetic_lines_are_not_burned():
+def test_voiceover_and_footer_jia_are_not_burned():
     events = extract_libass_events(SCRIPT, duration=16)
     blob = " ".join(event["text"] for event in events)
-    assert "一盏灯" not in blob
     assert "健康科技" not in blob
     poetic = extract_libass_events("花字「万家灯火」｜上屏=段末切镜｜听=无", duration=4)
     assert poetic == []
+    footer = extract_libass_events(
+        "花字「家」不是第二个人物。标记烧录=libass的店号与热线禁止描字。",
+        duration=4,
+    )
+    assert footer == []
 
 
 def test_ass_is_centered_and_copies_glyphs_verbatim():
@@ -46,9 +52,9 @@ def test_ass_is_centered_and_copies_glyphs_verbatim():
     assert r"\pos(" in ass
     assert r"\an2" not in ass
     dialogues = [line for line in ass.splitlines() if line.startswith("Dialogue:")]
-    assert len(dialogues) == 3
-    assert "FlowerSmall" in dialogues[1]
-    assert "FlowerSeal" in dialogues[2]
+    assert len(dialogues) == 4
+    assert any("FlowerSmall" in line and "0599-2323239" in line for line in dialogues)
+    assert any("FlowerSeal" in line for line in dialogues)
     for line in dialogues:
         pos = line.split("\\pos(", 1)[1].split(")", 1)[0]
         y = int(pos.split(",")[1])
@@ -62,7 +68,7 @@ def test_prompt_sent_to_video_model_drops_shop_glyphs():
     assert "何/家/乐/享" not in stripped
     assert "禁何乐乐享" not in stripped
     assert "ENV:[0度何家乐]" in stripped
-    assert "一盏灯，照见山河" in stripped
+    assert "一盏灯，照见山河" not in stripped
     assert "何家乐健康科技" in stripped
     assert "后期烧录" in stripped
 
@@ -85,3 +91,24 @@ def test_manual_seal_burns_beside_the_line():
     assert seal.replace("\\N", "").endswith("乐章")
     assert r"\an2" not in ass
     assert normalize_manual_burn_lines([{"text": "  ", "seal": ""}]) == []
+
+
+def test_draft_reads_video_prompt_when_shot_script_is_empty():
+    class _Shot:
+        video_content = ""
+        prompt = ""
+        duration = "5"
+        technical_notes = json.dumps({
+            "video_prompt_cn": (
+                "(P1 0s–5s) 文案=「何家安泰 草木长乐」｜烧录=libass｜手写=禁。"
+                "文案=「服务热线:0599-2323239」｜烧录=libass。"
+                "画幅叠出片内图形花字「何家安泰 草木长乐」。"
+                "花字「家」不是第二个人物。标记烧录=libass的店号与热线禁止描字。"
+            )
+        }, ensure_ascii=False)
+
+    draft = flower_burn_draft(_Shot())
+    assert draft["source"] == "script"
+    assert draft["lines"][0]["text"] == "何家安泰 草木长乐"
+    assert draft["lines"][0]["companion"].count("0599-2323239") == 1
+    assert draft["lines"][0]["text"] != "家"
