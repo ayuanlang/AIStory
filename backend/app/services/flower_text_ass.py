@@ -10,8 +10,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -304,19 +305,62 @@ def _pos(width: int, height: int, place: str, size: str, companion: bool) -> tup
     return x, y, fontsize
 
 
+_CJK_FONT_CANDIDATES: Tuple[Tuple[str, str], ...] = (
+    ("simhei.ttf", "SimHei"),
+    ("msyh.ttc", "Microsoft YaHei"),
+    ("NotoSansCJK-Regular.ttc", "Noto Sans CJK SC"),
+    ("NotoSansCJKsc-Regular.otf", "Noto Sans CJK SC"),
+)
+
+
+def _cjk_font_search_dirs() -> List[str]:
+    dirs: List[str] = []
+    windir = os.environ.get("WINDIR")
+    if windir:
+        dirs.append(os.path.join(windir, "Fonts"))
+    dirs.extend([
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/noto-cjk",
+        "/usr/share/fonts/truetype",
+    ])
+    return dirs
+
+
+def stage_burn_font(work_dir: str) -> str:
+    """Copy one CJK font next to the ASS file and return its family name.
+
+    libass drops a Windows path in fontsdir: the drive colon is parsed as a
+    filter separator, the font never loads, and Chinese becomes empty boxes.
+    """
+    fonts_dir = os.path.join(work_dir, "fonts")
+    os.makedirs(fonts_dir, exist_ok=True)
+    for folder in _cjk_font_search_dirs():
+        for filename, family in _CJK_FONT_CANDIDATES:
+            src = os.path.join(folder, filename)
+            if not os.path.isfile(src):
+                continue
+            shutil.copyfile(src, os.path.join(fonts_dir, filename))
+            return family
+    raise RuntimeError("找不到可烧录中文的字体（需要黑体 SimHei 或微软雅黑）")
+
+
 def build_ass(
     events: List[Dict[str, Any]],
     *,
     width: int = 1920,
     height: int = 1080,
+    font_name: Optional[str] = None,
 ) -> str:
     width = max(16, int(width or 1920))
     height = max(16, int(height or 1080))
-    font = "KaiTi"
-    for event in events:
-        if event.get("font"):
-            font = str(event["font"])
-            break
+    font = str(font_name or "").strip()
+    if not font:
+        font = "SimHei"
+        for event in events:
+            if event.get("font"):
+                font = str(event["font"])
+                break
     header = "\n".join([
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -467,15 +511,14 @@ def burn_flower_text_video(
         probed_w, probed_h = _probe_video_size(source_path, ffmpeg_exe)
         frame_w = int(width or probed_w or 1920)
         frame_h = int(height or probed_h or 1080)
-        ass_text = build_ass(events, width=frame_w, height=frame_h)
+        font_family = stage_burn_font(work_dir)
+        ass_text = build_ass(events, width=frame_w, height=frame_h, font_name=font_family)
         ass_path = os.path.join(work_dir, "burn.ass")
         with open(ass_path, "w", encoding="utf-8-sig") as handle:
             handle.write(ass_text)
         output_path = os.path.join(work_dir, "burned.mp4")
-        fonts_dir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
-        vf = f"subtitles={_ffmpeg_filter_path(ass_path)}"
-        if os.path.isdir(fonts_dir):
-            vf = f"{vf}:fontsdir={_ffmpeg_filter_path(fonts_dir)}"
+        # Relative names only. A drive letter colon breaks the subtitles filter.
+        vf = "subtitles=burn.ass:fontsdir=fonts"
         _run_ffmpeg([
             ffmpeg_exe, "-y", "-i", source_path,
             "-vf", vf,
@@ -483,7 +526,7 @@ def burn_flower_text_video(
             "-c:a", "copy",
             "-movflags", "+faststart",
             output_path,
-        ])
+        ], cwd=work_dir)
         import uuid
 
         uploaded = _upload_processed_video(output_path, f"flower_{uuid.uuid4().hex}.mp4", user_id=user_id)

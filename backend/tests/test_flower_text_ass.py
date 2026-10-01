@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 import json
+import os
+import shutil
+import tempfile
 
 from app.services.flower_text_ass import (
     build_ass,
     extract_libass_events,
     flower_burn_draft,
     normalize_manual_burn_lines,
+    stage_burn_font,
     strip_libass_glyphs_from_prompt,
 )
 
@@ -112,3 +116,27 @@ def test_draft_reads_video_prompt_when_shot_script_is_empty():
     assert draft["lines"][0]["text"] == "何家安泰 草木长乐"
     assert draft["lines"][0]["companion"].count("0599-2323239") == 1
     assert draft["lines"][0]["text"] != "家"
+
+
+def test_stage_burn_font_copies_simhei_beside_the_ass_file():
+    windir = os.environ.get("WINDIR")
+    if not windir or not os.path.isfile(os.path.join(windir, "Fonts", "simhei.ttf")):
+        return
+    work = tempfile.mkdtemp(prefix="flower_font_")
+    try:
+        family = stage_burn_font(work)
+        assert family == "SimHei"
+        assert os.path.isfile(os.path.join(work, "fonts", "simhei.ttf"))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def test_burn_style_uses_the_staged_cjk_font():
+    ass = build_ass([{
+        "text": "何家安泰",
+        "start": 0,
+        "end": 1,
+        "font": "KaiTi",
+    }], font_name="SimHei")
+    assert "Style: Flower,SimHei," in ass
+    assert "KaiTi" not in ass

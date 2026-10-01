@@ -74,7 +74,7 @@ def _resolve_ffprobe_exe(ffmpeg_exe: Optional[str] = None) -> Optional[str]:
     return None
 
 
-def _run_ffmpeg(cmd: list, timeout_seconds: int = 600) -> None:
+def _run_ffmpeg(cmd: list, timeout_seconds: int = 600, cwd: Optional[str] = None) -> None:
     logger.info("ffmpeg cmd: %s", " ".join(str(part) for part in cmd))
     completed = subprocess.run(
         cmd,
@@ -82,6 +82,7 @@ def _run_ffmpeg(cmd: list, timeout_seconds: int = 600) -> None:
         text=True,
         timeout=timeout_seconds,
         check=False,
+        cwd=cwd,
     )
     if completed.returncode != 0:
         stderr = (completed.stderr or completed.stdout or "").strip()
