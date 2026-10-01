@@ -3889,6 +3889,7 @@ const ANALYSIS_STAGE_LABELS = {
     assets_gen_character: { zh: '角色生成', en: 'Character Gen' },
     assets_gen_prop: { zh: '道具生成', en: 'Prop Gen' },
     assets_gen_environment: { zh: '环境生成', en: 'Environment Gen' },
+    assets_gen_derived: { zh: '生成衍生环境', en: 'Derived Environment Gen' },
     storyboard: { zh: '分镜生成', en: 'Storyboard Generation' },
 };
 
@@ -5686,6 +5687,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [isRetryingPhase2, setIsRetryingPhase2] = useState(false);
     const [retryingAssetCategoryKeys, setRetryingAssetCategoryKeys] = useState([]);
     const [isRegeneratingDerivedEnvs, setIsRegeneratingDerivedEnvs] = useState(false);
+    const [environmentQuadRerunActive, setEnvironmentQuadRerunActive] = useState(false);
     const [liveAssetDesignTaskKeys, setLiveAssetDesignTaskKeys] = useState([]);
     const [systemPrompt, setSystemPrompt] = useState('');
     const [userPrompt, setUserPrompt] = useState('');
@@ -30238,8 +30240,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         if (!window.confirm(t(
-            '将只重跑美术指导这一排：全局统筹 → 环境规划 → 角色/道具/主环境生成。分场节点不会重跑。确认继续吗？',
-            'Only the Art Direction row will rerun: global orchestration → environment plan → character / prop / main-environment design. Per-scene nodes will not run. Continue?'
+            '将只重跑美术指导这一排：全局统筹 → 环境规划 → 角色/道具/主环境生成 → 生成衍生环境。分场节点不会重跑。确认继续吗？',
+            'Only the Art Direction row will rerun: global orchestration → environment plan → character / prop / main-environment design → derived-environment generation. Per-scene nodes will not run. Continue?'
         ))) return;
 
         const startedAt = Date.now();
@@ -32325,6 +32327,100 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             reportAnalysisPanelNotice(message, 'error');
         } finally {
             setIsRegeneratingDerivedEnvs(false);
+        }
+    };
+
+    const handleRerunEnvironmentQuad = async () => {
+        if (!projectId || !activeEpisode?.id || environmentQuadRerunActive) return;
+        if (isAssetCategoryBusy('environments')) {
+            reportAnalysisPanelNotice(t(
+                '主环境还在生成，请等环境生成结束后再重跑四宫格。',
+                'Main-environment design is still running. Rerun the four-grid after it finishes.'
+            ), 'warning');
+            return;
+        }
+        const ok = await confirmUiMessage(t(
+            '将按已入库的主环境开篇，重新生成主环境四宫格。主环境实体、衍生环境和分镜都保留。是否继续？',
+            'This reruns the main-environment four-grid from the saved opening draft. Main-environment rows, derived environments, and storyboards stay. Continue?'
+        ));
+        if (!ok) return;
+        setEnvironmentQuadRerunActive(true);
+        onLog?.(t('正在重跑主环境四宫格…', 'Rerunning the main-environment four-grid…'), 'process');
+        try {
+            const owned = await refreshEpisodeOwnedEntities();
+            const mains = (Array.isArray(owned) ? owned : []).filter((item) => (
+                isMainEnvironmentCompletenessAsset(item)
+                && String(item?.name || '').trim()
+                && String(item?.generation_prompt_cn || '').trim()
+            ));
+            if (!mains.length) {
+                reportAnalysisPanelNotice(t(
+                    '没有可重跑的主环境设计稿。',
+                    'No main-environment draft is available to rerun.'
+                ), 'warning');
+                return;
+            }
+            const quadPromptRes = await fetchPrompt(
+                'skills/scene_analysis_feature_stack/environment_quad_prompt.md'
+            ).catch(() => null);
+            const quadPrompt = String(quadPromptRes?.content || '').trim();
+            if (!quadPrompt) {
+                throw new Error(t('四宫格技能缺失。', 'The four-grid skill is missing.'));
+            }
+            const openingDraft = (prompt) => {
+                const text = String(prompt || '').replace(/\r\n/g, '\n').trim();
+                const match = text.match(/(?:^|\n)【四向拼图】/);
+                if (!match || match.index == null) return text;
+                const opening = text.slice(0, match.index).trim();
+                return opening || text;
+            };
+            const source = mains.map((item) => (
+                `【主环境设计稿】${String(item.name).trim()}\n${openingDraft(item.generation_prompt_cn)}\n【/主环境设计稿】`
+            )).join('\n\n');
+            throwIfAnalysisStopped();
+            const res = await runScriptAnalysisFlowAnalyzeNode(
+                'asset_design_environment_quad',
+                source,
+                quadPrompt,
+                null,
+                activeEpisode.id,
+                analysisAttentionNotes,
+                selectedReuseSubjectAssets,
+                {
+                    skipEpisodePersist: true,
+                    analysisTraceId: `environment-quad-rerun-${activeEpisode.id}-${Date.now()}`,
+                },
+                projectId,
+                'script_analysis',
+                resolveSelectedScriptAnalysisApiId(),
+                'environment_quad'
+            );
+            const text = extractAnalysisTextFromResult(res);
+            const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
+            const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
+            const readyCount = returned.filter((item) => (
+                mains.some((row) => String(row?.name || '').trim() === String(item?.name || '').trim())
+                && mainEnvironmentPromptHasQuad(item?.generation_prompt_cn)
+            )).length;
+            await refreshEpisodeOwnedEntities();
+            if (readyCount < mains.length) {
+                throw new Error(t(
+                    `四宫格未写满 ${readyCount}/${mains.length}`,
+                    `Four-grid prompts are incomplete: ${readyCount}/${mains.length}`
+                ));
+            }
+            onLog?.(t(
+                `主环境四宫格已重跑，写回 ${readyCount} 个主环境。`,
+                `Main-environment four-grid rerun wrote ${readyCount} prompt(s).`
+            ), 'success');
+        } catch (error) {
+            const detail = String(error?.response?.data?.detail || error?.message || error || '');
+            const message = t(`重跑主环境四宫格失败：${detail}`, `Main-environment four-grid rerun failed: ${detail}`);
+            onLog?.(message, 'error');
+            reportAnalysisPanelNotice(message, 'error');
+        } finally {
+            setEnvironmentQuadRerunActive(false);
+            setDiagnosticsRefreshNonce((value) => value + 1);
         }
     };
 
@@ -34636,10 +34732,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             return;
         }
+        if (kind === 'environment_quad') {
+            void handleRerunEnvironmentQuad();
+            return;
+        }
         if (kind === 'scene' && inspect.stepKey && inspect.sceneId) {
             void handleRerunSceneMatrixNode(inspect.stepKey, inspect.sceneId);
         }
-    }, [failedNodeInspect, handleRerunSceneMatrixNode, handleRerunStage1NodeOnly, openPhase2RerunModal]);
+    }, [failedNodeInspect, handleRerunEnvironmentQuad, handleRerunSceneMatrixNode, handleRerunStage1NodeOnly, openPhase2RerunModal]);
 
     const stage2StageCards = useMemo(() => {
         const byScene = stage2SceneMarkdownByScene || {};
@@ -35223,8 +35323,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <span className="font-bold text-sm">{t('进度诊断面板', 'Workflow Diagnostics')}</span>
                             <span className="text-[9px] leading-4 text-white/40 max-w-[520px]">
                                 {t(
-                                    '全局节点与分场节点分行展示。美术指导左侧「重跑此排」只重跑全局统筹到主环境生成，不跑分场。每场左侧「重跑该场」只从文戏优化重跑该场后续节点，不跑美术指导与其他分场。失败节点可点「查看原因」看错误、处理建议，并衔接 AI 诊断。',
-                                    'Global and per-scene nodes are shown separately. “Rerun This Row” on Art Direction regenerates global orchestration through main-environment design and skips per-scene nodes. “Rerun This Scene” on the left starts that scene from drama and skips art direction and other scenes. Use View reason on a failed node for the error, next steps, and AI Diagnosis.'
+                                    '全局节点与分场节点分行展示。美术指导左侧「重跑此排」只重跑全局统筹到生成衍生环境，不跑分场。每场左侧「重跑该场」只从文戏优化重跑该场后续节点，不跑美术指导与其他分场。失败节点可点「查看原因」看错误、处理建议，并衔接 AI 诊断。',
+                                    'Global and per-scene nodes are shown separately. “Rerun This Row” on Art Direction regenerates global orchestration through derived-environment generation and skips per-scene nodes. “Rerun This Scene” on the left starts that scene from drama and skips art direction and other scenes. Use View reason on a failed node for the error, next steps, and AI Diagnosis.'
                                 )}
                             </span>
                         </div>
@@ -35761,6 +35861,151 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 </div>
                             );
                         };
+                        const renderDerivedEnvironmentQuadCell = () => {
+                            const nodeState = resolveNodeState('asset_design_environment_quad', false, false);
+                            const quadStatus = String(nodeState.status || '').trim().toLowerCase();
+                            const mainCount = countDbMainEnvironmentEntities(episodeOwnedEntities);
+                            const promptCount = countDbMainEnvironmentEntitiesWithPrompt(episodeOwnedEntities);
+                            const promptsReady = mainCount > 0 && promptCount >= mainCount;
+                            const envState = assetCategoryStates.environment || {};
+                            const designBusy = Boolean(envState.active || isAssetCategoryBusy('environments'));
+                            const active = Boolean(environmentQuadRerunActive || quadStatus === 'running');
+                            const waitingTurn = Boolean(!active && designBusy);
+                            const notStarted = Boolean(
+                                !active
+                                && !waitingTurn
+                                && !promptsReady
+                                && environmentDesignReady
+                                && mainCount > 0
+                                && (!quadStatus || quadStatus === 'queued')
+                            );
+                            const failed = Boolean(
+                                !active
+                                && !waitingTurn
+                                && !promptsReady
+                                && (nodeState.failed || notStarted)
+                            );
+                            const ready = Boolean(
+                                !active
+                                && !waitingTurn
+                                && !failed
+                                && (promptsReady || quadStatus === 'success' || quadStatus === 'warning')
+                            );
+                            const skipped = Boolean(
+                                !active
+                                && !failed
+                                && !ready
+                                && (envState.skipped || (environmentDesignReady && mainCount <= 0))
+                            );
+                            const statusLabel = active
+                                ? t('处理中', 'Processing')
+                                : waitingTurn
+                                    ? t('等待中', 'Waiting')
+                                    : failed
+                                    ? (notStarted ? t('未发起', 'Not started') : t('未完成', 'Incomplete'))
+                                    : skipped
+                                        ? t('无需', 'None')
+                                        : ready
+                                            ? t('已完成', 'Ready')
+                                            : t('待环境生成', 'Wait environment');
+                            const detail = notStarted
+                                ? t('主环境设计已完成，主环境四宫格未发起。', 'Main-environment design finished, but the four-grid was not started.')
+                                : String(nodeState.errorMessage || nodeState.detail || '').trim();
+                            const state = {
+                                ...nodeState,
+                                failed,
+                                detail,
+                                errorMessage: detail || nodeState.errorMessage,
+                            };
+                            const canRerunQuad = Boolean(
+                                mainCount > 0
+                                && !active
+                                && !designBusy
+                                && activeEpisode?.id
+                            );
+                            const inspectQuadFailure = () => openInspectFromNode('assets_gen_derived', state, {
+                                nodeKey: 'asset_design_environment_quad',
+                                nodeName: 'asset_design_environment_quad',
+                                label: getAnalysisStageLabel('assets_gen_derived', t),
+                                canRerun: canRerunQuad,
+                                rerunKind: 'environment_quad',
+                                detail,
+                                errorMessage: detail,
+                            });
+                            return (
+                                <div className="flex flex-col items-center gap-2 relative">
+                                    <div
+                                        role={failed ? 'button' : undefined}
+                                        tabIndex={failed ? 0 : undefined}
+                                        onClick={failed ? inspectQuadFailure : undefined}
+                                        onKeyDown={failed
+                                            ? (event) => {
+                                                if (event.key === 'Enter' || event.key === ' ') {
+                                                    event.preventDefault();
+                                                    inspectQuadFailure();
+                                                }
+                                            }
+                                            : undefined}
+                                        title={failed
+                                            ? t('点击查看失败原因、处理建议，并可开 AI 诊断', 'Click to view the failure reason, next steps, and AI Diagnosis')
+                                            : t('标注主环境四宫格是否已写成最后提示词', 'Shows whether the main-environment four-grid prompt is written')}
+                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
+                                            active
+                                                ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                                                : failed
+                                                    ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)] cursor-pointer hover:ring-2 hover:ring-red-300/70'
+                                                    : ready
+                                                        ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
+                                                        : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'
+                                        }`}
+                                    >
+                                        {active
+                                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                                            : failed
+                                                ? <X className="w-4 h-4" />
+                                                : ready
+                                                    ? <Check className="w-4 h-4" />
+                                                    : 6}
+                                    </div>
+                                    <div className="flex flex-col items-center gap-1 text-center">
+                                        <span
+                                            role={failed ? 'button' : undefined}
+                                            tabIndex={failed ? 0 : undefined}
+                                            onClick={failed ? inspectQuadFailure : undefined}
+                                            className={`text-[10px] ${
+                                                failed
+                                                    ? 'text-red-300 cursor-pointer hover:underline'
+                                                    : ready
+                                                        ? 'text-emerald-400/80'
+                                                        : (active || waitingTurn)
+                                                            ? 'text-purple-300'
+                                                            : 'text-white/30'
+                                            }`}
+                                            title={detail || t('主环境四宫格', 'Main environment four-grid')}
+                                        >
+                                            {statusLabel}
+                                        </span>
+                                        {failed ? renderFailedReasonPreview(state) : null}
+                                        <div className="flex items-center gap-1 flex-wrap justify-center">
+                                            {failed ? renderFailedReasonButton(inspectQuadFailure) : null}
+                                            <button
+                                                type="button"
+                                                onClick={() => { void handleRerunEnvironmentQuad(); }}
+                                                disabled={!canRerunQuad}
+                                                className={failed
+                                                    ? 'text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50'
+                                                    : diagnosticBtnClass}
+                                                title={t('按已入库的主环境开篇重跑四宫格', 'Rerun the four-grid from the saved main-environment opening')}
+                                            >
+                                                {active
+                                                    ? t('生成中', 'Working')
+                                                    : t('重跑', 'Rerun')}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        };
                         const renderPipelineNodeStep = (stepKey, state, number, nodeKey) => (
                             <div className="flex flex-col items-center gap-2 relative min-w-[78px]">
                                 <div
@@ -35876,6 +36121,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             { key: 'assets_gen_character' },
                             { key: 'assets_gen_prop' },
                             { key: 'assets_gen_environment' },
+                            { key: 'assets_gen_derived' },
                         ];
                         const sceneMatrixColumns = [
                             { key: 'drama_opt' },
@@ -36484,12 +36730,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="mb-1.5">
                                 <div className="text-xs font-bold text-white/85">{t('全局节点', 'Global nodes')}</div>
                                 <div className="text-[10px] text-white/35">
-                                    {t('按整集剧本处理：全局统筹、环境规划、角色生成、道具生成、主环境生成。左侧「重跑此排」只重跑这一排，不跑分场节点。', 'Runs on the full episode: global orchestration, environment planning, then character, prop, and main-environment generation. “Rerun This Row” on the left reruns only this row and skips per-scene nodes.')}
+                                    {t('按整集剧本处理：全局统筹、环境规划、角色生成、道具生成、主环境生成、生成衍生环境。左侧「重跑此排」只重跑这一排，不跑分场节点。', 'Runs on the full episode: global orchestration, environment planning, then character, prop, main-environment, and derived-environment generation. “Rerun This Row” on the left reruns only this row and skips per-scene nodes.')}
                                 </div>
                             </div>
                         <div
-                            className="min-w-[720px] grid gap-x-1 gap-y-0 items-stretch"
-                            style={{ gridTemplateColumns: 'minmax(6.5rem, 8.5rem) repeat(5, minmax(5.5rem, 1fr))' }}
+                            className="min-w-[860px] grid gap-x-1 gap-y-0 items-stretch"
+                            style={{ gridTemplateColumns: 'minmax(6.5rem, 8.5rem) repeat(6, minmax(5.5rem, 1fr))' }}
                         >
                             <div className="px-1 pb-2 text-[10px] font-semibold text-white/35">{t('全局', 'Global')}</div>
                             {episodeMatrixColumns.map((col) => (
@@ -36503,6 +36749,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     sceneSplitState.active
                                     || environmentPlanState.active
                                     || assetDesignActive
+                                    || environmentQuadRerunActive
                                 );
                                 const canRerunArtDirection = Boolean(
                                     !analysisLive
@@ -36525,7 +36772,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     title={artDirectionBusy
                                         ? t('美术指导已开始运行', 'Art direction has already started')
                                         : canRerunArtDirection
-                                            ? t('只重跑美术指导这一排：全局统筹、环境规划、角色/道具/主环境生成，不跑分场节点', 'Rerun only the Art Direction row: global orchestration, environment plan, and character / prop / main-environment design. Per-scene nodes will not run.')
+                                            ? t('只重跑美术指导这一排：全局统筹、环境规划、角色/道具/主环境生成、生成衍生环境，不跑分场节点', 'Rerun only the Art Direction row: global orchestration, environment plan, character / prop / main-environment design, and derived-environment generation. Per-scene nodes will not run.')
                                             : t('当前不可重跑', 'Rerun is unavailable now')}
                                 >
                                     {artDirectionBusy
@@ -36547,6 +36794,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     {renderAssetCategoryCell(spec)}
                                 </div>
                             ))}
+                            <div className="border-t border-white/10">{renderDerivedEnvironmentQuadCell()}</div>
                         </div>
                         </div>
 

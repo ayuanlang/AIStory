@@ -60,3 +60,14 @@ def test_pipeline_contract_injects_quad_before_staging():
         "skills/scene_analysis_feature_stack/environment_quad_prompt.md"
     )
     assert "asset_design_environment_quad" in (nodes["storyboard_generation"].get("depends_on") or [])
+
+
+def test_art_direction_exposes_rerunnable_derived_environment_node():
+    from pathlib import Path
+
+    editor = Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "editor" / "components" / "ScriptEditor.jsx"
+    src = editor.read_text(encoding="utf-8")
+    assert "assets_gen_derived" in src
+    assert "handleRerunEnvironmentQuad" in src
+    assert "asset_design_environment_quad" in src
+    assert "rerunKind: 'environment_quad'" in src
