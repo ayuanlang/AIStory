@@ -306,6 +306,7 @@ def _pos(width: int, height: int, place: str, size: str, companion: bool) -> tup
 
 
 _CJK_FONT_CANDIDATES: Tuple[Tuple[str, str], ...] = (
+    ("wqy-microhei.ttc", "WenQuanYi Micro Hei"),
     ("simhei.ttf", "SimHei"),
     ("msyh.ttc", "Microsoft YaHei"),
     ("NotoSansCJK-Regular.ttc", "Noto Sans CJK SC"),
@@ -313,8 +314,12 @@ _CJK_FONT_CANDIDATES: Tuple[Tuple[str, str], ...] = (
 )
 
 
+def _bundled_cjk_font_dir() -> str:
+    return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "assets", "fonts"))
+
+
 def _cjk_font_search_dirs() -> List[str]:
-    dirs: List[str] = []
+    dirs = [_bundled_cjk_font_dir()]
     windir = os.environ.get("WINDIR")
     if windir:
         dirs.append(os.path.join(windir, "Fonts"))
@@ -323,6 +328,7 @@ def _cjk_font_search_dirs() -> List[str]:
         "/usr/share/fonts/opentype/noto",
         "/usr/share/fonts/noto-cjk",
         "/usr/share/fonts/truetype",
+        "/usr/share/fonts/truetype/wqy",
     ])
     return dirs
 
@@ -342,7 +348,7 @@ def stage_burn_font(work_dir: str) -> str:
                 continue
             shutil.copyfile(src, os.path.join(fonts_dir, filename))
             return family
-    raise RuntimeError("找不到可烧录中文的字体（需要黑体 SimHei 或微软雅黑）")
+    raise RuntimeError("找不到可烧录的中文字体。请确认已部署 backend/app/assets/fonts/wqy-microhei.ttc")
 
 
 def build_ass(

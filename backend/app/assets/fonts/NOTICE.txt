@@ -1,0 +1,6 @@
+WenQuanYi Micro Hei (wqy-microhei.ttc)
+Source: https://github.com/anthonyfok/fonts-wqy-microhei
+Copyright (C) 2007-2009, WenQuanYi Project (board@wenq.org)
+Licensed under the Apache License, Version 2.0,
+or the GNU General Public License v3 with the font embedding exception.
+Bundled so video text burn works on hosts that have no system CJK font.

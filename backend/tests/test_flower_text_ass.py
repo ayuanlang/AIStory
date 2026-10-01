@@ -118,15 +118,16 @@ def test_draft_reads_video_prompt_when_shot_script_is_empty():
     assert draft["lines"][0]["text"] != "家"
 
 
-def test_stage_burn_font_copies_simhei_beside_the_ass_file():
-    windir = os.environ.get("WINDIR")
-    if not windir or not os.path.isfile(os.path.join(windir, "Fonts", "simhei.ttf")):
-        return
+def test_stage_burn_font_copies_the_bundled_cjk_font():
+    bundled = os.path.normpath(os.path.join(
+        os.path.dirname(__file__), "..", "app", "assets", "fonts", "wqy-microhei.ttc"
+    ))
+    assert os.path.isfile(bundled)
     work = tempfile.mkdtemp(prefix="flower_font_")
     try:
         family = stage_burn_font(work)
-        assert family == "SimHei"
-        assert os.path.isfile(os.path.join(work, "fonts", "simhei.ttf"))
+        assert family == "WenQuanYi Micro Hei"
+        assert os.path.isfile(os.path.join(work, "fonts", "wqy-microhei.ttc"))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
