@@ -1028,17 +1028,19 @@ def _bind_generated_media_to_shot(
     if not persisted:
         return None
     try:
-        from app.services.flower_text_ass import _notes, apply_flower_burn_to_shot
+        from app.services.flower_text_ass import _burn_output_keys, _notes, _url_key, apply_flower_burn_to_shot
 
         notes = _notes(shot)
         already = str(notes.get("flower_ass_output_url") or "").strip()
-        if already and str(notes.get("flower_ass_source_url") or "") == url_text:
+        url_key = _url_key(url_text)
+        origin_key = _url_key(str(notes.get("flower_ass_origin_url") or notes.get("flower_ass_source_url") or ""))
+        if url_key and url_key in _burn_output_keys(notes):
+            return already or url_text
+        if already and origin_key and url_key == origin_key:
             if str(getattr(shot, "video_url", None) or "") != already:
                 shot.video_url = already
                 db.add(shot)
                 db.commit()
-            return already
-        if already and url_text == already:
             return already
         return apply_flower_burn_to_shot(
             db,

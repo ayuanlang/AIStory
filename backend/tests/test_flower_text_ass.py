@@ -57,7 +57,7 @@ def test_ass_is_centered_and_copies_glyphs_verbatim():
     assert r"\pos(" in ass
     assert r"\an2" not in ass
     dialogues = [line for line in ass.splitlines() if line.startswith("Dialogue:")]
-    assert len(dialogues) == 5
+    assert len(dialogues) == 8
     assert any("FlowerSmall" in line and "0599-2323239" in line for line in dialogues)
     assert any("FlowerSeal" in line for line in dialogues)
     for line in dialogues:
@@ -91,9 +91,16 @@ def test_manual_seal_burns_beside_the_line():
     assert events[0]["seal"] == "乐章"
     ass = build_ass(events, width=1920, height=1080)
     main = next(line for line in ass.splitlines() if line.startswith("Dialogue:") and "何家乐享" in line)
-    seal = next(line for line in ass.splitlines() if line.startswith("Dialogue:") and "FlowerSeal" in line and "乐" in line)
+    glyphs = [
+        line.rsplit("}", 1)[-1]
+        for line in ass.splitlines()
+        if line.startswith("Dialogue:") and "FlowerSeal" in line and r"\p1" not in line
+    ]
     assert "乐章" not in main
-    assert seal.replace("\\N", "").endswith("乐章")
+    assert "".join(glyphs) == "乐章"
+    box = next(line for line in ass.splitlines() if r"\p1" in line and "FlowerSeal" in line)
+    side = int(box.split(" l ")[1].split(" ")[0])
+    assert side >= 20 * 2
     assert r"\fsp" in main
     assert r"\p1" in ass
     assert r"\an2" not in ass
@@ -148,6 +155,32 @@ def test_reburn_uses_the_clean_plate_even_when_the_output_url_is_signed():
     }
     assert resolve_burn_source("https://cdn.example/burned.mp4?e=1&token=abc", notes) == "https://cdn.example/clean.mp4"
     assert resolve_burn_source("https://cdn.example/fresh.mp4", notes) == "https://cdn.example/fresh.mp4"
+
+
+def test_reburn_restarts_from_the_original_even_after_two_passes():
+    notes = {
+        "flower_ass_origin_url": "https://cdn.example/origin.mp4",
+        "flower_ass_source_url": "https://cdn.example/burned-once.mp4",
+        "flower_ass_output_url": "https://cdn.example/burned-twice.mp4",
+        "flower_ass_output_urls": [
+            "https://cdn.example/burned-once.mp4",
+            "https://cdn.example/burned-twice.mp4",
+        ],
+    }
+    assert resolve_burn_source("https://cdn.example/burned-twice.mp4?token=1", notes) == "https://cdn.example/origin.mp4"
+    assert resolve_burn_source("https://cdn.example/fresh.mp4", notes) == "https://cdn.example/fresh.mp4"
+
+
+def test_reburn_recovers_past_a_source_that_is_already_burned():
+    notes = {
+        "flower_ass_source_url": "https://cdn.example/flower_once.mp4",
+        "flower_ass_output_url": "https://cdn.example/flower_twice.mp4",
+    }
+    assert resolve_burn_source(
+        "https://cdn.example/flower_twice.mp4?token=1",
+        notes,
+        origin_fallback="https://cdn.example/origin.mp4",
+    ) == "https://cdn.example/origin.mp4"
 
 
 def test_burn_style_uses_the_staged_cjk_font():

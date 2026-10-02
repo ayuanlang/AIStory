@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from app.services.script_analysis_flow.environment_consistency import (
     ConsistencyApplyError,
+    apply_consistency_writes,
     classify_checked_prompt,
     parse_consistency_payload,
     plan_consistency_writes,
@@ -36,7 +37,7 @@ class Dummy:
         self.name = kwargs.get("name", "厨房")
         self.name_en = kwargs.get("name_en", "")
         self.generation_prompt_cn = kwargs.get("prompt", "")
-        self.description = ""
+        self.description = kwargs.get("description", "")
         self.custom_attributes = dict(kwargs.get("attrs") or {})
         self.project_id = 1
         self.episode_id = 1
@@ -76,8 +77,35 @@ def test_main_revision_keeps_quad_contract():
     fields = {(item["entity_id"], item["field"]) for item in plan["writes"]}
     assert (7, "generation_prompt_cn") in fields
     assert (7, "last_submitted_image_prompt") in fields
-    assert plan["updated_targets"] == ["主环境提示词"]
+    assert plan["updated_targets"] == ["四向拼图"]
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert written.startswith("【六面一次】")
+    assert "竖边=东西走向。" in written
+    assert "台贴在画面前方。" in written
     assert plan["consistent"] is False
+
+
+def test_main_revision_keeps_opening_when_model_rewrites_it():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT, description="主环境描述保持不动")
+    rewritten = MAIN_PROMPT.replace("竖边=东西走向。", "竖边=南北走向。").replace(
+        "台在画面前方。", "台贴在画面前方。"
+    )
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {"consistent": False, "summary": "开篇不该被改", "revised_prompt": rewritten},
+    )
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert "竖边=东西走向。" in written
+    assert "竖边=南北走向。" not in written
+    assert "台贴在画面前方。" in written
+    apply_consistency_writes(
+        {7: entity},
+        [item for item in plan["writes"] if item["field"] == "generation_prompt_cn"],
+    )
+    assert entity.description == "主环境描述保持不动"
+    assert entity.generation_prompt_cn == written
 
 
 def test_main_revision_rejects_dropped_grid():
@@ -117,12 +145,15 @@ def test_crop_updates_main_prompt_only():
         },
     )
     assert all(item["entity_id"] == 3 for item in plan["writes"])
+    assert not any(item["field"] == "last_submitted_image_prompt" for item in plan["writes"])
     assert not any(item["field"] == "generation_prompt_cn" and item["entity_id"] == 9 for item in plan["writes"])
     assert derived.generation_prompt_cn == CROP_PROMPT
-    assert plan["updated_targets"] == ["主环境提示词"]
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert written.startswith(MAIN_PROMPT.split("【四向拼图】", 1)[0])
+    assert plan["updated_targets"] == ["四向拼图"]
 
 
-def test_regen_updates_saved_prompt_and_main_world():
+def test_regen_updates_derived_prompt_only():
     derived = Dummy(
         id=9,
         name="90度厨房",
@@ -151,7 +182,7 @@ def test_regen_updates_saved_prompt_and_main_world():
     by_field = {(item["entity_id"], item["field"]): item["value"] for item in plan["writes"]}
     assert by_field[(9, "grid_regen_prompt")] == revised
     assert by_field[(9, "last_submitted_image_prompt")] == revised
-    assert by_field[(3, "generation_prompt_cn")] == REVISED_MAIN.strip()
-    assert "重生修正提示词" in plan["updated_targets"]
-    assert "主环境提示词" in plan["updated_targets"]
+    assert (3, "generation_prompt_cn") not in by_field
+    assert plan["updated_targets"] == ["重生修正提示词"]
+    assert main.generation_prompt_cn == MAIN_PROMPT
     assert derived.generation_prompt_cn == CROP_PROMPT

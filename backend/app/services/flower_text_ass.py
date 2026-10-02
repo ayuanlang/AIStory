@@ -39,7 +39,7 @@ _DESIGNATED_COPY_RE = re.compile(
     r"(?:画幅叠出片内图形花字|片内图形花字|文案)\s*[=＝]?\s*「([^」]+)」"
 )
 _REAL_BURN_MARK_RE = re.compile(r"(?<!标记)烧录=libass")
-_SIZE_RATIO = {"大": 0.072, "中": 0.050, "小": 0.032}
+_SIZE_RATIO = {"大": 0.068, "中": 0.046, "小": 0.030}
 _ASS_FILTER_CACHE: Optional[bool] = None
 
 
@@ -327,10 +327,11 @@ def _pos(width: int, height: int, place: str, size: str, companion: bool) -> tup
         x = int(width * 0.22)
     else:
         x = int(width / 2)
-    y = int(height * 0.42)
+    y = int(height * 0.40)
     if companion:
-        fontsize = max(18, int(fontsize * 0.42))
-        y = min(int(height * 0.72), y + int(height * ratio * 0.95))
+        main_fs = fontsize
+        fontsize = max(16, int(main_fs * 0.34))
+        y = min(int(height * 0.82), y + int(main_fs * 1.45))
     return x, y, fontsize
 
 
@@ -434,37 +435,52 @@ def build_ass(
         vertical = bool(event.get("vertical"))
         main = str(event.get("text") or "").strip()
         main_x, main_y, main_size = _pos(width, height, place, size, companion=False)
-        tracking = max(6, int(main_size * 0.12))
+        tracking = max(8, int(main_size * 0.16))
         if main:
             shown = _layout_text(main, vertical)
             lines.append(
-                f"Dialogue: 0,{start},{end},Flower,,0,0,0,,{{\\an5\\fs{main_size}\\fsp{tracking}\\bord2\\shad0\\blur0.4\\1c&H00F7F5F3&\\3c&H00181020&\\pos({main_x},{main_y})}}{shown}"
+                f"Dialogue: 0,{start},{end},Flower,,0,0,0,,{{\\an5\\fs{main_size}\\fsp{tracking}\\bord2\\shad0\\blur0.3\\1c&H00F7F5F3&\\3c&H00181020&\\pos({main_x},{main_y})}}{shown}"
+            )
+            rule_w = min(_glyph_span(main, main_size, tracking), int(width * 0.46))
+            rule_h = max(2, int(main_size * 0.028))
+            rule_x = max(8, main_x - rule_w // 2)
+            rule_y = main_y + int(main_size * 0.78)
+            rule = f"m 0 0 l {rule_w} 0 l {rule_w} {rule_h} l 0 {rule_h}"
+            lines.append(
+                f"Dialogue: 0,{start},{end},FlowerSmall,,0,0,0,,{{\\an7\\pos({rule_x},{rule_y})\\p1\\bord0\\shad0\\1c&H004EA4D9&}}{rule}"
             )
         companion = str(event.get("companion") or "").strip()
         if companion:
             x, y, fontsize = _pos(width, height, place, size, companion=True)
             shown = _layout_text(companion, False)
             lines.append(
-                f"Dialogue: 0,{start},{end},FlowerSmall,,0,0,0,,{{\\an5\\fs{fontsize}\\fsp4\\bord1\\shad0\\1c&H004EA4D9&\\3c&H00181020&\\pos({x},{y})}}{shown}"
+                f"Dialogue: 0,{start},{end},FlowerSmall,,0,0,0,,{{\\an5\\fs{fontsize}\\fsp3\\bord1\\shad0\\1c&H004EA4D9&\\3c&H00181020&\\pos({x},{y})}}{shown}"
             )
         seal = str(event.get("seal") or "").strip()
         if seal:
-            seal_size = max(26, int(main_size * 0.34))
-            glyph_count = max(1, len(seal))
-            side = int(seal_size * (glyph_count + 0.85))
+            chars = [ch for ch in seal if ch not in {"\n", "\r"}]
+            glyph_count = max(1, len(chars))
+            seal_size = max(28, int(main_size * 0.48))
+            pad = max(10, int(seal_size * 0.32))
+            gap = max(4, int(seal_size * 0.08))
+            side = pad * 2 + seal_size * glyph_count + gap * max(0, glyph_count - 1)
             half = side // 2
             half_span = _glyph_span(main, main_size, tracking) // 2
-            seal_x = min(width - half - 8, main_x + half_span + half + int(main_size * 0.35))
+            seal_x = min(width - half - 16, main_x + half_span + half + int(main_size * 0.55))
             seal_y = main_y
-            box_x = seal_x - half
-            box_y = seal_y - half
+            box_x = max(8, seal_x - half)
+            box_y = max(8, seal_y - half)
             chop = f"m 0 0 l {side} 0 l {side} {side} l 0 {side}"
             lines.append(
-                f"Dialogue: 1,{start},{end},FlowerSeal,,0,0,0,,{{\\an7\\pos({box_x},{box_y})\\p1\\bord4\\shad0\\1a&HFF&\\3c&H003A3AC2&}}{chop}"
+                f"Dialogue: 1,{start},{end},FlowerSeal,,0,0,0,,{{\\an7\\pos({box_x},{box_y})\\p1\\bord3\\shad0\\1a&HFF&\\3c&H003A3AC2&}}{chop}"
             )
-            lines.append(
-                f"Dialogue: 2,{start},{end},FlowerSeal,,0,0,0,,{{\\an5\\pos({seal_x},{seal_y})\\p0\\bord0\\shad0\\fsp1\\1c&H003A3AC2&\\fs{seal_size}}}{_layout_text(seal, True)}"
-            )
+            first_y = box_y + pad + seal_size // 2
+            step = seal_size + gap
+            for index, ch in enumerate(chars):
+                cy = first_y + index * step
+                lines.append(
+                    f"Dialogue: 2,{start},{end},FlowerSeal,,0,0,0,,{{\\an5\\pos({seal_x},{cy})\\p0\\bord0\\shad0\\1c&H003A3AC2&\\fs{seal_size}}}{_ass_escape(ch)}"
+                )
     return "\n".join(lines) + "\n"
 
 
@@ -614,17 +630,78 @@ def _url_key(url: str) -> str:
     return raw.split("#", 1)[0].split("?", 1)[0].rstrip("/")
 
 
-def resolve_burn_source(video_url: str, notes: Dict[str, Any]) -> str:
-    """Re-burn the clean plate. A signed copy of the last output must not stack another pass."""
+def _is_burn_file(url: str) -> bool:
+    name = _url_key(url).rsplit("/", 1)[-1]
+    return name.startswith("flower_")
+
+
+def _burn_output_keys(notes: Dict[str, Any]) -> set:
+    keys = set()
+    output = str((notes or {}).get("flower_ass_output_url") or "").strip()
+    if output:
+        keys.add(_url_key(output))
+    for item in (notes or {}).get("flower_ass_output_urls") or []:
+        key = _url_key(str(item or ""))
+        if key:
+            keys.add(key)
+    return {key for key in keys if key}
+
+
+def resolve_burn_source(video_url: str, notes: Dict[str, Any], origin_fallback: str = "") -> str:
+    """Every re-burn starts from the first clean plate, never from a burned copy."""
     current = str(video_url or "").strip()
+    outputs = _burn_output_keys(notes)
+    origin = str((notes or {}).get("flower_ass_origin_url") or "").strip()
     saved_source = str((notes or {}).get("flower_ass_source_url") or "").strip()
-    saved_output = str((notes or {}).get("flower_ass_output_url") or "").strip()
-    if not saved_source:
-        return current
     current_key = _url_key(current)
-    if current_key and current_key in {_url_key(saved_output), _url_key(saved_source)}:
+
+    def usable(url: str) -> bool:
+        key = _url_key(url)
+        return bool(key) and key not in outputs and not _is_burn_file(url)
+
+    if current_key and usable(current) and current_key not in {_url_key(origin), _url_key(saved_source)}:
+        if origin or saved_source or outputs:
+            return current
+    if usable(origin):
+        return origin
+    if usable(saved_source):
         return saved_source
-    return current
+    if usable(origin_fallback):
+        return origin_fallback
+    if current_key and usable(current):
+        return current
+    return origin or saved_source or origin_fallback or current
+
+
+def _earliest_clean_shot_video(db: Any, shot: Any, outputs: set) -> str:
+    """Oldest non-burn asset for this shot. Burn files are named flower_*.mp4."""
+    try:
+        from app.models.all_models import Asset
+    except Exception:
+        return ""
+    shot_id = str(getattr(shot, "id", "") or "").strip()
+    project_id = getattr(shot, "project_id", None)
+    if not shot_id:
+        return ""
+    query = db.query(Asset).filter(Asset.type == "video", Asset.is_deleted == False)  # noqa: E712
+    if project_id:
+        query = query.filter(Asset.project_id == project_id)
+    rows = query.order_by(Asset.id.asc()).limit(2000).all()
+    for asset in rows:
+        meta = asset.meta_info if isinstance(asset.meta_info, dict) else {}
+        if str(meta.get("shot_id") or "").strip() != shot_id:
+            continue
+        kind = str(meta.get("asset_type") or meta.get("frame_type") or "video").strip().lower()
+        if kind not in {"video", "shot_video", ""}:
+            continue
+        url = str(asset.url or "").strip()
+        name = str(asset.filename or "")
+        if not url or name.startswith("flower_") or "/flower_" in url.split("?", 1)[0]:
+            continue
+        if _url_key(url) in outputs:
+            continue
+        return url
+    return ""
 
 
 def apply_flower_burn_to_shot(db: Any, shot: Any, user_id: int = 0, lines: Any = None) -> Optional[str]:
@@ -634,7 +711,21 @@ def apply_flower_burn_to_shot(db: Any, shot: Any, user_id: int = 0, lines: Any =
         return None
     duration = getattr(shot, "duration", None)
     notes = _notes(shot)
-    source_url = resolve_burn_source(video_url, notes)
+    outputs = _burn_output_keys(notes)
+    origin_fallback = ""
+    origin_url = str(notes.get("flower_ass_origin_url") or "")
+    source_url_saved = str(notes.get("flower_ass_source_url") or "")
+    origin_key = _url_key(origin_url)
+    source_key = _url_key(source_url_saved)
+    if (
+        not origin_key
+        or origin_key in outputs
+        or source_key in outputs
+        or _is_burn_file(origin_url)
+        or _is_burn_file(source_url_saved)
+    ):
+        origin_fallback = _earliest_clean_shot_video(db, shot, outputs)
+    source_url = resolve_burn_source(video_url, notes, origin_fallback)
     if lines is not None:
         events = normalize_manual_burn_lines(lines, duration)
     else:
@@ -650,12 +741,17 @@ def apply_flower_burn_to_shot(db: Any, shot: Any, user_id: int = 0, lines: Any =
     new_url = str((result or {}).get("url") or "").strip()
     if not new_url:
         return None
-    previous_source = str(notes.get("flower_ass_source_url") or "").strip()
-    if not previous_source or _url_key(source_url) == _url_key(previous_source):
-        notes["flower_ass_source_url"] = source_url
-    elif _url_key(source_url) != _url_key(str(notes.get("flower_ass_output_url") or "")):
-        notes["flower_ass_source_url"] = source_url
+    prior_outputs = [str(item) for item in (notes.get("flower_ass_output_urls") or []) if str(item or "").strip()]
+    output_urls = prior_outputs + [new_url]
+    notes["flower_ass_output_urls"] = output_urls[-8:]
     notes["flower_ass_output_url"] = new_url
+    source_key = _url_key(source_url)
+    prior_keys = {_url_key(item) for item in prior_outputs}
+    if source_key and source_key not in prior_keys and source_key != _url_key(new_url) and not _is_burn_file(source_url):
+        locked_key = _url_key(str(notes.get("flower_ass_origin_url") or ""))
+        if not locked_key or locked_key in prior_keys or source_key != locked_key:
+            notes["flower_ass_origin_url"] = source_url
+        notes["flower_ass_source_url"] = str(notes.get("flower_ass_origin_url") or source_url)
     notes["flower_ass_draft"] = events
     shot.video_url = new_url
     shot.technical_notes = json.dumps(notes, ensure_ascii=False)

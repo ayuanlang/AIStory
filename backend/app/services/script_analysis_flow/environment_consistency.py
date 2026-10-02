@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Compare an environment image with the prompt that generated it.
+"""Compare environment grids and derived assets with the main-environment opening.
 
-The check rewrites the stored prompt only when the picture and that prompt
-disagree, so the opening world lock and each grid cell or derived shot still
-describe one place.
+The opening is the authority. When a grid cell or a derived-environment prompt
+disagrees with it, rewrite that cell or derived prompt. The opening text and
+the main environment description stay as they are.
 """
 from __future__ import annotations
 
@@ -231,6 +231,35 @@ def parse_consistency_payload(text: str) -> Dict[str, Any]:
     }
 
 
+QUAD_MARK = "【四向拼图】"
+
+
+def split_opening_and_quad(text: str) -> tuple:
+    raw = str(text or "")
+    index = raw.find(QUAD_MARK)
+    if index < 0:
+        return raw, ""
+    return raw[:index], raw[index:]
+
+
+def graft_quad_onto_opening(original: str, revised: str) -> str:
+    """Keep the main-environment opening and take only the rewritten grids."""
+    opening, _old_quad = split_opening_and_quad(original)
+    _revised_opening, revised_quad = split_opening_and_quad(revised)
+    if not opening.strip() or QUAD_MARK not in str(original or ""):
+        raise ConsistencyApplyError("主环境提示词没有可保留的开篇。")
+    if not revised_quad.strip():
+        raise ConsistencyApplyError("改写结果缺少【四向拼图】，不能改开篇。")
+    grafted = opening + revised_quad
+    problem = _prompt_keeps_world_lock(original, grafted)
+    if problem:
+        raise ConsistencyApplyError(problem)
+    kept, _quad = split_opening_and_quad(grafted)
+    if kept != opening:
+        raise ConsistencyApplyError("开篇被改动了。")
+    return grafted
+
+
 def _prompt_keeps_world_lock(original: str, revised: str) -> Optional[str]:
     source = str(original or "")
     target = str(revised or "")
@@ -250,14 +279,19 @@ def plan_consistency_writes(
     checked_prompt: str,
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Decide which stored prompts to replace. Does not touch the database."""
+    """Decide which stored prompts to replace. Does not touch the database.
+
+    The main-environment opening is kept verbatim. A main or crop check may
+    replace only the four grid cells. A derived or regen check replaces that
+    derived asset's prompt and does not write the main environment.
+    """
     kind = classify_checked_prompt(entity, checked_prompt)
     summary = str(payload.get("summary") or "").strip()
     if payload.get("consistent"):
         return {
             "consistent": True,
             "kind": kind,
-            "summary": summary or "图片与生成时的提示词一致。",
+            "summary": summary or "宫格和衍生环境与主环境开篇一致。",
             "writes": [],
             "updated_targets": [],
         }
@@ -270,73 +304,69 @@ def plan_consistency_writes(
     main_id = int(getattr(main_entity, "id", 0) or 0) if main_entity is not None else 0
     main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "") if main_entity is not None else ""
 
-    def _add_main(text: str) -> None:
+    def _add_grids(source_prompt: str, revised_text: str, remember_submitted: bool) -> None:
         if main_entity is None or main_id <= 0:
-            raise ConsistencyApplyError("找不到所属主环境，无法把世界物理写回主环境提示词。")
-        problem = _prompt_keeps_world_lock(main_prompt or checked_prompt, text)
-        if problem:
-            raise ConsistencyApplyError(problem)
-        if text.strip() == main_prompt.strip():
+            raise ConsistencyApplyError("找不到所属主环境，无法按开篇改正宫格。")
+        grafted = graft_quad_onto_opening(source_prompt, revised_text)
+        if grafted.strip() == source_prompt.strip():
             return
         writes.append({
             "entity_id": main_id,
             "field": "generation_prompt_cn",
-            "value": text,
+            "value": grafted,
             "kind": "main",
         })
-        writes.append({
-            "entity_id": main_id,
-            "field": LAST_SUBMITTED_PROMPT_ATTR,
-            "value": text,
-            "kind": "main",
-        })
-        if "主环境提示词" not in targets:
-            targets.append("主环境提示词")
+        if remember_submitted:
+            writes.append({
+                "entity_id": main_id,
+                "field": LAST_SUBMITTED_PROMPT_ATTR,
+                "value": grafted,
+                "kind": "main",
+            })
+        if "四向拼图" not in targets:
+            targets.append("四向拼图")
 
     if kind == "main":
         if not revised:
-            raise ConsistencyApplyError("图片和提示词不一致，但没有返回改写后的主环境提示词。")
-        _add_main(revised)
+            raise ConsistencyApplyError("宫格和开篇不一致，但没有返回改写后的四向拼图。")
+        _add_grids(main_prompt or checked_prompt, revised, True)
     elif kind == "crop":
         if not revised_main:
-            raise ConsistencyApplyError("切割图和主环境提示词不一致，但没有返回改写后的主环境提示词。")
-        _add_main(revised_main)
+            raise ConsistencyApplyError("切割图对应的宫格和开篇不一致，但没有返回改写后的四向拼图。")
+        _add_grids(main_prompt, revised_main, False)
     else:
         field_name = "grid_regen_prompt" if kind == "regen" else "generation_prompt_cn"
         label = "重生修正提示词" if kind == "regen" else "衍生环境提示词"
-        if revised and revised.strip() != str(checked_prompt or "").strip():
-            if field_name == "generation_prompt_cn" and is_stub_prompt(getattr(entity, "generation_prompt_cn", "")):
-                raise ConsistencyApplyError("切割提示词不能改成场景描写。")
-            writes.append({
-                "entity_id": entity_id,
-                "field": field_name,
-                "value": revised,
-                "kind": kind,
-            })
-            writes.append({
-                "entity_id": entity_id,
-                "field": LAST_SUBMITTED_PROMPT_ATTR,
-                "value": revised,
-                "kind": kind,
-            })
-            targets.append(label)
-        if revised_main:
-            _add_main(revised_main)
-        if not writes:
-            raise ConsistencyApplyError("图片和提示词不一致，但没有返回可写回的提示词。")
+        if not revised or revised.strip() == str(checked_prompt or "").strip():
+            raise ConsistencyApplyError("衍生环境和开篇不一致，但没有返回改写后的衍生提示词。")
+        if field_name == "generation_prompt_cn" and is_stub_prompt(getattr(entity, "generation_prompt_cn", "")):
+            raise ConsistencyApplyError("切割提示词不能改成场景描写。")
+        writes.append({
+            "entity_id": entity_id,
+            "field": field_name,
+            "value": revised,
+            "kind": kind,
+        })
+        writes.append({
+            "entity_id": entity_id,
+            "field": LAST_SUBMITTED_PROMPT_ATTR,
+            "value": revised,
+            "kind": kind,
+        })
+        targets.append(label)
 
     if not writes:
         return {
             "consistent": True,
             "kind": kind,
-            "summary": summary or "图片与生成时的提示词一致。",
+            "summary": summary or "宫格已与主环境开篇一致。",
             "writes": [],
             "updated_targets": [],
         }
     return {
         "consistent": False,
         "kind": kind,
-        "summary": summary or "已按图片更新提示词。",
+        "summary": summary or "已按主环境开篇更新宫格或衍生提示词。",
         "writes": writes,
         "updated_targets": targets,
     }
@@ -353,7 +383,6 @@ def apply_consistency_writes(entities_by_id: Dict[int, Any], writes: List[Dict[s
         value = str(write["value"])
         if field == "generation_prompt_cn":
             entity.generation_prompt_cn = value
-            entity.description = value
         else:
             attrs = attrs_of(entity)
             attrs[field] = value
@@ -384,20 +413,19 @@ def build_consistency_messages(
     kind: str,
 ) -> List[Dict[str, Any]]:
     system_prompt = (
-        "你是环境资产一致性校对。对照这张已经生成的图片，和生成这张图时使用的提示词。\n"
-        "目标：世界物理（东南西北、占地、竖边、心点、同一件家具的长短朝向）必须和图片里看见的是同一套。"
-        "主环境四个宫格、以及由它切出的衍生环境，描述的是同一处空间。\n"
-        "一致：空间、主要陈设的朝向和相对位置能被提示词解释。缝档、光色、材质的小差异算一致。\n"
-        "不一致：同一件家具在不同宫格长短或朝向对不上；开篇占地或竖边和画面里的长边方向相反；"
-        "衍生图和所属宫格、开篇不是同一处空间。\n"
-        "修改：只改和图片不符的句子，保留原有段落骨架和主体名字。不要新造第二套房间。\n"
-        "主环境提示词必须保留【六面一次】、【四向拼图】，以及四个宫格标题："
-        "[0度格-左上、[90度格-右上、[180度格-左下、[270度格-右下。开篇的占地=和竖边=必须留下。\n"
-        "看不出具体米数时，保留开篇已有米数，只改朝向、长边落到的画面轴和相对位置。"
+        "你是环境资产一致性校对。主环境开篇是权威，里面的东南西北、占地、竖边、心点和朝向不许改。\n"
+        "图片只用来发现宫格或衍生正文写错了哪一句。图片和开篇不一致时，改宫格或衍生去对齐开篇，"
+        "禁止改开篇去对齐图片，禁止改主环境描述。\n"
+        "一致：各宫格和衍生正文已经能被开篇解释。缝档、光色、材质的小差异算一致。\n"
+        "不一致：同一件家具的宫格长短或朝向和开篇竖边相反；衍生正文和开篇不是同一处空间。\n"
+        "修改：只改宫格或衍生里和开篇不符的句子，保留主体名字。不要新造第二套房间。\n"
+        "四向拼图必须保留四个宫格标题：[0度格-左上、[90度格-右上、[180度格-左下、[270度格-右下。\n"
         "桌、案、凳、椅、沙发、床、榻的宫格句只写长边落到哪条画面轴，禁止写几成、一半、占房间、一半宽。\n"
-        "含「只切割」或「不要重切宫格」的提示词不要改成场景描写。这类图若和世界物理不符，只改主环境提示词，revised_prompt 必须为 null。"
-        "状态衍生上的临时变化，例如沙尘、天气、破损，不要写回主环境。\n"
-        "重生修正或衍生描写若和图片不符，改这份生成时提示词，并在世界物理也冲突时同时改主环境提示词。\n"
+        "含「只切割」或「不要重切宫格」的提示词不要改成场景描写。这类图若宫格和开篇不符，"
+        "只在 revised_main_prompt 里给出改后的完整主环境提示词，revised_prompt 必须为 null。"
+        "程序会丢掉你改过的开篇，只采用【四向拼图】。\n"
+        "状态衍生上的临时变化，例如沙尘、天气、破损，留在衍生正文里，不要写回主环境。\n"
+        "重生修正或衍生描写和开篇不符时，只改这份衍生提示词，revised_main_prompt 必须为 null。\n"
         "一致时 revised_prompt 和 revised_main_prompt 都必须为 null。\n"
         "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
         '{"consistent": true或false, "summary": "一两句中文", "revised_prompt": null或完整提示词, "revised_main_prompt": null或完整主环境提示词}'
@@ -418,11 +446,11 @@ def build_consistency_messages(
         parts.append("主环境完整提示词：")
         parts.append(main_prompt or "（空）")
         if kind == "crop":
-            parts.append("这次生成用的是切割提示词。不要改写切割提示词。若图片和世界物理不一致，把改正写进 revised_main_prompt。")
+            parts.append("这次生成用的是切割提示词。不要改写切割提示词，也不要改开篇。若对应宫格和开篇不一致，把保留原开篇、只改正四向拼图的完整主环境提示词写进 revised_main_prompt。")
         else:
-            parts.append("若生成时提示词本身和图片不符，把完整改正写进 revised_prompt。若开篇或对应宫格也要改，把完整主环境提示词写进 revised_main_prompt。")
+            parts.append("若这份衍生提示词和开篇不一致，把对齐开篇后的完整衍生提示词写进 revised_prompt。revised_main_prompt 置 null。不要改主环境。")
     else:
-        parts.append("这是主环境四宫格图。若不一致，把改正后的完整主环境提示词写进 revised_prompt，revised_main_prompt 置 null。")
+        parts.append("这是主环境四宫格图。开篇逐字保留。若宫格和开篇不一致，把完整主环境提示词写进 revised_prompt，只改【四向拼图】，revised_main_prompt 置 null。")
     return [
         {"role": "system", "content": system_prompt},
         {

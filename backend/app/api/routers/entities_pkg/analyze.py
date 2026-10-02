@@ -1231,10 +1231,10 @@ async def check_environment_consistency(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Compare an environment image with the prompt used to generate it.
+    """Compare grids or a derived environment with the main-environment opening.
 
-    When they disagree, rewrite that prompt (or the owning main-environment
-    prompt for a crop shot) so world physics matches the picture.
+    When they disagree, rewrite the grid cells or the derived prompt so they
+    match the opening. The opening and the main environment description stay.
     """
     from app.services.promo_planner import resolve_image_url_for_llm
     from app.services.script_analysis_flow.environment_consistency import (
