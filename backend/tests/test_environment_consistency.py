@@ -2,6 +2,7 @@
 from app.services.script_analysis_flow.environment_consistency import (
     ConsistencyApplyError,
     apply_consistency_writes,
+    build_consistency_messages,
     classify_checked_prompt,
     parse_consistency_payload,
     plan_consistency_writes,
@@ -153,6 +154,101 @@ def test_crop_updates_main_prompt_only():
     assert plan["updated_targets"] == ["四向拼图"]
 
 
+def test_consistency_prompt_checks_count_facing_and_position():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
+    messages = build_consistency_messages(
+        image_url="http://example.test/grid.png",
+        entity=entity,
+        main_entity=entity,
+        checked_prompt=MAIN_PROMPT,
+        kind="main",
+    )
+    system = messages[0]["content"]
+    assert "个数" in system
+    assert "朝向" in system
+    assert "位置" in system
+    assert "开篇有误：" in system
+    assert "左上是0度格望北" in system
+    user = messages[1]["content"][0]["text"]
+    assert "主体个数、朝向、位置" in user
+
+
+def test_unmarked_opening_rewrite_is_discarded():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
+    rewritten = MAIN_PROMPT.replace("竖边=东西走向。", "竖边=南北走向。").replace(
+        "台在画面前方。", "台贴在画面前方。"
+    )
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {"consistent": False, "summary": "图片里的台转向了", "revised_prompt": rewritten},
+    )
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert "竖边=东西走向。" in written
+    assert "竖边=南北走向。" not in written
+    assert "台贴在画面前方。" in written
+
+
+def test_marked_opening_error_keeps_opening_fix():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
+    rewritten = MAIN_PROMPT.replace("竖边=东西走向。", "竖边=南北走向。")
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {"consistent": False, "summary": "开篇有误：竖边和两端相反", "revised_prompt": rewritten},
+    )
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert "竖边=南北走向。" in written
+    assert "竖边=东西走向。" not in written
+    assert "[270度格-右下" in written
+
+
+def test_marked_opening_error_still_rejects_dropped_grid():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
+    rewritten = MAIN_PROMPT.replace("竖边=东西走向。", "竖边=南北走向。").replace(
+        "[270度格-右下·西]\n台在另一侧。长边从靠近镜头铺到远离镜头。\n", ""
+    )
+    try:
+        plan_consistency_writes(
+            entity,
+            entity,
+            MAIN_PROMPT,
+            {"consistent": False, "summary": "开篇有误：竖边和两端相反", "revised_prompt": rewritten},
+        )
+    except ConsistencyApplyError as exc:
+        assert "宫格" in str(exc)
+    else:
+        raise AssertionError("dropped grid should be rejected")
+
+
+def test_crop_marked_opening_error_keeps_opening_fix():
+    derived = Dummy(
+        id=9,
+        name="90度厨房",
+        prompt=CROP_PROMPT,
+        attrs={"derived_kind": "first_cut", "main_environment": "厨房", "view_angle_from_main": 90},
+    )
+    main = Dummy(id=3, name="厨房", prompt=MAIN_PROMPT)
+    rewritten = MAIN_PROMPT.replace("竖边=东西走向。", "竖边=南北走向。")
+    plan = plan_consistency_writes(
+        derived,
+        main,
+        CROP_PROMPT,
+        {
+            "consistent": False,
+            "summary": "开篇有误：竖边和两端相反",
+            "revised_prompt": None,
+            "revised_main_prompt": rewritten,
+        },
+    )
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert written.startswith("【六面一次】")
+    assert "竖边=南北走向。" in written
+    assert all(item["entity_id"] == 3 for item in plan["writes"])
+
+
 def test_regen_updates_derived_prompt_only():
     derived = Dummy(
         id=9,
@@ -186,3 +282,32 @@ def test_regen_updates_derived_prompt_only():
     assert plan["updated_targets"] == ["重生修正提示词"]
     assert main.generation_prompt_cn == MAIN_PROMPT
     assert derived.generation_prompt_cn == CROP_PROMPT
+
+
+def test_regen_ignores_opening_fix_even_when_marked():
+    derived = Dummy(
+        id=9,
+        name="90度厨房",
+        prompt=CROP_PROMPT,
+        attrs={
+            "derived_kind": "first_cut",
+            "main_environment": "厨房",
+            "grid_regen_prompt": "按90度格修正这张16:9。长边从靠近镜头铺到远离镜头。",
+            "last_submitted_image_prompt_kind": "regen",
+        },
+    )
+    main = Dummy(id=3, name="厨房", prompt=MAIN_PROMPT)
+    revised = "按90度格修正这张16:9。长边从画面左铺到画面右。"
+    plan = plan_consistency_writes(
+        derived,
+        main,
+        derived.custom_attributes["grid_regen_prompt"],
+        {
+            "consistent": False,
+            "summary": "开篇有误：竖边和两端相反",
+            "revised_prompt": revised,
+            "revised_main_prompt": MAIN_PROMPT.replace("竖边=东西走向。", "竖边=南北走向。"),
+        },
+    )
+    assert all(item["entity_id"] == 9 for item in plan["writes"])
+    assert main.generation_prompt_cn == MAIN_PROMPT

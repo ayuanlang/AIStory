@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """Compare environment grids and derived assets with the main-environment opening.
 
-The opening is the authority. When a grid cell or a derived-environment prompt
-disagrees with it, rewrite that cell or derived prompt. The opening text and
-the main environment description stay as they are.
+The opening is the authority for subject count, facing, and position. When a
+grid cell or a derived-environment prompt disagrees with it, rewrite that cell
+or derived prompt. The opening stays verbatim unless the checker marks an
+internal contradiction in the opening itself.
 """
 from __future__ import annotations
 
@@ -232,6 +233,7 @@ def parse_consistency_payload(text: str) -> Dict[str, Any]:
 
 
 QUAD_MARK = "【四向拼图】"
+OPENING_ERROR_PREFIX = "开篇有误"
 
 
 def split_opening_and_quad(text: str) -> tuple:
@@ -240,6 +242,11 @@ def split_opening_and_quad(text: str) -> tuple:
     if index < 0:
         return raw, ""
     return raw[:index], raw[index:]
+
+
+def opening_error_claimed(summary: str) -> bool:
+    """True when the checker says the opening contradicts itself."""
+    return str(summary or "").strip().startswith(OPENING_ERROR_PREFIX)
 
 
 def graft_quad_onto_opening(original: str, revised: str) -> str:
@@ -258,6 +265,20 @@ def graft_quad_onto_opening(original: str, revised: str) -> str:
     if kept != opening:
         raise ConsistencyApplyError("开篇被改动了。")
     return grafted
+
+
+def accept_revised_main_prompt(original: str, revised: str) -> str:
+    """Keep an opening correction the checker explicitly marked as 开篇有误."""
+    source = str(original or "")
+    target = str(revised or "").strip()
+    if QUAD_MARK not in source:
+        raise ConsistencyApplyError("主环境提示词没有可保留的开篇。")
+    if QUAD_MARK not in target:
+        raise ConsistencyApplyError("改写结果缺少【四向拼图】，不能改开篇。")
+    problem = _prompt_keeps_world_lock(source, target)
+    if problem:
+        raise ConsistencyApplyError(problem)
+    return target
 
 
 def _prompt_keeps_world_lock(original: str, revised: str) -> Optional[str]:
@@ -281,9 +302,11 @@ def plan_consistency_writes(
 ) -> Dict[str, Any]:
     """Decide which stored prompts to replace. Does not touch the database.
 
-    The main-environment opening is kept verbatim. A main or crop check may
-    replace only the four grid cells. A derived or regen check replaces that
-    derived asset's prompt and does not write the main environment.
+    The main-environment opening is kept verbatim unless the summary starts
+    with 开篇有误, meaning the opening contradicts itself. A main or crop
+    check then keeps that corrected opening together with the grids. Otherwise
+    it replaces only the four grid cells. A derived or regen check replaces
+    that derived asset's prompt and does not write the main environment.
     """
     kind = classify_checked_prompt(entity, checked_prompt)
     summary = str(payload.get("summary") or "").strip()
@@ -307,7 +330,10 @@ def plan_consistency_writes(
     def _add_grids(source_prompt: str, revised_text: str, remember_submitted: bool) -> None:
         if main_entity is None or main_id <= 0:
             raise ConsistencyApplyError("找不到所属主环境，无法按开篇改正宫格。")
-        grafted = graft_quad_onto_opening(source_prompt, revised_text)
+        if opening_error_claimed(summary):
+            grafted = accept_revised_main_prompt(source_prompt, revised_text)
+        else:
+            grafted = graft_quad_onto_opening(source_prompt, revised_text)
         if grafted.strip() == source_prompt.strip():
             return
         writes.append({
@@ -413,17 +439,40 @@ def build_consistency_messages(
     kind: str,
 ) -> List[Dict[str, Any]]:
     system_prompt = (
-        "你是环境资产一致性校对。主环境开篇是权威，里面的东南西北、占地、竖边、心点和朝向不许改。\n"
-        "图片只用来发现宫格或衍生正文写错了哪一句。图片和开篇不一致时，改宫格或衍生去对齐开篇，"
-        "禁止改开篇去对齐图片，禁止改主环境描述。\n"
-        "一致：各宫格和衍生正文已经能被开篇解释。缝档、光色、材质的小差异算一致。\n"
-        "不一致：同一件家具的宫格长短或朝向和开篇竖边相反；衍生正文和开篇不是同一处空间。\n"
+        "你是环境资产一致性校对。主环境开篇在【四向拼图】之前，是权威。"
+        "按开篇核对四个宫格正文，以及图片里同一格的主体个数、朝向、位置。\n"
+        "图片对格：左上是0度格望北，右上是90度格望东，左下是180度格望南，右下是270度格望西。"
+        "衍生图、切割图、重生图只核对自己的那一个角度。\n"
+        "个数：开篇点名并且这一格该看见的主体，正文写一次，图片里出现一次。"
+        "多一件、少一件、同一个名字变成两个身体，都不一致。"
+        "开篇写了镜后不入画的，这一格正文不点名，图片里也不出现。\n"
+        "朝向：先用开篇竖边推出这一格的长边画面轴。"
+        "南北走向时，0度和180度的长边从靠近镜头伸向远离镜头，90度和270度的长边从画面左铺到画面右。"
+        "东西走向把这两类对调。0度与180度对调两端，90度与270度对调左右。"
+        "椅面朝向、床头和床尾按同一格旋转，四格各写各的。"
+        "正文或图片和这个结果相反，就是朝向不一致。\n"
+        "位置：开篇的南北差，在望北和望南写成靠近镜头或远离镜头，在望东和望西写成画面左或画面右。"
+        "东西差对调。0度与180度、90度与270度都要左右对调，并且近远对调。"
+        "心点或在桌侧旋反了，就是位置不一致。\n"
+        "一致：宫格正文和衍生正文都能被开篇解释，图片里的个数、朝向、位置也和这个结果相同。"
+        "缝档、光色、材质的小差异算一致。"
+        "正文已经对齐开篇、只有图片画错时，也算一致，summary 写明哪一格的图片错在个数、朝向或位置。"
+        "revised_prompt 和 revised_main_prompt 都为 null。提示词保持对齐开篇。\n"
+        "不一致：同一件的宫格长边或朝向和开篇竖边旋出的画面轴相反；件数和开篇不同；"
+        "左右或远近和开篇心点、在桌侧旋出的结果相反；衍生正文和开篇不是同一处空间。\n"
         "修改：只改宫格或衍生里和开篇不符的句子，保留主体名字。不要新造第二套房间。\n"
+        "开篇默认保持原句，东南西北、占地、竖边、心点和朝向保持原值。"
+        "只有开篇内部互相矛盾时才改开篇：同一件写出两个相反的竖边；"
+        "竖边是东西走向而两端写成北端和南端；主体编号表的件数和正文点名的件数不同；椅面朝向和在桌侧相反。"
+        "图片或宫格和开篇不同，保持开篇，改宫格或衍生。"
+        "开篇内部矛盾时，consistent 为 false，summary 以「开篇有误：」开头。"
+        "主环境图把含改正开篇的完整提示词写进 revised_prompt；切割图写进 revised_main_prompt。"
+        "开篇里只改正互相矛盾的那几句，并改正受影响的宫格。"
+        "summary 不以「开篇有误：」开头时，改过的开篇会被丢掉，只采用【四向拼图】。\n"
         "四向拼图必须保留四个宫格标题：[0度格-左上、[90度格-右上、[180度格-左下、[270度格-右下。\n"
         "桌、案、凳、椅、沙发、床、榻的宫格句只写长边落到哪条画面轴，禁止写几成、一半、占房间、一半宽。\n"
         "含「只切割」或「不要重切宫格」的提示词不要改成场景描写。这类图若宫格和开篇不符，"
-        "只在 revised_main_prompt 里给出改后的完整主环境提示词，revised_prompt 必须为 null。"
-        "程序会丢掉你改过的开篇，只采用【四向拼图】。\n"
+        "只在 revised_main_prompt 里给出改后的完整主环境提示词，revised_prompt 必须为 null。\n"
         "状态衍生上的临时变化，例如沙尘、天气、破损，留在衍生正文里，不要写回主环境。\n"
         "重生修正或衍生描写和开篇不符时，只改这份衍生提示词，revised_main_prompt 必须为 null。\n"
         "一致时 revised_prompt 和 revised_main_prompt 都必须为 null。\n"
@@ -446,11 +495,24 @@ def build_consistency_messages(
         parts.append("主环境完整提示词：")
         parts.append(main_prompt or "（空）")
         if kind == "crop":
-            parts.append("这次生成用的是切割提示词。不要改写切割提示词，也不要改开篇。若对应宫格和开篇不一致，把保留原开篇、只改正四向拼图的完整主环境提示词写进 revised_main_prompt。")
+            parts.append(
+                "这次生成用的是切割提示词。不要改写切割提示词。"
+                "核对该角度图片和该格正文的主体个数、朝向、位置。"
+                "和开篇不符时，把完整主环境提示词写进 revised_main_prompt，只改【四向拼图】。"
+                "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_main_prompt 里改正开篇。"
+            )
         else:
-            parts.append("若这份衍生提示词和开篇不一致，把对齐开篇后的完整衍生提示词写进 revised_prompt。revised_main_prompt 置 null。不要改主环境。")
+            parts.append(
+                "核对该角度图片和这份衍生正文的主体个数、朝向、位置。"
+                "和开篇不符时，把对齐开篇后的完整衍生提示词写进 revised_prompt。revised_main_prompt 置 null。"
+                "重生和衍生检查不改开篇，也不改主环境。"
+            )
     else:
-        parts.append("这是主环境四宫格图。开篇逐字保留。若宫格和开篇不一致，把完整主环境提示词写进 revised_prompt，只改【四向拼图】，revised_main_prompt 置 null。")
+        parts.append(
+            "这是主环境四宫格图。按左上0度、右上90度、左下180度、右下270度，逐格核对正文和图片的主体个数、朝向、位置。"
+            "和开篇不符时，把完整主环境提示词写进 revised_prompt，只改【四向拼图】，revised_main_prompt 置 null。"
+            "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_prompt 里改正开篇。"
+        )
     return [
         {"role": "system", "content": system_prompt},
         {

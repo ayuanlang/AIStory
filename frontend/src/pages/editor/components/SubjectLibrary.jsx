@@ -7304,7 +7304,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     onClick={() => { void handleEnvironmentConsistencyCheck(entity); }}
                     disabled={!hasImage || running}
                     title={hasImage
-                        ? t('对照图片核对宫格或衍生正文。不一致时按主环境开篇改正它们，不改主环境描述。', 'Compare the image with the grid cells or derived prompt. When they disagree, align those texts with the main-environment opening and leave the main description unchanged.')
+                        ? t('对照各宫格和图片，核对主体个数、朝向、位置。不符时按开篇改正宫格或衍生。开篇只在它自己写矛盾时才改。', 'Compare each grid and its image for subject count, facing, and position. Align the grid or derived prompt with the opening. Change the opening only when the opening contradicts itself.')
                         : t('生成图片后才能检查。', 'Generate an image before checking.')}
                     className="self-end inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/5 px-4 py-2 text-sm font-bold text-white/80 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >
