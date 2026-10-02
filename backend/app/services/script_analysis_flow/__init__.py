@@ -2395,12 +2395,19 @@ def sync_scene_units_from_script_text(
         str(row.scene_id): row for row in existing_rows if str(getattr(row, "scene_id", "")).strip()
     }
 
-    incoming_scene_ids = {unit.scene_id for unit in units}
     resolved_target_scene_id = str(target_scene_id or "").strip() or None
+    written_scene_ids: set[str] = set()
+    units_to_write = []
     for unit in units:
         if partial and resolved_target_scene_id:
             unit.scene_id = resolved_target_scene_id
-            incoming_scene_ids.add(resolved_target_scene_id)
+        scene_key = str(unit.scene_id or "").strip()
+        if not scene_key or scene_key in written_scene_ids:
+            continue
+        written_scene_ids.add(scene_key)
+        units_to_write.append(unit)
+    incoming_scene_ids = set(written_scene_ids)
+    for unit in units_to_write:
         _upsert_scene_unit(
             db,
             project_id=project_id,
@@ -2438,8 +2445,8 @@ def sync_scene_units_from_script_text(
         "project_id": int(project_id),
         "episode_id": int(episode_id),
         "script_id": script_id,
-        "scene_count": len(units),
-        "scene_ids": [unit.scene_id for unit in units],
+        "scene_count": len(units_to_write),
+        "scene_ids": [unit.scene_id for unit in units_to_write],
         "parse_source": parse_source,
         "removed_stale_scene_ids": removed_stale_scene_ids,
     }

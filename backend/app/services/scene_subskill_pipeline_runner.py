@@ -3369,7 +3369,9 @@ async def run_scene_subskill_pipeline(
     script_text = str(raw_payload.get("text") or "").strip()
     start_group = resolve_subskill_start_group(raw_payload)
     explicit_start = payload_has_explicit_subskill_start(raw_payload)
-    target_scene_ids = coerce_target_scene_ids_for_orchestration(raw_payload, script_text)
+    # Payload targets only. Do not scan the episode script for a single-scene
+    # instruction; continue must fan out every unfinished scene.
+    target_scene_ids = coerce_target_scene_ids_for_orchestration(raw_payload, "")
     logger.warning(
         "[scene_subskill_pipeline] start contract=%s post_env_steps=%s start_from=%s explicit=%s targets=%s",
         PIPELINE_CONTRACT_VERSION,
@@ -3524,12 +3526,29 @@ async def run_scene_subskill_pipeline(
                 persisted_subskill_step_usable("drama", persist_drama),
                 persisted_subskill_step_usable("framing", str((persist_steps or {}).get("framing") or "")),
             )
+    resume_step_name = {
+        "drama": "drama",
+        "combat": "combat",
+        "framing": "derived_framing",
+        "staging": "staging",
+    }
+    resume_step_label = {
+        "drama": "文戏增强",
+        "combat": "武戏增强",
+        "framing": "场景现场编排",
+        "staging": "建置与入戏",
+    }
     if project_id > 0 and node_episode_id > 0:
+        queued_scene_ids: List[str] = []
         for task in tasks:
             scene_id = str(task.get("scene_id") or "").strip()
             plan = resume_plans.get(scene_id)
             if plan and plan.start_group == "done":
                 continue
+            start_name = str(
+                getattr(plan, "start_group", "") or start_group or "drama"
+            ).strip() or "drama"
+            step_name = resume_step_name.get(start_name, "drama")
             upsert_pipeline_node_status(
                 db,
                 project_id=project_id,
@@ -3537,13 +3556,24 @@ async def run_scene_subskill_pipeline(
                 script_id=f"episode:{node_episode_id}",
                 node_name="scene_subskill_scene",
                 scene_id=scene_id,
-                status="queued",
-                progress_percent=0.0,
-                runtime_meta={"business_event": "queued"},
+                status="running",
+                progress_percent=5.0,
+                runtime_meta={
+                    "business_event": "started",
+                    "current_step": step_name,
+                    "current_step_label": resume_step_label.get(start_name, "文戏增强"),
+                },
                 error_code=None,
                 error_message=None,
             )
+            queued_scene_ids.append(scene_id)
         db.commit()
+        logger.warning(
+            "[scene_subskill_pipeline] fan-out scenes=%s ids=%s concurrency=%s",
+            len(queued_scene_ids),
+            queued_scene_ids,
+            max_concurrency,
+        )
     semaphore = asyncio.Semaphore(max(1, int(max_concurrency or 1)))
     leftover_tail = _extract_project_tail(script_text)
     project_tail = "\n\n".join(

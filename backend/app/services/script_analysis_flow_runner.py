@@ -384,9 +384,17 @@ async def execute_scene_analysis_flow_node(
         raw_payload["function_name"] = raw_payload.get("function_name") or request.function_name or "script_analysis"
         raw_payload["system_api_id"] = raw_payload.get("system_api_id") or request.system_api_id
         target_scene_id = str(raw_payload.get("target_scene_id") or "").strip()
+        # Scene markdown still reads 「本次仅处理 Scene ID」 from its own user text.
+        # A full-episode 逐场优化 continue must not: that line inside an older
+        # script echo would scope the whole run to one scene.
+        target_source_text = (
+            str(raw_payload.get("text") or "")
+            if node_key == "scene_markdown"
+            else ""
+        )
         target_scene_ids = coerce_target_scene_ids_for_orchestration(
             raw_payload,
-            str(raw_payload.get("text") or ""),
+            target_source_text,
         )
         scoped_rerun = bool(target_scene_ids)
         start_from_step = str(raw_payload.get("start_from_step") or "").strip()

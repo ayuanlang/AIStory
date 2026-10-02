@@ -113,6 +113,8 @@ class DerivedEnvIngestRequest(BaseModel):
     purge_existing: Optional[bool] = True
 
 
+from app.services.script_analysis_flow import SceneMarkerParseError  # noqa: E402
+from sqlalchemy.exc import IntegrityError  # noqa: E402
 from app.services.script_analysis_flow_runner import (  # noqa: E402,F401
     execute_scene_analysis_flow_node,
 )
@@ -145,42 +147,55 @@ async def sync_scene_units_progress(
         raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
 
     script_id = request.script_id or f"episode:{int(request.episode_id)}"
-    if request.prefer_markers:
-        sync_result = sync_scene_units_from_markers(
+    try:
+        if request.prefer_markers:
+            sync_result = sync_scene_units_from_markers(
+                db,
+                project_id=int(request.project_id),
+                episode_id=int(request.episode_id),
+                script_text=request.script_text,
+                script_id=script_id,
+            )
+            summary = {
+                "stage_key": STAGE_SCENE_MARKDOWN,
+                "import_target": "script_progress_scene_units",
+                "scene_count": int(sync_result.get("scene_count") or 0),
+                "scene_ids": list(sync_result.get("scene_ids") or []),
+                "parse_source": sync_result.get("parse_source"),
+                "sync_result": sync_result,
+            }
+        else:
+            summary = import_scene_markdown_stage(
+                db=db,
+                project_id=int(request.project_id),
+                episode_id=int(request.episode_id),
+                script_text=request.script_text,
+                script_id=script_id,
+                partial=bool(request.partial),
+                target_scene_id=str(request.target_scene_id or "").strip() or None,
+            )
+        upsert_pipeline_node_status(
             db,
             project_id=int(request.project_id),
             episode_id=int(request.episode_id),
-            script_text=request.script_text,
             script_id=script_id,
+            node_name="scene_planning",
+            status="success",
+            progress_percent=100.0,
         )
-        summary = {
-            "stage_key": STAGE_SCENE_MARKDOWN,
-            "import_target": "script_progress_scene_units",
-            "scene_count": int(sync_result.get("scene_count") or 0),
-            "scene_ids": list(sync_result.get("scene_ids") or []),
-            "parse_source": sync_result.get("parse_source"),
-            "sync_result": sync_result,
-        }
-    else:
-        summary = import_scene_markdown_stage(
-            db=db,
-            project_id=int(request.project_id),
-            episode_id=int(request.episode_id),
-            script_text=request.script_text,
-            script_id=script_id,
-            partial=bool(request.partial),
-            target_scene_id=str(request.target_scene_id or "").strip() or None,
-        )
-    upsert_pipeline_node_status(
-        db,
-        project_id=int(request.project_id),
-        episode_id=int(request.episode_id),
-        script_id=script_id,
-        node_name="scene_planning",
-        status="success",
-        progress_percent=100.0,
-    )
-    db.commit()
+        db.commit()
+    except SceneMarkerParseError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail=f"{exc.code}: {exc}",
+        ) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail="scene unit sync conflict",
+        ) from exc
     return {"status": "ok", "summary": summary.get("sync_result") or summary}
 
 

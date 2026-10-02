@@ -2194,6 +2194,27 @@ const extractDerivedEnvNamesHeader = (sceneText) => {
         .join('，');
 };
 
+const isBlankEnvironmentToken = (value) => (
+    !value || ['无', 'None', 'none', 'N/A', 'null', '空'].includes(String(value || '').trim())
+);
+
+/** Staging 建置 often has 当前环境=ENV:[…] but not the framing header. */
+const extractStagingEnvironmentName = (sceneText) => {
+    const derived = extractDerivedEnvNamesHeader(sceneText);
+    if (!isBlankEnvironmentToken(derived)) return derived;
+    const names = [];
+    const seen = new Set();
+    const pattern = /ENV\s*:\s*\[([^\]]+)\]/gi;
+    let match;
+    while ((match = pattern.exec(String(sceneText || ''))) !== null) {
+        const cleaned = String(match[1] || '').trim();
+        if (isBlankEnvironmentToken(cleaned) || seen.has(cleaned)) continue;
+        seen.add(cleaned);
+        names.push(cleaned);
+    }
+    return names.join('，');
+};
+
 const inferPlotStageFromSceneText = (sceneText) => {
     const match = /(闪回|倒叙|梦境|想象|正常叙事)/.exec(String(sceneText || ''));
     return match ? match[1] : '正常叙事';
@@ -2219,7 +2240,7 @@ const buildSceneTableMarkdownFromStaging = (sceneId, sceneBlock, sceneOrder) => 
         : (scMatch ? String(Number(scMatch[1])) : '');
     const sceneName = extractSceneNameValueForTable(source);
     const beats = extractStagingVisualBeats(source);
-    const derivedEnvs = extractDerivedEnvNamesHeader(source);
+    const derivedEnvs = extractStagingEnvironmentName(source);
     const chars = collectTypedEntityTokens(source, 'char').map((name) => `CHAR:[@${name}]`);
     const props = collectTypedEntityTokens(source, 'prop').map((name) => `PROP:[${name}]`);
     const envs = derivedEnvs.split('，').filter(Boolean).map((name) => `ENV:[${name}]`);
@@ -2238,7 +2259,7 @@ const buildSceneTableMarkdownFromStaging = (sceneId, sceneBlock, sceneOrder) => 
         'None',
         core,
         'None',
-        derivedEnvs || '无',
+        derivedEnvs,
         'None',
         'None',
         'None',
@@ -6304,15 +6325,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Restart live-only: never substitute the previous run's scene_split body
         // (that resurrected leftover 分场 titles such as 龙门风月客栈).
         if (analysisTrustLiveDownstreamOnlyRef.current) return source;
-        const persistedSplit = readPersistedStage1Slot('scene_split');
-        if (hasVisualBackfillInText(persistedSplit)) return persistedSplit;
-        const persistedRaw = readPersistedStage1Slot('raw_text');
-        if (hasVisualBackfillInText(persistedRaw)) return persistedRaw;
+        const appendBackfill = (body, backfillJson) => {
+            const jsonText = String(backfillJson || '').trim();
+            if (!body || !parseVisualBackfillGlobalStyle(jsonText)) return body;
+            return `${body}\n\n### Project Visual Backfill\n\n\`\`\`json\n${jsonText}\n\`\`\``.trim();
+        };
         const slot = String(readPersistedStage1Slot('project_visual_backfill') || '').trim();
         const slotJson = extractProjectVisualBackfillJsonText(slot) || slot;
-        if (!parseVisualBackfillGlobalStyle(slotJson)) return source;
-        if (!source) return slotJson;
-        return `${source}\n\n### Project Visual Backfill\n\n\`\`\`json\n${slotJson}\n\`\`\``.trim();
+        if (source && parseVisualBackfillGlobalStyle(slotJson)) {
+            return appendBackfill(source, slotJson);
+        }
+        // A persisted split that merely contains global style must not replace
+        // the current episode script. That swap dropped later scenes and continue
+        // only started the first scene.
+        const persistedSplit = String(readPersistedStage1Slot('scene_split') || '').trim();
+        const persistedRaw = String(readPersistedStage1Slot('raw_text') || '').trim();
+        const persistedJson = extractProjectVisualBackfillJsonText(persistedSplit)
+            || extractProjectVisualBackfillJsonText(persistedRaw);
+        if (source && parseVisualBackfillGlobalStyle(persistedJson)) {
+            return appendBackfill(source, persistedJson);
+        }
+        if (!source) {
+            if (hasVisualBackfillInText(persistedSplit)) return persistedSplit;
+            if (hasVisualBackfillInText(persistedRaw)) return persistedRaw;
+            if (parseVisualBackfillGlobalStyle(slotJson)) return slotJson;
+        }
+        return source;
     }, [
         extractProjectVisualBackfillJsonText,
         hasVisualBackfillInText,
@@ -11520,8 +11558,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // priorIsSameScene can fail when canonicalize(item.marker) ≠ identity key.
         // New full runs clear tracking first; scoped/manual reruns pass force.
         // Re-entry must not reopen a settled success just because the timer stamp changed.
+        // A leftover "completed" overlay is final only after this run tracked that
+        // scene's DB id (shots were verified or generated). Otherwise 齐套补跑 sees
+        // 完成 1/1 with 已跟踪 0 场 and never POSTs generate-shots.
         if (!force && priorItem && priorStatus === 'completed' && !resumeThis) {
-            return true;
+            const priorDbId = Number(priorItem?.dbSceneId || 0);
+            if (priorDbId > 0 && storyboardKickoffByDbIdRef.current.has(priorDbId)) {
+                return true;
+            }
         }
         if (!force && priorItem && priorStatus === 'failed' && !resumeThis && !isStoryboardRetryableKickoffError(priorItem?.error)) {
             return true;
@@ -12851,6 +12895,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const waitStartedAt = Date.now();
         let lastStrandedFlushAt = 0;
         let lastResidualEnsureAt = 0;
+        let leftoverCompletedRecoveryPasses = 0;
         while (Date.now() - waitStartedAt < maxWaitMs) {
             const control = episodeIdForDeadline
                 ? getEpisodeAnalysisPipelineControl(episodeIdForDeadline)
@@ -12965,7 +13010,44 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 // Kickoffs already completed/failed. A secondary DB coverage poll must not
                 // keep the analysis pipeline on "waiting" after 5/5 (leftover scenes or a
                 // compact-shot lag would otherwise loop until the pipeline deadline).
+                // A leftover 完成 1/1 with nothing tracked this run is not that case:
+                // workspace scenes can still have zero shots.
                 if (isStoryboardTaskProgressSettled(progress) && !liveWork) {
+                    if (
+                        !scopedRerun
+                        && autoStartEnabled
+                        && storyboardKickoffByDbIdRef.current.size <= 0
+                        && leftoverCompletedRecoveryPasses < 1
+                    ) {
+                        const { missingRows, count: missingShotCount } = await countImportedScenesMissingShots();
+                        if (missingShotCount > 0) {
+                            leftoverCompletedRecoveryPasses += 1;
+                            onLog?.(
+                                t(
+                                    `[分镜生成] 进度显示完成 ${progress.completed}/${progress.started}，但本轮未跟踪到场次，且有 ${missingShotCount} 场还没有分镜，正在重新发起。`,
+                                    `[Storyboard] Progress shows ${progress.completed}/${progress.started} done, but this run tracked no scenes and ${missingShotCount} still have no shots; kicking off again.`
+                                ),
+                                'process'
+                            );
+                            const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+                            for (const row of missingRows) {
+                                const raw = String(row?.scene_id || row?.scene_code || row?.scene_no || '').trim();
+                                const marker = canonicalizeSceneUnitId(
+                                    raw,
+                                    deriveSceneOrderFromSceneId(raw) || row?.scene_number,
+                                    episodePrefix
+                                ) || raw;
+                                if (!marker) continue;
+                                await registerSceneImportedAndKickoffStoryboard({
+                                    sceneId: marker,
+                                    sceneOrder: deriveSceneOrderFromSceneId(raw) || row?.scene_number,
+                                    dbSceneId: row.id,
+                                });
+                            }
+                            await new Promise((resolve) => setTimeout(resolve, pollMs));
+                            continue;
+                        }
+                    }
                     break;
                 }
                 const coverage = await resolveEpisodeStoryboardCoverage({
@@ -24384,6 +24466,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisProgressDismissedRef.current = false;
         analysisStopRequestedRef.current = false;
         analysisStopReasonRef.current = '';
+        analysisFullRestartGateRef.current = false;
+        analysisTrustLiveDownstreamOnlyRef.current = false;
         armAnalysisPipelineDeadline(Date.now());
         setIsAnalyzing(true);
         beginAnalysisRestartUi(
@@ -28529,6 +28613,42 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         withPersistedVisualBackfill,
     ]);
 
+    const resolveFullEpisodeSceneScript = useCallback(() => {
+        const candidates = [
+            latestStage1NodeOutputsRef.current?.environment_plan,
+            latestStage1NodeOutputsRef.current?.scene_split,
+            getStageOutputContent('stage1', 'environment_plan'),
+            getStageOutputContent('stage1', 'scene_split'),
+            readPersistedStage1Slot('environment_plan'),
+            readPersistedStage1Slot('scene_split'),
+            activeEpisode?.ai_scene_analysis_adaptation,
+            resolveSceneSplitSourceText(),
+        ];
+        let best = '';
+        let bestCount = -1;
+        candidates.forEach((raw) => {
+            const text = String(raw || '').trim();
+            if (!text) return;
+            let count = 0;
+            try {
+                count = parseSceneUnitsFromScriptMarkersText(text).length;
+            } catch (_) {
+                count = 0;
+            }
+            if (count > bestCount || (count === bestCount && text.length > best.length)) {
+                best = text;
+                bestCount = count;
+            }
+        });
+        return withPersistedVisualBackfill(best);
+    }, [
+        activeEpisode?.ai_scene_analysis_adaptation,
+        getStageOutputContent,
+        readPersistedStage1Slot,
+        resolveSceneSplitSourceText,
+        withPersistedVisualBackfill,
+    ]);
+
     const hasPersistedEnvironmentPlan = useCallback(() => {
         if (String(getStageOutputContent('stage1', 'environment_plan') || '').trim()) return true;
         if (readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs)) return true;
@@ -28581,7 +28701,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     };
 
     const continueUnfinishedPerSceneRefinement = async () => {
-        const sceneSplitText = resolveSceneSplitSourceText();
+        const sceneSplitText = resolveFullEpisodeSceneScript();
         if (!sceneSplitText) {
             throw new Error(t(
                 '缺少全局统筹产物，无法继续逐场优化。',
@@ -28605,15 +28725,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             && !envImported
             && !envNodeLive
             && (hasPersistedEnvironmentPlan() || hasEnvironmentsToDesign());
+        let continueSceneCount = 0;
+        try {
+            continueSceneCount = parseSceneUnitsFromScriptMarkersText(sceneSplitText).length;
+        } catch (_) {
+            continueSceneCount = 0;
+        }
+        const continueSceneNote = continueSceneCount > 0
+            ? t(`（${continueSceneCount} 场）`, ` (${continueSceneCount} scenes)`)
+            : '';
         onLog?.(
             shouldStartEnvDesign
                 ? t(
-                    '环境规划已就绪，正在并行：主环境设计 ∥ 续跑未完成的逐场优化。',
-                    'Environment plan is ready; starting main-environment design in parallel with unfinished per-scene refinement.'
+                    `环境规划已就绪，正在并行：主环境设计 ∥ 续跑未完成的逐场优化${continueSceneNote}。`,
+                    `Environment plan is ready; starting main-environment design in parallel with unfinished per-scene refinement${continueSceneNote}.`
                 )
                 : t(
-                    '环境规划已就绪，正在续跑未完成的逐场优化。',
-                    'Environment plan is ready; resuming unfinished per-scene refinement.'
+                    `环境规划已就绪，正在续跑未完成的逐场优化${continueSceneNote}。`,
+                    `Environment plan is ready; resuming unfinished per-scene refinement${continueSceneNote}.`
                 ),
             'info'
         );
@@ -28715,7 +28844,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const kicked = [];
         if (!episodeId) return kicked;
         if (artDirectionRerunInFlightRef.current) return kicked;
-        const sceneSplitText = resolveSceneSplitSourceText();
+        const sceneSplitText = resolveFullEpisodeSceneScript();
         const snapshot = await getEpisodeProgressSnapshot(episodeId).catch(() => null);
         const nodes = Array.isArray(snapshot?.pipeline_nodes)
             ? snapshot.pipeline_nodes
@@ -33110,7 +33239,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     didWork = true;
                 } else {
                     const sceneSplitText = String(
-                        resolveSceneSplitSourceText()
+                        resolveFullEpisodeSceneScript()
+                        || resolveSceneSplitSourceText()
                         || stage1SourceText
                         || activeEpisode?.ai_scene_analysis_adaptation
                         || activeEpisode?.ai_scene_analysis_result
@@ -33309,6 +33439,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         projectId,
         registerActiveAnalysisTask,
         resolveAssetRerunSourceText,
+        resolveFullEpisodeSceneScript,
         resolveSceneSplitSourceText,
         resolveSelectedScriptAnalysisApiId,
         runAutoImportAndSwitchToScenes,
@@ -36188,6 +36319,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             wait_env: 3,
                             derived_framing: 4,
                             staging: 5,
+                            wait_env_asset: 5,
                             completed: 6,
                         };
                         const collectDiagnosticSceneRows = () => {
@@ -36448,8 +36580,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const groupActiveStep = {
                                 drama: ['drama'],
                                 combat: ['vfx', 'xian', 'combat'],
-                                framing: ['wait_env', 'derived_framing'],
-                                staging: ['staging'],
+                                framing: ['wait_env', 'derived_framing', 'framing'],
+                                staging: ['staging', 'wait_env_asset'],
                             }[group] || [];
                             const doneAfter = { drama: 1, combat: 2, framing: 4, staging: 5 }[group] || 0;
                             // A live earlier step must not keep later groups on 已完成 via leftover
@@ -36486,8 +36618,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     ready: false,
                                     active: true,
                                     failed: false,
-                                    detail: step === 'wait_env' ? t('等待环境', 'Wait ENV') : '',
+                                    detail: (step === 'wait_env' || step === 'wait_env_asset')
+                                        ? t('等待环境', 'Wait ENV')
+                                        : '',
                                 };
+                            }
+                            if (['running', 'queued'].includes(status) && !step && group === 'drama') {
+                                return started;
                             }
                             if (
                                 isThisSceneRerun
