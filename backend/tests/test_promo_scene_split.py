@@ -905,11 +905,10 @@ def test_promo_flower_text_is_planned_and_injected():
     assert "禁何乐乐享" in jia
     assert "禁印代字" in jia
     assert "压字=禁" in jia
-    assert "上屏=字卡专镜" in jia
-    assert "字卡=场景底+字层" in jia
-    assert "手写=禁" in jia
-    assert "烧录=libass" in jia
-    assert "出字=后期烧录" in jia
+    assert "上屏=段末切镜" in jia
+    assert "出字=模型直出" in jia
+    assert "出字=后期烧录" not in jia
+    assert "烧录=libass" not in jia
     assert "出字=模型直出" in merged["stage_plan"]["close"]["flower_text"]
 
     brief = collect_promo_brief({"source_promo_project_id": 9}, {}, merged)

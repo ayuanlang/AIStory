@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Eye, Image as ImageIcon, Loader2, RefreshCw, Replace, Trash2, Upload, Video, X } from 'lucide-react';
+import { Eye, Image as ImageIcon, Loader2, Plus, RefreshCw, Replace, Trash2, Upload, Video, X } from 'lucide-react';
 import { SafeImage, getFullUrl } from '../editorHelpers';
 import {
     analyzePromoCatalogAsset,
@@ -35,6 +35,7 @@ const directionLabel = (value, t) => {
 };
 
 export const PROMO_MEDIA_ACCEPT = 'image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov';
+const WALL_IMAGE_ACCEPT = 'image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp';
 const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp'];
 const VIDEO_EXTS = ['mp4', 'webm', 'mov'];
 const MAX_MB = 40;
@@ -72,6 +73,13 @@ const isAcceptedMedia = (file) => {
     const ext = name.includes('.') ? name.split('.').pop() : '';
     const type = String(file?.type || '').toLowerCase();
     return IMAGE_EXTS.includes(ext) || VIDEO_EXTS.includes(ext) || type.startsWith('image/') || type.startsWith('video/');
+};
+
+const isWallImage = (file) => {
+    const name = String(file?.name || '').toLowerCase();
+    const ext = name.includes('.') ? name.split('.').pop() : '';
+    const type = String(file?.type || '').toLowerCase();
+    return IMAGE_EXTS.includes(ext) || (type.startsWith('image/') && !type.startsWith('image/gif'));
 };
 
 const mediaKindOf = (file) => {
@@ -137,11 +145,20 @@ export default function PromoCatalogAssets({
     const sceneGroupInputRef = useRef(null);
     const replaceInputRef = useRef(null);
     const replaceTargetRef = useRef(null);
+    const wallFileInputRef = useRef(null);
+    const wallPickRef = useRef(null);
     const assetsRef = useRef([]);
+    const analyzeFlightRef = useRef(0);
+    const queuedAnalyzeRef = useRef(null);
+    const analyzeDebounceRef = useRef(null);
 
     useEffect(() => {
         assetsRef.current = assets;
     }, [assets]);
+
+    useEffect(() => () => {
+        if (analyzeDebounceRef.current) clearTimeout(analyzeDebounceRef.current);
+    }, []);
 
     const load = useCallback(async () => {
         if (!ownerId) {
@@ -192,30 +209,48 @@ export default function PromoCatalogAssets({
         return mates.length ? mates : [asset];
     };
 
-    const analyzeOne = async (asset) => {
+    const latestAsset = (asset) => (
+        (assetsRef.current || []).find((item) => Number(item.id) === Number(asset?.id)) || asset
+    );
+
+    const publishAssets = (next, preview) => {
+        assetsRef.current = next;
+        setAssets(next);
+        if (preview !== undefined) setPreviewAsset(preview);
+    };
+
+    const analyzeOne = async (asset, options = {}) => {
         if (!asset?.id || disabled) return;
-        const current = (assetsRef.current || []).find((item) => Number(item.id) === Number(asset.id)) || asset;
-        if (normalizeAnalysisStatus(current.analysis_status) === ANALYSIS_STATUS_ANALYZING) return;
+        const current = latestAsset(asset);
         if (!(current.img_url || current.file_url)) return;
+        if (analyzeFlightRef.current > 0) {
+            if (options.queue) queuedAnalyzeRef.current = current;
+            return;
+        }
+        analyzeFlightRef.current += 1;
         const mates = sceneGroupMates(current);
         const mateIds = new Set(mates.map((item) => Number(item.id)));
-        setAssets((prev) => prev.map((item) => (
+        const marked = (assetsRef.current || []).map((item) => (
             mateIds.has(Number(item.id))
                 ? { ...item, analysis_status: ANALYSIS_STATUS_ANALYZING, analysis_error: '' }
                 : item
-        )));
+        ));
+        publishAssets(
+            marked,
+            undefined,
+        );
         setPreviewAsset((prev) => (
             prev && mateIds.has(Number(prev.id))
                 ? { ...prev, analysis_status: ANALYSIS_STATUS_ANALYZING, analysis_error: '' }
                 : prev
         ));
         try {
-            const data = await analyzePromoCatalogAsset(asset.id, {});
+            const data = await analyzePromoCatalogAsset(current.id, {});
             const returned = Array.isArray(data?.group_assets) ? data.group_assets : [];
             const byId = new Map(returned.map((item) => [Number(item.id), item]));
             const applyRow = (item) => {
                 const nextRow = byId.get(Number(item.id));
-                if (!nextRow && Number(item.id) !== Number(asset.id)) return item;
+                if (!nextRow && Number(item.id) !== Number(current.id)) return item;
                 const source = nextRow || { ...item, ...data };
                 return {
                     ...item,
@@ -225,21 +260,55 @@ export default function PromoCatalogAssets({
                     image_asset_analysis: source.image_asset_analysis || item.image_asset_analysis || {},
                 };
             };
-            setAssets((prev) => prev.map(applyRow));
+            const completed = (assetsRef.current || []).map(applyRow);
+            assetsRef.current = completed;
+            setAssets((prev) => {
+                const next = prev.map(applyRow);
+                assetsRef.current = next;
+                return next;
+            });
             setPreviewAsset((prev) => (prev ? applyRow(prev) : prev));
         } catch (err) {
             const message = err?.response?.data?.detail || err?.message || t('解析失败', 'Analysis failed');
-            setAssets((prev) => prev.map((item) => (
+            const failed = (assetsRef.current || []).map((item) => (
                 mateIds.has(Number(item.id))
                     ? { ...item, analysis_status: ANALYSIS_STATUS_FAILED, analysis_error: String(message) }
                     : item
-            )));
+            ));
+            assetsRef.current = failed;
+            setAssets((prev) => {
+                const next = prev.map((item) => (
+                    mateIds.has(Number(item.id))
+                        ? { ...item, analysis_status: ANALYSIS_STATUS_FAILED, analysis_error: String(message) }
+                        : item
+                ));
+                assetsRef.current = next;
+                return next;
+            });
             setPreviewAsset((prev) => (
                 prev && mateIds.has(Number(prev.id))
                     ? { ...prev, analysis_status: ANALYSIS_STATUS_FAILED, analysis_error: String(message) }
                     : prev
             ));
+        } finally {
+            analyzeFlightRef.current = Math.max(0, analyzeFlightRef.current - 1);
+            const pending = queuedAnalyzeRef.current;
+            if (pending && !analyzeDebounceRef.current && analyzeFlightRef.current === 0) {
+                queuedAnalyzeRef.current = null;
+                await analyzeOne(latestAsset(pending), { queue: true });
+            }
         }
+    };
+
+    const scheduleGroupAnalyze = (asset) => {
+        queuedAnalyzeRef.current = latestAsset(asset);
+        if (analyzeDebounceRef.current) clearTimeout(analyzeDebounceRef.current);
+        analyzeDebounceRef.current = setTimeout(() => {
+            analyzeDebounceRef.current = null;
+            const target = queuedAnalyzeRef.current;
+            queuedAnalyzeRef.current = null;
+            if (target) analyzeOne(latestAsset(target), { queue: true });
+        }, 500);
     };
 
     const analyzePending = async () => {
@@ -389,6 +458,95 @@ export default function PromoCatalogAssets({
         if (created[0]) await analyzeOne(created[0]);
     };
 
+    const commitSceneMeta = async (asset, next) => {
+        const current = latestAsset(asset);
+        const extra = { ...(current.extra_info || {}) };
+        if (Object.prototype.hasOwnProperty.call(next, 'view_direction')) extra.view_direction = next.view_direction;
+        if (Object.prototype.hasOwnProperty.call(next, 'scene_group_id')) extra.scene_group_id = next.scene_group_id;
+        const patch = {
+            extra_info: extra,
+            view_direction: extra.view_direction || '',
+            scene_group_id: extra.scene_group_id || '',
+        };
+        const apply = (list, row) => list.map((item) => (
+            Number(item.id) === Number(current.id) ? { ...item, ...row } : item
+        ));
+        assetsRef.current = apply(assetsRef.current || [], patch);
+        setAssets(assetsRef.current);
+        setPreviewAsset((prev) => (prev && Number(prev.id) === Number(current.id) ? { ...prev, ...patch } : prev));
+        const updated = await updatePromoCatalogAsset(current.id, patch);
+        const merged = apply(assetsRef.current || [], updated);
+        assetsRef.current = merged;
+        setAssets(merged);
+        const saved = merged.find((item) => Number(item.id) === Number(current.id)) || { ...current, ...updated };
+        setPreviewAsset((prev) => (prev && Number(prev.id) === Number(current.id) ? { ...prev, ...saved } : prev));
+        return saved;
+    };
+
+    const addWallPhoto = async (anchor, direction, file) => {
+        if (!isWallImage(file)) {
+            alert(t('壁面只补图片：jpg / png / webp', 'Walls take jpg / png / webp only'));
+            return;
+        }
+        if (file.size > MAX_MB * 1024 * 1024) {
+            alert(t(`单文件不超过 ${MAX_MB}MB`, `Max ${MAX_MB}MB per file`));
+            return;
+        }
+        let current = latestAsset(anchor);
+        if (!isSceneAsset(current) || !direction) return;
+        if (!viewDirectionOf(current)) {
+            alert(t('先选定当前这张正对的壁，再补其他壁。', 'Label this photo’s wall before adding another.'));
+            return;
+        }
+        const taken = new Set(sceneGroupMates(current).map((item) => viewDirectionOf(item)).filter(Boolean));
+        if (taken.has(direction)) {
+            alert(t('这面墙已经有照片。', 'This wall already has a photo.'));
+            return;
+        }
+        let gid = sceneGroupIdOf(current);
+        if (!gid) {
+            gid = `scene-${Date.now()}`;
+            current = await commitSceneMeta(current, {
+                scene_group_id: gid,
+                view_direction: viewDirectionOf(current),
+            });
+            gid = sceneGroupIdOf(current) || gid;
+        }
+        const created = await uploadOne(file, {
+            manageBusy: false,
+            autoAnalyze: false,
+            assetType: 'scene',
+            objectName: current.object_name || String(file.name || '场景').replace(/\.[^.]+$/, ''),
+            extraInfo: {
+                scene_group_id: gid,
+                view_direction: direction,
+            },
+        });
+        if (created) scheduleGroupAnalyze(created);
+    };
+
+    const openWallUpload = (asset, direction) => {
+        if (disabled || busy || !asset?.id || !direction) return;
+        wallPickRef.current = { assetId: asset.id, direction };
+        wallFileInputRef.current?.click();
+    };
+
+    const handleWallFile = async (file) => {
+        const pick = wallPickRef.current;
+        wallPickRef.current = null;
+        if (!pick || !file) return;
+        const asset = latestAsset({ id: pick.assetId });
+        if (!asset?.id) return;
+        setBusy(true);
+        try {
+            await addWallPhoto(asset, pick.direction, file);
+        } catch (err) {
+            alert(err?.response?.data?.detail || err?.message || t('补壁失败', 'Could not add this wall'));
+        } finally {
+            setBusy(false);
+        }
+    };
+
     const patchSceneMeta = (asset, next) => {
         const extra = { ...(asset.extra_info || {}) };
         if (Object.prototype.hasOwnProperty.call(next, 'view_direction')) extra.view_direction = next.view_direction;
@@ -405,11 +563,24 @@ export default function PromoCatalogAssets({
 
     const patchAsset = async (asset, patch) => {
         if (!asset?.id || disabled) return;
-        setAssets((prev) => prev.map((item) => (Number(item.id) === Number(asset.id) ? { ...item, ...patch } : item)));
+        const apply = (list, row) => list.map((item) => (
+            Number(item.id) === Number(asset.id) ? { ...item, ...row } : item
+        ));
+        assetsRef.current = apply(assetsRef.current || [], patch);
+        setAssets((prev) => {
+            const next = apply(prev, patch);
+            assetsRef.current = next;
+            return next;
+        });
         setPreviewAsset((prev) => (prev && Number(prev.id) === Number(asset.id) ? { ...prev, ...patch } : prev));
         try {
             const updated = await updatePromoCatalogAsset(asset.id, patch);
-            setAssets((prev) => prev.map((item) => (Number(item.id) === Number(asset.id) ? { ...item, ...updated } : item)));
+            assetsRef.current = apply(assetsRef.current || [], updated);
+            setAssets((prev) => {
+                const next = apply(prev, updated);
+                assetsRef.current = next;
+                return next;
+            });
             setPreviewAsset((prev) => (prev && Number(prev.id) === Number(asset.id) ? { ...prev, ...updated } : prev));
         } catch (err) {
             console.error('[PromoCatalogAssets] update failed', err);
@@ -425,6 +596,38 @@ export default function PromoCatalogAssets({
         } catch (err) {
             alert(err?.response?.data?.detail || err?.message || t('删除失败', 'Delete failed'));
         }
+    };
+
+    const renderWallExtras = (asset) => {
+        if (!isSceneAsset(asset)) return null;
+        if (!viewDirectionOf(asset)) {
+            return (
+                <div className="text-[11px] text-white/45">
+                    {t('先选定这张正对的壁，再补其他壁。补上后会重新解析。', 'Label this photo’s wall, then add the others. Adding a wall re-analyzes the room.')}
+                </div>
+            );
+        }
+        const mates = sceneGroupMates(asset, assets);
+        const missing = SCENE_GROUP_DIRECTION_CYCLE.filter((dir) => !mates.some((item) => viewDirectionOf(item) === dir));
+        if (!missing.length) return null;
+        return (
+            <div className="space-y-1">
+                <div className="text-[11px] text-white/45">{t('补充其他壁，补完会重新解析同一场景。', 'Add the other walls. The room is analyzed again.')}</div>
+                <div className="flex flex-wrap gap-1">
+                    {missing.map((dir) => (
+                        <button
+                            key={dir}
+                            type="button"
+                            disabled={disabled || busy}
+                            onClick={() => openWallUpload(asset, dir)}
+                            className="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 disabled:opacity-40 inline-flex items-center gap-1"
+                        >
+                            <Plus className="w-3 h-3" /> {directionLabel(dir, t)}
+                        </button>
+                    ))}
+                </div>
+            </div>
+        );
     };
 
     if (!ownerId) {
@@ -477,10 +680,21 @@ export default function PromoCatalogAssets({
                 className="w-full text-xs px-3 py-2 rounded-lg border border-white/15 hover:border-white/30 disabled:opacity-40"
             >
                 {t('上传场景组（多张，按北、东、南、西标注）', 'Upload a scene group (north, east, south, west)')}
-                <div className="text-[11px] text-muted-foreground mt-1">{t('第1张北壁，第2张东壁，第3张南壁，第4张西壁。多出来的先不标，上传后可改。同组照片会合成四面墙。', '1st north, 2nd east, 3rd south, 4th west. Extras stay unlabeled until you set them. The group is read as one room.')}</div>
+                <div className="text-[11px] text-muted-foreground mt-1">{t('第1张北壁，第2张东壁，第3张南壁，第4张西壁。已有场景可再补缺的壁，补完会重新解析。', '1st north, 2nd east, 3rd south, 4th west. An existing scene can gain the missing walls, then the room is analyzed again.')}</div>
             </button>
             <input ref={fileInputRef} type="file" accept={PROMO_MEDIA_ACCEPT} multiple className="hidden" onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
             <input ref={sceneGroupInputRef} type="file" accept={PROMO_MEDIA_ACCEPT} multiple className="hidden" onChange={(e) => { handleSceneGroupFiles(e.target.files); e.target.value = ''; }} />
+            <input
+                ref={wallFileInputRef}
+                type="file"
+                accept={WALL_IMAGE_ACCEPT}
+                className="hidden"
+                onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleWallFile(file);
+                    e.target.value = '';
+                }}
+            />
             <input
                 ref={replaceInputRef}
                 type="file"
@@ -576,6 +790,7 @@ export default function PromoCatalogAssets({
                                                 }}
                                                 placeholder={t('场景组名，同组填同一个', 'Scene group, same name joins photos')}
                                             />
+                                            {renderWallExtras(asset)}
                                         </>
                                     ) : null}
                                     {status === ANALYSIS_STATUS_FAILED && asset.analysis_error ? (
@@ -670,6 +885,19 @@ export default function PromoCatalogAssets({
                                 {t('重新解析', 'Re-analyze')}
                             </button>
                         </div>
+                        {isSceneAsset(previewAsset) ? (
+                            <select
+                                className="w-full bg-black/30 border border-white/10 rounded-md px-2 py-1 text-xs"
+                                value={viewDirectionOf(previewAsset)}
+                                disabled={disabled || busy || normalizeAnalysisStatus(previewAsset.analysis_status) === ANALYSIS_STATUS_ANALYZING}
+                                onChange={(e) => patchSceneMeta(previewAsset, { view_direction: e.target.value })}
+                            >
+                                {SCENE_VIEW_DIRECTIONS.map((opt) => (
+                                    <option key={opt.value || 'unset'} value={opt.value}>{t(opt.zh, opt.en)}</option>
+                                ))}
+                            </select>
+                        ) : null}
+                        {renderWallExtras(previewAsset)}
                         {previewAsset.analysis_error ? (
                             <div className="text-xs text-red-300 break-words">{previewAsset.analysis_error}</div>
                         ) : null}

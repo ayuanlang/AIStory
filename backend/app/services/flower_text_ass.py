@@ -97,10 +97,8 @@ def _flower_output_mode(block: str) -> str:
         or "上屏=字卡专镜" in text
     ):
         return "burn"
-    if "画幅叠出" in text or "片内图形花字" in text:
+    if "画幅叠出" in text or "片内图形花字" in text or _DESIGNATED_COPY_RE.search(text):
         return "model"
-    if _DESIGNATED_COPY_RE.search(text):
-        return "burn"
     return ""
 
 

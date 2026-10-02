@@ -330,6 +330,50 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
     );
 };
 
+const FLOWER_COPY_RE = /(?:画幅叠出片内图形花字|片内图形花字|文案)\s*[=＝]?\s*「[^」]+」|出字=(?:后期烧录|模型直出|舍)|花字\s*[:：]\s*(?!无)/;
+
+const promptHasFlower = (text) => FLOWER_COPY_RE.test(String(text || ''));
+
+const readShotFlowerMode = (text) => {
+    const src = String(text || '');
+    if (src.includes('出字=舍')) return 'drop';
+    if (src.includes('出字=后期烧录')) return 'burn';
+    if (src.includes('出字=模型直出')) return 'model';
+    if (src.includes('烧录=libass') || src.includes('手写=禁')) return 'burn';
+    return 'model';
+};
+
+const writeFlowerBlock = (block, mode) => {
+    let next = String(block || '').replace(/(?:^|[｜|])出字=(?:后期烧录|模型直出|舍)/g, '');
+    next = next.replace(/[｜|]{2,}/g, '｜').replace(/[｜|]\s*$/g, '');
+    if (mode === 'drop') return `${next.replace(/\s*$/, '')}｜出字=舍`;
+    if (mode === 'model') {
+        next = next
+            .replace(/(?:^|[｜|])烧录=libass/g, '')
+            .replace(/(?:^|[｜|])手写=禁/g, '')
+            .replace(/[｜|]{2,}/g, '｜')
+            .replace(/[｜|]\s*$/g, '');
+        return `${next.replace(/\s*$/, '')}｜出字=模型直出`;
+    }
+    if (!next.includes('烧录=libass')) next = `${next.replace(/\s*$/, '')}｜烧录=libass`;
+    if (!next.includes('手写=禁')) next = `${next.replace(/\s*$/, '')}｜手写=禁`;
+    return `${next.replace(/\s*$/, '')}｜出字=后期烧录`;
+};
+
+const rewriteShotFlowerMode = (text, mode) => {
+    const src = String(text || '');
+    const heads = [...src.matchAll(/\(P\d+\s+\d+(?:\.\d+)?s\s*[–—-]\s*\d+(?:\.\d+)?s\)/g)];
+    if (!heads.length) return promptHasFlower(src) ? writeFlowerBlock(src, mode) : src;
+    let out = src.slice(0, heads[0].index);
+    for (let index = 0; index < heads.length; index += 1) {
+        const start = heads[index].index;
+        const end = index + 1 < heads.length ? heads[index + 1].index : src.length;
+        const block = src.slice(start, end);
+        out += promptHasFlower(block) ? writeFlowerBlock(block, mode) : block;
+    }
+    return out;
+};
+
 export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null, userBatchParallelLimit = 3, tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
         const aspectParts = parseAspectRatioParts(getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9');
     const isPortrait = aspectParts && aspectParts.heightPart > aspectParts.widthPart;
@@ -13851,6 +13895,38 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         })()}
 
                                         
+{(() => {
+    let promptCn = '';
+    try { promptCn = String(JSON.parse(editingShot?.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) {}
+    if (!promptHasFlower(promptCn)) return null;
+    const mode = readShotFlowerMode(promptCn);
+    return (
+        <div className="mt-2 mb-2 rounded-md border border-white/10 bg-black/20 p-2">
+            <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('本镜花字', 'Flower text on this shot')}</div>
+                <select
+                    className="bg-black/40 border border-white/10 rounded px-2 py-1 text-[11px] text-white focus:border-primary/50 focus:outline-none"
+                    value={mode}
+                    onChange={(e) => {
+                        const nextMode = e.target.value;
+                        if (!nextMode) return;
+                        updateShotTechnicalNotes((techObj) => {
+                            techObj.video_prompt_cn = rewriteShotFlowerMode(String(techObj.video_prompt_cn || ''), nextMode);
+                            techObj.manual_video_prompt = true;
+                        });
+                    }}
+                >
+                    <option value="model">{t('模型直出', 'Model paints')}</option>
+                    <option value="burn">{t('后期烧录', 'Burn in post')}</option>
+                    <option value="drop">{t('不上屏', 'Off screen')}</option>
+                </select>
+            </div>
+            <p className="mt-1 text-[10px] text-white/45">
+                {t('生成视频前选。后期烧录时模型不画这些字，成片后再点「烧录文字」。改完已有视频的镜头，需要重新生成。', 'Choose before generating. Burn-in-post keeps the glyphs off the model; use Burn text after the video exists. Changing this on a finished video requires a regenerate.')}
+            </p>
+        </div>
+    );
+})()}
 <div className="flex justify-between items-center mb-1 mt-2">
     <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('动作 / 运动提示词', 'Action / Motion Prompt')}</div>
     <button 
