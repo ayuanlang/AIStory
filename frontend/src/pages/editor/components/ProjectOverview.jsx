@@ -17,6 +17,14 @@ import {
     getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, useTabMediaRefreshEffect, TabMediaRefreshButton
 } from '../editorHelpers';
 import { PROJECT_ASPECT_RATIO_OPTIONS } from '../projectOptionConfig';
+import {
+    SAVE_THE_CAT_ACTS,
+    STORY_PREFILL_KEYS,
+    emptyStoryPrefillFields,
+    migrateLegacyPlotToBeats,
+    rollupSaveTheCat,
+    storyPrefillPayloadFields,
+} from '../storyPrefill';
 
 import { 
     fetchProject, 
@@ -276,19 +284,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         story_generator_global_input: {
             episodes_count: 30,
             episode_duration_minutes: 1,
-            logline: "",
-            theme: "",
-            core_conflict: "",
-            background: "",
-            characters: "",
-            setup: "",
-            development: "",
-            turning_points: "",
-            climax: "",
-            resolution: "",
-            suspense: "",
-            foreshadowing: "",
-            classic_framework: "",
+            ...emptyStoryPrefillFields(),
             wild_creative_notes: "",
             extra_notes: "",
             episode_generation_guidance: "",
@@ -313,19 +309,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         episode_duration_minutes: 1,
         script_mode: "短剧快节奏 / Short Drama",
         target_audience: "男频路线 / Male-Oriented",
-        logline: "",
-        theme: "",
-        core_conflict: "",
-        background: "",
-        characters: "",
-        setup: "",
-        development: "",
-        turning_points: "",
-        climax: "",
-        resolution: "",
-        suspense: "",
-        foreshadowing: "",
-        classic_framework: "",
+        ...emptyStoryPrefillFields(),
         wild_creative_notes: "",
         extra_notes: "",
         episode_generation_guidance: "",
@@ -1071,7 +1055,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
                      // Restore Story Generator draft inputs (if previously saved)
                      if (merged.story_generator_global_input && typeof merged.story_generator_global_input === 'object') {
-                         setGlobalStoryInput(prev => ({
+                         setGlobalStoryInput(prev => migrateLegacyPlotToBeats({
                              ...prev,
                              ...merged.story_generator_global_input,
                              episode_duration_minutes: Number(merged.story_generator_global_input.episode_duration_minutes) > 0
@@ -1367,22 +1351,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         : 1,
                     script_mode: globalStoryInput.script_mode,
                     target_audience: globalStoryInput.target_audience,
-                    logline: globalStoryInput.logline,
-                    theme: globalStoryInput.theme,
-                    core_conflict: globalStoryInput.core_conflict,
-                    background: globalStoryInput.background,
-                    characters: globalStoryInput.characters,
-                    setup: globalStoryInput.setup,
-                    development: globalStoryInput.development,
-                    turning_points: globalStoryInput.turning_points,
-                    climax: globalStoryInput.climax,
-                    resolution: globalStoryInput.resolution,
-                    suspense: globalStoryInput.suspense,
-                    foreshadowing: globalStoryInput.foreshadowing,
-                    classic_framework: globalStoryInput.classic_framework,
-                    wild_creative_notes: globalStoryInput.wild_creative_notes,
-                    extra_notes: globalStoryInput.extra_notes,
-                    episode_generation_guidance: globalStoryInput.episode_generation_guidance,
+                    ...storyPrefillPayloadFields(globalStoryInput),
                 };
                 await saveProjectStoryGeneratorGlobalInput(id, payload);
                 setGeneratorAutosaveState('saved', t('故事输入已自动保存', 'Story input auto-saved'));
@@ -1651,22 +1620,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 : 1,
             script_mode: globalStoryInput.script_mode,
             target_audience: globalStoryInput.target_audience,
-            logline: globalStoryInput.logline,
-            theme: globalStoryInput.theme,
-            core_conflict: globalStoryInput.core_conflict,
-            background: globalStoryInput.background,
-            characters: globalStoryInput.characters,
-            setup: globalStoryInput.setup,
-            development: globalStoryInput.development,
-            turning_points: globalStoryInput.turning_points,
-            climax: globalStoryInput.climax,
-            resolution: globalStoryInput.resolution,
-            suspense: globalStoryInput.suspense,
-            foreshadowing: globalStoryInput.foreshadowing,
-            classic_framework: globalStoryInput.classic_framework,
-            wild_creative_notes: globalStoryInput.wild_creative_notes,
-            extra_notes: globalStoryInput.extra_notes,
-            episode_generation_guidance: globalStoryInput.episode_generation_guidance,
+            ...storyPrefillPayloadFields(globalStoryInput),
             trending_ai_short_dramas_report: trendingDramasReport,
             ai_short_drama_industry_report: industryAnalysisReport,
             ...patch,
@@ -1873,22 +1827,15 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 type: info.type,
                 language: info.language,
             }));
-            const structureFields = [
-                'logline', 'theme', 'core_conflict', 'background', 'characters',
-                'setup', 'development', 'turning_points', 'climax', 'resolution',
-                'suspense', 'foreshadowing', 'classic_framework', 'extra_notes',
-            ];
             setGlobalStoryInput(prev => {
                 const next = { ...prev, wild_creative_notes: prev.wild_creative_notes };
-                structureFields.forEach((key) => {
-                    if (structured && Object.prototype.hasOwnProperty.call(structured, key)) {
-                        next[key] = String(structured[key] ?? '').trim();
-                    }
+                STORY_PREFILL_KEYS.forEach((key) => {
+                    next[key] = String(structured?.[key] ?? '').trim();
                 });
-                return next;
+                return { ...next, ...rollupSaveTheCat(next) };
             });
             setStoryGenFocusStep('structure_prefill');
-            alert(t('已预填 I1–I10，请重点核对：主框架是否现代/当代、辅助是否至少 5 部且维度不同、转译与 I7a 高潮名场面。', 'I1–I10 prefilled. Review: primary is modern/contemporary, at least 5 distinct auxiliaries, transfer, and I7a climax scenes.'));
+            alert(t('已按救猫咪 15 节拍预填。请核对：主控思想是否是「价值+因为」，人物是否有前提、三维和弧光，15 拍是否一拍压一拍，主框架是否现代/当代且辅助至少 5 部。', 'Prefilled on the Save the Cat 15 beats. Check: controlling idea is value-plus-because, characters have premise, dimensions, and an arc, the 15 beats chain, and the primary is modern/contemporary with at least 5 auxiliaries.'));
         } catch (e) {
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
@@ -1919,22 +1866,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 language: info.language,
                 base_positioning: info.base_positioning,
                 Global_Style: info.Global_Style,
-                logline: globalStoryInput.logline,
-                theme: globalStoryInput.theme,
-                core_conflict: globalStoryInput.core_conflict,
-                background: globalStoryInput.background,
-                characters: globalStoryInput.characters,
-                setup: globalStoryInput.setup,
-                development: globalStoryInput.development,
-                turning_points: globalStoryInput.turning_points,
-                climax: globalStoryInput.climax,
-                resolution: globalStoryInput.resolution,
-                suspense: globalStoryInput.suspense,
-                foreshadowing: globalStoryInput.foreshadowing,
-                classic_framework: globalStoryInput.classic_framework,
-                wild_creative_notes: globalStoryInput.wild_creative_notes,
-                extra_notes: globalStoryInput.extra_notes,
-                episode_generation_guidance: globalStoryInput.episode_generation_guidance,
+                ...storyPrefillPayloadFields(globalStoryInput),
             };
             const updated = await generateProjectStoryGlobal(id, buildScriptAnalysisApiPayload(payload));
             setProject(updated);
@@ -3858,7 +3790,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             />
                         </div>
 
-                        {/* Step 2: Structure & Prefill (I1–I10) */}
+                        {/* Step 2: Structure & Prefill (McKee + Egri + Save the Cat) */}
                         <div
                             ref={(el) => { storyGenStepRefs.current.structure_prefill = el; }}
                             className={`sm:col-span-2 rounded-xl border p-4 space-y-4 transition-colors ${storyGenFocusStep === 'structure_prefill' ? 'border-purple-500/40 bg-purple-500/5' : 'border-white/10 bg-white/[0.02]'}`}
@@ -3867,10 +3799,10 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 <div>
                                     <div className="flex items-center gap-2">
                                         <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${structurePrefillReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>2</span>
-                                        <div className="text-sm font-semibold text-white">{t('脑洞标准输入（I1–I10）', 'Creative Input (I1–I10)')}</div>
+                                        <div className="text-sm font-semibold text-white">{t('结构化预填（核心建置 · 人物弧光 · 救猫咪15拍）', 'Structure & Prefill (Concept · Character · 15 Beats)')}</div>
                                     </div>
                                     <div className="text-xs text-muted-foreground mt-1">
-                                        {t('点「结构化预填」从天马行空直接生成 I1–I10（主骨架优先现代/当代，并至少配 5 部辅助，避免整段翻拍）；也可手工填写。预填不要随便抄场景：地点须匹配身份、符合逻辑且剧情真正需要；拿不准可不写环境，留给后续大纲规划。', 'Use Structure & Prefill to generate I1–I10 from wild ideas (modern/contemporary primary plus at least 5 auxiliaries to avoid remaking the primary); or fill manually. Do not casually copy locations: a place must match status, stay logical, and be plot-required; otherwise omit environment and let later outline nodes plan it.')}
+                                        {t('点「结构化预填」生成三层：三幕与麦基做核心建置，编剧的艺术做人设和弧光，情节按救猫咪 15 节拍往下接。主骨架仍优先现代/当代，并至少配 5 部辅助。地点拿不准可以不写。', 'Structure & Prefill builds three layers: three-act and McKee for the concept, Egri for character and arc, and the Save the Cat 15 beats for the plot. The primary spine stays modern/contemporary, with at least 5 auxiliaries. Omit a location if you are unsure.')}
                                     </div>
                                 </div>
                                 <button
@@ -3878,7 +3810,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     onClick={handleStructureCreativeInput}
                                     disabled={isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady}
                                     className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
-                                    title={t('根据天马行空直接生成 I1–I10（主框架优先现代/当代，场景须匹配且可省略）', 'Generate I1–I10 directly from wild ideas (modern/contemporary primary; locations optional, must match)')}
+                                    title={t('按三幕与麦基、编剧的艺术、救猫咪 15 拍，从天马行空直接预填', 'Prefill from wild ideas using three-act and McKee, Egri, and the Save the Cat 15 beats')}
                                 >
                                     {isStructuringCreativeInput
                                         ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('结构化中...', 'Structuring...')}</>
@@ -3888,56 +3820,66 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             {[
                                 {
                                     id: 'logline',
-                                    label: t('I1 高概念 Logline', 'I1 Logline / High Concept'),
+                                    label: t('高概念 · 欲望脊柱', 'High Concept · Desire Spine'),
                                     hint: t(
-                                        '高概念 = 3 秒让人懂「这是什么故事、独特在哪、为什么要看」。写独特钩子+困境/目标+变数；不写主题（I2）和矛盾细节（I3）。',
-                                        'High concept = in 3 seconds: what story, what\'s unique, why watch. Hook + dilemma/goal + twist; not theme (I2) or conflict detail (I3).'
+                                        '麦基的脊柱：谁想要什么、谁在挡、失败会失去什么。三秒能懂。不写主题，不写十五拍。',
+                                        'McKee\'s spine: who wants what, who blocks them, what is lost on failure. Understandable in three seconds. Not the theme, and not the 15 beats.'
                                     ),
                                     example: t(
-                                        '例：能看见「死亡倒计时」的实习律师，必须在被当成疯子之前，救下将被谋杀的上司。',
-                                        'e.g. An intern lawyer who sees death countdowns must save her boss from murder before being labeled insane.'
+                                        '例：能看见死亡倒计时的实习律师，要在被当成疯子之前救下将被谋杀的上司；挡住她的是封口体系。',
+                                        'e.g. An intern who sees death countdowns must save her boss before she is called insane; a cover-up system stands in the way.'
                                     ),
                                     rows: 2,
                                 },
                                 {
                                     id: 'theme',
-                                    label: t('I2 主题与主控思想', 'I2 Theme / Controlling Idea'),
-                                    hint: t('本剧最终要证明什么价值/人性命题（Controlling Idea）', 'What value or human truth the story ultimately proves'),
+                                    label: t('主控思想', 'Controlling Idea'),
+                                    hint: t('麦基：价值电荷 + 原因。写成「……战胜/输掉……，因为……」。三幕结局要能证明这句。', 'McKee: value charge plus cause. Write "X beats/loses to Y, because …". The ending must be able to prove it.'),
                                     example: t(
-                                        '例：当真相与忠诚冲突时，选择真相才能救人；包庇只会让系统一起崩塌。',
-                                        'e.g. When truth conflicts with loyalty, only truth saves lives; cover-ups collapse the system.'
+                                        '例：真相战胜封口，因为有人愿意用职业生涯把证据公开。',
+                                        'e.g. Truth beats the cover-up, because someone will spend their career to make the evidence public.'
                                     ),
                                     rows: 2,
                                 },
                                 {
                                     id: 'core_conflict',
-                                    label: t('I3 核心矛盾·赌注', 'I3 Core Conflict & Stakes'),
-                                    hint: t('不可调和对立 + 失败代价 + 行动为何适得其反（Gap）', 'Irreconcilable opposition + stakes + why actions backfire'),
+                                    label: t('对抗 · 鸿沟 · 危机', 'Antagonism · Gap · Crisis'),
+                                    hint: t('对抗原则（对手更强）、否定之否定、期望和实际结果的鸿沟、赌注，以及危机时必须做的两难。', 'Principle of antagonism, negation of the negation, the gap between expected and actual results, the stakes, and the crisis dilemma.'),
                                     example: t(
-                                        '例：林一 vs 集团封口体系+真凶；赌注：职业与生命；每查一步审计逼近一步，调查本身触发灭口。',
-                                        'e.g. Lin vs corporate cover-up + killer; stakes: career and life; each probe triggers audit and retaliation.'
+                                        '例：封口体系比林一更有权；最坏不是查无结果，而是真相被当成诬告。两难：交牌自保，或留证担责。',
+                                        'e.g. The cover-up outranks Lin. The worst charge is not "no proof" but truth branded as slander. Dilemma: hand over the badge, or keep the evidence and take the blame.'
+                                    ),
+                                    rows: 3,
+                                },
+                                {
+                                    id: 'three_act',
+                                    label: t('三幕价值弧', 'Three-Act Value Arc'),
+                                    hint: t('只写三幕各自往哪边翻价值，不写十五拍的场面。建置如何被打破，对抗如何逐级翻转，结局用哪一次危机选择证明主控思想。', 'The value turn of each act, not the 15 scenes. How the balance breaks, how confrontation turns the value, and which crisis choice proves the controlling idea.'),
+                                    example: t(
+                                        '例：第一幕，审计日常被一封无署名解雇信打破。第二幕，每查一步权限就收紧，中点是假胜利。第三幕，交牌或留证；公开证据证明真相能救人，人也被行业放下。',
+                                        'e.g. Act I: an unsigned termination letter breaks the audit routine. Act II: each probe tightens access; the midpoint is a false win. Act III: surrender the badge or keep the proof; going public proves truth can save a life, at the cost of the career.'
                                     ),
                                     rows: 3,
                                 },
                                 {
                                     id: 'background',
-                                    label: t('I4 世界与背景', 'I4 World & Background'),
-                                    hint: t('时代/地点/规则/前史/视觉基调', 'Era, place, rules, backstory, visual tone'),
+                                    label: t('故事世界 · 压力场', 'Story World · Pressure'),
+                                    hint: t('迫使人物做选择的时代、制度、礼法和能力边界。不是地点清单。', 'The era, institution, custom, and limits of ability that force the choice. Not a list of locations.'),
                                     example: t(
-                                        '例：2026 上海跨国律所；职级门禁+24h 审计；冷峻都市写实。',
-                                        'e.g. 2026 Shanghai megafirm; tiered access + 24h audit logs; cold urban realism.'
+                                        '例：2026 跨国律所。职级决定能进哪扇门。审计 24 小时留痕。越权本身就会触发约谈。',
+                                        'e.g. A 2026 megafirm. Rank decides which door opens. Audit logs last 24 hours. Overreach itself triggers a hearing.'
                                     ),
                                     rows: 3,
                                 },
                                 {
                                     id: 'characters',
-                                    label: t('I5 核心人物', 'I5 Characters & Relationships'),
-                                    hint: t('主角/对手/关系；可写 Ghost·Need·Want 种子', 'Protagonist, antagonist, ties; Ghost/Need/Want seeds'),
+                                    label: t('人物 · 前提与弧光', 'Characters · Premise & Arc'),
+                                    hint: t('编剧的艺术：前提、生理/社会/心理、谁逼谁变、统一的对立面、编排对照、弧光从哪一极走到哪一极。姓名用日常人名。', 'Egri: premise, physiology/sociology/psychology, who forces the change, unity of opposites, orchestration, and the arc from one pole to the other. Ordinary names.'),
                                     example: t(
-                                        '例：林一：实习法务，Need 边界，Want 留任。周薇：盟友→对手。',
-                                        'e.g. Lin Yi: intern, Need boundaries, Want to stay. Zhou Wei: ally→foe.'
+                                        '例：前提：怕失去位置的人，经过封口冲突，会学会用位置去公开真相。林一：社会=实习法务｜心理=先自保｜弧光：交牌→留证。周薇：信念相反，两人互相锁死。',
+                                        'e.g. Premise: fear of losing one\'s place, through a cover-up, learns to spend that place on the truth. Lin: sociology=intern, psychology=self-protection, arc=hand over the badge → keep the proof. Zhou holds the opposite belief; the two lock each other.'
                                     ),
-                                    rows: 3,
+                                    rows: 5,
                                 },
                             ].map((field) => (
                                 <div key={field.id}>
@@ -3957,7 +3899,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             <div>
                                 <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('I10 经典作品框架', 'I10 Classic Works Framework')}</label>
                                 <div className="text-[11px] text-muted-foreground/80 mb-0.5">
-                                    {t('主框架优先选现代、当代作品的剧情逻辑；除主框架外至少再列 5 部辅助（各贡献不同维度：桥段/特效/动作/对白/反转/关系），用来拆开主框架、避免整段翻拍。古典原典只可作辅助。须写作品名、机制与转译，不搬原作皮相。', 'Primary spine: prefer modern/contemporary plot logic. Besides the primary, list at least 5 auxiliaries, each a different dimension (set piece / VFX / action / dialogue / reversal / relationship), so the story is not a remake. Pre-modern classics are auxiliaries only. Name works, mechanisms, and the transfer — do not copy the source skin.')}
+                                    {t('主框架优先选现代、当代作品的剧情逻辑，并写明落在哪几拍。除主框架外至少再列 5 部辅助，各贡献不同维度，用来拆开主框架。古典原典只可作辅助。写作品名、机制与转译。', 'Primary spine: prefer modern/contemporary plot logic, and name which beats it lands on. Besides the primary, list at least 5 auxiliaries, each a different dimension, so the 15 beats are not a remake. Pre-modern classics are auxiliaries only. Name works, mechanisms, and the transfer.')}
                                 </div>
                                 <div className="text-[11px] text-primary/70 mb-1.5 italic">
                                     {t('例：主框架：《消失的爱人》— 证据战与身份反转；转译→宫斗密折/朝堂对质。辅助≥5：《肖申克的救赎》取证；《喜剧之王》身份反差；《无间道》双面身份；《寄生虫》阶层空间；《致命ID》封闭空间置换。各写机制+转译，禁五部复述主框架。', 'e.g. Spine: Gone Girl — evidence war + identity reversal; transfer → palace memorial / court confrontation. Aux≥5: Shawshank (covert proof); King of Comedy (status reversal); Infernal Affairs (double identity); Parasite (class space); Identity (closed-room swap). Each a different mechanism + transfer; do not retell the primary five times.')}
@@ -3971,89 +3913,34 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     placeholder={t('例：主框架：《消失的爱人》— 剧情逻辑：…；转译→…。辅助≥5：《肖申克的救赎》…；《无间道》…；《寄生虫》…；…', 'e.g. Spine: Gone Girl — plot logic: …; transfer → …. Aux≥5: Shawshank …; Infernal Affairs …; Parasite …; …')}
                                 />
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                {[
-                                    {
-                                        id: 'setup',
-                                        label: t('I6a 开局与激励', 'I6a Opening & Inciting'),
-                                        hint: t('激励事件 + 打破日常；地点仅在剧情需要且身份/准入说得通时才写，否则不写环境', 'Inciting incident; name a place only if plot-required and access is logical, otherwise omit environment'),
-                                        example: t(
-                                            '例：晨会送文件误拿卡套→总裁电梯开门→看见未署名解雇信。',
-                                            'e.g. Wrong badge case at morning handoff → CEO elevator opens → unsigned termination letter.'
-                                        ),
-                                        rows: 3,
-                                    },
-                                    {
-                                        id: 'development',
-                                        label: t('I6b 中段升级', 'I6b Mid Arc Escalation'),
-                                        hint: t('受挫、加码、副线、压力升级；优先写事件，不要从参考作抄场景', 'Setbacks, escalation, B-story; write events first — do not copy reference locations'),
-                                        example: t(
-                                            '例：人事约谈假配合→暗中比对信纸→周薇暗中观察。',
-                                            'e.g. HR interview feigned compliance → secret paper match → Zhou Wei watches.'
-                                        ),
-                                        rows: 3,
-                                    },
-                                    {
-                                        id: 'turning_points',
-                                        label: t('I6c 转折与中点', 'I6c Turning Points'),
-                                        hint: t('中点反转、真相揭露、局势失控；环境可留空给后续规划', 'Midpoint reversal, reveal, loss of control; environment may be left for later nodes'),
-                                        example: t(
-                                            '例：中点：信纸来自总裁办；信任崩塌；保安搜身逼近。',
-                                            'e.g. Midpoint: letter paper from CEO office; trust breaks; security search closes in.'
-                                        ),
-                                        rows: 3,
-                                    },
-                                ].map((field) => (
-                                    <div key={field.id}>
-                                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{field.label}</label>
-                                        <div className="text-[11px] text-muted-foreground/80 mb-0.5">{field.hint}</div>
-                                        <div className="text-[11px] text-primary/70 mb-1.5 italic">{field.example}</div>
-                                        <textarea
-                                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
-                                            rows={field.rows}
-                                            placeholder={field.example}
-                                            value={globalStoryInput[field.id] || ''}
-                                            onFocus={() => setStoryGenFocusStep('structure_prefill')}
-                                            onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
-                                        />
+                            <div className="space-y-3">
+                                <div>
+                                    <div className="text-xs font-bold text-white">{t('救猫咪 15 节拍', 'Save the Cat · 15 Beats')}</div>
+                                    <div className="text-[11px] text-muted-foreground/80 mt-0.5">
+                                        {t('情节按这 15 拍往下接。每一拍写谁对谁做了什么、期望和实际差在哪、价值往哪边翻。上一拍的结果是下一拍的压力。地点拿不准就不写。', 'The plot runs down these 15 beats. Each beat: who does what to whom, the gap between expected and actual, and which way the value turns. One beat\'s result is the next beat\'s pressure. Omit a location if you are unsure.')}
                                     </div>
-                                ))}
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                {[
-                                    {
-                                        id: 'climax',
-                                        label: t('I7a 高潮与名场面', 'I7a Climax & Must-Have Scenes'),
-                                        hint: t('必须拍出的高潮事件：对白与动作；地点须匹配身份/准入且剧情需要，否则不写环境', 'Must-have climax beats: lines and action; name a place only if it matches access and is plot-required, otherwise omit'),
-                                        example: t(
-                                            '例：雨夜天台对峙，工牌作钥，当众播放偷拍视频换生存。',
-                                            'e.g. Rainy rooftop standoff; badge as key; plays hidden video publicly to survive.'
-                                        ),
-                                        rows: 3,
-                                    },
-                                    {
-                                        id: 'resolution',
-                                        label: t('I7b 结局与收尾', 'I7b Ending & Resolution'),
-                                        hint: t('终局态、代价、新常态、续集留白', 'Final state, cost, new normal, sequel hook'),
-                                        example: t(
-                                            '例：真凶曝光但林一被行业封杀；留白：工牌权限谁开的。',
-                                            'e.g. Killer exposed but Lin blacklisted; hook: who granted badge access?'
-                                        ),
-                                        rows: 3,
-                                    },
-                                ].map((field) => (
-                                    <div key={field.id}>
-                                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{field.label}</label>
-                                        <div className="text-[11px] text-muted-foreground/80 mb-0.5">{field.hint}</div>
-                                        <div className="text-[11px] text-primary/70 mb-1.5 italic">{field.example}</div>
-                                        <textarea
-                                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
-                                            rows={field.rows}
-                                            placeholder={field.example}
-                                            value={globalStoryInput[field.id] || ''}
-                                            onFocus={() => setStoryGenFocusStep('structure_prefill')}
-                                            onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
-                                        />
+                                </div>
+                                {SAVE_THE_CAT_ACTS.map((act) => (
+                                    <div key={act.id} className="space-y-2">
+                                        <div className="text-[11px] font-bold uppercase tracking-wide text-primary/80">{t(act.zh, act.en)}</div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            {act.beats.map((beat) => (
+                                                <div key={beat.id}>
+                                                    <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">
+                                                        {beat.no} {t(beat.zh, beat.en)}
+                                                    </label>
+                                                    <div className="text-[11px] text-muted-foreground/80 mb-1">{t(beat.hintZh, beat.hintEn)}</div>
+                                                    <textarea
+                                                        className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                                        rows={3}
+                                                        placeholder={t(beat.hintZh, beat.hintEn)}
+                                                        value={globalStoryInput[beat.id] || ''}
+                                                        onFocus={() => setStoryGenFocusStep('structure_prefill')}
+                                                        onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [beat.id]: e.target.value }))}
+                                                    />
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -4062,7 +3949,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     {
                                         id: 'suspense',
                                         label: t('I8a 核心悬念', 'I8a Core Suspense'),
-                                        hint: t('观众贯穿全剧想追问的问题（与 I3 对抗结构互补）', 'Core questions driving the season'),
+                                        hint: t('观众贯穿全剧想追问的问题。和危机两难互补，不代替它。', 'Questions the audience keeps asking. They complement the crisis dilemma; they do not replace it.'),
                                         example: t(
                                             '例：谁写了解雇信？谁给了林一总裁权限？',
                                             'e.g. Who wrote the letter? Who gave Lin CEO-level access?'

@@ -657,7 +657,35 @@ def test_story_markdown_and_market_intel_sinks():
     assert _parse_episode_heading_from_markdown("# EP01 - Foo")["episode_number"] == 1
     assert _sanitize_llm_json_text('```json\n{"a":1}\n```')
     assert _normalize_story_field_map({"a": " x "}, ["a"])["a"] == "x"
-    assert "logline" in _CREATIVE_INPUT_STRUCTURE_KEYS or len(_CREATIVE_INPUT_STRUCTURE_KEYS) >= 3
+    assert "logline" in _CREATIVE_INPUT_STRUCTURE_KEYS
+    assert "three_act" in _CREATIVE_INPUT_STRUCTURE_KEYS
+    assert "stc_01_opening_image" in _CREATIVE_INPUT_STRUCTURE_KEYS
+    assert "stc_15_final_image" in _CREATIVE_INPUT_STRUCTURE_KEYS
+    from app.services.story_generator_llm import rollup_save_the_cat, format_story_creative_input_block
+    rolled = rollup_save_the_cat({
+        "stc_04_catalyst": "信出现",
+        "stc_09_midpoint": "中点翻面",
+        "stc_14_finale": "当众公开",
+        "stc_15_final_image": "工牌还在",
+        "setup": "旧桶不该盖住节拍",
+    })
+    assert "信出现" in rolled["setup"]
+    assert "旧桶不该盖住节拍" not in rolled["setup"]
+    assert rolled["turning_points"] == "中点翻面"
+    assert rolled["climax"] == "当众公开"
+    assert rolled["resolution"] == "工牌还在"
+    legacy = rollup_save_the_cat({"setup": "旧开局", "climax": "旧高潮"})
+    assert legacy["setup"] == "旧开局"
+    assert legacy["climax"] == "旧高潮"
+    block = format_story_creative_input_block({
+        "logline": "脊柱",
+        "stc_01_opening_image": "开场工牌",
+        "theme": "真相战胜封口，因为有人公开证据",
+    })
+    assert "节拍01" in block
+    assert "开场工牌" in block
+    assert "主控思想" in block
+    assert "旧开局" not in block
     assert callable(_require_market_intel_model)
     assert "热榜" in _build_trending_dramas_markdown("2026-07", "s", [])
     assert _industry_analysis_section_map()

@@ -105,22 +105,7 @@ async def generate_project_story_dna_global(
         f"Script Mode: {(getattr(req, 'script_mode', None) or '').strip()}\n"
         f"Target Audience: {(getattr(req, 'target_audience', None) or '').strip()}\n"
         f"\n"
-        f"[Creative Input — Standard Structure (脑洞标准输入)]\n"
-        f"I1 Logline / 高概念: {(getattr(req, 'logline', None) or '').strip()}\n"
-        f"I2 Theme / 主题与主控思想: {(getattr(req, 'theme', None) or '').strip()}\n"
-        f"I3 Core Conflict / 核心矛盾·赌注·Gap: {(getattr(req, 'core_conflict', None) or '').strip()}\n"
-        f"I4 World & Background / 世界与背景: {(req.background or '').strip()}\n"
-        f"I5 Characters & Relationships / 核心人物: {(getattr(req, 'characters', None) or '').strip()}\n"
-        f"I6a Opening & Inciting / 开局与激励: {(req.setup or '').strip()}\n"
-        f"I6b Mid Arc Escalation / 中段升级: {(req.development or '').strip()}\n"
-        f"I6c Turning Points / 转折与中点: {(req.turning_points or '').strip()}\n"
-        f"I7a Climax & Must-Have Scenes / 高潮与名场面: {(req.climax or '').strip()}\n"
-        f"I7b Ending & Resolution / 结局与收尾: {(req.resolution or '').strip()}\n"
-        f"I8a Core Suspense / 核心悬念: {(req.suspense or '').strip()}\n"
-        f"I8b Foreshadowing & Must-Keep / 伏笔与必留元素: {(req.foreshadowing or '').strip()}\n"
-        f"I9 Raw Fragments / 自由脑洞补充: {(req.extra_notes or '').strip()}\n"
-        f"I10 Classic Framework / 经典作品框架: {(getattr(req, 'classic_framework', None) or '').strip()}\n"
-        f"Wild Creative Notes (天马行空原文，保留溯源): {(getattr(req, 'wild_creative_notes', None) or '').strip()}\n"
+        f"{format_story_creative_input_block(req)}\n"
     )
 
     llm_config = _resolve_story_generator_script_analysis_llm_config(
@@ -685,6 +670,8 @@ class StructureCreativeInputRequest(BaseModel):
 from app.services.story_generator_llm import (  # noqa: E402,F401
     _loads_json5_if_available,
     _CREATIVE_INPUT_STRUCTURE_KEYS,
+    format_story_creative_input_block,
+    rollup_save_the_cat,
     _sanitize_llm_json_text,
     _extract_llm_json_object_from_text,
     _normalize_llm_json_object,
@@ -752,17 +739,20 @@ async def structure_project_creative_input_to_story_fields(
     user_prompt = (
         f"{project_context}\n"
         f"Wild Creative Brainstorm:\n{creative_text}\n\n"
-        "Structure I1-I10 directly from the brainstorm. Do not wait for or assume web-search evidence. "
+        "Build the prefill in three layers. Concept (logline, controlling idea, antagonism, three-act value arc, world) comes from the three-act shape and McKee's Story. "
+        "Characters and the arc come from Egri's Art of Dramatic Writing: premise, three dimensions, unity of opposites, orchestration, transition. "
+        "Plot is the Save the Cat 15-beat sheet, causally chained, not five loose buckets. "
+        "Do not wait for or assume web-search evidence. "
         "I10 must name one primary MODERN/CONTEMPORARY work (literature / film / TV / game; prefer recent decades) as the PLOT-LOGIC framework, "
-        "plus AT LEAST 5 auxiliaries (older classics OK only as auxiliaries; each a different dimension) so I6-I8 is not a remake of the primary. "
+        "plus AT LEAST 5 auxiliaries (older classics OK only as auxiliaries; each a different dimension) so the 15 beats are not a remake of the primary. "
         "Cross-style transfer is required: keep causal/beat/set-piece logic, "
         "transcode genre/skin (e.g. modern workplace engine → ancient palace drama). Do not default a pre-modern classic as the primary spine. "
         "For each work write reusable logic (core plot, set pieces, VFX function, action, dialogue, "
         "and how distance/comms/blocking actually work on screen) and 转译. "
-        "I6-I8 beats must be physically shootable: no long-distance conversation without a comms tool or same-space staging. "
+        "Beats 01-15 must be physically shootable: no long-distance conversation without a comms tool or same-space staging. "
         "Do NOT casually copy scene/environment names from the brainstorm or from reference works. "
         "Name a location only if the plot hard-needs that space, it matches character status/access (prisons/monitor rooms/vaults are restricted), and arrival is logical; otherwise omit place and write the event only — later nodes will plan environments. "
-        "Prioritize climax and iconic beats (I7a) using visual, dialogue, and action reference angles — not copied sets."
+        "Put the must-have climax inside beat 14, and rhyme beat 15 with beat 01."
     )
     raw = await _run_structure_llm_call(
         db=db,
@@ -789,6 +779,7 @@ async def structure_project_creative_input_to_story_fields(
         llm_config=structure_llm_config,
     )
     normalized = _normalize_story_field_map(data, _CREATIVE_INPUT_STRUCTURE_KEYS)
+    normalized.update(rollup_save_the_cat(normalized))
     normalized["prefill_meta"] = {
         "pipeline": "structure_fill",
         "key_elements": {},

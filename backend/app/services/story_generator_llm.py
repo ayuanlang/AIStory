@@ -39,22 +39,115 @@ def _loads_json5_if_available(text: str) -> Optional[Any]:
     except Exception:
         return None
 
+# Save the Cat 15. Legacy I6/I7 buckets are rollups of these beats.
+SAVE_THE_CAT_BEATS = [
+    ("stc_01_opening_image", "01", "开场画面", "Opening Image", "第一幕"),
+    ("stc_02_theme_stated", "02", "主题呈现", "Theme Stated", "第一幕"),
+    ("stc_03_setup", "03", "铺垫", "Set-up", "第一幕"),
+    ("stc_04_catalyst", "04", "催化剂", "Catalyst", "第一幕"),
+    ("stc_05_debate", "05", "争执", "Debate", "第一幕"),
+    ("stc_06_break_into_two", "06", "进入第二幕", "Break into Two", "第二幕上"),
+    ("stc_07_b_story", "07", "B故事", "B Story", "第二幕上"),
+    ("stc_08_fun_and_games", "08", "游戏时间", "Fun and Games", "第二幕上"),
+    ("stc_09_midpoint", "09", "中点", "Midpoint", "第二幕下"),
+    ("stc_10_bad_guys_close_in", "10", "反派逼近", "Bad Guys Close In", "第二幕下"),
+    ("stc_11_all_is_lost", "11", "一无所有", "All Is Lost", "第二幕下"),
+    ("stc_12_dark_night", "12", "灵魂黑夜", "Dark Night of the Soul", "第二幕下"),
+    ("stc_13_break_into_three", "13", "进入第三幕", "Break into Three", "第三幕"),
+    ("stc_14_finale", "14", "终场", "Finale", "第三幕"),
+    ("stc_15_final_image", "15", "终场画面", "Final Image", "第三幕"),
+]
+
+_SAVE_THE_CAT_BEAT_KEYS = [row[0] for row in SAVE_THE_CAT_BEATS]
+
+_LEGACY_BEAT_GROUPS = {
+    "setup": _SAVE_THE_CAT_BEAT_KEYS[0:5],
+    "development": _SAVE_THE_CAT_BEAT_KEYS[5:8],
+    "turning_points": _SAVE_THE_CAT_BEAT_KEYS[8:12],
+    "climax": _SAVE_THE_CAT_BEAT_KEYS[12:14],
+    "resolution": _SAVE_THE_CAT_BEAT_KEYS[14:15],
+}
+
 _CREATIVE_INPUT_STRUCTURE_KEYS = [
     "logline",
     "theme",
     "core_conflict",
+    "three_act",
     "background",
     "characters",
+    *_SAVE_THE_CAT_BEAT_KEYS,
+    "suspense",
+    "foreshadowing",
+    "classic_framework",
+    "extra_notes",
     "setup",
     "development",
     "turning_points",
     "climax",
     "resolution",
-    "suspense",
-    "foreshadowing",
-    "classic_framework",
-    "extra_notes",
 ]
+
+
+def _field_text(source: Any, key: str) -> str:
+    if isinstance(source, dict):
+        val = source.get(key, "")
+    else:
+        val = getattr(source, key, "")
+    if val is None:
+        return ""
+    return str(val).strip()
+
+
+def rollup_save_the_cat(source: Any) -> Dict[str, str]:
+    """Fold the 15 beats into the legacy plot buckets. Empty beats keep the old buckets."""
+    has_beat = any(_field_text(source, key) for key in _SAVE_THE_CAT_BEAT_KEYS)
+    if not has_beat:
+        return {name: _field_text(source, name) for name in _LEGACY_BEAT_GROUPS}
+    rolled: Dict[str, str] = {}
+    for name, keys in _LEGACY_BEAT_GROUPS.items():
+        parts = [_field_text(source, key) for key in keys]
+        rolled[name] = "\n".join(part for part in parts if part)
+    return rolled
+
+
+def format_story_creative_input_block(source: Any) -> str:
+    """Creative-input block for the global architect. Beats win; old buckets are the fallback."""
+    lines = [
+        "[Creative Input — 核心建置（三幕式 + 麦基《故事》）]",
+        f"I1 高概念 / 欲望脊柱: {_field_text(source, 'logline')}",
+        f"I2 主控思想 Controlling Idea（价值+原因）: {_field_text(source, 'theme')}",
+        f"I3 对抗原则 · 否定之否定 · Gap · 危机抉择: {_field_text(source, 'core_conflict')}",
+        f"I3b 三幕价值弧: {_field_text(source, 'three_act')}",
+        f"I4 故事世界（压力场）: {_field_text(source, 'background')}",
+        "",
+        "[人物 — 《编剧的艺术》]",
+        f"I5 前提 / 三维 / 统一的对立面 / 编排 / 弧光: {_field_text(source, 'characters')}",
+        "",
+        "[情节 — 救猫咪 15 节拍]",
+    ]
+    beat_lines = []
+    for key, num, zh, en, act in SAVE_THE_CAT_BEATS:
+        text = _field_text(source, key)
+        if text:
+            beat_lines.append(f"节拍{num} {zh} / {en}｜幕={act}: {text}")
+    if beat_lines:
+        lines.extend(beat_lines)
+    else:
+        lines.append("（15 节拍为空。下面是旧版情节桶，按幕归位，不是另一套结构。）")
+        lines.append(f"旧开局与激励 → 第一幕: {_field_text(source, 'setup')}")
+        lines.append(f"旧中段升级 → 第二幕上: {_field_text(source, 'development')}")
+        lines.append(f"旧转折与中点 → 第二幕下: {_field_text(source, 'turning_points')}")
+        lines.append(f"旧高潮与名场面 → 进入第三幕与终场: {_field_text(source, 'climax')}")
+        lines.append(f"旧结局与收尾 → 终场画面: {_field_text(source, 'resolution')}")
+    lines.extend([
+        "",
+        f"I8a 核心悬念: {_field_text(source, 'suspense')}",
+        f"I8b 伏笔与必留: {_field_text(source, 'foreshadowing')}",
+        f"I9 自由补充: {_field_text(source, 'extra_notes')}",
+        f"I10 经典作品框架: {_field_text(source, 'classic_framework')}",
+        f"天马行空原文: {_field_text(source, 'wild_creative_notes')}",
+    ])
+    return "\n".join(lines)
 
 
 def _sanitize_llm_json_text(raw: str) -> str:

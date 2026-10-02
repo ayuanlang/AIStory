@@ -183,6 +183,35 @@ def test_reburn_recovers_past_a_source_that_is_already_burned():
     ) == "https://cdn.example/origin.mp4"
 
 
+def test_title_plate_is_a_transparent_image_with_a_square_seal():
+    from PIL import Image
+
+    from app.services.flower_text_ass import render_title_plate, resolve_cjk_font_file
+
+    plate = render_title_plate({
+        "text": "何以安康，家和人乐",
+        "companion": "公司服务热线:0599-2323239",
+        "seal": "朱文",
+        "place": "中",
+        "size": "大",
+    }, width=1920, height=1080, font_path=resolve_cjk_font_file())
+    assert isinstance(plate, Image.Image)
+    assert plate.mode == "RGBA"
+    assert plate.size == (1920, 1080)
+    assert plate.getextrema()[3][1] > 200
+    pixels = plate.load()
+    minx, miny, maxx, maxy = 1920, 1080, 0, 0
+    for y in range(1080):
+        for x in range(1920):
+            red, green, blue, alpha = pixels[x, y]
+            if alpha > 180 and red > 120 and green < 80 and blue < 80:
+                minx, miny = min(minx, x), min(miny, y)
+                maxx, maxy = max(maxx, x), max(maxy, y)
+    box_w, box_h = maxx - minx, maxy - miny
+    assert box_w > 70 and box_h > 70
+    assert abs(box_w - box_h) < 8
+
+
 def test_burn_style_uses_the_staged_cjk_font():
     ass = build_ass([{
         "text": "何家安泰",

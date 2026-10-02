@@ -553,6 +553,183 @@ def ffmpeg_supports_ass() -> bool:
     return bool(_ASS_FILTER_CACHE)
 
 
+def resolve_cjk_font_file() -> str:
+    for folder in _cjk_font_search_dirs():
+        for filename, _family in _CJK_FONT_CANDIDATES:
+            src = os.path.join(folder, filename)
+            if os.path.isfile(src):
+                return src
+    raise RuntimeError("找不到可烧录的中文字体。请确认已部署 backend/app/assets/fonts/wqy-microhei.ttc")
+
+
+def _open_cjk_font(font_path: str, size: int):
+    from PIL import ImageFont
+
+    size = max(12, int(size))
+    return ImageFont.truetype(font_path, size, index=0)
+
+
+def _glyph_advance(font: Any, ch: str, tracking: int) -> int:
+    width = int(round(font.getlength(ch))) if hasattr(font, "getlength") else (font.getbbox(ch)[2] - font.getbbox(ch)[0])
+    extra = tracking // 3 if ch in "，。、：:；;·,." else tracking
+    return max(1, width) + max(0, extra)
+
+
+def _tracked_width(font: Any, text: str, tracking: int) -> int:
+    chars = [ch for ch in str(text or "") if ch not in {"\n", "\r"}]
+    if not chars:
+        return 0
+    return sum(_glyph_advance(font, ch, tracking) for ch in chars) - (
+        tracking // 3 if chars[-1] in "，。、：:；;·,." else tracking
+    )
+
+
+def _draw_tracked(draw: Any, text: str, font: Any, center: Tuple[int, int], fill: Tuple[int, int, int, int], tracking: int, vertical: bool = False) -> None:
+    chars = [ch for ch in str(text or "") if ch not in {"\n", "\r"}]
+    if not chars:
+        return
+    if vertical:
+        step = int(getattr(font, "size", 32) * 1.05)
+        top = center[1] - step * (len(chars) - 1) / 2
+        for index, ch in enumerate(chars):
+            draw.text((center[0], top + index * step), ch, font=font, fill=fill, anchor="mm")
+        return
+    cursor = center[0] - _tracked_width(font, "".join(chars), tracking) / 2
+    for ch in chars:
+        advance = _glyph_advance(font, ch, tracking)
+        ink = advance - (tracking // 3 if ch in "，。、：:；;·,." else tracking)
+        draw.text((cursor + ink / 2, center[1]), ch, font=font, fill=fill, anchor="mm")
+        cursor += advance
+
+
+def _paint_tracked(
+    plate: Any,
+    text: str,
+    font: Any,
+    center: Tuple[int, int],
+    fill: Tuple[int, int, int, int],
+    tracking: int,
+    *,
+    vertical: bool = False,
+    shadow: bool = True,
+) -> None:
+    from PIL import Image, ImageDraw, ImageFilter
+
+    if shadow and text:
+        layer = Image.new("RGBA", plate.size, (0, 0, 0, 0))
+        offset = max(1, int(getattr(font, "size", 32) / 22))
+        _draw_tracked(
+            ImageDraw.Draw(layer),
+            text,
+            font,
+            (center[0], center[1] + offset),
+            (28, 20, 14, 150),
+            tracking,
+            vertical,
+        )
+        plate.alpha_composite(layer.filter(ImageFilter.GaussianBlur(radius=max(1.4, getattr(font, "size", 32) / 16))))
+    _draw_tracked(ImageDraw.Draw(plate), text, font, center, fill, tracking, vertical)
+
+
+def _fit_seal_font(font_path: str, cell: int, chars: List[str]) -> Any:
+    size = max(12, int(cell))
+    font = _open_cjk_font(font_path, size)
+    for _ in range(14):
+        fits = True
+        for ch in chars:
+            box = font.getbbox(ch)
+            if (box[2] - box[0]) > cell * 0.92 or (box[3] - box[1]) > cell * 0.92:
+                fits = False
+                break
+        if fits:
+            return font
+        size = max(12, int(size * 0.9))
+        font = _open_cjk_font(font_path, size)
+    return font
+
+
+def render_title_plate(
+    event: Dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    font_path: str,
+) -> Any:
+    """Typeset one title card as a transparent image. Glyphs come from the font file."""
+    from PIL import Image, ImageDraw
+
+    width = max(16, int(width))
+    height = max(16, int(height))
+    plate = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    place = str(event.get("place") or "中")
+    size_name = str(event.get("size") or "中")
+    ratio = {"大": 0.062, "中": 0.046, "小": 0.032}.get(size_name, 0.046)
+    main_size = max(28, int(height * ratio))
+    if place == "画右":
+        main_x = int(width * 0.72)
+    elif place == "画左":
+        main_x = int(width * 0.28)
+    else:
+        main_x = width // 2
+    main_y = int(height * 0.40)
+    ivory = (246, 242, 232, 255)
+    gold = (184, 138, 58, 235)
+    cinnabar = (168, 42, 36, 255)
+    main = str(event.get("text") or "").strip()
+    vertical = bool(event.get("vertical"))
+    title_font = _open_cjk_font(font_path, main_size)
+    tracking = max(6, int(main_size * 0.22))
+    if main:
+        _paint_tracked(plate, main, title_font, (main_x, main_y), ivory, tracking, vertical=vertical)
+        title_w = _tracked_width(title_font, main, tracking) if not vertical else main_size
+        rule_w = max(main_size, int(title_w * 0.62))
+        rule_h = max(2, int(main_size * 0.018))
+        rule_x = main_x - rule_w // 2
+        rule_y = main_y + int(main_size * 0.70)
+        ImageDraw.Draw(plate).rectangle((rule_x, rule_y, rule_x + rule_w, rule_y + rule_h), fill=gold)
+    else:
+        title_w = 0
+        rule_y = main_y
+    companion = str(event.get("companion") or "").strip()
+    if companion:
+        companion_size = max(16, int(main_size * 0.34))
+        companion_font = _open_cjk_font(font_path, companion_size)
+        companion_y = rule_y + int(main_size * 0.62)
+        for line in [part.strip() for part in companion.splitlines() if part.strip()]:
+            _paint_tracked(
+                plate,
+                line,
+                companion_font,
+                (main_x, companion_y),
+                gold,
+                max(2, int(companion_size * 0.08)),
+            )
+            companion_y += int(companion_size * 1.35)
+    seal = str(event.get("seal") or "").strip()
+    chars = [ch for ch in seal if ch not in {"\n", "\r"}]
+    if chars:
+        glyph_count = len(chars)
+        side = int(main_size * (1.02 + 0.58 * max(0, glyph_count - 1)))
+        side = max(side, int(main_size * 1.15))
+        border = max(4, side // 13)
+        gap = int(main_size * 0.38)
+        left = min(width - side - 20, main_x + title_w // 2 + gap)
+        top = max(12, main_y - side // 2)
+        draw = ImageDraw.Draw(plate)
+        draw.rectangle((left, top, left + side - 1, top + side - 1), outline=cinnabar, width=border)
+        inner_pad = border + max(6, side // 16)
+        inner_top = top + inner_pad
+        inner_h = side - 2 * inner_pad
+        cell = max(12, inner_h // glyph_count)
+        stack = cell * glyph_count
+        stack_top = inner_top + max(0, (inner_h - stack) // 2)
+        seal_font = _fit_seal_font(font_path, cell, chars)
+        for index, ch in enumerate(chars):
+            cy = stack_top + cell * index + cell / 2
+            draw.text((left + side / 2, cy), ch, font=seal_font, fill=cinnabar, anchor="mm")
+    return plate
+
+
 def burn_flower_text_video(
     video_url: str,
     script_text: str = "",
@@ -566,8 +743,6 @@ def burn_flower_text_video(
     events = list(events) if events is not None else extract_libass_events(script_text, duration)
     if not events:
         raise ValueError("没有可烧录的文字")
-    if not ffmpeg_supports_ass():
-        raise RuntimeError("当前 ffmpeg 没有 libass（subtitles 滤镜），无法烧录店号")
 
     from app.services.video_service import (
         _download_or_resolve_local_video,
@@ -577,36 +752,50 @@ def burn_flower_text_video(
         _upload_processed_video,
     )
 
-    work_dir = tempfile.mkdtemp(prefix="flower_ass_")
+    work_dir = tempfile.mkdtemp(prefix="flower_plate_")
     try:
         source_path = _download_or_resolve_local_video(video_url, work_dir)
         ffmpeg_exe = _resolve_ffmpeg_exe()
         probed_w, probed_h = _probe_video_size(source_path, ffmpeg_exe)
         frame_w = int(width or probed_w or 1920)
         frame_h = int(height or probed_h or 1080)
-        font_family = stage_burn_font(work_dir)
-        ass_text = build_ass(events, width=frame_w, height=frame_h, font_name=font_family)
-        ass_path = os.path.join(work_dir, "burn.ass")
-        with open(ass_path, "w", encoding="utf-8-sig") as handle:
-            handle.write(ass_text)
+        font_path = resolve_cjk_font_file()
+        plates: List[str] = []
+        for index, event in enumerate(events):
+            plate = render_title_plate(event, width=frame_w, height=frame_h, font_path=font_path)
+            plate_path = os.path.join(work_dir, f"plate_{index}.png")
+            plate.save(plate_path)
+            plates.append(plate_path)
         output_path = os.path.join(work_dir, "burned.mp4")
-        # Relative names only. A drive letter colon breaks the subtitles filter.
-        vf = "subtitles=burn.ass:fontsdir=fonts"
-        _run_ffmpeg([
-            ffmpeg_exe, "-y", "-i", source_path,
-            "-vf", vf,
+        cmd = [ffmpeg_exe, "-y", "-i", source_path]
+        for plate_path in plates:
+            cmd.extend(["-i", plate_path])
+        steps = []
+        prev = "0:v"
+        for index, event in enumerate(events):
+            start = max(0.0, float(event.get("start") or 0))
+            end = max(start, float(event.get("end") or 0))
+            nxt = f"v{index}"
+            steps.append(
+                f"[{prev}][{index + 1}:v]overlay=0:0:enable='between(t\\,{start:.3f}\\,{end:.3f})'[{nxt}]"
+            )
+            prev = nxt
+        cmd.extend([
+            "-filter_complex", ";".join(steps),
+            "-map", f"[{prev}]",
+            "-map", "0:a?",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
             "-c:a", "copy",
             "-movflags", "+faststart",
             output_path,
-        ], cwd=work_dir)
+        ])
+        _run_ffmpeg(cmd)
         import uuid
 
         uploaded = _upload_processed_video(output_path, f"flower_{uuid.uuid4().hex}.mp4", user_id=user_id)
         return {"url": uploaded, "events": events}
     finally:
         try:
-            import shutil
             shutil.rmtree(work_dir, ignore_errors=True)
         except Exception:
             pass
