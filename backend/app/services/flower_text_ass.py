@@ -220,15 +220,13 @@ def _color_from_script(value: str, fallback: Tuple[int, int, int, int]) -> Tuple
 
 def script_flower_look(block: str, spec: str = "") -> Dict[str, Any]:
     """Font, color, and art treatment locked by script generation and optimization."""
-    face = _mark(block, "字体") or _mark(spec, "字体")
-    emphasis = _mark(block, "强调体") or _mark(spec, "强调体")
-    exhibit = _mark(block, "展示") or _mark(spec, "展示")
-    art = " ".join((
-        _mark(block, "艺术"),
-        _mark(block, "艺术化"),
-        emphasis,
-        exhibit,
-    ))
+    def taken(name: str) -> str:
+        return _mark(block, name) or _mark(spec, name)
+
+    face = taken("字体")
+    emphasis = taken("强调体")
+    exhibit = taken("展示")
+    art = " ".join((taken("艺术化") or taken("艺术"), emphasis, exhibit))
     color_text = _mark(block, "字色") or _mark(spec, "字色")
     accent_text = _mark(block, "点缀色") or _mark(spec, "点缀色")
     blob = " ".join((face, emphasis, exhibit, art))
@@ -266,8 +264,17 @@ def script_flower_look(block: str, spec: str = "") -> Dict[str, Any]:
         "seal_scale": 1.15 if "印章" in blob else 1.0,
         "painted": any(token in blob for token in ("书法", "毛笔", "水墨", "飞白")),
         "glow": any(token in art for token in ("光晕", "霓虹", "发光")),
+        "duotone": "套印" in art,
+        "gradient": "渐变" in art,
+        "wide": "宽" in face,
         "locked": bool(face or color_text or art.strip()),
     }
+
+
+def _style_context(script: str) -> str:
+    """Style may sit on a sibling sentence, not only on the burn quote."""
+    spec = _spec_context(script)
+    return spec or str(script or "")
 
 
 def _spec_context(script: str) -> str:
@@ -306,7 +313,7 @@ def extract_libass_events(script: str, duration: Any = None) -> List[Dict[str, A
         if not main and not companion and not seal:
             continue
         place, size, vertical, font = _place_and_size(block)
-        look = script_flower_look(block, _spec_context(script))
+        look = script_flower_look(block, _style_context(script))
         stop = float(end) if end is not None else float(start) + fallback
         if stop <= start:
             stop = start + fallback
@@ -742,15 +749,17 @@ def _fit_title_font(
     size_name: str,
     vertical: bool,
     budget: int,
+    tracking_scale: float = 1.0,
 ) -> Tuple[Any, int]:
+    ratio = _TITLE_TRACKING * max(1.0, float(tracking_scale or 1))
     target = max(36, int(height * _SIZE_RATIO.get(size_name, _SIZE_RATIO["中"])))
     size = target
     font = _open_cjk_font(font_path, size)
     line = "".join(ch for ch in str(text or "") if ch not in {"\n", "\r"})
     if not line:
-        return font, max(4, int(size * _TITLE_TRACKING))
+        return font, max(4, int(size * ratio))
     for _ in range(16):
-        tracking = max(4, int(size * _TITLE_TRACKING))
+        tracking = max(4, int(size * ratio))
         span = _tracked_width(font, line, tracking) if not vertical else int(size * 1.05) * len(line)
         if span <= budget:
             break
@@ -758,7 +767,7 @@ def _fit_title_font(
         font = _open_cjk_font(font_path, size)
         if size == 36:
             break
-    return font, max(4, int(getattr(font, "size", size) * _TITLE_TRACKING))
+    return font, max(4, int(getattr(font, "size", size) * ratio))
 
 
 def _open_cjk_font(font_path: str, size: int):
@@ -818,10 +827,6 @@ def _paint_tracked(
     from PIL import Image, ImageDraw, ImageFilter
 
     size = int(getattr(font, "size", 32) or 32)
-    if glow and text:
-        layer = Image.new("RGBA", plate.size, (0, 0, 0, 0))
-        _draw_tracked(ImageDraw.Draw(layer), text, font, center, (*fill[:3], 150), tracking, vertical)
-        plate.alpha_composite(layer.filter(ImageFilter.GaussianBlur(radius=max(6.0, size / 5))))
     if shadow and text and shadow_alpha > 0:
         layer = Image.new("RGBA", plate.size, (0, 0, 0, 0))
         offset = max(2, int(size / (12 if painted else 22)))
@@ -838,6 +843,10 @@ def _paint_tracked(
         plate.alpha_composite(layer.filter(ImageFilter.GaussianBlur(radius=blur)))
     if not text:
         return
+    if glow and text:
+        layer = Image.new("RGBA", plate.size, (0, 0, 0, 0))
+        _draw_tracked(ImageDraw.Draw(layer), text, font, center, (*fill[:3], 150), tracking, vertical)
+        plate.alpha_composite(layer.filter(ImageFilter.GaussianBlur(radius=max(6.0, size / 5))))
     if painted and size >= 64:
         glyph = Image.new("RGBA", plate.size, (0, 0, 0, 0))
         _draw_tracked(ImageDraw.Draw(glyph), text, font, center, fill, tracking, vertical)
@@ -845,6 +854,81 @@ def _paint_tracked(
         plate.alpha_composite(glyph)
         return
     _draw_tracked(ImageDraw.Draw(plate), text, font, center, fill, tracking, vertical)
+
+
+def _paint_art_title(
+    plate: Any,
+    text: str,
+    font: Any,
+    center: Tuple[int, int],
+    fill: Tuple[int, int, int, int],
+    tracking: int,
+    *,
+    vertical: bool,
+    look: Dict[str, Any],
+    shadow_alpha: int,
+) -> None:
+    """Gold plate sits under the glyphs. The face itself carries the gradient."""
+    from PIL import Image, ImageDraw, ImageFilter
+
+    if not text:
+        return
+    size = int(getattr(font, "size", 32) or 32)
+    gold = _NAMED_COLORS["浅金"]
+    if shadow_alpha > 0:
+        layer = Image.new("RGBA", plate.size, (0, 0, 0, 0))
+        offset = max(3, int(size / 10))
+        _draw_tracked(
+            ImageDraw.Draw(layer),
+            text,
+            font,
+            (center[0], center[1] + offset),
+            (42, 28, 16, max(1, min(255, int(shadow_alpha)))),
+            tracking,
+            vertical,
+        )
+        plate.alpha_composite(layer.filter(ImageFilter.GaussianBlur(radius=max(3.0, size / 7))))
+    if look.get("glow"):
+        layer = Image.new("RGBA", plate.size, (0, 0, 0, 0))
+        _draw_tracked(ImageDraw.Draw(layer), text, font, center, (*fill[:3], 150), tracking, vertical)
+        plate.alpha_composite(layer.filter(ImageFilter.GaussianBlur(radius=max(6.0, size / 5))))
+    if look.get("duotone"):
+        shift = max(6, int(size * 0.12))
+        plate_gold = _NAMED_COLORS["鎏金"]
+        _draw_tracked(
+            ImageDraw.Draw(plate),
+            text,
+            font,
+            (center[0] + shift, center[1] + int(shift * 0.55)),
+            (*plate_gold[:3], 245),
+            tracking,
+            vertical,
+        )
+    mask_layer = Image.new("RGBA", plate.size, (0, 0, 0, 0))
+    _draw_tracked(ImageDraw.Draw(mask_layer), text, font, center, (255, 255, 255, 255), tracking, vertical)
+    if look.get("painted") and size >= 48:
+        mask_layer = mask_layer.effect_spread(1)
+    alpha = mask_layer.getchannel("A")
+    bbox = alpha.getbbox()
+    if not bbox:
+        return
+    if not look.get("gradient"):
+        solid = Image.new("RGBA", plate.size, (*fill[:3], 0))
+        solid.putalpha(alpha)
+        plate.alpha_composite(solid)
+        return
+    top = fill
+    bottom = gold
+    span = max(1, bbox[3] - bbox[1])
+    grad = Image.new("RGBA", plate.size, (0, 0, 0, 0))
+    pixels = grad.load()
+    for y in range(bbox[1], bbox[3] + 1):
+        blend = (y - bbox[1]) / span
+        color = tuple(int(top[channel] * (1 - blend) + bottom[channel] * blend) for channel in range(3))
+        for x in range(bbox[0], bbox[2] + 1):
+            pixels[x, y] = (*color, 255)
+    grad.putalpha(alpha)
+    plate.alpha_composite(grad)
 
 
 _DEFAULT_FLOWER_STYLE: Dict[str, Any] = {
@@ -1171,6 +1255,7 @@ def render_title_plate(
         size_name=size_name,
         vertical=vertical,
         budget=budget,
+        tracking_scale=1.55 if event_look.get("wide") else 1.0,
     )
     main_size = int(getattr(title_font, "size", 36) or 36)
     if decoration is not None:
@@ -1184,18 +1269,31 @@ def render_title_plate(
         layer.paste(mist, (main_x - mist_w // 2, main_y - mist_h // 2), mist)
         plate.alpha_composite(layer)
     if main:
-        _paint_tracked(
-            plate,
-            main,
-            title_font,
-            (main_x, main_y),
-            ivory,
-            tracking,
-            vertical=vertical,
-            shadow_alpha=shadow_alpha,
-            painted=bool(event_look.get("painted")),
-            glow=bool(event_look.get("glow")),
-        )
+        if event_look.get("duotone") or event_look.get("gradient"):
+            _paint_art_title(
+                plate,
+                main,
+                title_font,
+                (main_x, main_y),
+                ivory,
+                tracking,
+                vertical=vertical,
+                look=event_look,
+                shadow_alpha=shadow_alpha,
+            )
+        else:
+            _paint_tracked(
+                plate,
+                main,
+                title_font,
+                (main_x, main_y),
+                ivory,
+                tracking,
+                vertical=vertical,
+                shadow_alpha=shadow_alpha,
+                painted=bool(event_look.get("painted")),
+                glow=bool(event_look.get("glow")),
+            )
         title_w = _tracked_width(title_font, main, tracking) if not vertical else main_size
         rule_w = max(main_size, int(title_w * 0.62))
         rule_h = max(2, int(main_size * 0.012))
@@ -1209,7 +1307,7 @@ def render_title_plate(
     companion = str(event.get("companion") or "").strip()
     if companion:
         companion_size = max(18, min(int(height * 0.048), int(main_size * 0.36)))
-        companion_font = _open_cjk_font(font_path, companion_size)
+        companion_font = _open_cjk_font(title_font_path or font_path, companion_size)
         companion_y = rule_y + int(main_size * 0.42)
         for line in [part.strip() for part in companion.splitlines() if part.strip()]:
             _paint_tracked(

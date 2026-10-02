@@ -2069,8 +2069,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
             if (trailerMode) {
                 const ok = await confirmUiMessage(
-                    '将单独生成一条预告片，写入「预告片」分集，不覆盖已有正片。预告只放大娱乐时间和核心看点。是否继续？',
-                    'This writes one trailer into its own episode and does not overwrite the series. It focuses on fun-and-games and the core highlights. Continue?'
+                    '将单独生成一条预告片，写入「预告片」分集，不覆盖已有正片。预告要讲清整体剧情的来龙去脉，并把动作、对白、情节拍成高光。是否继续？',
+                    'This writes one trailer into its own episode and does not overwrite the series. It sketches the story throughline and plays highlight action, dialogue, and plot. Continue?'
                 );
                 if (!ok) {
                     addLog?.('Trailer generation canceled.', 'warning');
@@ -4096,7 +4096,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     <div>
                                         <div className="text-sm font-semibold text-white">{t('分集剧本生成', 'Episode Script Generation')}</div>
                                         <div className="text-[11px] text-muted-foreground mt-0.5">
-                                            {t('基于全局框架与角色设定批量/单集生成正片。预告片单独成片，只放大娱乐时间和核心看点。', 'Batch or single-episode scripts from the global framework. A trailer is a separate piece built from fun-and-games and the core highlights.')}
+                                            {t('基于全局框架与角色设定批量/单集生成正片。预告片单独成片，讲清剧情来龙去脉，并拍出动作、对白、情节高光。', 'Batch or single-episode scripts from the global framework. A trailer is a separate piece that sketches the throughline and plays highlight action, dialogue, and plot.')}
                                         </div>
                                     </div>
                                 </div>
@@ -4114,7 +4114,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         onClick={() => handleGenerateEpisodeScripts({ outputKind: 'trailer' })}
                                         disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady}
                                         className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
-                                        title={t('单独生成一条预告片：主体是娱乐时间，每段都落到核心看点。不覆盖正片。', 'Generate one trailer: fun-and-games first, each beat landing a core highlight. Does not overwrite the series.')}
+                                        title={t('单独生成一条预告片：讲清整体剧情来龙去脉，高光含动作、对白和情节。不覆盖正片。', 'Generate one trailer: the story throughline, with highlight action, dialogue, and plot. Does not overwrite the series.')}
                                     >
                                         {t('生成预告片', 'Generate Trailer')}
                                     </button>

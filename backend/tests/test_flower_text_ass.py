@@ -284,6 +284,42 @@ def test_title_plate_is_a_transparent_image_with_a_square_seal():
     assert abs(box_w - box_h) < 8
 
 
+def test_burn_uses_art_direction_from_a_sibling_sentence():
+    events = extract_libass_events(
+        "画幅叠出片内图形花字「何家安泰」，字体=现代宽宋，字色=象牙白(#F3F5F7)，"
+        "艺术化=书法+双色套印+印章+浅金渐变。"
+        "(P1 0s–4s) 文案=「何以安康，家和人乐」｜烧录=libass｜手写=禁",
+        duration=4,
+    )
+    assert events[0]["text"] == "何以安康，家和人乐"
+    assert events[0]["font_kind"] == "brush"
+    assert events[0]["look"]["duotone"] is True
+    assert events[0]["look"]["gradient"] is True
+    assert events[0]["look"]["painted"] is True
+    assert events[0]["look"]["wide"] is True
+    from app.services.flower_text_ass import render_title_plate, resolve_cjk_font_file
+
+    plate = render_title_plate(
+        events[0],
+        width=1280,
+        height=720,
+        font_path=resolve_cjk_font_file(),
+    )
+    ivory = gold = 0
+    pixels = plate.load()
+    for y in range(720):
+        for x in range(1280):
+            red, green, blue, alpha = pixels[x, y]
+            if alpha < 180:
+                continue
+            if red > 220 and green > 210 and blue > 200:
+                ivory += 1
+            elif red > 190 and 120 < green < 210 and blue < 160:
+                gold += 1
+    assert ivory > 200
+    assert gold > 200
+
+
 def test_burn_look_follows_the_script_face_and_color():
     from app.services.flower_text_ass import script_flower_look
 
