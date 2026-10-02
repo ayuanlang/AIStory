@@ -197,7 +197,36 @@ def extract_libass_events(script: str, duration: Any = None) -> List[Dict[str, A
             "vertical": vertical,
             "font": font,
         })
-    return events
+    return _dedupe_burn_events(events)
+
+
+def _dedupe_burn_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One copy of the same line. A second pass must not stack the same glyphs."""
+    kept: List[Dict[str, Any]] = []
+    for event in events:
+        text = str(event.get("text") or "").strip()
+        start = float(event.get("start") or 0)
+        end = float(event.get("end") or 0)
+        merged = False
+        for prev in kept:
+            prev_text = str(prev.get("text") or "").strip()
+            if text and prev_text and text != prev_text:
+                continue
+            prev_start = float(prev.get("start") or 0)
+            prev_end = float(prev.get("end") or 0)
+            if end <= prev_start or start >= prev_end:
+                continue
+            prev["start"] = min(prev_start, start)
+            prev["end"] = max(prev_end, end)
+            if not str(prev.get("companion") or "").strip():
+                prev["companion"] = event.get("companion") or ""
+            if not str(prev.get("seal") or "").strip():
+                prev["seal"] = event.get("seal") or ""
+            merged = True
+            break
+        if not merged:
+            kept.append(dict(event))
+    return kept
 
 
 def _seal_text(block: str) -> str:
@@ -291,21 +320,32 @@ def _layout_text(text: str, vertical: bool) -> str:
 
 def _pos(width: int, height: int, place: str, size: str, companion: bool) -> tuple[int, int, int]:
     ratio = _SIZE_RATIO.get(size, _SIZE_RATIO["中"])
-    fontsize = max(18, int(height * ratio))
+    fontsize = max(28, int(height * ratio))
     if place == "画右":
-        x = int(width * 0.72)
+        x = int(width * 0.78)
     elif place == "画左":
-        x = int(width * 0.28)
+        x = int(width * 0.22)
     else:
         x = int(width / 2)
-    y = int(height * 0.46)
+    y = int(height * 0.42)
     if companion:
-        fontsize = max(16, int(fontsize * 0.46))
-        y = min(int(height * 0.72), y + int(height * 0.08))
+        fontsize = max(18, int(fontsize * 0.42))
+        y = min(int(height * 0.72), y + int(height * ratio * 0.95))
     return x, y, fontsize
 
 
+def _glyph_span(text: str, fontsize: int, tracking: int) -> int:
+    span = 0
+    for ch in str(text or ""):
+        if ch in {"\n", "\r"}:
+            continue
+        span += int(fontsize * (1.0 if ord(ch) > 127 else 0.56)) + tracking
+    return span
+
+
 _CJK_FONT_CANDIDATES: Tuple[Tuple[str, str], ...] = (
+    ("simkai.ttf", "KaiTi"),
+    ("STKAITI.TTF", "STKaiti"),
     ("wqy-microhei.ttc", "WenQuanYi Micro Hei"),
     ("simhei.ttf", "SimHei"),
     ("msyh.ttc", "Microsoft YaHei"),
@@ -319,10 +359,11 @@ def _bundled_cjk_font_dir() -> str:
 
 
 def _cjk_font_search_dirs() -> List[str]:
-    dirs = [_bundled_cjk_font_dir()]
+    dirs: List[str] = []
     windir = os.environ.get("WINDIR")
     if windir:
         dirs.append(os.path.join(windir, "Fonts"))
+    dirs.append(_bundled_cjk_font_dir())
     dirs.extend([
         "/usr/share/fonts/truetype/noto",
         "/usr/share/fonts/opentype/noto",
@@ -377,9 +418,9 @@ def build_ass(
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Flower,{font},64,&H00E6F0F5,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,40,40,40,1",
-        f"Style: FlowerSmall,{font},28,&H00E6F0F5,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,40,40,40,1",
-        f"Style: FlowerSeal,{font},42,&H003333D0,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,40,40,40,1",
+        f"Style: Flower,{font},64,&H00F7F5F3,&H000000FF,&H00181020,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,60,60,40,1",
+        f"Style: FlowerSmall,{font},28,&H004EA4D9,&H000000FF,&H00181020,&H00000000,0,0,0,0,100,100,0,0,1,1,0,5,60,60,40,1",
+        f"Style: FlowerSeal,{font},42,&H003A3AC2,&H000000FF,&H003A3AC2,&H00000000,0,0,0,0,100,100,0,0,1,3,0,5,20,20,20,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -392,27 +433,37 @@ def build_ass(
         size = str(event.get("size") or "中")
         vertical = bool(event.get("vertical"))
         main = str(event.get("text") or "").strip()
+        main_x, main_y, main_size = _pos(width, height, place, size, companion=False)
+        tracking = max(6, int(main_size * 0.12))
         if main:
-            x, y, fontsize = _pos(width, height, place, size, companion=False)
             shown = _layout_text(main, vertical)
             lines.append(
-                f"Dialogue: 0,{start},{end},Flower,,0,0,0,,{{\\an5\\fs{fontsize}\\pos({x},{y})}}{shown}"
+                f"Dialogue: 0,{start},{end},Flower,,0,0,0,,{{\\an5\\fs{main_size}\\fsp{tracking}\\bord2\\shad0\\blur0.4\\1c&H00F7F5F3&\\3c&H00181020&\\pos({main_x},{main_y})}}{shown}"
             )
         companion = str(event.get("companion") or "").strip()
         if companion:
             x, y, fontsize = _pos(width, height, place, size, companion=True)
             shown = _layout_text(companion, False)
             lines.append(
-                f"Dialogue: 0,{start},{end},FlowerSmall,,0,0,0,,{{\\an5\\fs{fontsize}\\pos({x},{y})}}{shown}"
+                f"Dialogue: 0,{start},{end},FlowerSmall,,0,0,0,,{{\\an5\\fs{fontsize}\\fsp4\\bord1\\shad0\\1c&H004EA4D9&\\3c&H00181020&\\pos({x},{y})}}{shown}"
             )
         seal = str(event.get("seal") or "").strip()
         if seal:
-            main_x, main_y, main_size = _pos(width, height, place, size, companion=False)
-            seal_size = max(28, int(main_size * 0.62))
-            seal_x = min(width - 36, main_x + int(width * 0.18))
-            seal_y = min(int(height * 0.72), main_y + int(height * 0.08))
+            seal_size = max(26, int(main_size * 0.34))
+            glyph_count = max(1, len(seal))
+            side = int(seal_size * (glyph_count + 0.85))
+            half = side // 2
+            half_span = _glyph_span(main, main_size, tracking) // 2
+            seal_x = min(width - half - 8, main_x + half_span + half + int(main_size * 0.35))
+            seal_y = main_y
+            box_x = seal_x - half
+            box_y = seal_y - half
+            chop = f"m 0 0 l {side} 0 l {side} {side} l 0 {side}"
             lines.append(
-                f"Dialogue: 1,{start},{end},FlowerSeal,,0,0,0,,{{\\an5\\fs{seal_size}\\pos({seal_x},{seal_y})}}{_layout_text(seal, True)}"
+                f"Dialogue: 1,{start},{end},FlowerSeal,,0,0,0,,{{\\an7\\pos({box_x},{box_y})\\p1\\bord4\\shad0\\1a&HFF&\\3c&H003A3AC2&}}{chop}"
+            )
+            lines.append(
+                f"Dialogue: 2,{start},{end},FlowerSeal,,0,0,0,,{{\\an5\\pos({seal_x},{seal_y})\\p0\\bord0\\shad0\\fsp1\\1c&H003A3AC2&\\fs{seal_size}}}{_layout_text(seal, True)}"
             )
     return "\n".join(lines) + "\n"
 
@@ -556,6 +607,26 @@ def _notes(shot: Any) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _url_key(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    return raw.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+
+
+def resolve_burn_source(video_url: str, notes: Dict[str, Any]) -> str:
+    """Re-burn the clean plate. A signed copy of the last output must not stack another pass."""
+    current = str(video_url or "").strip()
+    saved_source = str((notes or {}).get("flower_ass_source_url") or "").strip()
+    saved_output = str((notes or {}).get("flower_ass_output_url") or "").strip()
+    if not saved_source:
+        return current
+    current_key = _url_key(current)
+    if current_key and current_key in {_url_key(saved_output), _url_key(saved_source)}:
+        return saved_source
+    return current
+
+
 def apply_flower_burn_to_shot(db: Any, shot: Any, user_id: int = 0, lines: Any = None) -> Optional[str]:
     """Auto burn reads the shot script. A later edit burns those lines onto the clean source."""
     video_url = str(getattr(shot, "video_url", None) or "").strip()
@@ -563,12 +634,9 @@ def apply_flower_burn_to_shot(db: Any, shot: Any, user_id: int = 0, lines: Any =
         return None
     duration = getattr(shot, "duration", None)
     notes = _notes(shot)
-    source_url = video_url
+    source_url = resolve_burn_source(video_url, notes)
     if lines is not None:
         events = normalize_manual_burn_lines(lines, duration)
-        saved_source = str(notes.get("flower_ass_source_url") or "").strip()
-        if saved_source and video_url == str(notes.get("flower_ass_output_url") or ""):
-            source_url = saved_source
     else:
         events = extract_shot_libass_events(shot)
     if not events:
@@ -582,7 +650,11 @@ def apply_flower_burn_to_shot(db: Any, shot: Any, user_id: int = 0, lines: Any =
     new_url = str((result or {}).get("url") or "").strip()
     if not new_url:
         return None
-    notes["flower_ass_source_url"] = source_url
+    previous_source = str(notes.get("flower_ass_source_url") or "").strip()
+    if not previous_source or _url_key(source_url) == _url_key(previous_source):
+        notes["flower_ass_source_url"] = source_url
+    elif _url_key(source_url) != _url_key(str(notes.get("flower_ass_output_url") or "")):
+        notes["flower_ass_source_url"] = source_url
     notes["flower_ass_output_url"] = new_url
     notes["flower_ass_draft"] = events
     shot.video_url = new_url

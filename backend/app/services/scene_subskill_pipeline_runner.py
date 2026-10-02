@@ -1277,26 +1277,59 @@ def _load_latest_subskill_llm_text(
     project_id: int,
     scene_id: str,
     prompt_file: str,
+    not_before: str = "",
 ) -> str:
     if int(project_id or 0) <= 0 or not str(scene_id or "").strip():
         return ""
     action_name = f"{_subskill_action_label(prompt_file)} · {scene_id}"
     try:
-        row = (
+        query = (
             db.query(LLMCallLog)
             .filter(
                 LLMCallLog.project_id == int(project_id),
                 LLMCallLog.tag == "LLM_RESPONSE",
                 LLMCallLog.action == action_name,
             )
-            .order_by(LLMCallLog.id.desc())
-            .first()
         )
+        started = str(not_before or "").strip()
+        if started:
+            query = query.filter(LLMCallLog.timestamp >= started)
+        row = query.order_by(LLMCallLog.id.desc()).first()
     except Exception:
         return ""
     if row is None:
         return ""
     return _text_from_stored_llm_response(getattr(row, "response_json", ""))
+
+
+def _accepted_subskill_output(
+    text: str,
+    prompt_file: str,
+    scene_id: str,
+    fallback_special: str = "",
+    previous_block: str = "",
+) -> str:
+    """Return a usable scene block when this attempt's LLM log already succeeded."""
+    from app.services.script_analysis_flow_runner import scoped_node_body_usable
+
+    cleaned = strip_injection_section(
+        strip_project_visual_backfill_sections(str(text or "")),
+        "项目视觉回填",
+    ).strip()
+    stripped = _strip_subskill_completion_marker(cleaned, prompt_file) if cleaned else ""
+    if not cleaned or not _subskill_marker_present(cleaned, prompt_file):
+        return ""
+    if not scoped_node_body_usable(stripped):
+        return ""
+    extracted = _try_extract_subskill_scene_block(
+        stripped,
+        scene_id,
+        fallback_special,
+        previous_block=previous_block,
+    )
+    if prompt_file == FRAMING_PROMPT:
+        return _coerce_ready_framing_block(extracted, stripped, scene_id)
+    return extracted if extracted else ""
 
 
 def should_recover_framing_from_llm_log(plan: SceneSubskillResume, persist_drama: str) -> bool:
@@ -1574,20 +1607,89 @@ def _ingest_derived_environments_after_framing(
 
 
 def is_timeout_like_error(exc: Any) -> bool:
+    """True for an LLM/transport deadline. Asset and plan waits are not LLM timeouts."""
+    detail = getattr(exc, "detail", None)
+    text = str(detail if detail is not None else exc or "")
+    upper = text.upper()
+    if "STAGING_ENVIRONMENT_ASSET_" in upper or "STAGING_ENVIRONMENT_PLAN_" in upper:
+        return False
     if isinstance(exc, TimeoutError):
         return True
-    text = str(exc or "").lower()
+    lowered = text.lower()
     return (
-        "timed out" in text
-        or "timeout" in text
-        or "read timeout" in text
-        or "wall-clock" in text
+        "timed out" in lowered
+        or "timeout" in lowered
+        or "read timeout" in lowered
+        or "wall-clock" in lowered
     )
+
+
+def describe_scene_subskill_batch_failure(result: Any) -> Dict[str, str]:
+    """Parent-node failure text. Say timeout only when that scene's LLM call timed out."""
+    outputs = []
+    if isinstance(result, dict):
+        raw_outputs = result.get("per_scene_outputs") or []
+        if isinstance(raw_outputs, list):
+            outputs = [item for item in raw_outputs if isinstance(item, dict) and item.get("failed")]
+    failed_ids = []
+    if isinstance(result, dict):
+        failed_ids = [
+            str(item or "").strip()
+            for item in (result.get("failed_scene_ids") or [])
+            if str(item or "").strip()
+        ]
+    if not failed_ids:
+        failed_ids = [
+            str(item.get("scene_id") or "").strip()
+            for item in outputs
+            if str(item.get("scene_id") or "").strip()
+        ]
+    by_id = {str(item.get("scene_id") or "").strip(): item for item in outputs}
+    timed_out_ids = [
+        sid
+        for sid in failed_ids
+        if bool((by_id.get(sid) or {}).get("timed_out"))
+    ]
+    details: List[str] = []
+    for sid in failed_ids:
+        item = by_id.get(sid) or {}
+        err = str(item.get("error") or "").strip()
+        if item.get("timed_out"):
+            details.append(f"{sid} 调用超时" + (f"：{err}" if err else ""))
+        elif err:
+            details.append(f"{sid}：{err}")
+        else:
+            details.append(f"{sid} 未完成")
+    scene_count = int(result.get("scene_count") or 0) if isinstance(result, dict) else 0
+    all_failed = bool(failed_ids) and (scene_count <= 0 or scene_count <= len(failed_ids))
+    all_timeout = bool(failed_ids) and len(timed_out_ids) == len(failed_ids)
+    if all_timeout:
+        error_code = "SCENE_SUBSKILL_TIMEOUT"
+    elif all_failed:
+        error_code = "SCENE_SUBSKILL_ALL_FAILED"
+    elif failed_ids:
+        error_code = "SCENE_SUBSKILL_PARTIAL_FAILURE"
+    else:
+        error_code = ""
+    return {
+        "error_code": error_code,
+        "error_message": "；".join(details),
+    }
 
 
 def _scene_subskill_failure_reason(exc: Exception) -> str:
     detail = getattr(exc, "detail", None)
     text = str(detail if detail is not None else exc or "")
+    if "STAGING_ENVIRONMENT_ASSET_TIMEOUT" in text:
+        return "等待环境资产四宫格超时，不能进入建置与入戏"
+    if "STAGING_ENVIRONMENT_ASSET_FAILED" in text:
+        return "环境资产四宫格失败，不能进入建置与入戏"
+    if "STAGING_ENVIRONMENT_ASSET_EMPTY" in text:
+        return "环境资产四宫格未齐，不能进入建置与入戏"
+    if "STAGING_ENVIRONMENT_ASSET_NAMES_MISSING" in text or "STAGING_ENVIRONMENT_ASSET_MISSING" in text:
+        return "本场缺少主环境四宫格，不能进入建置与入戏"
+    if "STAGING_ENVIRONMENT_PLAN_TIMEOUT" in text:
+        return "等待本轮环境规划超时，不能进入现场编排"
     if is_timeout_like_error(exc):
         return "节点超时，已标记失败并将自动补跑"
     if "COMPLETION_MARKER_MISSING" in text:
@@ -1622,8 +1724,6 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
         return "未解析到可执行的场景"
     if "STAGING_ENVIRONMENT_PLAN_EMPTY" in text:
         return "环境规划节点已完成，但本轮主环境稿缺失，不能进入现场编排"
-    if "STAGING_ENVIRONMENT_PLAN_TIMEOUT" in text:
-        return "等待本轮环境规划超时，不能进入现场编排"
     if "STAGING_ENVIRONMENT_PLAN_FAILED" in text:
         return "本轮环境规划失败，不能进入现场编排"
     if "STAGING_ENV_SCENE_MISSING" in text:
@@ -2872,6 +2972,9 @@ async def _call_scene_subskill(
             scene_id=scene_id,
             system_api_id=api_id or base_payload.get("system_api_id"),
         )
+        from app.core.time_utils import now_bj_iso
+
+        attempt_started = now_bj_iso()
         try:
             result = await analyze_scene(
                 request,
@@ -2880,6 +2983,28 @@ async def _call_scene_subskill(
                 async_mode="0",
             )
         except Exception as call_exc:
+            if is_timeout_like_error(call_exc):
+                recovered = _accepted_subskill_output(
+                    _load_latest_subskill_llm_text(
+                        task_db,
+                        project_id=int(base_payload.get("project_id") or 0),
+                        scene_id=scene_id,
+                        prompt_file=prompt_file,
+                        not_before=attempt_started,
+                    ),
+                    prompt_file,
+                    scene_id,
+                    fallback_special,
+                    previous_block,
+                )
+                if recovered:
+                    logger.info(
+                        "[scene_subskill_pipeline] llm already succeeded scene=%s prompt=%s chars=%s; ignoring timeout",
+                        scene_id,
+                        prompt_file,
+                        len(recovered),
+                    )
+                    return recovered
             if is_timeout_like_error(call_exc) and attempt < max_attempts:
                 logger.warning(
                     "[scene_subskill_pipeline] timeout retry scene=%s prompt=%s attempt=%s/%s err=%s",

@@ -9,6 +9,7 @@ from app.services.flower_text_ass import (
     extract_libass_events,
     flower_burn_draft,
     normalize_manual_burn_lines,
+    resolve_burn_source,
     stage_burn_font,
     strip_libass_glyphs_from_prompt,
 )
@@ -56,7 +57,7 @@ def test_ass_is_centered_and_copies_glyphs_verbatim():
     assert r"\pos(" in ass
     assert r"\an2" not in ass
     dialogues = [line for line in ass.splitlines() if line.startswith("Dialogue:")]
-    assert len(dialogues) == 4
+    assert len(dialogues) == 5
     assert any("FlowerSmall" in line and "0599-2323239" in line for line in dialogues)
     assert any("FlowerSeal" in line for line in dialogues)
     for line in dialogues:
@@ -90,9 +91,11 @@ def test_manual_seal_burns_beside_the_line():
     assert events[0]["seal"] == "乐章"
     ass = build_ass(events, width=1920, height=1080)
     main = next(line for line in ass.splitlines() if line.startswith("Dialogue:") and "何家乐享" in line)
-    seal = next(line for line in ass.splitlines() if line.startswith("Dialogue:") and "FlowerSeal" in line)
+    seal = next(line for line in ass.splitlines() if line.startswith("Dialogue:") and "FlowerSeal" in line and "乐" in line)
     assert "乐章" not in main
     assert seal.replace("\\N", "").endswith("乐章")
+    assert r"\fsp" in main
+    assert r"\p1" in ass
     assert r"\an2" not in ass
     assert normalize_manual_burn_lines([{"text": "  ", "seal": ""}]) == []
 
@@ -118,7 +121,7 @@ def test_draft_reads_video_prompt_when_shot_script_is_empty():
     assert draft["lines"][0]["text"] != "家"
 
 
-def test_stage_burn_font_copies_the_bundled_cjk_font():
+def test_stage_burn_font_prefers_kaiti_then_the_bundled_font():
     bundled = os.path.normpath(os.path.join(
         os.path.dirname(__file__), "..", "app", "assets", "fonts", "wqy-microhei.ttc"
     ))
@@ -126,10 +129,25 @@ def test_stage_burn_font_copies_the_bundled_cjk_font():
     work = tempfile.mkdtemp(prefix="flower_font_")
     try:
         family = stage_burn_font(work)
-        assert family == "WenQuanYi Micro Hei"
-        assert os.path.isfile(os.path.join(work, "fonts", "wqy-microhei.ttc"))
+        copied = os.listdir(os.path.join(work, "fonts"))
+        windir = os.environ.get("WINDIR") or ""
+        if os.path.isfile(os.path.join(windir, "Fonts", "simkai.ttf")):
+            assert family == "KaiTi"
+            assert "simkai.ttf" in copied
+        else:
+            assert family == "WenQuanYi Micro Hei"
+            assert "wqy-microhei.ttc" in copied
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def test_reburn_uses_the_clean_plate_even_when_the_output_url_is_signed():
+    notes = {
+        "flower_ass_source_url": "https://cdn.example/clean.mp4",
+        "flower_ass_output_url": "https://cdn.example/burned.mp4",
+    }
+    assert resolve_burn_source("https://cdn.example/burned.mp4?e=1&token=abc", notes) == "https://cdn.example/clean.mp4"
+    assert resolve_burn_source("https://cdn.example/fresh.mp4", notes) == "https://cdn.example/fresh.mp4"
 
 
 def test_burn_style_uses_the_staged_cjk_font():

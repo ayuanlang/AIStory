@@ -28,7 +28,10 @@ from app.services.scene_markdown_orchestration import (
     _extract_analysis_text_from_result,
 )
 from app.services.scene_markdown_runner import _run_scene_markdown_node_per_scene
-from app.services.scene_subskill_pipeline_runner import run_scene_subskill_pipeline
+from app.services.scene_subskill_pipeline_runner import (
+    describe_scene_subskill_batch_failure,
+    run_scene_subskill_pipeline,
+)
 from app.services.script_analysis_flow import (
     STAGE_SCENE_MARKDOWN,
     coerce_target_scene_ids_for_orchestration,
@@ -877,6 +880,20 @@ async def execute_scene_analysis_flow_node(
                     failed_scene_ids
                     and (scene_count <= 0 or scene_count <= len(failed_scene_ids))
                 )
+                batch_failure = (
+                    describe_scene_subskill_batch_failure(result)
+                    if failed_scene_ids
+                    else {}
+                )
+                failure_code = None
+                failure_message = None
+                if failed_scene_ids:
+                    failure_code = str(batch_failure.get("error_code") or "").strip() or (
+                        "SCENE_SUBSKILL_ALL_FAILED"
+                        if all_failed
+                        else "SCENE_SUBSKILL_PARTIAL_FAILURE"
+                    )
+                    failure_message = str(batch_failure.get("error_message") or "").strip() or None
                 upsert_pipeline_node_status(
                     db,
                     project_id=node_project_id,
@@ -885,16 +902,8 @@ async def execute_scene_analysis_flow_node(
                     node_name=node_key,
                     status="failed" if all_failed else ("warning" if partial_failure else "success"),
                     progress_percent=100.0,
-                    error_code=(
-                        "SCENE_SUBSKILL_ALL_FAILED"
-                        if all_failed
-                        else ("SCENE_SUBSKILL_PARTIAL_FAILURE" if partial_failure else None)
-                    ),
-                    error_message=(
-                        f"timed out or failed: {', '.join(failed_scene_ids)}"
-                        if failed_scene_ids
-                        else None
-                    ),
+                    error_code=failure_code,
+                    error_message=failure_message,
                     runtime_meta=(
                         {
                             "business_event": "all_failed" if all_failed else "partial_failure",

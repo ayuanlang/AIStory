@@ -108,8 +108,24 @@ def is_stale_llm_request_timestamp(timestamp: Any, timeout_seconds: int, *, now:
         return False
 
 
+_SUCCESS_LLM_LOG_TAGS = (
+    "LLM_RESPONSE",
+    "LLM_RESPONSE_SUMMARY",
+    "LLM_RESPONSE_TRUNCATED",
+    "LLM_EMPTY_OUTPUT",
+)
+_STALE_PENDING_TIMEOUT_MARKER = "stale pending log"
+
+
+def llm_error_is_stale_pending_timeout(error_msg: Any) -> bool:
+    return _STALE_PENDING_TIMEOUT_MARKER in str(error_msg or "")
+
+
 def finalize_stale_llm_request_logs(db: Any = None, *, timeout_seconds: Optional[int] = None) -> int:
-    """Mark leftover LLM_REQUEST rows as timed out so admin no longer shows 请求中 forever."""
+    """Mark leftover LLM_REQUEST rows as timed out so admin no longer shows 请求中 forever.
+
+    A row whose call already returned is reconciled to success instead of a timeout.
+    """
     from datetime import timedelta
     from app.core.time_utils import now_bj
     from app.db.session import SessionLocal
@@ -121,6 +137,7 @@ def finalize_stale_llm_request_logs(db: Any = None, *, timeout_seconds: Optional
     owns_session = db is None
     session = db if db is not None else SessionLocal()
     finalized = 0
+    promoted = 0
     try:
         rows = (
             session.query(LLMCallLog)
@@ -129,15 +146,41 @@ def finalize_stale_llm_request_logs(db: Any = None, *, timeout_seconds: Optional
             .limit(200)
             .all()
         )
+        request_ids = [
+            str(getattr(row, "request_id", "") or "").strip()
+            for row in rows
+            if str(getattr(row, "request_id", "") or "").strip()
+        ]
+        succeeded_request_ids = set()
+        if request_ids:
+            succeeded_request_ids = {
+                str(request_id or "").strip()
+                for (request_id,) in (
+                    session.query(LLMCallLog.request_id)
+                    .filter(LLMCallLog.request_id.in_(request_ids))
+                    .filter(LLMCallLog.tag.in_(_SUCCESS_LLM_LOG_TAGS))
+                    .all()
+                )
+                if str(request_id or "").strip()
+            }
         for row in rows:
             if not is_stale_llm_request_timestamp(row.timestamp, budget):
+                continue
+            request_id = str(getattr(row, "request_id", "") or "").strip()
+            already_succeeded = bool(str(getattr(row, "response_json", "") or "").strip()) or (
+                bool(request_id) and request_id in succeeded_request_ids
+            )
+            if already_succeeded:
+                row.tag = "LLM_RESPONSE"
+                row.error_msg = None
+                promoted += 1
                 continue
             row.tag = "LLM_RESPONSE_ERROR"
             row.error_msg = f"Error: LLM request timed out after {budget}s (stale pending log)"
             if row.latency_ms is None:
                 row.latency_ms = budget * 1000
             finalized += 1
-        if finalized:
+        if finalized or promoted:
             session.commit()
     except Exception:
         if owns_session:
@@ -146,9 +189,14 @@ def finalize_stale_llm_request_logs(db: Any = None, *, timeout_seconds: Optional
     finally:
         if owns_session:
             session.close()
+    if promoted:
+        logger.info(
+            "Reconciled %s stale LLM_REQUEST log(s) that already succeeded",
+            promoted,
+        )
     if finalized:
         logger.warning("Finalized %s stale LLM_REQUEST log(s) older than %ss", finalized, budget)
-    return finalized
+    return finalized + promoted
 
 
 LLM_DEBUG_LOG_ENABLED = os.getenv("LLM_DEBUG_LOG", "0") == "1"
@@ -655,11 +703,16 @@ class LLMService:
                     log_entry = db.query(LLMCallLog).filter(LLMCallLog.request_id == request_id).order_by(LLMCallLog.id.desc()).first()
 
                 if log_entry:
-                    # Prevent overwriting an ERROR tag with a generic RESPONSE or SUMMARY unless it's a new error
-                    if log_entry.tag == "LLM_RESPONSE_ERROR" and tag in ("LLM_RESPONSE", "LLM_RESPONSE_SUMMARY", "LLM_RESPONSE_TRUNCATED", "LLM_EMPTY_OUTPUT"):
+                    # Keep a real failure. A stale-pending timeout is provisional and
+                    # must yield when this same request later returns successfully.
+                    incoming_success = tag in _SUCCESS_LLM_LOG_TAGS
+                    stale_timeout = llm_error_is_stale_pending_timeout(log_entry.error_msg)
+                    if log_entry.tag == "LLM_RESPONSE_ERROR" and incoming_success and not stale_timeout:
                         pass
                     else:
                         log_entry.tag = tag
+                        if stale_timeout and incoming_success:
+                            log_entry.error_msg = None
                     if response_json:
                         log_entry.response_json = response_json
                     if error_msg:

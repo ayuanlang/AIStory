@@ -19,6 +19,55 @@ def test_is_llm_timeout_error_detects_transport_and_message():
     assert not is_llm_timeout_error(Exception("upstream 500"))
 
 
+def test_asset_wait_is_not_an_llm_timeout_and_batch_message_says_so():
+    from fastapi import HTTPException
+    from app.services.llm_service import llm_error_is_stale_pending_timeout
+    from app.services.scene_subskill_pipeline_runner import (
+        _scene_subskill_failure_reason,
+        describe_scene_subskill_batch_failure,
+        is_timeout_like_error,
+    )
+
+    asset_failed = HTTPException(
+        status_code=422,
+        detail="STAGING_ENVIRONMENT_ASSET_FAILED:EP01_SC01:failed",
+    )
+    assert is_timeout_like_error(asset_failed) is False
+    assert "超时" not in _scene_subskill_failure_reason(asset_failed)
+    assert is_timeout_like_error(TimeoutError("LLM call timed out after 900s")) is True
+    assert llm_error_is_stale_pending_timeout(
+        "Error: LLM request timed out after 900s (stale pending log)"
+    )
+    assert not llm_error_is_stale_pending_timeout("Error: upstream 500")
+
+    described = describe_scene_subskill_batch_failure({
+        "scene_count": 1,
+        "failed_scene_ids": ["EP01_SC01"],
+        "per_scene_outputs": [{
+            "scene_id": "EP01_SC01",
+            "failed": True,
+            "timed_out": False,
+            "error": "STAGING_ENVIRONMENT_ASSET_FAILED:EP01_SC01:failed",
+        }],
+    })
+    assert described["error_code"] == "SCENE_SUBSKILL_ALL_FAILED"
+    assert "timed out" not in described["error_message"].lower()
+    assert "EP01_SC01" in described["error_message"]
+
+    timed = describe_scene_subskill_batch_failure({
+        "scene_count": 1,
+        "failed_scene_ids": ["EP01_SC01"],
+        "per_scene_outputs": [{
+            "scene_id": "EP01_SC01",
+            "failed": True,
+            "timed_out": True,
+            "error": "LLM call timed out after 900s",
+        }],
+    })
+    assert timed["error_code"] == "SCENE_SUBSKILL_TIMEOUT"
+    assert "调用超时" in timed["error_message"]
+
+
 def test_finalize_stale_pipeline_nodes_skips_wait_env_inside_budget():
     from types import SimpleNamespace
     from app.core.time_utils import now_bj

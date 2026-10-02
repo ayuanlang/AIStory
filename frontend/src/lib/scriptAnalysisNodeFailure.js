@@ -55,7 +55,10 @@ const classifyFailureKind = ({ errorCode, errorMessage, businessReason, detail, 
         || code === 'SCENE_SUBSKILL_TIMEOUT'
         || /超过\s*\d+s\s*无进展/.test(raw)
         || /timed out after \d+s with no progress/i.test(raw)
-        || lower.includes('timeout')
+        || (
+            /timeout|timed out/i.test(lower)
+            && !/timed out or failed/i.test(raw)
+        )
     ) {
         return 'timeout';
     }
