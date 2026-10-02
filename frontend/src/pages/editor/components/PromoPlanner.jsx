@@ -553,6 +553,25 @@ const emptyFlowerTextSpec = () => ({
     spec_line: '',
 });
 
+const readFlowerChoice = (text) => (String(text || '').includes('出字=舍') ? 'drop' : 'keep');
+const readFlowerMode = (text) => (String(text || '').includes('出字=模型直出') ? 'model' : 'burn');
+
+const writeFlowerChoice = (text, choice, mode) => {
+    let next = String(text || '').replace(/(?:^|[｜|])出字=(?:后期烧录|模型直出|舍)/g, '');
+    next = next.replace(/^[｜|\s]+|[｜|\s]+$/g, '').replace(/[｜|]{2,}/g, '｜');
+    if (choice === 'drop') return next ? `${next}｜出字=舍` : '出字=舍';
+    if (mode === 'model') {
+        next = next
+            .replace(/(?:^|[｜|])烧录=libass/g, '')
+            .replace(/(?:^|[｜|])手写=禁/g, '')
+            .replace(/^[｜|\s]+|[｜|\s]+$/g, '')
+            .replace(/[｜|]{2,}/g, '｜');
+        return next ? `${next}｜出字=模型直出` : '出字=模型直出';
+    }
+    if (!next.includes('烧录=libass')) next = next ? `${next}｜烧录=libass｜手写=禁` : '烧录=libass｜手写=禁';
+    return `${next}｜出字=后期烧录`;
+};
+
 const emptyStageBlock = (name) => ({
     name,
     duration: '',
@@ -2430,9 +2449,28 @@ function StagePlanEditor({
                                     onChange={(v) => patchResult(`${prefix}.flower_text`, v)}
                                     rows={2}
                                     placeholder={key === 'close'
-                                        ? t('文案=「有韵味的收口句」｜位置=中｜字级=大｜上屏=段末切镜|黑屏专镜|字卡专镜｜停留=长｜听=无｜艺术=A+B｜逐字=…', 'Copy | mid | large | end-cut, black card or title card | silent | hold long | glyph lock')
-                                        : t('文案=「上屏短句」｜位置=中｜字级=中｜上屏=段末切镜|段首开镜|黑屏专镜|字卡专镜｜停留=短｜听=无｜艺术=A+B｜逐字=…', 'Copy | mid | medium | open/end cut, black or title card | silent | short | glyph lock')}
+                                        ? t('文案=「有韵味的收口句」｜出字=后期烧录|模型直出｜位置=中｜字级=大｜听=无', 'Copy | burn later or model | mid | large | silent')
+                                        : t('文案=「上屏短句」｜出字=后期烧录|模型直出｜位置=中｜字级=中｜听=无', 'Copy | burn later or model | mid | medium | silent')}
                                 />
+                                <div className="grid grid-cols-2 gap-2">
+                                    <select
+                                        className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
+                                        value={readFlowerChoice(row.flower_text)}
+                                        onChange={(e) => patchResult(`${prefix}.flower_text`, writeFlowerChoice(row.flower_text, e.target.value, readFlowerMode(row.flower_text)))}
+                                    >
+                                        <option value="keep">{t('取：上屏', 'Keep on screen')}</option>
+                                        <option value="drop">{t('舍：不上屏', 'Drop')}</option>
+                                    </select>
+                                    <select
+                                        className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none disabled:opacity-40"
+                                        value={readFlowerMode(row.flower_text)}
+                                        disabled={readFlowerChoice(row.flower_text) === 'drop'}
+                                        onChange={(e) => patchResult(`${prefix}.flower_text`, writeFlowerChoice(row.flower_text, 'keep', e.target.value))}
+                                    >
+                                        <option value="burn">{t('后期烧录', 'Burn in post')}</option>
+                                        <option value="model">{t('模型直出', 'Model paints')}</option>
+                                    </select>
+                                </div>
                             </div>
                             <div>
                                 <FieldLabel>{t('技法联想', 'Technique')}</FieldLabel>

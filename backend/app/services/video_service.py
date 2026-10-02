@@ -89,6 +89,18 @@ def _run_ffmpeg(cmd: list, timeout_seconds: int = 600, cwd: Optional[str] = None
         raise RuntimeError(f"ffmpeg failed (code={completed.returncode}): {stderr[-2000:]}")
 
 
+def _require_complete_mp4(file_path: str) -> None:
+    """Reject error pages and truncated downloads before any decoder opens them."""
+    try:
+        size = os.path.getsize(file_path)
+        with open(file_path, "rb") as handle:
+            header = handle.read(32)
+    except OSError as exc:
+        raise RuntimeError(f"原始视频无法读取：{exc}") from exc
+    if size < 1024 or b"ftyp" not in header:
+        raise RuntimeError("下载到的不是完整视频，预览用的成片没有保存到这次烧录。请等成片保存后再烧录。")
+
+
 def _probe_video_size(file_path: str, ffmpeg_exe: str) -> Tuple[int, int]:
     probe_exe = _resolve_ffprobe_exe(ffmpeg_exe)
     if probe_exe:
@@ -122,17 +134,23 @@ def _probe_video_size(file_path: str, ffmpeg_exe: str) -> Tuple[int, int]:
         except Exception as exc:
             logger.warning("ffprobe size probe failed path=%s err=%s", file_path, exc)
 
-    clip = None
-    try:
-        clip = VideoFileClip(file_path)
-        width, height = clip.size
-        return int(width), int(height)
-    finally:
-        if clip is not None:
-            try:
-                clip.close()
-            except Exception:
-                pass
+    completed = subprocess.run(
+        [ffmpeg_exe, "-hide_banner", "-i", file_path],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    blob = f"{completed.stdout or ''}\n{completed.stderr or ''}"
+    import re
+
+    match = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", blob, re.DOTALL)
+    if not match:
+        match = re.search(r"(\d{2,5})x(\d{2,5})", blob)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    tail = (completed.stderr or completed.stdout or "").strip()[-400:]
+    raise RuntimeError(f"无法读取视频尺寸：{tail or '文件不是可播放的视频'}")
 
 
 def _download_or_resolve_local_video(video_url: str, work_dir: str) -> str:
@@ -154,13 +172,18 @@ def _download_or_resolve_local_video(video_url: str, work_dir: str) -> str:
         if len(ext) > 8:
             ext = ".mp4"
         local_path = os.path.join(work_dir, f"source_{uuid.uuid4().hex}{ext}")
-        logger.info("Downloading video for cleanup: %s -> %s", raw, local_path)
-        with requests.get(raw, stream=True, timeout=_CLEANUP_DOWNLOAD_TIMEOUT_SECONDS) as response:
-            response.raise_for_status()
-            with open(local_path, "wb") as handle:
-                for chunk in response.iter_content(chunk_size=1024 * 256):
-                    if chunk:
-                        handle.write(chunk)
+        logger.info("Downloading video for cleanup: %s%s", parsed.netloc, parsed.path)
+        try:
+            with requests.get(raw, stream=True, timeout=_CLEANUP_DOWNLOAD_TIMEOUT_SECONDS) as response:
+                response.raise_for_status()
+                with open(local_path, "wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 256):
+                        if chunk:
+                            handle.write(chunk)
+        except requests.HTTPError as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            raise RuntimeError(f"原始视频无法下载（{status or '网络错误'}）。请重新打开这一镜后再烧录。") from exc
+        _require_complete_mp4(local_path)
         return local_path
 
     candidate = raw if os.path.isabs(raw) else os.path.join(settings.UPLOAD_DIR, raw.lstrip("/\\"))

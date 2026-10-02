@@ -1787,13 +1787,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const getBatchVideoEligibleShots = useCallback((shotList) => {
         return (Array.isArray(shotList) ? shotList : []).filter((shot) => {
             if (!shot || !shot.id) return false;
-            const startFrameUrl = String(shot?.image_url || '').trim();
-            const endFrameUrl = String(getShotEndFrameUrl(shot) || '').trim();
             const videoUrl = String(shot?.video_url || '').trim();
             if (videoUrl) return false;
-            return Boolean(startFrameUrl || endFrameUrl);
+            const videoPrompt = String(shot?.video_content || shot?.prompt || '').trim();
+            if (videoPrompt) return true;
+            try {
+                const tech = JSON.parse(shot?.technical_notes || '{}');
+                return Boolean(String(tech?.video_prompt_cn || '').trim());
+            } catch (e) {
+                return false;
+            }
         });
-    }, [getShotEndFrameUrl]);
+    }, []);
 
     const normalizeGeneratingState = useCallback((raw) => {
         if (!raw || typeof raw !== 'object') return {};
@@ -11855,7 +11860,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const targetShots = mode === 'videos' ? getBatchVideoEligibleShots(shots) : shots;
         if (mode === 'videos' && targetShots.length === 0) {
-            const msg = t('当前没有可批量生成视频的镜头。需要至少已有一张首尾帧，且当前没有视频。', 'No eligible shots for batch video generation. Each shot must already have at least one start/end frame and must not already have a video.');
+            const msg = t('当前没有可批量生成视频的镜头。需要有视频提示词，且当前没有视频。', 'No eligible shots for batch video generation. Each shot needs a video prompt and must not already have a video.');
             onLog?.(msg, 'warning');
             alert(msg);
             return;
@@ -11872,6 +11877,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     tech = {};
                 }
                 ensureShotDefaultVideoMode(tech);
+                tech.video_mode_unified = 'entity_refs';
+                tech.video_ref_submit_mode = 'entity_refs';
                 const warnings = collectShotVideoReferenceWarnings({
                     shotLike: shot,
                     techObj: tech,
@@ -11954,8 +11961,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const ok = mode === 'videos'
             ? await confirmUiMessage(t(
-                `将为 ${targetShots.length} 个镜头批量生成视频。只会提交至少已有一张首尾帧、且当前没有视频的镜头；后端会按你的账号等级并发执行。是否继续？`,
-                `Generate videos for ${targetShots.length} shots. Only shots that already have at least one start/end frame and do not already have a video will be submitted; the backend will run them concurrently based on your user level. Continue?`
+                `将为 ${targetShots.length} 个镜头按实体参考图模式批量生成视频。会自动提交提示词里的实体参考图并注入描点；已有视频的镜头不会重复提交。是否继续？`,
+                `Generate videos for ${targetShots.length} shots in entity-reference mode. Entity reference images from each prompt will be submitted and anchors will be injected. Shots that already have a video are skipped. Continue?`
             ))
             : true;
         if (!ok) return;
@@ -11965,7 +11972,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const targetShotIds = targetShots.map((shot) => shot.id).filter(Boolean);
             if (targetShotIds.length === 0) {
                 const msg = mode === 'videos'
-                    ? t('当前没有可批量生成视频的镜头。需要至少已有一张首尾帧，且当前没有视频。', 'No eligible shots for batch video generation. Each shot must already have at least one start/end frame and must not already have a video.')
+                    ? t('当前没有可批量生成视频的镜头。需要有视频提示词，且当前没有视频。', 'No eligible shots for batch video generation. Each shot needs a video prompt and must not already have a video.')
                     : t('当前镜头尚未保存到数据库，无法批量执行。请先保存镜头。', 'Current shots are not saved to database yet, cannot run batch. Please save shots first.');
                 onLog?.(msg, 'warning');
                 alert(msg);
@@ -12466,7 +12473,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         <button
                                                             onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerateVideo(); }}
                                                             className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
-                                                            title={t('仅处理已有首尾帧且当前无视频的镜头', 'Only shots with existing start/end frames and no current video')}
+                                                            title={t('按实体参考图模式批量生成当前无视频的镜头，自动提交参考图并注入描点', 'Batch-generate videos in entity-reference mode for shots without a video, submitting reference images and injecting anchors')}
                                                         >
                                                             <Film className="w-3 h-3 text-muted-foreground"/>
                                                             {t('视频', 'Video')}
@@ -13503,7 +13510,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 </button>
                                                             </div>
                                                             <p className="text-[11px] text-white/55 mb-3">
-                                                                {t('生成时已按文案自动烧录。可改主文、热线和印章，再烧一次。印章落在主文旁侧。', 'The line was burned automatically. Edit the line, hotline, or seal, then burn again. The seal sits beside the line.')}
+                                                                {t('烧录按剧本里已定的字体、字色和艺术处理来画，字仍是框里的原文。可改主文、热线和印章，再烧一次。', 'Burn follows the font, color, and art treatment locked in the script. The glyphs stay the text in this form. Edit the line, hotline, or seal, then burn again.')}
                                                             </p>
                                                             {flowerBurnLoading ? (
                                                                 <div className="text-xs text-white/60 py-6 text-center">{t('正在读取…', 'Loading…')}</div>

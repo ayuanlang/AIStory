@@ -57,10 +57,14 @@ export function requestEpisodeAnalysisPipelineStop(episodeId, reason = 'user') {
     const id = toEpisodeId(episodeId);
     if (!id) return null;
     const prev = analysisPipelineControlByEpisode.get(id) || emptyPipelineControl();
+    // Stop ends this budget. A later action must not inherit an already-expired clock.
     const next = {
         ...prev,
         stopRequested: true,
         stopReason: String(reason || 'user').trim() || 'user',
+        deadlineAt: 0,
+        startedAt: 0,
+        supervisorActive: false,
         updatedAt: Date.now(),
     };
     analysisPipelineControlByEpisode.set(id, next);

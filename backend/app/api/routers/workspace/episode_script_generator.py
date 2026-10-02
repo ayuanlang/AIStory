@@ -41,6 +41,7 @@ from app.services.episode_script_output import (  # noqa: E402,F401
     extract_official_episode_script,
 )
 from app.services.episode_script_prompt import (  # noqa: E402,F401
+    build_trailer_generation_prompt_block,
     resolve_episode_generation_guidance_for_prompt,
 )
 from app.services.script_analysis_llm_config import (  # noqa: E402,F401
@@ -699,6 +700,11 @@ async def generate_project_episode_scripts_from_global_framework(
         if requested_episode_number <= 0:
             raise HTTPException(status_code=400, detail="episode_number must be greater than 0")
 
+    output_kind_raw = str(getattr(req, "output_kind", None) or "").strip().lower()
+    trailer_mode = output_kind_raw in {"trailer", "preview", "预告", "预告片"}
+    if trailer_mode:
+        requested_episode_number = None
+
     # Determine target episode count
     target_n: Optional[int] = None
     if req.episodes_count is not None:
@@ -765,10 +771,14 @@ async def generate_project_episode_scripts_from_global_framework(
 
     story_input_key = "promo_generator_input" if generator_kind == "promo" else "story_generator_global_input"
     saved_story_input = gi.get(story_input_key) if isinstance(gi.get(story_input_key), dict) else {}
-    episode_script_mode = _pick_first_text(
-        req.script_mode,
-        saved_story_input.get("script_mode"),
-        gi_story_input.get("script_mode"),
+    episode_script_mode = (
+        "预告片 / Trailer"
+        if trailer_mode
+        else _pick_first_text(
+            req.script_mode,
+            saved_story_input.get("script_mode"),
+            gi_story_input.get("script_mode"),
+        )
     )
     episode_target_audience = _pick_first_text(
         req.target_audience,
@@ -852,6 +862,12 @@ async def generate_project_episode_scripts_from_global_framework(
         .all()
     )
 
+    def _is_trailer_episode(ep: Episode) -> bool:
+        ep_info = _episode_runtime_info_from_episode(ep)
+        if not isinstance(ep_info, dict):
+            return False
+        return str(ep_info.get("script_output_kind") or "").strip().lower() == "trailer"
+
     def _safe_positive_int(value: Any) -> Optional[int]:
         try:
             num = int(value)
@@ -915,7 +931,11 @@ async def generate_project_episode_scripts_from_global_framework(
     by_idx: Dict[int, Episode] = {}
     idx_candidates: Dict[int, List[int]] = {}
     by_title: Dict[str, Episode] = {}
+    trailer_eps: List[Episode] = []
     for ep in existing_eps:
+        if _is_trailer_episode(ep):
+            trailer_eps.append(ep)
+            continue
         title_key = str(ep.title or "").strip().lower()
         if title_key and title_key not in by_title:
             by_title[title_key] = ep
@@ -942,7 +962,10 @@ async def generate_project_episode_scripts_from_global_framework(
     # Fallback mapping for legacy projects: if titles were renamed without numeric prefix,
     # keep existing episode rows and assign missing indexes by stable DB order before creating any new rows.
     mapped_ids = {int(ep.id) for ep in by_idx.values() if ep is not None}
-    unmapped_eps = [ep for ep in existing_eps if int(ep.id) not in mapped_ids]
+    unmapped_eps = [
+        ep for ep in existing_eps
+        if int(ep.id) not in mapped_ids and not _is_trailer_episode(ep)
+    ]
     if unmapped_eps:
         upper_bound = max(int(target_n or 0), len(existing_eps), int(requested_episode_number or 0))
         next_unmapped_idx = 0
@@ -971,7 +994,7 @@ async def generate_project_episode_scripts_from_global_framework(
     episodes_in_order: List[Episode] = []
 
     # Strict single-episode mode: never auto-create episodes before target resolution.
-    single_episode_mode = bool(requested_episode_number is not None or req.episode_id)
+    single_episode_mode = bool(requested_episode_number is not None or req.episode_id or trailer_mode)
     loop_limit = 0 if single_episode_mode else (target_n if target_n != 999 else 0)
     for i in range(1, loop_limit + 1):
         title = f"Episode {i}"
@@ -1026,6 +1049,25 @@ async def generate_project_episode_scripts_from_global_framework(
         {"idx": n, "id": ep.id, "title": ep.title, "script_content": ep.script_content}
         for n, ep in enumerate(episodes_in_order, start=1)
     ]
+    if trailer_mode:
+        trailer_ep = trailer_eps[0] if trailer_eps else None
+        if trailer_ep is None:
+            trailer_ep = Episode(project_id=project_id, title="预告片", script_content="")
+            trailer_info = _episode_runtime_info_from_episode(trailer_ep)
+            trailer_info["script_output_kind"] = "trailer"
+            trailer_info.pop("episode_script_episode_number", None)
+            trailer_ep.episode_info = trailer_info
+            db.add(trailer_ep)
+            db.commit()
+            db.refresh(trailer_ep)
+            created_episodes.append(int(trailer_ep.id))
+        episodes_data = [{
+            "idx": 0,
+            "id": int(trailer_ep.id),
+            "title": trailer_ep.title or "预告片",
+            "script_content": trailer_ep.script_content,
+            "output_kind": "trailer",
+        }]
 
     target_episode_id: Optional[int] = None
     target_resolution_source = "none"
@@ -1362,7 +1404,14 @@ async def generate_project_episode_scripts_from_global_framework(
             relationships_block = f"Character Relationships (Plain Text):\n{relationships}\n\n"
 
         episode_title_is_placeholder = _is_placeholder_episode_title(ep_title, idx)
-        if episode_title_is_placeholder:
+        call_is_trailer = str(ep_data.get("output_kind") or "") == "trailer"
+        if call_is_trailer:
+            episode_title_policy_block = (
+                "Episode Title Policy (Hard Constraint):\n"
+                "- This piece is a trailer. The H1 short title should name the hook, not the episode number.\n"
+                "- Do NOT title it Episode 1, 第1集, or a series episode title.\n\n"
+            )
+        elif episode_title_is_placeholder:
             episode_title_policy_block = (
                 "Episode Title Policy (Hard Constraint):\n"
                 f"- Current DB title is a placeholder: {ep_title}\n"
@@ -1377,7 +1426,23 @@ async def generate_project_episode_scripts_from_global_framework(
                 "- Do NOT output placeholder titles such as 'Episode N', 'EPN', '第N集', 'Untitled', or 'TBD'.\n\n"
             )
 
-        generation_scope_block = (
+        if call_is_trailer:
+            generation_scope_block = (
+                "Generation Scope (Hard Constraint):\n"
+                "- Delivery: TRAILER. This is not a numbered series episode.\n"
+                f"- Series length for context only: {target_n}\n"
+                f"- Current Call Title: {ep_title}\n"
+                "- Generate ONLY this trailer. Do not write EP01 or any other episode.\n"
+                "- Global Story DNA is a mine for fun-and-games beats and core highlights, not a script to summarize in order.\n\n"
+                "Output Format Contract (Hard Constraint):\n"
+                "- The first non-empty line MUST be exactly one H1 heading: # 预告-{short title}\n"
+                "- Output MUST be pure Markdown text only.\n"
+                "- Do NOT output JSON, XML, YAML, code fences, or any wrapper text.\n"
+                "- Do NOT output a numbered episode heading such as # 1-标题.\n"
+                "- Keep the formal script blocks. This is still one trailer, not a series episode.\n\n"
+            )
+        else:
+            generation_scope_block = (
             "Generation Scope (Hard Constraint):\n"
             f"- Requested Episodes Count Input: {target_n}\n"
             f"- Episodes In Current Run: {len(episodes_data)}\n"
@@ -1446,15 +1511,17 @@ async def generate_project_episode_scripts_from_global_framework(
                 )
 
         episode_generation_guidance_block = resolve_episode_generation_guidance_for_prompt(
-            single_episode_mode=single_episode_mode,
+            single_episode_mode=single_episode_mode and not call_is_trailer,
             request_guidance=req.episode_generation_guidance,
             persisted_guidance=gi_story_input.get("episode_generation_guidance"),
         )
 
+        trailer_block = build_trailer_generation_prompt_block() if call_is_trailer else ""
         user_prompt = (
+            f"{trailer_block}"
             f"{episode_generation_guidance_block}"
             f"Project Title: {project_title}\n"
-            f"Episode Number: {idx}\n"
+            f"Episode Number: {'预告片' if call_is_trailer else idx}\n"
             f"Episode Title (current DB value): {ep_title}\n"
             f"Extra Notes: {req.extra_notes or ''}\n\n"
             f"{episode_product_specs_block}"
@@ -1555,7 +1622,13 @@ async def generate_project_episode_scripts_from_global_framework(
                 llm_episode_title,
                 not bool(parsed_heading.get("episode_title")),
             )
-            title_mismatch = bool(llm_episode_number) and int(llm_episode_number) != int(idx)
+            title_mismatch = (
+                False
+                if call_is_trailer
+                else bool(llm_episode_number) and int(llm_episode_number) != int(idx)
+            )
+            if call_is_trailer and llm_episode_number:
+                title_mismatch = True
             if title_mismatch:
                 logger.error(
                     f"[generate_episode_scripts] EPISODE_TITLE_MISMATCH_BLOCKED project_episode_number={idx} llm_episode_number={llm_episode_number} episode_id={ep_id} raw_heading={llm_heading!r}"
@@ -1642,11 +1715,15 @@ async def generate_project_episode_scripts_from_global_framework(
                 previous_title = str(ep_db.title or "")
                 ep_db.script_content = content
                 if llm_episode_title:
-                    ep_db.title = llm_episode_title
+                    ep_db.title = f"预告片·{llm_episode_title}" if call_is_trailer else llm_episode_title
                 ep_script_content = content
                 ei = _episode_runtime_info_from_episode(ep_db)
                 ei["episode_script_generated_at"] = now_bj_iso()
-                ei["episode_script_episode_number"] = int(idx)
+                if call_is_trailer:
+                    ei["script_output_kind"] = "trailer"
+                    ei.pop("episode_script_episode_number", None)
+                else:
+                    ei["episode_script_episode_number"] = int(idx)
                 if llm_episode_title:
                     ei["episode_title"] = llm_episode_title
                 if generator_kind == "promo":

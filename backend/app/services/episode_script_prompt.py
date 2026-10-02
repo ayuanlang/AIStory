@@ -23,6 +23,26 @@ def build_episode_generation_guidance_prompt_block(guidance: Optional[str]) -> s
     )
 
 
+def build_trailer_generation_prompt_block() -> str:
+    """Highest-priority brief when this call writes a trailer, not a series episode."""
+    return (
+        "【预告片生成 / Trailer — HIGHEST PRIORITY】\n"
+        "This call writes ONE trailer. It is not series episode 1 and not a compressed episode.\n"
+        "Story-circle completeness, previous-episode handoff, and next-episode setup do not apply.\n"
+        "Draw the picture from two sources only:\n"
+        "1) 娱乐时间 = Save the Cat Fun and Games / 游戏时间 / 节拍08. This is the body. "
+        "At least three entertainment beats: who does what, why it is fun to watch, and the visible result.\n"
+        "2) 核心看点 = Audience Hook, TOP anchors, iconic lines, 四美, and spectacle already in the global framework. "
+        "Each highlight used here must be seen or heard in the trailer, not only named in the selling-point list.\n"
+        "Shape: open on the most arresting fun-and-games image; cut the entertainment beats; "
+        "end by showing one side of the crisis and withholding the answer. Do not play the finale, "
+        "do not reveal a hidden villain, and do not retell all 15 beats in order.\n"
+        "The first non-empty OUTPUT line MUST be: # 预告-{short title}\n"
+        "Keep the formal script blocks, but 卖点 are the highlights this trailer actually shows, "
+        "and 重要情节 must say what is shown and what is deliberately withheld.\n\n"
+    )
+
+
 def resolve_episode_generation_guidance_for_prompt(
     *,
     single_episode_mode: bool,

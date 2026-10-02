@@ -167,6 +167,8 @@ def _pick_first_text(*values: Any) -> str:
 
 def _normalize_script_mode_key(script_mode: Any) -> str:
     raw = str(script_mode or "").strip().lower()
+    if "trailer" in raw or "预告" in raw:
+        return "trailer"
     if "short drama" in raw or "短剧" in raw:
         return "short_drama"
     if "feature film" in raw or "电影" in raw:
@@ -201,6 +203,13 @@ def _normalize_script_mode_key(script_mode: Any) -> str:
 
 
 _MANDATORY_WRITING_LOGIC_BY_SCRIPT_MODE: Dict[str, str] = {
+    "trailer": (
+        "- 这是预告片，不是正片的一集。不演完故事环，不按集推进，不回收上集，不给下集写正片交接。\n"
+        "- 主体是娱乐时间：救猫咪 Fun and Games / 游戏时间。把类型承诺拍成看得见的桥段，至少 3 段。\n"
+        "- 每段娱乐时间都要落地一条核心看点（卖点、名场面、金句、四美或特效），观众必须看见或听见，不能只在清单里点名。\n"
+        "- 开场先给最抓人的娱乐画面。收口只抛危机的一边，不演终场，不点破隐藏反派，不把十五拍按顺序重讲。\n"
+        "- 1200 字内，短对白，一场预告切 4–8 个短拍。H1 必须是 # 预告-{短题}。"
+    ),
     "short_drama": (
         "- 首分钟强钩子；压缩说明；快反转；集末强悬念；短句对白。\n"
         "- 表演主轴=对白+微表情+微动作（每句台词配说话人/听者微表演，禁对白裸奔）。\n"

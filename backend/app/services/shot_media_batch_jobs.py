@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
@@ -29,25 +30,17 @@ from app.services.generation_runtime.job_store import (
 from app.services.generation_runtime.seedance_duration import _resolve_shot_video_duration_value
 from app.services.generation_runtime.video_generation_runner import _run_generate_video
 from app.services.generation_runtime.video_ref_pipeline import (
-    DEFAULT_SHOT_VIDEO_MODE,
     _append_video_api_ref_mapping,
     _build_project_entity_lookup,
     _compute_subject_ref_index_map,
     _ensure_video_frame_role_instructions,
     _find_previous_shot_end_frame_url,
-    _find_previous_shot_video_url,
     _inject_shot_prompt_anchors,
-    _is_video_reference_image_mode,
-    _limit_keyframes_for_video_mode,
     _listify_video_ref_urls,
-    _merge_entity_refs_for_video_mode,
-    _normalize_video_request_refs,
     _parse_shot_tech,
-    _prepend_keyframe_story_progression_instruction,
     _resolve_default_shot_image_gen_refs,
-    _resolve_shot_video_mode,
+    _resolve_shot_video_panel_image_refs,
     _sync_request_image_refs_with_aligned,
-    _video_api_supports_last_frame_mode,
 )
 from app.services.media_service import media_service
 from app.services.project_episode_utils import _episode_runtime_info_from_episode
@@ -60,14 +53,101 @@ from app.services.system_api_lookup import get_system_api_setting
 
 logger = logging.getLogger("api_logger")
 
-def _is_shot_video_batch_eligible(shot: Shot, overwrite_existing: bool = False) -> bool:
+# Batch video always runs the entity-reference automatic path.
+BATCH_SHOT_VIDEO_MODE = "entity_refs"
+
+
+def _shot_has_video_prompt(shot: Shot) -> bool:
     tech = _parse_shot_tech(shot)
-    start_frame_url = str(getattr(shot, "image_url", "") or "").strip()
-    end_frame_url = str(tech.get("end_frame_url") or "").strip()
+    return bool(
+        str(getattr(shot, "video_content", None) or "").strip()
+        or str(getattr(shot, "prompt", None) or "").strip()
+        or str((tech or {}).get("video_prompt_cn") or "").strip()
+    )
+
+
+def _is_manual_video_ref_override(tech: Dict[str, Any]) -> bool:
+    notes = tech if isinstance(tech, dict) else {}
+    return bool(notes.get("video_ref_image_urls_manual") or notes.get("video_ref_image_urls_user_edited"))
+
+
+def _resolve_batch_entity_ref_images(
+    shot: Shot,
+    tech: Dict[str, Any],
+    entity_lookup: Dict[str, Dict[str, Any]],
+) -> tuple:
+    """Entity-reference images for batch video.
+
+    Auto mode rebuilds from names in the video prompt. A stored
+    ``video_ref_image_urls`` list is only honored after an explicit manual edit,
+    so stale panel snapshots cannot skip reference-image collection.
+    """
+    notes = dict(tech) if isinstance(tech, dict) else {}
+    manual = _is_manual_video_ref_override(notes)
+    forced = dict(notes)
+    forced["video_mode_unified"] = BATCH_SHOT_VIDEO_MODE
+    forced["video_ref_submit_mode"] = BATCH_SHOT_VIDEO_MODE
+    if not manual:
+        forced.pop("video_ref_image_urls", None)
+        forced["video_ref_image_urls_manual"] = False
+        forced["video_ref_image_urls_user_edited"] = False
+    refs = _resolve_shot_video_panel_image_refs(shot, forced, entity_lookup)
+    return refs, manual
+
+
+def _apply_entity_ref_prompt(
+    prompt_raw: str,
+    *,
+    entity_lookup: Dict[str, Dict[str, Any]],
+    global_style: str,
+    ordered_refs: List[str],
+    normalized_refs: Optional[List[str]],
+    use_prev_video: bool,
+    provider: str,
+    model: str,
+    manual_override: bool,
+) -> tuple:
+    """Inject entity anchors, then bind those images to @ImageN."""
+    source = str(prompt_raw or "").strip()
+    if not source:
+        return "", list(ordered_refs or []), normalized_refs
+    ref_index_map = _compute_subject_ref_index_map(source, entity_lookup)
+    anchored = _inject_shot_prompt_anchors(source, entity_lookup, global_style, ref_index_map)
+    mapped, aligned_refs = _append_video_api_ref_mapping(
+        anchored,
+        list(ordered_refs or []),
+        normalized_refs,
+        None,
+        None,
+        None,
+        entity_lookup=entity_lookup,
+        use_prev_video=bool(use_prev_video),
+        provider=provider,
+        model=model,
+        preserve_submitted_refs=bool(manual_override),
+    )
+    _, synced_refs = _sync_request_image_refs_with_aligned(
+        aligned_refs=aligned_refs,
+        image_urls=None,
+        ref_image_url=normalized_refs,
+        last_frame_url=None,
+        keyframes=None,
+    )
+    mapped = _ensure_video_frame_role_instructions(
+        mapped,
+        ref_mode=BATCH_SHOT_VIDEO_MODE,
+        image_urls=_listify_video_ref_urls(synced_refs),
+        last_frame_url=None,
+        start_frame_url=None,
+    )
+    return mapped, aligned_refs, synced_refs
+
+
+def _is_shot_video_batch_eligible(shot: Shot, overwrite_existing: bool = False) -> bool:
     video_url = str(getattr(shot, "video_url", "") or "").strip()
     if not overwrite_existing and video_url:
         return False
-    return bool(start_frame_url or end_frame_url)
+    return _shot_has_video_prompt(shot)
 
 def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int, overwrite_existing: bool = False, system_api_id: Optional[int] = None, use_prev_video: bool = False) -> Dict[str, Any]:
     item_db = SessionLocal()
@@ -131,8 +211,6 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
 
         shot_label = str(shot.shot_id or shot.shot_name or f"#{shot.id}")
         tech = _parse_shot_tech(shot)
-        start_frame_url = str(shot.image_url or "").strip()
-        end_frame_url = str(tech.get("end_frame_url") or "").strip()
         video_url = str(shot.video_url or "").strip()
 
         if not overwrite_existing and video_url:
@@ -143,13 +221,13 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 "skipped": True,
                 "skip_reason": "existing_video",
             }
-        if not start_frame_url and not end_frame_url:
+        if not _shot_has_video_prompt(shot):
             return {
                 "shot_id": int(shot.id),
                 "shot_label": shot_label,
                 "ok": True,
                 "skipped": True,
-                "skip_reason": "missing_frames",
+                "skip_reason": "missing_prompt",
             }
 
         episode_info = _episode_runtime_info_from_episode(episode)
@@ -159,53 +237,9 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             item_db, int(episode.project_id), episode_id=int(episode_id)
         )
 
-        video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
-        video_ref_index_map = _compute_subject_ref_index_map(video_prompt_raw, entity_lookup)
-        logger.info(
-            "[shot_media_batch] subject_ref_index_map asset=video shot_id=%s shot_label=%s map=%s",
-            shot.id,
-            shot_label,
-            video_ref_index_map,
-        )
-        video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style, video_ref_index_map)
-
-        video_mode = _resolve_shot_video_mode(tech)
-        refs: List[str] = []
-        explicit_last_frame_url = end_frame_url or None
-        video_prompt_candidates: List[str] = [
-            str(video_prompt_raw or "").strip(),
-            str(tech.get("video_prompt_cn") or "").strip(),
-        ]
-        if isinstance(tech.get("video_ref_image_urls"), list):
-            refs.extend([str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()])
-        else:
-            shot_mode = str(video_mode or "").strip().lower()
-            if not shot_mode:
-                shot_mode = DEFAULT_SHOT_VIDEO_MODE
-
-            if shot_mode == "end":
-                if end_frame_url:
-                    explicit_last_frame_url = end_frame_url
-            else:
-                if start_frame_url:
-                    refs.append(start_frame_url)
-
-                if shot_mode in {"entity_refs", "keyframes_entity_refs"}:
-                    keyframes = _limit_keyframes_for_video_mode(tech.get("keyframes"), shot_mode)
-                    refs.extend(keyframes)
-
-                if shot_mode == "start_end" and end_frame_url:
-                    explicit_last_frame_url = end_frame_url
-
-        preserve_panel_video_refs = isinstance(tech.get("video_ref_image_urls"), list) and bool(tech.get("video_ref_image_urls"))
-        refs, auto_entity_refs = _merge_entity_refs_for_video_mode(
-            refs,
-            ref_mode=video_mode,
-            prompt_candidates=video_prompt_candidates,
-            entity_lookup=entity_lookup,
-            manual_override=preserve_panel_video_refs,
-            associated_entities=shot.associated_entities,
-        )
+        video_mode = BATCH_SHOT_VIDEO_MODE
+        entity_refs, manual_override = _resolve_batch_entity_ref_images(shot, tech, entity_lookup)
+        normalized_refs = entity_refs or None
 
         system_api_id_val = system_api_id
         if not system_api_id_val and getattr(episode, "system_api_id", None):
@@ -222,110 +256,49 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             if "seedance" in str(pre_api_cfg.get("provider") or "").lower() or "seedance" in str(pre_api_cfg.get("model") or "").lower():
                 is_seedance_batch = True
 
-        supports_last_frame_mode = _video_api_supports_last_frame_mode(
-            pre_api_cfg.get("provider"),
-            pre_api_cfg.get("model"),
-        )
-        normalized_refs, normalized_last_frame_url, batch_ref_info = _normalize_video_request_refs(
-            refs or None,
-            explicit_last_frame_url,
-            video_mode,
-            supports_last_frame_mode=supports_last_frame_mode,
-        )
-
-        # @ImageN numbering uses image refs only; last_frame stays a dedicated slot when supported.
+        provider_name = "seedance" if is_seedance_batch else ""
+        model_name = str(pre_api_cfg.get("model") or "")
         ordered_video_refs = _listify_video_ref_urls(normalized_refs)
-
-        keyframe_priority_refs: List[str] = []
-        if video_mode == "keyframes_entity_refs":
-            keyframe_priority_refs = _limit_keyframes_for_video_mode(tech.get("keyframes"), video_mode)
-
-        reference_video_urls: List[str] = []
-        if use_prev_video:
-            prev_video_url = _find_previous_shot_video_url(item_db, episode_id, int(shot.id))
-            if prev_video_url:
-                reference_video_urls.append(prev_video_url)
-
-        mapping_lookup = entity_lookup if _is_video_reference_image_mode(video_mode) else None
-        video_prompt, ordered_video_refs = _append_video_api_ref_mapping(
-            video_prompt,
-            ordered_video_refs,
-            normalized_refs,
-            normalized_last_frame_url,
-            keyframe_priority_refs or None,
-            reference_video_urls,
-            provider="seedance" if is_seedance_batch else None,
-            model=str(pre_api_cfg.get("model") or ""),
-            entity_lookup=mapping_lookup,
+        video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
+        video_prompt, ordered_video_refs, normalized_refs = _apply_entity_ref_prompt(
+            video_prompt_raw,
+            entity_lookup=entity_lookup,
+            global_style=global_style,
+            ordered_refs=ordered_video_refs,
+            normalized_refs=entity_refs,
             use_prev_video=bool(use_prev_video),
-            preserve_submitted_refs=preserve_panel_video_refs,
+            provider=provider_name,
+            model=model_name,
+            manual_override=manual_override,
         )
-        _, normalized_refs = _sync_request_image_refs_with_aligned(
-            aligned_refs=ordered_video_refs,
-            image_urls=None,
-            ref_image_url=normalized_refs,
-            last_frame_url=normalized_last_frame_url,
-            keyframes=keyframe_priority_refs if video_mode == "keyframes_entity_refs" else None,
-        )
-        video_prompt = _ensure_video_frame_role_instructions(
-            video_prompt,
-            ref_mode=video_mode,
-            image_urls=_listify_video_ref_urls(normalized_refs),
-            last_frame_url=normalized_last_frame_url,
-            start_frame_url=start_frame_url,
-        )
-        if video_mode == "keyframes_entity_refs":
-            keyframe_ref_count = 1 if keyframe_priority_refs else 0
-            video_prompt = _prepend_keyframe_story_progression_instruction(video_prompt, keyframe_ref_count, language="en")
 
         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
         video_prompt_cn = ""
         if video_prompt_cn_raw:
-            video_cn_ref_index_map = _compute_subject_ref_index_map(video_prompt_cn_raw, entity_lookup)
-            video_prompt_cn = _inject_shot_prompt_anchors(video_prompt_cn_raw, entity_lookup, global_style, video_cn_ref_index_map)
-            video_prompt_cn, ordered_video_refs = _append_video_api_ref_mapping(
-                video_prompt_cn,
-                ordered_video_refs,
-                normalized_refs,
-                normalized_last_frame_url,
-                keyframe_priority_refs or None,
-                reference_video_urls,
-                provider="seedance" if is_seedance_batch else None,
-                model=str(pre_api_cfg.get("model") or ""),
-                entity_lookup=mapping_lookup,
+            video_prompt_cn, ordered_video_refs, normalized_refs = _apply_entity_ref_prompt(
+                video_prompt_cn_raw,
+                entity_lookup=entity_lookup,
+                global_style=global_style,
+                ordered_refs=ordered_video_refs,
+                normalized_refs=_listify_video_ref_urls(normalized_refs) or entity_refs,
                 use_prev_video=bool(use_prev_video),
-                preserve_submitted_refs=preserve_panel_video_refs,
+                provider=provider_name,
+                model=model_name,
+                manual_override=manual_override,
             )
-            _, normalized_refs = _sync_request_image_refs_with_aligned(
-                aligned_refs=ordered_video_refs,
-                image_urls=None,
-                ref_image_url=normalized_refs,
-                last_frame_url=normalized_last_frame_url,
-                keyframes=keyframe_priority_refs if video_mode == "keyframes_entity_refs" else None,
-            )
-            video_prompt_cn = _ensure_video_frame_role_instructions(
-                video_prompt_cn,
-                ref_mode=video_mode,
-                image_urls=_listify_video_ref_urls(normalized_refs),
-                last_frame_url=normalized_last_frame_url,
-                start_frame_url=start_frame_url,
-            )
-            if video_mode == "keyframes_entity_refs":
-                keyframe_ref_count = 1 if keyframe_priority_refs else 0
-                video_prompt_cn = _prepend_keyframe_story_progression_instruction(video_prompt_cn, keyframe_ref_count, language="zh")
             tech["video_prompt_cn"] = video_prompt_cn
             item_db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
             item_db.commit()
 
         logger.info(
-            "[shot_media_batch] video ref resolution | shot_id=%s shot_label=%s video_mode=%s refs=%s last_frame=%s auto_entity_refs=%s fallback_to_refs=%s",
+            "[shot_media_batch] entity_refs auto execute | shot_id=%s shot_label=%s video_mode=%s refs=%s manual=%s anchor_injected=%s image_tags=%s",
             shot.id,
             shot_label,
             video_mode,
-            len(ordered_video_refs),
-            bool(str(normalized_last_frame_url or "").strip()),
-            len(auto_entity_refs),
-            bool(batch_ref_info.get("fallback_to_refs")),
+            len(_listify_video_ref_urls(normalized_refs)),
+            manual_override,
+            video_prompt != video_prompt_raw,
+            len(re.findall(r"@Image\d+", str(video_prompt or ""), flags=re.IGNORECASE)),
         )
 
         batch_status = _read_shot_media_batch_status(episode) if episode else {}
@@ -347,17 +320,17 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             prompt=video_prompt,
             multi_prompt=multi_prompt_payload,
             ref_image_url=normalized_refs,
-            last_frame_url=normalized_last_frame_url,
+            last_frame_url=None,
             ref_mode=video_mode,
             keyframes=None,
             duration=duration_val,
             project_id=episode.project_id,
+            episode_id=int(episode_id),
             shot_id=shot.id,
             shot_number=shot.shot_id,
             shot_name=shot.shot_name,
             asset_type="video",
             system_api_id=system_api_id,
-            ref_video_urls=reference_video_urls or None,
             use_prev_video=bool(use_prev_video),
         )
         _release_db_connection(item_db, "shot_media_batch_video")
@@ -930,53 +903,9 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         _persist_shot_media_batch_status(db, episode, latest)
                         _release_db_connection(db, "shot_media_batch_video_status")
 
-                        video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
-                        video_ref_index_map = _compute_subject_ref_index_map(video_prompt_raw, entity_lookup)
-                        logger.info(
-                            "[shot_media_batch] subject_ref_index_map asset=video shot_id=%s shot_label=%s map=%s",
-                            shot.id,
-                            shot_label,
-                            video_ref_index_map,
-                        )
-                        video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style, video_ref_index_map)
-
-                        video_mode = _resolve_shot_video_mode(tech)
-                        refs: List[str] = []
-                        explicit_last_frame_url = end_frame_url or None
-                        video_prompt_candidates: List[str] = [
-                            str(video_prompt_raw or "").strip(),
-                            str(tech.get("video_prompt_cn") or "").strip(),
-                        ]
-                        if isinstance(tech.get("video_ref_image_urls"), list):
-                            refs.extend([str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()])
-                        else:
-                            shot_mode = str(video_mode or "").strip().lower()
-                            if not shot_mode:
-                                shot_mode = DEFAULT_SHOT_VIDEO_MODE
-
-                            if shot_mode == "end":
-                                if end_frame_url:
-                                    explicit_last_frame_url = end_frame_url
-                            else:
-                                if str(shot.image_url or "").strip():
-                                    refs.append(str(shot.image_url).strip())
-
-                                if shot_mode in {"entity_refs", "keyframes_entity_refs"}:
-                                    keyframes = _limit_keyframes_for_video_mode(tech.get("keyframes"), shot_mode)
-                                    refs.extend(keyframes)
-
-                                if shot_mode == "start_end" and end_frame_url:
-                                    explicit_last_frame_url = end_frame_url
-
-                        preserve_panel_video_refs = isinstance(tech.get("video_ref_image_urls"), list) and bool(tech.get("video_ref_image_urls"))
-                        refs, auto_entity_refs = _merge_entity_refs_for_video_mode(
-                            refs,
-                            ref_mode=video_mode,
-                            prompt_candidates=video_prompt_candidates,
-                            entity_lookup=entity_lookup,
-                            manual_override=preserve_panel_video_refs,
-                            associated_entities=shot.associated_entities,
-                        )
+                        video_mode = BATCH_SHOT_VIDEO_MODE
+                        entity_refs, manual_override = _resolve_batch_entity_ref_images(shot, tech, entity_lookup)
+                        normalized_refs = entity_refs or None
 
                         batch_provider = str((request_payload or {}).get("provider") or "").strip()
                         batch_model = str((request_payload or {}).get("model") or "").strip()
@@ -990,109 +919,49 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         is_seedance_batch = (
                             "seedance" in batch_provider.lower() or "seedance" in batch_model.lower()
                         )
-                        supports_last_frame_mode = _video_api_supports_last_frame_mode(
-                            batch_provider,
-                            batch_model,
-                        )
-                        normalized_refs, normalized_last_frame_url, batch_ref_info = _normalize_video_request_refs(
-                            refs or None,
-                            explicit_last_frame_url,
-                            video_mode,
-                            supports_last_frame_mode=supports_last_frame_mode,
-                        )
-
+                        provider_name = "seedance" if is_seedance_batch else ""
+                        use_prev_video = bool((request_payload or {}).get("use_prev_video"))
                         ordered_video_refs = _listify_video_ref_urls(normalized_refs)
-
-                        keyframe_priority_refs: List[str] = []
-                        if video_mode == "keyframes_entity_refs":
-                            keyframe_priority_refs = _limit_keyframes_for_video_mode(tech.get("keyframes"), video_mode)
-
-                        reference_video_urls: List[str] = []
-                        if bool((request_payload or {}).get("use_prev_video")):
-                            prev_video_url = _find_previous_shot_video_url(db, episode_id, int(shot.id))
-                            if prev_video_url:
-                                reference_video_urls.append(prev_video_url)
-
-                        mapping_lookup = entity_lookup if _is_video_reference_image_mode(video_mode) else None
-                        video_prompt, ordered_video_refs = _append_video_api_ref_mapping(
-                            video_prompt,
-                            ordered_video_refs,
-                            normalized_refs,
-                            normalized_last_frame_url,
-                            keyframe_priority_refs or None,
-                            reference_video_urls,
-                            entity_lookup=mapping_lookup,
-                            use_prev_video=bool((request_payload or {}).get("use_prev_video")),
-                            provider="seedance" if is_seedance_batch else None,
+                        video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
+                        video_prompt, ordered_video_refs, normalized_refs = _apply_entity_ref_prompt(
+                            video_prompt_raw,
+                            entity_lookup=entity_lookup,
+                            global_style=global_style,
+                            ordered_refs=ordered_video_refs,
+                            normalized_refs=entity_refs,
+                            use_prev_video=use_prev_video,
+                            provider=provider_name,
                             model=batch_model,
-                            preserve_submitted_refs=preserve_panel_video_refs,
+                            manual_override=manual_override,
                         )
-                        _, normalized_refs = _sync_request_image_refs_with_aligned(
-                            aligned_refs=ordered_video_refs,
-                            image_urls=None,
-                            ref_image_url=normalized_refs,
-                            last_frame_url=normalized_last_frame_url,
-                            keyframes=keyframe_priority_refs if video_mode == "keyframes_entity_refs" else None,
-                        )
-                        video_prompt = _ensure_video_frame_role_instructions(
-                            video_prompt,
-                            ref_mode=video_mode,
-                            image_urls=_listify_video_ref_urls(normalized_refs),
-                            last_frame_url=normalized_last_frame_url,
-                            start_frame_url=start_frame_url,
-                        )
-                        if video_mode == "keyframes_entity_refs":
-                            keyframe_ref_count = 1 if keyframe_priority_refs else 0
-                            video_prompt = _prepend_keyframe_story_progression_instruction(video_prompt, keyframe_ref_count, language="en")
 
                         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
                         video_prompt_cn = ""
                         if video_prompt_cn_raw:
-                            video_cn_ref_index_map = _compute_subject_ref_index_map(video_prompt_cn_raw, entity_lookup)
-                            video_prompt_cn = _inject_shot_prompt_anchors(video_prompt_cn_raw, entity_lookup, global_style, video_cn_ref_index_map)
-                            video_prompt_cn, ordered_video_refs = _append_video_api_ref_mapping(
-                                video_prompt_cn,
-                                ordered_video_refs,
-                                normalized_refs,
-                                normalized_last_frame_url,
-                                keyframe_priority_refs or None,
-                                reference_video_urls,
-                                entity_lookup=mapping_lookup,
-                                use_prev_video=bool((request_payload or {}).get("use_prev_video")),
-                                provider="seedance" if is_seedance_batch else None,
+                            video_prompt_cn, ordered_video_refs, normalized_refs = _apply_entity_ref_prompt(
+                                video_prompt_cn_raw,
+                                entity_lookup=entity_lookup,
+                                global_style=global_style,
+                                ordered_refs=ordered_video_refs,
+                                normalized_refs=_listify_video_ref_urls(normalized_refs) or entity_refs,
+                                use_prev_video=use_prev_video,
+                                provider=provider_name,
                                 model=batch_model,
-                                preserve_submitted_refs=preserve_panel_video_refs,
+                                manual_override=manual_override,
                             )
-                            _, normalized_refs = _sync_request_image_refs_with_aligned(
-                                aligned_refs=ordered_video_refs,
-                                image_urls=None,
-                                ref_image_url=normalized_refs,
-                                last_frame_url=normalized_last_frame_url,
-                                keyframes=keyframe_priority_refs if video_mode == "keyframes_entity_refs" else None,
-                            )
-                            video_prompt_cn = _ensure_video_frame_role_instructions(
-                                video_prompt_cn,
-                                ref_mode=video_mode,
-                                image_urls=_listify_video_ref_urls(normalized_refs),
-                                last_frame_url=normalized_last_frame_url,
-                                start_frame_url=start_frame_url,
-                            )
-                            if video_mode == "keyframes_entity_refs":
-                                keyframe_ref_count = 1 if keyframe_priority_refs else 0
-                                video_prompt_cn = _prepend_keyframe_story_progression_instruction(video_prompt_cn, keyframe_ref_count, language="zh")
                             tech["video_prompt_cn"] = video_prompt_cn
                             db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
                             db.commit()
 
                         logger.info(
-                            "[shot_media_batch] video ref resolution | shot_id=%s shot_label=%s video_mode=%s refs=%s last_frame=%s auto_entity_refs=%s fallback_to_refs=%s",
+                            "[shot_media_batch] entity_refs auto execute | shot_id=%s shot_label=%s video_mode=%s refs=%s manual=%s anchor_injected=%s image_tags=%s",
                             shot.id,
                             shot_label,
                             video_mode,
-                            len(ordered_video_refs),
-                            bool(str(normalized_last_frame_url or "").strip()),
-                            len(auto_entity_refs),
-                            bool(batch_ref_info.get("fallback_to_refs")),
+                            len(_listify_video_ref_urls(normalized_refs)),
+                            manual_override,
+                            video_prompt != video_prompt_raw,
+                            len(re.findall(r"@Image\d+", str(video_prompt or ""), flags=re.IGNORECASE)),
                         )
 
                         batch_status = _read_shot_media_batch_status(episode) if episode else {}
@@ -1114,18 +983,18 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             prompt=video_prompt,
                             multi_prompt=multi_prompt_payload,
                             ref_image_url=normalized_refs,
-                            last_frame_url=normalized_last_frame_url,
+                            last_frame_url=None,
                             ref_mode=video_mode,
                             keyframes=None,
                             duration=duration_val,
                             project_id=episode.project_id,
+                            episode_id=int(episode_id),
                             shot_id=shot.id,
                             shot_number=shot.shot_id,
                             shot_name=shot.shot_name,
                             asset_type="video",
                             system_api_id=system_api_id,
-                            ref_video_urls=reference_video_urls or None,
-                            use_prev_video=bool((request_payload or {}).get("use_prev_video")),
+                            use_prev_video=use_prev_video,
                         )
                         _release_db_connection(db, "shot_media_batch_video")
                         try:

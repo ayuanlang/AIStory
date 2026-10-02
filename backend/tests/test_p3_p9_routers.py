@@ -498,6 +498,88 @@ def test_batch_media_thinned_reexports_pipeline():
     assert "def _run_shot_media_batch_job" in jobs_path.read_text(encoding="utf-8")
 
 
+def test_batch_video_auto_entity_refs_collects_images_and_anchors():
+    from types import SimpleNamespace
+
+    from app.services.shot_media_batch_jobs import (
+        _apply_entity_ref_prompt,
+        _is_shot_video_batch_eligible,
+        _resolve_batch_entity_ref_images,
+    )
+
+    prompt = "CHAR:[@小宝] 走进 ENV:[客厅]"
+    lookup = {
+        "小宝": {
+            "name": "小宝",
+            "image_url": "http://cdn/xiaobao.jpg",
+            "entity_type": "character",
+            "entity_id": 1,
+            "anchor": "短发少年",
+            "anchor_description": "短发少年",
+        },
+        "客厅": {
+            "name": "客厅",
+            "image_url": "http://cdn/room.jpg",
+            "entity_type": "environment",
+            "entity_id": 2,
+            "anchor": "暖色客厅",
+            "anchor_description": "暖色客厅",
+        },
+    }
+    shot = SimpleNamespace(
+        video_content=prompt,
+        prompt="",
+        video_url="",
+        image_url="http://cdn/start.jpg",
+        technical_notes="{}",
+        associated_entities="",
+    )
+    tech = {
+        "video_mode_unified": "start_end",
+        "end_frame_url": "http://cdn/end.jpg",
+        "video_ref_image_urls": ["http://cdn/stale.jpg"],
+    }
+    refs, manual = _resolve_batch_entity_ref_images(shot, tech, lookup)
+    assert manual is False
+    assert refs == ["http://cdn/xiaobao.jpg", "http://cdn/room.jpg"]
+
+    mapped, _aligned, synced = _apply_entity_ref_prompt(
+        prompt,
+        entity_lookup=lookup,
+        global_style="",
+        ordered_refs=list(refs),
+        normalized_refs=list(refs),
+        use_prev_video=False,
+        provider="",
+        model="",
+        manual_override=False,
+    )
+    assert "短发少年" in mapped
+    assert "暖色客厅" in mapped
+    assert "@Image1" in mapped
+    assert "@Image2" in mapped
+    assert synced == ["http://cdn/xiaobao.jpg", "http://cdn/room.jpg"]
+
+    manual_tech = dict(tech)
+    manual_tech["video_ref_image_urls_manual"] = True
+    manual_refs, is_manual = _resolve_batch_entity_ref_images(shot, manual_tech, lookup)
+    assert is_manual is True
+    assert manual_refs == ["http://cdn/stale.jpg"]
+
+    eligible = SimpleNamespace(video_url="", video_content=prompt, prompt="", technical_notes="{}")
+    framed_only = SimpleNamespace(
+        video_url="",
+        video_content="",
+        prompt="",
+        technical_notes='{"end_frame_url":"http://cdn/end.jpg"}',
+    )
+    has_video = SimpleNamespace(video_url="http://cdn/v.mp4", video_content=prompt, prompt="", technical_notes="{}")
+    assert _is_shot_video_batch_eligible(eligible) is True
+    assert _is_shot_video_batch_eligible(framed_only) is False
+    assert _is_shot_video_batch_eligible(has_video) is False
+    assert _is_shot_video_batch_eligible(has_video, True) is True
+
+
 def test_video_runner_uses_ref_pipeline_not_batch_media():
     import inspect
     from app.services.generation_runtime import video_generation_runner as vr

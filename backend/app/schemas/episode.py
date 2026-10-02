@@ -75,6 +75,7 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     episode_id: Optional[int] = None  # Optional. Generate a specific episode only
     episode_number: Optional[int] = None  # Optional alias for single-episode generation
     script_mode: Optional[str] = None
+    output_kind: Optional[str] = None  # episode | trailer
     target_audience: Optional[str] = None
     script_title: Optional[str] = None
     function_name: Optional[str] = None

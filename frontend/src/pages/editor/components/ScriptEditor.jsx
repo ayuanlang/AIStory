@@ -31,7 +31,6 @@ import {
     clearEpisodeAnalysisDetached,
     isEpisodeAnalysisDetached,
     armEpisodeAnalysisPipelineControl,
-    requestEpisodeAnalysisPipelineStop,
     getEpisodeAnalysisPipelineControl,
     getEpisodeAnalysisPipelineRemainingMs,
     clearEpisodeAnalysisPipelineControl,
@@ -12866,8 +12865,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (Number.isFinite(pipelineRemainingMs) && getEpisodeAnalysisPipelineRemainingMs(episodeIdForDeadline) <= 0) {
                 analysisStopRequestedRef.current = true;
                 analysisStopReasonRef.current = 'timeout';
+                analysisPipelineDeadlineRef.current = 0;
+                analysisPipelineSupervisorActiveRef.current = false;
+                analysisTimerStartedAtRef.current = 0;
                 if (episodeIdForDeadline) {
-                    requestEpisodeAnalysisPipelineStop(episodeIdForDeadline, 'timeout');
+                    clearEpisodeAnalysisPipelineControl(episodeIdForDeadline);
                 }
                 break;
             }
@@ -17263,6 +17265,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisPipelineSupervisorActiveRef.current = false;
     }, []);
 
+    /**
+     * Manual stop and the 60-minute auto-stop both end the current budget.
+     * Zero the clock so the next action is not born already over the limit.
+     * Skip when a newer run has already armed a future deadline.
+     */
+    const resetAnalysisPipelineClockAfterStop = useCallback((episodeId, { force = false } = {}) => {
+        const id = Number(episodeId || activeEpisode?.id || latestActiveEpisodeIdRef.current || 0);
+        if (!force && id) {
+            const control = getEpisodeAnalysisPipelineControl(id);
+            const newerBudget = Boolean(
+                control?.supervisorActive
+                && !control?.stopRequested
+                && Number(control?.deadlineAt || 0) > Date.now()
+            );
+            if (newerBudget) return;
+        }
+        analysisPipelineDeadlineRef.current = 0;
+        analysisPipelineSupervisorActiveRef.current = false;
+        analysisTimerStartedAtRef.current = 0;
+        if (id) clearEpisodeAnalysisPipelineControl(id);
+    }, [activeEpisode?.id]);
+
     const cancelActiveAnalysisTasksBestEffort = useCallback(async (reason = '') => {
         const taskIds = Array.from(new Set([
             ...Array.from(activeAnalysisTaskIdsRef.current || []),
@@ -17298,6 +17322,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (stopRequested) {
             analysisStopRequestedRef.current = true;
             analysisStopReasonRef.current = stopReason || 'user';
+            // The in-flight closure still sees the local stop ref. Drop the shared
+            // clock now so a later action is not already past 60 minutes.
+            resetAnalysisPipelineClockAfterStop(episodeId, { force: true });
             if (stopReason === 'timeout') {
                 throw createAnalysisPipelineTimeoutError();
             }
@@ -17308,9 +17335,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (Number.isFinite(remainingMs) && remainingMs <= 0) {
             analysisStopRequestedRef.current = true;
             analysisStopReasonRef.current = 'timeout';
-            if (episodeId) {
-                requestEpisodeAnalysisPipelineStop(episodeId, 'timeout');
-            }
+            resetAnalysisPipelineClockAfterStop(episodeId, { force: true });
             void cancelActiveAnalysisTasksBestEffort('pipeline-timeout');
             throw createAnalysisPipelineTimeoutError();
         }
@@ -17320,6 +17345,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         createAnalysisCanceledError,
         createAnalysisPipelineTimeoutError,
         getAnalysisPipelineRemainingMs,
+        resetAnalysisPipelineClockAfterStop,
     ]);
 
     const registerActiveAnalysisTask = useCallback((taskId) => {
@@ -18095,10 +18121,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         storyboardKickoffPromisesRef.current = new Map();
         pendingStoryboardKickoffsRef.current = [];
         storyboardTaskProgressRef.current = EMPTY_STORYBOARD_TASK_PROGRESS;
-        clearAnalysisPipelineDeadline();
+        resetAnalysisPipelineClockAfterStop(id, { force: true });
 
         if (id) {
-            requestEpisodeAnalysisPipelineStop(id, 'user');
             releaseEpisodeAnalysisClaim(id);
             releaseEpisodeAnalysisRun(id);
             analysisClaimTokenRef.current = '';
@@ -18115,11 +18140,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phase: 'warning',
             message: stopMessage,
         });
-        const startedAt = Number(
-            analysisUiReportRef.current?.startedAt
-            || analysisTimerStartedAtRef.current
-            || 0
-        );
         const nextReport = {
             ...(analysisUiReportRef.current && typeof analysisUiReportRef.current === 'object'
                 ? analysisUiReportRef.current
@@ -18127,9 +18147,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             status: 'warning',
             warning: stopMessage,
             error: '',
-            durationMs: startedAt > 0
-                ? Math.max(0, Date.now() - startedAt)
-                : Number(analysisUiReportRef.current?.durationMs || 0) || 0,
+            startedAt: 0,
+            durationMs: 0,
             storyboardTaskProgress: EMPTY_STORYBOARD_TASK_PROGRESS,
         };
         setStoryboardTaskProgress(EMPTY_STORYBOARD_TASK_PROGRESS);
@@ -18156,7 +18175,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }, [
         activeEpisode?.id,
-        clearAnalysisPipelineDeadline,
+        resetAnalysisPipelineClockAfterStop,
         clearAnalysisTaskMarker,
         setAnalysisFlowStatus,
         setAnalysisFlowStatusHistory,
@@ -26262,10 +26281,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ? t('分析任务因超时已停止。', 'Analysis task was stopped due to timeout.')
                         : t('分析任务已停止。', 'Analysis task was stopped.'),
                 });
+                resetAnalysisPipelineClockAfterStop(activeEpisode?.id);
+                analysisTimerStartedAtRef.current = 0;
                 setAnalysisUiReport({
                     status: 'warning',
-                    startedAt,
-                    durationMs: Date.now() - startedAt,
+                    startedAt: 0,
+                    durationMs: 0,
                     phaseTimings: null,
                     importReport: null,
                     runtimeMeta: null,
@@ -26291,7 +26312,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
             }
         } finally {
-            if (isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+            const stopReasonNow = String(analysisStopReasonRef.current || '').trim();
+            const stoppedThisRun = Boolean(
+                analysisStopRequestedRef.current
+                && (stopReasonNow === 'user' || stopReasonNow === 'timeout')
+            );
+            if (stoppedThisRun || isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
                 localStopRequested: analysisStopRequestedRef.current,
                 localStopReason: analysisStopReasonRef.current,
             })) {
@@ -26302,7 +26328,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setIsRerunningStoryboard(false);
                 setActiveAnalysisTaskId('');
                 clearAnalysisTaskMarker(activeEpisode?.id);
-                clearAnalysisPipelineDeadline();
+                resetAnalysisPipelineClockAfterStop(activeEpisode?.id);
+                analysisStopRequestedRef.current = false;
+                analysisStopReasonRef.current = '';
             } else if (analysisAwaitingStoryboardRef.current) {
                 setIsAnalyzing(true);
             } else {
@@ -28333,6 +28361,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 'The analysis task was interrupted without a user stop request. A development hot reload or network disconnect may cause this.'
                             )
                     );
+                if (timedOut || explicitlyStoppedByUser) {
+                    resetAnalysisPipelineClockAfterStop(episodeId);
+                }
                 setAnalysisFlowStatus({
                     phase: 'warning',
                     message: timedOut
@@ -28345,8 +28376,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
                 setAnalysisUiReport({
                     status: 'warning',
-                    startedAt,
-                    durationMs: Date.now() - startedAt,
+                    startedAt: (timedOut || explicitlyStoppedByUser) ? 0 : startedAt,
+                    durationMs: (timedOut || explicitlyStoppedByUser) ? 0 : (Date.now() - startedAt),
                     phaseTimings,
                     importReport: importReport,
                     runtimeMeta,
@@ -28380,12 +28411,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 clearAnalysisTaskMarker(episodeId);
             }
             analysisRunInFlightRef.current = false;
-            if (!awaitingStoryboard) {
-                clearAnalysisPipelineDeadline();
+            const stopReasonNow = String(analysisStopReasonRef.current || '').trim();
+            const stoppedThisRun = Boolean(
+                analysisStopRequestedRef.current
+                && (stopReasonNow === 'user' || stopReasonNow === 'timeout')
+            );
+            if (!awaitingStoryboard || stoppedThisRun) {
+                resetAnalysisPipelineClockAfterStop(episodeId);
             }
             if (!scriptEditorMountedRef.current) {
                 // still allow registry.finally cleanup; skip UI-only resume kick
-            } else if (isEpisodeAnalysisUserStopRequested(episodeId, {
+                if (stoppedThisRun) {
+                    analysisStopRequestedRef.current = false;
+                    analysisStopReasonRef.current = '';
+                }
+            } else if (stoppedThisRun || isEpisodeAnalysisUserStopRequested(episodeId, {
                 localStopRequested: analysisStopRequestedRef.current,
                 localStopReason: analysisStopReasonRef.current,
             })) {
@@ -28395,6 +28435,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setIsRetryingPhase2(false);
                 setIsRerunningStoryboard(false);
                 setActiveAnalysisTaskId('');
+                analysisStopRequestedRef.current = false;
+                analysisStopReasonRef.current = '';
             } else if (awaitingStoryboard) {
                 setIsAnalyzing(true);
             } else if (!retainMarker) {
@@ -32377,6 +32419,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const source = mains.map((item) => (
                 `【主环境设计稿】${String(item.name).trim()}\n${openingDraft(item.generation_prompt_cn)}\n【/主环境设计稿】`
             )).join('\n\n');
+            // A stopped run's clock is already zero. This rerun is a new action
+            // and gets its own 60-minute budget from now.
+            analysisStopRequestedRef.current = false;
+            analysisStopReasonRef.current = '';
+            clearEpisodeAnalysisPipelineControl(activeEpisode.id);
+            armAnalysisPipelineDeadline(Date.now());
             throwIfAnalysisStopped();
             const res = await runScriptAnalysisFlowAnalyzeNode(
                 'asset_design_environment_quad',

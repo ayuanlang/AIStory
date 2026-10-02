@@ -2024,7 +2024,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         }
     };
 
-    const handleGenerateEpisodeScripts = async ({ retryFailedOnly = false, forceStart = false, specificEpisode = null } = {}) => {
+    const handleGenerateEpisodeScripts = async ({ retryFailedOnly = false, forceStart = false, specificEpisode = null, outputKind = null } = {}) => {
         if (episodeScriptsGenerationInFlightRef.current || isGeneratingEpisodeScripts || isStoppingEpisodeScripts) return;
         episodeScriptsGenerationInFlightRef.current = true;
         if (!id) {
@@ -2039,7 +2039,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 ? (promoInput.episodes_count || 0)
                 : (globalStoryInput.episodes_count || 0)
         );
-        if (!specificEpisode && (!n || Number.isNaN(n) || n <= 0)) {
+        const trailerMode = outputKind === 'trailer';
+        if (!specificEpisode && !trailerMode && (!n || Number.isNaN(n) || n <= 0)) {
             alert('Please set a valid Episodes Count first.');
             episodeScriptsGenerationInFlightRef.current = false;
             return;
@@ -2062,10 +2063,20 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             const overwriteExisting = true;
             const modeLabel = retryFailedOnly
                 ? 'retry-failed-only'
+                : trailerMode ? 'generate-trailer'
                 : specificEpisode ? `generate-episode-${specificEpisode}`
                 : 'overwrite-all-default';
 
-            if (overwriteExisting && !specificEpisode) {
+            if (trailerMode) {
+                const ok = await confirmUiMessage(
+                    '将单独生成一条预告片，写入「预告片」分集，不覆盖已有正片。预告只放大娱乐时间和核心看点。是否继续？',
+                    'This writes one trailer into its own episode and does not overwrite the series. It focuses on fun-and-games and the core highlights. Continue?'
+                );
+                if (!ok) {
+                    addLog?.('Trailer generation canceled.', 'warning');
+                    return;
+                }
+            } else if (overwriteExisting && !specificEpisode) {
                 const ok = await confirmUiMessage('默认会覆盖目标范围内已有分集剧本，是否继续？', 'This will overwrite existing episode scripts in the target range by default. Continue?');
                 if (!ok) {
                     addLog?.('Force Start canceled.', 'warning');
@@ -2086,7 +2097,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             );
             const reqPayload = {
                 generator_kind: generatorKind,
-                episodes_count: n,
+                episodes_count: trailerMode ? Math.max(Number(n) || 1, 1) : n,
                 episode_duration_minutes: Number(globalStoryInput.episode_duration_minutes) > 0
                     ? Number(globalStoryInput.episode_duration_minutes)
                     : 1,
@@ -2095,6 +2106,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 script_title: String(info?.script_title || project?.title || '').trim(),
                 overwrite_existing: overwriteExisting,
                 retry_failed_only: retryFailedOnly,
+                ...(trailerMode ? { output_kind: 'trailer' } : {}),
             };
             if (specificEpisode) {
                 reqPayload.episode_number = Number(specificEpisode);
@@ -2150,10 +2162,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 await onRefreshEpisodes({ invalidateEpisodeIds: generatedEpisodeIds });
             }
 
-            // In single-episode mode, jump directly to the resolved episode_id returned by backend.
-            // This avoids staying on another duplicate-number episode and looking like overwrite failed.
-            if (specificEpisode) {
-                const generatedSingle = results.find((item) => {
+            // In single-episode or trailer mode, jump directly to the resolved episode_id returned by backend.
+            if (trailerMode || specificEpisode) {
+                const generatedSingle = trailerMode
+                    ? (results.find((item) => item && Number(item.episode_id || 0) > 0 && Boolean(item.generated)) || null)
+                    : results.find((item) => {
                     if (!item || typeof item !== 'object') return false;
                     const num = Number(item.episode_number || 0);
                     const eid = Number(item.episode_id || 0);
@@ -4083,7 +4096,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     <div>
                                         <div className="text-sm font-semibold text-white">{t('分集剧本生成', 'Episode Script Generation')}</div>
                                         <div className="text-[11px] text-muted-foreground mt-0.5">
-                                            {t('基于全局框架与角色设定批量/单集生成分集剧本。', 'Batch or single-episode scripts from Global Framework + Character Canon.')}
+                                            {t('基于全局框架与角色设定批量/单集生成正片。预告片单独成片，只放大娱乐时间和核心看点。', 'Batch or single-episode scripts from the global framework. A trailer is a separate piece built from fun-and-games and the core highlights.')}
                                         </div>
                                     </div>
                                 </div>
@@ -4095,6 +4108,15 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         title={t('从全局框架 + 项目角色设定生成分集剧本，自动创建缺失分集并写入对应分集', 'Generate episode scripts from Global Framework + Project Character Canon, create missing episodes, and save each script into its episode')}
                                     >
                                         {episodeScriptsRunning ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-3.5 h-3.5" /> {t('全量生成分集', 'Generate All')}</>}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleGenerateEpisodeScripts({ outputKind: 'trailer' })}
+                                        disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady}
+                                        className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
+                                        title={t('单独生成一条预告片：主体是娱乐时间，每段都落到核心看点。不覆盖正片。', 'Generate one trailer: fun-and-games first, each beat landing a core highlight. Does not overwrite the series.')}
+                                    >
+                                        {t('生成预告片', 'Generate Trailer')}
                                     </button>
                                     <div className="flex items-center bg-white/5 rounded-lg overflow-hidden border border-white/10">
                                         <input
