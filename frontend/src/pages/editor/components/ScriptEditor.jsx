@@ -36577,6 +36577,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             if (event === 'completed' || status === 'success' || status === 'warning') rank = 7;
                             if (event === 'queued' && !step) rank = 0;
                             const failed = status === 'failed' || status === 'blocked';
+                            const quadWaitText = [
+                                meta.business_reason,
+                                node?.last_error_message,
+                                node?.last_error_code,
+                            ].join('\n');
+                            // 四宫格未齐只挡住建置。场景现场编排只依赖主环境，自身已完成则成功。
+                            const quadWait = /环境资产四宫格未齐|等待环境资产四宫格|STAGING_ENVIRONMENT_ASSET_EMPTY|STAGING_ENVIRONMENT_ASSET_TIMEOUT/.test(quadWaitText);
+                            if (quadWait && group === 'framing') {
+                                return { ready: true, active: false, failed: false, detail: '' };
+                            }
+                            if (quadWait && group === 'staging') {
+                                return {
+                                    ready: false,
+                                    active: true,
+                                    failed: false,
+                                    parked: true,
+                                    detail: t('等待环境', 'Wait ENV'),
+                                };
+                            }
                             const groupActiveStep = {
                                 drama: ['drama'],
                                 combat: ['vfx', 'xian', 'combat'],

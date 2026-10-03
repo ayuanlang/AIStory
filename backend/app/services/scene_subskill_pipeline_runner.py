@@ -1692,10 +1692,27 @@ def _ingest_derived_environments_after_framing(
         return None
 
 
+def _exception_detail_text(exc: Any) -> str:
+    detail = getattr(exc, "detail", None)
+    return str(detail if detail is not None else exc or "")
+
+
+def is_environment_asset_wait_error(exc: Any) -> bool:
+    """Quad grid is not ready yet. That wait is not a scene-analysis failure.
+
+    Scene analysis only depends on the main environment. Missing four-cell
+    prompts block 建置与入戏; they do not fail a scene whose own draft is done.
+    """
+    text = _exception_detail_text(exc)
+    return (
+        "STAGING_ENVIRONMENT_ASSET_EMPTY" in text
+        or "STAGING_ENVIRONMENT_ASSET_TIMEOUT" in text
+    )
+
+
 def is_timeout_like_error(exc: Any) -> bool:
     """True for an LLM/transport deadline. Asset and plan waits are not LLM timeouts."""
-    detail = getattr(exc, "detail", None)
-    text = str(detail if detail is not None else exc or "")
+    text = _exception_detail_text(exc)
     upper = text.upper()
     if "STAGING_ENVIRONMENT_ASSET_" in upper or "STAGING_ENVIRONMENT_PLAN_" in upper:
         return False
@@ -2881,7 +2898,6 @@ async def await_environment_asset_quad_injection(
 
     deadline = time.monotonic() + float(timeout_seconds)
     last_status = ""
-    empty_polls = 0
     logger.info(
         "[scene_subskill_pipeline] waiting for environment asset quads before staging scene=%s mains=%s",
         sid,
@@ -2910,16 +2926,8 @@ async def await_environment_asset_quad_injection(
                     status_code=422,
                     detail=f"STAGING_ENVIRONMENT_ASSET_FAILED:{sid}:{last_status}",
                 )
-            if last_status == "success":
-                empty_polls += 1
-                if empty_polls >= _ENV_PLAN_EMPTY_GRACE_POLLS:
-                    missing = [name for name in main_names if name not in ready]
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"STAGING_ENVIRONMENT_ASSET_EMPTY:{sid}:{','.join(missing)}",
-                    )
-            else:
-                empty_polls = 0
+            # Quad-node success before the four cells are visible is still a wait.
+            # Scene analysis only needs the main environment and must not fail here.
             _heartbeat_environment_wait(
                 poll_db,
                 project_id=int(project_id or 0),
@@ -4187,8 +4195,46 @@ async def run_scene_subskill_pipeline(
             except Exception as exc:
                 project_id = int(raw_payload.get("project_id") or 0)
                 timed_out = is_timeout_like_error(exc)
-                detail = getattr(exc, "detail", None)
-                error_text = detail.strip() if isinstance(detail, str) and detail.strip() else str(exc)
+                error_text = _exception_detail_text(exc).strip() or str(exc)
+                called_now = locals().get("called") if isinstance(locals().get("called"), list) else []
+                scene_block_now = str(locals().get("current_block") or task.get("scene_block") or "")
+                asset_gate = "STAGING_ENVIRONMENT_ASSET_" in error_text.upper()
+                # Last called step is often 场景现场编排. A quad wait must not be
+                # recorded on that step: scene analysis only depends on 主环境.
+                current_step = "wait_env_asset" if asset_gate else str(called_now[-1] if called_now else "")
+                if project_id > 0 and node_episode_id > 0 and is_environment_asset_wait_error(exc):
+                    upsert_pipeline_node_status(
+                        task_db,
+                        project_id=project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name="scene_subskill_scene",
+                        scene_id=scene_id,
+                        status="running",
+                        progress_percent=70.0,
+                        runtime_meta={
+                            "business_event": "waiting",
+                            "business_reason": "等待环境资产四宫格",
+                            "current_step": "wait_env_asset",
+                            "current_step_label": "等待环境资产四宫格",
+                            "scene_block": scene_block_now,
+                            "called_subskills": called_now,
+                        },
+                        error_code=None,
+                        error_message=None,
+                    )
+                    task_db.commit()
+                    return int(task.get("scene_order") or 0), {
+                        "scene_id": scene_id,
+                        "scene_order": int(task.get("scene_order") or 0),
+                        "scene_block": scene_block_now,
+                        "called_subskills": called_now,
+                        "routes": task.get("routes") or {},
+                        "failed": False,
+                        "waiting_asset": True,
+                        "timed_out": False,
+                        "error": "",
+                    }
                 if project_id > 0 and node_episode_id > 0:
                     upsert_pipeline_node_status(
                         task_db,
@@ -4202,8 +4248,9 @@ async def run_scene_subskill_pipeline(
                         runtime_meta={
                             "business_event": "timeout" if timed_out else "failed",
                             "business_reason": _scene_subskill_failure_reason(exc),
-                            "scene_block": str(locals().get("current_block") or ""),
-                            "current_step": str((locals().get("called") or [""])[-1] if locals().get("called") else ""),
+                            "scene_block": scene_block_now,
+                            "current_step": current_step,
+                            "called_subskills": called_now,
                         },
                         error_code="SCENE_SUBSKILL_TIMEOUT" if timed_out else "SCENE_SUBSKILL_SCENE_FAILED",
                         error_message=error_text,
@@ -4212,8 +4259,8 @@ async def run_scene_subskill_pipeline(
                 return int(task.get("scene_order") or 0), {
                     "scene_id": scene_id,
                     "scene_order": int(task.get("scene_order") or 0),
-                    "scene_block": str(locals().get("current_block") or task.get("scene_block") or ""),
-                    "called_subskills": locals().get("called") if isinstance(locals().get("called"), list) else [],
+                    "scene_block": scene_block_now,
+                    "called_subskills": called_now,
                     "routes": task.get("routes") or {},
                     "failed": True,
                     "timed_out": timed_out,
@@ -4323,10 +4370,16 @@ async def run_scene_subskill_pipeline(
         for item in ordered
         if item.get("failed") and str(item.get("scene_id") or "").strip()
     ]
+    waiting_ids = [
+        str(item.get("scene_id") or "").strip()
+        for item in ordered
+        if item.get("waiting_asset") and str(item.get("scene_id") or "").strip()
+    ]
     logger.info(
-        "[scene_subskill_pipeline] completed scenes=%s failed=%s concurrency=%s episode_id=%s",
+        "[scene_subskill_pipeline] completed scenes=%s failed=%s waiting_asset=%s concurrency=%s episode_id=%s",
         len(ordered),
         failed_ids,
+        waiting_ids,
         max_concurrency,
         node_episode_id,
     )
@@ -4338,4 +4391,5 @@ async def run_scene_subskill_pipeline(
         "scene_count": len(ordered),
         "partial_failure": bool(failed_ids),
         "failed_scene_ids": failed_ids,
+        "waiting_scene_ids": waiting_ids,
     }

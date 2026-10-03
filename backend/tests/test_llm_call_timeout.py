@@ -25,6 +25,7 @@ def test_asset_wait_is_not_an_llm_timeout_and_batch_message_says_so():
     from app.services.scene_subskill_pipeline_runner import (
         _scene_subskill_failure_reason,
         describe_scene_subskill_batch_failure,
+        is_environment_asset_wait_error,
         is_timeout_like_error,
     )
 
@@ -34,6 +35,15 @@ def test_asset_wait_is_not_an_llm_timeout_and_batch_message_says_so():
     )
     assert is_timeout_like_error(asset_failed) is False
     assert "超时" not in _scene_subskill_failure_reason(asset_failed)
+    assert is_environment_asset_wait_error(asset_failed) is False
+    assert is_environment_asset_wait_error(HTTPException(
+        status_code=422,
+        detail="STAGING_ENVIRONMENT_ASSET_EMPTY:SC02:毒水鉴心",
+    )) is True
+    assert is_environment_asset_wait_error(HTTPException(
+        status_code=422,
+        detail="STAGING_ENVIRONMENT_ASSET_TIMEOUT:SC02:success",
+    )) is True
     assert is_timeout_like_error(TimeoutError("LLM call timed out after 900s")) is True
     assert llm_error_is_stale_pending_timeout(
         "Error: LLM request timed out after 900s (stale pending log)"
@@ -66,6 +76,54 @@ def test_asset_wait_is_not_an_llm_timeout_and_batch_message_says_so():
     })
     assert timed["error_code"] == "SCENE_SUBSKILL_TIMEOUT"
     assert "调用超时" in timed["error_message"]
+
+
+def test_finalize_stale_pipeline_nodes_keeps_parked_quad_wait():
+    from types import SimpleNamespace
+    from app.core.time_utils import now_bj
+    from app.services.script_analysis_flow import finalize_stale_pipeline_nodes
+
+    wait_ts = (now_bj() - timedelta(seconds=4000)).isoformat(timespec="microseconds")
+    row = SimpleNamespace(
+        status="running",
+        node_name="scene_subskill_scene",
+        episode_id=1,
+        scene_id="SC02",
+        updated_at=wait_ts,
+        started_at=wait_ts,
+        created_at=wait_ts,
+        runtime_meta={
+            "current_step": "wait_env_asset",
+            "business_event": "waiting",
+            "business_reason": "等待环境资产四宫格",
+        },
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+    )
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return [row]
+
+    class _Session:
+        committed = False
+
+        def query(self, *_args, **_kwargs):
+            return _Query()
+
+        def commit(self):
+            self.committed = True
+
+    assert finalize_stale_pipeline_nodes(_Session(), episode_id=1, timeout_seconds=900) == 0
+    assert row.status == "running"
+    assert row.last_error_code is None
 
 
 def test_finalize_stale_pipeline_nodes_skips_wait_env_inside_budget():

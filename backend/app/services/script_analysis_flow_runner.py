@@ -902,27 +902,55 @@ async def execute_scene_analysis_flow_node(
                         else "SCENE_SUBSKILL_PARTIAL_FAILURE"
                     )
                     failure_message = str(batch_failure.get("error_message") or "").strip() or None
-                upsert_pipeline_node_status(
-                    db,
-                    project_id=node_project_id,
-                    episode_id=node_episode_id,
-                    script_id=f"episode:{node_episode_id}",
-                    node_name=node_key,
-                    status="failed" if all_failed else ("warning" if partial_failure else "success"),
-                    progress_percent=100.0,
-                    error_code=failure_code,
-                    error_message=failure_message,
-                    runtime_meta=(
+                waiting_scene_ids = (
+                    [
+                        str(item or "").strip()
+                        for item in (result.get("waiting_scene_ids") or [])
+                        if str(item or "").strip()
+                    ]
+                    if isinstance(result, dict) and node_key == "scene_subskill_pipeline"
+                    else []
+                )
+                asset_wait_only = bool(waiting_scene_ids) and not failed_scene_ids
+                if asset_wait_only:
+                    node_status = "running"
+                    node_progress = 70.0
+                    failure_code = None
+                    failure_message = None
+                    node_runtime_meta = {
+                        "business_event": "waiting",
+                        "business_reason": "等待环境资产四宫格",
+                        "current_step": "wait_env_asset",
+                        "current_step_label": "等待环境资产四宫格",
+                        "waiting_scene_ids": waiting_scene_ids,
+                    }
+                else:
+                    node_status = "failed" if all_failed else ("warning" if partial_failure else "success")
+                    node_progress = 100.0
+                    node_runtime_meta = (
                         {
                             "business_event": "all_failed" if all_failed else "partial_failure",
                             "failed_scene_ids": failed_scene_ids,
                         }
                         if failed_scene_ids
                         else None
-                    ),
+                    )
+                upsert_pipeline_node_status(
+                    db,
+                    project_id=node_project_id,
+                    episode_id=node_episode_id,
+                    script_id=f"episode:{node_episode_id}",
+                    node_name=node_key,
+                    status=node_status,
+                    progress_percent=node_progress,
+                    error_code=failure_code,
+                    error_message=failure_message,
+                    runtime_meta=node_runtime_meta,
                 )
             if node_key == "scene_subskill_pipeline" and not (
-                isinstance(result, dict) and result.get("partial_failure")
+                isinstance(result, dict) and (
+                    result.get("partial_failure") or result.get("waiting_scene_ids")
+                )
             ):
                 upsert_pipeline_node_status(
                     db,

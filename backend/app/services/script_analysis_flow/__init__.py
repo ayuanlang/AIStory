@@ -2612,6 +2612,13 @@ _PER_SCENE_RESET_ON_RERUN = {
 _WAIT_ENV_STALE_BUDGET_SECONDS = 1200
 
 
+def _parked_environment_wait(meta: Dict[str, Any]) -> bool:
+    """A scene parked on 主环境 or 四宫格. Waiting is not an LLM stall."""
+    step = str(meta.get("current_step") or "").strip()
+    event = str(meta.get("business_event") or "").strip()
+    return step in {"wait_env", "wait_env_asset"} and event == "waiting"
+
+
 def _iter_pipeline_nodes(
     db: Session,
     *,
@@ -3090,6 +3097,10 @@ def finalize_stale_pipeline_nodes(
         )
         row_episode_id = int(getattr(row, "episode_id", 0) or 0)
         meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
+        if _parked_environment_wait(meta):
+            if row_episode_id > 0:
+                fresh_child_episodes.add(row_episode_id)
+            continue
         row_budget = (
             _WAIT_ENV_STALE_BUDGET_SECONDS
             if str(meta.get("current_step") or "").strip() == "wait_env"
@@ -3104,6 +3115,8 @@ def finalize_stale_pipeline_nodes(
             or str(getattr(row, "created_at", "") or "").strip()
         )
         meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
+        if _parked_environment_wait(meta):
+            continue
         node_name = str(getattr(row, "node_name", "") or "").strip()
         row_episode_id = int(getattr(row, "episode_id", 0) or 0)
         row_budget = (
