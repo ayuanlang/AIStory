@@ -516,7 +516,7 @@ def _sanitize_upstream_subskill_persist(
         cleaned = strip_prior_derived_environment_sections(text)
         if cleaned == text:
             continue
-        if not persisted_subskill_step_usable(key, cleaned):
+        if not _saved_subskill_slot_body(key, cleaned):
             clear_scene_subskill_step_results(
                 db=db,
                 episode_id=episode_id,
@@ -553,8 +553,10 @@ def seed_scene_block_for_start(
 
     def _usable(key: str) -> str:
         text = str(steps.get(key) or "").strip()
-        return text if persisted_subskill_step_usable(key, text) else ""
+        return text if _saved_subskill_slot_body(key, text) else ""
 
+    if group == "storyboard":
+        return _usable("staging") or raw
     if group == "staging":
         return _usable("framing") or raw
     if group == "framing":
@@ -566,48 +568,79 @@ def seed_scene_block_for_start(
     return strip_environment_planning_sections(raw)
 
 
+def staging_import_body_ready(text: str) -> bool:
+    """True only when the block can be imported and turned into a storyboard.
+
+    A success row or a long scene-split body is not enough. Continue used to
+    treat any 40-character success block as done, so the other scenes never
+    started while the parent node completed in a couple of seconds.
+    """
+    body = str(text or "")
+    if len(body.strip()) <= 100:
+        return False
+    return bool(
+        re.search(r"【\s*建置\s*】", body)
+        and re.search(r"【\s*入戏\s*】", body)
+    )
+
+
+def _step_return_tag_present(step_key: str, body: str) -> bool:
+    markers = _PERSISTED_STEP_MARKERS.get(str(step_key or "").strip()) or ()
+    return any(marker in body for marker in markers)
+
+
+def _persisted_drama_body(body: str) -> bool:
+    """Drama 落库去掉结束标签后，仍须留下文戏自己的场核，不能是分场原文。"""
+    if (
+        "【角色道具世界分布图】" in body
+        or "【角色道具宫格分布图】" in body
+        or "【建置】" in body
+        or "【入戏】" in body
+    ):
+        return False
+    return any(hint in body for hint in _DRAMA_OUTPUT_HINTS if hint != "[DRAMA_STANDARDIZATION_OUTPUT_END]")
+
+
+def _persisted_combat_body(body: str) -> bool:
+    """Combat 落库是去掉结束标签后的场正文。后环的编排/建置不能倒算成武戏。"""
+    if staging_import_body_ready(body) or _framing_has_plan_and_extract(body):
+        return False
+    return bool(
+        re.search(r"\[SCENE_START", body, re.IGNORECASE)
+        or re.search(r"\[BEAT_STREAM_START", body, re.IGNORECASE)
+    )
+
+
 def persisted_subskill_step_usable(step_key: str, text: str) -> bool:
+    """完成 = 该节点返回标签仍在，或落库正文就是该节点写出的那一版。"""
     body = str(text or "").strip()
     if len(body) <= 100:
         return False
     key = str(step_key or "").strip()
-    markers = _PERSISTED_STEP_MARKERS.get(key)
-    if markers and any(marker in body for marker in markers):
+    if _step_return_tag_present(key, body):
         return True
-    # persist_scene_subskill_named_step stores the extracted scene block after
-    # the completion marker is stripped. Marker-only checks would always miss.
-    has_scene = bool(re.search(r"\[SCENE_START", body, re.IGNORECASE))
-    has_beat_stream = bool(re.search(r"\[BEAT_STREAM_START", body, re.IGNORECASE))
-    if not has_scene:
-        # Staging may persist only the beat stream; wrappers are spliced from upstream.
-        if key == "staging" and has_beat_stream and (
-            "【入戏】" in body or "【建置】" in body
-        ):
-            return True
-        return False
     if key == "drama":
-        return True
+        return _persisted_drama_body(body)
     if key == "combat":
-        return True
+        return _persisted_combat_body(body)
     if key == "framing":
-        return (
-            "【角色道具世界分布图】" in body
-            or "【角色道具宫格分布图】" in body
-            or "【Beat主体定位】" in body
-            or "【取景锁定】" in body
-            or "[DERIVED_ENV" in body
-            or "【Beat景别构图方案】" in body
-        )
+        return _framing_has_plan_and_extract(body)
     if key == "staging":
-        return (
-            "[STAGING_ENV" in body
-            or "【入戏】" in body
-            or "【建置】" in body
-            or "入戏状态" in body
-            or "出场状态" in body
-            or "ENV氛围微" in body
-        )
+        return staging_import_body_ready(body)
     return False
+
+
+def _saved_subskill_slot_body(step_key: str, text: str) -> bool:
+    """续跑选上游稿时，该步槽位里的场正文仍可用，即使结束标签已被去掉。"""
+    if persisted_subskill_step_usable(step_key, text):
+        return True
+    body = str(text or "").strip()
+    if len(body) <= 100:
+        return False
+    return bool(
+        re.search(r"\[SCENE_START", body, re.IGNORECASE)
+        or re.search(r"\[BEAT_STREAM_START", body, re.IGNORECASE)
+    )
 
 
 _DRAMA_OUTPUT_HINTS = (
@@ -684,6 +717,54 @@ def hydrate_persisted_subskill_steps(
     return hydrated
 
 
+def load_scene_markers_with_persisted_shots(db: Session, episode_id: int) -> set[str]:
+    """Scene markers whose workspace row already has shot rows. That is 分镜落库."""
+    from app.models.all_models import Scene, Shot
+    from app.services.soft_delete import _active_scene_clause, _active_shot_clause
+
+    eid = int(episode_id or 0)
+    if eid <= 0:
+        return set()
+    scenes = (
+        db.query(Scene)
+        .filter(Scene.episode_id == eid, _active_scene_clause())
+        .all()
+    )
+    id_to_markers: Dict[int, List[str]] = {}
+    for scene in scenes:
+        sid = int(getattr(scene, "id", 0) or 0)
+        if sid <= 0:
+            continue
+        markers: List[str] = []
+        for raw in (
+            getattr(scene, "scene_no", ""),
+            getattr(scene, "scene_id", ""),
+            getattr(scene, "scene_code", ""),
+        ):
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            markers.append(text)
+            markers.append(text.lower())
+        id_to_markers[sid] = markers
+    if not id_to_markers:
+        return set()
+    hit_ids = {
+        int(row[0])
+        for row in (
+            db.query(Shot.scene_id)
+            .filter(Shot.scene_id.in_(list(id_to_markers)), _active_shot_clause())
+            .distinct()
+            .all()
+        )
+        if row and row[0]
+    }
+    ready: set[str] = set()
+    for sid in hit_ids:
+        ready.update(id_to_markers.get(sid) or [])
+    return ready
+
+
 def resolve_scene_subskill_resume(
     *,
     scene_id: str,
@@ -692,6 +773,7 @@ def resolve_scene_subskill_resume(
     pipeline_scene_block: str = "",
     call_vfx: bool = False,
     call_xian: bool = False,
+    storyboard_ready: bool = False,
 ) -> SceneSubskillResume:
     """Pick the first unfinished step for one scene. Completed LLM steps are reused."""
     sid = str(scene_id or "").strip()
@@ -704,20 +786,24 @@ def resolve_scene_subskill_resume(
     node_block = str(pipeline_scene_block or "").strip()
     # Scene-split input often has no SPECIAL_SCENE_ANALYSIS yet. After drama,
     # read the persisted block so combat is not skipped on continue/resume.
-
-    if status == "success" and (persisted_subskill_step_usable("staging", staging) or len(node_block) >= 40):
+    # Staging ready is not the end of the scene. 分镜 is the same kind of step:
+    # done only when this scene's shots are already in the workspace.
+    ready_block = staging if staging_import_body_ready(staging) else ""
+    if not ready_block and staging_import_body_ready(node_block):
+        ready_block = node_block
+    if ready_block and storyboard_ready:
         return SceneSubskillResume(
             start_group="done",
-            current_block=staging or node_block,
-            called=("drama", "derived_framing", "staging"),
-            skipped_reason="pipeline_success",
+            current_block=ready_block,
+            called=("drama", "derived_framing", "staging", "storyboard"),
+            skipped_reason="storyboard_persisted",
         )
-    if persisted_subskill_step_usable("staging", staging):
+    if ready_block:
         return SceneSubskillResume(
-            start_group="done",
-            current_block=staging,
+            start_group="storyboard",
+            current_block=ready_block,
             called=("drama", "derived_framing", "staging"),
-            skipped_reason="staging_persisted",
+            skipped_reason="resume_storyboard",
         )
 
     framing_ready = persisted_subskill_step_usable("framing", framing)
@@ -3358,6 +3444,153 @@ async def _run_derived_framing_then_staging(
     return current_block
 
 
+async def _run_scene_storyboard_step(
+    task_db: Session,
+    *,
+    user_principal: Any,
+    raw_payload: Dict[str, Any],
+    project_id: int,
+    episode_id: int,
+    scene_id: str,
+    staging_text: str,
+    scene_order: int,
+) -> int:
+    """Generate and import this scene's shots. Completion is shot rows, same as other steps' 落库."""
+    from app.api.routers.workspace.shot_ai_generation import AIShotGenRequest
+    from app.models.all_models import Episode as EpisodeModel
+    from app.models.all_models import Project as ProjectModel
+    from app.models.all_models import Scene as SceneModel
+    from app.services.scene_no_utils import _find_active_scene_by_scene_no
+    from app.services.script_analysis_flow import (
+        mark_storyboard_generation_applied,
+        mark_storyboard_generation_started,
+    )
+    from app.services.script_analysis_flow.workspace_scene_from_staging import (
+        upsert_workspace_scene_from_staging,
+    )
+    from app.services.shot_ai_generation_ops import _count_active_shots, execute_ai_generate_shots
+    from app.services.shot_import_ops import _import_scene_shot_rows_to_db
+
+    if staging_import_body_ready(staging_text):
+        upsert_workspace_scene_from_staging(
+            task_db,
+            episode_id=int(episode_id),
+            scene_id=scene_id,
+            staging_text=staging_text,
+            scene_order=int(scene_order or 0) or None,
+        )
+        task_db.commit()
+    scene = _find_active_scene_by_scene_no(
+        task_db,
+        episode_id=int(episode_id),
+        scene_no=scene_id,
+        scene_id=scene_id,
+    )
+    if scene is None:
+        raise HTTPException(status_code=422, detail=f"STORYBOARD_SCENE_NOT_IMPORTED:{scene_id}")
+    db_scene_id = int(getattr(scene, "id", 0) or 0)
+    existing = _count_active_shots(task_db, db_scene_id)
+    if existing > 0:
+        mark_storyboard_generation_applied(
+            task_db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            scene=scene,
+            scene_marker=scene_id,
+            shot_count=existing,
+        )
+        task_db.commit()
+        return existing
+
+    mark_storyboard_generation_started(
+        task_db,
+        project_id=int(project_id),
+        episode_id=int(episode_id),
+        scene=scene,
+        scene_marker=scene_id,
+    )
+    task_db.commit()
+    system_api_id = raw_payload.get("system_api_id")
+    try:
+        system_api_id = int(system_api_id) if system_api_id not in (None, "") else None
+    except (TypeError, ValueError):
+        system_api_id = None
+    try:
+        result = await execute_ai_generate_shots(
+            scene_id=db_scene_id,
+            req=AIShotGenRequest(
+                function_name=str(raw_payload.get("function_name") or "script_analysis"),
+                system_api_id=system_api_id,
+            ),
+            db=task_db,
+            current_user=user_principal,
+        )
+    except HTTPException as exc:
+        if int(getattr(exc, "status_code", 0) or 0) != 409:
+            raise
+        for _ in range(120):
+            await asyncio.sleep(5)
+            existing = _count_active_shots(task_db, db_scene_id)
+            if existing > 0:
+                mark_storyboard_generation_applied(
+                    task_db,
+                    project_id=int(project_id),
+                    episode_id=int(episode_id),
+                    scene_marker=scene_id,
+                    shot_count=existing,
+                )
+                task_db.commit()
+                return existing
+        raise
+    if isinstance(result, dict) and result.get("skipped_existing"):
+        kept = int(result.get("existing_shot_count") or 0)
+        mark_storyboard_generation_applied(
+            task_db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            scene_marker=scene_id,
+            shot_count=kept,
+        )
+        task_db.commit()
+        return kept
+    rows = list((result or {}).get("content") or []) if isinstance(result, dict) else []
+    if not rows:
+        raise HTTPException(status_code=422, detail=f"STORYBOARD_EMPTY:{scene_id}")
+    apply_scene_id = int((result or {}).get("remapped_scene_id") or db_scene_id) if isinstance(result, dict) else db_scene_id
+    episode = task_db.query(EpisodeModel).filter(EpisodeModel.id == int(episode_id)).first()
+    project = (
+        task_db.query(ProjectModel).filter(ProjectModel.id == int(getattr(episode, "project_id", 0) or 0)).first()
+        if episode is not None
+        else None
+    )
+    scene_row = task_db.query(SceneModel).filter(SceneModel.id == apply_scene_id).first()
+    if episode is None or project is None or scene_row is None:
+        raise HTTPException(status_code=422, detail=f"STORYBOARD_SCENE_NOT_IMPORTED:{scene_id}")
+    _import_scene_shot_rows_to_db(
+        scene_id=apply_scene_id,
+        db=task_db,
+        scene=scene_row,
+        episode=episode,
+        project=project,
+        shots_data=rows,
+        replace_existing=False,
+    )
+    task_db.commit()
+    written = _count_active_shots(task_db, apply_scene_id)
+    if written <= 0:
+        raise HTTPException(status_code=422, detail=f"STORYBOARD_NOT_PERSISTED:{scene_id}")
+    mark_storyboard_generation_applied(
+        task_db,
+        project_id=int(project_id),
+        episode_id=int(episode_id),
+        scene=scene_row,
+        scene_marker=scene_id,
+        shot_count=written,
+    )
+    task_db.commit()
+    return written
+
+
 async def run_scene_subskill_pipeline(
     *,
     raw_payload: Dict[str, Any],
@@ -3456,6 +3689,7 @@ async def run_scene_subskill_pipeline(
                 str(getattr(resume_episode, "ai_scene_analysis_adaptation", "") or ""),
             ]
     resume_plans: Dict[str, SceneSubskillResume] = {}
+    shot_markers = load_scene_markers_with_persisted_shots(db, node_episode_id) if node_episode_id > 0 else set()
     if not explicit_start:
         for task in tasks:
             scene_id = str(task.get("scene_id") or "").strip()
@@ -3493,6 +3727,7 @@ async def run_scene_subskill_pipeline(
                 pipeline_scene_block=str(node_row.get("scene_block") or ""),
                 call_vfx=needs_combat or bool(task.get("call_vfx")),
                 call_xian=bool(task.get("call_xian")),
+                storyboard_ready=scene_id in shot_markers or scene_id.lower() in shot_markers,
             )
             if should_recover_framing_from_llm_log(plan, persist_drama):
                 recovered = _recover_ready_framing_from_llm_log(
@@ -3531,12 +3766,14 @@ async def run_scene_subskill_pipeline(
         "combat": "combat",
         "framing": "derived_framing",
         "staging": "staging",
+        "storyboard": "storyboard",
     }
     resume_step_label = {
         "drama": "文戏增强",
         "combat": "武戏增强",
         "framing": "场景现场编排",
         "staging": "建置与入戏",
+        "storyboard": "分镜生成",
     }
     if project_id > 0 and node_episode_id > 0:
         queued_scene_ids: List[str] = []
@@ -3612,10 +3849,40 @@ async def run_scene_subskill_pipeline(
             scene_resume = resume_plans.get(scene_id) or resume_plans.get(scene_id.lower())
             scene_start = scene_resume.start_group if scene_resume else start_group
             if scene_start == "done":
+                done_block = str(
+                    scene_resume.current_block if scene_resume else task.get("scene_block") or ""
+                ).strip()
+                project_id_done = int(raw_payload.get("project_id") or 0)
+                if (
+                    project_id_done > 0
+                    and node_episode_id > 0
+                    and staging_import_body_ready(done_block)
+                ):
+                    done_db = SessionLocal()
+                    try:
+                        upsert_pipeline_node_status(
+                            done_db,
+                            project_id=project_id_done,
+                            episode_id=node_episode_id,
+                            script_id=f"episode:{node_episode_id}",
+                            node_name="scene_subskill_scene",
+                            scene_id=scene_id,
+                            status="success",
+                            progress_percent=100.0,
+                            runtime_meta={
+                                "business_event": "completed",
+                                "scene_block": done_block,
+                                "called_subskills": list(scene_resume.called) if scene_resume else ["staging"],
+                                "routes": task.get("routes") or {},
+                            },
+                        )
+                        done_db.commit()
+                    finally:
+                        _release_db_connection(done_db)
                 return int(task.get("scene_order") or 0), {
                     "scene_id": scene_id,
                     "scene_order": int(task.get("scene_order") or 0),
-                    "scene_block": str(scene_resume.current_block if scene_resume else task.get("scene_block") or ""),
+                    "scene_block": done_block,
                     "called_subskills": list(scene_resume.called) if scene_resume else [],
                     "routes": task.get("routes") or {},
                     "skipped": True,
@@ -3660,6 +3927,49 @@ async def run_scene_subskill_pipeline(
                 if special and special not in current_block:
                     current_block = "\n".join(part for part in (special, current_block) if part)
                 called: List[str] = list(scene_resume.called) if scene_resume else []
+                if scene_start == "storyboard":
+                    shot_count = await _run_scene_storyboard_step(
+                        task_db,
+                        user_principal=user_principal,
+                        raw_payload=raw_payload,
+                        project_id=project_id,
+                        episode_id=node_episode_id,
+                        scene_id=scene_id,
+                        staging_text=str(
+                            (scene_resume.current_block if scene_resume else "")
+                            or task.get("scene_block")
+                            or ""
+                        ),
+                        scene_order=int(task.get("scene_order") or 0),
+                    )
+                    called.append("storyboard")
+                    upsert_pipeline_node_status(
+                        task_db,
+                        project_id=project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name="scene_subskill_scene",
+                        scene_id=scene_id,
+                        status="success",
+                        progress_percent=100.0,
+                        runtime_meta={
+                            "business_event": "completed",
+                            "current_step": "storyboard",
+                            "current_step_label": "分镜生成",
+                            "scene_block": str(scene_resume.current_block if scene_resume else ""),
+                            "called_subskills": called,
+                            "shot_count": int(shot_count or 0),
+                        },
+                    )
+                    task_db.commit()
+                    return int(task.get("scene_order") or 0), {
+                        "scene_id": scene_id,
+                        "scene_order": int(task.get("scene_order") or 0),
+                        "scene_block": str(scene_resume.current_block if scene_resume else ""),
+                        "called_subskills": called,
+                        "routes": task.get("routes") or {},
+                        "shot_count": int(shot_count or 0),
+                    }
                 call_vfx = bool(task.get("call_vfx"))
                 call_xian = bool(task.get("call_xian"))
                 if explicit_start:
@@ -3712,7 +4022,7 @@ async def run_scene_subskill_pipeline(
                         called=called,
                     )
 
-                if scene_start not in {"combat", "framing", "staging"}:
+                if scene_start not in {"combat", "framing", "staging", "storyboard"}:
                     await _run_enhance_step(DRAMA_PROMPT, "drama")
                     special = _special_block_from_text(current_block, scene_id) or special
                     call_vfx, call_xian = _routes_from_special_text(special, scene_id)
@@ -3932,6 +4242,7 @@ async def run_scene_subskill_pipeline(
                     project_id=project_id,
                     episode_id=node_episode_id,
                 )
+                shot_markers = load_scene_markers_with_persisted_shots(refresh_db, node_episode_id)
             finally:
                 _release_db_connection(refresh_db)
             for task in timeout_retry_tasks:
@@ -3944,6 +4255,7 @@ async def run_scene_subskill_pipeline(
                     pipeline_scene_block=str(node_row.get("scene_block") or ""),
                     call_vfx=bool(task.get("call_vfx")),
                     call_xian=bool(task.get("call_xian")),
+                    storyboard_ready=scene_id in shot_markers or scene_id.lower() in shot_markers,
                 )
                 resume_plans[scene_id] = plan
                 resume_plans[scene_id.lower()] = plan

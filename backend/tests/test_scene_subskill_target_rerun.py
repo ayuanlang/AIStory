@@ -62,7 +62,8 @@ DRAMA_OK = (
 )
 DRAMA_STRIPPED = (
     "[SCENE_START:EP01_SC01]\n"
-    "文戏增强已完成并已去掉结束标签的正文，续跑仍应识别为可用落库，长度须超过一百字门槛，不得当成空壳跳过本场文戏。\n"
+    "【场景综合】文戏增强已完成并已去掉结束标签的正文，续跑仍应识别为可用落库，长度须超过一百字门槛，不得当成空壳跳过本场文戏。\n"
+    "- Beat 1：节拍=铺垫\n"
     "[SCENE_END:EP01_SC01]"
 )
 FRAMING_STRIPPED = (
@@ -184,12 +185,44 @@ def test_resume_skips_combat_when_merged_or_legacy_marker_persisted():
 def test_resume_skips_scene_when_pipeline_already_success():
     plan = resolve_scene_subskill_resume(
         scene_id="EP01_SC01",
-        steps={"staging": STAGING_OK},
+        steps={"staging": STAGING_STRIPPED},
         pipeline_status="success",
-        pipeline_scene_block=STAGING_OK,
+        pipeline_scene_block=STAGING_STRIPPED,
+        storyboard_ready=True,
     )
     assert plan.start_group == "done"
-    assert plan.skipped_reason in {"pipeline_success", "staging_persisted"}
+    assert plan.skipped_reason == "storyboard_persisted"
+
+
+def test_resume_starts_storyboard_when_staging_ready_but_shots_missing():
+    plan = resolve_scene_subskill_resume(
+        scene_id="EP01_SC02",
+        steps={"staging": STAGING_STRIPPED},
+        pipeline_status="success",
+        pipeline_scene_block=STAGING_STRIPPED,
+        storyboard_ready=False,
+    )
+    assert plan.start_group == "storyboard"
+    assert plan.skipped_reason == "resume_storyboard"
+
+
+def test_resume_does_not_skip_success_scene_without_staging_body():
+    long_scene = (
+        "[SCENE_START:EP01_SC02]\n"
+        + ("素衣奉茶的场头正文。" * 20)
+        + "\n[SCENE_END:EP01_SC02]"
+    )
+    plan = resolve_scene_subskill_resume(
+        scene_id="EP01_SC02",
+        steps={},
+        pipeline_status="success",
+        pipeline_scene_block=long_scene,
+    )
+    assert plan.start_group == "drama"
+    assert plan.skipped_reason == "start_drama"
+    assert persisted_subskill_step_usable("drama", long_scene) is False
+    assert persisted_subskill_step_usable("framing", long_scene) is False
+    assert persisted_subskill_step_usable("staging", long_scene) is False
 
 
 def test_hydrate_recovers_drama_from_saved_script():

@@ -36684,7 +36684,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const subskillStatus = String(subskillNode?.status || '').trim().toLowerCase();
                             const subskillStep = String(subskillNode?.runtime_meta?.current_step || '').trim().toLowerCase();
                             const subskillActive = ['running', 'queued'].includes(subskillStatus);
-                            const subskillStillOpen = subskillActive && subskillStep !== 'completed';
+                            const subskillStillOpen = subskillActive
+                                && !['completed', 'storyboard'].includes(subskillStep);
+                            const persistedShotCount = Number(node?.runtime_meta?.shot_count || 0);
                             const thisRunGeneratingStatus = ['starting', 'generating', 'importing'].includes(status)
                                 || ['starting', 'generating', 'importing'].includes(refStatus);
                             // Queued after a 文戏 rerun is a placeholder. Leftover success must not
@@ -36692,15 +36694,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             if ((pendingAfterSubskill || storyboardQueuedPlaceholder) && !thisRunGeneratingStatus) {
                                 return { ready: false, active: false, failed: false, detail: '' };
                             }
-                            if (
-                                workspaceSceneCount > 0
-                                && workspaceSceneCountWithShots >= workspaceSceneCount
-                                && !isRerunningStoryboard
-                                && !pendingAfterSubskill
-                                && !sceneMatrixRerunInFlightRef.current
-                                && !subskillStillOpen
-                                && !storyboardQueuedPlaceholder
-                            ) {
+                            if (subskillActive && subskillStep === 'storyboard') {
+                                return {
+                                    ready: false,
+                                    active: true,
+                                    failed: false,
+                                    detail: t('已开始运行', 'Started'),
+                                };
+                            }
+                            if (fromNode.ready && persistedShotCount > 0 && !pendingAfterSubskill && !subskillStillOpen) {
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
                             const thisRunItem = isThisRunStoryboardProgressItem(
@@ -36752,7 +36754,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 return { ready: false, active: true, failed: false, detail: '' };
                             }
                             const settledCompleted = status === 'completed' || refStatus === 'completed';
-                            if (settledCompleted && (
+                            if (settledCompleted && persistedShotCount > 0 && (
                                 thisRunItem
                                 || thisRunRefItem
                                 || fromNode.ready
@@ -36778,7 +36780,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ) {
                                 return { ready: false, active: false, failed: false, detail: '' };
                             }
-                            if (fromNode.ready && !ignoreLeftoverStoryboard) {
+                            if (fromNode.ready && persistedShotCount > 0 && !ignoreLeftoverStoryboard) {
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
                             if (
