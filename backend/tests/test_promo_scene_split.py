@@ -902,8 +902,37 @@ def test_promo_flower_text_is_planned_and_injected():
     assert "CTA=「订座热线：13706902999｜地址：福建省松溪县庙下98号」" in contact_flower
     assert "字级=小" in contact_flower
     assert "落位=句下" in contact_flower
-    assert "上屏=字卡专镜" in contact_flower
+    assert "出字=模型直出" in contact_flower
+    assert "烧录=libass" not in contact_flower
+    assert "上屏=字卡专镜" not in contact_flower
     assert "打开预约" not in contact_flower
+    painted = merge_planner_result(
+        {
+            "stage_plan": {
+                "close": {
+                    "flower_text": "文案=「何以安康，家和人乐」｜位置=中｜字级=大｜出字=模型直出",
+                    "cta": "服务热线：0599-2323239",
+                },
+            },
+        }
+    )["stage_plan"]["close"]["flower_text"]
+    assert "服务热线：0599-2323239" in painted
+    assert "出字=模型直出" in painted
+    assert "出字=后期烧录" not in painted
+    assert "烧录=libass" not in painted
+    burned_close = merge_planner_result(
+        {
+            "stage_plan": {
+                "close": {
+                    "flower_text": "文案=「何以安康，家和人乐」｜位置=中｜字级=大｜出字=后期烧录",
+                    "cta": "服务热线：0599-2323239",
+                },
+            },
+        }
+    )["stage_plan"]["close"]["flower_text"]
+    assert "服务热线：0599-2323239" in burned_close
+    assert "烧录=libass" in burned_close
+    assert "上屏=字卡专镜" in burned_close
     assert "逐字=" in merged["stage_plan"]["hook"]["flower_text"]
     assert "压字=禁" in merged["stage_plan"]["hook"]["flower_text"]
     assert "替字=禁" in merged["stage_plan"]["hook"]["flower_text"]

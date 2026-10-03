@@ -104,8 +104,10 @@ def test_prompt_sent_to_video_model_drops_shop_glyphs():
     assert "画幅叠出片内图形花字" not in burned
     assert "禁止生成花字" in burned
     kept = strip_libass_glyphs_from_prompt(
-        "画幅叠出片内图形花字「何以安康，家和人乐」｜出字=模型直出"
+        "画幅叠出片内图形花字「何以安康，家和人乐」｜出字=模型直出｜"
+        "其下叠出联系行「服务热线：0599-2323239」，落位=句下，字级=小｜手写=禁"
     )
+    assert "0599-2323239" in kept
     assert "何以安康，家和人乐" in kept
     assert extract_libass_events(kept, duration=4) == []
     dropped = strip_libass_glyphs_from_prompt("文案=「何以安康，家和人乐」｜出字=舍")
