@@ -840,7 +840,8 @@ def test_promo_flower_text_is_planned_and_injected():
     assert spec["cut_fusion"] == "优先段末切镜或段首开镜，不与动作抢镜；可黑屏专镜或字卡专镜；有旁白则无花字"
     assert "字卡专镜" in spec["card_shot"]
     assert "场景底+字层" in spec["card_shot"]
-    assert spec["cta_hold"] == "CTA可较长停留"
+    assert "热线｜地址" in spec["cta_hold"]
+    assert "不算第二条花字" in spec["cta_hold"]
     assert spec["vo_xor"] == "有旁白时不出花字，花字低于旁白，禁同步以免分心"
     assert "禁漏家" in spec["glyph_lock"]
     assert "禁何乐乐享" in spec["glyph_lock"]
@@ -886,6 +887,23 @@ def test_promo_flower_text_is_planned_and_injected():
     assert "停留=长" in merged["stage_plan"]["close"]["flower_text"]
     assert "听=无" in merged["stage_plan"]["close"]["flower_text"]
     assert "打开预约" not in merged["stage_plan"]["close"]["flower_text"]
+    contact = merge_planner_result(
+        {
+            "stage_plan": {
+                "close": {
+                    "flower_text": "文案=「廿載泓林·常暖人間」｜位置=中｜字级=大",
+                    "cta": "订座热线：13706902999｜地址：福建省松溪县庙下98号",
+                },
+            },
+        }
+    )
+    contact_flower = contact["stage_plan"]["close"]["flower_text"]
+    assert "廿載泓林·常暖人間" in contact_flower
+    assert "CTA=「订座热线：13706902999｜地址：福建省松溪县庙下98号」" in contact_flower
+    assert "字级=小" in contact_flower
+    assert "落位=句下" in contact_flower
+    assert "上屏=字卡专镜" in contact_flower
+    assert "打开预约" not in contact_flower
     assert "逐字=" in merged["stage_plan"]["hook"]["flower_text"]
     assert "压字=禁" in merged["stage_plan"]["hook"]["flower_text"]
     assert "替字=禁" in merged["stage_plan"]["hook"]["flower_text"]

@@ -22,6 +22,7 @@ _P_HEAD_RE = re.compile(
 _QUOTE_RE = re.compile(r"「([^」]+)」|\"([^\"]+)\"")
 _PHONE_RE = re.compile(r"\d{3,4}-?\d{5,8}")
 _EN_RE = re.compile(r"英=「([^」]+)」|英文小字「([^」]+)」")
+_CTA_RE = re.compile(r"CTA\s*[=＝]\s*「([^」]+)」")
 _SEAL_TEXT_RE = re.compile(r"(?:印文|印章文|闲章|朱文)=「([^」]+)」")
 _GLYPH_LOCK_RE = re.compile(r"逐字=[^｜|\n]+")
 _VOICE_RE = re.compile(r"(?:Voiceover|旁白|口播)\s*[:：]\s*(.+)", re.IGNORECASE)
@@ -51,7 +52,12 @@ def _usable_copy(quote: str) -> bool:
 
 def _is_hotline_copy(quote: str) -> bool:
     text = str(quote or "").strip()
-    return bool(text and (_PHONE_RE.search(text) or "热线" in text or "电话" in text))
+    return bool(text and (_PHONE_RE.search(text) or "热线" in text or "电话" in text or "订座" in text))
+
+
+def _split_contact_lines(text: str) -> List[str]:
+    parts = [part.strip() for part in re.split(r"[｜|]", str(text or "")) if part.strip()]
+    return parts or ([text.strip()] if str(text or "").strip() else [])
 
 
 def _quote_needs_exact_burn(quote: str) -> bool:
@@ -160,6 +166,12 @@ def _pick_main_and_companion(block: str) -> tuple[str, str]:
     for quote in en_quotes:
         if quote != main:
             _append_unique(companion_parts, quote)
+    for quote in _CTA_RE.findall(block):
+        if not _usable_copy(quote) or quote.strip() == main:
+            continue
+        for part in _split_contact_lines(quote):
+            if part != main:
+                _append_unique(companion_parts, part)
     for phone in phones:
         if phone == main or any(phone in part for part in companion_parts):
             continue
@@ -287,9 +299,10 @@ def _place_and_size(block: str) -> tuple[str, str, bool, str]:
     elif "位置=画左" in block or "落位=画左" in block:
         place = "画左"
     size = "中"
-    if "字级=大" in block:
+    size_body = _CTA_RE.sub("", block).replace("｜字级=小｜落位=句下", "").replace("字级=小｜落位=句下", "")
+    if "字级=大" in size_body or "字级=大" in block:
         size = "大"
-    elif "字级=小" in block:
+    elif "字级=小" in size_body:
         size = "小"
     font = "KaiTi"
     font_match = re.search(r"字体=([^｜|\n]+)", block)
@@ -643,7 +656,7 @@ def _strip_block(block: str) -> str:
     text = _GLYPH_LOCK_RE.sub("逐字=后期烧录", text)
     text = text.replace("禁何乐乐享", "禁复写")
     note = (
-        "本P禁止生成花字、店号、热线与任何字幕字形，字由后期烧录。"
+        "本P禁止生成花字、店号、热线、地址与任何字幕字形，字由后期烧录。"
         if mode == "burn"
         else "本P花字已舍，禁止生成花字字形。"
     )

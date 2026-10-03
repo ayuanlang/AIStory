@@ -35,6 +35,27 @@ def test_libass_events_keep_shop_name_and_hotline_exact():
     assert event["seal"] == "乐章"
 
 
+def test_close_card_burns_hotline_and_address_verbatim():
+    block = (
+        "(P1 0s–6s) 字卡专镜，Static Hold。文案=「廿載泓林·常暖人間」｜烧录=libass｜手写=禁｜字级=大。"
+        "英文小字「SINCE 1997 HONG LIN」，字级=小。"
+        "CTA=「订座热线：13706902999｜地址：福建省松溪县庙下98号」｜烧录=libass｜手写=禁｜字级=小｜落位=句下。"
+        "本P无旁白。"
+    )
+    events = extract_libass_events(block, duration=6)
+    assert events[0]["text"] == "廿載泓林·常暖人間"
+    assert events[0]["size"] == "大"
+    assert "订座热线：13706902999" in events[0]["companion"]
+    assert "地址：福建省松溪县庙下98号" in events[0]["companion"]
+    assert "垂询热线" not in events[0]["companion"]
+    assert "SINCE 1997 HONG LIN" in events[0]["companion"]
+    stripped = strip_libass_glyphs_from_prompt(block)
+    assert "13706902999" not in stripped
+    assert "福建省松溪县庙下98号" not in stripped
+    assert "廿載泓林" not in stripped
+    assert "禁止生成花字" in stripped
+
+
 def test_voiceover_and_footer_jia_are_not_burned():
     events = extract_libass_events(SCRIPT, duration=16)
     blob = " ".join(event["text"] for event in events)
