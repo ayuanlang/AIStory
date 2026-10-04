@@ -162,8 +162,10 @@ async def generate_project_story_dna_global(
 
     _release_db_connection(db, "generate_project_story_dna_global_llm_call")
 
+    fill_usage: dict = {}
     try:
         # Story DNA: do not strict-retry on H1/marker shape — recover markers on persist instead.
+        # Truncation is kept so missing episodes can be filled instead of discarded.
         generated_payload = await generate_markdown_with_retry(
             user_prompt=user_prompt,
             sys_prompt=sys_prompt,
@@ -171,13 +173,26 @@ async def generate_project_story_dna_global(
             strict_markdown=False,
             require_h1=False,
             return_meta=True,
+            keep_truncated=not series_ip,
         )
+        generated_md = str((generated_payload or {}).get("content") or "").strip()
+        if generated_md and not series_ip:
+            from app.services.story_episode_coverage import (  # noqa: E402
+                ensure_story_episode_blocks,
+                merge_usage,
+            )
+
+            generated_md, fill_usage = await ensure_story_episode_blocks(
+                generated_md,
+                episodes_count=int(episodes_count),
+                llm_config=llm_config,
+                user_id=user_id,
+            )
+            fill_usage = merge_usage({}, fill_usage)
     except Exception as e:
         if reservation_tx:
             billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
         raise
-
-    generated_md = str((generated_payload or {}).get("content") or "").strip()
     usage = (generated_payload or {}).get("usage") if isinstance(generated_payload, dict) else {}
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
@@ -217,6 +232,10 @@ async def generate_project_story_dna_global(
         )
     generated_script_title = _strip_stacked_production_title_suffixes(generated_script_title)
 
+    if fill_usage:
+        from app.services.story_episode_coverage import merge_usage  # noqa: E402
+
+        usage = merge_usage(usage, fill_usage)
     if not usage:
         usage = billing_service.estimate_input_output_tokens_from_messages(
             [

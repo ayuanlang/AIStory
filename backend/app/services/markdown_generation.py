@@ -147,6 +147,7 @@ async def generate_markdown_with_retry(
     strict_markdown: bool = True,
     require_h1: bool = True,
     return_meta: bool = False,
+    keep_truncated: bool = False,
 ) -> Any:
     def _is_prohibited_marker(text: str) -> bool:
         if not text:
@@ -280,6 +281,12 @@ async def generate_markdown_with_retry(
 
     if not strict_markdown:
         if _is_truncated(meta_1):
+            if keep_truncated and content_1 and not _looks_like_error_text(content_1):
+                logger.warning(
+                    "[generate_markdown_with_retry] keeping truncated output for continuation clean_len=%s",
+                    len(content_1),
+                )
+                return _result_payload(content_1, meta_1)
             raise RuntimeError("LLM output appears truncated (finish_reason=length) in non-strict mode")
         if content_1 and not _looks_like_error_text(content_1):
             return _result_payload(content_1, meta_1)

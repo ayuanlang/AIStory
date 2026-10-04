@@ -862,6 +862,7 @@ async def generate_episode_story_dna(
         f"Suspense: {req.suspense or ''}\n"
         f"Extra Notes: {req.extra_notes or ''}\n"
     )
+    fill_story_episodes = False
     if mode == "global" and prompt_filename == "master_story_architect.md":
         from app.services.script_mode_helpers import build_story_episode_coverage_block  # noqa: E402
         from app.services.series_ip_mode import is_series_ip_script_mode  # noqa: E402
@@ -871,7 +872,8 @@ async def generate_episode_story_dna(
             or (project.global_info or {}).get("script_mode")
             or ""
         ).strip()
-        if not is_series_ip_script_mode(script_mode_for_ip):
+        fill_story_episodes = not is_series_ip_script_mode(script_mode_for_ip)
+        if fill_story_episodes:
             user_prompt_body += build_story_episode_coverage_block(req.episodes_count)
         user_prompt_body += (
             "\nTruncatable markers (hard): wrap Part 1 in [STORY_DNA_THINKING_START]…[STORY_DNA_THINKING_END]; "
@@ -919,6 +921,7 @@ async def generate_episode_story_dna(
 
     _release_db_connection(db, f"generate_episode_story_dna_{mode}_llm_call")
 
+    fill_usage: dict = {}
     try:
         generated_payload = await generate_markdown_with_retry(
             user_prompt=user_prompt,
@@ -927,13 +930,26 @@ async def generate_episode_story_dna(
             strict_markdown=False if (mode == "global" and prompt_filename == "master_story_architect.md") else (req.strict_markdown is not False),
             require_h1=False if (mode == "global" and prompt_filename == "master_story_architect.md") else True,
             return_meta=True,
+            keep_truncated=fill_story_episodes,
         )
+        generated_md = str((generated_payload or {}).get("content") or "").strip()
+        if generated_md and fill_story_episodes:
+            from app.services.story_episode_coverage import (  # noqa: E402
+                ensure_story_episode_blocks,
+                merge_usage,
+            )
+
+            generated_md, fill_usage = await ensure_story_episode_blocks(
+                generated_md,
+                episodes_count=int(req.episodes_count or 0),
+                llm_config=llm_config,
+                user_id=int(current_user.id),
+            )
+            fill_usage = merge_usage({}, fill_usage)
     except Exception as e:
         if reservation_tx:
             billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
         raise
-
-    generated_md = str((generated_payload or {}).get("content") or "").strip()
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
 
@@ -952,6 +968,10 @@ async def generate_episode_story_dna(
         )
 
     usage = (generated_payload or {}).get("usage") if isinstance(generated_payload, dict) else {}
+    if fill_usage:
+        from app.services.story_episode_coverage import merge_usage  # noqa: E402
+
+        usage = merge_usage(usage, fill_usage)
     if not usage:
         usage = billing_service.estimate_input_output_tokens_from_messages(
             [
