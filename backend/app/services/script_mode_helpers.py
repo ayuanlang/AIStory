@@ -167,6 +167,8 @@ def _pick_first_text(*values: Any) -> str:
 
 def _normalize_script_mode_key(script_mode: Any) -> str:
     raw = str(script_mode or "").strip().lower()
+    if "ip模式" in raw or "series ip" in raw or "ip mode" in raw:
+        return "series_ip"
     if "trailer" in raw or "预告" in raw:
         return "trailer"
     if "short drama" in raw or "短剧" in raw:
@@ -258,6 +260,12 @@ _MANDATORY_WRITING_LOGIC_BY_SCRIPT_MODE: Dict[str, str] = {
     ),
     "general_series": (
         "- 铺垫、升级、反转、情感释放、后续价值之间保持平衡。"
+    ),
+    "series_ip": (
+        "- 这是系列剧（IP模式）。全剧只提供世界观、主要角色 IP、基本故事线索；没有预先写好的分集剧情框架。\n"
+        "- 本集只演用户指定的基本剧情、要体现的冲突和重要亮点。对标经典是整体剧本的机制参考，不把参考剧情搬进本集。\n"
+        "- 此前各集摘要是已发生事实，必须承接。不得改人设，不得改世界规则，不得替未写的集编情节。\n"
+        "- 正片之外必须写出本集摘要，供下一集读取。"
     ),
 }
 

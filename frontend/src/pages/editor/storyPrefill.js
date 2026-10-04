@@ -235,6 +235,27 @@ export function migrateLegacyPlotToBeats(input) {
     return next;
 }
 
+export const SERIES_IP_SCRIPT_MODE = '系列剧（IP模式） / Series IP';
+
+export function isSeriesIpScriptMode(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    return raw.includes('ip模式') || raw.includes('series ip') || raw.includes('ip mode');
+}
+
+export function composeSeriesIpEpisodeGuidance(input) {
+    const src = input || {};
+    const plot = String(src.ip_episode_plot || '').trim();
+    const conflict = String(src.ip_episode_conflict || '').trim();
+    const highlights = String(src.ip_episode_highlights || '').trim();
+    const reference = String(src.ip_episode_reference || '').trim();
+    const lines = [];
+    if (plot) lines.push(`基本剧情：${plot}`);
+    if (conflict) lines.push(`要体现的冲突：${conflict}`);
+    if (highlights) lines.push(`重要亮点：${highlights}`);
+    if (reference) lines.push(`对标参考（学机制，不搬剧情；可对标整体剧本）：${reference}`);
+    return lines.join('\n');
+}
+
 export function storyPrefillPayloadFields(input) {
     const src = input || {};
     const fields = {};
@@ -247,5 +268,9 @@ export function storyPrefillPayloadFields(input) {
         wild_creative_notes: String(src.wild_creative_notes ?? ''),
         extra_notes: String(src.extra_notes ?? ''),
         episode_generation_guidance: String(src.episode_generation_guidance ?? ''),
+        ip_episode_plot: String(src.ip_episode_plot ?? ''),
+        ip_episode_conflict: String(src.ip_episode_conflict ?? ''),
+        ip_episode_highlights: String(src.ip_episode_highlights ?? ''),
+        ip_episode_reference: String(src.ip_episode_reference ?? ''),
     };
 }

@@ -84,4 +84,8 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     retry_failed_only: bool = False
     extra_notes: Optional[str] = None
     episode_generation_guidance: Optional[str] = None
+    ip_episode_plot: Optional[str] = None
+    ip_episode_conflict: Optional[str] = None
+    ip_episode_highlights: Optional[str] = None
+    ip_episode_reference: Optional[str] = None
     strict_markdown: bool = True

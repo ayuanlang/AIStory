@@ -87,7 +87,20 @@ async def generate_project_story_dna_global(
         "Do not echo the INPUT block into OUTPUT.\n\n"
     )
 
-    user_prompt = wrap_story_dna_input_block(
+    from app.services.series_ip_mode import (  # noqa: E402
+        build_series_ip_global_prompt_block,
+        is_series_ip_script_mode,
+    )
+
+    script_mode_for_ip = (getattr(req, "script_mode", None) or "").strip()
+    series_ip_global_block = (
+        build_series_ip_global_prompt_block()
+        if is_series_ip_script_mode(script_mode_for_ip)
+        else ""
+    )
+    user_prompt = (
+        f"{series_ip_global_block}"
+        + wrap_story_dna_input_block(
         f"Mode: global\n"
         f"Project Title: {project_title}\n"
         f"Note: Project Overview / Basic Information and Character Canon may be empty; do not fail, infer sensible defaults and continue.\n"
@@ -106,6 +119,7 @@ async def generate_project_story_dna_global(
         f"Target Audience: {(getattr(req, 'target_audience', None) or '').strip()}\n"
         f"\n"
         f"{format_story_creative_input_block(req)}\n"
+        )
     )
 
     llm_config = _resolve_story_generator_script_analysis_llm_config(
@@ -754,6 +768,15 @@ async def structure_project_creative_input_to_story_fields(
         "Name a location only if the plot hard-needs that space, it matches character status/access (prisons/monitor rooms/vaults are restricted), and arrival is logical; otherwise omit place and write the event only — later nodes will plan environments. "
         "Put the must-have climax inside beat 14, and rhyme beat 15 with beat 01."
     )
+    from app.services.series_ip_mode import is_series_ip_script_mode as _is_series_ip_script_mode
+
+    if _is_series_ip_script_mode(script_mode):
+        user_prompt += (
+            "\n\n【系列剧 IP 模式】这次预填只服务全剧圣经，不服务逐集大纲。"
+            "把笔墨放在世界观、主要角色 IP、基本故事线索，以及 I10 对整体剧本的机制参考。"
+            "救猫咪 15 拍若写，只作为全剧走向，每拍一句方向，禁止写成某一集的场表或分集情节。"
+            "不要输出 EP01–EPN。\n"
+        )
     raw = await _run_structure_llm_call(
         db=db,
         user_id=user_id,

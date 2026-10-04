@@ -65,6 +65,8 @@ export const PROJECT_STORY_SCRIPT_MODE_OPTIONS = [
 
     "通用连续剧 / General Series",
 
+    "系列剧（IP模式） / Series IP",
+
     "短剧快节奏 / Short Drama",
 
     "动作片 / Action Feature",

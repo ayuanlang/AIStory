@@ -82,6 +82,10 @@ class StoryGeneratorRequest(BaseModel):
     wild_creative_notes: Optional[str] = None
     extra_notes: Optional[str] = None
     episode_generation_guidance: Optional[str] = None
+    ip_episode_plot: Optional[str] = None
+    ip_episode_conflict: Optional[str] = None
+    ip_episode_highlights: Optional[str] = None
+    ip_episode_reference: Optional[str] = None
     trending_ai_short_dramas_report: Optional[Dict[str, Any]] = None
     ai_short_drama_industry_report: Optional[Dict[str, Any]] = None
     strict_markdown: bool = True

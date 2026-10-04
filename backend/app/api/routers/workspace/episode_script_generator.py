@@ -44,6 +44,17 @@ from app.services.episode_script_prompt import (  # noqa: E402,F401
     build_trailer_generation_prompt_block,
     resolve_episode_generation_guidance_for_prompt,
 )
+from app.services.series_ip_mode import (  # noqa: E402,F401
+    build_prior_episode_summaries_prompt_block,
+    build_series_ip_episode_prompt_block,
+    build_series_ip_trailer_note,
+    compose_series_ip_episode_brief,
+    extract_series_episode_summary,
+    fallback_series_episode_summary,
+    is_series_ip_script_mode,
+    series_ip_brief_is_usable,
+    strip_series_episode_summary,
+)
 from app.services.script_analysis_llm_config import (  # noqa: E402,F401
     sanitize_script_generation_llm_config_text_only,
 )
@@ -771,15 +782,13 @@ async def generate_project_episode_scripts_from_global_framework(
 
     story_input_key = "promo_generator_input" if generator_kind == "promo" else "story_generator_global_input"
     saved_story_input = gi.get(story_input_key) if isinstance(gi.get(story_input_key), dict) else {}
-    episode_script_mode = (
-        "预告片 / Trailer"
-        if trailer_mode
-        else _pick_first_text(
-            req.script_mode,
-            saved_story_input.get("script_mode"),
-            gi_story_input.get("script_mode"),
-        )
+    saved_script_mode = _pick_first_text(
+        req.script_mode,
+        saved_story_input.get("script_mode"),
+        gi_story_input.get("script_mode"),
     )
+    series_ip_mode = is_series_ip_script_mode(saved_script_mode)
+    episode_script_mode = "预告片 / Trailer" if trailer_mode else saved_script_mode
     episode_target_audience = _pick_first_text(
         req.target_audience,
         saved_story_input.get("target_audience"),
@@ -995,6 +1004,45 @@ async def generate_project_episode_scripts_from_global_framework(
 
     # Strict single-episode mode: never auto-create episodes before target resolution.
     single_episode_mode = bool(requested_episode_number is not None or req.episode_id or trailer_mode)
+    series_ip_brief = ""
+    if series_ip_mode and not trailer_mode:
+        if not single_episode_mode:
+            raise HTTPException(
+                status_code=400,
+                detail="系列剧（IP模式）按集生成：请指定集数，并填写本集基本剧情与要体现的冲突。不预生成全部分集。",
+            )
+        series_ip_brief = compose_series_ip_episode_brief(
+            plot=_pick_first_text(
+                getattr(req, "ip_episode_plot", None),
+                saved_story_input.get("ip_episode_plot"),
+                gi_story_input.get("ip_episode_plot"),
+            ),
+            conflict=_pick_first_text(
+                getattr(req, "ip_episode_conflict", None),
+                saved_story_input.get("ip_episode_conflict"),
+                gi_story_input.get("ip_episode_conflict"),
+            ),
+            highlights=_pick_first_text(
+                getattr(req, "ip_episode_highlights", None),
+                saved_story_input.get("ip_episode_highlights"),
+                gi_story_input.get("ip_episode_highlights"),
+            ),
+            reference=_pick_first_text(
+                getattr(req, "ip_episode_reference", None),
+                saved_story_input.get("ip_episode_reference"),
+                gi_story_input.get("ip_episode_reference"),
+            ),
+            guidance=_pick_first_text(
+                req.episode_generation_guidance,
+                saved_story_input.get("episode_generation_guidance"),
+                gi_story_input.get("episode_generation_guidance"),
+            ),
+        )
+        if not series_ip_brief_is_usable(series_ip_brief):
+            raise HTTPException(
+                status_code=400,
+                detail="系列剧（IP模式）需要本集基本剧情和要体现的冲突。请填写后再生成这一集。",
+            )
     loop_limit = 0 if single_episode_mode else (target_n if target_n != 999 else 0)
     for i in range(1, loop_limit + 1):
         title = f"Episode {i}"
@@ -1433,8 +1481,9 @@ async def generate_project_episode_scripts_from_global_framework(
                 f"- Series length for context only: {target_n}\n"
                 f"- Current Call Title: {ep_title}\n"
                 "- Generate ONLY this trailer. Do not write EP01 or any other episode.\n"
-                "- Global Story DNA is the map of the story's throughline and the source of highlight action, dialogue, and plot turns.\n"
-                "- Play the causal spine and those highlights. Leave the final choice unplayed.\n\n"
+                "- Global Story DNA is the map of the WHOLE series: throughline, highlight action, dialogue, plot turns, and registered main environments.\n"
+                "- Sample across the series in story order. Make the throughline followable, and leave the final choice unplayed.\n"
+                "- Lock the Save the Cat selections first. Each beat's main environment is the registered place where that actual plot happens. Those selections carry multiple main environments.\n\n"
                 "Output Format Contract (Hard Constraint):\n"
                 "- The first non-empty line MUST be exactly one H1 heading: # 预告-{short title}\n"
                 "- Output MUST be pure Markdown text only.\n"
@@ -1511,14 +1560,54 @@ async def generate_project_episode_scripts_from_global_framework(
                     "Use Global Story DNA Carry-in / Hook Ledger only; do not invent conflicting prior events.\n\n"
                 )
 
-        episode_generation_guidance_block = resolve_episode_generation_guidance_for_prompt(
-            single_episode_mode=single_episode_mode and not call_is_trailer,
-            request_guidance=req.episode_generation_guidance,
-            persisted_guidance=gi_story_input.get("episode_generation_guidance"),
-        )
+        episode_generation_guidance_block = ""
+        series_ip_block = ""
+        if series_ip_mode and not call_is_trailer:
+            prior_rows: List[Dict[str, Any]] = []
+            for prev_n in range(1, int(idx)):
+                prev_ep = by_idx.get(prev_n)
+                prev_db = db.query(Episode).filter(Episode.id == prev_ep.id).first() if prev_ep else None
+                source_ep = prev_db or prev_ep
+                if not source_ep:
+                    continue
+                source_info = _episode_runtime_info_from_episode(source_ep)
+                if str(source_info.get("script_output_kind") or "") == "trailer":
+                    continue
+                stored_summary = str(source_info.get("series_episode_summary") or "").strip()
+                source_script = str(getattr(source_ep, "script_content", None) or "")
+                summary_text = (
+                    stored_summary
+                    or extract_series_episode_summary(source_script)
+                    or fallback_series_episode_summary(source_script)
+                )
+                if not summary_text:
+                    continue
+                prior_rows.append(
+                    {
+                        "number": prev_n,
+                        "title": str(getattr(source_ep, "title", None) or ""),
+                        "summary": summary_text,
+                    }
+                )
+            series_ip_block = build_series_ip_episode_prompt_block(
+                brief=series_ip_brief,
+                prior_summaries_block=build_prior_episode_summaries_prompt_block(
+                    prior_rows,
+                    current_episode_number=int(idx),
+                ),
+            )
+        elif call_is_trailer and series_ip_mode:
+            series_ip_block = build_series_ip_trailer_note()
+        else:
+            episode_generation_guidance_block = resolve_episode_generation_guidance_for_prompt(
+                single_episode_mode=single_episode_mode and not call_is_trailer,
+                request_guidance=req.episode_generation_guidance,
+                persisted_guidance=gi_story_input.get("episode_generation_guidance"),
+            )
 
         trailer_block = build_trailer_generation_prompt_block() if call_is_trailer else ""
         user_prompt = (
+            f"{series_ip_block}"
             f"{trailer_block}"
             f"{episode_generation_guidance_block}"
             f"Project Title: {project_title}\n"
@@ -1593,6 +1682,19 @@ async def generate_project_episode_scripts_from_global_framework(
             content = str((generated_payload or {}).get("content") or "").strip()
             if not content:
                 raise RuntimeError("LLM returned empty content")
+            series_episode_summary = ""
+            if series_ip_mode and not call_is_trailer:
+                series_episode_summary = (
+                    extract_series_episode_summary(content)
+                    or fallback_series_episode_summary(content)
+                )
+                content = strip_series_episode_summary(content)
+                logger.info(
+                    "[generate_episode_scripts] SERIES_IP_SUMMARY episode_number=%s episode_id=%s summary_chars=%s",
+                    idx,
+                    ep_id,
+                    len(series_episode_summary),
+                )
             official_content = extract_official_episode_script(content)
             if official_content:
                 if extract_episode_script_output_between_markers(content).get("found"):
@@ -1732,6 +1834,11 @@ async def generate_project_episode_scripts_from_global_framework(
                 else:
                     ei["episode_script_source"] = "project_global_framework_plus_project_character_canon"
                 ei["emergency_recovery_block_audit"] = recovery_audit
+                if series_ip_mode and not call_is_trailer:
+                    if series_episode_summary:
+                        ei["series_episode_summary"] = series_episode_summary
+                    else:
+                        ei.pop("series_episode_summary", None)
                 ep_db.episode_info = ei
                 logger.info(
                     "[generate_episode_scripts] PERSIST_PREPARE episode_number=%s episode_id=%s previous_title=%r next_title=%r episode_info_title=%r script_chars=%s",

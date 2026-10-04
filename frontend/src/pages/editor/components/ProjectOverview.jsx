@@ -24,6 +24,9 @@ import {
     migrateLegacyPlotToBeats,
     rollupSaveTheCat,
     storyPrefillPayloadFields,
+    SERIES_IP_SCRIPT_MODE,
+    isSeriesIpScriptMode,
+    composeSeriesIpEpisodeGuidance,
 } from '../storyPrefill';
 
 import { 
@@ -288,6 +291,10 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             wild_creative_notes: "",
             extra_notes: "",
             episode_generation_guidance: "",
+            ip_episode_plot: "",
+            ip_episode_conflict: "",
+            ip_episode_highlights: "",
+            ip_episode_reference: "",
         },
         character_profiles: [],
         character_canon_md: "",
@@ -313,6 +320,10 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         wild_creative_notes: "",
         extra_notes: "",
         episode_generation_guidance: "",
+        ip_episode_plot: "",
+        ip_episode_conflict: "",
+        ip_episode_highlights: "",
+        ip_episode_reference: "",
     });
     const [promoInput, setPromoInput] = useState({
         promo_type: "企业宣传 / Corporate Promotion",
@@ -2040,6 +2051,21 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 : (globalStoryInput.episodes_count || 0)
         );
         const trailerMode = outputKind === 'trailer';
+        const seriesIpMode = isSeriesIpScriptMode(globalStoryInput.script_mode);
+        if (seriesIpMode && !trailerMode && !specificEpisode) {
+            alert('系列剧（IP模式）不预生成全部分集。请填写这一集的基本剧情和冲突，再用单集生成。');
+            episodeScriptsGenerationInFlightRef.current = false;
+            return;
+        }
+        if (seriesIpMode && !trailerMode && specificEpisode) {
+            const plot = String(globalStoryInput.ip_episode_plot || '').trim();
+            const conflict = String(globalStoryInput.ip_episode_conflict || '').trim();
+            if (!plot || !conflict) {
+                alert('系列剧（IP模式）需要填写本集基本剧情，以及要体现的冲突。');
+                episodeScriptsGenerationInFlightRef.current = false;
+                return;
+            }
+        }
         if (!specificEpisode && !trailerMode && (!n || Number.isNaN(n) || n <= 0)) {
             alert('Please set a valid Episodes Count first.');
             episodeScriptsGenerationInFlightRef.current = false;
@@ -2110,10 +2136,21 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             };
             if (specificEpisode) {
                 reqPayload.episode_number = Number(specificEpisode);
-                const guidance = String(globalStoryInput.episode_generation_guidance || '').trim();
+                const seriesIpGuidance = seriesIpMode ? composeSeriesIpEpisodeGuidance(globalStoryInput) : '';
+                const guidance = seriesIpGuidance || String(globalStoryInput.episode_generation_guidance || '').trim();
                 if (guidance) {
                     reqPayload.episode_generation_guidance = guidance;
-                    void persistStoryGeneratorInputPatch({ episode_generation_guidance: guidance }).catch(() => {});
+                    reqPayload.ip_episode_plot = String(globalStoryInput.ip_episode_plot || '').trim();
+                    reqPayload.ip_episode_conflict = String(globalStoryInput.ip_episode_conflict || '').trim();
+                    reqPayload.ip_episode_highlights = String(globalStoryInput.ip_episode_highlights || '').trim();
+                    reqPayload.ip_episode_reference = String(globalStoryInput.ip_episode_reference || '').trim();
+                    void persistStoryGeneratorInputPatch({
+                        episode_generation_guidance: guidance,
+                        ip_episode_plot: reqPayload.ip_episode_plot,
+                        ip_episode_conflict: reqPayload.ip_episode_conflict,
+                        ip_episode_highlights: reqPayload.ip_episode_highlights,
+                        ip_episode_reference: reqPayload.ip_episode_reference,
+                    }).catch(() => {});
                 }
             }
             const res = await generateProjectEpisodeScripts(id, buildScriptAnalysisApiPayload(reqPayload));
@@ -2458,6 +2495,33 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         if (!isGeneratorMode || episodeResultRows.length === 0) return [];
         return episodeResultRows.filter(item => item?.status === 'failed' && item?.episode_id);
     }, [episodeResultRows, isGeneratorMode]);
+
+    const seriesIpMode = isSeriesIpScriptMode(globalStoryInput.script_mode);
+    const priorEpisodeSummaries = useMemo(() => {
+        if (!seriesIpMode) return [];
+        const rows = [];
+        const seen = new Set();
+        (Array.isArray(episodes) ? episodes : []).forEach((ep, index) => {
+            if (String(ep?.episode_info?.script_output_kind || '') === 'trailer') return;
+            const parsedNumber = Number(ep?.episode_info?.episode_script_episode_number) > 0
+                ? Number(ep.episode_info.episode_script_episode_number)
+                : (Number(ep?.episode_number) > 0
+                    ? Number(ep.episode_number)
+                    : (parseEpisodeNumberFromText(ep?.title) || (index + 1)));
+            if (!parsedNumber || seen.has(parsedNumber)) return;
+            const summary = String(ep?.episode_info?.series_episode_summary || '').trim();
+            const hasScript = Boolean(String(ep?.script_content || '').trim());
+            if (!summary && !hasScript) return;
+            seen.add(parsedNumber);
+            rows.push({
+                number: parsedNumber,
+                title: String(ep?.title || '').trim(),
+                summary,
+            });
+        });
+        rows.sort((a, b) => a.number - b.number);
+        return rows;
+    }, [seriesIpMode, episodes]);
 
     const STORY_GEN_STEP_LABELS = {
         wild_ideas: { zh: '输入天马行空想法', en: 'Wild Ideas' },
@@ -3751,7 +3815,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 list={[
                                     '短剧快节奏 / Short Drama',
                                     '电影 / Feature Film',
-                                    '通用连续剧 / General Series'
+                                    '通用连续剧 / General Series',
+                                    SERIES_IP_SCRIPT_MODE,
                                 ]}
                             />
                             <InputGroup
@@ -3766,7 +3831,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 ]}
                             />
                             <div className="sm:col-span-2 text-xs text-muted-foreground mb-1">
-                                {t('大模型将根据【产品规格】严格套用不同的工业化叙事节奏与起承转合结构，并针对【受众定位】极化核心看点与张力。', 'The AI will apply distinct rhythmic and structural pacing based on the chosen Product Format and polarize constraints based on target audience.')}
+                                {seriesIpMode
+                                    ? t('系列剧（IP模式）只生成全剧信息：世界观、主要角色 IP、基本故事线索。不预写各集剧情。每一集另填基本剧情、冲突和亮点，并自动带上此前各集摘要。', 'Series IP keeps a series bible only: world, lead character IP, and story threads. Episode plots are not prewritten. Each episode adds its plot, conflict, and highlights, plus summaries of earlier episodes.')
+                                    : t('大模型将根据【产品规格】严格套用不同的工业化叙事节奏与起承转合结构，并针对【受众定位】极化核心看点与张力。', 'The AI will apply distinct rhythmic and structural pacing based on the chosen Product Format and polarize constraints based on target audience.')}
                             </div>
                         </div>
 
@@ -3815,7 +3882,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         <div className="text-sm font-semibold text-white">{t('结构化预填（核心建置 · 人物弧光 · 救猫咪15拍）', 'Structure & Prefill (Concept · Character · 15 Beats)')}</div>
                                     </div>
                                     <div className="text-xs text-muted-foreground mt-1">
-                                        {t('点「结构化预填」生成三层：三幕与麦基做核心建置，编剧的艺术做人设和弧光，情节按救猫咪 15 节拍往下接。主骨架仍优先现代/当代，并至少配 5 部辅助。地点拿不准可以不写。', 'Structure & Prefill builds three layers: three-act and McKee for the concept, Egri for character and arc, and the Save the Cat 15 beats for the plot. The primary spine stays modern/contemporary, with at least 5 auxiliaries. Omit a location if you are unsure.')}
+                                        {seriesIpMode
+                                            ? t('IP 模式的预填只锁全剧：世界观、角色 IP、故事线索，以及经典作品对整体剧本的机制参考。15 拍可以只写全剧走向，不要写成各集场表。', 'IP prefill locks the series only: world, character IP, story threads, and classic works as a mechanism reference for the whole script. The 15 beats, if used, stay series direction and are not episode scenes.')
+                                            : t('点「结构化预填」生成三层：三幕与麦基做核心建置，编剧的艺术做人设和弧光，情节按救猫咪 15 节拍往下接。主骨架仍优先现代/当代，并至少配 5 部辅助。地点拿不准可以不写。', 'Structure & Prefill builds three layers: three-act and McKee for the concept, Egri for character and arc, and the Save the Cat 15 beats for the plot. The primary spine stays modern/contemporary, with at least 5 auxiliaries. Omit a location if you are unsure.')}
                                     </div>
                                 </div>
                                 <button
@@ -3930,7 +3999,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 <div>
                                     <div className="text-xs font-bold text-white">{t('救猫咪 15 节拍', 'Save the Cat · 15 Beats')}</div>
                                     <div className="text-[11px] text-muted-foreground/80 mt-0.5">
-                                        {t('情节按这 15 拍往下接。每一拍写谁对谁做了什么、期望和实际差在哪、价值往哪边翻。上一拍的结果是下一拍的压力。地点拿不准就不写。', 'The plot runs down these 15 beats. Each beat: who does what to whom, the gap between expected and actual, and which way the value turns. One beat\'s result is the next beat\'s pressure. Omit a location if you are unsure.')}
+                                        {seriesIpMode
+                                            ? t('可留空。若填写，只作为全剧走向，不会被拆成各集剧情框架。', 'Optional. If filled, this is series direction only and will not be split into episode frameworks.')
+                                            : t('情节按这 15 拍往下接。每一拍写谁对谁做了什么、期望和实际差在哪、价值往哪边翻。上一拍的结果是下一拍的压力。地点拿不准就不写。', 'The plot runs down these 15 beats. Each beat: who does what to whom, the gap between expected and actual, and which way the value turns. One beat\'s result is the next beat\'s pressure. Omit a location if you are unsure.')}
                                     </div>
                                 </div>
                                 {SAVE_THE_CAT_ACTS.map((act) => (
@@ -4021,7 +4092,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             <div className="flex items-center justify-between gap-3">
                                 <div className="flex items-center gap-2">
                                     <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${globalFrameworkReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>3</span>
-                                    <label className="text-xs text-muted-foreground uppercase font-bold block">{t('已生成全局框架（Markdown）', 'Generated Global Framework (Markdown)')}</label>
+                                    <label className="text-xs text-muted-foreground uppercase font-bold block">{seriesIpMode ? t('已生成全剧信息（Markdown）', 'Generated Series Bible (Markdown)') : t('已生成全局框架（Markdown）', 'Generated Global Framework (Markdown)')}</label>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <button
@@ -4033,7 +4104,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     >
                                         {isGeneratingGlobalStory
                                             ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('生成中...', 'Generating...')}</>
-                                            : <><Sparkles className="w-3.5 h-3.5" /> {globalFrameworkReady ? t('重新生成', 'Regenerate') : t('生成全局框架', 'Generate Framework')}</>}
+                                            : <><Sparkles className="w-3.5 h-3.5" /> {globalFrameworkReady ? t('重新生成', 'Regenerate') : (seriesIpMode ? t('生成全剧信息', 'Generate Series Bible') : t('生成全局框架', 'Generate Framework'))}</>}
                                     </button>
                                     <div className="flex items-center gap-1 bg-black/20 border border-white/10 rounded-md p-1">
                                         <button
@@ -4096,16 +4167,20 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     <div>
                                         <div className="text-sm font-semibold text-white">{t('分集剧本生成', 'Episode Script Generation')}</div>
                                         <div className="text-[11px] text-muted-foreground mt-0.5">
-                                            {t('基于全局框架与角色设定批量/单集生成正片。预告片单独成片，讲清剧情来龙去脉，并拍出动作、对白、情节高光。', 'Batch or single-episode scripts from the global framework. A trailer is a separate piece that sketches the throughline and plays highlight action, dialogue, and plot.')}
+                                            {seriesIpMode
+                                                ? t('按集写。填写这一集的基本剧情、冲突和亮点；此前各集摘要会自动作为下一集的输入。不预写全部分集。', 'Write one episode at a time. Give this episode’s plot, conflict, and highlights. Summaries of earlier episodes are fed into the next one. Episode frameworks are not prewritten.')
+                                                : t('基于全局框架与角色设定批量/单集生成正片。预告片单独成片，讲清剧情来龙去脉，并拍出动作、对白、情节高光。', 'Batch or single-episode scripts from the global framework. A trailer is a separate piece that sketches the throughline and plays highlight action, dialogue, and plot.')}
                                         </div>
                                     </div>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2">
                                     <button
                                         onClick={handleGenerateEpisodeScripts}
-                                        disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady}
-                                        className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
-                                        title={t('从全局框架 + 项目角色设定生成分集剧本，自动创建缺失分集并写入对应分集', 'Generate episode scripts from Global Framework + Project Character Canon, create missing episodes, and save each script into its episode')}
+                                        disabled={seriesIpMode || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady}
+                                        className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(seriesIpMode || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
+                                        title={seriesIpMode
+                                            ? t('系列剧（IP模式）不预生成全部分集，请使用单集生成。', 'Series IP does not prewrite every episode. Use single-episode generation.')
+                                            : t('从全局框架 + 项目角色设定生成分集剧本，自动创建缺失分集并写入对应分集', 'Generate episode scripts from Global Framework + Project Character Canon, create missing episodes, and save each script into its episode')}
                                     >
                                         {episodeScriptsRunning ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-3.5 h-3.5" /> {t('全量生成分集', 'Generate All')}</>}
                                     </button>
@@ -4150,6 +4225,74 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 </div>
                             </div>
 
+                            {seriesIpMode ? (
+                                <div className="space-y-3">
+                                    <div className="text-[11px] text-muted-foreground/80">
+                                        {t('单集生成时，下面四项是这一集的唯一剧情指定。全剧信息里的经典对标仍作整体剧本参考。此前各集摘要会自动写入提示词。', 'On single-episode generation, these four fields are the only plot brief for this episode. Classic references in the series bible still guide the whole script. Summaries of earlier episodes are added automatically.')}
+                                    </div>
+                                    {[
+                                        {
+                                            id: 'ip_episode_plot',
+                                            label: t('本集基本剧情', 'This Episode Plot'),
+                                            placeholder: t('这一集发生什么：谁、在什么压力下、做成哪一步。', 'What happens: who, under what pressure, and which step they complete.'),
+                                            rows: 3,
+                                        },
+                                        {
+                                            id: 'ip_episode_conflict',
+                                            label: t('要体现的冲突', 'Conflict To Play'),
+                                            placeholder: t('这一集要撞上的相反欲望，以及人物被迫做的选择。', 'The opposing wants that collide, and the choice the character is forced to make.'),
+                                            rows: 2,
+                                        },
+                                        {
+                                            id: 'ip_episode_highlights',
+                                            label: t('重要亮点', 'Highlights'),
+                                            placeholder: t('必须被看见的场面、金句或关系变化。可留空。', 'Scenes, lines, or relationship turns that must be seen. Optional.'),
+                                            rows: 2,
+                                        },
+                                        {
+                                            id: 'ip_episode_reference',
+                                            label: t('本集对标（可选）', 'This Episode Reference (optional)'),
+                                            placeholder: t('可点名一部经典的机制，用来演这一集。不填则沿用全剧对标。不要要求照搬剧情。', 'Name one classic mechanism for this episode. If empty, the series reference is used. Do not ask to copy the plot.'),
+                                            rows: 2,
+                                        },
+                                    ].map((field) => (
+                                        <div key={field.id}>
+                                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{field.label}</label>
+                                            <textarea
+                                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                                rows={field.rows}
+                                                value={globalStoryInput[field.id] || ''}
+                                                onFocus={() => setStoryGenFocusStep('episode_scripts')}
+                                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
+                                                disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                                placeholder={field.placeholder}
+                                            />
+                                        </div>
+                                    ))}
+                                    <div>
+                                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('此前各集摘要', 'Earlier Episode Summaries')}</label>
+                                        <div className="text-[11px] text-muted-foreground/80 mb-1.5">
+                                            {t('生成后面的集时，这些摘要会作为已发生事实输入。改过前面的集之后，请重生成后面的集。', 'These summaries are fed in as facts when a later episode is generated. After changing an earlier episode, regenerate the later ones.')}
+                                        </div>
+                                        {priorEpisodeSummaries.length === 0 ? (
+                                            <div className="text-sm text-muted-foreground rounded-md border border-white/10 bg-black/20 px-3 py-2">
+                                                {t('还没有已生成的分集。第 1 集只根据全剧信息和本集指定来写。', 'No episodes yet. Episode 1 uses the series bible and this episode brief only.')}
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
+                                                {priorEpisodeSummaries.map((row) => (
+                                                    <div key={row.number} className="rounded-md border border-white/10 bg-black/20 px-3 py-2">
+                                                        <div className="text-xs font-bold text-white">{t(`第${row.number}集`, `Episode ${row.number}`)}{row.title ? ` · ${row.title}` : ''}</div>
+                                                        <div className="text-sm text-white/80 mt-1 whitespace-pre-wrap">
+                                                            {row.summary || t('已有剧本，重新生成该集后会写入摘要。', 'Script exists. Regenerate this episode to store its summary.')}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
                             <div>
                                 <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('本集生成指导', 'This Episode Generation Guidance')}</label>
                                 <div className="text-[11px] text-muted-foreground/80 mb-1.5">
@@ -4164,6 +4307,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     placeholder={t('例如：本集强化反派压迫感；开场必须回收上集门铃声；高潮改在雨中对峙。', 'e.g. Heighten antagonist pressure; open by paying off last episode’s doorbell; move the climax to a rain confrontation.')}
                                 />
                             </div>
+                            )}
 
                             {episodeScriptsProgress && (
                                 <div className="border border-white/10 rounded-lg p-3 bg-black/20 space-y-2">
