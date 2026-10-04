@@ -837,6 +837,7 @@ async def execute_scene_analysis_flow_node(
             from app.services.script_analysis_flow.derived_env_ingest import (  # noqa: WPS433
                 DEGREE_NAME_PATTERN,
                 apply_main_environment_quad_prompts,
+                format_main_environment_quad_apply_failure,
                 main_environment_quad_prompt_ready,
             )
 
@@ -862,6 +863,13 @@ async def execute_scene_analysis_flow_node(
                 rows=ready_rows,
             )
             if not named_rows or len(ready_rows) != len(named_rows) or len(applied.get("updated") or []) != len(ready_rows):
+                failure_message = format_main_environment_quad_apply_failure(named_rows, applied)
+                logger.error(
+                    "[environment_quad] not applied episode_id=%s project_id=%s %s",
+                    node_episode_id,
+                    node_project_id,
+                    failure_message,
+                )
                 upsert_pipeline_node_status(
                     db,
                     project_id=node_project_id,
@@ -870,10 +878,13 @@ async def execute_scene_analysis_flow_node(
                     node_name=node_key,
                     status="failed",
                     error_code="ENVIRONMENT_QUAD_NOT_APPLIED",
-                    error_message="four-grid prompt was not written onto every main environment",
+                    error_message=failure_message,
                 )
                 db.commit()
-                raise HTTPException(status_code=422, detail="ENVIRONMENT_QUAD_NOT_APPLIED")
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"ENVIRONMENT_QUAD_NOT_APPLIED: {failure_message}",
+                )
 
         if node_project_id > 0 and node_episode_id > 0:
             if node_key != "scene_markdown":

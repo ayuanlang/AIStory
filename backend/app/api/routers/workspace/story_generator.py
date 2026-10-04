@@ -703,6 +703,8 @@ class StructureCreativeInputRequest(BaseModel):
 from app.services.story_generator_llm import (  # noqa: E402,F401
     _loads_json5_if_available,
     _CREATIVE_INPUT_STRUCTURE_KEYS,
+    apply_classic_framework_from_llm,
+    ensure_classic_framework_filled,
     format_story_creative_input_block,
     rollup_save_the_cat,
     _sanitize_llm_json_text,
@@ -776,6 +778,8 @@ async def structure_project_creative_input_to_story_fields(
         "Characters and the arc come from Egri's Art of Dramatic Writing: premise, three dimensions, unity of opposites, orchestration, transition. "
         "Plot is the Save the Cat 15-beat sheet, causally chained, not five loose buckets. "
         "Do not wait for or assume web-search evidence. "
+        "I10 / classic_framework is mandatory and must be non-empty. "
+        "Forbidden: omitting the key, \"\", 无, 暂无, N/A, 待定, 推断, or a genre label with no titled work. "
         "I10 must name one primary MODERN/CONTEMPORARY work (literature / film / TV / game; prefer recent decades) as the PLOT-LOGIC framework, "
         "plus AT LEAST 5 auxiliaries (older classics OK only as auxiliaries; each a different dimension) so the 15 beats are not a remake of the primary. "
         "Cross-style transfer is required: keep causal/beat/set-piece logic, "
@@ -821,7 +825,18 @@ async def structure_project_creative_input_to_story_fields(
         llm_config=structure_llm_config,
     )
     normalized = _normalize_story_field_map(data, _CREATIVE_INPUT_STRUCTURE_KEYS)
+    apply_classic_framework_from_llm(normalized, data)
     normalized.update(rollup_save_the_cat(normalized))
+    normalized = await ensure_classic_framework_filled(
+        db=db,
+        user_id=user_id,
+        project_global_info=project_global_info,
+        req=req,
+        normalized=normalized,
+        creative_text=creative_text,
+        project_context=project_context,
+        llm_config=structure_llm_config,
+    )
     normalized["prefill_meta"] = {
         "pipeline": "structure_fill",
         "key_elements": {},

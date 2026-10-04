@@ -235,6 +235,7 @@ def _detect_prompt_template_syntax_warnings(
     syntax_rules: Dict[str, Any],
     parsed_entities: Dict[str, Any] = None,
     sections: Optional[List[str]] = None,
+    check_entity_schema: bool = True,
 ) -> Dict[str, Any]:
     entities_payload = parsed_entities if parsed_entities is not None else _extract_entities_from_json_candidates(text)
     warning_codes: List[str] = []
@@ -290,6 +291,8 @@ def _detect_prompt_template_syntax_warnings(
         if not isinstance(items, list):
             continue
 
+        if not check_entity_schema:
+            continue
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -338,13 +341,31 @@ def _detect_prompt_template_syntax_warnings(
     if mismatches:
         warning_codes.append("ANALYSIS_PROMPT_TEMPLATE_MISMATCH")
         preview = mismatches[:8]
+
+        def _mismatch_fields(item: Dict[str, Any]) -> str:
+            fields = [str(field) for field in (item.get("missing_text_fields") or []) if str(field).strip()]
+            fields.extend(
+                str(field) for field in (item.get("missing_present_fields") or []) if str(field).strip()
+            )
+            fields.extend(
+                f"dependency_strategy.{field}"
+                for field in (item.get("missing_dependency_strategy_keys") or [])
+                if str(field).strip()
+            )
+            if not fields:
+                return "unknown"
+            shown = ",".join(fields[:6])
+            if len(fields) > 6:
+                shown += f"+{len(fields) - 6}"
+            return shown
+
         summary = "; ".join([
-            f"{it.get('section')}:{it.get('name')}"
+            f"{it.get('section')}:{it.get('name')} missing={_mismatch_fields(it)}"
             for it in preview
         ])
         warnings.append(
-            "Entity design schema warning: some assets are missing required fields or have empty prompt/schema values. "
-            f"Examples: {summary}"
+            "主体缺字段或字段为空。"
+            f" Examples: {summary}"
         )
 
     return {

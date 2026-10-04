@@ -783,6 +783,105 @@ def test_story_markdown_and_market_intel_sinks():
     assert "from app.services.market_intel_ops import" in story_src
 
 
+def test_classic_framework_empty_prefill_must_be_filled():
+    import asyncio
+    from fastapi import HTTPException
+    from app.services.story_generator_llm import (
+        apply_classic_framework_from_llm,
+        classic_framework_needs_fill,
+        ensure_classic_framework_filled,
+    )
+
+    filled = (
+        "主框架：《寄生虫》（当代·电影）— 剧情逻辑：以客居身份渗入封闭家庭；"
+        "可拍逻辑：当面同场；转译：本剧宫廷门禁；落拍：01/04/09/14。"
+        "辅助1：《教父》— 贡献维度=关系；机制：家族令传达到场；可拍逻辑：信使；转译：本剧密旨；落拍：06。"
+    )
+    assert classic_framework_needs_fill("")
+    assert classic_framework_needs_fill("   ")
+    assert classic_framework_needs_fill("无")
+    assert classic_framework_needs_fill("暂无")
+    assert classic_framework_needs_fill("N/A")
+    assert classic_framework_needs_fill("推断")
+    assert classic_framework_needs_fill("主框架：无")
+    assert classic_framework_needs_fill("都市情感")
+    assert not classic_framework_needs_fill(filled)
+
+    normalized = {"classic_framework": "", "logline": "想进门"}
+    apply_classic_framework_from_llm(normalized, {"I10": filled, "classic_framework": ""})
+    assert normalized["classic_framework"] == filled
+
+    nested = {"classic_framework": {"text": filled}}
+    normalized = {"classic_framework": str(nested["classic_framework"])}
+    apply_classic_framework_from_llm(normalized, nested)
+    assert normalized["classic_framework"] == filled
+
+    async def _run():
+        calls = {"n": 0}
+
+        async def _fake_call(**kwargs):
+            calls["n"] += 1
+            assert kwargs["billing_item"] == "structure_creative_input_classic_framework"
+            assert "想进门" in kwargs["user_prompt"]
+            if calls["n"] == 1:
+                return '{"classic_framework":"无"}'
+            return '{"经典作品框架":"' + filled.replace('"', "") + '"}'
+
+        import app.services.story_generator_llm as mod
+        original = mod._run_structure_llm_call
+        mod._run_structure_llm_call = _fake_call
+        try:
+            kept = await ensure_classic_framework_filled(
+                db=None,
+                user_id=1,
+                project_global_info={},
+                req=None,
+                normalized={"classic_framework": filled, "logline": "想进门"},
+                creative_text="脑洞",
+                project_context="Project Title: T",
+                max_attempts=2,
+            )
+            assert kept["classic_framework"] == filled
+            assert calls["n"] == 0
+
+            out = await ensure_classic_framework_filled(
+                db=None,
+                user_id=1,
+                project_global_info={},
+                req=None,
+                normalized={"classic_framework": "", "logline": "想进门"},
+                creative_text="脑洞",
+                project_context="Project Title: T",
+                max_attempts=2,
+            )
+            assert out["classic_framework"] == filled
+            assert calls["n"] == 2
+
+            async def _always_empty(**kwargs):
+                return '{"classic_framework":""}'
+
+            mod._run_structure_llm_call = _always_empty
+            try:
+                await ensure_classic_framework_filled(
+                    db=None,
+                    user_id=1,
+                    project_global_info={},
+                    req=None,
+                    normalized={"classic_framework": "待定"},
+                    creative_text="脑洞",
+                    project_context="Project Title: T",
+                    max_attempts=1,
+                )
+                raise AssertionError("empty I10 must fail")
+            except HTTPException as exc:
+                assert exc.status_code == 500
+                assert "classic_framework" in exc.detail
+        finally:
+            mod._run_structure_llm_call = original
+
+    asyncio.run(_run())
+
+
 def test_asset_registration_uses_episode_utils():
     import inspect
     from app.services.generation_runtime import asset_registration as ar

@@ -260,6 +260,247 @@ async def _normalize_llm_json_object_with_repair(
     raise HTTPException(status_code=500, detail=f"Failed to parse LLM JSON for {context}")
 
 
+_CLASSIC_FRAMEWORK_ALIASES = (
+    "classic_framework",
+    "I10",
+    "i10",
+    "经典作品框架",
+)
+
+_CLASSIC_FRAMEWORK_PLACEHOLDERS = frozenset({
+    "",
+    "无",
+    "暂无",
+    "空",
+    "没有",
+    "无内容",
+    "无框架",
+    "暂缺",
+    "待定",
+    "待补",
+    "待补充",
+    "推断",
+    "未知",
+    "不详",
+    "略",
+    "省略",
+    "不适用",
+    "无需",
+    "不必",
+    "留空",
+    "n/a",
+    "na",
+    "none",
+    "null",
+    "nil",
+    "tbd",
+    "todo",
+    "undefined",
+    "-",
+    "—",
+    "——",
+    "/",
+    "／",
+    "{}",
+    "[]",
+})
+
+_CLASSIC_FRAMEWORK_PLACEHOLDER_RE = re.compile(
+    r"^(?:"
+    r"无|暂无|没有|不详|未知|待定|待补|待补充|省略|略|空|不适用|无需|不必|留空|"
+    r"(?:无|暂无|没有|暂缺)(?:相关)?(?:经典)?(?:作品)?(?:框架|参考)?|"
+    r"n/?a|none|null|nil|tbd|todo|undefined"
+    r")$",
+    re.IGNORECASE,
+)
+
+# A real I10 names a primary work plus auxiliaries. Shorter than this is a blank or a genre tag.
+_CLASSIC_FRAMEWORK_MIN_COMPACT = 20
+
+
+def _classic_framework_compact(text: str) -> str:
+    raw = str(text or "").strip()
+    compact = re.sub(r"[\s\u3000]+", "", raw)
+    return compact.strip("。．.，,；;：:、\"'`“”‘’【】[]()（）")
+
+
+def classic_framework_needs_fill(text: str) -> bool:
+    """True when I10 is missing, a placeholder, or too short to be a work framework."""
+    compact = _classic_framework_compact(text)
+    if not compact:
+        return True
+    lowered = compact.lower()
+    if lowered in _CLASSIC_FRAMEWORK_PLACEHOLDERS:
+        return True
+    if _CLASSIC_FRAMEWORK_PLACEHOLDER_RE.fullmatch(lowered):
+        return True
+    unlabeled = re.sub(r"(主框架|辅助\d*|经典作品框架|i10|classicframework)", "", lowered)
+    unlabeled = unlabeled.strip("：:；;，,。．.、")
+    if not unlabeled or unlabeled in _CLASSIC_FRAMEWORK_PLACEHOLDERS:
+        return True
+    if _CLASSIC_FRAMEWORK_PLACEHOLDER_RE.fullmatch(unlabeled):
+        return True
+    return len(compact) < _CLASSIC_FRAMEWORK_MIN_COMPACT
+
+
+def classic_framework_text(val: Any) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, list):
+        parts = [classic_framework_text(item) for item in val]
+        return "\n".join(part for part in parts if part)
+    if isinstance(val, dict):
+        for key in _CLASSIC_FRAMEWORK_ALIASES + ("text", "content", "框架"):
+            if key in val:
+                nested = classic_framework_text(val.get(key))
+                if nested:
+                    return nested
+        if not val:
+            return ""
+        return json.dumps(val, ensure_ascii=False)
+    return str(val).strip()
+
+
+def apply_classic_framework_from_llm(normalized: Dict[str, str], data: Any) -> Dict[str, str]:
+    """Keep a non-empty I10. Salvage it when the model used an alias or a nested value."""
+    if isinstance(data, dict):
+        for key in _CLASSIC_FRAMEWORK_ALIASES:
+            salvaged = classic_framework_text(data.get(key))
+            if not classic_framework_needs_fill(salvaged):
+                normalized["classic_framework"] = salvaged
+                return normalized
+    current = classic_framework_text(normalized.get("classic_framework"))
+    if not classic_framework_needs_fill(current):
+        normalized["classic_framework"] = current
+        return normalized
+    normalized["classic_framework"] = ""
+    return normalized
+
+
+def _classic_framework_story_context(normalized: Dict[str, str]) -> str:
+    lines = []
+    for key, label in (
+        ("logline", "I1"),
+        ("theme", "I2"),
+        ("core_conflict", "I3"),
+        ("three_act", "I3b"),
+        ("background", "I4"),
+        ("characters", "I5"),
+        ("suspense", "I8a"),
+        ("foreshadowing", "I8b"),
+    ):
+        text = _field_text(normalized, key)
+        if text:
+            lines.append(f"{label}: {text}")
+    for key, num, zh, en, act in SAVE_THE_CAT_BEATS:
+        text = _field_text(normalized, key)
+        if text:
+            lines.append(f"节拍{num} {zh} / {en}｜幕={act}: {text}")
+    return "\n".join(lines)
+
+
+def build_classic_framework_fill_prompts(
+    normalized: Dict[str, str],
+    *,
+    creative_text: str,
+    project_context: str,
+) -> tuple[str, str]:
+    system = (
+        "You complete one missing story field. "
+        "Output ONLY a JSON object whose single key is classic_framework. "
+        "The first character must be '{' and the last character must be '}'. "
+        "No markdown fences, no explanation. "
+        "classic_framework MUST be a non-empty string. "
+        "Forbidden values: empty string, 无, 暂无, N/A, 待定, 推断, 空, none, or a genre label with no titled work. "
+        "Name one modern/contemporary primary work (literature, film, TV, or game; recent decades) "
+        "as plot-logic spine, plus at least 5 auxiliary works. "
+        "Older classics may be auxiliaries only. Each auxiliary contributes a different dimension "
+        "(桥段|特效|动作|对白|反转|关系). "
+        "For every work write reusable logic, shootable distance/comms/blocking, 转译 into THIS story, and which beats it lands on. "
+        "Format: 主框架：《作品》（现代/当代·媒介）— 剧情逻辑：…；可拍逻辑：…；转译：…；落拍：…。"
+        "辅助1：《作品》— 贡献维度=…；机制：…；可拍逻辑：…；转译：…；落拍：…。 "
+        "Continue through 辅助5 or more. "
+        "Write the value in the same language as the story fields. "
+        "Do not copy the source work's era, costumes, or locations."
+    )
+    user = (
+        "The structured prefill left I10 classic_framework empty. Fill it now. "
+        "It must match this story's causal logic. Do not start a different plot.\n\n"
+        f"{project_context}\n"
+        f"Wild Creative Brainstorm:\n{creative_text}\n\n"
+        "Structured fields already accepted:\n"
+        f"{_classic_framework_story_context(normalized)}"
+    )
+    return system, user
+
+
+async def ensure_classic_framework_filled(
+    *,
+    db: Session,
+    user_id: int,
+    project_global_info: Optional[Dict[str, Any]],
+    req: Any,
+    normalized: Dict[str, str],
+    creative_text: str,
+    project_context: str,
+    llm_config: Optional[Dict[str, Any]] = None,
+    max_attempts: int = 2,
+) -> Dict[str, str]:
+    """When structured prefill omits I10, call the LLM again until that field is filled."""
+    if not classic_framework_needs_fill(normalized.get("classic_framework", "")):
+        return normalized
+
+    logger.warning("[structure_creative_input] classic_framework empty; requesting required fill")
+    system, user = build_classic_framework_fill_prompts(
+        normalized,
+        creative_text=creative_text,
+        project_context=project_context,
+    )
+    attempts = max(1, int(max_attempts))
+    for attempt in range(1, attempts + 1):
+        raw = await _run_structure_llm_call(
+            db=db,
+            user_id=user_id,
+            project_global_info=project_global_info,
+            req=req,
+            sys_prompt=system,
+            user_prompt=user,
+            billing_item="structure_creative_input_classic_framework",
+            llm_context="structure_creative_input_classic_framework",
+        )
+        data = await _normalize_llm_json_object_with_repair(
+            raw,
+            context="structure_creative_input_classic_framework",
+            llm_config=llm_config,
+        )
+        filled = ""
+        if isinstance(data, dict):
+            for key in _CLASSIC_FRAMEWORK_ALIASES:
+                candidate = classic_framework_text(data.get(key))
+                if not classic_framework_needs_fill(candidate):
+                    filled = candidate
+                    break
+        if filled:
+            normalized["classic_framework"] = filled
+            logger.info(
+                "[structure_creative_input] classic_framework filled on attempt %s len=%s",
+                attempt,
+                len(filled),
+            )
+            return normalized
+        logger.warning(
+            "[structure_creative_input] classic_framework still empty after fill attempt %s",
+            attempt,
+        )
+
+    raise HTTPException(
+        status_code=500,
+        detail="I10 classic_framework remained empty after required completion",
+    )
+
+
 def _normalize_story_field_map(data: Dict[str, Any], keys: List[str]) -> Dict[str, str]:
     normalized: Dict[str, str] = {}
     for key in keys:

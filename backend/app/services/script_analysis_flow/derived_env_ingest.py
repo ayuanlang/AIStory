@@ -1769,10 +1769,49 @@ _QUAD_FINAL_MARKERS = (
 )
 
 
+def missing_main_environment_quad_markers(prompt: str) -> List[str]:
+    """Markers a main-env four-grid prompt still lacks."""
+    text = str(prompt or "")
+    return [marker for marker in _QUAD_FINAL_MARKERS if marker not in text]
+
+
 def main_environment_quad_prompt_ready(prompt: str) -> bool:
     """True when a main-env prompt keeps the opening and the four grid cells."""
-    text = str(prompt or "")
-    return all(marker in text for marker in _QUAD_FINAL_MARKERS)
+    return not missing_main_environment_quad_markers(prompt)
+
+
+def format_main_environment_quad_apply_failure(
+    named_rows: Sequence[Dict[str, Any]],
+    applied: Optional[Dict[str, Any]] = None,
+) -> str:
+    """One readable report: which main env failed, and whether the prompt or the library row is the gap."""
+    rows = [row for row in (named_rows or []) if isinstance(row, dict)]
+    if not rows:
+        return "四宫格未写回：结果里没有可写回的主环境。"
+    applied = applied if isinstance(applied, dict) else {}
+    incomplete: List[str] = []
+    ready_count = 0
+    for row in rows:
+        name = _clean(row.get("name")) or "(未命名)"
+        missing_markers = missing_main_environment_quad_markers(row.get("generation_prompt_cn"))
+        if not missing_markers:
+            ready_count += 1
+            continue
+        incomplete.append(f"{name}缺{'、'.join(missing_markers)}")
+    updated = [str(item).strip() for item in (applied.get("updated") or []) if str(item).strip()]
+    missing_entities = [str(item).strip() for item in (applied.get("missing") or []) if str(item).strip()]
+    parts = [
+        f"四宫格未写回全部主环境。主环境{len(rows)}条，提示词合格{ready_count}条，已写入{len(updated)}条。"
+    ]
+    if incomplete:
+        shown = incomplete[:8]
+        tail = f"；另有{len(incomplete) - len(shown)}条" if len(incomplete) > len(shown) else ""
+        parts.append(f"提示词缺标记：{'；'.join(shown)}{tail}。")
+    if missing_entities:
+        shown_names = missing_entities[:8]
+        tail = f"等{len(missing_entities)}条" if len(missing_entities) > len(shown_names) else ""
+        parts.append(f"库中无同名环境：{'、'.join(shown_names)}{tail}。")
+    return "".join(parts)
 
 
 def apply_main_environment_quad_prompts(

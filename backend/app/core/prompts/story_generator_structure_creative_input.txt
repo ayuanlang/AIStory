@@ -14,7 +14,8 @@ Rules:
 - Infer the dominant language of the input and write every JSON value in that same language.
 - Preserve the user's original **plot ideas, events, lines, and constraints**. Place each idea on the best-fit beat. Do not smear one event across all 15, and do not replace the brainstorm with an unrelated story. **Do not casually copy scene/location names** from the brainstorm or from reference works (see Scene/environment rule below).
 - Do not duplicate the same sentence across keys. `three_act` states the value turn of each act. Each beat states the event. The beat does not repeat the act sentence.
-- If the brainstorm is thin, infer a conservative chain that still serves the user's events. Use "" only when a slot is truly unknowable and inventing it would start a new plot.
+- If the brainstorm is thin, infer a conservative chain that still serves the user's events. Use "" only when a slot is truly unknowable and inventing it would start a new plot. **"classic_framework" is never one of those slots.**
+- **"classic_framework" is mandatory on every response.** Never omit the key. Never output "", 无, 暂无, N/A, 待定, 推断, 空, or a genre label with no work title. If length is tight, shorten the beats. Do not drop I10.
 - Also fill the legacy rollup keys by joining the beats, so older readers stay in sync:
   - "setup" = beats 01–05
   - "development" = beats 06–08
@@ -64,7 +65,7 @@ Also:
 
 Entertainment: pick from 自嘲/自我吐槽, 身份反差, 误会错位, 一本正经胡说八道, 吐槽役/捧逗, 黑色幽默, 反差萌, 谐音/梗台词, 物理滑稽, 自知破绽. If the plot allows, put one funny or self-deprecating configuration in the cast, and plant at least one such beat in 03 or 08. It must serve plot or character.
 
-I10 ("classic_framework") is required whenever the brainstorm has enough conflict to beat out. Never write only a genre label.
+I10 ("classic_framework") is required on every response, including a thin brainstorm. Never leave it blank. Never write only a genre label. An empty or placeholder I10 makes the whole JSON invalid.
 - One **modern/contemporary** primary work (literature / film / TV / game; recent decades) as plot-logic spine. A pre-modern classic is not the default primary. Use one only when no contemporary work has equal causal strength, and say why.
 - At least 5 auxiliaries. Older classics may be auxiliaries. Each auxiliary contributes a **different** dimension (桥段/特效机制/动作语法/对白机制/反转类型/人物关系). They exist to break the primary open. Beats 06–14 must show at least three of those mechanisms. Forbidden: five auxiliaries that retell the primary; a 15-beat sheet that is only the primary with the names changed.
 - Cross-style transfer: borrow causal and staging logic, transcode the skin into this story's era and genre. Do not copy costumes, era, or VFX literally. Do not switch the primary to an ancient source just because this story is costume or xianxia.

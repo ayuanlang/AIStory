@@ -7,6 +7,7 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     format_camera_switch_line,
     parse_derived_env_extract_items,
     extract_grid_cell_prompt,
+    format_main_environment_quad_apply_failure,
     main_environment_quad_prompt_ready,
     parse_quad_degrees_from_prompt,
     resolve_grid_for_angle,
@@ -229,6 +230,35 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     assert main_environment_quad_prompt_ready(opening + cells) is True
     assert main_environment_quad_prompt_ready(opening) is False
     assert main_environment_quad_prompt_ready(cells) is False
+
+
+def test_quad_apply_failure_names_the_gap():
+    opening = "【六面一次】\n北壁=封闭面。\n"
+    cells = (
+        "【四向拼图】\n"
+        "[0度格-左上·北]\n"
+        "[90度格-右上·东]\n"
+        "[180度格-左下·南]\n"
+        "[270度格-右下·西]\n"
+    )
+    incomplete = format_main_environment_quad_apply_failure(
+        [
+            {"name": "重明防务大厦", "generation_prompt_cn": opening},
+            {"name": "摩天云顶天台", "generation_prompt_cn": opening + cells},
+        ],
+        {"updated": ["摩天云顶天台"], "missing": []},
+    )
+    assert "主环境2条，提示词合格1条，已写入1条" in incomplete
+    assert "重明防务大厦缺【四向拼图】、[0度格-左上" in incomplete
+    assert "重明防务大厦缺【六面一次】" not in incomplete
+
+    unmatched = format_main_environment_quad_apply_failure(
+        [{"name": "地下军械库", "generation_prompt_cn": opening + cells}],
+        {"updated": [], "missing": ["地下军械库"]},
+    )
+    assert "提示词合格1条，已写入0条" in unmatched
+    assert "库中无同名环境：地下军械库" in unmatched
+    assert format_main_environment_quad_apply_failure([], {}) == "四宫格未写回：结果里没有可写回的主环境。"
 
 
 def test_build_item_persists_frame_anchors():

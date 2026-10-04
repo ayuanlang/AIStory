@@ -2382,12 +2382,18 @@ async def execute_analyze_scene(
                 prompt_check_sections = ["props"]
             elif is_environment_asset_design:
                 prompt_check_sections = ["environments"]
+            # Quad output is only name + generation_prompt_cn. The full asset schema
+            # would warn on every row and hide the real write-back failure.
+            is_environment_quad_stage = "environment_quad_prompt" in prompt_file_lower
+            if is_environment_quad_stage:
+                prompt_check_sections = ["environments"]
 
             prompt_template_meta = _detect_prompt_template_syntax_warnings(
                 result_content,
                 prompt_syntax_rules,
                 subjects_json,
                 sections=prompt_check_sections,
+                check_entity_schema=not is_environment_quad_stage,
             )
             debug_meta["prompt_template_syntax"] = prompt_template_meta
 
