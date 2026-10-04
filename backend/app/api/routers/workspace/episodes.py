@@ -863,6 +863,16 @@ async def generate_episode_story_dna(
         f"Extra Notes: {req.extra_notes or ''}\n"
     )
     if mode == "global" and prompt_filename == "master_story_architect.md":
+        from app.services.script_mode_helpers import build_story_episode_coverage_block  # noqa: E402
+        from app.services.series_ip_mode import is_series_ip_script_mode  # noqa: E402
+
+        script_mode_for_ip = str(
+            getattr(req, "script_mode", None)
+            or (project.global_info or {}).get("script_mode")
+            or ""
+        ).strip()
+        if not is_series_ip_script_mode(script_mode_for_ip):
+            user_prompt_body += build_story_episode_coverage_block(req.episodes_count)
         user_prompt_body += (
             "\nTruncatable markers (hard): wrap Part 1 in [STORY_DNA_THINKING_START]…[STORY_DNA_THINKING_END]; "
             "wrap §0–§9 (including [SCRIPT_TITLE:…]) in [STORY_DNA_OUTPUT_START]…[STORY_DNA_OUTPUT_END]. "

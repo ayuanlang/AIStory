@@ -87,17 +87,16 @@ async def generate_project_story_dna_global(
         "Do not echo the INPUT block into OUTPUT.\n\n"
     )
 
+    from app.services.script_mode_helpers import build_story_episode_coverage_block  # noqa: E402
     from app.services.series_ip_mode import (  # noqa: E402
         build_series_ip_global_prompt_block,
         is_series_ip_script_mode,
     )
 
     script_mode_for_ip = (getattr(req, "script_mode", None) or "").strip()
-    series_ip_global_block = (
-        build_series_ip_global_prompt_block()
-        if is_series_ip_script_mode(script_mode_for_ip)
-        else ""
-    )
+    series_ip = is_series_ip_script_mode(script_mode_for_ip)
+    series_ip_global_block = build_series_ip_global_prompt_block() if series_ip else ""
+    episode_coverage_block = "" if series_ip else build_story_episode_coverage_block(episodes_count)
     user_prompt = (
         f"{series_ip_global_block}"
         + wrap_story_dna_input_block(
@@ -114,6 +113,7 @@ async def generate_project_story_dna_global(
         f"Global Style: {global_style}\n"
         f"\n"
         f"Episodes Count: {int(episodes_count)}\n"
+        f"{episode_coverage_block}"
         f"Episode Duration (minutes): {_resolve_episode_duration_minutes(getattr(req, 'episode_duration_minutes', None))}\n"
         f"Script Mode: {(getattr(req, 'script_mode', None) or '').strip()}\n"
         f"Target Audience: {(getattr(req, 'target_audience', None) or '').strip()}\n"

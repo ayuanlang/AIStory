@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-from app.services.script_mode_helpers import _build_mandatory_writing_logic, _normalize_script_mode_key
+from app.services.script_mode_helpers import (
+    _build_mandatory_writing_logic,
+    _normalize_script_mode_key,
+    build_story_episode_coverage_block,
+)
 from app.services.series_ip_mode import (
     build_prior_episode_summaries_prompt_block,
     build_series_ip_episode_prompt_block,
@@ -10,6 +14,18 @@ from app.services.series_ip_mode import (
     series_ip_brief_is_usable,
     strip_series_episode_summary,
 )
+
+
+def test_episode_coverage_block_names_every_episode_and_dedups_character_bios():
+    block = build_story_episode_coverage_block(24)
+    assert "EP01–EP24" in block
+    assert "共 24 块" in block
+    assert "[EPISODE_BLOCK_START] 的个数 = 24" in block
+    assert "全剧钩子" in block
+    assert "人物小传只在 §8 Characters 写一次" in block
+    assert "场景和道具只写注册名和一句基本功能" in block
+    assert build_story_episode_coverage_block(0) == ""
+    assert build_story_episode_coverage_block("nope") == ""
 
 
 def test_series_ip_mode_key_does_not_fall_through_to_general_series():

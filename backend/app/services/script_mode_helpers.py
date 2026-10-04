@@ -283,6 +283,28 @@ def _resolve_episode_duration_minutes(value: Any, *, default: int = 1) -> int:
     return n if n > 0 else default
 
 
+def build_story_episode_coverage_block(episodes_count: Any) -> str:
+    """Restate the per-episode gate next to Episodes Count. Series IP mode must not inject this."""
+    try:
+        n = int(episodes_count)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    end = f"EP{n:02d}"
+    return (
+        "【分集完整 — 最高，紧挨集数】\n"
+        f"Episodes Count = {n}。§9 逐集输出 EP01–{end}，共 {n} 块；"
+        "每集一对 [EPISODE_BLOCK_START:EPxx] / [EPISODE_BLOCK_END:EPxx]，集号连续。\n"
+        "每一集单独写本集冲突、转折、Continuity 和集末钩子。"
+        "多集合并、只写头尾、或用「同上/略/类推/中后段加快/见大纲」代替任何一集，都要拆回逐集再交。\n"
+        "篇幅只缩短思考和 §0–§8。人物小传只在 §8 Characters 写一次；"
+        "全剧钩子和其他台账只写角色名与事件，不重贴身份、能力、声线、信念、外形。"
+        "场景和道具只写注册名和一句基本功能；陈设、外形、布局留给分集剧本和环境规划。\n"
+        f"收束前点名：[EPISODE_BLOCK_START] 的个数 = {n}。少一块就补上再收束。\n"
+    )
+
+
 def _build_episode_script_product_specs_block(
     *,
     episodes_count: Any,
