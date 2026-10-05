@@ -282,6 +282,46 @@ export function resolveSubmittedGridRegenPrompt(entity, plan, draft) {
     return ensureDerivedGridRegenAppearanceLock(stripOpeningWorldFromRegenPrompt(text));
 }
 
+const BRACKET_SUBJECT_RE = /\[@([^\]]+)\]/g;
+
+export function bracketSubjectNames(text) {
+    const names = [];
+    const seen = new Set();
+    const re = new RegExp(BRACKET_SUBJECT_RE.source, 'g');
+    let match = re.exec(String(text || ''));
+    while (match) {
+        const name = String(match[1] || '').trim();
+        if (name && !seen.has(name)) {
+            seen.add(name);
+            names.push(name);
+        }
+        match = re.exec(String(text || ''));
+    }
+    return names;
+}
+
+export function filterSubjectAppearanceSection(section, names) {
+    const source = String(section || '').trim();
+    const wanted = new Set((names || []).map((name) => String(name || '').trim()).filter(Boolean));
+    if (!source || !wanted.size) return '';
+    const lines = source.split(/\r?\n/);
+    const kept = lines.filter((line) => {
+        const match = line.match(/\[@([^\]]+)\]/);
+        return Boolean(match) && wanted.has(String(match[1] || '').trim());
+    });
+    if (!kept.length) return '';
+    return ['【主体外形】', ...kept].join('\n').trim();
+}
+
+export function quadSharedHeader(mainPrompt) {
+    const raw = String(mainPrompt || '');
+    const quadAt = raw.indexOf('【四向拼图】');
+    if (quadAt < 0) return '';
+    const titles = listPanelTitles(raw).filter((item) => item.index >= quadAt);
+    const end = titles.length ? titles[0].index : raw.length;
+    return raw.slice(quadAt, end).trim();
+}
+
 function markedSection(text, name) {
     const source = String(text || '');
     const start = source.indexOf(`【${name}】`);
@@ -359,26 +399,28 @@ export function assetCardIntro(entity) {
 }
 
 export function stripOpeningWorldFromRegenPrompt(text) {
-    const openingSection = /【(?:定位|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|本角开篇可见面|主体材质一次)】[\s\S]*?(?=【(?:定位|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|本角开篇可见面|主体材质一次)】|\[(?:0|90|180|270)度格|$)/g;
+    const openingSection = /【(?:六面一次|北壁|东壁|南壁|西壁|中区|光学说明|构图|本角开篇可见面|主体材质一次)】[\s\S]*?(?=【(?:定位|主体外形|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|四向拼图|本角开篇可见面|主体材质一次)】|\[(?:0|90|180|270)度格|$)/g;
     return String(text || '')
         .replace(openingSection, '')
-        .replace(/\[(0|90|180|270)度格[-－—](左上|右上|右下|左下)·[北东南西]\]/g, '[$1度格-$2]')
-        .replace(/^\s*角标=.*$/gm, '')
-        .replace(/[ \t]*角标=[^。\n]*[。]?/g, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
 }
 
-export function buildDerivedGridRegenPrompt({ mainName, grid, cellPrompt }) {
-    const cell = stripOpeningWorldFromRegenPrompt(cellPrompt);
+export function buildDerivedGridRegenPrompt({ mainName, grid, cellPrompt, mainPrompt }) {
+    const cell = String(cellPrompt || '').trim();
+    const names = bracketSubjectNames(cell);
+    const locating = markedSection(mainPrompt, '定位');
+    const subjects = filterSubjectAppearanceSection(markedSection(mainPrompt, '主体外形'), names);
+    const color = markedSection(mainPrompt, '色彩说明');
+    const quad = [quadSharedHeader(mainPrompt), cell].filter(Boolean).join('\n\n');
     return [
         `参照这张参考图。它是主环境「${mainName}」四向拼图中的${grid}，作为该格画面参照。`,
-        '按下面这一格提示词修正生成一张16:9单镜头成片。',
+        '按下面抽出的定位、主体外形、色彩说明和这一格修正生成一张16:9单镜头成片。',
         DERIVED_GRID_REGEN_APPEARANCE_LOCK,
         '成片去掉宫格分割线、角标、格标、度数标和拼缝，仍是这一格里的同一处空间，单张完整镜头。',
         '光学、结构和摆位以这一格画面句为准。',
         '',
-        cell,
+        [locating, subjects, color, quad].filter(Boolean).join('\n\n'),
     ].join('\n');
 }
 
@@ -419,6 +461,7 @@ export function planDerivedGridRegen(entity, entities) {
             mainName: String(mainEntity.name || mainEntity.name_en || '').trim(),
             grid: extracted.grid,
             cellPrompt: extracted.cellPrompt,
+            mainPrompt,
         }),
     };
 }
