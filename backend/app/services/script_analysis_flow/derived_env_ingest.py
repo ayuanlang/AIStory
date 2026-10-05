@@ -1801,16 +1801,16 @@ def main_environment_quad_prompt_ready(prompt: str) -> bool:
 
 
 def compose_stored_quad_prompt(existing_prompt: str, returned_prompt: str) -> str:
-    """Keep the library opening and take only the four cells from the skill output."""
+    """Keep whatever opening the library already has, and take the four cells from the skill output."""
     returned = str(returned_prompt or "").strip()
     quad_at = returned.find("【四向拼图】")
     quad = returned[quad_at:].strip() if quad_at >= 0 else ""
     existing = str(existing_prompt or "")
     opening_at = existing.find("【四向拼图】")
     opening = (existing[:opening_at] if opening_at >= 0 else existing).strip()
-    if opening and "【六面一次】" in opening and quad:
+    if opening and quad:
         return f"{opening}\n\n{quad}".strip()
-    return returned
+    return returned or quad
 
 
 def format_main_environment_quad_apply_failure(
@@ -1833,6 +1833,7 @@ def format_main_environment_quad_apply_failure(
         incomplete.append(f"{name}缺{'、'.join(missing_markers)}")
     updated = [str(item).strip() for item in (applied.get("updated") or []) if str(item).strip()]
     missing_entities = [str(item).strip() for item in (applied.get("missing") or []) if str(item).strip()]
+    skipped = [str(item).strip() for item in (applied.get("skipped") or []) if str(item).strip()]
     parts = [
         f"四宫格未写回全部主环境。主环境{len(rows)}条，提示词合格{ready_count}条，已写入{len(updated)}条。"
     ]
@@ -1844,6 +1845,10 @@ def format_main_environment_quad_apply_failure(
         shown_names = missing_entities[:8]
         tail = f"等{len(missing_entities)}条" if len(missing_entities) > len(shown_names) else ""
         parts.append(f"库中无同名环境：{'、'.join(shown_names)}{tail}。")
+    if skipped:
+        shown_skipped = skipped[:8]
+        tail = f"等{len(skipped)}条" if len(skipped) > len(shown_skipped) else ""
+        parts.append(f"已找到但未写入：{'、'.join(shown_skipped)}{tail}。")
     return "".join(parts)
 
 
@@ -1869,6 +1874,8 @@ def apply_main_environment_quad_prompts(
             skipped.append(name or "")
             continue
         name_expr = func.lower(func.trim(func.coalesce(Entity.name, "")))
+        name_en_expr = func.lower(func.trim(func.coalesce(Entity.name_en, "")))
+        wanted = name.lower()
         existing = (
             db.query(Entity)
             .filter(
@@ -1876,7 +1883,7 @@ def apply_main_environment_quad_prompts(
                 Entity.episode_id == int(episode_id),
                 _active_entity_clause(),
                 func.lower(func.trim(func.coalesce(Entity.type, ""))) == "environment",
-                name_expr == name.lower(),
+                or_(name_expr == wanted, name_en_expr == wanted),
             )
             .first()
         )
@@ -1884,7 +1891,7 @@ def apply_main_environment_quad_prompts(
             missing.append(name)
             continue
         stored = compose_stored_quad_prompt(existing.generation_prompt_cn, prompt)
-        if not main_environment_quad_prompt_ready(stored):
+        if not quad_cells_prompt_ready(stored):
             skipped.append(name)
             continue
         existing.generation_prompt_cn = stored

@@ -241,6 +241,10 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     assert replaced.count("【四向拼图】") == 1
     assert "旧格" not in replaced
     assert "[0度格-左上·北]" in replaced
+    plain = compose_stored_quad_prompt("【构图】\n大厅。\n", cells)
+    assert plain.startswith("【构图】")
+    assert "【四向拼图】" in plain
+    assert compose_stored_quad_prompt("", cells) == cells.strip()
 
 
 def test_quad_apply_failure_names_the_gap():
