@@ -239,6 +239,7 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     draft = (
         "【定位】\n后厨。\n"
         "【主体外形】\n[@灶台]（N-001）外形=双眼灶，材质=黑铸铁，纹样=无，颜色=墨黑。\n"
+        "【色彩说明】\n主冷暖=冷，色系=煤灰蓝。\n"
         "【六面一次】\n北壁=封闭面。\n"
         "【北壁】\n白色瓷砖墙。\n"
     )
@@ -246,6 +247,9 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     assert stored.startswith("【定位】")
     assert "【主体外形】" in stored
     assert "黑铸铁" in stored
+    assert "【色彩说明】" in stored
+    assert "煤灰蓝" in stored
+    assert stored.index("【色彩说明】") < stored.index("【四向拼图】")
     assert "【四向拼图】" in stored
     assert "【六面一次】" not in stored
     assert "【北壁】" not in stored
@@ -271,6 +275,7 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     rewritten = (
         "【定位】\n改过的定位。\n"
         "【主体外形】\n[@灶台]（N-001）外形=双眼灶，材质=白瓷，纹样=无，颜色=白。\n"
+        "【色彩说明】\n主冷暖=暖，色系=改过的色。\n"
         + cells
     )
     copied = compose_stored_quad_prompt(draft, rewritten, draft)
@@ -278,10 +283,16 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     assert "改过的定位" not in copied
     assert "黑铸铁" in copied
     assert "白瓷" not in copied
+    assert "煤灰蓝" in copied
+    assert "改过的色" not in copied
     kept = environment_opening_to_keep(opening + cells, "", "")
     assert kept.startswith("【六面一次】")
     assert "【四向拼图】" not in kept
     assert environment_opening_to_keep(cells, opening, "") == opening.strip()
+    short_prefix = "【定位】\n后厨。\n【主体外形】\n黑铸铁。\n"
+    assert environment_opening_to_keep(short_prefix + cells, draft, short_prefix) == draft.strip()
+    assert "【六面一次】" in environment_opening_to_keep(short_prefix + cells, draft, short_prefix)
+    assert "白色瓷砖" in environment_opening_to_keep(short_prefix + cells, draft, short_prefix)
     named = extract_named_design_openings(
         f"【主环境设计稿】客栈大堂\n{opening}\n【/主环境设计稿】"
     )

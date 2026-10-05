@@ -299,7 +299,7 @@ export function quadImagePrompt(text) {
     const style = raw.slice(0, index).match(/\[Global Style\]\([^)]*\)\.?/);
     const prefix = style ? style[0].trim() : '';
     const quad = raw.slice(index).trim();
-    const kept = [prefix, markedSection(raw, '定位'), markedSection(raw, '主体外形'), quad]
+    const kept = [prefix, markedSection(raw, '定位'), markedSection(raw, '主体外形'), markedSection(raw, '色彩说明'), quad]
         .map((part) => String(part || '').trim())
         .filter(Boolean);
     return kept.join('\n\n');
@@ -316,10 +316,38 @@ function openingBeforeQuad(value) {
     return text.slice(0, index).trim();
 }
 
+const FULL_OPENING_MARKS = ['【六面一次】', '【北壁】', '【光学说明】', '【构图】'];
+
+function looksLikeFullDesignOpening(text) {
+    const body = openingBeforeQuad(text);
+    return Boolean(body) && FULL_OPENING_MARKS.some((mark) => body.includes(mark));
+}
+
 export function mainEnvironmentOpeningDraft(entity) {
     const attrs = readAttrs(entity);
     return openingBeforeQuad(attrs.main_environment_opening || '')
         || openingBeforeQuad(entity?.generation_prompt_cn || entity?.prompt || '');
+}
+
+export function withMainEnvironmentOpening(entity, opening) {
+    const attrs = readAttrs(entity);
+    return {
+        ...entity,
+        description: opening,
+        custom_attributes: { ...attrs, main_environment_opening: opening },
+    };
+}
+
+export function mainEnvironmentDesignDescription(entity) {
+    const attrs = readAttrs(entity);
+    const saved = openingBeforeQuad(attrs.main_environment_opening || '');
+    const description = openingBeforeQuad(entity?.description || '');
+    const prompt = openingBeforeQuad(entity?.generation_prompt_cn || entity?.prompt || '');
+    for (const candidate of [saved, description, prompt]) {
+        if (looksLikeFullDesignOpening(candidate)) return candidate;
+    }
+    if (description && !String(entity?.description || '').includes('【四向拼图】')) return description;
+    return saved;
 }
 
 export function assetCardIntro(entity) {

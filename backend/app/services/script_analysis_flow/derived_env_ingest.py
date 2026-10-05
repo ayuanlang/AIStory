@@ -1816,7 +1816,7 @@ _DESIGN_BLOCK_RE = re.compile(
 )
 
 
-_KEEP_IN_CHINESE_PROMPT = ("定位", "主体外形")
+_KEEP_IN_CHINESE_PROMPT = ("定位", "主体外形", "色彩说明")
 _SECTION_RE = re.compile(
     r"【(定位|主体外形|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|四向拼图)】"
 )
@@ -1860,13 +1860,32 @@ def _opening_body(text: str) -> str:
     return body.strip()
 
 
+_FULL_OPENING_MARKS = ("【六面一次】", "【北壁】", "【光学说明】", "【构图】")
+
+
+def _full_opening_body(text: str) -> str:
+    """Design draft through 【构图】. A 定位/主体外形 prefix is not this opening."""
+    body = _opening_body(text)
+    if body and any(mark in body for mark in _FULL_OPENING_MARKS):
+        return body
+    return ""
+
+
 def environment_opening_to_keep(
     existing_prompt: str,
     saved_opening: str = "",
     named_opening: str = "",
 ) -> str:
-    """Keep one world-lock opening for the next four-grid run. It does not go back into the Chinese prompt."""
-    for candidate in (named_opening, _opening_body(existing_prompt), saved_opening):
+    """Keep one world-lock opening for the next four-grid run and for Description.
+
+    A stored Chinese prompt that only still has 定位 and 主体外形 must not replace
+    the design draft. The opening does not go back into the Chinese prompt.
+    """
+    for candidate in (named_opening, saved_opening, existing_prompt):
+        full = _full_opening_body(candidate)
+        if full:
+            return full
+    for candidate in (named_opening, existing_prompt, saved_opening):
         if _looks_like_environment_opening(candidate):
             return _opening_body(candidate)
     return ""
@@ -1888,9 +1907,10 @@ def compose_stored_quad_prompt(
     returned_prompt: str,
     named_opening: str = "",
 ) -> str:
-    """Chinese prompt keeps 定位 and the one subject-appearance sheet, then the four cells.
+    """Chinese prompt keeps 定位, the appearance sheet, and 【色彩说明】, then the four cells.
 
-    Wall sections and the rest of the opening stay out. Appearance is not copied from those walls.
+    Wall sections stay out. Appearance is not copied from those walls. 【色彩说明】 is copied
+    from the design draft, not rewritten from the four cells.
     """
     draft_sources = (named_opening, existing_prompt)
     parts: List[str] = []
@@ -2004,9 +2024,8 @@ def apply_main_environment_quad_prompts(
         if opening:
             attrs[MAIN_ENVIRONMENT_OPENING_ATTR] = opening
             existing.custom_attributes = attrs
+            existing.description = opening
         existing.generation_prompt_cn = stored
-        existing.description = stored
-        existing.narrative_description = stored
         updated.append(name)
     return {"updated": updated, "missing": missing, "skipped": skipped}
 

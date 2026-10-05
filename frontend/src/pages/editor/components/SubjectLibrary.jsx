@@ -29,6 +29,8 @@ import {
     assetCardIntro,
     isMainEnvironmentEntity,
     planDerivedGridRegen,
+    mainEnvironmentDesignDescription,
+    withMainEnvironmentOpening,
     quadImagePrompt,
     readSavedGridRegenPrompt,
     stripMainEnvironmentDraftWrapper,
@@ -9672,16 +9674,36 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                         ))}
                                     </div>
 
-                                    {/* Description — display falls back to generation prompt when empty */}
+                                    {/* Main environments show the design opening. Other assets fall back to the generation prompt. */}
                                     <div className="space-y-2">
                                         <h4 className="text-xs font-bold uppercase text-muted-foreground flex items-center gap-2">
                                             <FileText size={12} /> Description
                                         </h4>
                                         <textarea 
-                                            value={stripMainEnvironmentDraftWrapper(viewingEntity.description || viewingEntity.generation_prompt_cn || '')}
-                                            onChange={(e) => setViewingEntity(prev => ({ ...prev, description: e.target.value }))}
-                                            onBlur={(e) => handleFieldUpdate('description', e.target.value)}
-                                            className="w-full text-sm leading-relaxed text-white/80 bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-24 resize-none transition-colors"
+                                            value={isMainEnvironmentEntity(viewingEntity)
+                                                ? mainEnvironmentDesignDescription(viewingEntity)
+                                                : stripMainEnvironmentDraftWrapper(viewingEntity.description || viewingEntity.generation_prompt_cn || '')}
+                                            onChange={(e) => {
+                                                const next = e.target.value;
+                                                setViewingEntity((prev) => (
+                                                    isMainEnvironmentEntity(prev)
+                                                        ? withMainEnvironmentOpening(prev, next)
+                                                        : { ...prev, description: next }
+                                                ));
+                                            }}
+                                            onBlur={(e) => {
+                                                const next = e.target.value;
+                                                if (!isMainEnvironmentEntity(viewingEntity) || viewingEntity.id === 'new') {
+                                                    handleFieldUpdate('description', next);
+                                                    return;
+                                                }
+                                                const updated = withMainEnvironmentOpening(viewingEntity, next);
+                                                setViewingEntity(updated);
+                                                setEntities((prev) => prev.map((ent) => (String(ent.id) === String(updated.id) ? updated : ent)));
+                                                setAllEntities((prev) => prev.map((ent) => (String(ent.id) === String(updated.id) ? updated : ent)));
+                                                updateEntity(updated.id, { description: next, main_environment_opening: next }).catch(console.error);
+                                            }}
+                                            className={`w-full text-sm leading-relaxed text-white/80 bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none transition-colors ${isMainEnvironmentEntity(viewingEntity) ? 'min-h-[270px] resize-y' : 'h-24 resize-none'}`}
                                             placeholder="Enter description..."
                                         />
                                     </div>
