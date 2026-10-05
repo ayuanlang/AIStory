@@ -264,18 +264,30 @@ export function readSavedGridRegenPrompt(entity) {
     return String(attrs[GRID_REGEN_PROMPT_ATTR] || '').trim();
 }
 
+export const DERIVED_GRID_REGEN_APPEARANCE_LOCK = '画面中所有主体的大小、形状、细节、色泽、风格都必须与这张主环境参考图完全一致，只能调整摆位、朝向、走向和位置。禁止改大小、改形状、改细节、改色泽或改风格。';
+
+export function ensureDerivedGridRegenAppearanceLock(text) {
+    const value = String(text || '').trim();
+    if (!value || value.includes(DERIVED_GRID_REGEN_APPEARANCE_LOCK)) return value;
+    return `${DERIVED_GRID_REGEN_APPEARANCE_LOCK}\n${value}`;
+}
+
 export function resolveSubmittedGridRegenPrompt(entity, plan, draft) {
-    if (typeof draft === 'string') return draft.trim();
-    const saved = readSavedGridRegenPrompt(entity);
-    if (saved) return saved;
-    return String(plan?.regenPrompt || '').trim();
+    let text = '';
+    if (typeof draft === 'string') text = draft.trim();
+    else {
+        const saved = readSavedGridRegenPrompt(entity);
+        text = saved || String(plan?.regenPrompt || '').trim();
+    }
+    return ensureDerivedGridRegenAppearanceLock(text);
 }
 
 export function buildDerivedGridRegenPrompt({ mainName, grid, cellPrompt }) {
     const cell = String(cellPrompt || '').trim();
     return [
         `参照这张参考图。它是主环境「${mainName}」四向拼图中的${grid}，作为该格画面参照。`,
-        '按下面这一格提示词修正生成一张16:9单镜头成片：保留参考图里已经画对的空间、陈设、材质和光色；提示词里有而参考图漏画或画错的部分，按提示词改正。',
+        '按下面这一格提示词修正生成一张16:9单镜头成片。',
+        DERIVED_GRID_REGEN_APPEARANCE_LOCK,
         '成片去掉宫格分割线、角标、格标、度数标和拼缝，仍是这一格里的同一处空间，单张完整镜头。',
         '',
         cell,

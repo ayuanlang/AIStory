@@ -664,7 +664,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
     const [refImage, setRefImage] = useState(null);
     const [inheritAppearance, setInheritAppearance] = useState(true);
-    const [derivedImageGenMode, setDerivedImageGenMode] = useState('crop');
+    const [derivedImageGenMode, setDerivedImageGenMode] = useState('regen');
     const [gridRegenPreparing, setGridRegenPreparing] = useState(false);
     const [gridRegenPromptDrafts, setGridRegenPromptDrafts] = useState({});
     const [gridRegenPromptSaving, setGridRegenPromptSaving] = useState(false);
@@ -7161,12 +7161,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         );
     };
 
-    const handleGenerateFromPage = async (entityOverride = null, planOverride = null) => {
-        const targetEntity = entityOverride || selectedEntity;
+    const handleGenerateFromPage = async (entityOverride = null, planOverride = null, options = null) => {
+        const overrideEntity = (
+            entityOverride
+            && typeof entityOverride === 'object'
+            && typeof entityOverride.preventDefault !== 'function'
+            && entityOverride.id != null
+        ) ? entityOverride : null;
+        const targetEntity = overrideEntity || selectedEntity;
         const regenRequested = derivedImageGenMode === 'regen' && isGridCropDerivedEntity(targetEntity);
         if (!regenRequested) {
-            if (entityOverride) {
-                await handleGenerate(entityOverride, null, getEntityPromptByLang(entityOverride, effectivePromptSubmitLang));
+            if (overrideEntity) {
+                await handleGenerate(overrideEntity, null, getEntityPromptByLang(overrideEntity, effectivePromptSubmitLang));
             } else {
                 await handleGenerate();
             }
@@ -7201,7 +7207,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 plan.position
             );
             const refs = [cropUrl];
-            if (refImage?.url) refs.push(refImage.url);
+            if (!options?.skipManualRef && refImage?.url) refs.push(refImage.url);
             await handleGenerate(
                 targetEntity,
                 refs,
@@ -7859,15 +7865,36 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         let skippedPromptCount = 0;
         let skippedDepCount = 0;
         let skippedUnresolvedCount = 0;
+        let skippedGridRegenCount = 0;
         let failedAttemptCount = 0;
         let completedRounds = 0;
 
-        const isReady = (ent) => getMissingVisualDependencyTargets(
-            ent,
-            allEntities,
-            (target) => urlMap.get(target.id),
-            nameMap
-        ).length === 0;
+        const entitiesWithLatestImages = () => allEntities.map((item) => {
+            const latest = urlMap.get(item.id);
+            if (!latest || latest === item.image_url) return item;
+            return { ...item, image_url: latest };
+        });
+
+        const gridRegenReadiness = (ent) => {
+            if (!isGridCropDerivedEntity(ent)) return { state: 'plain' };
+            const plan = planDerivedGridRegen(ent, entitiesWithLatestImages());
+            if (plan?.ok) return { state: 'ready', plan };
+            if (plan?.errorCode === 'missing_main_image') {
+                const label = String(plan.mainName || plan.mainEntity?.name || '主环境').trim();
+                return { state: 'waiting', missingLabels: label ? [label] : [] };
+            }
+            return { state: 'blocked', errorCode: plan?.errorCode || 'unavailable' };
+        };
+
+        const isReady = (ent) => {
+            if (getMissingVisualDependencyTargets(
+                ent,
+                allEntities,
+                (target) => urlMap.get(target.id),
+                nameMap
+            ).length > 0) return false;
+            return gridRegenReadiness(ent).state !== 'waiting';
+        };
 
         const countSettled = () => orderedToGenerate.filter(
             (entity) => urlMap.has(entity.id) || permanentSkipIds.has(entity.id)
@@ -7884,14 +7911,49 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 if (shouldStopBatchGenerate()) {
                     return { entity, stopped: true };
                 }
+                const regenReadiness = gridRegenReadiness(entity);
+                if (regenReadiness.state === 'waiting') {
+                    return {
+                        entity,
+                        waitingDependency: true,
+                        missingLabels: regenReadiness.missingLabels,
+                    };
+                }
+                if (regenReadiness.state === 'blocked') {
+                    return {
+                        entity,
+                        skippedGridRegen: true,
+                        regenErrorCode: regenReadiness.errorCode,
+                    };
+                }
                 const epInfo = currentEpisode?.episode_info || {};
                 const preferredImageSize = getEpisodePreferredImageSize(epInfo);
+                const regenPlan = regenReadiness.state === 'ready' ? regenReadiness.plan : null;
+                let promptEntity = entity;
                 let basePrompt = getEntityPromptByLang(entity, resolvedPromptSubmitLang)
                     || entity.description
                     || `A ${entity.type} named ${entity.name}.`;
+                if (regenPlan) {
+                    const regenEntityId = String(entity?.id || '').trim();
+                    const regenDraft = Object.prototype.hasOwnProperty.call(gridRegenPromptDrafts, regenEntityId)
+                        ? gridRegenPromptDrafts[regenEntityId]
+                        : undefined;
+                    basePrompt = resolveSubmittedGridRegenPrompt(entity, regenPlan, regenDraft);
+                    promptEntity = {
+                        ...entity,
+                        negative_prompt_en: DERIVED_GRID_REGEN_NEGATIVE,
+                        custom_attributes: {
+                            ...parseEntityCustomAttributes(entity),
+                            negative_prompt_en: DERIVED_GRID_REGEN_NEGATIVE,
+                        },
+                    };
+                }
 
                 if (!basePrompt || basePrompt.trim().length < 2) {
-                    basePrompt = `${entity.type} ${entity.name}`;
+                    basePrompt = regenPlan ? '' : `${entity.type} ${entity.name}`;
+                }
+                if (regenPlan && !String(basePrompt || '').trim()) {
+                    return { entity, skippedPrompt: true };
                 }
 
                 const finalPrompt = prependEntityGlobalStyleToPromptHead(
@@ -7930,11 +7992,25 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     }
                 });
                 collectPromoSourceImageUrls(entity, project?.global_info).forEach((url) => depUrls.push(url));
-                const uniqueRefs = [...new Set(depUrls)];
+                let uniqueRefs = [...new Set(depUrls)];
+                if (regenPlan) {
+                    const mainId = regenPlan.mainEntity?.id;
+                    const mainUrl = String((mainId != null && urlMap.get(mainId)) || regenPlan.mainEntity?.image_url || '').trim();
+                    uniqueRefs = uniqueRefs.filter((url) => String(url || '').trim() !== mainUrl);
+                    onLog?.(
+                        t(
+                            `批量重生修正：正在裁出${regenPlan.grid}，并按该格提示词生成 ${entity?.name || entity?.name_en || entity?.id}（${regenPlan.mainName}）`,
+                            `Batch regen: cropping ${regenPlan.grid} and generating ${entity?.name || entity?.name_en || entity?.id} from that cell prompt (${regenPlan.mainName})`
+                        ),
+                        'process'
+                    );
+                    const cropUrl = await cropMainEnvironmentGridCell(mainUrl, regenPlan.position);
+                    uniqueRefs = [cropUrl, ...uniqueRefs.filter((url) => url !== cropUrl)];
+                }
 
                 if (onLog) {
                     onLog(
-                        `Batch subject refs: entity=${entity?.name || entity?.name_en || entity?.id}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}`,
+                        `Batch subject refs: entity=${entity?.name || entity?.name_en || entity?.id}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}${regenPlan ? ', mode=grid_regen' : ''}`,
                         'process'
                     );
                 }
@@ -7944,8 +8020,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = buildEntityImageGenerationPrompts(
                         finalPrompt,
                         basePrompt,
-                        entity,
+                        promptEntity,
                         allEntities
+                    );
+                    rememberSubmittedImagePrompt(
+                        entity,
+                        submissionPrompt,
+                        submittedImagePromptKind(entity, submissionPrompt)
                     );
                     const res = await generateImage(submissionPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                         function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
@@ -7959,6 +8040,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         prompt_language: resolvedPromptSubmitLang,
                         asset_type: 'subject',
                         ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                        ...(regenPlan ? { aspect_ratio: '16:9' } : {}),
                         negative_prompt: entityNegativePrompt,
                         // When account parallel slots are full, poll-wait (1 min) and resubmit;
                         // cancel promptly if the batch is stopped.
@@ -8213,6 +8295,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                 ),
                                 'warning'
                             );
+                        } else if (settledTask.value?.skippedGridRegen) {
+                            skippedGridRegenCount += 1;
+                            permanentSkipIds.add(entity.id);
+                            clearLocalSubjectImageJobState(entity.id);
+                            onLog?.(
+                                t(
+                                    `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 无法重生修正。${derivedGridRegenErrorText(settledTask.value?.regenErrorCode)}`,
+                                    `Batch image generation skipped: ${entity?.name || entity?.name_en || entity?.id} cannot use grid regen. ${derivedGridRegenErrorText(settledTask.value?.regenErrorCode)}`
+                                ),
+                                'warning'
+                            );
                         } else if (settledTask.value?.waitingDependency) {
                             // Race: deps vanished after dequeue — park and re-check later (do not permanent-skip).
                             waitingQueue.push(entity);
@@ -8369,6 +8462,24 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         );
                         return;
                     }
+                    const regenReadiness = gridRegenReadiness(entity);
+                    if (regenReadiness.state === 'waiting') {
+                        skipEntityForMissingDependencies(entity, regenReadiness.missingLabels);
+                        return;
+                    }
+                    if (regenReadiness.state === 'blocked') {
+                        skippedGridRegenCount += 1;
+                        permanentSkipIds.add(entity.id);
+                        clearLocalSubjectImageJobState(entity.id);
+                        onLog?.(
+                            t(
+                                `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 无法重生修正。${derivedGridRegenErrorText(regenReadiness.errorCode)}`,
+                                `Batch image generation skipped: ${entity?.name || entity?.name_en || entity?.id} cannot use grid regen. ${derivedGridRegenErrorText(regenReadiness.errorCode)}`
+                            ),
+                            'warning'
+                        );
+                        return;
+                    }
                     // Ready but still no image after all rounds (typically repeated generation failures).
                     skippedUnresolvedCount += 1;
                     permanentSkipIds.add(entity.id);
@@ -8385,7 +8496,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
             if (subjectBatchGenerateSessionRef.current !== batchSessionId || subjectBatchGenerateStopRequestedRef.current) {
                 alert(t('批量生图已停止。', 'Batch image generation stopped.'));
-            } else if (skippedDepCount > 0 || skippedPromptCount > 0 || skippedUnresolvedCount > 0 || failedAttemptCount > 0) {
+            } else if (skippedDepCount > 0 || skippedPromptCount > 0 || skippedUnresolvedCount > 0 || skippedGridRegenCount > 0 || failedAttemptCount > 0) {
                 const summaryParts = [];
                 if (completedRounds > 1) {
                     summaryParts.push(
@@ -8405,6 +8516,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 if (skippedPromptCount > 0) {
                     summaryParts.push(
                         t(`跳过 ${skippedPromptCount} 个提示词过短项`, `skipped ${skippedPromptCount} item(s) with short prompts`)
+                    );
+                }
+                if (skippedGridRegenCount > 0) {
+                    summaryParts.push(
+                        t(`跳过 ${skippedGridRegenCount} 个无法重生修正项`, `skipped ${skippedGridRegenCount} item(s) that could not use grid regen`)
                     );
                 }
                 if (failedAttemptCount > 0) {
@@ -9181,11 +9297,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                 <button 
                                     onClick={(e) => {
                                         e.stopPropagation();
-                                        handleGenerate(entity, null, getEntityPromptByLang(entity, effectivePromptSubmitLang));
+                                        handleGenerateFromPage(entity, null, { skipManualRef: true });
                                     }}
                                     disabled={imageActionLocked}
                                     className="p-1.5 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title={t('生成图片', 'Generate Image')}
+                                    title={isGridCropDerivedEntity(entity) && derivedImageGenMode === 'regen'
+                                        ? t('重生修正', 'Regen from cell')
+                                        : t('生成图片', 'Generate Image')}
                                 >
                                     <Wand2 size={16} />
                                 </button>
