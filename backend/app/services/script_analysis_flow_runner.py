@@ -837,6 +837,7 @@ async def execute_scene_analysis_flow_node(
             from app.services.script_analysis_flow.derived_env_ingest import (  # noqa: WPS433
                 DEGREE_NAME_PATTERN,
                 apply_main_environment_quad_prompts,
+                extract_named_design_openings,
                 format_main_environment_quad_apply_failure,
                 quad_cells_prompt_ready,
             )
@@ -861,6 +862,7 @@ async def execute_scene_analysis_flow_node(
                 project_id=node_project_id,
                 episode_id=node_episode_id,
                 rows=ready_rows,
+                openings=extract_named_design_openings(str(raw_payload.get("text") or "")),
             )
             if not named_rows or len(ready_rows) != len(named_rows) or len(applied.get("updated") or []) != len(ready_rows):
                 failure_message = format_main_environment_quad_apply_failure(named_rows, applied)

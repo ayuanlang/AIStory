@@ -26,10 +26,12 @@ import {
     gridCropPixels,
     isEnvironmentEntity,
     isGridCropDerivedEntity,
+    assetCardIntro,
     isMainEnvironmentEntity,
     planDerivedGridRegen,
     quadImagePrompt,
     readSavedGridRegenPrompt,
+    stripMainEnvironmentDraftWrapper,
     resolveSubmittedGridRegenPrompt,
 } from '../derivedGridRegen';
 import { 
@@ -9387,7 +9389,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             <div className="text-[10px] text-white/55 uppercase tracking-[0.16em] mt-1">{subTab}</div>
                             <div className="mt-3 text-[10px] text-white/45 uppercase tracking-[0.16em]">{t('Subject介绍', 'Subject Intro')}</div>
                             <div className="text-xs text-white/70 mt-1 line-clamp-3 leading-relaxed min-h-[3.5rem]">
-                                {String(entity.generation_prompt_cn || entity.description || '').trim() || t('暂无介绍，点击卡片可编辑主体描述。', 'No intro yet. Click the card to edit subject description.')}
+                                {assetCardIntro(entity) || t('暂无介绍，点击卡片可编辑主体描述。', 'No intro yet. Click the card to edit subject description.')}
                             </div>
                         </div>
                     </div>
@@ -9676,7 +9678,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                             <FileText size={12} /> Description
                                         </h4>
                                         <textarea 
-                                            value={viewingEntity.description || viewingEntity.generation_prompt_cn || ''}
+                                            value={stripMainEnvironmentDraftWrapper(viewingEntity.description || viewingEntity.generation_prompt_cn || '')}
                                             onChange={(e) => setViewingEntity(prev => ({ ...prev, description: e.target.value }))}
                                             onBlur={(e) => handleFieldUpdate('description', e.target.value)}
                                             className="w-full text-sm leading-relaxed text-white/80 bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-24 resize-none transition-colors"
@@ -9764,7 +9766,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                              <div className="space-y-1">
                                                 <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('叙事描述', 'Narrative Description')}</h4>
                                                 <textarea 
-                                                    value={viewingEntity.narrative_description || ''}
+                                                    value={stripMainEnvironmentDraftWrapper(viewingEntity.narrative_description || '')}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, narrative_description: e.target.value }))}
                                                     onBlur={(e) => handleFieldUpdate('narrative_description', e.target.value)}
                                                     className="w-full text-sm bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-24 resize-none"
@@ -9807,7 +9809,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                             <div>
                                                 <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('中文提示词', 'Chinese Prompt')}</div>
                                                 <textarea
-                                                    value={viewingEntity.generation_prompt_cn || ''}
+                                                    value={stripMainEnvironmentDraftWrapper(viewingEntity.generation_prompt_cn || '')}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_cn: e.target.value }))}
                                                     onBlur={(e) => handleFieldUpdate('generation_prompt_cn', e.target.value)}
                                                     className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[270px] resize-y"
@@ -10264,7 +10266,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                     <div>
                                                         <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('中文提示词', 'Chinese Prompt')}</div>
                                                         <textarea
-                                                            value={viewingEntity.generation_prompt_cn || ''}
+                                                            value={stripMainEnvironmentDraftWrapper(viewingEntity.generation_prompt_cn || '')}
                                                             onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_cn: e.target.value }))}
                                                             onBlur={(e) => handleFieldUpdate('generation_prompt_cn', e.target.value)}
                                                             className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[270px] resize-y"

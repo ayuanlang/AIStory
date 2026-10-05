@@ -14,6 +14,7 @@ import { BookOpen, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users,
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
+import { mainEnvironmentOpeningDraft } from '../derivedGridRegen';
 import {
     getEpisodeAnalysisRun,
     releaseEpisodeAnalysisRun,
@@ -32516,6 +32517,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             name: String(item.name).trim(),
             hasQuad: mainEnvironmentPromptHasQuad(item.generation_prompt_cn),
             prompt: String(item.generation_prompt_cn || ''),
+            opening: mainEnvironmentOpeningDraft(item),
         }))
     );
 
@@ -32582,15 +32584,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!quadPrompt) {
                 throw new Error(t('四宫格技能缺失。', 'The four-grid skill is missing.'));
             }
-            const openingDraft = (prompt) => {
-                const text = String(prompt || '').replace(/\r\n/g, '\n').trim();
-                const match = text.match(/(?:^|\n)【四向拼图】/);
-                if (!match || match.index == null) return text;
-                const opening = text.slice(0, match.index).trim();
-                return opening || text;
-            };
+            const missingOpening = mains.filter((item) => !String(item.opening || '').trim());
+            if (missingOpening.length) {
+                throw new Error(t(
+                    `这些主环境没有可旋转的开篇：${missingOpening.map((item) => item.name).join('、')}`,
+                    `These main environments have no opening to rotate: ${missingOpening.map((item) => item.name).join(', ')}`
+                ));
+            }
             const source = mains.map((item) => (
-                `【主环境设计稿】${String(item.name).trim()}\n${openingDraft(item.prompt)}\n【/主环境设计稿】`
+                `【主环境设计稿】${String(item.name).trim()}\n${String(item.opening).trim()}\n【/主环境设计稿】`
             )).join('\n\n');
             // A stopped run's clock is already zero. This rerun is a new action
             // and gets its own 60-minute budget from now.

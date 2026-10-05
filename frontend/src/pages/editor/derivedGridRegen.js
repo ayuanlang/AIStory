@@ -292,6 +292,31 @@ export function quadImagePrompt(text) {
     return prefix ? `${prefix}\n${quad}` : quad;
 }
 
+export function stripMainEnvironmentDraftWrapper(text) {
+    return String(text || '').replace(/^【\/?主环境设计稿】[^\n]*\n?/gm, '').trim();
+}
+
+function openingBeforeQuad(value) {
+    const text = stripMainEnvironmentDraftWrapper(value);
+    const index = text.indexOf('【四向拼图】');
+    if (index < 0) return text;
+    return text.slice(0, index).trim();
+}
+
+export function mainEnvironmentOpeningDraft(entity) {
+    const attrs = readAttrs(entity);
+    return openingBeforeQuad(attrs.main_environment_opening || '')
+        || openingBeforeQuad(entity?.generation_prompt_cn || entity?.prompt || '');
+}
+
+export function assetCardIntro(entity) {
+    const raw = String(entity?.generation_prompt_cn || entity?.description || '');
+    if (isMainEnvironmentEntity(entity) && raw.includes('【四向拼图】')) {
+        return quadImagePrompt(raw);
+    }
+    return stripMainEnvironmentDraftWrapper(raw);
+}
+
 export function stripOpeningWorldFromRegenPrompt(text) {
     const openingSection = /【(?:定位|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|本角开篇可见面|主体材质一次)】[\s\S]*?(?=【(?:定位|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|本角开篇可见面|主体材质一次)】|\[(?:0|90|180|270)度格|$)/g;
     return String(text || '')

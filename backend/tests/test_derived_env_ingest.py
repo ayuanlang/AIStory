@@ -8,6 +8,8 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     parse_derived_env_extract_items,
     extract_grid_cell_prompt,
     compose_stored_quad_prompt,
+    environment_opening_to_keep,
+    extract_named_design_openings,
     format_main_environment_quad_apply_failure,
     main_environment_quad_prompt_ready,
     quad_cells_prompt_ready,
@@ -235,16 +237,34 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     assert quad_cells_prompt_ready(cells) is True
     assert quad_cells_prompt_ready(opening) is False
     stored = compose_stored_quad_prompt(opening, cells)
-    assert stored.startswith("【六面一次】")
-    assert "北壁=封闭面" in stored
+    assert stored.startswith("【四向拼图】")
+    assert "【六面一次】" not in stored
+    assert "北壁=封闭面" not in stored
     replaced = compose_stored_quad_prompt(opening + "【四向拼图】\n旧格\n", cells)
     assert replaced.count("【四向拼图】") == 1
     assert "旧格" not in replaced
+    assert "【六面一次】" not in replaced
     assert "[0度格-左上·北]" in replaced
     plain = compose_stored_quad_prompt("【构图】\n大厅。\n", cells)
-    assert plain.startswith("【构图】")
-    assert "【四向拼图】" in plain
+    assert plain.startswith("【四向拼图】")
+    assert "【构图】" not in plain
     assert compose_stored_quad_prompt("", cells) == cells.strip()
+    echoed = compose_stored_quad_prompt(
+        opening,
+        "【主环境设计稿】客栈大堂\n" + opening + cells,
+    )
+    assert echoed.startswith("【四向拼图】")
+    assert "【主环境设计稿】" not in echoed
+    assert "【六面一次】" not in echoed
+    kept = environment_opening_to_keep(opening + cells, "", "")
+    assert kept.startswith("【六面一次】")
+    assert "【四向拼图】" not in kept
+    assert environment_opening_to_keep(cells, opening, "") == opening.strip()
+    named = extract_named_design_openings(
+        f"【主环境设计稿】客栈大堂\n{opening}\n【/主环境设计稿】"
+    )
+    assert named["客栈大堂"].startswith("【六面一次】")
+    assert environment_opening_to_keep(cells, "旧开篇", named["客栈大堂"]) == named["客栈大堂"]
 
 
 def test_quad_apply_failure_names_the_gap():

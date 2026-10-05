@@ -1800,17 +1800,75 @@ def main_environment_quad_prompt_ready(prompt: str) -> bool:
     return not missing_main_environment_quad_markers(prompt)
 
 
+_DRAFT_WRAPPER_RE = re.compile(r"^【/?主环境设计稿】[^\n]*\n?", re.MULTILINE)
+
+
+def strip_main_environment_draft_wrapper(text: str) -> str:
+    """Drop the quad-skill input label if a model echoed it into the stored prompt."""
+    return _DRAFT_WRAPPER_RE.sub("", str(text or "")).strip()
+
+
+MAIN_ENVIRONMENT_OPENING_ATTR = "main_environment_opening"
+_OPENING_MARKS = ("【定位】", "【六面一次】", "【构图】", "【北壁】")
+_DESIGN_BLOCK_RE = re.compile(
+    r"【主环境设计稿】([^\n]+)\n(.*?)【/主环境设计稿】",
+    re.DOTALL,
+)
+
+
+def _quad_only_prompt(prompt: str) -> str:
+    """The Chinese image prompt is the four cells. Drop any opening echoed in front."""
+    text = strip_main_environment_draft_wrapper(prompt)
+    quad_at = text.find("【四向拼图】")
+    if quad_at < 0:
+        return ""
+    return text[quad_at:].strip()
+
+
+def _looks_like_environment_opening(text: str) -> bool:
+    body = strip_main_environment_draft_wrapper(text)
+    quad_at = body.find("【四向拼图】")
+    if quad_at >= 0:
+        body = body[:quad_at]
+    body = body.strip()
+    return bool(body) and any(mark in body for mark in _OPENING_MARKS)
+
+
+def _opening_body(text: str) -> str:
+    body = strip_main_environment_draft_wrapper(text)
+    quad_at = body.find("【四向拼图】")
+    if quad_at >= 0:
+        body = body[:quad_at]
+    return body.strip()
+
+
+def environment_opening_to_keep(
+    existing_prompt: str,
+    saved_opening: str = "",
+    named_opening: str = "",
+) -> str:
+    """Keep one world-lock opening for the next four-grid run. It does not go back into the Chinese prompt."""
+    for candidate in (named_opening, _opening_body(existing_prompt), saved_opening):
+        if _looks_like_environment_opening(candidate):
+            return _opening_body(candidate)
+    return ""
+
+
+def extract_named_design_openings(source_text: str) -> Dict[str, str]:
+    """Name → opening from the quad skill's input blocks."""
+    found: Dict[str, str] = {}
+    for match in _DESIGN_BLOCK_RE.finditer(str(source_text or "")):
+        name = _clean(match.group(1))
+        body = _opening_body(match.group(2))
+        if name and _looks_like_environment_opening(body):
+            found[name.lower()] = body
+    return found
+
+
 def compose_stored_quad_prompt(existing_prompt: str, returned_prompt: str) -> str:
-    """Keep whatever opening the library already has, and take the four cells from the skill output."""
-    returned = str(returned_prompt or "").strip()
-    quad_at = returned.find("【四向拼图】")
-    quad = returned[quad_at:].strip() if quad_at >= 0 else ""
-    existing = str(existing_prompt or "")
-    opening_at = existing.find("【四向拼图】")
-    opening = (existing[:opening_at] if opening_at >= 0 else existing).strip()
-    if opening and quad:
-        return f"{opening}\n\n{quad}".strip()
-    return returned or quad
+    """Replace the asset Chinese prompt with the four cells and drop the previous opening."""
+    del existing_prompt
+    return _quad_only_prompt(returned_prompt)
 
 
 def format_main_environment_quad_apply_failure(
@@ -1858,6 +1916,7 @@ def apply_main_environment_quad_prompts(
     project_id: int,
     episode_id: int,
     rows: Sequence[Dict[str, Any]],
+    openings: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Write the final four-grid prompt onto existing main-environment rows."""
     updated: List[str] = []
@@ -1894,6 +1953,18 @@ def apply_main_environment_quad_prompts(
         if not quad_cells_prompt_ready(stored):
             skipped.append(name)
             continue
+        attrs = dict(existing.custom_attributes) if isinstance(existing.custom_attributes, dict) else {}
+        named_opening = ""
+        if isinstance(openings, dict):
+            named_opening = str(openings.get(name.lower()) or "")
+        opening = environment_opening_to_keep(
+            existing.generation_prompt_cn,
+            str(attrs.get(MAIN_ENVIRONMENT_OPENING_ATTR) or ""),
+            named_opening,
+        )
+        if opening:
+            attrs[MAIN_ENVIRONMENT_OPENING_ATTR] = opening
+            existing.custom_attributes = attrs
         existing.generation_prompt_cn = stored
         existing.description = stored
         existing.narrative_description = stored

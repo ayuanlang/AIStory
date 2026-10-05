@@ -19,6 +19,8 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     SOURCE_FLAG,
     extract_grid_cell_prompt,
     main_environment_quad_prompt_ready,
+    quad_cells_prompt_ready,
+    strip_main_environment_draft_wrapper,
 )
 from app.services.soft_delete import _active_entity_clause
 
@@ -249,20 +251,32 @@ def opening_error_claimed(summary: str) -> bool:
     return str(summary or "").strip().startswith(OPENING_ERROR_PREFIX)
 
 
+def _stored_opening(text: str) -> str:
+    opening, _quad = split_opening_and_quad(text)
+    return strip_main_environment_draft_wrapper(opening)
+
+
 def graft_quad_onto_opening(original: str, revised: str) -> str:
-    """Keep the main-environment opening and take only the rewritten grids."""
-    opening, _old_quad = split_opening_and_quad(original)
+    """Keep a stored opening when the asset still has one, and take only the rewritten grids.
+
+    The asset Chinese prompt is the four cells. An older row may still have the
+    opening in front; that opening stays. A cells-only row is replaced with the cells.
+    """
+    opening = _stored_opening(original)
     _revised_opening, revised_quad = split_opening_and_quad(revised)
-    if not opening.strip() or QUAD_MARK not in str(original or ""):
+    revised_quad = strip_main_environment_draft_wrapper(revised_quad)
+    if QUAD_MARK not in str(original or ""):
         raise ConsistencyApplyError("主环境提示词没有可保留的开篇。")
     if not revised_quad.strip():
         raise ConsistencyApplyError("改写结果缺少【四向拼图】，不能改开篇。")
-    grafted = opening + revised_quad
+    if not opening.strip():
+        return revised_quad
+    grafted = f"{opening.rstrip()}\n{revised_quad.lstrip()}"
     problem = _prompt_keeps_world_lock(original, grafted)
     if problem:
         raise ConsistencyApplyError(problem)
     kept, _quad = split_opening_and_quad(grafted)
-    if kept != opening:
+    if kept.strip() != opening.strip():
         raise ConsistencyApplyError("开篇被改动了。")
     return grafted
 
@@ -286,8 +300,12 @@ def _prompt_keeps_world_lock(original: str, revised: str) -> Optional[str]:
     target = str(revised or "")
     if len(target) < max(80, int(len(source) * 0.45)):
         return "改写结果过短，没有保留原提示词。"
-    if not main_environment_quad_prompt_ready(target):
-        return "改写结果缺少开篇或四个宫格标题。"
+    source_opening = _stored_opening(source)
+    if source_opening.strip():
+        if not main_environment_quad_prompt_ready(target):
+            return "改写结果缺少开篇或四个宫格标题。"
+    elif not quad_cells_prompt_ready(target):
+        return "改写结果缺少四个宫格标题。"
     for key in ("占地=", "竖边="):
         if key in source and key not in target:
             return f"改写结果丢掉了开篇的{key.rstrip('=')}。"
