@@ -675,7 +675,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return planDerivedGridRegen(selectedEntity, allEntities);
     }, [selectedEntity, allEntities]);
     useEffect(() => {
-        setDerivedImageGenMode('crop');
+        setDerivedImageGenMode('regen');
     }, [selectedEntity?.id]);
     /** Dependency tokens excluded from this generation's asset-reference refs (session-only). */
     const [excludedVisualDepKeys, setExcludedVisualDepKeys] = useState([]);
@@ -696,7 +696,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return planDerivedGridRegen(viewingEntity, allEntities);
     }, [viewingEntity, allEntities]);
     useEffect(() => {
-        setDerivedImageGenMode('crop');
+        setDerivedImageGenMode('regen');
     }, [viewingEntity?.id]);
     useEffect(() => {
         const syncDraft = (entity, plan) => {

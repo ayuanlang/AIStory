@@ -5708,6 +5708,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [retryingAssetCategoryKeys, setRetryingAssetCategoryKeys] = useState([]);
     const [isRegeneratingDerivedEnvs, setIsRegeneratingDerivedEnvs] = useState(false);
     const [environmentQuadRerunActive, setEnvironmentQuadRerunActive] = useState(false);
+    const [environmentQuadRerunModal, setEnvironmentQuadRerunModal] = useState({
+        open: false,
+        mode: 'all',
+        name: '',
+        candidates: [],
+    });
     const [liveAssetDesignTaskKeys, setLiveAssetDesignTaskKeys] = useState([]);
     const [systemPrompt, setSystemPrompt] = useState('');
     const [userPrompt, setUserPrompt] = useState('');
@@ -32501,7 +32507,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
-    const handleRerunEnvironmentQuad = async () => {
+    const collectRerunnableMainEnvironments = (entities) => (
+        (Array.isArray(entities) ? entities : []).filter((item) => (
+            isMainEnvironmentCompletenessAsset(item)
+            && String(item?.name || '').trim()
+            && String(item?.generation_prompt_cn || '').trim()
+        )).map((item) => ({
+            name: String(item.name).trim(),
+            hasQuad: mainEnvironmentPromptHasQuad(item.generation_prompt_cn),
+            prompt: String(item.generation_prompt_cn || ''),
+        }))
+    );
+
+    const openEnvironmentQuadRerunModal = async () => {
         if (!projectId || !activeEpisode?.id || environmentQuadRerunActive) return;
         if (isAssetCategoryBusy('environments')) {
             reportAnalysisPanelNotice(t(
@@ -32510,19 +32528,45 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ), 'warning');
             return;
         }
-        const ok = await confirmUiMessage(t(
-            '将按已入库的主环境开篇，重新生成主环境四宫格。主环境实体、衍生环境和分镜都保留。是否继续？',
-            'This reruns the main-environment four-grid from the saved opening draft. Main-environment rows, derived environments, and storyboards stay. Continue?'
-        ));
-        if (!ok) return;
+        const owned = await refreshEpisodeOwnedEntities();
+        const candidates = collectRerunnableMainEnvironments(owned);
+        if (!candidates.length) {
+            reportAnalysisPanelNotice(t(
+                '没有可重跑的主环境设计稿。',
+                'No main-environment draft is available to rerun.'
+            ), 'warning');
+            return;
+        }
+        setEnvironmentQuadRerunModal({
+            open: true,
+            mode: 'all',
+            name: candidates[0].name,
+            candidates,
+        });
+    };
+
+    const handleRerunEnvironmentQuad = async (selectedName = '') => {
+        if (!projectId || !activeEpisode?.id || environmentQuadRerunActive) return;
+        if (isAssetCategoryBusy('environments')) {
+            reportAnalysisPanelNotice(t(
+                '主环境还在生成，请等环境生成结束后再重跑四宫格。',
+                'Main-environment design is still running. Rerun the four-grid after it finishes.'
+            ), 'warning');
+            return;
+        }
+        const wantedName = String(selectedName || '').trim();
+        setEnvironmentQuadRerunModal((prev) => ({ ...prev, open: false }));
         setEnvironmentQuadRerunActive(true);
-        onLog?.(t('正在重跑主环境四宫格…', 'Rerunning the main-environment four-grid…'), 'process');
+        onLog?.(
+            wantedName
+                ? t(`正在重跑主环境四宫格：${wantedName}`, `Rerunning the main-environment four-grid: ${wantedName}`)
+                : t('正在重跑全部主环境四宫格…', 'Rerunning the four-grid for every main environment…'),
+            'process'
+        );
         try {
             const owned = await refreshEpisodeOwnedEntities();
-            const mains = (Array.isArray(owned) ? owned : []).filter((item) => (
-                isMainEnvironmentCompletenessAsset(item)
-                && String(item?.name || '').trim()
-                && String(item?.generation_prompt_cn || '').trim()
+            const mains = collectRerunnableMainEnvironments(owned).filter((item) => (
+                !wantedName || item.name === wantedName
             ));
             if (!mains.length) {
                 reportAnalysisPanelNotice(t(
@@ -32546,7 +32590,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return opening || text;
             };
             const source = mains.map((item) => (
-                `【主环境设计稿】${String(item.name).trim()}\n${openingDraft(item.generation_prompt_cn)}\n【/主环境设计稿】`
+                `【主环境设计稿】${String(item.name).trim()}\n${openingDraft(item.prompt)}\n【/主环境设计稿】`
             )).join('\n\n');
             // A stopped run's clock is already zero. This rerun is a new action
             // and gets its own 60-minute budget from now.
@@ -32586,10 +32630,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     `Four-grid prompts are incomplete: ${readyCount}/${mains.length}`
                 ));
             }
-            onLog?.(t(
-                `主环境四宫格已重跑，写回 ${readyCount} 个主环境。`,
-                `Main-environment four-grid rerun wrote ${readyCount} prompt(s).`
-            ), 'success');
+            onLog?.(
+                wantedName
+                    ? t(`主环境四宫格已重跑：${wantedName}`, `Main-environment four-grid rerun wrote ${wantedName}.`)
+                    : t(
+                        `主环境四宫格已重跑，写回 ${readyCount} 个主环境。`,
+                        `Main-environment four-grid rerun wrote ${readyCount} prompt(s).`
+                    ),
+                'success'
+            );
         } catch (error) {
             const detail = String(error?.response?.data?.detail || error?.message || error || '');
             const message = t(`重跑主环境四宫格失败：${detail}`, `Main-environment four-grid rerun failed: ${detail}`);
@@ -34912,13 +34961,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         if (kind === 'environment_quad') {
-            void handleRerunEnvironmentQuad();
+            void openEnvironmentQuadRerunModal();
             return;
         }
         if (kind === 'scene' && inspect.stepKey && inspect.sceneId) {
             void handleRerunSceneMatrixNode(inspect.stepKey, inspect.sceneId);
         }
-    }, [failedNodeInspect, handleRerunEnvironmentQuad, handleRerunSceneMatrixNode, handleRerunStage1NodeOnly, openPhase2RerunModal]);
+    }, [failedNodeInspect, handleRerunSceneMatrixNode, handleRerunStage1NodeOnly, openEnvironmentQuadRerunModal, openPhase2RerunModal]);
 
     const stage2StageCards = useMemo(() => {
         const byScene = stage2SceneMarkdownByScene || {};
@@ -36050,10 +36099,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const designBusy = Boolean(envState.active || isAssetCategoryBusy('environments'));
                             const active = Boolean(environmentQuadRerunActive || quadStatus === 'running');
                             const waitingTurn = Boolean(!active && designBusy);
+                            const partial = mainCount > 0 && promptCount > 0 && promptCount < mainCount;
                             const notStarted = Boolean(
                                 !active
                                 && !waitingTurn
                                 && !promptsReady
+                                && !partial
                                 && environmentDesignReady
                                 && mainCount > 0
                                 && (!quadStatus || quadStatus === 'queued')
@@ -36062,13 +36113,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 !active
                                 && !waitingTurn
                                 && !promptsReady
-                                && (nodeState.failed || notStarted)
+                                && (nodeState.failed || notStarted || (environmentDesignReady && partial))
                             );
                             const ready = Boolean(
                                 !active
                                 && !waitingTurn
-                                && !failed
-                                && (promptsReady || quadStatus === 'success' || quadStatus === 'warning')
+                                && promptsReady
                             );
                             const skipped = Boolean(
                                 !active
@@ -36087,9 +36137,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         : ready
                                             ? t('已完成', 'Ready')
                                             : t('待环境生成', 'Wait environment');
-                            const detail = notStarted
-                                ? t('主环境设计已完成，主环境四宫格未发起。', 'Main-environment design finished, but the four-grid was not started.')
-                                : String(nodeState.errorMessage || nodeState.detail || '').trim();
+                            const detail = partial
+                                ? t(
+                                    `四宫格已写 ${promptCount}/${mainCount}，可选择还没有四宫格的主环境重跑。`,
+                                    `Four-grid prompts are written for ${promptCount}/${mainCount}. Rerun can target a main environment that still lacks one.`
+                                )
+                                : notStarted
+                                    ? t('主环境设计已完成，主环境四宫格未发起。', 'Main-environment design finished, but the four-grid was not started.')
+                                    : String(nodeState.errorMessage || nodeState.detail || '').trim();
                             const state = {
                                 ...nodeState,
                                 failed,
@@ -36169,12 +36224,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             {failed ? renderFailedReasonButton(inspectQuadFailure) : null}
                                             <button
                                                 type="button"
-                                                onClick={() => { void handleRerunEnvironmentQuad(); }}
+                                                onClick={() => { void openEnvironmentQuadRerunModal(); }}
                                                 disabled={!canRerunQuad}
                                                 className={failed
                                                     ? 'text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50'
                                                     : diagnosticBtnClass}
-                                                title={t('按已入库的主环境开篇重跑四宫格', 'Rerun the four-grid from the saved main-environment opening')}
+                                                title={t('重跑全部或单个主环境的四宫格', 'Rerun the four-grid for every main environment, or for one')}
                                             >
                                                 {active
                                                     ? t('生成中', 'Working')
@@ -37803,6 +37858,125 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         {t('进入编辑', 'Edit')}
                                     </button>
                                 )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {environmentQuadRerunModal.open && (
+                <div
+                    className="fixed inset-0 z-[59] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                    onClick={() => setEnvironmentQuadRerunModal((prev) => ({ ...prev, open: false }))}
+                >
+                    <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-2xl max-h-[84vh] shadow-2xl overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
+                            <h3 className="text-lg font-bold flex items-center gap-2">
+                                <Layers className="w-5 h-5 text-emerald-400" />
+                                {t('生成衍生环境重跑', 'Derived Environment Rerun')}
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setEnvironmentQuadRerunModal((prev) => ({ ...prev, open: false }))}
+                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-bold transition-colors text-white"
+                            >
+                                {t('退出', 'Exit')}
+                            </button>
+                        </div>
+                        <div className="p-4 overflow-y-auto custom-scrollbar space-y-4 text-sm">
+                            <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-white/80">
+                                <div className="font-semibold text-white">
+                                    {t(
+                                        `按已入库的主环境开篇重跑四宫格，共 ${environmentQuadRerunModal.candidates.length} 个主环境`,
+                                        `${environmentQuadRerunModal.candidates.length} main environment(s) can rerun from the saved opening`
+                                    )}
+                                </div>
+                                <div className="mt-1 text-xs text-white/55">
+                                    {t('只改所选主环境的四宫格提示词。其它主环境、衍生环境和分镜都保留。', 'Only the selected main environment’s four-grid prompt is rewritten. Other main environments, derived environments, and storyboards stay.')}
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {[
+                                    { key: 'all', labelZh: '全部重跑', labelEn: 'Rerun All' },
+                                    { key: 'single', labelZh: '单个主环境', labelEn: 'One Main Environment' },
+                                ].map((mode) => {
+                                    const active = environmentQuadRerunModal.mode === mode.key;
+                                    return (
+                                        <button
+                                            key={mode.key}
+                                            type="button"
+                                            onClick={() => setEnvironmentQuadRerunModal((prev) => ({ ...prev, mode: mode.key }))}
+                                            className={`rounded-lg border px-3 py-2 text-sm font-bold transition-colors ${active ? 'border-emerald-300/60 bg-emerald-500/25 text-emerald-50' : 'border-white/10 bg-white/5 hover:bg-white/10 text-white/75'}`}
+                                        >
+                                            {t(mode.labelZh, mode.labelEn)}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            {environmentQuadRerunModal.mode === 'single' && (
+                                <div className="space-y-2">
+                                    <div className="text-xs font-bold text-white/55 uppercase tracking-wide">{t('选择主环境', 'Select main environment')}</div>
+                                    <div className="max-h-56 overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                                        {environmentQuadRerunModal.candidates.map((item) => {
+                                            const active = environmentQuadRerunModal.name === item.name;
+                                            return (
+                                                <button
+                                                    key={`quad-rerun-${item.name}`}
+                                                    type="button"
+                                                    onClick={() => setEnvironmentQuadRerunModal((prev) => ({ ...prev, name: item.name }))}
+                                                    className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${active ? 'border-emerald-300/60 bg-emerald-500/20 text-emerald-50' : 'border-white/10 bg-white/5 hover:bg-white/10 text-white/80'}`}
+                                                >
+                                                    <div className="text-sm font-semibold">{item.name}</div>
+                                                    <div className="text-[11px] text-white/50 mt-0.5">
+                                                        {item.hasQuad ? t('四宫格已写', 'Four-grid written') : t('四宫格未写', 'Four-grid missing')}
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        <div className="p-4 border-t border-white/10 bg-white/5 flex items-center justify-between gap-3">
+                            <span className="text-xs text-white/45">
+                                {environmentQuadRerunModal.mode === 'single'
+                                    ? (environmentQuadRerunModal.name || t('未选择', 'None selected'))
+                                    : t(`全部 ${environmentQuadRerunModal.candidates.length} 个`, `All ${environmentQuadRerunModal.candidates.length}`)}
+                            </span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setEnvironmentQuadRerunModal((prev) => ({ ...prev, open: false }))}
+                                    className="px-4 py-2 rounded-lg text-sm font-bold bg-white/10 hover:bg-white/20 text-white"
+                                >
+                                    {t('取消', 'Cancel')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        const selectedName = environmentQuadRerunModal.mode === 'single'
+                                            ? String(environmentQuadRerunModal.name || '').trim()
+                                            : '';
+                                        void handleRerunEnvironmentQuad(selectedName);
+                                    }}
+                                    disabled={
+                                        environmentQuadRerunActive
+                                        || environmentQuadRerunModal.candidates.length <= 0
+                                        || (environmentQuadRerunModal.mode === 'single' && !String(environmentQuadRerunModal.name || '').trim())
+                                    }
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${
+                                        environmentQuadRerunActive
+                                        || environmentQuadRerunModal.candidates.length <= 0
+                                        || (environmentQuadRerunModal.mode === 'single' && !String(environmentQuadRerunModal.name || '').trim())
+                                            ? 'bg-white/5 text-white/35 cursor-not-allowed'
+                                            : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                                    }`}
+                                >
+                                    {environmentQuadRerunActive
+                                        ? <Loader2 className="w-4 h-4 animate-spin" />
+                                        : <RefreshCw className="w-4 h-4" />}
+                                    {t('开始重跑', 'Start Rerun')}
+                                </button>
                             </div>
                         </div>
                     </div>

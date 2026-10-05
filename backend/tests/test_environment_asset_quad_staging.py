@@ -69,5 +69,7 @@ def test_art_direction_exposes_rerunnable_derived_environment_node():
     src = editor.read_text(encoding="utf-8")
     assert "assets_gen_derived" in src
     assert "handleRerunEnvironmentQuad" in src
+    assert "openEnvironmentQuadRerunModal" in src
+    assert "key: 'single', labelZh: '单个主环境'" in src
     assert "asset_design_environment_quad" in src
     assert "rerunKind: 'environment_quad'" in src
