@@ -3019,7 +3019,7 @@ const MAIN_ENV_QUAD_MARKERS = ['【四向拼图】', '[0度格-左上', '[90度�
 
 const mainEnvironmentPromptHasQuad = (prompt) => {
     const text = String(prompt || '');
-    return text.includes('【六面一次】') && MAIN_ENV_QUAD_MARKERS.every((marker) => text.includes(marker));
+    return MAIN_ENV_QUAD_MARKERS.every((marker) => text.includes(marker));
 };
 
 const countDbMainEnvironmentEntitiesWithPrompt = (dbEntities) => (
@@ -37405,7 +37405,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     {analysisUnifiedProgressLog.map((item, index) => {
                                         const itemStartedAt = Number(item?.createdAt || item?.at || 0);
                                         const itemEndedAt = Number(item?.endedAt || 0);
-                                        const itemDurationMs = Number.isFinite(itemStartedAt) && itemStartedAt > 0 && item.kind === 'history'
+                                        const itemPhaseKey = String(item?.phase || '').trim().toLowerCase();
+                                        // 资产设计（并行）的行尾时间是状态文案写下之后的几秒，不是本轮生成耗时。
+                                        // 失败、按类重试和停止都会改写这一行，时间立刻清零，避免冻成 4.9s 这类误导数字。
+                                        const assetDesignParallelRow = itemPhaseKey === 'assets_gen' || itemPhaseKey === 'supplement';
+                                        const itemDurationMs = (
+                                            !assetDesignParallelRow
+                                            && Number.isFinite(itemStartedAt)
+                                            && itemStartedAt > 0
+                                            && item.kind === 'history'
+                                        )
                                             ? Math.max(0, (itemEndedAt > 0 ? itemEndedAt : Date.now()) - itemStartedAt)
                                             : 0;
                                         const startedTime = formatHistoryClock(itemStartedAt);

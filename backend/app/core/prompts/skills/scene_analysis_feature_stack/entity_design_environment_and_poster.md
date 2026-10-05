@@ -50,7 +50,7 @@
 **继承**：与 `entity_design_common.md` 一并注入。命名/语言/审美/§1.5 色谱与色板（含全局色卡锁、6:3:1、特征色名、强对比）/§1.6 渲染/合规等通则**以 common 为准**；本文只写环境·海报 delta。冲突时：空间权威（§2.5）与环境光学（§2.7）以本文为准；**色板锁 / 6:3:1 / 特征色名 / 强对比以 common §1.5 为准**（§2.9 只写环境空间 delta：纵深色层/四向落点/顶格表面数/自然场与室内辨识）；其余以 common 为准。
 
 ### 下游分镜失效（强制 · 工程契约）
-- 分镜生成依赖本场景关联衍生 ENV 的【衍生环境信息】（所属主环境 / 背景 / 画左 / 画右），并注入该主环境**整份** `generation_prompt_cn`（开篇世界锁 + 【四向拼图】宫格，结构不得压扁）作光学真源。光线控制只读当前衍生度数对应宫格的 `源体可见=`+`源体画布位=`+`高度带=`+`影子投向`，须同核并写曝光效果；换衍生只换观察轴，禁止另起一日（见 `shot_generation.md` `# Scene Subject Image Prompts (CN)`）。
+- 分镜生成依赖本场景关联衍生 ENV 的【衍生环境信息】（所属主环境 / 背景 / 画左 / 画右）。光线只读该主环境 `generation_prompt_cn` 里、当前衍生度数对应宫格已经写成的 `源体可见=`+`源体画布位=`+`高度带=`+`影子投向`。不从开篇 `Key世界向=` 再算方向，不把开篇四壁抄进视频句。换衍生只换格，禁止另起一日（见 `shot_generation.md`）。
 - **重跑/清除 `environments[]`（ENV 设计）时**：流水线**仅清除关联该 ENV（含同主环境族衍生）的场景分镜**，再在 ENV 就绪后重跑那些场的分镜；**禁止**把未关联该 ENV 的场次分镜一并清掉。
 - **`posters[]` / 封面海报**重跑或清除**不**使分镜失效；海报不参与分镜 ENV 光学门闩。
 - 角色/道具资产重跑**不**使分镜失效（CHAR/PROP 不注入分镜 CN prompt）。
@@ -59,16 +59,16 @@
 - Stage 1 **主环境** = 基准定义（俯视 360 + 0 度坐标轴 + 固定实体清单；仰视 360 可选）；**不可作 Beat 当前可拍 ENV**；是未改写氛围下**该主环境族**全部视角衍生的默认生图参考源。**主环境四向拼图与基准 `generation_prompt_cn` 锁定上游初始建立态**（服化道环境细节 / Index 主环境属性）——**禁止**把剧情发展后的狼藉、废墟、域场改写、战损陈设画进主环境基准图；此类只出现在已声明的状态衍生行 §C Delta。
 - **闪回/蒙太奇多主环境**：快速闪回/蒙太奇同 Scene 在 Index 中可有多条 `env_role:主环境基准定义`（当下主线 / 闪回 / 蒙太奇片段等）；较长回忆则为独立闪回 Scene 的主环境行。**各主环境各自**出四向拼图，衍生只挂**所属**主环境，禁止把闪回异地当成当下主环境的视角衍生。**主环境↔主环境**仅允许下条风格依赖；衍生仍禁跨主。
 - 可拍空镜须为 `{N}度{主环境名}` 或状态后 `{N}度{主环境名}_{状态}` 衍生行。
-- **`visual_dependencies`（生图依赖图；对应必须准确；最高）**：
+- **`visual_dependencies`（生图依赖图；对应必须准确；最高）**：本份 JSON 只输出主环境，只使用下面 1 和 2。3、4 和对应准确是下游程序入库规则，本技能不写那些行。
   1. **主环境（默认）**：`[]`；`dependency_strategy.type=BaselineDefinition`。
-  2. **主环境风格依赖（例外；楼层切分等同建筑气质）**：Index 有 `style_reference_env` 时，依赖方主环境 `visual_dependencies=["ENV:[风格父主环境名]"]`（必须是**另一块主环境**行，禁挂 `{N}度` 衍生/CHAR/PROP）；`dependency_strategy.type=StyleReference`。`generation_prompt_cn` **仍须独立写满**折中两段式（自有开篇拓扑/四向/中区/固定清单），只对齐父块年代/材质族/色系/工艺/文学气质；**禁止**抄父块四向家具、0°轴、楼底或把本块写成父块宫格切割。父块仍 `[]` + `BaselineDefinition`。单向、禁环。父图未就绪可先独立成稿，logic 标待挂。
-  3. **第一刀视角衍生**（名必须=`{N}度{主}`；同向用法/景别后缀须并入该名，禁另起 `_桌后反打` / `_乙侧` 第一刀行；禁 `Beat:`/`0deg Beat:`/`文戏:` 当环境名）：必须且仅能 `["ENV:[所属主环境名]"]`（四向拼图）。名=Index `derivative_base_zh` / 主环境 `subject_name_zh` **逐字符**。禁止挂其他 `{N}度…`，禁止改挂风格父主环境。**商业宣传片：衍生禁止挂上传素材**（禁 `source_image_urls` / 素材依赖图），只挂该主环境。
-  4. **衍生的衍生**（`{N}度{主}_{状态}` / 同角再状态）：必须且仅能 `["ENV:[同角已切割衍生名]"]`。同角已切割衍生名=本行 N 对应的 `{N}度{所属主环境名}`；若本行是该角再状态，则挂该角上一状态行 `{N}度{主}_{上一状态}`。
-  **对应准确（一票否决）**：依赖行的 N / `angle_key` **必须与本行相同**（风格依赖主环境无 N，只核父名为另一主环境）；所属主环境必须相同（风格依赖除外）；方括号名与 Index **逐字符**一致。禁止挂他角切割图（0° 状态挂 180° 切割）；禁止在已有同角切割时回挂主环境四向拼图；禁止衍生挂他主、CHAR、PROP、海报、英文名、裸名；禁止闪回衍生挂当下主。同角切割图未就绪 → 禁止开本行生图。
-- **衍生 / 衍生的衍生 `generation_prompt_cn` 必须点名所属主环境（最高）**：须可检索 `所属主环境={主环境名}`。第一刀 §B 只点名该主环境四向拼图 + 宫格并去分割线（**只切割**；禁止写正对边界/四方正交/景深/斜向机位/荷兰角）。写到该角主体的位置、大小、走向、朝向、开合时，沿用该格已译画面词，与开篇世界物理同核，禁止改用米或东南西北重写，禁止抄邻格。衍生的衍生 §B 点名**同角已切割衍生**（禁止再从四向拼图重切、禁止只写泛称、禁止复述几何、禁止画回拼图痕迹）。状态 Delta 只追加 §C。同场多主时禁串挂他主。缺名/错名/依赖 N 不一致=失败重写。
+  2. **主环境风格依赖（例外；楼层切分等同建筑气质）**：Index 有 `style_reference_env` 时，依赖方主环境 `visual_dependencies=["ENV:[风格父主环境名]"]`（必须是**另一块主环境**行，禁挂 `{N}度` 衍生/CHAR/PROP）；`dependency_strategy.type=StyleReference`。`generation_prompt_cn` **仍须独立写满开篇**（自有拓扑/中区/固定清单，止于【构图】），只对齐父块年代/材质族/色系/工艺/文学气质；**禁止**抄父块家具、0°轴、楼底，禁止输出【四向拼图】。父块仍 `[]` + `BaselineDefinition`。单向、禁环。父图未就绪可先独立成稿，logic 标待挂。
+  3. **下游：第一刀视角衍生**（名必须=`{N}度{主}`）：必须且仅能 `["ENV:[所属主环境名]"]`。本技能不输出这一行。
+  4. **下游：衍生的衍生**（`{N}度{主}_{状态}`）：必须且仅能 `["ENV:[同角已切割衍生名]"]`。本技能不输出这一行。
+  **对应准确（下游程序；本技能不核衍生行）**：依赖行的 N 必须与该衍生行相同。禁止挂他角切割图。禁止在已有同角切割时回挂主环境。禁止衍生挂他主、CHAR、PROP、海报。
+- **衍生提示词不在本技能**。本份 JSON 不写 `{N}度` 行，也不写第一刀或状态衍生的 `generation_prompt_cn`。第一刀由程序写成只切割；重生修正只提交四宫格里已经转好的那一格画面句，不附开篇世界内容。
 - Stage 1/2.1 对衍生**只提供轻量角度清单**（名、`view_angle_from_main`、触发原因含 OTS/反打两步结论、`spatial_axis`、`lens_profile`、`axis_crossing`、`empty_view_delta` 可选）；**不提供**衍生四向具名实体或前景/中景/背景空镜层次。
 - **复用既有主环境（上集/跨集注入）时**：主环境四向拼图与既有 `generation_prompt_cn`/Index 基准同核的是空间、外形和坐标系；各衍生截取的观察轴 `N` 与背景半空间须与该基准**同角完全一致**——禁止为「更好看」重映射度数、旋转 0° 轴、或按顺序轮写四向。开闭与落点以本场环境规划【主环境】为准：规划已改的门窗开闭、已移位主体的位置，按规划重写，禁止把旧稿里冲突的开闭或旧落点照抄回来。衍生只按 Index 已声明角与 `activity_fit` 截取所属扇区。
-- **本技能只写开篇世界物理**。主环境 `generation_prompt_cn` 止于【构图】。禁止输出【四向拼图】、宫格标题和画面左/画面右。四宫格最后提示词由独立技能把本开篇旋转成四格后写回同一条 `generation_prompt_cn`。禁止输出视角衍生或状态衍生。
+- **本技能只写开篇世界物理**。主环境 `generation_prompt_cn` 止于【构图】。禁止输出【四向拼图】、宫格标题和画面左/画面右。四宫格最后提示词由独立技能只写四格，不抄本开篇。程序写回时把开篇留在【四向拼图】之前；交给生图模型的只有四格。禁止输出视角衍生或状态衍生。
 - **主环境骨架锁（最高；缺一即整条失败）**：主环境 `generation_prompt_cn` **不是**单张 16:9 可拍空镜，也不是四宫格。本技能只交开篇世界锁。四宫格由下一技能接在开篇后面。全文必须按序可检索下列字面标记，缺任一标记=框架破裂、废弃重写：`【定位】`、`【六面一次】`、`【北壁】`、`【东壁】`、`【南壁】`、`【西壁】`、`【光学说明】`、`【色彩说明】`、`【构图】`、`六面一次`、`下=`、`上=`、`中=`、`北壁=`、`东壁=`、`南壁=`、`西壁=`、`壁别名=`、`场径=`、`围合=`、`向距上限=`、`面积测算=`、`整体环境锚点=`、`主舞台区=`、`舞台范围=`、`舞台大小=`、`舞台净空=`、`舞台占地=`、`挂靠锚点=`、`锚点落=`、`场态=`、`主光=`、`辅光=`、`点缀=`、`源形=`、`Key世界向=`、`物理系闭集`、`主体编号表=`、`主体分组=`。成稿须分点自然语言（`- ` 起行）。开篇锁键不得省（`场径=`/`心点=`/`号=#N`）。四宫画面转译不在本技能。
 
 ## 开篇世界锁（本技能成稿止于此）
@@ -185,11 +185,11 @@
 
 | | `description_cn` | `generation_prompt_cn` / `dependency_strategy.logic` |
 | :--- | :--- | :--- |
-| 可写 | 恒 `""`（禁任何正文） | **主环境 prompt**：开篇=`六面一次`（下/上/中/四壁 + `主光=`/`辅光=`/`Key世界向=`/源 `心点=` + `主舞台区=`/`挂靠锚点=`/`锚点落=`；禁抄文学；光属物理世界；止于【构图】；禁止【四向拼图】）。**衍生 prompt**：§B 截取放大并写入该宫格已旋 `源体可见=`+`源体画布位=`+`高度带=`+`影子投向` + 可选 §C。**logic**：360 拓扑、美学参考 |
+| 可写 | 恒 `""`（禁任何正文） | **主环境 prompt**：开篇=`六面一次`（下/上/中/四壁 + `主光=`/`辅光=`/`Key世界向=`/源 `心点=` + `主舞台区=`/`挂靠锚点=`/`锚点落=`；禁抄文学；光属物理世界；止于【构图】；禁止【四向拼图】）。衍生环境提示词不在本技能。**logic**：360 拓扑、美学参考 |
 | 禁写 | 非空字符串 | prompt：拓扑字段、度数公式、继承锚点、跨格对照；**任何人物/用途句**（§2.6） |
 
 - 转译自检：单独复制 `generation_prompt_cn` 应可直接生图；`description_cn` 必须为 `""`。主环境须可检索 `项目类型为`、`【六面一次】`、`主光=`、`Key世界向=`、`主体编号表=`，并止于【构图】。出现【四向拼图】、宫格标题、画面左、画面右 = 失败。四宫换算自检不在本技能。
-- **`generation_prompt_cn` 禁空（最高；防整族落空）**：`""` / 缺键 / `null` / `…` / `待补` / `停止成稿` **只允许**出现在 `description_cn` 与 `generation_prompt_en`。主环境与其全部 `{N}度…` / 状态衍生的 `generation_prompt_cn` **必须每条非空**。同一主环境族主+衍生皆空 = 整份失败，须在**本份 JSON 内当场重写**，禁止交空族。上游缺口、数量未闭合、骨架自检未过、`废弃重写` **都不是**把字段留空——缺口只进 `dependency_strategy.logic`，生图词仍须按合同写出可入库文本。
+- **`generation_prompt_cn` 禁空（最高；防整族落空）**：`""` / 缺键 / `null` / `…` / `待补` / `停止成稿` **只允许**出现在 `description_cn` 与 `generation_prompt_en`。本技能只交主环境。主环境 `generation_prompt_cn` **必须非空**。禁止在本份 JSON 输出 `{N}度` 或状态衍生。上游缺口、数量未闭合、骨架自检未过、`废弃重写` **都不是**把字段留空——缺口只进 `dependency_strategy.logic`，生图词仍须按合同写出可入库文本。
 
 ### 1.4 审美基线（环境 delta；通则见 common §1.4）
 - 对标电影级空间/海报；禁舞台剧/样板间/廉价缩小感。
@@ -240,7 +240,7 @@
     - 四格剪影（纵深格/横跨格）不在本技能。
 
 - **允许美术增补**：见 §2.5；增补不得改拓扑、不得新增未列主体。**分位**：**四面只深化**规划已列围合立面/门窗/贴墙件的材质与细节，禁止自拟新具名主体；**中区不要求整片净空**——规划已有的床、窗、桌照画；`动线=` 中间不另加障碍；禁止为好看、凑套再加实体，禁止为了空地删掉已有的件。**唯一窄例外=§2.4.3 E 高挑/宏大尺度衬托**：无已列人体尺度件时，可在围合/贴缘补 1–2 件成人日常静态参照（室内靠墙桌椅、室外栏杆/普通树），禁入表演中央，须有场所功能借口。以上仅作内部美术裁决，**不得把“分位从简/四面允许加围合/中区默认空区/靠边常用配置”等元规则写入 `generation_prompt_cn`、`anchor_description`、环境叙述或logic的实例化结果**；成稿必须改写成最终实际存在的具名实体、具体靠向/扇区与具体净空，没有采用某类配置就完全不提。**场头空间位置关系锁定（对齐环境规划）**：门/窗/主家具/出入口/活动区相对与四向归属只读继承；禁把单门扩成多门、禁把门桌对调或换向；**表演中央禁增补立体障碍**。
-- **固定实体零遗漏**：清单内每一实体须进主环境四向 `generation_prompt_cn`；禁止因「次要」省略。上游【主环境】已点名 `背景微动件=` 且非`无` → 该细小件须在其落点所属向**可见入镜**（贴墙/窗沿/空中/檐下即可），**禁止**画进中区舞台或挡动线；禁因「次要」省略。**中区/靠边地面家具只在开篇锁一次**（`心点=`/`距原点=`/`占地=` + `锚=`/`宫格=`/`落边=`；非正方件加 `竖边=`；挂桌件加 `在桌=`；有前后向的椅/沙发写 `椅面朝向=`；桌禁写 `椅面朝向=`。成稿禁止写 `F=`）。只写锚/宫格、不写极坐标=失败。各格可见面不在本技能。禁止③与①/②共用一个 `心点=正{向}`。**通高须共享外形**：下层与上层实体须在开篇拓扑及可见格**分别具名**；禁止 `二楼同楼下` / 只画一层而让上层「继承」。**二层内部不共享外形**则为独立主环境行（可 `StyleReference` 挂一层主环境作风格参考），禁止把客房/账房家具画进一层大堂四向拼图当「上层」，也禁止用风格依赖省略本块四向。
+- **固定实体零遗漏**：清单内每一实体须进主环境开篇 `generation_prompt_cn`；禁止因「次要」省略。上游【主环境】已点名 `背景微动件=` 且非`无` → 该细小件须在其落点所属向**可见入镜**（贴墙/窗沿/空中/檐下即可），**禁止**画进中区舞台或挡动线；禁因「次要」省略。**中区/靠边地面家具只在开篇锁一次**（`心点=`/`距原点=`/`占地=` + `锚=`/`宫格=`/`落边=`；非正方件加 `竖边=`；挂桌件加 `在桌=`；有前后向的椅/沙发写 `椅面朝向=`；桌禁写 `椅面朝向=`。成稿禁止写 `F=`）。只写锚/宫格、不写极坐标=失败。各格可见面不在本技能。禁止③与①/②共用一个 `心点=正{向}`。**通高须共享外形**：下层与上层实体须在开篇拓扑及可见格**分别具名**；禁止 `二楼同楼下` / 只画一层而让上层「继承」。**二层内部不共享外形**则为独立主环境行（可 `StyleReference` 挂一层主环境作风格参考），禁止把客房/账房家具画进一层大堂四向拼图当「上层」，也禁止用风格依赖省略本块四向。
 - 专属字段 + 时段/时辰/内外/气候/气候可见/氛围/空气感/季节须写入**主环境** `generation_prompt_cn`；衍生只继承目标宫格，除非 §C 有可见状态 Delta。
 
 ### 2.2 舞台与空间实体化
@@ -267,7 +267,7 @@
 - **实体间关系**：前后左右上下 + 每层每实体垂直上/中/下；**同向后景 ≥2 具名实体时必须写清彼此左右或上下（可叠用），禁只并列点名**；门窗须写开闭态、内开|外开、门轴侧与把手位（门左|门右 × 上|中|下，把手侧≠门轴侧）；**同一扇跨格再写时开闭词不得改、不得省**；方向性实体具名+朝向+正反面（成稿锚固定实体或相对镜头表述）。**贴墙定向实体**（柜台、吧台、收银台、服务台、神龛、讲台、贴墙柜等）与长桌同锁长轴+两端具名锚，另写 **M=所属墙**、背面贴靠、操作面朝室内；**中区案台/书桌不是本类**。各格纵深/横跨不在本技能。贴墙件 `N=M` 见操作面正面，禁把「操作面朝 0°」当成座椅式 `椅面朝向=正北` 去套「观察轴=椅面朝向则见正面」。禁随画面左右翻面、镜像、换墙或消失。**楼梯/台阶/坡道/扶梯**与长桌同锁展开轴+两端（下口/上口=两端具名），另写 U 与基准格；贴墙时所属格必须有 `背景正对` 整跑基准，禁只写「有楼梯」。
 - **具名实体材质锁（最高；环境实体必须交代材质）**：凡写入主环境 `generation_prompt_cn` 的具名实体（沙发/椅/床/桌/柜、门窗、楼梯、墙面、地面、天花、灯具、织物、软装），**必须写出可核销材质名**。禁止只写「沙发/桌子/椅子/柜子」。
   1. **成稿句式**：`{具名}｜材质={具体材质}`（可叠纹理/光泽）。✅`沙发｜材质=头层真皮`｜✅`长桌｜材质=黑胡桃木，细碎划痕哑光`｜✅`地面｜材质=抛光大理石`。❌`沙发`｜❌`高级沙发`｜❌`皮质感很好`。
-  2. **一次锁、后文只点名**：材质在开篇拓扑或中区总账锁一次；【四面】【四向拼图】再出现该实体时**只点名**，禁止再写 `材质=` 长句。
+  2. **一次锁在开篇**：材质在开篇拓扑或中区总账锁一次。本技能不写【四向拼图】。下一技能点名该实体时不重写 `材质=` 长句。
   3. **品级跟定位（最高）**：材质档须核销 `basic_positioning` / 场域地位，不得用廉价材冒充高规格空间。
      - **豪宅/别墅/高档会客/酒店套房/总裁办/高端会议室/游艇/豪车/专机**：沙发/椅/床/车艇机座必须写 `真皮`（或等档：头层牛皮/纳帕皮）；椅/床软包同档；禁灰布沙发、廉价PU、通铺化纤冒充高规格。
      - **礼制/宫廷/仙宫**：木作须具名贵重材（楠木/紫檀等已核销者）并见木纹或雕花母题；石须石纹走向；金须线脚或贴金；织物丝绸/绒并见织纹；禁松木白胚，禁无纹「汉白玉/鎏金」空壳。
@@ -275,7 +275,7 @@
      - **工业/职场/舱内**：金属/皮革/织物按类型具名。
   4. **禁空壳**：`高级材质`/`质感很好`/`皮沙发`无「真皮/头层」等可辨品级 = 失败。豪宅写灰布沙发 = 失败。上游 `fixed_*` 已写材质 → 原样落地；未写则按定位裁定并写入成稿。
 - **细节质感与真实性补充**：材质锁之上，须再补纹理、光泽或节制使用痕迹（例：带细碎划痕的黑胡桃木桌面、反光做旧黄铜边框、边缘冷光的钢化玻璃），提升电影写实感。宫殿/仙宫/豪宅另过 §2.4.3 `纹饰=`，不得只补光泽不写纹样。无上游破败明文仍禁破烂。
-- **固定实体数量预检（最高；先于美术设计）**：读取 Index `fixed_entity_inventory` / `homogeneous_layout` / `opening_inventory` / `directional_structure_inventory`。任一清单含 `若干|数把|多张|一些|成排|散座`，或同质多件缺总数/分项和/逐具F/顺序，或门窗缺总数/所属扇区/开闭态/扇型/开向，或窗棂缺**总扇数+每扇横×纵格阵+同墙顺序**，或楼梯缺 M/U/下口/上口/`低端=`/`高端=`/基准格/坡向 → `dependency_strategy.logic` 写 `upstream_missing_env_inventory_quantification:{缺项}:回流 Stage 2.1/1`，**禁止用默认数、常识数、随机数或“若干”写入 `generation_prompt_cn`**。缺数**不等于**停笔留空：仍须输出完整开篇 + 已具名且数量已锁的实体；未闭合件数只写具名、不写猜数、不抄模糊量词。该族全部衍生仍须输出非空 §B 截取句。
+- **固定实体数量预检（最高；先于美术设计）**：读取 Index `fixed_entity_inventory` / `homogeneous_layout` / `opening_inventory` / `directional_structure_inventory`。任一清单含 `若干|数把|多张|一些|成排|散座`，或同质多件缺总数/分项和/逐具F/顺序，或门窗缺总数/所属扇区/开闭态/扇型/开向，或窗棂缺**总扇数+每扇横×纵格阵+同墙顺序**，或楼梯缺 M/U/下口/上口/`低端=`/`高端=`/基准格/坡向 → `dependency_strategy.logic` 写 `upstream_missing_env_inventory_quantification:{缺项}:回流 Stage 2.1/1`，**禁止用默认数、常识数、随机数或“若干”写入 `generation_prompt_cn`**。缺数**不等于**停笔留空：仍须输出完整开篇 + 已具名且数量已锁的实体；未闭合件数只写具名、不写猜数、不抄模糊量词。衍生截取句不在本技能。
 - **同质多件分边与冗余重复（防遗漏铁律）**：≥2 具椅凳等须写总个数、分边个数、逐具 `椅面朝向=`、同侧顺序，且强制验算 `总数=分边/分桌/分组之和`；“散座”不是实体清单项，必须展开为具名桌/椅及明确数量。更重要的是：**中区地面固定家具只在开篇/中区总账锁一次世界坐标**（椅凳/沙发/轮椅/茶几/中央桌件数+`椅面朝向=`/`竖边=`/`在桌=`+`锚=`）。件数与朝向只锁在开篇。各格点名不在本技能。衍生截取须把该格已点名中部件全部纳入。**禁止**再写各椅可见面切换或「椅面朝镜头」当世界朝向。座具的画面侧不在本技能。椅面朝与在桌侧拆开核。挂靠小件随宿主锁在开篇；**中区台面可数件只锁一次 `数量=N`，禁止四宫改数或另画同款克隆**。
 - **门窗/窗棂阵列成稿（强制）**：全局共享先锁 `门总数`、`窗总数`。`开闭` **只抄**环境规划 `开合态=`（`全关|半开|全开`，禁近义、禁改档）；规划未给则 logic 标 `upstream_missing_opening_state` 且该扇只许 `全关`。`开向`、`扇型`、`通行扇` 逐字抄环境规划。本环节只另锁 `门轴` 与 `把手`。开篇按所属壁逐扇写 `横N列×纵M行` 格阵、各格等宽与否、棂条材质/截面/间距、**同一份**开闭/开向/门轴/把手、同墙从左到右或从下到上顺序。格阵世界锁只在开篇所属壁一次。格阵只锁在开篇所属壁。各格旋进不在本技能。禁裸写「窗棂/雕花窗格/成排窗」而不给数量与阵列。
 - **开合件开篇锁**：开篇凡有开合的件，`开闭` 逐字抄规划 `开合态=`（缺则 `全关`），`开向` 逐字抄规划。铰链和门栓的画面句不在本技能。
@@ -561,7 +561,7 @@
 ### 2.6 纯空镜去角色化与门禁（最高硬约束）
 环境资产的目标画面是**无人空镜**——只画空间、建筑、固定陈设、材质、光色与空气感。
 
-**`generation_prompt_cn`（含主环境开篇 / 【四向拼图】 / 衍生 §B 与可选 §C；§A 仅在 logic）绝对禁止**：
+**本技能 `generation_prompt_cn` 是主环境开篇，绝对禁止**：
 1. **任何人像实体**：具名角色、匿名群演、路人、手/足/肩/背/剪影、焦外人影、倒影中的人、雕像以外的拟人主体（雕像仅当上游固定清单已列）。
 2. **任何人物语义**：人称（他/她/他们/某人）、站位/姿态/视线/对白/口型/持握/交互/走位/跪拜/对峙等动作叙述。
 3. **任何「用途—角色」句**：把空间写成「给某角色干什么用」——包括但不限于「林月的审讯区」「陈医生坐诊」「供主角逃窜的走廊」「双人对坐会商」「正反打读某某正面」「OTS 看对手」等。此类上游规划语**不得**进入生图词；只保留空镜几何等价物（例：门前净空对峙区→写净空与地标家具，不写人对峙；座次区→写椅位几何，不写谁坐）。
@@ -572,7 +572,7 @@
 
 **`negative_prompt_en`（环境强制追加语义，可并入既有串）**：`people, person, human, characters, faces, crowd, silhouette of person, hands, body parts, occupied seats with people, cluttered floor blocking walkway, furniture blocking open performance area, dutch angle, tilted horizon, looking into a room corner, 45-degree wall, diamond floor, oblique camera, three-quarter wall as main background, side counter as main background, counter dominating right side as background, edge strip becoming main background, peripheral object centered, full facade on frame edge, adjacent wall entity dominating background, left-edge object as backdrop, right-edge object as backdrop, duplicate doors, duplicate staircases, mirrored staircase, reversed stair slope, backslash stair diagonal, stairs rising lower-right to upper-left, stairs high at door and low at counter, stairs descending from upper-left to lower-right when should ascend lower-left to upper-right, stair slope inverted between panels, staircase on wrong side of frame, stairs on right when facing counter, seating tables on left when facing counter, stairs and seating swapped left-right at counter view, frontal stair treads in door-facing panel, head-on staircase when only side edge should show, short stub staircase at door edge, truncated stair run ending mid-frame, double-segment staircase, split staircase, two separate stair flights, broken stair banister in two parts, second flight of stairs, second foreground desk in front of counter, double counter, floating ledger table in foreground, shallow depth of field, portrait bokeh, blurred background shelves, one panel soft focus only, flat backdrop wall only, missing floor, missing ceiling, no ground plane, no ceiling visible, cropped floor, cropped ceiling, two-dimensional wall fill, camera-behind wall in frame, rear wall visible behind camera, omitted named background object, omitted named left-wall object, omitted named right-wall object, mentioned furniture missing from panel, cropped half-object on side wall, truncated window, half door, sliver-only side wall, incomplete wall subject, inconsistent door open state across panels, door open in one panel and closed in another, mismatched window sash across panels, chair facing camera in every panel, chair flipped between 0 and 180, chair always facing viewer, tufted chair front visible in both 0-degree and 180-degree panels, chair back to the door in a study, chair facing the bookshelf instead of the door, driver seat back to dashboard, cockpit seat facing camera in windshield panel, driver chair front in 0-degree cockpit, mirrored chair orientation, neighbor-wall subject centered or used as facing facade, adjacent-wall opening painted onto the facing wall, path receding into the facing wall when its world long axis is perpendicular to the view, near-far labels copied from another compass panel, different architectural style per panel, second full facade on a side wall, facing subject taken from a neighboring compass wall, table-end object merged onto the same-direction wall counter, far-side long-edge bench missing, only the near-side bench along the table, light punching through a sealed facing wall with no opening, god rays from a windowless facing wall, key window treated as behind-camera while it sits on a visible side wall, non-key window acting as the main source, west window glowing as key when key host is the east window, god-ray shaft in three panels but wash-only in the facing-key panel, volumetric shaft from the opposite side of the key host, fourth wall in one panel, extra wall plane from objects on the same wall, folded wall, two depths on one wall, coplanar objects skewed on a diagonal, same-distance columns staggered front to back, three frontal facades side by side, wall attachments swapped along the wall between facing and side views, door jumped from a side wall onto the facing wall, corner opening absorbed by the adjacent facade, side-view wall attachments packed into one counter, named facing-wall object missing from the side-view of the same wall, door present only in the facing panel, door omitted from the two side views, opening dropped to avoid jumping walls, attachment center on the axis while its extents are offset, two tabletop objects with opposite east-west offsets both written on the far half, sun disk in a behind-camera panel, extra sun in the near-side sky, mid-elevation sun pasted on the horizon like sunset, third visible sun, overcast fill-only in a keyed panel`。
 
-**衍生切割 `negative_prompt_en` 追加（主环境四向拼图不加）**：`four-panel grid lines, 2x2 collage seams, panel borders, quadrant labels, split-screen divider, neighboring panel leaking into frame`。主环境 2×2 必须保留宫格分界；第一刀与衍生的衍生必须去掉。
+**衍生切割负向词不在本技能**。第一刀去掉宫格线由下游程序追加。本技能不写 `four-panel grid lines`。
 
 **数量与阵列自检（一票否决；在下列综合自检前先执行）**：扫描 Index 与 `generation_prompt_cn`；出现 `若干|数把|多张|一些|成排|散座` 即失败；同质多件须能算出 `总数=分项和` 且逐具 F/顺序齐；门/窗/楼梯总数须显式；每扇须有同一份 `开闭=全关|半开|全开`，且与环境规划 `开合态=` 同词、禁止改档（规划缺该扇则只许全关并标 `upstream_missing_opening_state`）；每扇窗棂须有横×纵格阵与同墙顺序；**同一具名门窗的开闭/开向/门轴世界必须在开篇逐字锁一次**；**场所风格**须可检索 `场所风格=`+`落点=`+`引用=`+`表外=`（落点=本场实际入画特征，含剧情增补与跨行引用，**不要求**主行全槽）；开篇+世界四壁（非仅键值行）可检索落点/引用实质词，只写「古装客栈/赛博都市」=失败；为凑全槽发明本场没有的构件=失败；**建筑术语**须可检索 `建筑术语系=`+≥3术语原词`落点=`+`表外=`；殿宇类（大殿/正殿/金殿/朝堂/宗门大殿/仙宫/礼堂/高厅）天花须点名术语库原词（影游默认`哥特式高挑穹顶`），只写「挑高层高」=失败。**军队旗帜（§2.4.4）**：命中军队/军营/校场/战场/军阵/仪仗时须可检索 `旗帜设计=`+整数 `总数=N`（`总数=分项和`）+`型数=M` 达量级下限；档③只在正对格写入、邻格蒸发或改名顶替=失败；档②写 `心点=正{向}` 或相对Oh与Ow心点对不上=失败；档②端锚写成远山/地平线=失败；旗面主色垄断为红、全场同形同图、只写「旌旗猎猎/旗海」、单面旗冒充大军、或出现持旗人/旗手剪影 = 失败。**高速空间（§2.4.5）**：命中追逐/穿梭/飞翔/飙车时须可检索 `高速空间=`+`视距=广角远距`+过幅参照+光带锚+航线净空+`距离锚=`近中远三处不同位置；望向航向为 18–24mm（空域/云海 16–22mm），航向 `场径=` 无限制；四面可见向可检索列灯/窗阵/走廊净空等静态词；空镜出现运动模糊/景物拉丝/光带甩尾/风压条带 = 失败；只写「很有速度感」无具名参照 = 失败；用 35–50mm 把航道压成厅堂、或把窄巷侧向拍成广场 = 失败。缺项 → logic 标回流，**禁止猜数**，但 **`generation_prompt_cn` 仍须非空成稿**（骨架+已锁具名实体；未闭合件数不写进 prompt）。图像分析回写也不得用模糊词覆盖不可辨数量：无法从图中可靠计数时须在 logic 标 `count_unverifiable_from_image`，保留原 Index 数量锁，**不得把 prompt 改成空串**。
 
@@ -611,7 +611,7 @@
 
 **世界光与换角（最高；光源在房间里，不在四面里）**
 1. **世界光一次**：光源与光照方向和墙、桌一样是物理世界事实，必须写在开篇、写在【四向拼图】之前。全局 `光影体系` 锁全场动机光的世界落位。换角**不关灯、不另起一套光**。各格来光句不在本技能。
-2. **禁止按四面另起源**：`generation_prompt_cn` 出现 `本向光变` / `入射=` / `身后Key` / 回写 `Key世界向=` / `本格光位=` / 另起源 = 失败。缺 `影子投向` = 失败。四宫只写主光、未按本格换算辅光与点缀 = 失败。四宫光句出现「不」「没有」「无」「禁止」「日轮」「朝阳」= 失败。
+2. **禁止按四面另起源**：`generation_prompt_cn` 出现 `本向光变` / `入射=` / `身后Key` / `本格光位=` / `影子投向` / `源体画布位` / 另起源 = 失败。各格来光、辅光和影子由四宫格技能写入对应格，本技能不写。
 3. **来光画面轴不在本技能**。开篇只锁 `主光=`/`辅光=`/`点缀=`/`Key世界向=` 与各源心点。
 4. **时段/时辰与 Key 同核（最高）**：`Key世界向` 跟 IDENT 时辰的行星太阳，不跟「哪面窗好看」。卯/辰→东|东南；巳→东南|南；午→南；未/申→西南；酉→西|西南；戌亥子丑寅→无日，Key 改室内灯或月。室内无朝日开口 → Key=天井西晒或半开门洞，暗侧窗只作 Fill/轮廓。
 5. **辅光不夺主 / 远墙不当第二太阳（最高）**：Fill（天井/天窗天光）不得在侧光格画成中央顶光太阳柱。远锚开口在 `Key世界向`≠该向 时只渗余晖，禁止该格地面中央自起一柱门洞太阳。背对 Key 的格禁止把 Key 关掉改平光。
@@ -650,12 +650,13 @@
 
 **E 柔和侧逆光 + 环境反射 Fill**（真人优先；三维/二维改 §2.11/§2.12 语言）：半影自然柔散；禁硬阴影刀切；海报群像同口径。默认照度充足、主舞台可读；大光比见 common §1.5-A（≠无脑压黑）。
 
-**F 四向 / 衍生 / 海报**：
-- **四向拼图**：全局世界光**一次声明**（`主光=`/`辅光=`/`Key世界向=`）；各格只写白话光句。换角后灯仍起作用，禁止另起源。
-- **衍生**：§B 必须写入该宫格已旋 `源体可见=`+`源体画布位=`+`高度带=`+`影子投向`，或按该 N 从开篇心点+高度重算；禁止抄邻格，禁止另起无动机棚拍光。§C 仅写状态导致的色温/投影 Delta，不得把太阳挪到另一高度带，除非上游明文改时辰。
+**F 光写在哪一层**：
+- **本技能**：世界光只在开篇声明一次（`主光=`/`辅光=`/`Key世界向=`）。不写各格光句，不写 `源体可见=`、`源体画布位=`、`影子投向`。禁止按某一度从心点重算方向。
+- **四宫格技能**：各格只写已经转成画面的光句。换角不另起一盏灯。
+- **衍生**：不在本技能写提示词。重生修正只提交该格已写成的画面光句，不从开篇重算。
 - **海报**：Key 服务轮廓与标题留白；Fill/rim 挂靠 ENV 动机光；禁灰片平光糊标题。
 
-**G 自检口诀**：删掉「电影感/高级感」后，能否指出——主光在世界哪一侧、辅光/点缀在哪、照亮哪面、Fill 从哪反、近中远哪层更亮、半影/投影落在谁身上、**是否只写了物理光源而没有按四面写入射、焦段偏 16–22 / 18–24 / 24–28 / 35 / 50 哪一档（仙境外景/美景须偏 16–22，广场/野外须偏 18–24，室内殿须偏 24–28）、光比/柔硬/自然光/实用光如何同时核销 `basic_positioning` 与 `scene_mood`、`env_goal` 可见落点是否被该光照见**？任一否 → 重写光影段。  
+**G 自检口诀**：删掉「电影感/高级感」后，能否指出——主光在世界哪一侧、辅光/点缀在哪、照亮哪面、Fill 从哪反、近中远哪层更亮、半影/投影落在谁身上、**是否把主光、辅光、Key世界向写在开篇，而没有写成某一格的画面光、焦段偏 16–22 / 18–24 / 24–28 / 35 / 50 哪一档（仙境外景/美景须偏 16–22，广场/野外须偏 18–24，室内殿须偏 24–28）、光比/柔硬/自然光/实用光如何同时核销 `basic_positioning` 与 `scene_mood`、`env_goal` 可见落点是否被该光照见**？任一否 → 重写光影段。  
 `negative_prompt_en` 可追加：`flat lighting, even room brightness, ambient-only wash, hard shadow edge, off-screen light source named in prompt, light fixture behind camera shown in frame, window behind camera drawn into shot, lights turning off when camera turns, a new sun in every panel, sun disk in a behind-camera panel, extra sun in the near-side sky, mid-elevation sun pasted on the horizon like sunset, sunset disk when height band is mid, third visible sun, overcast fill-only in a keyed panel, god rays from the far wall in every panel, skylight overpowering the key, central sun pillar from courtyard, south door acting as second sun, dusk sunlight from east window, morning key from west, side key in door-behind panel, light from frame-right when key is behind camera, shadows falling left-right when they should fall into far wall, frontal stair treads in counter-facing panel, stair starting at floor beside counter when landing should be high, missing time of day, missing weather, missing season, no volume light, featureless illumination`。
 
 ### 2.8 夜景、气候与氛围（强制消费上游时地；美观仍须层次）
@@ -689,20 +690,18 @@
 5. **禁室内样板间色谱**：室内若仅「白墙+木褐+灰软装」三色循环、无非常规立面色块/材质对撞/异色点缀 = 失败；须按 §2.4.2 补辨识点。
 6. **与定位目标 + `scene_mood` 同核（强制）**：主辅点缀冷暖须能核销 `basic_positioning` 气质品级与 Index 光色倾向、构图倾向（压迫≠无据满室暖黄喜庆；精致小屋≠宫殿金碧；纵深压迫须近中远色层可辨；负空间远景可降饱和）。缺 `scene_mood` 已标回流后，仍不得与 `color_spectrum` 主冷暖打架。
 
-**D 四向 / 衍生 / 海报**：
-- **四向拼图**：全局色彩规格**一次声明**（共享 6:3:1 主辅点缀秩序）；各格须写出**本格可见表面**上的色落点（背景墙/地面/主家具受光色），不得只抄全局句而各格无色；邻向侧壁可带邻向辅色边缘，不强制整面入画。
-- **衍生**：§B **继承而不重述**基准宫格的主辅点缀；§C 仅写光学/状态导致的色温·饱和·点缀 Delta（如雨湿加深、火光染暖）；禁另起冲突主色谱、禁破 6:3:1。
+**D 色写在哪一层**：
+- **本技能**：色彩规格在开篇声明一次（共享 6:3:1）。不写各格色落点。
+- **四宫格技能**：各格写出该格可见表面上的色落点。邻向侧壁可带邻向辅色边缘。
+- **衍生**：不在本技能写提示词。该格色落点已经在四宫里，不另起一套色谱。
 - **海报**：标题区与主视觉须有明度/色相对比；rim/环境色挂靠 ENV 光源；禁灰片糊标题；面积仍守 6:3:1。
 - 三维/二维按 §2.11/§2.12 转译语言（二维可用色块分层，仍须主辅点缀可辨、特征色名、6:3:1）。
 
 **E 自检口诀**：删掉「电影感/高级感」后，能否指出——**色卡来自全局 `color_palette` 还是主动锁的哪一部顶级大片**、主/辅/点缀面积是否 **6:3:1**、各层是否特征色（无「红/绿/黑」空壳）、辅色与点缀相对主色的**强烈对比**落在哪、提神点缀在哪、近中远三层色差如何形成**立体感与对比度**、**色层如何核销 `scene_mood`**？自然场能否指出琥珀/赭石/绛紫等穿插落点与 `山水层=` 四层交接？室内能否指出非常规辨识点？宫殿/仙宫/豪宅能否指出 `纹饰=` 母题+工艺？军队/军阵场能否指出 **≥2 型非红旗面主色** 与形状/图样差（§2.4.4）？顶格场所（§2.4.3）主色≥5 / 辅色≥6 / 点缀≥4 是否可数且面积仍 6:3:1？任一否 → 重写色彩段。  
 `negative_prompt_en` 可追加：`monochrome wash, muddy gray-brown palette, flat single-hue grading, desaturated mush, no accent color, generic red green blue labels, weak same-family contrast, broken 60-30-10 balance, low-contrast muddy palette, no depth in color layers, uniform color field, generic all-green forest, default blue sky green trees only, white-box interior, showroom flat palette, cheap miniature palace, generic immortal mountain template`。
 
-### 2.10 对话正反打与 OTS
-- 沿用上游命名格式；禁改 `_OTS_A` 等编号名。
-- **两步确认**：继承上游已写结论；本阶段**不重推**对手站位。核对时：①对手可读角 N_对手；②本镜角=`(N_对手±180)%360`；禁见「反打」就默认 180°。
-- 只改可见背景/阻隔/光源相对方向/景深层；`PlannedReverse` 须切到对向宫格截取。方向性物体可见面只记在 logic；`anchor_description` 仍只照抄程序已写入的选用参考主体；**§B 不做调整**，不在截取句里重算 F/U、镜像翻面或改墙。
-- Clean Plate：禁前景肩膀/人影/角色残留。
+### 2.10 正反打不在本技能
+角度、过肩和截取由现场编排与衍生提取决定。本技能不输出 `{N}度` 行，不改衍生提示词，不重算画面侧。开篇只锁世界。Clean Plate：开篇禁前景肩膀、人影、角色残留。
 
 ### 2.11 三维动画专项（仅 common §1.6 判三维时）
 空间骨架/四向/OTS 规则照常；只替换真人材质光影语言。次世代：PBR/GI；风格化：卡通色块+硬边阴影。`negative_prompt_en` 追加真人摄影过滤词；禁赛璐璐纯二维语言。

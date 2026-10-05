@@ -28,6 +28,7 @@ import {
     isGridCropDerivedEntity,
     isMainEnvironmentEntity,
     planDerivedGridRegen,
+    quadImagePrompt,
     readSavedGridRegenPrompt,
     resolveSubmittedGridRegenPrompt,
 } from '../derivedGridRegen';
@@ -4146,8 +4147,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
 
         setStep('generating', '正在根据新提示词生成图片...', 'Generating image with new prompt...', 80);
+        const imagePrompt = isMainEnvironmentEntity(analyzed || entity)
+            ? quadImagePrompt(finalPrompt)
+            : finalPrompt;
         const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = buildEntityImageGenerationPrompts(
-            finalPrompt,
+            imagePrompt,
             rawPrompt,
             analyzed || entity,
             allEntities
@@ -6909,8 +6913,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 effectivePromptToUse = effectivePromptToUse.replace(/【相貌】[\s\S]*?【\/相貌】/g, '【相貌】根据参考图生成【/相貌】');
             }
 
+            const imagePrompt = isMainEnvironmentEntity(activeEntity)
+                ? quadImagePrompt(effectiveFinalPrompt)
+                : effectiveFinalPrompt;
             const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = buildEntityImageGenerationPrompts(
-                effectiveFinalPrompt,
+                imagePrompt,
                 effectivePromptToUse,
                 promptEntity,
                 allEntities
@@ -7956,10 +7963,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     return { entity, skippedPrompt: true };
                 }
 
-                const finalPrompt = prependEntityGlobalStyleToPromptHead(
+                const styledPrompt = prependEntityGlobalStyleToPromptHead(
                     String(processPrompt(basePrompt, epInfo, allEntities) || '').trim(),
                     { injectIfMissing: true }
                 );
+                const finalPrompt = (!regenPlan && isMainEnvironmentEntity(entity))
+                    ? quadImagePrompt(styledPrompt)
+                    : styledPrompt;
                 if (finalPrompt.length < MIN_BATCH_IMAGE_PROMPT_CHARS) {
                     return { entity, skippedPrompt: true };
                 }

@@ -1769,15 +1769,48 @@ _QUAD_FINAL_MARKERS = (
 )
 
 
+_QUAD_CELL_MARKERS = (
+    "【四向拼图】",
+    "[0度格-左上",
+    "[90度格-右上",
+    "[180度格-左下",
+    "[270度格-右下",
+)
+
+
+def missing_quad_cell_markers(prompt: str) -> List[str]:
+    """Markers the four-grid image prompt still lacks. The opening is not one of them."""
+    text = str(prompt or "")
+    return [marker for marker in _QUAD_CELL_MARKERS if marker not in text]
+
+
+def quad_cells_prompt_ready(prompt: str) -> bool:
+    """True when the skill output is the four canvas cells, with or without the opening."""
+    return not missing_quad_cell_markers(prompt)
+
+
 def missing_main_environment_quad_markers(prompt: str) -> List[str]:
-    """Markers a main-env four-grid prompt still lacks."""
+    """Markers a stored main-env prompt still lacks. Storage keeps the opening plus the cells."""
     text = str(prompt or "")
     return [marker for marker in _QUAD_FINAL_MARKERS if marker not in text]
 
 
 def main_environment_quad_prompt_ready(prompt: str) -> bool:
-    """True when a main-env prompt keeps the opening and the four grid cells."""
+    """True when a stored main-env prompt keeps the opening and the four grid cells."""
     return not missing_main_environment_quad_markers(prompt)
+
+
+def compose_stored_quad_prompt(existing_prompt: str, returned_prompt: str) -> str:
+    """Keep the library opening and take only the four cells from the skill output."""
+    returned = str(returned_prompt or "").strip()
+    quad_at = returned.find("【四向拼图】")
+    quad = returned[quad_at:].strip() if quad_at >= 0 else ""
+    existing = str(existing_prompt or "")
+    opening_at = existing.find("【四向拼图】")
+    opening = (existing[:opening_at] if opening_at >= 0 else existing).strip()
+    if opening and "【六面一次】" in opening and quad:
+        return f"{opening}\n\n{quad}".strip()
+    return returned
 
 
 def format_main_environment_quad_apply_failure(
@@ -1793,7 +1826,7 @@ def format_main_environment_quad_apply_failure(
     ready_count = 0
     for row in rows:
         name = _clean(row.get("name")) or "(未命名)"
-        missing_markers = missing_main_environment_quad_markers(row.get("generation_prompt_cn"))
+        missing_markers = missing_quad_cell_markers(row.get("generation_prompt_cn"))
         if not missing_markers:
             ready_count += 1
             continue
@@ -1832,7 +1865,7 @@ def apply_main_environment_quad_prompts(
         prompt = _clean(row.get("generation_prompt_cn"))
         if not name:
             continue
-        if DEGREE_NAME_PATTERN.match(name) or not main_environment_quad_prompt_ready(prompt):
+        if DEGREE_NAME_PATTERN.match(name) or not quad_cells_prompt_ready(prompt):
             skipped.append(name or "")
             continue
         name_expr = func.lower(func.trim(func.coalesce(Entity.name, "")))
@@ -1850,9 +1883,13 @@ def apply_main_environment_quad_prompts(
         if existing is None:
             missing.append(name)
             continue
-        existing.generation_prompt_cn = prompt
-        existing.description = prompt
-        existing.narrative_description = prompt
+        stored = compose_stored_quad_prompt(existing.generation_prompt_cn, prompt)
+        if not main_environment_quad_prompt_ready(stored):
+            skipped.append(name)
+            continue
+        existing.generation_prompt_cn = stored
+        existing.description = stored
+        existing.narrative_description = stored
         updated.append(name)
     return {"updated": updated, "missing": missing, "skipped": skipped}
 

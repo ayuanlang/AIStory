@@ -838,7 +838,7 @@ async def execute_scene_analysis_flow_node(
                 DEGREE_NAME_PATTERN,
                 apply_main_environment_quad_prompts,
                 format_main_environment_quad_apply_failure,
-                main_environment_quad_prompt_ready,
+                quad_cells_prompt_ready,
             )
 
             subjects = {}
@@ -854,7 +854,7 @@ async def execute_scene_analysis_flow_node(
             ]
             ready_rows = [
                 row for row in named_rows
-                if main_environment_quad_prompt_ready(row.get("generation_prompt_cn"))
+                if quad_cells_prompt_ready(row.get("generation_prompt_cn"))
             ]
             applied = apply_main_environment_quad_prompts(
                 db,

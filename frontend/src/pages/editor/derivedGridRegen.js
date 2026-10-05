@@ -282,6 +282,16 @@ export function resolveSubmittedGridRegenPrompt(entity, plan, draft) {
     return ensureDerivedGridRegenAppearanceLock(stripOpeningWorldFromRegenPrompt(text));
 }
 
+export function quadImagePrompt(text) {
+    const raw = String(text || '');
+    const index = raw.indexOf('【四向拼图】');
+    if (index < 0) return raw.trim();
+    const style = raw.slice(0, index).match(/\[Global Style\]\([^)]*\)\.?/);
+    const prefix = style ? style[0].trim() : '';
+    const quad = raw.slice(index).trim();
+    return prefix ? `${prefix}\n${quad}` : quad;
+}
+
 export function stripOpeningWorldFromRegenPrompt(text) {
     const openingSection = /【(?:定位|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|本角开篇可见面|主体材质一次)】[\s\S]*?(?=【(?:定位|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|本角开篇可见面|主体材质一次)】|\[(?:0|90|180|270)度格|$)/g;
     return String(text || '')

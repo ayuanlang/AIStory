@@ -7,8 +7,10 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     format_camera_switch_line,
     parse_derived_env_extract_items,
     extract_grid_cell_prompt,
+    compose_stored_quad_prompt,
     format_main_environment_quad_apply_failure,
     main_environment_quad_prompt_ready,
+    quad_cells_prompt_ready,
     parse_quad_degrees_from_prompt,
     resolve_grid_for_angle,
     build_derived_environment_item,
@@ -230,6 +232,15 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     assert main_environment_quad_prompt_ready(opening + cells) is True
     assert main_environment_quad_prompt_ready(opening) is False
     assert main_environment_quad_prompt_ready(cells) is False
+    assert quad_cells_prompt_ready(cells) is True
+    assert quad_cells_prompt_ready(opening) is False
+    stored = compose_stored_quad_prompt(opening, cells)
+    assert stored.startswith("【六面一次】")
+    assert "北壁=封闭面" in stored
+    replaced = compose_stored_quad_prompt(opening + "【四向拼图】\n旧格\n", cells)
+    assert replaced.count("【四向拼图】") == 1
+    assert "旧格" not in replaced
+    assert "[0度格-左上·北]" in replaced
 
 
 def test_quad_apply_failure_names_the_gap():
