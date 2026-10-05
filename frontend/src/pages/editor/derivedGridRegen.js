@@ -279,102 +279,28 @@ export function resolveSubmittedGridRegenPrompt(entity, plan, draft) {
         const saved = readSavedGridRegenPrompt(entity);
         text = saved || String(plan?.regenPrompt || '').trim();
     }
-    return ensureOpeningVisibleContext(ensureDerivedGridRegenAppearanceLock(text), plan?.openingContext);
+    return ensureDerivedGridRegenAppearanceLock(stripOpeningWorldFromRegenPrompt(text));
 }
 
-const LOOK_BY_ANGLE = { 0: '望北', 90: '望东', 180: '望南', 270: '望西' };
-const HIDDEN_WALL_BY_ANGLE = { 0: '南壁', 90: '西壁', 180: '北壁', 270: '东壁' };
-const VISIBLE_WALLS_BY_ANGLE = {
-    0: [
-        { wall: '北壁', role: '正面' },
-        { wall: '西壁', role: '画面左' },
-        { wall: '东壁', role: '画面右' },
-    ],
-    90: [
-        { wall: '东壁', role: '正面' },
-        { wall: '北壁', role: '画面左' },
-        { wall: '南壁', role: '画面右' },
-    ],
-    180: [
-        { wall: '南壁', role: '正面' },
-        { wall: '东壁', role: '画面左' },
-        { wall: '西壁', role: '画面右' },
-    ],
-    270: [
-        { wall: '西壁', role: '正面' },
-        { wall: '南壁', role: '画面左' },
-        { wall: '北壁', role: '画面右' },
-    ],
-};
-
-export function openingSourceText(prompt) {
-    const text = String(prompt || '');
-    const cut = text.search(/【四向拼图】/);
-    return cut < 0 ? text : text.slice(0, cut);
+export function stripOpeningWorldFromRegenPrompt(text) {
+    const openingSection = /【(?:定位|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|本角开篇可见面|主体材质一次)】[\s\S]*?(?=【(?:定位|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|本角开篇可见面|主体材质一次)】|\[(?:0|90|180|270)度格|$)/g;
+    return String(text || '')
+        .replace(openingSection, '')
+        .replace(/\[(0|90|180|270)度格[-－—](左上|右上|右下|左下)·[北东南西]\]/g, '[$1度格-$2]')
+        .replace(/^\s*角标=.*$/gm, '')
+        .replace(/[ \t]*角标=[^。\n]*[。]?/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
 }
 
-export function extractBracketSection(prompt, title) {
-    const text = String(prompt || '');
-    const token = `【${title}】`;
-    const start = text.indexOf(token);
-    if (start < 0) return '';
-    const bodyStart = start + token.length;
-    const next = text.slice(bodyStart).search(/【[^】]+】/);
-    const end = next < 0 ? text.length : bodyStart + next;
-    return text.slice(start, end).trim();
-}
-
-export function extractMiddleBlock(prompt) {
-    const opening = openingSourceText(prompt);
-    const headed = extractBracketSection(opening, '中区');
-    if (headed) return headed;
-    const six = extractBracketSection(opening, '六面一次') || opening;
-    const match = six.match(/(?:^|\n)([ \t]*-?[ \t]*中区：[^\n]*)/);
-    return match ? match[1].trim() : '';
-}
-
-export function buildOpeningVisibleContext(mainPrompt, angle) {
-    const resolved = [0, 90, 180, 270].includes(Number(angle)) ? Number(angle) : 0;
-    const opening = openingSourceText(mainPrompt);
-    const walls = VISIBLE_WALLS_BY_ANGLE[resolved];
-    const hidden = HIDDEN_WALL_BY_ANGLE[resolved];
-    const roleLine = walls.map((item) => `${item.role}用${item.wall}`).join('，');
-    const parts = [
-        `【本角开篇可见面】${resolved}度${LOOK_BY_ANGLE[resolved]}。${roleLine}。${hidden}在镜头后，不写入画面。中区与光学说明沿用开篇。摆位、朝向、走向、位置以随后的宫格画面句为准。`,
-    ];
-    walls.forEach((item) => {
-        const section = extractBracketSection(opening, item.wall);
-        if (!section) return;
-        const body = section.replace(`【${item.wall}】`, '').trim();
-        if (!body) return;
-        parts.push(`【${item.wall}·${item.role}】\n${body}`);
-    });
-    const middle = extractMiddleBlock(opening);
-    if (middle) {
-        const body = middle.replace(/^【中区】/, '').replace(/^[ \t]*-?[ \t]*(?:中区：)?/, '').trim();
-        if (body) parts.push(`【中区】\n${body}`);
-    }
-    const optical = extractBracketSection(opening, '光学说明');
-    if (optical) parts.push(optical);
-    return parts.length > 1 ? parts.join('\n') : '';
-}
-
-export function ensureOpeningVisibleContext(text, openingContext) {
-    const value = String(text || '').trim();
-    const block = String(openingContext || '').trim();
-    if (!value || !block || value.includes('【本角开篇可见面】')) return value;
-    return `${value}\n\n${block}`;
-}
-
-export function buildDerivedGridRegenPrompt({ mainName, grid, cellPrompt, openingContext = '' }) {
-    const cell = String(cellPrompt || '').trim();
-    const opening = String(openingContext || '').trim();
+export function buildDerivedGridRegenPrompt({ mainName, grid, cellPrompt }) {
+    const cell = stripOpeningWorldFromRegenPrompt(cellPrompt);
     return [
         `参照这张参考图。它是主环境「${mainName}」四向拼图中的${grid}，作为该格画面参照。`,
         '按下面这一格提示词修正生成一张16:9单镜头成片。',
         DERIVED_GRID_REGEN_APPEARANCE_LOCK,
         '成片去掉宫格分割线、角标、格标、度数标和拼缝，仍是这一格里的同一处空间，单张完整镜头。',
-        ...(opening ? ['', opening] : []),
+        '光学、结构和摆位以这一格画面句为准。',
         '',
         cell,
     ].join('\n');
@@ -407,19 +333,16 @@ export function planDerivedGridRegen(entity, entities) {
             ...extracted,
         };
     }
-    const openingContext = buildOpeningVisibleContext(mainPrompt, angle);
     return {
         ok: true,
         errorCode: '',
         mainEntity,
         mainName: String(mainEntity.name || mainEntity.name_en || '').trim(),
         ...extracted,
-        openingContext,
         regenPrompt: buildDerivedGridRegenPrompt({
             mainName: String(mainEntity.name || mainEntity.name_en || '').trim(),
             grid: extracted.grid,
             cellPrompt: extracted.cellPrompt,
-            openingContext,
         }),
     };
 }
