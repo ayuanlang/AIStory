@@ -236,26 +236,48 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     assert main_environment_quad_prompt_ready(cells) is False
     assert quad_cells_prompt_ready(cells) is True
     assert quad_cells_prompt_ready(opening) is False
-    stored = compose_stored_quad_prompt(opening, cells)
-    assert stored.startswith("【四向拼图】")
+    draft = (
+        "【定位】\n后厨。\n"
+        "【主体外形】\n[@灶台]（N-001）外形=双眼灶，材质=黑铸铁，纹样=无，颜色=墨黑。\n"
+        "【六面一次】\n北壁=封闭面。\n"
+        "【北壁】\n白色瓷砖墙。\n"
+    )
+    stored = compose_stored_quad_prompt(draft, cells)
+    assert stored.startswith("【定位】")
+    assert "【主体外形】" in stored
+    assert "黑铸铁" in stored
+    assert "【四向拼图】" in stored
     assert "【六面一次】" not in stored
-    assert "北壁=封闭面" not in stored
-    replaced = compose_stored_quad_prompt(opening + "【四向拼图】\n旧格\n", cells)
+    assert "【北壁】" not in stored
+    assert "白色瓷砖" not in stored
+    replaced = compose_stored_quad_prompt(draft + "【四向拼图】\n旧格\n", cells)
     assert replaced.count("【四向拼图】") == 1
     assert "旧格" not in replaced
-    assert "【六面一次】" not in replaced
     assert "[0度格-左上·北]" in replaced
     plain = compose_stored_quad_prompt("【构图】\n大厅。\n", cells)
     assert plain.startswith("【四向拼图】")
     assert "【构图】" not in plain
     assert compose_stored_quad_prompt("", cells) == cells.strip()
     echoed = compose_stored_quad_prompt(
-        opening,
-        "【主环境设计稿】客栈大堂\n" + opening + cells,
+        "",
+        "【主环境设计稿】客栈大堂\n" + draft + cells,
+        draft,
     )
-    assert echoed.startswith("【四向拼图】")
+    assert echoed.startswith("【定位】")
+    assert "【主体外形】" in echoed
     assert "【主环境设计稿】" not in echoed
     assert "【六面一次】" not in echoed
+    assert "【北壁】" not in echoed
+    rewritten = (
+        "【定位】\n改过的定位。\n"
+        "【主体外形】\n[@灶台]（N-001）外形=双眼灶，材质=白瓷，纹样=无，颜色=白。\n"
+        + cells
+    )
+    copied = compose_stored_quad_prompt(draft, rewritten, draft)
+    assert "后厨" in copied
+    assert "改过的定位" not in copied
+    assert "黑铸铁" in copied
+    assert "白瓷" not in copied
     kept = environment_opening_to_keep(opening + cells, "", "")
     assert kept.startswith("【六面一次】")
     assert "【四向拼图】" not in kept

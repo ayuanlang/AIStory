@@ -282,14 +282,27 @@ export function resolveSubmittedGridRegenPrompt(entity, plan, draft) {
     return ensureDerivedGridRegenAppearanceLock(stripOpeningWorldFromRegenPrompt(text));
 }
 
+function markedSection(text, name) {
+    const source = String(text || '');
+    const start = source.indexOf(`【${name}】`);
+    if (start < 0) return '';
+    const rest = source.slice(start + `【${name}】`.length);
+    const next = rest.search(/【(?:定位|主体外形|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|四向拼图)】/);
+    const body = next < 0 ? rest : rest.slice(0, next);
+    return `【${name}】${body}`.trim();
+}
+
 export function quadImagePrompt(text) {
-    const raw = String(text || '');
+    const raw = stripMainEnvironmentDraftWrapper(text);
     const index = raw.indexOf('【四向拼图】');
     if (index < 0) return raw.trim();
     const style = raw.slice(0, index).match(/\[Global Style\]\([^)]*\)\.?/);
     const prefix = style ? style[0].trim() : '';
     const quad = raw.slice(index).trim();
-    return prefix ? `${prefix}\n${quad}` : quad;
+    const kept = [prefix, markedSection(raw, '定位'), markedSection(raw, '主体外形'), quad]
+        .map((part) => String(part || '').trim())
+        .filter(Boolean);
+    return kept.join('\n\n');
 }
 
 export function stripMainEnvironmentDraftWrapper(text) {

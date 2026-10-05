@@ -1816,13 +1816,31 @@ _DESIGN_BLOCK_RE = re.compile(
 )
 
 
+_KEEP_IN_CHINESE_PROMPT = ("定位", "主体外形")
+_SECTION_RE = re.compile(
+    r"【(定位|主体外形|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|四向拼图)】"
+)
+
+
 def _quad_only_prompt(prompt: str) -> str:
-    """The Chinese image prompt is the four cells. Drop any opening echoed in front."""
+    """The four cells, without any opening echoed in front."""
     text = strip_main_environment_draft_wrapper(prompt)
     quad_at = text.find("【四向拼图】")
     if quad_at < 0:
         return ""
     return text[quad_at:].strip()
+
+
+def _marked_section(text: str, name: str) -> str:
+    """One bracket section, from its title up to the next known section."""
+    body = strip_main_environment_draft_wrapper(text)
+    marks = list(_SECTION_RE.finditer(body))
+    for index, match in enumerate(marks):
+        if match.group(1) != name:
+            continue
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(body)
+        return body[match.start():end].strip()
+    return ""
 
 
 def _looks_like_environment_opening(text: str) -> bool:
@@ -1865,10 +1883,31 @@ def extract_named_design_openings(source_text: str) -> Dict[str, str]:
     return found
 
 
-def compose_stored_quad_prompt(existing_prompt: str, returned_prompt: str) -> str:
-    """Replace the asset Chinese prompt with the four cells and drop the previous opening."""
-    del existing_prompt
-    return _quad_only_prompt(returned_prompt)
+def compose_stored_quad_prompt(
+    existing_prompt: str,
+    returned_prompt: str,
+    named_opening: str = "",
+) -> str:
+    """Chinese prompt keeps 定位 and the one subject-appearance sheet, then the four cells.
+
+    Wall sections and the rest of the opening stay out. Appearance is not copied from those walls.
+    """
+    draft_sources = (named_opening, existing_prompt)
+    parts: List[str] = []
+    for name in _KEEP_IN_CHINESE_PROMPT:
+        section = ""
+        for source in draft_sources:
+            section = _marked_section(source, name)
+            if section:
+                break
+        if not section:
+            section = _marked_section(returned_prompt, name)
+        if section:
+            parts.append(section)
+    quad = _quad_only_prompt(returned_prompt)
+    if quad:
+        parts.append(quad)
+    return "\n\n".join(parts).strip()
 
 
 def format_main_environment_quad_apply_failure(
@@ -1949,14 +1988,14 @@ def apply_main_environment_quad_prompts(
         if existing is None:
             missing.append(name)
             continue
-        stored = compose_stored_quad_prompt(existing.generation_prompt_cn, prompt)
-        if not quad_cells_prompt_ready(stored):
-            skipped.append(name)
-            continue
         attrs = dict(existing.custom_attributes) if isinstance(existing.custom_attributes, dict) else {}
         named_opening = ""
         if isinstance(openings, dict):
             named_opening = str(openings.get(name.lower()) or "")
+        stored = compose_stored_quad_prompt(existing.generation_prompt_cn, prompt, named_opening)
+        if not quad_cells_prompt_ready(stored):
+            skipped.append(name)
+            continue
         opening = environment_opening_to_keep(
             existing.generation_prompt_cn,
             str(attrs.get(MAIN_ENVIRONMENT_OPENING_ATTR) or ""),
