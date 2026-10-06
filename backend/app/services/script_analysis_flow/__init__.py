@@ -2864,10 +2864,29 @@ def mark_storyboard_generation_applied(
         from app.services.scene_no_utils import canonicalize_progress_scene_marker
         marker = canonicalize_progress_scene_marker(marker, episode_prefix=prefix) or marker
     script_id = f"episode:{eid}"
+    written_shots = int(shot_count or 0)
+    if written_shots <= 0 and marker:
+        try:
+            existing = (
+                db.query(ScriptProgressPipelineNode)
+                .filter(
+                    ScriptProgressPipelineNode.project_id == pid,
+                    ScriptProgressPipelineNode.episode_id == eid,
+                    ScriptProgressPipelineNode.node_name == "storyboard_generation",
+                    ScriptProgressPipelineNode.scene_id == marker,
+                )
+                .first()
+            )
+            prev_meta = existing.runtime_meta if existing is not None and isinstance(getattr(existing, "runtime_meta", None), dict) else {}
+            prev_shots = int(prev_meta.get("shot_count") or 0)
+            if prev_shots > 0:
+                written_shots = prev_shots
+        except Exception:
+            pass
     meta = {
         "business_event": "applied_from_workspace",
         "business_reason": "分镜已写入工作区",
-        "shot_count": int(shot_count or 0),
+        "shot_count": written_shots,
     }
     if marker:
         upsert_pipeline_node_status(

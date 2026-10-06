@@ -391,6 +391,54 @@ def test_mark_storyboard_generation_applied_accepts_frontend_scene_marker(monkey
     assert calls[0]["runtime_meta"]["business_event"] == "applied_from_workspace"
 
 
+def test_mark_storyboard_generation_applied_keeps_positive_shot_count_when_report_is_zero(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import script_analysis_flow as flow
+
+    calls = []
+
+    def _upsert(_db, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    class _Existing:
+        runtime_meta = {"shot_count": 6, "business_event": "applied_from_workspace"}
+
+    class _Query:
+        def __init__(self, model):
+            self.model = model
+
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            name = getattr(self.model, "__name__", "")
+            if name == "ScriptProgressPipelineNode":
+                return _Existing()
+            return None
+
+    class _Session:
+        def query(self, model, *_args, **_kwargs):
+            return _Query(model)
+
+    monkeypatch.setattr(flow, "upsert_pipeline_node_status", _upsert)
+    monkeypatch.setattr(
+        flow,
+        "_episode_workspace_storyboard_coverage",
+        lambda *_args, **_kwargs: {"scene_count": 1, "with_shots": 1, "ok": True, "no_scenes": False},
+    )
+    flow.mark_storyboard_generation_applied(
+        _Session(),
+        project_id=9,
+        episode_id=3,
+        scene_marker="EP01_SC04",
+        shot_count=0,
+    )
+    assert calls[0]["status"] == "success"
+    assert calls[0]["scene_id"] == "EP01_SC04"
+    assert calls[0]["runtime_meta"]["shot_count"] == 6
+
+
 def test_mark_storyboard_generation_started_writes_scene_and_episode_running(monkeypatch):
     from types import SimpleNamespace
     from app.services import script_analysis_flow as flow

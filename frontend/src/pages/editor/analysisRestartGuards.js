@@ -71,6 +71,33 @@ export function shouldHoldStoryboardKickoffForQueuedPlaceholder(stagingNode, sto
     return stagingDoneAt <= queuedAt;
 }
 
+/**
+ * A rerun queues storyboard_generation before drama finishes. That row is a
+ * placeholder. Success / warning / failed / running are real node states:
+ * a leftover business_event of queued must not keep the cell on 等待中.
+ */
+export function isStoryboardQueuedPlaceholderNode(node) {
+    const status = String(node?.status || '').trim().toLowerCase();
+    if (['success', 'warning', 'failed', 'blocked', 'canceled', 'running'].includes(status)) return false;
+    const event = String(node?.runtime_meta?.business_event || '').trim().toLowerCase();
+    return status === 'queued' || event === 'queued' || Boolean(node?.runtime_meta?.rerun_cleared);
+}
+
+const STORYBOARD_APPLIED_EVENTS = new Set([
+    'applied_from_workspace',
+    'applied_from_frontend',
+    'reconciled_from_workspace',
+]);
+
+/** Shots are in the workspace when the count is positive or the node was applied. */
+export function storyboardShotsLanded(node) {
+    const shotCount = Number(node?.runtime_meta?.shot_count || 0);
+    if (shotCount > 0) return true;
+    const status = String(node?.status || '').trim().toLowerCase();
+    const event = String(node?.runtime_meta?.business_event || '').trim().toLowerCase();
+    return ['success', 'warning'].includes(status) && STORYBOARD_APPLIED_EVENTS.has(event);
+}
+
 export function isSuccessfulPipelineNode(node, names = []) {
     const name = String(node?.node_name || '').trim();
     if (names.length && !names.includes(name)) return false;

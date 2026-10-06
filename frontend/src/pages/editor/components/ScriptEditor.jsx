@@ -63,7 +63,7 @@ import {
     filterGlobalReuseDropdownAssets,
     isAssetFromEpisode,
 } from '../reuseEnvAssets';
-import { hasSuccessfulPipelineNode, isThisRunPipelineNode, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff } from '../analysisRestartGuards';
+import { hasSuccessfulPipelineNode, isStoryboardQueuedPlaceholderNode, isThisRunPipelineNode, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff, storyboardShotsLanded } from '../analysisRestartGuards';
 
 import { 
     fetchProject, 
@@ -996,7 +996,26 @@ const applyStoryboardProgressToNode = (node, item) => {
     if (!nextStatus) return node;
     if (nextStatus === 'failed') return applyStoryboardProgressFailureToNode(node, item);
     if (nextStatus === 'success') {
-        return { ...node, status: 'success', progress_percent: 100 };
+        const prevMeta = node?.runtime_meta && typeof node.runtime_meta === 'object' ? node.runtime_meta : {};
+        const shotCount = Number(item?.shotCount || item?.shot_count || prevMeta.shot_count || 0) || 0;
+        const nextMeta = { ...prevMeta };
+        delete nextMeta.rerun_cleared;
+        nextMeta.business_event = 'applied_from_frontend';
+        if (
+            !String(prevMeta.business_reason || '').trim()
+            || String(prevMeta.business_event || '').trim().toLowerCase() === 'queued'
+        ) {
+            nextMeta.business_reason = '分镜已写入工作区';
+        }
+        if (shotCount > 0) nextMeta.shot_count = shotCount;
+        return {
+            ...node,
+            status: 'success',
+            progress_percent: 100,
+            last_error_code: '',
+            last_error_message: '',
+            runtime_meta: nextMeta,
+        };
     }
     const prevMeta = node?.runtime_meta && typeof node.runtime_meta === 'object' ? node.runtime_meta : {};
     return {
@@ -1034,7 +1053,11 @@ const overlayStoryboardPipelineNodesFromProgress = (nodes, progress) => {
                 const mappedError = String(mapped?.last_error_message || '').trim();
                 const alreadySame = mappedStatus === current
                     && mappedError === String(node?.last_error_message || '').trim()
-                    && Number(mapped?.progress_percent || 0) === Number(node?.progress_percent || 0);
+                    && Number(mapped?.progress_percent || 0) === Number(node?.progress_percent || 0)
+                    && String(mapped?.runtime_meta?.business_event || '').trim()
+                        === String(node?.runtime_meta?.business_event || '').trim()
+                    && Number(mapped?.runtime_meta?.shot_count || 0)
+                        === Number(node?.runtime_meta?.shot_count || 0);
                 if (!alreadySame) {
                     changed = true;
                     return mapped;
@@ -11649,6 +11672,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 sceneOrder,
                 status: 'completed',
                 error: '',
+                shotCount: Number(existingCount || 0) || 0,
             });
             publishStoryboardTaskPanelStatus({
                 markerSceneId: stableMarker,
@@ -12172,7 +12196,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     );
                     await applyGeneratedRows(true);
                 }
-                const completedProgress = updateStoryboardTaskItem(stableMarker, { status: 'completed', error: '' });
+                const completedProgress = updateStoryboardTaskItem(stableMarker, {
+                    status: 'completed',
+                    error: '',
+                    shotCount: generatedRows.length,
+                });
                 publishStoryboardTaskPanelStatus({
                     markerSceneId: stableMarker,
                     sceneOrder,
@@ -31783,6 +31811,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 sceneOrder: item.sceneOrder,
                                 status: 'completed',
                                 error: '',
+                                shotCount: existingCount,
                             });
                             onLog?.(
                                 t(
@@ -36743,12 +36772,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const liveKickoff = sceneHasLiveStoryboardKickoff(sceneId);
                             const node = findScenePipelineNode('storyboard_generation', sceneId);
                             const fromNode = stateFromPipelineNode(node);
-                            const storyboardNodeStatus = String(node?.status || '').trim().toLowerCase();
-                            const storyboardNodeEvent = String(node?.runtime_meta?.business_event || '').trim().toLowerCase();
                             // Scene rerun queues storyboard_generation before 文戏 finishes.
-                            // queued is a placeholder, not generateSceneShots.
-                            const storyboardQueuedPlaceholder = storyboardNodeStatus === 'queued'
-                                || storyboardNodeEvent === 'queued';
+                            // Success / applied is finished. A leftover queued event must not keep 等待中.
+                            const storyboardQueuedPlaceholder = isStoryboardQueuedPlaceholderNode(node);
                             const nodeTimedOut = /NODE_TIMEOUT|超过\s*\d+s\s*无进展|timed out after/i.test(
                                 String(node?.last_error_code || node?.last_error_message || node?.runtime_meta?.business_reason || '')
                             );
@@ -36762,25 +36788,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const subskillActive = ['running', 'queued'].includes(subskillStatus);
                             const subskillStillOpen = subskillActive
                                 && !['completed', 'storyboard'].includes(subskillStep);
-                            const persistedShotCount = Number(node?.runtime_meta?.shot_count || 0);
+                            const shotsLanded = storyboardShotsLanded(node);
                             const thisRunGeneratingStatus = ['starting', 'generating', 'importing'].includes(status)
                                 || ['starting', 'generating', 'importing'].includes(refStatus);
-                            // Queued after a 文戏 rerun is a placeholder. Leftover success must not
-                            // keep 分镜 on 已完成, and must not look like generateSceneShots has started.
-                            if ((pendingAfterSubskill || storyboardQueuedPlaceholder) && !thisRunGeneratingStatus) {
-                                return { ready: false, active: false, failed: false, detail: '' };
-                            }
-                            if (subskillActive && subskillStep === 'storyboard') {
-                                return {
-                                    ready: false,
-                                    active: true,
-                                    failed: false,
-                                    detail: t('已开始运行', 'Started'),
-                                };
-                            }
-                            if (fromNode.ready && persistedShotCount > 0 && !pendingAfterSubskill && !subskillStillOpen) {
-                                return { ready: true, active: false, failed: false, detail: '' };
-                            }
                             const thisRunItem = isThisRunStoryboardProgressItem(
                                 item,
                                 analysisTimerStartedAtRef.current,
@@ -36791,6 +36801,36 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 analysisTimerStartedAtRef.current,
                                 { requireRunClock: false }
                             );
+                            const eitherStoryboardOpen = thisRunGeneratingStatus
+                                || ['waiting_env', 'waiting_import'].includes(status)
+                                || ['waiting_env', 'waiting_import'].includes(refStatus);
+                            const thisRunCompleted = !eitherStoryboardOpen && (
+                                (status === 'completed' && thisRunItem)
+                                || (
+                                    refStatus === 'completed'
+                                    && (!status || status === 'completed')
+                                    && thisRunRefItem
+                                )
+                            );
+                            // Queued after a 文戏 rerun is a placeholder. This-run completion still
+                            // flips the cell to 已完成 once shots are written.
+                            if ((pendingAfterSubskill || storyboardQueuedPlaceholder) && !thisRunGeneratingStatus && !thisRunCompleted) {
+                                return { ready: false, active: false, failed: false, detail: '' };
+                            }
+                            if (thisRunCompleted) {
+                                return { ready: true, active: false, failed: false, detail: '' };
+                            }
+                            if (subskillActive && subskillStep === 'storyboard') {
+                                return {
+                                    ready: false,
+                                    active: true,
+                                    failed: false,
+                                    detail: t('已开始运行', 'Started'),
+                                };
+                            }
+                            if (fromNode.ready && shotsLanded && !pendingAfterSubskill && !subskillStillOpen) {
+                                return { ready: true, active: false, failed: false, detail: '' };
+                            }
                             // 文戏/武戏/现场编排/建置仍在跑时，分镜只排队，不能显示成已开始运行。
                             if (subskillStillOpen) {
                                 return { ready: false, active: false, failed: false, detail: '' };
@@ -36830,7 +36870,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 return { ready: false, active: true, failed: false, detail: '' };
                             }
                             const settledCompleted = status === 'completed' || refStatus === 'completed';
-                            if (settledCompleted && persistedShotCount > 0 && (
+                            if (settledCompleted && shotsLanded && (
                                 thisRunItem
                                 || thisRunRefItem
                                 || fromNode.ready
@@ -36856,7 +36896,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ) {
                                 return { ready: false, active: false, failed: false, detail: '' };
                             }
-                            if (fromNode.ready && persistedShotCount > 0 && !ignoreLeftoverStoryboard) {
+                            if (fromNode.ready && shotsLanded && !ignoreLeftoverStoryboard) {
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
                             if (

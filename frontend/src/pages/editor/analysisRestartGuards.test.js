@@ -2,8 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     isThisRunPipelineNode,
+    isStoryboardQueuedPlaceholderNode,
     shouldHoldStoryboardKickoffForQueuedPlaceholder,
     shouldRejectLeftoverStagingKickoff,
+    storyboardShotsLanded,
 } from './analysisRestartGuards.js';
 
 describe('analysisRestartGuards', () => {
@@ -98,6 +100,32 @@ describe('analysisRestartGuards', () => {
             runtime_meta: { business_event: 'queued', rerun_cleared: true },
         };
         assert.equal(shouldHoldStoryboardKickoffForQueuedPlaceholder(staging, queued), false);
+    });
+
+    it('does not keep a finished storyboard on the queued placeholder', () => {
+        assert.equal(isStoryboardQueuedPlaceholderNode({
+            status: 'success',
+            runtime_meta: { business_event: 'queued', shot_count: 0 },
+        }), false);
+        assert.equal(isStoryboardQueuedPlaceholderNode({
+            status: 'queued',
+            runtime_meta: { business_event: 'queued', rerun_cleared: true },
+        }), true);
+    });
+
+    it('treats an applied storyboard node as landed when shot_count was reported as 0', () => {
+        assert.equal(storyboardShotsLanded({
+            status: 'success',
+            runtime_meta: { business_event: 'applied_from_workspace', shot_count: 0 },
+        }), true);
+        assert.equal(storyboardShotsLanded({
+            status: 'queued',
+            runtime_meta: { business_event: 'queued', shot_count: 0 },
+        }), false);
+        assert.equal(storyboardShotsLanded({
+            status: 'success',
+            runtime_meta: { business_event: 'applied_from_workspace', shot_count: 6 },
+        }), true);
     });
 
     it('does not hold kickoff when storyboard is already a finished node', () => {
