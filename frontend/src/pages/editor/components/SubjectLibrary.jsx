@@ -669,7 +669,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
     const [refImage, setRefImage] = useState(null);
     const [inheritAppearance, setInheritAppearance] = useState(true);
-    const [derivedImageGenMode, setDerivedImageGenMode] = useState('regen');
+    const [derivedImageGenMode, setDerivedImageGenMode] = useState('crop');
     const [gridRegenPreparing, setGridRegenPreparing] = useState(false);
     const [gridRegenPromptDrafts, setGridRegenPromptDrafts] = useState({});
     const [gridRegenPromptSaving, setGridRegenPromptSaving] = useState(false);
@@ -680,7 +680,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return planDerivedGridRegen(selectedEntity, allEntities);
     }, [selectedEntity, allEntities]);
     useEffect(() => {
-        setDerivedImageGenMode('regen');
+        setDerivedImageGenMode('crop');
     }, [selectedEntity?.id]);
     /** Dependency tokens excluded from this generation's asset-reference refs (session-only). */
     const [excludedVisualDepKeys, setExcludedVisualDepKeys] = useState([]);
@@ -701,7 +701,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return planDerivedGridRegen(viewingEntity, allEntities);
     }, [viewingEntity, allEntities]);
     useEffect(() => {
-        setDerivedImageGenMode('regen');
+        setDerivedImageGenMode('crop');
     }, [viewingEntity?.id]);
     useEffect(() => {
         const syncDraft = (entity, plan) => {
@@ -7887,7 +7887,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         });
 
         const gridRegenReadiness = (ent) => {
-            if (!isGridCropDerivedEntity(ent)) return { state: 'plain' };
+            if (derivedImageGenMode !== 'regen' || !isGridCropDerivedEntity(ent)) return { state: 'plain' };
             const plan = planDerivedGridRegen(ent, entitiesWithLatestImages());
             if (plan?.ok) return { state: 'ready', plan };
             if (plan?.errorCode === 'missing_main_image') {
