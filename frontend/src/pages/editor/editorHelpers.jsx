@@ -2365,6 +2365,15 @@ export function normalizeImageSizeOption(value) {
     return '';
 }
 
+const IMAGE_SIZE_LADDER = ['0.5K', '1K', '2K', '4K'];
+
+export function bumpImageSizeOption(value) {
+    const current = normalizeImageSizeOption(value);
+    const index = IMAGE_SIZE_LADDER.indexOf(current);
+    if (index < 0) return '4K';
+    return IMAGE_SIZE_LADDER[Math.min(index + 1, IMAGE_SIZE_LADDER.length - 1)];
+}
+
 export function normalizeAspectRatioOption(value) {
     const raw = String(value || '').trim();
     if (!raw) return '';

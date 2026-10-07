@@ -127,6 +127,13 @@ def test_first_cut_json_matches_environment_design_template():
     assert "禁止重写桌椅朝向" in prompt
     assert "禁以画外主体定位" in prompt
     assert "只切割，不要改画" in prompt
+    assert prompt.startswith("参考图是一张2×2四宫格")
+    assert "左半边和下半边" in prompt
+    assert "从上往下取纵向50%到100%" in prompt
+    assert "左上、右上、右下" in prompt
+    assert "Crop only the bottom-left quadrant" in prompt
+    assert prompt.index("只保留") < prompt.index("远锚=")
+    assert prompt.rindex("三格不在画面里") > prompt.index("远锚=")
     assert item["visual_dependencies"] == ["ENV:[客栈大堂]"]
     assert item["description_cn"] == ""
     assert item["dependency_strategy"]["type"] == "Type A"
@@ -174,6 +181,14 @@ def test_resolve_grid_follows_existing_main_env_prompt():
     )
     assert legacy_crop["token"] == "右下180度"
     assert legacy_crop["grid"] == "右下180度格"
+    legacy_item = build_derived_environment_item(
+        {"name": "180度客栈大堂", "main": "客栈大堂", "angle": 180, "kind": "第一刀"},
+        main_prompt="四宫度数=左上0度｜右上90度｜右下180度｜左下270度。[180度格-右下·南]",
+    )
+    legacy_prompt = legacy_item["generation_prompt_cn"]
+    assert "右半边和下半边" in legacy_prompt
+    assert "Crop only the bottom-right quadrant" in legacy_prompt
+    assert "左上、右上、左下" in legacy_prompt
     existing = (
         "【四向拼图】四宫度数=左上90度｜右上0度｜右下270度｜左下180度。"
         "[90度格-左上] [0度格-右上] [270度格-右下] [180度格-左下]"
@@ -523,7 +538,9 @@ def test_sample_ingest_writes_frame_and_reference_anchors():
     assert "楼梯口" not in zero
     assert "账房窗" not in zero
     assert "参照物=" not in zero
-    assert by_name["0度客栈大堂"]["generation_prompt_cn"].startswith("所属主环境=客栈大堂")
+    zero_prompt = by_name["0度客栈大堂"]["generation_prompt_cn"]
+    assert "所属主环境=客栈大堂" in zero_prompt
+    assert zero_prompt.startswith("参考图是一张2×2四宫格")
 
 
 def test_chosen_reference_subjects_cover_explicit_env_anchors():

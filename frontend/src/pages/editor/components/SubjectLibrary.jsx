@@ -16,7 +16,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, clearBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityImageGenerationPrompts, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, entityImageNeedsOssPersist, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, clearBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityImageGenerationPrompts, normalizeImageSizeOption, bumpImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, entityImageNeedsOssPersist, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick
 } from '../editorHelpers';
 
 import { generateEntityFromText, generateEntityFromImage, generateEntityDerived } from '../../../services/api';
@@ -79,7 +79,6 @@ import {
     getPromptSubmitLanguagePreference,
     resolvePromptSubmitLanguage,
     translateText,
-    refinePrompt,
     analyzeScene,
     analyzeAssetImage,
     waitForAsyncTask,
@@ -811,7 +810,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [entityRefAudioSunoPersonaId, setEntityRefAudioSunoPersonaId] = useState('');
     const [entityRefAudioSunoPersonaModel, setEntityRefAudioSunoPersonaModel] = useState('');
     const [advancedInstruction, setAdvancedInstruction] = useState('');
-    const [isAdvancedOptimizing, setIsAdvancedOptimizing] = useState(false);
 
     const ENTITY_REF_AUDIO_TONE_OPTIONS = useMemo(() => ([
         { value: '中高音（清晰明亮）', label: t('中高音（清晰明亮）', 'Mid-high (clear and bright)') },
@@ -6831,7 +6829,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             (target) => target?.image_url,
             entityNameMap
         ).filter(({ token }) => !excludedDepKeySet.has(String(token || '').trim()));
-        if (missingDependencyTargets.length > 0) {
+        const qualityRegen = Boolean(generationOptions?.qualityRegen);
+        if (!qualityRegen && missingDependencyTargets.length > 0) {
             const missingLabels = missingDependencyTargets.map(formatEntityDependencyLabel).join('、');
             showSubjectNotification(
                 t(
@@ -6859,10 +6858,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         // prompt likely already has suffixes appended from initialization, 
         // but we run processPrompt again in case user added new variables.
         // Use allEntities for resolution
-        const processedPrompt = processPrompt(promptToUse, epInfo, allEntities);
-        const finalPrompt = prependEntityGlobalStyleToPromptHead(processedPrompt, { injectIfMissing: true });
+        const processedPrompt = qualityRegen ? promptToUse : processPrompt(promptToUse, epInfo, allEntities);
+        const finalPrompt = qualityRegen
+            ? processedPrompt
+            : prependEntityGlobalStyleToPromptHead(processedPrompt, { injectIfMissing: true });
 
-        if (!generationOptions?.keepPromptDraft) {
+        if (!generationOptions?.keepPromptDraft && !qualityRegen) {
             // Update UI to show processed prompt (in case var replacement happened)
             setPrompt(finalPrompt);
             setPromptDrafts(prev => ({
@@ -6897,8 +6898,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             } else if (refImage?.url) {
                 allRefs.push(refImage.url);
             }
-            if (depUrls.length > 0) allRefs.push(...depUrls);
-            collectPromoSourceImageUrls(activeEntity, project?.global_info).forEach((url) => allRefs.push(url));
+            if (!qualityRegen && depUrls.length > 0) allRefs.push(...depUrls);
+            if (!qualityRegen) {
+                collectPromoSourceImageUrls(activeEntity, project?.global_info).forEach((url) => allRefs.push(url));
+            }
             
             // Deduplicate
             const uniqueRefs = [...new Set(allRefs)];
@@ -6917,7 +6920,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 effectivePromptToUse = effectivePromptToUse.replace(/【相貌】[\s\S]*?【\/相貌】/g, '【相貌】根据参考图生成【/相貌】');
             }
 
-            const imagePrompt = isMainEnvironmentEntity(activeEntity)
+            const imagePrompt = (!qualityRegen && isMainEnvironmentEntity(activeEntity))
                 ? quadImagePrompt(effectiveFinalPrompt)
                 : effectiveFinalPrompt;
             const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = buildEntityImageGenerationPrompts(
@@ -6945,7 +6948,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
             const jobId = String(submitResult?.job_id || '').trim();
             if (!jobId) throw new Error('Missing image job id');
-            rememberSubmittedImagePrompt(activeEntity, submissionPrompt, submittedImagePromptKind(activeEntity, submissionPrompt));
+            if (!qualityRegen) {
+                rememberSubmittedImagePrompt(activeEntity, submissionPrompt, submittedImagePromptKind(activeEntity, submissionPrompt));
+            }
 
             if (isMountedRef.current) {
                 updateSubjectImageJobsAndStorage(prev => ({
@@ -7268,6 +7273,34 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         } finally {
             setIsAdvancedLocalModifying(false);
         }
+    };
+
+    const submitAssetQualityRegen = async (entity) => {
+        const target = entity || viewingEntity;
+        const sourceUrl = String(target?.image_url || '').trim();
+        if (!target || !sourceUrl) {
+            showSubjectNotification(
+                t('还没有原图，无法提质重生。', 'There is no source image to enhance.'),
+                'warning'
+            );
+            return;
+        }
+        const currentSize = getEpisodePreferredImageSize(currentEpisode?.episode_info || {});
+        const nextSize = bumpImageSizeOption(currentSize);
+        const fidelityPrompt = '以参考图为唯一依据，只提高分辨率和清晰度，重新输出同一张图。主体、姿态、表情、服装、道具、环境、文字、颜色、光影、构图和所有细节都保持与参考图一致。不新增、不删除、不替换、不改写任何内容。';
+        if (onLog) {
+            onLog(
+                t(`正在提质重生，分辨率提升到 ${nextSize}，画面内容保持不变。`, `Enhancing the current image to ${nextSize} without changing its content.`),
+                'process'
+            );
+        }
+        await handleGenerate(
+            target,
+            [{ url: sourceUrl, type: 'image', weight: 1 }],
+            fidelityPrompt,
+            { image_size: nextSize },
+            { qualityRegen: true, keepPromptDraft: true }
+        );
     };
 
     const consistencyDetailText = (error) => {
@@ -10771,7 +10804,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                 <button
                                                                     key={angle}
                                                                     className="flex-1 py-1.5 px-3 bg-white/10 hover:bg-white/20 text-white rounded text-xs transition-colors disabled:opacity-50"
-                                                                    disabled={generating || isAdvancedLocalModifying || isAdvancedOptimizing}
+                                                                    disabled={generating || isAdvancedLocalModifying}
                                                                     onClick={async () => {
                                                                         const base = viewingEntity?.generation_prompt_cn || '';
                                                                         const appendInstruction = `请将当前的四向拼图中的${angle}度视野旋转到最前方的0度格（原左上宫格位置），然后其余角度（${(angle + 90) % 360}度，${(angle + 180) % 360}度，${(angle + 270) % 360}度）依顺时针的相对顺序自然对应到接下来的几个格子（90度格，180度格，270度格），保持各宫格排布的相对顺序不乱。`;
@@ -10811,7 +10844,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                     </div>
                                                 )}
                                                 <p className="text-[10px] text-white/50 mb-4">
-                                                    {t('输入具体指令以修改该资产的提示词。提交后将自动应用修改并重新生成图片。', 'Enter specific instructions to modify the prompt. Generation will be triggered automatically.')}
+                                                    {t('局部修改会按指令改这张图。提质重生只提高分辨率，以当前原图为参考，不改变画面内容。', 'Local Modify follows the instruction. Enhance regenerates the current image at a higher resolution and keeps the picture unchanged.')}
                                                 </p>
                                                 {renderEnvironmentConsistencyControls(viewingEntity)}
                                             </div>
@@ -10827,7 +10860,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                 <button
                                                     type="button"
                                                     className="flex-1 bg-white/10 hover:bg-white/20 text-white border-none py-6 flex items-center justify-center gap-2 rounded-md"
-                                                    disabled={!advancedInstruction.trim() || isAdvancedOptimizing || isAdvancedLocalModifying || generating}
+                                                    disabled={!advancedInstruction.trim() || isAdvancedLocalModifying || generating}
                                                     onClick={() => { void submitAdvancedLocalModify(viewingEntity, advancedInstruction); }}
                                                 >
                                                     {isAdvancedLocalModifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paintbrush className="w-4 h-4" />}
@@ -10837,53 +10870,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                 <button
                                                     type="button"
                                                     className="flex-1 bg-primary/20 hover:bg-primary/30 text-primary border-none py-6 flex flex-col items-center justify-center py-2 h-auto min-h-12 rounded-md"
-                                                    disabled={isAdvancedOptimizing || !advancedInstruction.trim() || isAdvancedLocalModifying || generating}
-                                                    onClick={async () => {
-                                                        setIsAdvancedOptimizing(true);
-                                                        if (onLog) onLog(t('正在通过大模型优化提示词...', 'Optimizing prompt using LLM...'), 'process');
-                                                        try {
-                                                            const base = viewingEntity?.generation_prompt_cn || "";
-                                                            const res = await refinePrompt(base, advancedInstruction, 'image');
-                                                            if (res && res.refined_prompt) {
-                                                                const optimized = res.refined_prompt;
-                                                                setPromptDrafts(prev => ({ ...prev, cn: optimized }));
-                                                                setPrompt(optimized);
-
-                                                                // Update Entity
-                                                                const updated = { ...viewingEntity, generation_prompt_cn: optimized };
-                                                                setViewingEntity(updated);
-                                                                updateEntity(updated.id, { generation_prompt_cn: optimized });
-
-                                                                const autoRefs = [];
-                                                                if (viewingEntity?.image_url) {
-                                                                    autoRefs.push({
-                                                                        url: viewingEntity.image_url,
-                                                                        type: 'image',
-                                                                        weight: 0.5
-                                                                    });
-                                                                }
-
-                                                                if (onLog) onLog(t('已生成新提示词，准备拉起生成...', 'Generated new prompt, ready to regenerate...'), 'info');
-                                                                try {
-                                                                    await handleGenerate(viewingEntity, autoRefs, optimized);
-                                                                    if (onLog) onLog(t('提交成功', 'Submitted successfully'), 'success');
-                                                                } catch (err) {
-                                                                    if (onLog) onLog(t('生成失败', 'Generation failed'), 'error');
-                                                                }
-                                                            } else {
-                                                                if (onLog) onLog(t('优化失败，请稍后再试', 'Optimization failed, please try again'), 'error');
-                                                            }
-                                                        } catch (e) {
-                                                            console.error("Refine prompt failed", e);
-                                                            if (onLog) onLog(t('指令分析失败', 'Instruction analysis failed') + ': ' + e.message, 'error');
-                                                        } finally {
-                                                            setIsAdvancedOptimizing(false);
-                                                        }
-                                                    }}
+                                                    disabled={!String(viewingEntity?.image_url || '').trim() || isAdvancedLocalModifying || generating}
+                                                    onClick={() => { void submitAssetQualityRegen(viewingEntity); }}
                                                 >
                                                     <div className="flex items-center gap-2">
-                                                        {isAdvancedOptimizing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                                                        <span className="font-semibold text-sm">{t('重新生成', 'Regenerate')}</span>
+                                                        {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                                                        <span className="font-semibold text-sm">{t('提质重生', 'Enhance')}</span>
                                                     </div>
                                                 </button>
                                             </div>

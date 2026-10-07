@@ -77,14 +77,49 @@ LENS_FOCAL = {
     "Standard": "50mm标准",
 }
 
+# Banana sometimes leaves the 2×2 intact. Name the kept half-planes
+# before any scene noun, and repeat the single-panel check at the end.
+CROP_REGION = {
+    "左上": {
+        "plane": "竖中线以左、横中线以上，只占参考图左半边和上半边",
+        "box": "从左往右取横向0%到50%，从上往下取纵向0%到50%",
+        "drop": "右上、左下、右下",
+        "en": "top-left quadrant only, the left half and the top half",
+    },
+    "右上": {
+        "plane": "竖中线以右、横中线以上，只占参考图右半边和上半边",
+        "box": "从左往右取横向50%到100%，从上往下取纵向0%到50%",
+        "drop": "左上、左下、右下",
+        "en": "top-right quadrant only, the right half and the top half",
+    },
+    "左下": {
+        "plane": "竖中线以左、横中线以下，只占参考图左半边和下半边",
+        "box": "从左往右取横向0%到50%，从上往下取纵向50%到100%",
+        "drop": "左上、右上、右下",
+        "en": "bottom-left quadrant only, the left half and the bottom half",
+    },
+    "右下": {
+        "plane": "竖中线以右、横中线以下，只占参考图右半边和下半边",
+        "box": "从左往右取横向50%到100%，从上往下取纵向50%到100%",
+        "drop": "左上、右上、左下",
+        "en": "bottom-right quadrant only, the right half and the bottom half",
+    },
+}
 FIRST_CUT_PROMPT = (
+    "参考图是一张2×2四宫格，正中一条横线和一条竖线分成四格。"
+    "只保留{grid}：{plane}。范围={box}。"
+    "另外三格（{drop}）整块删除，成稿里不得再看见这三格的任何画面。"
+    "把留下的这一格放大到铺满整张16:9，四边贴满，不留黑边，不留另外三格。"
+    "格内原样放大：禁止重画、禁止补细节、禁止换物体、禁止改朝向、禁止左右对调。"
+    "Crop only the {en}. Discard the other three quadrants completely. "
+    "Scale that single quadrant to fill the entire 16:9 frame edge to edge. Do not redraw."
+    "成稿是单张镜头，不得留下横线、竖线、宫格边框、格标、角标、十字拼缝。"
     "所属主环境={main}。angle_key={main}|{angle}。"
     "{quad_line}。截取宫格={token}。"
     "{camera}"
-    "请严格要求按对应主环境「{main}」四向拼图参考图，截取并放大其中对应的明确宫格位置（{grid}），"
-    "不要重新描述画面细节，直接作为本镜头的最终画面。"
-    "切割衍生环境时均按16:9固定比例，并保证高分辨率。只切割，不要改画。"
-    "成稿须为单张完整镜头：禁止保留四向拼图的宫格分割线、宫格边框、格标/角标、十字拼缝或任何拼图装配痕迹。"
+    "远锚和焦距只用来核对这一格，禁止按这些名字重画，禁止把四格留在同一张图里。"
+    "再确认一次：成稿只有{grid}这一格铺满整张16:9，{drop}三格不在画面里。"
+    "只切割，不要改画。"
 )
 STATE_CUT_PROMPT = (
     "所属主环境={main}。angle_key={main}|{angle}。"
@@ -95,7 +130,8 @@ FIRST_CUT_NEGATIVE = (
     "people, person, human, dutch angle, tilted horizon, looking into a room corner, "
     "re-described furniture layout, rewritten furniture orientation, left-right furniture swap, "
     "sector flip, mirrored room, four-panel grid lines, 2x2 collage seams, "
-    "panel borders, quadrant labels, split-screen divider"
+    "panel borders, quadrant labels, split-screen divider, "
+    "uncropped 2x2, all four quadrants visible, contact sheet, four views in one frame"
 )
 STATE_CUT_NEGATIVE = (
     "people, person, human, dutch angle, recropped four-panel, wrong camera angle, mirrored room, "
@@ -1258,6 +1294,7 @@ def build_derived_environment_item(
         atmosphere = f"Special {special_kind or 'plate'} from {grid}"
         visual_params = f"{lens}/Derived/Special/{special_kind or angle}"
     else:
+        region = CROP_REGION[str(crop["position"])]
         prompt = FIRST_CUT_PROMPT.format(
             main=main,
             angle=angle,
@@ -1265,6 +1302,10 @@ def build_derived_environment_item(
             token=token,
             quad_line=quad_line,
             camera=camera,
+            plane=region["plane"],
+            box=region["box"],
+            drop=region["drop"],
+            en=region["en"],
         )
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
