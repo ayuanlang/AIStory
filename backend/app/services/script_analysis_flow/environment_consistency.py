@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -231,6 +232,7 @@ def parse_consistency_payload(text: str) -> Dict[str, Any]:
         "summary": str(data.get("summary") or "").strip(),
         "revised_prompt": _blank_to_none(data.get("revised_prompt")),
         "revised_main_prompt": _blank_to_none(data.get("revised_main_prompt")),
+        "image_edit_instruction": _blank_to_none(data.get("image_edit_instruction")),
     }
 
 
@@ -328,6 +330,7 @@ def plan_consistency_writes(
     """
     kind = classify_checked_prompt(entity, checked_prompt)
     summary = str(payload.get("summary") or "").strip()
+    image_edit_instruction = _blank_to_none(payload.get("image_edit_instruction"))
     if payload.get("consistent"):
         return {
             "consistent": True,
@@ -335,6 +338,7 @@ def plan_consistency_writes(
             "summary": summary or "宫格和衍生环境与主环境开篇一致。",
             "writes": [],
             "updated_targets": [],
+            "image_edit_instruction": image_edit_instruction,
         }
 
     revised = _blank_to_none(payload.get("revised_prompt"))
@@ -406,6 +410,7 @@ def plan_consistency_writes(
             "summary": summary or "宫格已与主环境开篇一致。",
             "writes": [],
             "updated_targets": [],
+            "image_edit_instruction": image_edit_instruction,
         }
     return {
         "consistent": False,
@@ -413,6 +418,7 @@ def plan_consistency_writes(
         "summary": summary or "已按主环境开篇更新宫格或衍生提示词。",
         "writes": writes,
         "updated_targets": targets,
+        "image_edit_instruction": image_edit_instruction,
     }
 
 
@@ -448,6 +454,23 @@ def entity_consistency_payload(entity: Any) -> Dict[str, Any]:
     }
 
 
+def remote_vision_image_link(url: str) -> str:
+    """Public http(s) address a vision model can fetch itself.
+
+    Consistency checks pass this link instead of a base64 data URL. Inlining the
+    image makes the request body large enough to hit the stream write timeout.
+    """
+    raw = str(url or "").strip()
+    if not raw or raw.lower().startswith("data:"):
+        return ""
+    if not raw.startswith(("http://", "https://")):
+        return ""
+    host = (urlparse(raw).hostname or "").strip().lower()
+    if not host or host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+        return ""
+    return raw
+
+
 def build_consistency_messages(
     *,
     image_url: str,
@@ -475,7 +498,8 @@ def build_consistency_messages(
         "一致：宫格正文和衍生正文都能被开篇解释，图片里的个数、朝向、位置也和这个结果相同。"
         "缝档、光色、材质的小差异算一致。"
         "正文已经对齐开篇、只有图片画错时，也算一致，summary 写明哪一格的图片错在个数、朝向或位置。"
-        "revised_prompt 和 revised_main_prompt 都为 null。提示词保持对齐开篇。\n"
+        "revised_prompt 和 revised_main_prompt 都为 null。提示词保持对齐开篇。"
+        "这时 image_edit_instruction 仍要写出怎么改这张图。\n"
         "不一致：同一件的宫格长边或朝向和开篇竖边旋出的画面轴相反；件数和开篇不同；"
         "左右或远近和开篇心点、在桌侧旋出的结果相反；衍生正文和开篇不是同一处空间。\n"
         "修改：只改宫格或衍生里和开篇不符的句子，保留主体名字。不要新造第二套房间。\n"
@@ -494,8 +518,12 @@ def build_consistency_messages(
         "状态衍生上的临时变化，例如沙尘、天气、破损，留在衍生正文里，不要写回主环境。\n"
         "重生修正或衍生描写和开篇不符时，只改这份衍生提示词，revised_main_prompt 必须为 null。\n"
         "一致时 revised_prompt 和 revised_main_prompt 都必须为 null。\n"
+        "改图指令：图片里某一格的主体个数、朝向或位置和开篇旋出的结果不同时，"
+        "image_edit_instruction 写给改图模型的中文指令。点名哪一格、哪一件、要改成的个数或朝向或位置，"
+        "并写明其余画面保持不动。用画面左、画面右、靠近镜头、远离镜头，不要写东南西北，不要重写整段环境提示词。"
+        "图片已经相符时，image_edit_instruction 必须为 null。\n"
         "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
-        '{"consistent": true或false, "summary": "一两句中文", "revised_prompt": null或完整提示词, "revised_main_prompt": null或完整主环境提示词}'
+        '{"consistent": true或false, "summary": "一两句中文", "revised_prompt": null或完整提示词, "revised_main_prompt": null或完整主环境提示词, "image_edit_instruction": null或改图指令}'
     )
     parts = [
         f"检查对象={kind}。主体={getattr(entity, 'name', '')}。",

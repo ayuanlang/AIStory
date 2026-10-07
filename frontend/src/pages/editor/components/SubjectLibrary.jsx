@@ -7239,6 +7239,37 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
     };
 
+    const submitAdvancedLocalModify = async (entity, instruction) => {
+        const appended = String(instruction || '').trim();
+        const target = entity || viewingEntity;
+        if (!appended || !target) return;
+        setIsAdvancedLocalModifying(true);
+        try {
+            const base = target?.generation_prompt_cn || '';
+            const finalPrompt = base ? `${base}. ${appended}, keeping everything else unchanged.` : appended;
+            setPromptDrafts((prev) => ({ ...prev, cn: finalPrompt }));
+            setPrompt(finalPrompt);
+            const updated = { ...target, generation_prompt_cn: finalPrompt };
+            setViewingEntity(updated);
+            updateEntity(updated.id, { generation_prompt_cn: finalPrompt });
+            const autoRefs = [];
+            if (target?.image_url) {
+                autoRefs.push({
+                    url: target.image_url,
+                    type: 'image',
+                    weight: 0.8,
+                });
+            }
+            await handleGenerate(target, autoRefs, finalPrompt, {
+                is_gemini_multi_turn_edit: true,
+                gemini_base_prompt: base,
+                gemini_edit_instruction: appended,
+            });
+        } finally {
+            setIsAdvancedLocalModifying(false);
+        }
+    };
+
     const consistencyDetailText = (error) => {
         const detail = error?.response?.data?.detail;
         if (typeof detail === 'string' && detail.trim()) return detail.trim();
@@ -7289,11 +7320,29 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             });
             const summary = String(result?.summary || '').trim();
             const targets = Array.isArray(result?.updated_targets) ? result.updated_targets.filter(Boolean) : [];
-            const text = result?.consistent
-                ? (summary || t('宫格和衍生环境与主环境开篇一致。', 'The grids and derived environment match the main-environment opening.'))
-                : `${summary || t('已按主环境开篇更新宫格或衍生提示词。', 'Grid cells or the derived prompt were updated to match the main-environment opening.')}${targets.length ? `（${targets.join('、')}）` : ''}`;
-            setEnvironmentConsistency({ entityId, running: false, text, tone: result?.consistent ? 'ok' : 'changed' });
+            const imageEditInstruction = String(result?.image_edit_instruction || '').trim();
+            const selfRow = rows.find((row) => String(row?.id || '') === entityId);
+            const nextEntity = selfRow
+                ? {
+                    ...entity,
+                    ...(typeof selfRow.generation_prompt_cn === 'string' ? { generation_prompt_cn: selfRow.generation_prompt_cn } : {}),
+                    ...(typeof selfRow.description === 'string' ? { description: selfRow.description } : {}),
+                    ...(selfRow.custom_attributes && typeof selfRow.custom_attributes === 'object' ? { custom_attributes: selfRow.custom_attributes } : {}),
+                }
+                : entity;
+            if (!imageEditInstruction) {
+                const text = result?.consistent
+                    ? (summary || t('图片与主环境开篇一致，不用改图。', 'The image matches the main-environment opening, so no edit is needed.'))
+                    : `${summary || t('已按主环境开篇更新宫格或衍生提示词。图片本身不用改。', 'Grid cells or the derived prompt were updated. The image itself does not need an edit.')}${targets.length ? `（${targets.join('、')}）` : ''}`;
+                setEnvironmentConsistency({ entityId, running: false, text, tone: result?.consistent ? 'ok' : 'changed' });
+                showSubjectNotification(text, 'success');
+                return;
+            }
+            const text = summary || t('已按差异生成改图指令，正在局部修改图片。', 'Built an edit instruction from the differences and started a local image edit.');
+            setAdvancedInstruction(imageEditInstruction);
+            setEnvironmentConsistency({ entityId, running: false, text, tone: 'changed' });
             showSubjectNotification(text, 'success');
+            await submitAdvancedLocalModify(nextEntity, imageEditInstruction);
         } catch (error) {
             const message = consistencyDetailText(error);
             setEnvironmentConsistency({ entityId, running: false, text: message, tone: 'error' });
@@ -7305,7 +7354,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         if (!isEnvironmentEntity(entity) || String(entity?.id || '') === 'new') return null;
         const entityId = String(entity?.id || '');
         const hasImage = Boolean(String(entity?.image_url || '').trim());
-        const running = environmentConsistency.running && environmentConsistency.entityId === entityId;
+        const checking = environmentConsistency.running && environmentConsistency.entityId === entityId;
+        const busy = checking || isAdvancedLocalModifying || generating;
         const note = environmentConsistency.entityId === entityId ? String(environmentConsistency.text || '') : '';
         const tone = environmentConsistency.entityId === entityId ? environmentConsistency.tone : '';
         const noteClass = tone === 'error'
@@ -7314,19 +7364,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 ? 'text-amber-100'
                 : 'text-emerald-100';
         return (
-            <div className="flex flex-col items-end gap-1">
+            <div className="mb-3 flex flex-col items-start gap-2">
                 {note ? <div className={`text-[11px] leading-relaxed ${noteClass}`}>{note}</div> : null}
                 <button
                     type="button"
                     onClick={() => { void handleEnvironmentConsistencyCheck(entity); }}
-                    disabled={!hasImage || running}
+                    disabled={!hasImage || busy}
                     title={hasImage
-                        ? t('对照各宫格和图片，核对主体个数、朝向、位置。不符时按开篇改正宫格或衍生。开篇只在它自己写矛盾时才改。', 'Compare each grid and its image for subject count, facing, and position. Align the grid or derived prompt with the opening. Change the opening only when the opening contradicts itself.')
+                        ? t('对照图片和开篇，核对主体个数、朝向、位置。有差异时把改图指令填入下方输入框，并开始局部修改。', 'Compare the image with the opening for subject count, facing, and position. When they differ, fill the edit instruction below and start a local edit.')
                         : t('生成图片后才能检查。', 'Generate an image before checking.')}
-                    className="self-end inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/5 px-4 py-2 text-sm font-bold text-white/80 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/5 px-4 py-2 text-sm font-bold text-white/80 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    {running ? <Loader2 className="animate-spin" size={16} /> : <Stethoscope size={16} />}
-                    {running ? t('检查中...', 'Checking...') : t('一致性检查', 'Consistency check')}
+                    {checking ? <Loader2 className="animate-spin" size={16} /> : <Stethoscope size={16} />}
+                    {checking ? t('检查中...', 'Checking...') : t('一致性检查', 'Consistency check')}
                 </button>
             </div>
         );
@@ -10763,6 +10813,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                 <p className="text-[10px] text-white/50 mb-4">
                                                     {t('输入具体指令以修改该资产的提示词。提交后将自动应用修改并重新生成图片。', 'Enter specific instructions to modify the prompt. Generation will be triggered automatically.')}
                                                 </p>
+                                                {renderEnvironmentConsistencyControls(viewingEntity)}
                                             </div>
                                             <div className="flex-1 min-h-[250px]">
                                                 <textarea
@@ -10777,41 +10828,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                     type="button"
                                                     className="flex-1 bg-white/10 hover:bg-white/20 text-white border-none py-6 flex items-center justify-center gap-2 rounded-md"
                                                     disabled={!advancedInstruction.trim() || isAdvancedOptimizing || isAdvancedLocalModifying || generating}
-                                                    onClick={async () => {
-                                                        setIsAdvancedLocalModifying(true);
-                                                        try {
-                                                            const base = viewingEntity?.generation_prompt_cn || "";
-                                                            const appended = advancedInstruction.trim();
-                                                            const finalPrompt = base ? `${base}. ${appended}, keeping everything else unchanged.` : appended;
-                                                            
-                                                            setPromptDrafts(prev => ({ ...prev, cn: finalPrompt }));
-                                                            setPrompt(finalPrompt);
-
-                                                            // Update Entity
-                                                            const updated = { ...viewingEntity, generation_prompt_cn: finalPrompt };
-                                                            setViewingEntity(updated);
-                                                            updateEntity(updated.id, { generation_prompt_cn: finalPrompt });
-
-                                                            const autoRefs = [];
-                                                            if (viewingEntity?.image_url) {
-                                                                autoRefs.push({
-                                                                    url: viewingEntity.image_url,
-                                                                    type: 'image',
-                                                                    weight: 0.8
-                                                                });
-                                                            }
-
-                                                            const extraProviderOptions = {
-                                                                is_gemini_multi_turn_edit: true,
-                                                                gemini_base_prompt: base,
-                                                                gemini_edit_instruction: appended,
-                                                            };
-
-                                                            await handleGenerate(viewingEntity, autoRefs, finalPrompt, extraProviderOptions);
-                                                        } finally {
-                                                            setIsAdvancedLocalModifying(false);
-                                                        }
-                                                    }}
+                                                    onClick={() => { void submitAdvancedLocalModify(viewingEntity, advancedInstruction); }}
                                                 >
                                                     {isAdvancedLocalModifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paintbrush className="w-4 h-4" />}
                                                     <span className="font-semibold text-sm">{t('局部修改', 'Local Modify')}</span>
@@ -10876,7 +10893,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                 </div>
                                 
                                 <div className="p-4 border-t border-white/10 bg-black/20 flex flex-col gap-2">
-                                    {viewingEntityTab === 'generate' ? renderEnvironmentConsistencyControls(viewingEntity) : null}
                                     <div className="flex justify-end gap-3">
                                     <button 
                                         onClick={(e) => handleDeleteEntity(e, viewingEntity)}
@@ -11522,7 +11538,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                  )}
                                         </div>
 
-                                        {renderEnvironmentConsistencyControls(selectedEntity)}
                                         <div className="flex justify-end items-center gap-2">
                                             <button
                                                 onClick={handleGenerateFromPage}

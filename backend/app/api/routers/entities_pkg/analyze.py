@@ -1228,6 +1228,9 @@ async def check_environment_consistency(
     disagree, rewrite the grid cells or the derived prompt. The opening stays
     unless the checker marks an internal contradiction in the opening itself.
     """
+    from urllib.parse import urlparse
+
+    from app.services.generation_runtime.media_persist import _refresh_managed_media_url
     from app.services.promo_planner import resolve_image_url_for_llm
     from app.services.script_analysis_flow.environment_consistency import (
         ConsistencyApplyError,
@@ -1239,6 +1242,7 @@ async def check_environment_consistency(
         is_environment_entity,
         parse_consistency_payload,
         plan_consistency_writes,
+        remote_vision_image_link,
         resolve_checked_prompt,
     )
 
@@ -1281,7 +1285,15 @@ async def check_environment_consistency(
         cost = billing_service.estimate_cost(db, "analysis_character", api_provider, api_model)
         billing_service.check_can_proceed(current_user, cost)
 
-    image_url_final = await resolve_image_url_for_llm(str(entity.image_url or ""), db)
+    refreshed_image_url = _refresh_managed_media_url(str(entity.image_url or ""), db)
+    image_url_final = remote_vision_image_link(refreshed_image_url)
+    if image_url_final:
+        logger.info(
+            "Environment consistency check uses image link host=%s",
+            urlparse(image_url_final).hostname,
+        )
+    else:
+        image_url_final = await resolve_image_url_for_llm(str(entity.image_url or ""), db)
     if not image_url_final:
         raise HTTPException(status_code=400, detail="生成图片无法读取，暂时不能做一致性检查。")
 
@@ -1353,7 +1365,7 @@ async def check_environment_consistency(
                         "content": (
                             "你是严格的 JSON 整理器。把用户文本转成一个 JSON 对象。"
                             "第一个字符必须是 {，最后一个字符必须是 }。"
-                            "保留 consistent、summary、revised_prompt、revised_main_prompt。"
+                            "保留 consistent、summary、revised_prompt、revised_main_prompt、image_edit_instruction。"
                             "不要 Markdown，不要解释。"
                         ),
                     },
@@ -1426,6 +1438,7 @@ async def check_environment_consistency(
             "summary": plan["summary"],
             "checked_kind": plan["kind"],
             "updated_targets": plan["updated_targets"],
+            "image_edit_instruction": plan.get("image_edit_instruction"),
             "updated": [entity_consistency_payload(entities_by_id[item_id]) for item_id in touched],
         }
     except ConsistencyApplyError as exc:

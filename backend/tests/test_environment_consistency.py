@@ -6,6 +6,7 @@ from app.services.script_analysis_flow.environment_consistency import (
     classify_checked_prompt,
     parse_consistency_payload,
     plan_consistency_writes,
+    remote_vision_image_link,
 )
 
 
@@ -52,6 +53,7 @@ def test_parse_fenced_consistency_json():
     assert payload["summary"] == "长边反了"
     assert payload["revised_prompt"] == "全文"
     assert payload["revised_main_prompt"] is None
+    assert payload["image_edit_instruction"] is None
 
 
 def test_consistent_result_does_not_write():
@@ -169,8 +171,39 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "位置" in system
     assert "开篇有误：" in system
     assert "左上是0度格望北" in system
+    assert "image_edit_instruction" in system
+    assert "改图指令" in system
     user = messages[1]["content"][0]["text"]
     assert "主体个数、朝向、位置" in user
+    assert messages[1]["content"][1]["image_url"]["url"] == "http://example.test/grid.png"
+
+
+def test_image_edit_instruction_survives_when_prompts_stay():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
+    instruction = "把左上0度格的台改到画面前方，其余格子保持不动。"
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {
+            "consistent": True,
+            "summary": "0度格图片里的台不在画面前方。",
+            "revised_prompt": None,
+            "revised_main_prompt": None,
+            "image_edit_instruction": instruction,
+        },
+    )
+    assert plan["consistent"] is True
+    assert plan["writes"] == []
+    assert plan["image_edit_instruction"] == instruction
+
+
+def test_consistency_check_passes_public_image_link():
+    signed = "https://cdn.example.com/env/grid.png?token=abc"
+    assert remote_vision_image_link(signed) == signed
+    assert remote_vision_image_link("http://127.0.0.1:8000/uploads/grid.png") == ""
+    assert remote_vision_image_link("/uploads/grid.png") == ""
+    assert remote_vision_image_link("data:image/png;base64,aaaa") == ""
 
 
 def test_unmarked_opening_rewrite_is_discarded():
