@@ -717,6 +717,9 @@ async def _run_generate_image(
         if fallback_model_candidate:
             image_provider_options["fallbackModel"] = fallback_model_candidate
 
+        if is_subject_generation:
+            image_provider_options["__asset_type"] = "subject"
+
         if is_subject_generation and resolved_subject_type:
             subject_entity = None
             entity_id_hint = getattr(req, "entity_id", None)
@@ -917,7 +920,7 @@ async def _run_generate_image(
                     "width": int(width or 0) or None,
                     "height": int(height or 0) or None,
                     "aspect_ratio": str(aspect_ratio or "").strip() or None,
-                    "image_size": str(image_size or "").strip() or None,
+                    "image_size": str(result_meta.get("submit_image_size") or image_size or "").strip() or None,
                     "provider": billing_provider or reserve_provider or req.provider,
                     "model": billing_model or reserve_model or req.model,
                     "system_api_id": billing_system_api_id if billing_system_api_id is not None else reserve_system_api_id,
@@ -972,6 +975,10 @@ async def _run_generate_image(
                 submitted_ar = str(result_meta.get("submit_aspect_ratio") or aspect_ratio or "").strip()
                 if submitted_ar:
                     settle_details["aspect_ratio"] = submitted_ar
+
+                submitted_image_size = str(result_meta.get("submit_image_size") or image_size or "").strip()
+                if submitted_image_size:
+                    settle_details["image_size"] = submitted_image_size
 
                 submitted_quality = str(result_meta.get("submit_quality") or "").strip().lower()
                 if submitted_quality:

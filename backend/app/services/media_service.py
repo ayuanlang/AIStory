@@ -3831,6 +3831,20 @@ class MediaGenerationService:
                 best_key = ratio_key
         return best_key
 
+    def _normalize_grsai_model_key(self, model: Any) -> str:
+        return str(model or "").strip().lower().replace("/", "-").replace("_", "-")
+
+    def _grsai_asset_generation_requires_4k(self, model: Any, tool_conf: Optional[Dict[str, Any]]) -> bool:
+        """Asset generation on these Grsai image models must submit a 4K resolution."""
+        conf = tool_conf if isinstance(tool_conf, dict) else {}
+        asset_type = str(conf.get("__asset_type") or conf.get("asset_type") or "").strip().lower()
+        if asset_type not in {"subject", "entity", "character", "prop", "environment"}:
+            return False
+        model_key = self._normalize_grsai_model_key(model)
+        if model_key in {"nano-banana-2", "nano-banana-pro"}:
+            return True
+        return "gpt-image-2-vip" in model_key
+
     def _resolve_grsai_gpt_image_2_size(
         self,
         model: Any,
@@ -3838,8 +3852,9 @@ class MediaGenerationService:
         explicit_size: Any,
         width: Any,
         height: Any,
+        size_tier: Optional[str] = None,
     ) -> Tuple[str, bool]:
-        model_key = str(model or "").strip().lower().replace("/", "-").replace("_", "-")
+        model_key = self._normalize_grsai_model_key(model)
         is_vip = "gpt-image-2-vip" in model_key
 
         ratio_text = str(aspect_ratio or "").strip().lower()
@@ -3925,9 +3940,12 @@ class MediaGenerationService:
             )
 
         if is_vip:
-            # User preference: vip defaults to 1k preset, but preserve original framing.
+            # Shot generation keeps the 1k preset. Asset generation passes size_tier=4k.
+            requested_tier = str(size_tier or "").strip().lower()
+            if requested_tier not in vip_presets_by_tier:
+                requested_tier = "1k"
             ratio_key = ratio_text if ratio_text and ratio_text != "auto" else ""
-            tier_map = vip_presets_by_tier["1k"]
+            tier_map = vip_presets_by_tier[requested_tier]
             if ratio_key not in tier_map:
                 ratio_hint = self._parse_ratio_float(ratio_key)
                 if ratio_hint:
@@ -7822,6 +7840,20 @@ class MediaGenerationService:
             api_config["config"] = merged_config
             api_config["__request_provider_options"] = dict(provider_options)
 
+        asset_type_norm = str(asset_type or "").strip().lower()
+        if api_config is not None and asset_type_norm:
+            cfg = api_config.get("config")
+            if not isinstance(cfg, dict):
+                cfg = {}
+                api_config["config"] = cfg
+            if not str(cfg.get("__asset_type") or "").strip():
+                cfg["__asset_type"] = asset_type_norm
+            request_opts = api_config.get("__request_provider_options")
+            request_opts = dict(request_opts) if isinstance(request_opts, dict) else {}
+            if not str(request_opts.get("__asset_type") or "").strip():
+                request_opts["__asset_type"] = asset_type_norm
+            api_config["__request_provider_options"] = request_opts
+
         logger.info(
             "Generate image provider resolution | user_id=%s strict_provider=%s requested_provider=%s requested_model=%s resolved_provider=%s resolved_model=%s resolved_source=%s",
             user_id,
@@ -9322,6 +9354,14 @@ class MediaGenerationService:
             explicit_size_raw = tool_conf.get("size")
             explicit_size = explicit_size_raw or tool_conf.get("imageSize") or tool_conf.get("image_size")
             
+            force_asset_4k = self._grsai_asset_generation_requires_4k(final_model, tool_conf)
+            if force_asset_4k:
+                logger.info(
+                    "[GrsaiTrace][%s] asset generation submits 4k | model=%s asset_type=%s",
+                    trace_id,
+                    final_model,
+                    str(tool_conf.get("__asset_type") or tool_conf.get("asset_type") or "").strip().lower() or None,
+                )
             if is_gpt_image_2_family:
                 res_str, remove_aspect_ratio = self._resolve_grsai_gpt_image_2_size(
                     final_model,
@@ -9329,10 +9369,13 @@ class MediaGenerationService:
                     explicit_size,
                     w,
                     h,
+                    size_tier="4k" if force_asset_4k else None,
                 )
                 if remove_aspect_ratio:
                     payload.pop("aspectRatio", None)
                 base_metadata["submit_size"] = res_str
+                if force_asset_4k:
+                    base_metadata["submit_image_size"] = "4K"
             else:
                 if aspect_ratio:
                      # Generic fallback mapping for non-gpt-image Grsai image models.
@@ -9355,9 +9398,12 @@ class MediaGenerationService:
                     w if w else (res_str.split("x")[0] if "x" in res_str else 1024),
                     h if h else (res_str.split("x")[1] if "x" in res_str else 1024),
                 )
+            if force_asset_4k and is_banana:
+                normalized_image_size = "4K"
 
             if is_banana:
                 payload["imageSize"] = normalized_image_size
+                base_metadata["submit_image_size"] = normalized_image_size
             else:
                 payload["size"] = res_str
             
