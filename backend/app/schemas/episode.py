@@ -76,6 +76,9 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     episode_number: Optional[int] = None  # Optional alias for single-episode generation
     script_mode: Optional[str] = None
     output_kind: Optional[str] = None  # episode | trailer
+    trailer_focus: Optional[str] = None  # optional emphasis for this trailer only
+    trailer_episode_from: Optional[int] = None  # inclusive; default 1
+    trailer_episode_to: Optional[int] = None  # inclusive; default series length
     target_audience: Optional[str] = None
     script_title: Optional[str] = None
     function_name: Optional[str] = None

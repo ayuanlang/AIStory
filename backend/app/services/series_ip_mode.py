@@ -33,6 +33,8 @@ def build_series_ip_global_prompt_block() -> str:
         "Script Mode 是系列剧（IP模式）。本段覆盖系统提示词里的「分集完整」和 §9 逐集情节模板。\n"
         "- 不预写 EP01–EPN 分集剧情框架。禁止输出 [EPISODE_BLOCK_START]、Scene-Event Continuity、每集故事环、每集场表。\n"
         "- 只写全剧信息：世界观、主要角色 IP、基本故事线索、全剧冲突发动机、经典对标（整体剧本的机制参考）。\n"
+        "- 时间节点仍登记在 §8：至少开篇；有重生、穿越、回归等断点则分名登记，如重生前、重生后，并写该节点的季节、昼夜、气候。不因此预写各集情节。\n"
+        "- §9 契约写明：之后每一集必须交时间范围（绝对，或相对已登记节点），用来确认季节、昼夜、气候。此前各集摘要里的本集时间，后续集与全局统筹继承。\n"
         "- 预填里的救猫咪 15 拍若存在，只当作全剧走向，写进 §5，不得拆成各集情节。\n"
         "- Episodes Count 只记录计划体量，不因此展开 N 集。\n"
         "- 后续每一集另给「基本剧情 / 要体现的冲突 / 重要亮点」，并读取此前各集摘要。本阶段不要替那些集编情节。\n"
@@ -101,6 +103,7 @@ def build_series_ip_episode_prompt_block(*, brief: str, prior_summaries_block: s
         "人物状态：…\n"
         "未决钩子：…\n"
         "后续约束：…\n"
+        "本集时间：式=绝对|相对｜节点=…｜范围=起点→终点｜季节=…｜昼夜=日|夜|日转入夜|夜转入日｜气候=…\n"
         f"{SERIES_EPISODE_SUMMARY_END}\n\n"
         "本集指定：\n"
         f"{brief_text}\n\n"
@@ -108,10 +111,23 @@ def build_series_ip_episode_prompt_block(*, brief: str, prior_summaries_block: s
     )
 
 
-def build_series_ip_trailer_note() -> str:
+def build_series_ip_trailer_note(
+    *,
+    episode_from: Optional[int] = None,
+    episode_to: Optional[int] = None,
+) -> str:
+    if episode_from and episode_to:
+        range_line = (
+            f"取材范围是第{int(episode_from)}集到第{int(episode_to)}集："
+            "只从这一段已经写好的分集摘要取样。范围外的摘要只作已发生的公开背景。\n"
+        )
+    else:
+        range_line = "未写取材范围时，用全部已写摘要，相当于从头到尾。\n"
     return (
         "【系列剧 IP 模式 · 预告】全剧框架没有逐集剧情。"
-        "预告只从世界观、主要角色 IP、基本故事线索，以及已经写好的分集摘要里取样。"
+        "预告只从世界观、主要角色 IP、基本故事线索，以及已经写好的分集摘要里取样。\n"
+        f"{range_line}"
+        "须带上剧情背景：公开处境、关系前史、这场冲突此刻为何非做不可，用短拍里的动作或对白演出来。"
         "不要假装存在 EP01–EPN 分集规划，也不要为了预告补写未生成的集。\n\n"
     )
 

@@ -42,7 +42,9 @@ from app.services.episode_script_output import (  # noqa: E402,F401
 )
 from app.services.episode_script_prompt import (  # noqa: E402,F401
     build_trailer_generation_prompt_block,
+    format_trailer_episode_title,
     resolve_episode_generation_guidance_for_prompt,
+    resolve_trailer_sample_range,
 )
 from app.services.series_ip_mode import (  # noqa: E402,F401
     build_prior_episode_summaries_prompt_block,
@@ -1098,23 +1100,61 @@ async def generate_project_episode_scripts_from_global_framework(
         for n, ep in enumerate(episodes_in_order, start=1)
     ]
     if trailer_mode:
-        trailer_ep = trailer_eps[0] if trailer_eps else None
-        if trailer_ep is None:
-            trailer_ep = Episode(project_id=project_id, title="预告片", script_content="")
-            trailer_info = _episode_runtime_info_from_episode(trailer_ep)
-            trailer_info["script_output_kind"] = "trailer"
-            trailer_info.pop("episode_script_episode_number", None)
-            trailer_ep.episode_info = trailer_info
-            db.add(trailer_ep)
-            db.commit()
-            db.refresh(trailer_ep)
-            created_episodes.append(int(trailer_ep.id))
+        trailer_focus = str(getattr(req, "trailer_focus", None) or "").strip()
+        if len(trailer_focus) > 800:
+            raise HTTPException(status_code=400, detail="trailer_focus must be 800 characters or fewer")
+        try:
+            trailer_from, trailer_to = resolve_trailer_sample_range(
+                episode_from=getattr(req, "trailer_episode_from", None),
+                episode_to=getattr(req, "trailer_episode_to", None),
+                series_episode_count=int(target_n),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        def _existing_trailer_seq(ep: Episode) -> int:
+            info = _episode_runtime_info_from_episode(ep)
+            num = _safe_positive_int(info.get("trailer_seq") if isinstance(info, dict) else None)
+            if num:
+                return num
+            matched = re.search(r"预告片\s*(\d+)", str(getattr(ep, "title", None) or ""))
+            return int(matched.group(1)) if matched else 0
+
+        seqs = [_existing_trailer_seq(ep) for ep in trailer_eps]
+        next_seq = (max(seqs) if seqs else 0) + 1
+        if trailer_eps and next_seq <= len(trailer_eps):
+            next_seq = len(trailer_eps) + 1
+        placeholder_title = format_trailer_episode_title(
+            seq=next_seq,
+            episode_from=trailer_from,
+            episode_to=trailer_to,
+            series_episode_count=int(target_n),
+            focus=trailer_focus,
+        )
+        trailer_ep = Episode(project_id=project_id, title=placeholder_title, script_content="")
+        trailer_info = _episode_runtime_info_from_episode(trailer_ep)
+        trailer_info["script_output_kind"] = "trailer"
+        trailer_info["trailer_seq"] = int(next_seq)
+        trailer_info["trailer_episode_from"] = int(trailer_from)
+        trailer_info["trailer_episode_to"] = int(trailer_to)
+        if trailer_focus:
+            trailer_info["trailer_focus"] = trailer_focus
+        trailer_info.pop("episode_script_episode_number", None)
+        trailer_ep.episode_info = trailer_info
+        db.add(trailer_ep)
+        db.commit()
+        db.refresh(trailer_ep)
+        created_episodes.append(int(trailer_ep.id))
         episodes_data = [{
             "idx": 0,
             "id": int(trailer_ep.id),
-            "title": trailer_ep.title or "预告片",
+            "title": trailer_ep.title or placeholder_title,
             "script_content": trailer_ep.script_content,
             "output_kind": "trailer",
+            "trailer_seq": int(next_seq),
+            "trailer_episode_from": int(trailer_from),
+            "trailer_episode_to": int(trailer_to),
+            "trailer_focus": trailer_focus,
         }]
 
     target_episode_id: Optional[int] = None
@@ -1480,9 +1520,11 @@ async def generate_project_episode_scripts_from_global_framework(
                 "- Delivery: TRAILER. This is not a numbered series episode.\n"
                 f"- Series length for context only: {target_n}\n"
                 f"- Current Call Title: {ep_title}\n"
-                "- Generate ONLY this trailer. Do not write EP01 or any other episode.\n"
-                "- Global Story DNA is the map of the WHOLE series: throughline, highlight action, dialogue, plot turns, and registered main environments.\n"
-                "- Sample across the series in story order. Make the throughline followable, and leave the final choice unplayed.\n"
+                "- Generate ONLY this new trailer. Do not write EP01 or any other episode, and do not rewrite an earlier trailer.\n"
+                f"- Sample range: episode {ep_data.get('trailer_episode_from')} through episode {ep_data.get('trailer_episode_to')}.\n"
+                f"- Focus: {str(ep_data.get('trailer_focus') or '').strip() or 'unspecified'}.\n"
+                "- Global Story DNA is the map: throughline, highlight action, dialogue, plot turns, and registered main environments inside that range.\n"
+                "- Sample inside the locked range in story order. Make the throughline followable, and leave the final choice unplayed.\n"
                 "- Lock the Save the Cat selections first. Each beat's main environment is the registered place where that actual plot happens. Those selections carry multiple main environments.\n"
                 "- Those beats play the framework's belief collision and the locked social, philosophical, or moral layer in the scene itself.\n"
                 "- Do not reveal the final boss or the ultimate secret. Public face, subordinates, and event pressure may appear. The reveal beat and the secret's answer may not.\n\n"
@@ -1599,7 +1641,10 @@ async def generate_project_episode_scripts_from_global_framework(
                 ),
             )
         elif call_is_trailer and series_ip_mode:
-            series_ip_block = build_series_ip_trailer_note()
+            series_ip_block = build_series_ip_trailer_note(
+                episode_from=ep_data.get("trailer_episode_from"),
+                episode_to=ep_data.get("trailer_episode_to"),
+            )
         else:
             episode_generation_guidance_block = resolve_episode_generation_guidance_for_prompt(
                 single_episode_mode=single_episode_mode and not call_is_trailer,
@@ -1607,7 +1652,15 @@ async def generate_project_episode_scripts_from_global_framework(
                 persisted_guidance=gi_story_input.get("episode_generation_guidance"),
             )
 
-        trailer_block = build_trailer_generation_prompt_block() if call_is_trailer else ""
+        trailer_block = (
+            build_trailer_generation_prompt_block(
+                focus=ep_data.get("trailer_focus"),
+                episode_from=ep_data.get("trailer_episode_from"),
+                episode_to=ep_data.get("trailer_episode_to"),
+            )
+            if call_is_trailer
+            else ""
+        )
         user_prompt = (
             f"{series_ip_block}"
             f"{trailer_block}"
@@ -1819,13 +1872,28 @@ async def generate_project_episode_scripts_from_global_framework(
                     raise RuntimeError(f"Episode {ep_id} not found in database for update.")
                 previous_title = str(ep_db.title or "")
                 ep_db.script_content = content
-                if llm_episode_title:
-                    ep_db.title = f"预告片·{llm_episode_title}" if call_is_trailer else llm_episode_title
+                if call_is_trailer:
+                    ep_db.title = format_trailer_episode_title(
+                        seq=int(ep_data.get("trailer_seq") or 1),
+                        episode_title=llm_episode_title,
+                        episode_from=int(ep_data.get("trailer_episode_from") or 1),
+                        episode_to=int(ep_data.get("trailer_episode_to") or target_n),
+                        series_episode_count=int(target_n),
+                        focus=ep_data.get("trailer_focus"),
+                    )
+                elif llm_episode_title:
+                    ep_db.title = llm_episode_title
                 ep_script_content = content
                 ei = _episode_runtime_info_from_episode(ep_db)
                 ei["episode_script_generated_at"] = now_bj_iso()
                 if call_is_trailer:
                     ei["script_output_kind"] = "trailer"
+                    ei["trailer_seq"] = int(ep_data.get("trailer_seq") or 1)
+                    ei["trailer_episode_from"] = int(ep_data.get("trailer_episode_from") or 1)
+                    ei["trailer_episode_to"] = int(ep_data.get("trailer_episode_to") or target_n)
+                    focus_saved = str(ep_data.get("trailer_focus") or "").strip()
+                    if focus_saved:
+                        ei["trailer_focus"] = focus_saved
                     ei.pop("episode_script_episode_number", None)
                 else:
                     ei["episode_script_episode_number"] = int(idx)
@@ -1923,6 +1991,21 @@ async def generate_project_episode_scripts_from_global_framework(
                     billing_service.cancel_reservation(cancel_db, _reservation_tx_id(reservation_tx), str(e))
                 finally:
                     cancel_db.close()
+            if str(ep_data.get("output_kind") or "") == "trailer":
+                cleanup_db = SessionLocal()
+                try:
+                    failed_ep = cleanup_db.query(Episode).get(ep_id)
+                    if failed_ep and not str(failed_ep.script_content or "").strip():
+                        cleanup_db.delete(failed_ep)
+                        cleanup_db.commit()
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "[generate_episode_scripts] failed to drop empty trailer episode_id=%s error=%s",
+                        ep_id,
+                        cleanup_error,
+                    )
+                finally:
+                    cleanup_db.close()
             logger.exception(f"[generate_episode_scripts] FAILED episode_number={idx} episode_id={ep_id} error={e}")
             _safe_log_episode("GENERATE_EPISODE_SCRIPT_FAILED", {
                 "project_id": project_id,

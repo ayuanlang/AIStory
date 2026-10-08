@@ -343,6 +343,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const [storyGenFocusStep, setStoryGenFocusStep] = useState('wild_ideas');
     const storyGenStepRefs = useRef({});
     const [targetEpisodeNumberForGen, setTargetEpisodeNumberForGen] = useState('');
+    const [trailerFocus, setTrailerFocus] = useState('');
+    const [trailerEpisodeFrom, setTrailerEpisodeFrom] = useState('');
+    const [trailerEpisodeTo, setTrailerEpisodeTo] = useState('');
     const [hasSetDefaultEp, setHasSetDefaultEp] = useState(false);
     
     useEffect(() => {
@@ -2066,10 +2069,44 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 return;
             }
         }
-        if (!specificEpisode && !trailerMode && (!n || Number.isNaN(n) || n <= 0)) {
-            alert('Please set a valid Episodes Count first.');
+        if (!specificEpisode && (!n || Number.isNaN(n) || n <= 0)) {
+            alert(trailerMode
+                ? '请先填写集数。预告片默认从第 1 集取到最后一集。'
+                : 'Please set a valid Episodes Count first.');
             episodeScriptsGenerationInFlightRef.current = false;
             return;
+        }
+        let trailerFromNum = null;
+        let trailerToNum = null;
+        let trailerFocusText = '';
+        if (trailerMode) {
+            const readBound = (raw) => {
+                const text = String(raw || '').trim();
+                if (!text) return null;
+                const num = Number(text);
+                if (!Number.isInteger(num) || num <= 0) return NaN;
+                return num;
+            };
+            const fromBound = readBound(trailerEpisodeFrom);
+            const toBound = readBound(trailerEpisodeTo);
+            if (Number.isNaN(fromBound) || Number.isNaN(toBound)) {
+                alert('起始集和结束集必须是正整数。留空表示从头到尾。');
+                episodeScriptsGenerationInFlightRef.current = false;
+                return;
+            }
+            trailerFromNum = fromBound || 1;
+            trailerToNum = toBound || n;
+            trailerFocusText = String(trailerFocus || '').trim();
+            if (trailerFocusText.length > 800) {
+                alert('侧重点请控制在 800 字以内。');
+                episodeScriptsGenerationInFlightRef.current = false;
+                return;
+            }
+            if (trailerFromNum > trailerToNum || trailerFromNum > n || trailerToNum > n) {
+                alert(`取材范围须落在第 1 集到第 ${n} 集之间，且起始集不能大于结束集。`);
+                episodeScriptsGenerationInFlightRef.current = false;
+                return;
+            }
         }
 
         setIsGeneratingEpisodeScripts(true);
@@ -2094,9 +2131,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 : 'overwrite-all-default';
 
             if (trailerMode) {
+                const focusLine = trailerFocusText
+                    ? `侧重点：${trailerFocusText}。`
+                    : '未指定侧重点，按这一段的来龙去脉取样。';
                 const ok = await confirmUiMessage(
-                    '将单独生成一条预告片，写入「预告片」分集，不覆盖已有正片。预告要讲清整体剧情的来龙去脉，并把动作、对白、情节拍成高光。是否继续？',
-                    'This writes one trailer into its own episode and does not overwrite the series. It sketches the story throughline and plays highlight action, dialogue, and plot. Continue?'
+                    `将新写一条预告片，不覆盖已有预告片和正片。取材第 ${trailerFromNum} 集到第 ${trailerToNum} 集。${focusLine}是否继续？`,
+                    `This adds a new trailer and does not overwrite existing trailers or episodes. It samples episodes ${trailerFromNum}–${trailerToNum}. ${trailerFocusText ? `Focus: ${trailerFocusText}. ` : 'No focus set. '}Continue?`
                 );
                 if (!ok) {
                     addLog?.('Trailer generation canceled.', 'warning');
@@ -2123,7 +2163,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             );
             const reqPayload = {
                 generator_kind: generatorKind,
-                episodes_count: trailerMode ? Math.max(Number(n) || 1, 1) : n,
+                episodes_count: n,
                 episode_duration_minutes: Number(globalStoryInput.episode_duration_minutes) > 0
                     ? Number(globalStoryInput.episode_duration_minutes)
                     : 1,
@@ -2132,7 +2172,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 script_title: String(info?.script_title || project?.title || '').trim(),
                 overwrite_existing: overwriteExisting,
                 retry_failed_only: retryFailedOnly,
-                ...(trailerMode ? { output_kind: 'trailer' } : {}),
+                ...(trailerMode ? {
+                    output_kind: 'trailer',
+                    trailer_episode_from: trailerFromNum,
+                    trailer_episode_to: trailerToNum,
+                    ...(trailerFocusText ? { trailer_focus: trailerFocusText } : {}),
+                } : {}),
             };
             if (specificEpisode) {
                 reqPayload.episode_number = Number(specificEpisode);
@@ -4169,7 +4214,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         <div className="text-[11px] text-muted-foreground mt-0.5">
                                             {seriesIpMode
                                                 ? t('按集写。填写这一集的基本剧情、冲突和亮点；此前各集摘要会自动作为下一集的输入。不预写全部分集。', 'Write one episode at a time. Give this episode’s plot, conflict, and highlights. Summaries of earlier episodes are fed into the next one. Episode frameworks are not prewritten.')
-                                                : t('基于全局框架与角色设定批量/单集生成正片。预告片单独成片，讲清剧情来龙去脉，并拍出动作、对白、情节高光。', 'Batch or single-episode scripts from the global framework. A trailer is a separate piece that sketches the throughline and plays highlight action, dialogue, and plot.')}
+                                                : t('基于全局框架与角色设定批量/单集生成正片。预告片每次新写一条，不覆盖已有预告；可指定侧重点，以及从哪一集到哪一集，留空则从头到尾。', 'Batch or single-episode scripts from the global framework. Each trailer is a new piece. Set a focus and an episode range, or leave the range blank to cover the whole series.')}
                                         </div>
                                     </div>
                                 </div>
@@ -4183,15 +4228,6 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                             : t('从全局框架 + 项目角色设定生成分集剧本，自动创建缺失分集并写入对应分集', 'Generate episode scripts from Global Framework + Project Character Canon, create missing episodes, and save each script into its episode')}
                                     >
                                         {episodeScriptsRunning ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-3.5 h-3.5" /> {t('全量生成分集', 'Generate All')}</>}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => handleGenerateEpisodeScripts({ outputKind: 'trailer' })}
-                                        disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady}
-                                        className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
-                                        title={t('单独生成一条预告片：讲清整体剧情来龙去脉，高光含动作、对白和情节。不覆盖正片。', 'Generate one trailer: the story throughline, with highlight action, dialogue, and plot. Does not overwrite the series.')}
-                                    >
-                                        {t('生成预告片', 'Generate Trailer')}
                                     </button>
                                     <div className="flex items-center bg-white/5 rounded-lg overflow-hidden border border-white/10">
                                         <input
@@ -4223,6 +4259,48 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                             : <><X className="w-3.5 h-3.5" /> {t('强制停止', 'Force Stop')}</>}
                                     </button>
                                 </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2 py-2">
+                                <span className="text-[11px] text-amber-100/80 whitespace-nowrap">{t('预告片', 'Trailer')}</span>
+                                <input
+                                    type="text"
+                                    value={trailerFocus}
+                                    onChange={(e) => setTrailerFocus(e.target.value)}
+                                    placeholder={t('侧重点（可选，如感情线、动作高光）', 'Focus (optional)')}
+                                    disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                    className="min-w-[12rem] flex-1 px-2 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-white placeholder-white/30 outline-none"
+                                />
+                                <span className="text-[11px] text-white/70 whitespace-nowrap">{t('从第', 'From ep')}</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={trailerEpisodeFrom}
+                                    onChange={(e) => setTrailerEpisodeFrom(e.target.value)}
+                                    placeholder={t('首', 'Start')}
+                                    disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                    className="w-16 px-2 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-center text-white placeholder-white/30 outline-none"
+                                />
+                                <span className="text-[11px] text-white/70 whitespace-nowrap">{t('集到第', 'to ep')}</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={trailerEpisodeTo}
+                                    onChange={(e) => setTrailerEpisodeTo(e.target.value)}
+                                    placeholder={t('末', 'End')}
+                                    disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                    className="w-16 px-2 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-center text-white placeholder-white/30 outline-none"
+                                />
+                                <span className="text-[11px] text-white/45 whitespace-nowrap">{t('集，留空则从头到尾', 'Blank = whole series')}</span>
+                                <button
+                                    type="button"
+                                    onClick={() => handleGenerateEpisodeScripts({ outputKind: 'trailer' })}
+                                    disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts || !globalFrameworkReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
+                                    title={t('新写一条预告片，不覆盖已有预告和正片。可指定侧重点和集数范围。', 'Add a new trailer without overwriting existing trailers or episodes. Optional focus and episode range.')}
+                                >
+                                    {t('生成预告片', 'Generate Trailer')}
+                                </button>
                             </div>
 
                             {seriesIpMode ? (
