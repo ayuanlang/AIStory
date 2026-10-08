@@ -1081,13 +1081,14 @@ def _append_flower_render_mode(compact: str) -> str:
     text = _text(compact)
     if not text:
         return text
-    if "出字=舍" in text:
+    probe = text.replace("名牌出字=", "")
+    if "出字=舍" in probe:
         return text
-    if "出字=模型直出" in text and "出字=后期烧录" not in text:
+    if "出字=模型直出" in probe and "出字=后期烧录" not in probe:
         for mark in ("｜烧录=libass", "｜手写=禁", "｜上屏=字卡专镜", "｜字卡=场景底+字层"):
             text = text.replace(mark, "")
         return text
-    if "出字=后期烧录" in text or "烧录=libass" in text or "手写=禁" in text:
+    if "出字=后期烧录" in probe or "烧录=libass" in text or "手写=禁" in text:
         lifted = _lift_flower_title_card(text) if flower_needs_title_card(text) else text
         if "出字=后期烧录" not in lifted:
             lifted = f"{lifted}｜出字=后期烧录"
@@ -1111,8 +1112,9 @@ def _contact_cta_suffix(cta: Any, compact: str = "") -> str:
     if not (_FLOWER_PHONE_RE.search(raw) or "地址" in raw or "订座" in raw):
         return ""
     base = f"CTA=「{raw}」｜字级=小｜落位=句下"
-    burned = "出字=后期烧录" in compact or (
-        "烧录=libass" in compact and "出字=模型直出" not in compact
+    flower = compact.replace("名牌出字=", "")
+    burned = "出字=后期烧录" in flower or (
+        "烧录=libass" in compact and "出字=模型直出" not in flower
     )
     if burned:
         return f"{base}｜烧录=libass｜手写=禁"

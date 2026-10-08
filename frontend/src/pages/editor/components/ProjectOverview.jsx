@@ -2865,7 +2865,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         />
                         <InputGroup idPrefix={prefix}
                             label={t('镜头偏好', 'Lens Preference')}
-                            value={info.lens_preference}
+                            value={PROJECT_EP_LENS_PREFERENCE_OPTIONS.includes(info.lens_preference) ? info.lens_preference : PROJECT_EP_LENS_PREFERENCE_OPTIONS[0]}
                             onChange={v => updateField('lens_preference', v)}
                             list={PROJECT_EP_LENS_PREFERENCE_OPTIONS}
                         />

@@ -32,12 +32,19 @@ _FONT_MAP = {
     "宋体": "SimSun",
     "黑体": "SimHei",
     "微软雅黑": "Microsoft YaHei",
+    "魏碑": "KaiTi",
+    "宋": "SimSun",
     "kaiti": "KaiTi",
     "simsun": "SimSun",
     "simhei": "SimHei",
 }
 _DESIGNATED_COPY_RE = re.compile(
-    r"(?:画幅叠出片内图形花字|片内图形花字|文案)\s*[=＝]?\s*「([^」]+)」"
+    r"(?:画幅叠出片内图形花字|片内图形花字|(?<!名牌)文案)\s*[=＝]?\s*「([^」]+)」"
+)
+_NAMEPLATE_COPY_RE = re.compile(r"名牌字样\s*[=＝]\s*「([^」]*)」")
+_NAMEPLATE_PAINT_RE = re.compile(
+    r"(?:画幅顶部中央叠出片内图形名牌|画幅叠出片内图形名牌|画面打出物理文字标签：)\s*"
+    r"【[^】]*】(?:[^，。\n]*】)?"
 )
 _REAL_BURN_MARK_RE = re.compile(r"(?<!标记)烧录=libass")
 _SIZE_RATIO = {"大": 0.20, "中": 0.13, "小": 0.08}
@@ -92,12 +99,13 @@ def _append_unique(parts: List[str], text: str) -> None:
 def _flower_output_mode(block: str) -> str:
     """burn = post composite, model = video model paints, drop = no on-screen flower text."""
     text = str(block or "")
-    if "出字=舍" in text:
+    flower = text.replace("名牌出字=", "")
+    if "出字=舍" in flower:
         return "drop"
-    if "出字=模型直出" in text and "出字=后期烧录" not in text:
+    if "出字=模型直出" in flower and "出字=后期烧录" not in flower:
         return "model"
     if (
-        "出字=后期烧录" in text
+        "出字=后期烧录" in flower
         or _REAL_BURN_MARK_RE.search(text) is not None
         or "手写=禁" in text
         or "上屏=字卡专镜" in text
@@ -106,6 +114,65 @@ def _flower_output_mode(block: str) -> str:
     if "画幅叠出" in text or "片内图形花字" in text or _DESIGNATED_COPY_RE.search(text):
         return "model"
     return ""
+
+
+def _nameplate_output_mode(block: str) -> str:
+    """burn = post composite, model = video model paints the nameplate."""
+    text = str(block or "")
+    if "名牌出字=后期烧录" in text:
+        return "burn"
+    if "名牌出字=模型直出" in text:
+        return "model"
+    if "片内图形名牌" in text or "物理文字标签" in text or "名牌字样=" in text:
+        return "model"
+    return ""
+
+
+def _nameplate_burn_events(block: str, start: float, stop: float) -> List[Dict[str, Any]]:
+    if _nameplate_output_mode(block) != "burn":
+        return []
+    events: List[Dict[str, Any]] = []
+    for match in _NAMEPLATE_COPY_RE.finditer(block or ""):
+        raw = str(match.group(1) or "").strip()
+        if not raw:
+            continue
+        parts = [part.strip() for part in re.split(r"[｜|]", raw) if part.strip()]
+        tail = (block or "")[match.end():match.end() + 220]
+        place = "顶" if ("落位=顶部中央" in tail or "画幅顶部中央" in tail) else "名牌"
+        font = "KaiTi"
+        font_match = re.search(r"字体=([^｜|\n，,]+)", tail)
+        if font_match:
+            raw_font = font_match.group(1).strip()
+            font = _FONT_MAP.get(raw_font) or _FONT_MAP.get(raw_font.lower()) or "KaiTi"
+        size = "中"
+        if "字级=大" in tail:
+            size = "大"
+        elif "字级=小" in tail:
+            size = "小"
+        events.append({
+            "text": parts[0],
+            "companion": parts[1] if len(parts) > 1 else "",
+            "seal": "",
+            "start": float(start),
+            "end": float(stop),
+            "place": place,
+            "size": size,
+            "vertical": False,
+            "font": font,
+            "kind": "nameplate",
+        })
+    return events
+
+
+def _strip_nameplates(block: str) -> str:
+    if _nameplate_output_mode(block) != "burn":
+        return block
+    text = _NAMEPLATE_PAINT_RE.sub("", block)
+    text = _NAMEPLATE_COPY_RE.sub("名牌字样=「」", text)
+    note = "本P禁止生成角色名牌与环境名牌字形，字由后期烧录。"
+    if note not in text:
+        text = f"{text.rstrip()}{note}\n"
+    return text
 
 
 def _block_needs_libass(block: str) -> bool:
@@ -317,30 +384,29 @@ def extract_libass_events(script: str, duration: Any = None) -> List[Dict[str, A
     fallback = _parse_duration(duration, 4.0)
     events: List[Dict[str, Any]] = []
     for start, end, block in _iter_blocks(script):
-        if not _block_needs_libass(block):
-            continue
-        main, companion = _pick_main_and_companion(block)
-        seal = _seal_text(block)
-        if not main and not companion and not seal:
-            continue
-        place, size, vertical, font = _place_and_size(block)
-        look = script_flower_look(block, _style_context(script))
         stop = float(end) if end is not None else float(start) + fallback
         if stop <= start:
             stop = start + fallback
-        events.append({
-            "text": main,
-            "companion": companion,
-            "seal": seal,
-            "start": float(start),
-            "end": float(stop),
-            "place": place,
-            "size": size,
-            "vertical": vertical,
-            "font": font,
-            "font_kind": look.get("font_kind") or "",
-            "look": look,
-        })
+        if _block_needs_libass(block):
+            main, companion = _pick_main_and_companion(block)
+            seal = _seal_text(block)
+            if main or companion or seal:
+                place, size, vertical, font = _place_and_size(block)
+                look = script_flower_look(block, _style_context(script))
+                events.append({
+                    "text": main,
+                    "companion": companion,
+                    "seal": seal,
+                    "start": float(start),
+                    "end": float(stop),
+                    "place": place,
+                    "size": size,
+                    "vertical": vertical,
+                    "font": font,
+                    "font_kind": look.get("font_kind") or "",
+                    "look": look,
+                })
+        events.extend(_nameplate_burn_events(block, float(start), stop))
     return _dedupe_burn_events(events)
 
 
@@ -426,7 +492,7 @@ def normalize_manual_burn_lines(lines: Any, duration: Any = None) -> List[Dict[s
         if size not in {"大", "中", "小"}:
             size = "大"
         place = str(raw.get("place") or "中").strip()
-        if place not in {"中", "画左", "画右"}:
+        if place not in {"中", "画左", "画右", "顶", "名牌"}:
             place = "中"
         event = {
             "text": text,
@@ -476,11 +542,20 @@ def _pos(width: int, height: int, place: str, size: str, companion: bool) -> tup
         x = int(width * 0.22)
     else:
         x = int(width / 2)
-    y = int(height * 0.40)
+    if place == "顶":
+        y = int(height * 0.12)
+    elif place == "名牌":
+        y = int(height * 0.70)
+    else:
+        y = int(height * 0.40)
     if companion:
         main_fs = fontsize
-        fontsize = max(16, int(main_fs * 0.34))
-        y = min(int(height * 0.82), y + int(main_fs * 1.45))
+        if place in {"顶", "名牌"}:
+            fontsize = max(16, int(main_fs * 0.55))
+            y = min(int(height * 0.78), y + int(main_fs * 1.05))
+        else:
+            fontsize = max(16, int(main_fs * 0.34))
+            y = min(int(height * 0.82), y + int(main_fs * 1.45))
     return x, y, fontsize
 
 
@@ -641,7 +716,7 @@ _PAINT_CUE_RE = re.compile(
 def _strip_block(block: str) -> str:
     mode = _flower_output_mode(block)
     if mode not in {"burn", "drop"}:
-        return block
+        return _strip_nameplates(block)
     main, companion = _pick_main_and_companion(block)
     text = _PAINT_CUE_RE.sub("", block)
     if main:
@@ -662,7 +737,7 @@ def _strip_block(block: str) -> str:
     )
     if note not in text:
         text = f"{text.rstrip()}{note}\n"
-    return text
+    return _strip_nameplates(text)
 
 
 def strip_libass_glyphs_from_prompt(script: str) -> str:

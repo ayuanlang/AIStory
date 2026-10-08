@@ -659,7 +659,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newReviewerUsers, setNewReviewerUsers] = useState('');
     const [newEra, setNewEra] = useState('');
     const [newSeasonOccurrence, setNewSeasonOccurrence] = useState('');
-    const [newLensPreference, setNewLensPreference] = useState('');
+    const [newLensPreference, setNewLensPreference] = useState(PROJECT_CREATE_PREFERRED_LENS_PREFERENCE);
     const [newBroadcastSafetyLevel, setNewBroadcastSafetyLevel] = useState('');
     const [newVideoGenerationPreference, setNewVideoGenerationPreference] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.video_generation_preference));
     const [newCreativity, setNewCreativity] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.creativity));
@@ -950,7 +950,11 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 ));
                 setNewEra((prev) => (normalized.era.includes(prev) ? prev : ''));
                 setNewSeasonOccurrence((prev) => (normalized.season_occurrence.includes(prev) ? prev : ''));
-                setNewLensPreference((prev) => (normalized.lens_preference.includes(prev) ? prev : ''));
+                setNewLensPreference((prev) => (
+                    normalized.lens_preference.includes(prev)
+                        ? prev
+                        : pickPreferredOrFirst(normalized.lens_preference, PROJECT_CREATE_PREFERRED_LENS_PREFERENCE)
+                ));
                 setNewBroadcastSafetyLevel((prev) => (normalized.broadcast_safety_level.includes(prev) ? prev : ''));
                 setNewVideoGenerationPreference((prev) => (normalized.video_generation_preference.includes(prev) ? prev : pickPreferredOrFirst(normalized.video_generation_preference)));
                 setNewResolution((prev) => (normalized.resolution.includes(prev) ? prev : pickPreferredOrFirst(normalized.resolution)));
@@ -1228,7 +1232,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         setNewImageSize(pickPreferredOrFirst(projectCreateOptions.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
         setNewEra('');
         setNewSeasonOccurrence('');
-        setNewLensPreference('');
+        setNewLensPreference(pickPreferredOrFirst(projectCreateOptions.lens_preference, PROJECT_CREATE_PREFERRED_LENS_PREFERENCE));
         setNewBroadcastSafetyLevel('');
         setNewVideoGenerationPreference(pickPreferredOrFirst(projectCreateOptions.video_generation_preference));
         setNewCreativity(pickPreferredOrFirst(projectCreateOptions.creativity));

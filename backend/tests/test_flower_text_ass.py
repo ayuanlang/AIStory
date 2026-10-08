@@ -115,6 +115,41 @@ def test_prompt_sent_to_video_model_drops_shop_glyphs():
     assert extract_libass_events(dropped, duration=4) == []
 
 
+def test_nameplate_burn_is_separate_from_flower_text():
+    character = (
+        "(P1 0s–4s) 名牌字样=「陈｜客栈掌柜」｜落位=人物下方｜字体=魏碑｜字色=鎏金｜字级=中｜名牌出字=后期烧录。"
+    )
+    events = extract_libass_events(character, duration=4)
+    assert len(events) == 1
+    assert events[0]["text"] == "陈"
+    assert events[0]["companion"] == "客栈掌柜"
+    assert events[0]["place"] == "名牌"
+    stripped = strip_libass_glyphs_from_prompt(character)
+    assert "客栈掌柜" not in stripped
+    assert "名牌字样=「」" in stripped
+    assert "禁止生成角色名牌与环境名牌字形" in stripped
+    painted = strip_libass_glyphs_from_prompt(
+        "画幅叠出片内图形名牌【陈】客栈掌柜】，字体=魏碑，字色=鎏金，字级=中｜名牌出字=模型直出"
+    )
+    assert "客栈掌柜" in painted
+    assert extract_libass_events(painted, duration=4) == []
+    place = (
+        "名牌字样=「龙门风月客栈｜早上9点」｜落位=顶部中央｜字体=魏碑｜字色=鎏金｜字级=中｜名牌出字=后期烧录"
+    )
+    place_events = extract_libass_events(place, duration=4)
+    assert place_events[0]["text"] == "龙门风月客栈"
+    assert place_events[0]["place"] == "顶"
+    mixed = (
+        "画幅叠出片内图形花字「何以安康，家和人乐」｜出字=模型直出。"
+        "名牌字样=「陈｜客栈掌柜」｜落位=人物下方｜字体=魏碑｜字色=鎏金｜字级=中｜名牌出字=后期烧录。"
+    )
+    mixed_events = extract_libass_events(mixed, duration=4)
+    assert [event["text"] for event in mixed_events] == ["陈"]
+    mixed_stripped = strip_libass_glyphs_from_prompt(mixed)
+    assert "何以安康，家和人乐" in mixed_stripped
+    assert "客栈掌柜" not in mixed_stripped
+
+
 def test_manual_seal_burns_beside_the_line():
     events = normalize_manual_burn_lines([{
         "text": "天地灵秀·何家乐享",

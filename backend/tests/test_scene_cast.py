@@ -81,6 +81,8 @@ def test_build_scene_entity_token_brief():
     assert "CHAR:[@围观百姓]｜标签=无｜标签_en=无｜标签字体=无｜标签字色=无｜裸名=围观百姓｜裸名_en=Onlookers｜字幕=无" in brief
     assert "中文项目用 裸名+标签" in brief
     assert "物理文字标签" in brief
+    assert "名牌出字=模型直出" in brief
+    assert "名牌出字=后期烧录" in brief
     assert "不是对白硬字幕" in brief
     assert "只有字幕=待落的本集新角色" in brief
     assert "禁把多名牌攒到建置段末或入戏一起写" in brief

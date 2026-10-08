@@ -331,11 +331,12 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
 };
 
 const FLOWER_COPY_RE = /(?:画幅叠出片内图形花字|片内图形花字|文案)\s*[=＝]?\s*「[^」]+」|出字=(?:后期烧录|模型直出|舍)|花字\s*[:：]\s*(?!无)/;
+const withoutNameplateMode = (text) => String(text || '').replace(/名牌出字=/g, '');
 
-const promptHasFlower = (text) => FLOWER_COPY_RE.test(String(text || ''));
+const promptHasFlower = (text) => FLOWER_COPY_RE.test(withoutNameplateMode(text));
 
 const readShotFlowerMode = (text) => {
-    const src = String(text || '');
+    const src = withoutNameplateMode(text);
     if (src.includes('出字=舍')) return 'drop';
     if (src.includes('出字=后期烧录')) return 'burn';
     if (src.includes('出字=模型直出')) return 'model';
@@ -373,6 +374,65 @@ const rewriteShotFlowerMode = (text, mode) => {
     }
     return out;
 };
+
+const NAMEPLATE_RE = /片内图形名牌|物理文字标签|名牌字样\s*[=＝]|名牌出字=/;
+const NAMEPLATE_SPAN_RE = /(?:画幅顶部中央叠出片内图形名牌|画幅叠出片内图形名牌|画面打出物理文字标签：)\s*【[^】]+】(?:[^，。\n]*】)?[^。\n]*|名牌字样\s*[=＝]\s*「[^」]*」[^。\n]*(?:。本P禁止生成该名牌字形。)?/g;
+
+const promptHasNameplate = (text) => NAMEPLATE_RE.test(String(text || ''));
+
+const readShotNameplateMode = (text) => (
+    String(text || '').includes('名牌出字=后期烧录') ? 'burn' : 'model'
+);
+
+const readNameplate = (clause) => {
+    const src = String(clause || '');
+    const copied = src.match(/名牌字样\s*[=＝]\s*「([^」]*)」([^。\n]*)/);
+    const painted = src.match(/(?:画幅顶部中央叠出片内图形名牌|画幅叠出片内图形名牌|画面打出物理文字标签：)\s*【([^】]+)】(?:([^，。｜|\n]+)】)?/);
+    const tail = copied ? (copied[2] || '') : src;
+    const parts = copied
+        ? String(copied[1] || '').split(/[｜|]/).map((part) => part.trim()).filter(Boolean)
+        : [];
+    const name = copied ? (parts[0] || '') : String(painted?.[1] || '').trim();
+    const tag = copied ? (parts[1] || '') : String(painted?.[2] || '').trim();
+    if (!name) return null;
+    const pick = (key) => (tail.match(new RegExp(`${key}=([^｜|，,\\s]+)`)) || src.match(new RegExp(`${key}=([^｜|，,\\s]+)`)) || [])[1] || '';
+    return {
+        name,
+        tag,
+        top: src.includes('顶部中央') || src.includes('画幅顶部中央'),
+        font: pick('字体') || '魏碑',
+        color: pick('字色') || '鎏金',
+        size: pick('字级') || '中',
+    };
+};
+
+const renderNameplate = (plate, mode) => {
+    const place = plate.top ? '顶部中央' : '人物下方';
+    if (mode === 'burn') {
+        const body = plate.tag ? `${plate.name}｜${plate.tag}` : plate.name;
+        return `名牌字样=「${body}」｜落位=${place}｜字体=${plate.font}｜字色=${plate.color}｜字级=${plate.size}｜名牌出字=后期烧录。本P禁止生成该名牌字形。`;
+    }
+    const tail = `字体=${plate.font}，字色=${plate.color}，字级=${plate.size}，须清晰可读，禁大字占幅｜名牌出字=模型直出`;
+    if (plate.top) {
+        const core = plate.tag
+            ? `画幅顶部中央叠出片内图形名牌【${plate.name}】${plate.tag}】`
+            : `画幅顶部中央叠出片内图形名牌【${plate.name}】`;
+        return `${core}，落位=顶部中央，${tail}`;
+    }
+    const core = plate.tag
+        ? `画幅叠出片内图形名牌【${plate.name}】${plate.tag}】`
+        : `画幅叠出片内图形名牌【${plate.name}】`;
+    return `${core}，${tail}`;
+};
+
+const rewriteShotNameplateMode = (text, mode) => String(text || '').replace(new RegExp(NAMEPLATE_SPAN_RE.source, 'g'), (clause) => {
+    const cutAt = clause.search(/画幅叠出片内图形花字|文案\s*[=＝]|烧录=libass|手写=禁/);
+    const kept = cutAt > 0 ? clause.slice(cutAt) : '';
+    const head = cutAt > 0 ? clause.slice(0, cutAt) : clause;
+    const plate = readNameplate(head);
+    if (!plate) return clause;
+    return `${renderNameplate(plate, mode)}${kept}`;
+});
 
 export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null, userBatchParallelLimit = 3, tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
         const aspectParts = parseAspectRatioParts(getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9');
@@ -13631,6 +13691,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                                 <option value="中">{t('中', 'Center')}</option>
                                                                                 <option value="画左">{t('画左', 'Left')}</option>
                                                                                 <option value="画右">{t('画右', 'Right')}</option>
+                                                                                <option value="顶">{t('顶部', 'Top')}</option>
+                                                                                <option value="名牌">{t('名牌', 'Nameplate')}</option>
                                                                             </select>
                                                                         </label>
                                                                     </div>
@@ -13923,6 +13985,37 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             </div>
             <p className="mt-1 text-[10px] text-white/45">
                 {t('生成视频前选。后期烧录时模型不画这些字，成片后再点「烧录文字」。改完已有视频的镜头，需要重新生成。', 'Choose before generating. Burn-in-post keeps the glyphs off the model; use Burn text after the video exists. Changing this on a finished video requires a regenerate.')}
+            </p>
+        </div>
+    );
+})()}
+{(() => {
+    let promptCn = '';
+    try { promptCn = String(JSON.parse(editingShot?.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) {}
+    if (!promptHasNameplate(promptCn)) return null;
+    const mode = readShotNameplateMode(promptCn);
+    return (
+        <div className="mt-2 mb-2 rounded-md border border-white/10 bg-black/20 p-2">
+            <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('本镜名牌', 'Nameplates on this shot')}</div>
+                <select
+                    className="bg-black/40 border border-white/10 rounded px-2 py-1 text-[11px] text-white focus:border-primary/50 focus:outline-none"
+                    value={mode}
+                    onChange={(e) => {
+                        const nextMode = e.target.value;
+                        if (!nextMode) return;
+                        updateShotTechnicalNotes((techObj) => {
+                            techObj.video_prompt_cn = rewriteShotNameplateMode(String(techObj.video_prompt_cn || ''), nextMode);
+                            techObj.manual_video_prompt = true;
+                        });
+                    }}
+                >
+                    <option value="model">{t('模型直出', 'Model paints')}</option>
+                    <option value="burn">{t('后期烧录', 'Burn in post')}</option>
+                </select>
+            </div>
+            <p className="mt-1 text-[10px] text-white/45">
+                {t('角色名牌和环境名牌共用这一项。后期烧录时模型不画名牌，成片后再点「烧录文字」。', 'Character and place nameplates share this switch. Burn-in-post keeps those glyphs off the model; use Burn text after the video exists.')}
             </p>
         </div>
     );
