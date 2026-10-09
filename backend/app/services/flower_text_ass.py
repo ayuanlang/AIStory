@@ -117,13 +117,17 @@ def _flower_output_mode(block: str) -> str:
 
 
 def _nameplate_output_mode(block: str) -> str:
-    """burn = post composite, model = video model paints the nameplate."""
+    """burn = post composite, model = video model paints the nameplate.
+
+    The quality footer mentions both modes as instructions
+    (``名牌出字=后期烧录时`` / ``名牌出字=模型直出（含未写``). Those are not a choice.
+    """
     text = str(block or "")
-    if "名牌出字=后期烧录" in text:
+    if re.search(r"名牌出字=后期烧录(?!时)", text):
         return "burn"
-    if "名牌出字=模型直出" in text:
+    if re.search(r"名牌出字=模型直出(?![(（])", text):
         return "model"
-    if "片内图形名牌" in text or "物理文字标签" in text or "名牌字样=" in text:
+    if re.search(r"画幅(?:顶部中央)?叠出片内图形名牌|画面打出物理文字标签|名牌字样\s*[=＝]", text):
         return "model"
     return ""
 
@@ -149,6 +153,9 @@ def _nameplate_burn_events(block: str, start: float, stop: float) -> List[Dict[s
             size = "大"
         elif "字级=小" in tail:
             size = "小"
+        look = script_flower_look(tail)
+        if not _mark(tail, "点缀色"):
+            look["companion_color"] = look["title_color"]
         events.append({
             "text": parts[0],
             "companion": parts[1] if len(parts) > 1 else "",
@@ -159,6 +166,8 @@ def _nameplate_burn_events(block: str, start: float, stop: float) -> List[Dict[s
             "size": size,
             "vertical": False,
             "font": font,
+            "font_kind": look.get("font_kind") or "",
+            "look": look,
             "kind": "nameplate",
         })
     return events
@@ -531,6 +540,23 @@ def _layout_text(text: str, vertical: bool) -> str:
         return raw.replace("\n", r"\N")
     pieces = [ch for ch in raw if ch not in {"\n", "\r"}]
     return r"\N".join(pieces)
+
+
+def _plate_anchor(width: int, height: int, place: str) -> Tuple[int, int]:
+    """Screen point for a burned line. Nameplates use the same card as flower text, at their own seat."""
+    if place == "画右":
+        x = int(width * 0.68)
+    elif place == "画左":
+        x = int(width * 0.32)
+    else:
+        x = int(width) // 2
+    if place == "顶":
+        y = int(height * 0.14)
+    elif place == "名牌":
+        y = int(height * 0.72)
+    else:
+        y = int(height * 0.46)
+    return x, y
 
 
 def _pos(width: int, height: int, place: str, size: str, companion: bool) -> tuple[int, int, int]:
@@ -1307,16 +1333,11 @@ def render_title_plate(
     size_name = str(event.get("size") or "中")
     seal = str(event.get("seal") or "").strip()
     seal_chars = [ch for ch in seal if ch not in {"\n", "\r"}]
-    if place == "画右":
-        main_x = int(width * 0.68)
-        budget = int(width * 0.42)
-    elif place == "画左":
-        main_x = int(width * 0.32)
+    main_x, main_y = _plate_anchor(width, height, place)
+    if place in {"画右", "画左"}:
         budget = int(width * 0.42)
     else:
-        main_x = width // 2
         budget = int(width * (0.72 if seal_chars else 0.84))
-    main_y = int(height * 0.46)
     look = dict(style or _DEFAULT_FLOWER_STYLE)
     event_look = event.get("look") if isinstance(event.get("look"), dict) else {}
     for key in ("title_color", "companion_color", "seal_color", "shadow", "rule", "seal_scale"):

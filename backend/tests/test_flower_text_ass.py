@@ -115,6 +115,13 @@ def test_prompt_sent_to_video_model_drops_shop_glyphs():
     assert extract_libass_events(dropped, duration=4) == []
 
 
+_QUALITY_FOOTER = (
+    "无字幕不含片内图形名牌与花字；运镜与动作流已写的花字须上屏一次。"
+    "名牌出字=模型直出（含未写名牌出字）的角色名牌与环境名牌须上屏一次。"
+    "名牌出字=后期烧录时禁止描名牌字形，只保留名牌字样供后期烧录。"
+)
+
+
 def test_nameplate_burn_is_separate_from_flower_text():
     character = (
         "(P1 0s–4s) 名牌字样=「陈｜客栈掌柜」｜落位=人物下方｜字体=魏碑｜字色=鎏金｜字级=中｜名牌出字=后期烧录。"
@@ -148,6 +155,53 @@ def test_nameplate_burn_is_separate_from_flower_text():
     mixed_stripped = strip_libass_glyphs_from_prompt(mixed)
     assert "何以安康，家和人乐" in mixed_stripped
     assert "客栈掌柜" not in mixed_stripped
+    assert events[0]["font_kind"] == "weibei"
+    assert events[0]["look"]["title_color"] == (212, 168, 74, 255)
+    assert events[0]["look"]["companion_color"] == events[0]["look"]["title_color"]
+
+
+def test_quality_footer_does_not_flip_nameplate_mode():
+    painted = (
+        "(P1 0s–4s) 画幅叠出片内图形名牌【陈】客栈掌柜】，字体=魏碑，字色=鎏金，字级=中｜名牌出字=模型直出。\n"
+        "(P2 4s–8s) 画幅顶部中央叠出片内图形名牌【龙门风月客栈】早上9点】，落位=顶部中央，"
+        "字体=魏碑，字色=鎏金，字级=中｜名牌出字=模型直出。\n"
+        + _QUALITY_FOOTER
+    )
+    assert extract_libass_events(painted, duration=4) == []
+    kept = strip_libass_glyphs_from_prompt(painted)
+    assert "客栈掌柜" in kept
+    assert "龙门风月客栈" in kept
+    assert "禁止生成角色名牌" not in kept
+    burned = (
+        "(P1 0s–4s) 名牌字样=「陈｜客栈掌柜」｜落位=人物下方｜字体=魏碑｜字色=鎏金｜字级=中｜名牌出字=后期烧录。\n"
+        "(P2 4s–8s) 名牌字样=「龙门风月客栈｜早上9点」｜落位=顶部中央｜字体=魏碑｜字色=鎏金｜字级=中｜名牌出字=后期烧录。\n"
+        + _QUALITY_FOOTER
+    )
+    burned_events = extract_libass_events(burned, duration=4)
+    assert [(event["text"], event["place"]) for event in burned_events] == [
+        ("陈", "名牌"),
+        ("龙门风月客栈", "顶"),
+    ]
+    stripped = strip_libass_glyphs_from_prompt(burned)
+    assert "客栈掌柜" not in stripped
+    assert "龙门风月客栈" not in stripped
+    assert "早上9点" not in stripped
+    assert stripped.count("禁止生成角色名牌与环境名牌字形") == 2
+    flower = (
+        "(P1 0s–4s) 画幅叠出片内图形花字「何以安康，家和人乐」｜出字=模型直出。\n"
+        + _QUALITY_FOOTER
+    )
+    assert extract_libass_events(flower, duration=4) == []
+    assert "何以安康，家和人乐" in strip_libass_glyphs_from_prompt(flower)
+
+
+def test_nameplate_burn_sits_at_its_own_seat():
+    from app.services.flower_text_ass import _plate_anchor
+
+    assert _plate_anchor(1920, 1080, "中") == (960, int(1080 * 0.46))
+    assert _plate_anchor(1920, 1080, "顶")[1] == int(1080 * 0.14)
+    assert _plate_anchor(1920, 1080, "名牌")[1] == int(1080 * 0.72)
+    assert _plate_anchor(1920, 1080, "画右")[0] == int(1920 * 0.68)
 
 
 def test_manual_seal_burns_beside_the_line():

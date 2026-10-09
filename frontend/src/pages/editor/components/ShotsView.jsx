@@ -375,13 +375,14 @@ const rewriteShotFlowerMode = (text, mode) => {
     return out;
 };
 
-const NAMEPLATE_RE = /片内图形名牌|物理文字标签|名牌字样\s*[=＝]|名牌出字=/;
 const NAMEPLATE_SPAN_RE = /(?:画幅顶部中央叠出片内图形名牌|画幅叠出片内图形名牌|画面打出物理文字标签：)\s*【[^】]+】(?:[^，。\n]*】)?[^。\n]*|名牌字样\s*[=＝]\s*「[^」]*」[^。\n]*(?:。本P禁止生成该名牌字形。)?/g;
 
-const promptHasNameplate = (text) => NAMEPLATE_RE.test(String(text || ''));
+const promptHasNameplate = (text) => (
+    /画幅(?:顶部中央)?叠出片内图形名牌|画面打出物理文字标签|名牌字样\s*[=＝]|名牌出字=后期烧录(?!时)|名牌出字=模型直出(?![(（])/.test(String(text || ''))
+);
 
 const readShotNameplateMode = (text) => (
-    String(text || '').includes('名牌出字=后期烧录') ? 'burn' : 'model'
+    /名牌出字=后期烧录(?!时)/.test(String(text || '')) ? 'burn' : 'model'
 );
 
 const readNameplate = (clause) => {
