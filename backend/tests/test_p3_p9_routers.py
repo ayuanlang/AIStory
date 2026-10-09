@@ -988,6 +988,19 @@ def test_shot_generation_prompts_and_episode_script_section():
     assert isinstance(ctx_default, dict)
     assert "Max Shot Seconds (分镜最长秒数): 15" in str(ctx_default.get("project_context_section") or "")
     assert ctx_default.get("metadata", {}).get("max_shot_seconds") == 15
+    assert ctx_default.get("metadata", {}).get("shot_preference") == "长镜头 / Long Take"
+    from app.services.shot_generation_prompts import _shot_merge_gate_line
+    long_gate = _shot_merge_gate_line("长镜头 / Long Take")
+    short_gate = _shot_merge_gate_line("短镜头 / Short Take")
+    assert long_gate.startswith("合镜不认主环境")
+    assert "禁止因跨主或闪回拆镜" in long_gate
+    assert short_gate.startswith("【短镜头闸·最高】")
+    assert "必须在该拍另起一镜" in short_gate
+    assert "一律不执行" in short_gate
+    assert "合镜不认主环境" not in short_gate
+    ctx_short = _build_project_prompt_context({"script_title": "X", "lens_preference": "短镜头 / Short Take"})
+    assert ctx_short.get("metadata", {}).get("shot_preference") == "短镜头 / Short Take"
+    assert "镜头偏好): 短镜头 / Short Take" in str(ctx_short.get("project_context_section") or "")
     ctx_custom = _build_project_prompt_context({"script_title": "X", "max_shot_seconds": "12"})
     assert "Max Shot Seconds (分镜最长秒数): 12" in str(ctx_custom.get("project_context_section") or "")
     ctx_season = _build_project_prompt_context({
