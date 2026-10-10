@@ -258,6 +258,16 @@ def _unique_codes(chunk: str) -> List[str]:
     return seen
 
 
+def _named_codes(chunk: str) -> List[str]:
+    """Codes written as visible subjects. A 镜后 sentence does not count as 点名."""
+    visible = []
+    for sentence in re.split(r"。", chunk or ""):
+        if "镜后" in sentence or "不入画" in sentence:
+            continue
+        visible.append(sentence)
+    return _unique_codes("。".join(visible))
+
+
 def _ledger_names(raw: Optional[str]) -> List[str]:
     text = str(raw or "").strip()
     if not text or text == "无":
@@ -284,6 +294,7 @@ def audit_piece_count_reconciliation(text: str) -> List[str]:
 
     issues: List[str] = []
     center_codes: Dict[str, List[str]] = {}
+    center_counts: Dict[str, int] = {}
     for angle, body in cells:
         ledger_at = body.find("件数核销")
         if ledger_at < 0:
@@ -297,15 +308,18 @@ def audit_piece_count_reconciliation(text: str) -> List[str]:
             end = face_marks[index + 1].start() if index + 1 < len(face_marks) else len(faces_blob)
             chunk = faces_blob[mark.end():end]
             name = mark.group(1)
-            codes = _unique_codes(chunk)
+            codes = _named_codes(chunk)
             face_codes[name] = codes
             declared = re.match(r"\s*件数=(\d+)", chunk)
             if declared and int(declared.group(1)) != len(codes):
                 issues.append(
                     f"{angle}度格{name}件数={declared.group(1)}，正文点名{len(codes)}件。"
                 )
-        if "中部" in face_codes:
-            center_codes[angle] = face_codes["中部"]
+            if name == "中部":
+                center_counts[angle] = int(declared.group(1)) if declared else len(codes)
+        center_codes[angle] = face_codes.get("中部", [])
+        if angle not in center_counts:
+            center_counts[angle] = len(center_codes[angle])
         parsed = {match.group(1): match for match in _LEDGER_FACE.finditer(ledger)}
         for face in _FACE_ORDER:
             codes = face_codes.get(face, [])
@@ -348,7 +362,73 @@ def audit_piece_count_reconciliation(text: str) -> List[str]:
                 issues.append(
                     f"{angle}度格中部少了{'、'.join(missing)}，邻格已经点名，不能划出。"
                 )
+    if len(set(center_counts.values())) > 1:
+        detail = "、".join(f"{angle}度={count}" for angle, count in center_counts.items())
+        issues.append(f"四格中部件数不一致：{detail}。")
     return issues
+
+
+def audit_street_end_phrases(text: str) -> List[str]:
+    """Long-street cells must keep end monuments as equal-distance ends.
+
+    Runs only when a cell uses the along-street sentence. A room without that
+    sentence is left alone. 短头 and 没有实墙 are rejected in every cell.
+    """
+    raw = str(text or "")
+    cells = []
+    for part in re.split(r"(?=\[(?:0|90|180|270)度格)", raw):
+        head = _CELL_HEAD.search(part)
+        if head:
+            cells.append((head.group(1), part))
+    if not cells:
+        return []
+    issues: List[str] = []
+    along = []
+    cross = []
+    for angle, body in cells:
+        if "短头" in body:
+            issues.append(f"{angle}度格写了短头。靠近镜头这一头是路面短边，不是一扇门。")
+        if "没有实墙" in body:
+            issues.append(f"{angle}度格写了没有实墙。街端写成远处那一整面。")
+        chunks = _face_chunks(body)
+        if "沿长侧" in body:
+            along.append((angle, chunks))
+        else:
+            cross.append((angle, chunks))
+    if not along:
+        return issues
+    ends: List[str] = []
+    for _angle, chunks in along:
+        for code in _named_codes(chunks.get("正面", "")):
+            if code not in ends:
+                ends.append(code)
+    for angle, chunks in cross:
+        for side in ("左侧面", "右侧面"):
+            chunk = chunks.get(side, "")
+            for part in re.split(r"(?=\[@)", chunk):
+                if "一头近" not in part and "从靠近镜头伸向远离镜头" not in part:
+                    continue
+                for code in _named_codes(part):
+                    if code in ends:
+                        issues.append(
+                            f"{angle}度格{side}把街端{code}写成一头近。沿短边只写在画面端，两端一样远。"
+                        )
+        for part in re.split(r"(?=\[@)", chunks.get("正面", "")):
+            codes = _unique_codes(part)
+            if codes and re.search(r"中心在画布原点的画面[左右]", part) and "从画面左铺到画面右" in part:
+                issues.append(f"{angle}度格正面{codes[0]}盖住长街，中心要左右对齐。")
+    return issues
+
+
+def _face_chunks(body: str) -> Dict[str, str]:
+    ledger_at = body.find("件数核销")
+    faces_blob = body[:ledger_at] if ledger_at >= 0 else body
+    marks = list(_FACE_HEAD.finditer(faces_blob))
+    chunks: Dict[str, str] = {}
+    for index, mark in enumerate(marks):
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(faces_blob)
+        chunks[mark.group(1)] = faces_blob[mark.end():end]
+    return chunks
 
 
 def piece_count_block(summary: str, issues: List[str]) -> str:
@@ -458,11 +538,14 @@ def plan_consistency_writes(
     revised_quad = revised_main or revised or ""
     audit_target = revised_quad if ("件数核销" in revised_quad or "件数=" in revised_quad) else source_quad
     piece_issues = audit_piece_count_reconciliation(audit_target)
-    if piece_issues:
+    street_issues = audit_street_end_phrases(audit_target)
+    if piece_issues or street_issues:
+        detail = piece_issues + street_issues
+        prefix = PIECE_COUNT_PREFIX if piece_issues else "长街两端未通过"
         return {
             "consistent": False,
             "kind": kind,
-            "summary": piece_count_block(summary, piece_issues),
+            "summary": piece_count_block(summary, detail).replace(PIECE_COUNT_PREFIX, prefix, 1),
             "writes": [],
             "updated_targets": [],
             "image_edit_instruction": image_edit_instruction,
@@ -626,7 +709,14 @@ def build_consistency_messages(
         "只写划出数字、没有划出名，就是不一致。"
         "镜头脚停在后壁近面之前。原点与后壁之间的桌、案、椅、凳在镜头脚前面。"
         "望北写在远离镜头的公案和椅，望南必须写成靠近镜头并点名，禁止划出。"
+        "四格中部件数必须相同，点名的主体是同一批。"
+        "脚停在原点地毯或中岛外沿之外，不把书桌、椅子、屏幕写成镜头脚后方。"
         "某一格中部点过的主体，另外三格中部仍要点名。少一件就改这一格的正文和件数核销。\n"
+        "长街：地面一条至少是另一条两倍时，长轴两端的坊、门、露台是街端。"
+        "顺着长边，街端是正面，左右对齐，两端一样远，禁止没有实墙，禁止用天际代替。"
+        "靠近镜头这一头是路面短边，禁止写成短头或一扇门。"
+        "沿短边，街端在画面左端或画面右端，两端一样远，禁止一头近。"
+        "连绵铺面在沿短边的格里中心左右对齐。开篇只登记一根的灯杆，四格只写这一根。\n"
         "朝向：先用开篇竖边推出这一格的长边画面轴。"
         "南北走向时，0度和180度的长边从靠近镜头伸向远离镜头，90度和270度的长边从画面左铺到画面右。"
         "东西走向把这两类对调。0度与180度对调两端，90度与270度对调左右。"

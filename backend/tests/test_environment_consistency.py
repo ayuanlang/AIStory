@@ -3,6 +3,7 @@ from app.services.script_analysis_flow.environment_consistency import (
     ConsistencyApplyError,
     apply_consistency_writes,
     audit_piece_count_reconciliation,
+    audit_street_end_phrases,
     build_consistency_messages,
     classify_checked_prompt,
     parse_consistency_payload,
@@ -170,6 +171,9 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "个数" in system
     assert "件数核销" in system
     assert "划出名" in system
+    assert "四格中部件数必须相同" in system
+    assert "街端" in system
+    assert "禁止一头近" in system
     assert "朝向" in system
     assert "位置" in system
     assert "开篇有误：" in system
@@ -209,6 +213,60 @@ def test_piece_count_ledger_blocks_a_consistent_verdict():
     assert plan["consistent"] is False
     assert plan["writes"] == []
     assert plan["summary"].startswith("件数核销未通过")
+    assert any("四格中部件数不一致" in item for item in issues)
+
+
+def test_center_count_rejects_desk_hidden_behind_camera():
+    quad = """【四向拼图】
+[0度格-左上·北]
+中部：件数=1。[@地毯]（F-001）。[@书桌]（M-001）在镜头脚后方，镜后整包不入画。
+件数核销：正面点名=0开篇=0划出=0划出名=无｜左侧面点名=0开篇=0划出=0划出名=无｜右侧面点名=0开篇=0划出=0划出名=无｜中部点名=1开篇=2划出=1改入=0划出名=[@书桌]（M-001）｜上点名=0开篇=0划出=0划出名=无。
+[90度格-右上·东]
+中部：件数=2。[@地毯]（F-001）。[@书桌]（M-001）。
+件数核销：正面点名=0开篇=0划出=0划出名=无｜左侧面点名=0开篇=0划出=0划出名=无｜右侧面点名=0开篇=0划出=0划出名=无｜中部点名=2开篇=2划出=0改入=0划出名=无｜上点名=0开篇=0划出=0划出名=无。
+[180度格-左下·南]
+中部：件数=2。[@地毯]（F-001）。[@书桌]（M-001）。
+件数核销：正面点名=0开篇=0划出=0划出名=无｜左侧面点名=0开篇=0划出=0划出名=无｜右侧面点名=0开篇=0划出=0划出名=无｜中部点名=2开篇=2划出=0改入=0划出名=无｜上点名=0开篇=0划出=0划出名=无。
+[270度格-右下·西]
+中部：件数=2。[@地毯]（F-001）。[@书桌]（M-001）。
+件数核销：正面点名=0开篇=0划出=0划出名=无｜左侧面点名=0开篇=0划出=0划出名=无｜右侧面点名=0开篇=0划出=0划出名=无｜中部点名=2开篇=2划出=0改入=0划出名=无｜上点名=0开篇=0划出=0划出名=无。
+"""
+    issues = audit_piece_count_reconciliation(quad)
+    assert any("0度格中部少了M-001" in item for item in issues)
+    assert any("四格中部件数不一致" in item for item in issues)
+
+
+def test_street_end_rejects_near_depth_and_short_head():
+    quad = """【四向拼图】
+[0度格-左上·北]
+正面：[@北侧商肆]（N-002）。中心在画布原点的画面右15.0米。从画面左铺到画面右。
+左侧面：[@出入石坊]（W-001）。从靠近镜头伸向远离镜头，一头近、一头远。
+中部：[@青石地面]（F-001）。从画面左铺到画面右。
+[90度格-右上·东]
+正面：远处没有实墙。[@酒肆露台]（E-001）。
+中部：本格沿长侧看[@青石地面]（F-001），近端是短头。
+左侧面：[@北侧商肆]（N-002）。从靠近镜头伸向远离镜头，一头近、一头远。
+[180度格-左下·南]
+中部：[@青石地面]（F-001）。从画面左铺到画面右。
+[270度格-右下·西]
+正面：[@出入石坊]（W-001）。中心在画布原点的左右对齐。左端和右端离镜头一样远。
+中部：本格沿长侧看[@青石地面]（F-001）。
+"""
+    issues = audit_street_end_phrases(quad)
+    assert any("0度格左侧面把街端W-001写成一头近" in item for item in issues)
+    assert any("0度格正面N-002盖住长街" in item for item in issues)
+    assert any("90度格写了短头" in item for item in issues)
+    assert any("90度格写了没有实墙" in item for item in issues)
+    entity = Dummy(id=11, prompt=quad)
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        quad,
+        {"consistent": True, "summary": "一致", "revised_prompt": quad, "revised_main_prompt": None},
+    )
+    assert plan["consistent"] is False
+    assert plan["writes"] == []
+    assert plan["summary"].startswith("长街两端未通过")
 
 
 def test_image_edit_instruction_survives_when_prompts_stay():
