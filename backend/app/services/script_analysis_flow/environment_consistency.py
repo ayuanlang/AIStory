@@ -238,6 +238,126 @@ def parse_consistency_payload(text: str) -> Dict[str, Any]:
 
 QUAD_MARK = "【四向拼图】"
 OPENING_ERROR_PREFIX = "开篇有误"
+PIECE_COUNT_PREFIX = "件数核销未通过"
+_CELL_HEAD = re.compile(r"\[(0|90|180|270)度格")
+_FACE_HEAD = re.compile(r"(正面|左侧面|右侧面|中部|上)：")
+_SUBJECT_CODE = re.compile(r"\[@[^\]]+\]（([^）]+)）")
+_LEDGER_FACE = re.compile(
+    r"(正面|左侧面|右侧面|中部|上)点名=(\d+)开篇=(\d+)划出=(\d+)"
+    r"(?:改入=(\d+))?(?:划出名=([^｜。\n]*))?"
+)
+_FACE_ORDER = ("正面", "左侧面", "右侧面", "中部", "上")
+
+
+def _unique_codes(chunk: str) -> List[str]:
+    seen = []
+    for match in _SUBJECT_CODE.finditer(chunk or ""):
+        code = match.group(1).strip()
+        if code and code not in seen:
+            seen.append(code)
+    return seen
+
+
+def _ledger_names(raw: Optional[str]) -> List[str]:
+    text = str(raw or "").strip()
+    if not text or text == "无":
+        return []
+    return _unique_codes(text)
+
+
+def audit_piece_count_reconciliation(text: str) -> List[str]:
+    """Confirm each cell's 件数核销 against the names actually written in that cell.
+
+    Arithmetic alone does not pass. 划出 greater than zero must name the omitted
+    codes, and a center subject named in any cell stays named in the other cells.
+    """
+    raw = str(text or "")
+    if "件数核销" not in raw and "件数=" not in raw:
+        return []
+    cells = []
+    for part in re.split(r"(?=\[[0-9]+度格)", raw):
+        head = _CELL_HEAD.search(part)
+        if head:
+            cells.append((head.group(1), part))
+    if not cells:
+        return []
+
+    issues: List[str] = []
+    center_codes: Dict[str, List[str]] = {}
+    for angle, body in cells:
+        ledger_at = body.find("件数核销")
+        if ledger_at < 0:
+            issues.append(f"{angle}度格缺少件数核销。")
+            continue
+        faces_blob = body[:ledger_at]
+        ledger = body[ledger_at:].split("\n", 1)[0]
+        face_marks = list(_FACE_HEAD.finditer(faces_blob))
+        face_codes: Dict[str, List[str]] = {}
+        for index, mark in enumerate(face_marks):
+            end = face_marks[index + 1].start() if index + 1 < len(face_marks) else len(faces_blob)
+            chunk = faces_blob[mark.end():end]
+            name = mark.group(1)
+            codes = _unique_codes(chunk)
+            face_codes[name] = codes
+            declared = re.match(r"\s*件数=(\d+)", chunk)
+            if declared and int(declared.group(1)) != len(codes):
+                issues.append(
+                    f"{angle}度格{name}件数={declared.group(1)}，正文点名{len(codes)}件。"
+                )
+        if "中部" in face_codes:
+            center_codes[angle] = face_codes["中部"]
+        parsed = {match.group(1): match for match in _LEDGER_FACE.finditer(ledger)}
+        for face in _FACE_ORDER:
+            codes = face_codes.get(face, [])
+            row = parsed.get(face)
+            if row is None:
+                issues.append(f"{angle}度格件数核销缺少{face}。")
+                continue
+            named = int(row.group(2))
+            opening = int(row.group(3))
+            struck = int(row.group(4))
+            moved_in = int(row.group(5) or 0)
+            struck_codes = _ledger_names(row.group(6))
+            if named != len(codes):
+                issues.append(
+                    f"{angle}度格{face}点名={named}，正文是{len(codes)}件。"
+                )
+            expected = named + struck - (moved_in if face == "中部" else 0)
+            if expected != opening:
+                issues.append(
+                    f"{angle}度格{face}点名+划出与开篇对不上。"
+                )
+            if struck > 0 and len(struck_codes) != struck:
+                issues.append(
+                    f"{angle}度格{face}划出={struck}，划出名没有逐件列出。"
+                )
+            overlap = [code for code in struck_codes if code in codes]
+            if overlap:
+                issues.append(
+                    f"{angle}度格{face}划出名仍写在正文里。"
+                )
+    if len(center_codes) >= 2:
+        union = []
+        for codes in center_codes.values():
+            for code in codes:
+                if code not in union:
+                    union.append(code)
+        for angle, codes in center_codes.items():
+            missing = [code for code in union if code not in codes]
+            if missing:
+                issues.append(
+                    f"{angle}度格中部少了{'、'.join(missing)}，邻格已经点名，不能划出。"
+                )
+    return issues
+
+
+def piece_count_block(summary: str, issues: List[str]) -> str:
+    detail = "；".join(issues)
+    prefix = f"{PIECE_COUNT_PREFIX}：{detail}"
+    rest = str(summary or "").strip()
+    if not rest or rest.startswith(PIECE_COUNT_PREFIX):
+        return prefix
+    return f"{prefix}。{rest}"
 
 
 def split_opening_and_quad(text: str) -> tuple:
@@ -331,6 +451,22 @@ def plan_consistency_writes(
     kind = classify_checked_prompt(entity, checked_prompt)
     summary = str(payload.get("summary") or "").strip()
     image_edit_instruction = _blank_to_none(payload.get("image_edit_instruction"))
+    main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "") if main_entity is not None else ""
+    source_quad = main_prompt or checked_prompt
+    revised = _blank_to_none(payload.get("revised_prompt"))
+    revised_main = _blank_to_none(payload.get("revised_main_prompt"))
+    revised_quad = revised_main or revised or ""
+    audit_target = revised_quad if ("件数核销" in revised_quad or "件数=" in revised_quad) else source_quad
+    piece_issues = audit_piece_count_reconciliation(audit_target)
+    if piece_issues:
+        return {
+            "consistent": False,
+            "kind": kind,
+            "summary": piece_count_block(summary, piece_issues),
+            "writes": [],
+            "updated_targets": [],
+            "image_edit_instruction": image_edit_instruction,
+        }
     if payload.get("consistent"):
         return {
             "consistent": True,
@@ -341,14 +477,10 @@ def plan_consistency_writes(
             "image_edit_instruction": image_edit_instruction,
         }
 
-    revised = _blank_to_none(payload.get("revised_prompt"))
-    revised_main = _blank_to_none(payload.get("revised_main_prompt"))
     writes: List[Dict[str, Any]] = []
     targets: List[str] = []
     entity_id = int(getattr(entity, "id", 0) or 0)
     main_id = int(getattr(main_entity, "id", 0) or 0) if main_entity is not None else 0
-    main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "") if main_entity is not None else ""
-
     def _add_grids(source_prompt: str, revised_text: str, remember_submitted: bool) -> None:
         if main_entity is None or main_id <= 0:
             raise ConsistencyApplyError("找不到所属主环境，无法按开篇改正宫格。")
@@ -487,6 +619,14 @@ def build_consistency_messages(
         "个数：开篇点名并且这一格该看见的主体，正文写一次，图片里出现一次。"
         "多一件、少一件、同一个名字变成两个身体，都不一致。"
         "开篇写了镜后不入画的，这一格正文不点名，图片里也不出现。\n"
+        "件数核销：每一格的正面、左侧面、右侧面、中部、上都要核对。"
+        "件数=和点名=必须等于这一面正文里不同主体的个数。"
+        "点名+划出等于开篇；中部再减去改入。算式对上还不够。"
+        "划出大于 0 必须写划出名，逐个列出本面没有的主体，个数等于划出。"
+        "只写划出数字、没有划出名，就是不一致。"
+        "镜头脚停在后壁近面之前。原点与后壁之间的桌、案、椅、凳在镜头脚前面。"
+        "望北写在远离镜头的公案和椅，望南必须写成靠近镜头并点名，禁止划出。"
+        "某一格中部点过的主体，另外三格中部仍要点名。少一件就改这一格的正文和件数核销。\n"
         "朝向：先用开篇竖边推出这一格的长边画面轴。"
         "南北走向时，0度和180度的长边从靠近镜头伸向远离镜头，90度和270度的长边从画面左铺到画面右。"
         "东西走向把这两类对调。0度与180度对调两端，90度与270度对调左右。"
@@ -543,19 +683,19 @@ def build_consistency_messages(
         if kind == "crop":
             parts.append(
                 "这次生成用的是切割提示词。不要改写切割提示词。"
-                "核对该角度图片和该格正文的主体个数、朝向、位置。"
+                "核对该角度图片和该格正文的主体个数、件数核销、朝向、位置。"
                 "和开篇不符时，把完整主环境提示词写进 revised_main_prompt，只改【四向拼图】。"
                 "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_main_prompt 里改正开篇。"
             )
         else:
             parts.append(
-                "核对该角度图片和这份衍生正文的主体个数、朝向、位置。"
+                "核对该角度图片和这份衍生正文的主体个数、件数核销、朝向、位置。"
                 "和开篇不符时，把对齐开篇后的完整衍生提示词写进 revised_prompt。revised_main_prompt 置 null。"
                 "重生和衍生检查不改开篇，也不改主环境。"
             )
     else:
         parts.append(
-            "这是主环境四宫格图。按左上0度、右上90度、左下180度、右下270度，逐格核对正文和图片的主体个数、朝向、位置。"
+            "这是主环境四宫格图。按左上0度、右上90度、左下180度、右下270度，逐格核对正文和图片的主体个数、件数核销、朝向、位置。"
             "和开篇不符时，把完整主环境提示词写进 revised_prompt，只改【四向拼图】，revised_main_prompt 置 null。"
             "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_prompt 里改正开篇。"
         )

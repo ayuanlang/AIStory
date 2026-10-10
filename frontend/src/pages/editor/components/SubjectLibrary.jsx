@@ -7404,7 +7404,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     onClick={() => { void handleEnvironmentConsistencyCheck(entity); }}
                     disabled={!hasImage || busy}
                     title={hasImage
-                        ? t('对照图片和开篇，核对主体个数、朝向、位置。有差异时把改图指令填入下方输入框，并开始局部修改。', 'Compare the image with the opening for subject count, facing, and position. When they differ, fill the edit instruction below and start a local edit.')
+                        ? t('对照图片和开篇，核对主体个数、件数核销、朝向、位置。有差异时把改图指令填入下方输入框，并开始局部修改。', 'Compare the image with the opening for subject count, the piece-count ledger, facing, and position. When they differ, fill the edit instruction below and start a local edit.')
                         : t('生成图片后才能检查。', 'Generate an image before checking.')}
                     className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/5 px-4 py-2 text-sm font-bold text-white/80 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >

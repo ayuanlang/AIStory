@@ -2,6 +2,7 @@
 from app.services.script_analysis_flow.environment_consistency import (
     ConsistencyApplyError,
     apply_consistency_writes,
+    audit_piece_count_reconciliation,
     build_consistency_messages,
     classify_checked_prompt,
     parse_consistency_payload,
@@ -167,6 +168,8 @@ def test_consistency_prompt_checks_count_facing_and_position():
     )
     system = messages[0]["content"]
     assert "个数" in system
+    assert "件数核销" in system
+    assert "划出名" in system
     assert "朝向" in system
     assert "位置" in system
     assert "开篇有误：" in system
@@ -174,8 +177,38 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "image_edit_instruction" in system
     assert "改图指令" in system
     user = messages[1]["content"][0]["text"]
-    assert "主体个数、朝向、位置" in user
+    assert "主体个数、件数核销、朝向、位置" in user
     assert messages[1]["content"][1]["image_url"]["url"] == "http://example.test/grid.png"
+
+
+def test_piece_count_ledger_blocks_a_consistent_verdict():
+    quad = """【四向拼图】
+[0度格-左上·北]
+中部：件数=2。[@公案]（M-001）。[@主椅]（M-002）。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=0开篇=0划出=0。
+[90度格-右上·东]
+中部：件数=2。[@公案]（M-001）。[@主椅]（M-002）。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=0开篇=0划出=0。
+[180度格-左下·南]
+中部：件数=0。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=0开篇=2划出=2改入=0｜上点名=0开篇=0划出=0。
+[270度格-右下·西]
+中部：件数=2。[@公案]（M-001）。[@主椅]（M-002）。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=0开篇=0划出=0。
+"""
+    issues = audit_piece_count_reconciliation(quad)
+    assert any("划出名" in item for item in issues)
+    assert any("180度格中部少了" in item for item in issues)
+    entity = Dummy(id=7, prompt=quad)
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        quad,
+        {"consistent": True, "summary": "看起来一致", "revised_prompt": None},
+    )
+    assert plan["consistent"] is False
+    assert plan["writes"] == []
+    assert plan["summary"].startswith("件数核销未通过")
 
 
 def test_image_edit_instruction_survives_when_prompts_stay():
