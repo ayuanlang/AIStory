@@ -242,29 +242,25 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
     const [isRegenerating, setIsRegenerating] = useState(false);
 
     const handleLocalModify = async () => {
+        const appended = instruction.trim();
+        if (!appended) return;
+        if (!currentImage) {
+            addLog(userLang('还没有当前画面，无法按图生图修改。', 'There is no current image to edit.'), 'warning');
+            return;
+        }
         setIsLocalModifying(true);
         try {
-            const base = promptText || "";
-            const appended = instruction.trim();
-            const finalPrompt = base ? `${base}. ${appended}, keeping everything else unchanged.` : appended;
-            onPromptUpdate(finalPrompt);
-            
-            addLog(userLang('已生成新提示词，准备拉起局部修改...', 'Generated new prompt, ready to local modify...'), 'info');
-            setTimeout(() => {
-                const autoRefs = [];
-                if (currentImage) {
-                    autoRefs.push(currentImage);
-                }
-                
-                onGenerateAsset(type, -1, { 
-                    cfg: currentImageCfgValue,
-                    is_gemini_multi_turn_edit: true,
-                    gemini_base_prompt: base,
-                    gemini_edit_instruction: appended,
-                    auto_refs: autoRefs,
-                    finalPrompt: finalPrompt
-                });
-            }, 100);
+            const editInstruction = userLang(
+                `${appended}。只改这一点，其余画面保持这张参考图不动。`,
+                `${appended}. Change only this. Keep the rest of this reference image unchanged.`
+            );
+            addLog(userLang('按当前画面做图生图修改，不提交原有提示词。', 'Editing the current image. The original prompt is not submitted.'), 'info');
+            onGenerateAsset(type, -1, {
+                cfg: currentImageCfgValue,
+                image_edit_only: true,
+                auto_refs: [currentImage],
+                finalPrompt: editInstruction,
+            });
         } finally {
             setIsLocalModifying(false);
         }
@@ -8403,6 +8399,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     // --- Generation Handlers ---
     const handleGenerateStartFrame = async (promptOverride = null, cfgOverride = null, extraProviderOptions = {}) => {
         if (!editingShot) return;
+        const imageEditOnly = Boolean(extraProviderOptions?.image_edit_only);
+        if (extraProviderOptions && Object.prototype.hasOwnProperty.call(extraProviderOptions, 'image_edit_only')) {
+            delete extraProviderOptions.image_edit_only;
+        }
         const shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
         let createdImageJobId = '';
@@ -8410,7 +8410,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         // Check inherit logic - Inherit from previous End Frame
         const currentPrompt = String(promptOverride || shotSnapshot.start_frame || '').trim();
-        if (isStartFrameInheritPrompt(currentPrompt)) {
+        if (!imageEditOnly && isStartFrameInheritPrompt(currentPrompt)) {
             const prevEndUrl = findPrevShotEndFrameUrl(shotSnapshot.id);
 
             if (prevEndUrl) {
@@ -8445,11 +8445,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const legacyStartPrompt = resolvedPromptSubmitLang === 'cn'
             ? (cnStartPrompt || shotSnapshot.start_frame || shotSnapshot.video_content || "A cinematic shot")
             : (shotSnapshot.start_frame || cnStartPrompt || shotSnapshot.video_content || "A cinematic shot");
-        const rawPrompt = promptOverride
-            || buildShotFramePromptFromVideoBase(shotSnapshot, 'start', techNotes, legacyStartPrompt).text;
+        const rawPrompt = imageEditOnly
+            ? String(promptOverride || '').trim()
+            : (promptOverride
+                || buildShotFramePromptFromVideoBase(shotSnapshot, 'start', techNotes, legacyStartPrompt).text);
         const isManual = techNotes.manual_start_frame === true;
 
-        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
+        const { text: submitPrompt } = imageEditOnly
+            ? { text: rawPrompt }
+            : injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
 
         onLog?.('Generating Start Frame...', 'info');
         
@@ -8458,15 +8462,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                  onLog?.('Start Frame generation stopped by user.', 'warning');
                  return;
              }
-                const refs = resolveDefaultShotImageGenerationRefs(shotSnapshot, 'start', resolvedEntities);
+                const refs = imageEditOnly ? [] : resolveDefaultShotImageGenerationRefs(shotSnapshot, 'start', resolvedEntities);
                 if (extraProviderOptions && extraProviderOptions.auto_refs) {
                     refs.push(...extraProviderOptions.auto_refs);
                     delete extraProviderOptions.auto_refs;
                 }
+                if (imageEditOnly && refs.length === 0) {
+                    onLog?.('Image edit needs the current frame.', 'warning');
+                    setShotGeneratingState(targetShotId, 'start', false);
+                    return;
+                }
 
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
-                const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
+                const finalPrompt = (imageEditOnly || isManual) ? submitPrompt : (submitPrompt + globalCtx);
                 const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
                 const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
 
@@ -8505,7 +8514,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(res.url);
                     clearPendingImageJob(targetShotId, 'start');
                     // Save original prompt to DB (user view), but image was generated with context
-                    const newData = { image_url: res.url, start_frame: rawPrompt };
+                    const newData = imageEditOnly
+                        ? { image_url: res.url }
+                        : { image_url: res.url, start_frame: rawPrompt };
                     await onUpdateShot(targetShotId, newData);
                     setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev)); 
                     onLog?.('Start Frame Generated', 'success');
@@ -8544,6 +8555,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
     const handleGenerateEndFrame = async (promptOverride = null, cfgOverride = null, extraProviderOptions = {}) => {
         if (!editingShot) return;
+        const imageEditOnly = Boolean(extraProviderOptions?.image_edit_only);
+        if (extraProviderOptions && Object.prototype.hasOwnProperty.call(extraProviderOptions, 'image_edit_only')) {
+            delete extraProviderOptions.image_edit_only;
+        }
         const shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
         let createdImageJobId = '';
@@ -8558,11 +8573,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const legacyEndPrompt = resolvedPromptSubmitLang === 'cn'
             ? (cnEndPrompt || shotSnapshot.end_frame || "End frame")
             : (shotSnapshot.end_frame || cnEndPrompt || "End frame");
-        const rawPrompt = promptOverride
-            || buildShotFramePromptFromVideoBase(shotSnapshot, 'end', techNotes, legacyEndPrompt).text;
+        const rawPrompt = imageEditOnly
+            ? String(promptOverride || '').trim()
+            : (promptOverride
+                || buildShotFramePromptFromVideoBase(shotSnapshot, 'end', techNotes, legacyEndPrompt).text);
         const isManual = techNotes.manual_end_frame === true;
 
-        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
+        const { text: submitPrompt } = imageEditOnly
+            ? { text: rawPrompt }
+            : injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
 
         onLog?.('Generating End Frame...', 'info');
 
@@ -8571,15 +8590,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                  onLog?.('End Frame generation stopped by user.', 'warning');
                  return;
              }
-                const uniqueRefs = resolveDefaultShotImageGenerationRefs(shotSnapshot, 'end', resolvedEntities);
+                const uniqueRefs = imageEditOnly ? [] : resolveDefaultShotImageGenerationRefs(shotSnapshot, 'end', resolvedEntities);
                 if (extraProviderOptions && extraProviderOptions.auto_refs) {
                     uniqueRefs.push(...extraProviderOptions.auto_refs);
                     delete extraProviderOptions.auto_refs;
                 }
+                if (imageEditOnly && uniqueRefs.length === 0) {
+                    onLog?.('Image edit needs the current frame.', 'warning');
+                    setShotGeneratingState(targetShotId, 'end', false);
+                    return;
+                }
 
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
-                const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
+                const finalPrompt = (imageEditOnly || isManual) ? submitPrompt : (submitPrompt + globalCtx);
                 const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
                 const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
 
@@ -8617,13 +8641,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                     if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(res.url);
                     clearPendingImageJob(targetShotId, 'end');
-                    tech.end_frame_url = res.url;
-                    const newData = { technical_notes: JSON.stringify(tech), end_frame: rawPrompt };
+                    techNotes.end_frame_url = res.url;
+                    const newData = imageEditOnly
+                        ? { technical_notes: JSON.stringify(techNotes) }
+                        : { technical_notes: JSON.stringify(techNotes), end_frame: rawPrompt };
                     await onUpdateShot(targetShotId, newData);
                     setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev));
                     onLog?.('End Frame Generated', 'success');
                     showNotification('End Frame Generated', 'success');
-                    notifyShotMediaOssPersistWarning({ ...shotSnapshot, ...newData, technical_notes: JSON.stringify(tech) }, 'end');
+                    notifyShotMediaOssPersistWarning({ ...shotSnapshot, ...newData, technical_notes: JSON.stringify(techNotes) }, 'end');
                     refreshShotAssetsMeta();
                     Promise.resolve(refreshShots()).catch(() => {});
                 } else {

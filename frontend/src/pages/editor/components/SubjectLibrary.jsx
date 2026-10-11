@@ -6864,7 +6864,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             ? processedPrompt
             : prependEntityGlobalStyleToPromptHead(processedPrompt, { injectIfMissing: true });
 
-        if (!generationOptions?.keepPromptDraft && !qualityRegen) {
+        const preserveStoredPrompt = Boolean(generationOptions?.preserveStoredPrompt);
+        if (!generationOptions?.keepPromptDraft && !qualityRegen && !preserveStoredPrompt) {
             // Update UI to show processed prompt (in case var replacement happened)
             setPrompt(finalPrompt);
             setPromptDrafts(prev => ({
@@ -6949,7 +6950,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
             const jobId = String(submitResult?.job_id || '').trim();
             if (!jobId) throw new Error('Missing image job id');
-            if (!qualityRegen) {
+            if (!qualityRegen && !generationOptions?.preserveStoredPrompt) {
                 rememberSubmittedImagePrompt(activeEntity, submissionPrompt, submittedImagePromptKind(activeEntity, submissionPrompt));
             }
 
@@ -7270,15 +7271,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         if (!appended || !target) return;
         setIsAdvancedLocalModifying(true);
         try {
-            const base = target?.generation_prompt_cn || '';
+            const base = String(target?.generation_prompt_cn || '');
             const quadEdit = isEnvironmentEntity(target) && /四向拼图|2×2|四宫格/.test(base);
             const editInstruction = quadEdit ? sealCellEditInstruction(appended) : appended;
-            const finalPrompt = base ? `${base}. ${editInstruction}` : editInstruction;
-            setPromptDrafts((prev) => ({ ...prev, cn: finalPrompt }));
-            setPrompt(finalPrompt);
-            const updated = { ...target, generation_prompt_cn: finalPrompt };
-            setViewingEntity(updated);
-            updateEntity(updated.id, { generation_prompt_cn: finalPrompt });
             const autoRefs = [];
             if (target?.image_url) {
                 autoRefs.push({
@@ -7287,11 +7282,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     weight: 0.8,
                 });
             }
-            await handleGenerate(target, autoRefs, finalPrompt, {
+            await handleGenerate(target, autoRefs, base.trim() || editInstruction, {
                 is_gemini_multi_turn_edit: true,
                 gemini_base_prompt: base,
                 gemini_edit_instruction: editInstruction,
-            });
+            }, { preserveStoredPrompt: true });
         } finally {
             setIsAdvancedLocalModifying(false);
         }
@@ -10846,15 +10841,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                     onClick={async () => {
                                                                         const base = viewingEntity?.generation_prompt_cn || '';
                                                                         const appendInstruction = `请将当前的四向拼图中的${angle}度视野旋转到最前方的0度格（原左上宫格位置），然后其余角度（${(angle + 90) % 360}度，${(angle + 180) % 360}度，${(angle + 270) % 360}度）依顺时针的相对顺序自然对应到接下来的几个格子（90度格，180度格，270度格），保持各宫格排布的相对顺序不乱。`;
-                                                                        
                                                                         const finalPrompt = base ? `${base}\n\n【旋转指令】：${appendInstruction}` : appendInstruction;
-                                                                        
-                                                                        setPromptDrafts(prev => ({ ...prev, cn: finalPrompt }));
-                                                                        setPrompt(finalPrompt);
-
-                                                                        const updated = { ...viewingEntity, generation_prompt_cn: finalPrompt };
-                                                                        setViewingEntity(updated);
-                                                                        updateEntity(updated.id, { generation_prompt_cn: finalPrompt });
 
                                                                         const autoRefs = [];
                                                                         if (viewingEntity?.image_url) {
@@ -10867,7 +10854,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                         
                                                                         if (onLog) onLog(t('正在旋转生成新图片...', 'Rotating and generating new image...'), 'info');
                                                                         try {
-                                                                            await handleGenerate(viewingEntity, autoRefs, finalPrompt);
+                                                                            await handleGenerate(viewingEntity, autoRefs, finalPrompt, null, { preserveStoredPrompt: true });
                                                                             if (onLog) onLog(t('旋转指令提交成功', 'Rotation submitted successfully'), 'success');
                                                                         } catch (err) {
                                                                             console.error(err);
