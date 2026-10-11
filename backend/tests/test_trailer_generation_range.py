@@ -2,6 +2,7 @@
 import pytest
 
 from app.services.episode_script_prompt import (
+    build_structured_prefill_prompt_block,
     build_trailer_generation_prompt_block,
     format_trailer_episode_title,
     resolve_trailer_sample_range,
@@ -74,6 +75,32 @@ def test_title_keeps_each_trailer_distinct():
         episode_to=12,
         series_episode_count=12,
     ) == "预告片1·开场"
+
+
+def test_blank_prefill_is_omitted():
+    assert build_structured_prefill_prompt_block({}, trailer=True) == ""
+    assert build_structured_prefill_prompt_block({"logline": "  "}, trailer=False) == ""
+
+
+def test_prefill_is_required_input_and_trailer_keeps_length():
+    source = {
+        "logline": "林一要留证，人事要她交牌。",
+        "theme": "证据比职位贵，因为交牌就没人能查。",
+        "core_conflict": "交牌自保对上留证担责。",
+        "characters": "林一从怕丢工作，到肯为证据担责。",
+        "stc_14_finale": "她当众拆穿周薇。",
+    }
+    trailer = build_structured_prefill_prompt_block(source, trailer=True)
+    episode = build_structured_prefill_prompt_block(source, trailer=False)
+    assert "概念=I1" in trailer
+    assert "林一要留证" in trailer
+    assert "不把预告拉长" in trailer
+    assert "11–15" in trailer
+    assert "已锁救猫咪拍" in episode
+    assert "证据比职位贵" in episode
+    block = build_trailer_generation_prompt_block(episode_from=1, episode_to=4)
+    assert "概念 (I1)" in block
+    assert "Do not lengthen the trailer" in block
 
 
 def test_series_ip_note_uses_the_same_range():

@@ -110,6 +110,30 @@ def rollup_save_the_cat(source: Any) -> Dict[str, str]:
     return rolled
 
 
+_PREFILL_TEXT_KEYS = (
+    "logline",
+    "theme",
+    "core_conflict",
+    "three_act",
+    "background",
+    "characters",
+    "suspense",
+    "foreshadowing",
+    "extra_notes",
+    "classic_framework",
+    "wild_creative_notes",
+    "setup",
+    "development",
+    "turning_points",
+    "climax",
+    "resolution",
+) + tuple(row[0] for row in SAVE_THE_CAT_BEATS)
+
+
+def structured_prefill_has_text(source: Any) -> bool:
+    return any(_field_text(source, key) for key in _PREFILL_TEXT_KEYS)
+
+
 def format_story_creative_input_block(source: Any) -> str:
     """Creative-input block for the global architect. Beats win; old buckets are the fallback."""
     lines = [

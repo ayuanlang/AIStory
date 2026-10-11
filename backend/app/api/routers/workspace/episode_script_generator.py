@@ -41,6 +41,7 @@ from app.services.episode_script_output import (  # noqa: E402,F401
     extract_official_episode_script,
 )
 from app.services.episode_script_prompt import (  # noqa: E402,F401
+    build_structured_prefill_prompt_block,
     build_trailer_generation_prompt_block,
     format_trailer_episode_title,
     resolve_episode_generation_guidance_for_prompt,
@@ -1661,10 +1662,12 @@ async def generate_project_episode_scripts_from_global_framework(
             if call_is_trailer
             else ""
         )
+        prefill_block = build_structured_prefill_prompt_block(gi_story_input, trailer=call_is_trailer)
         user_prompt = (
             f"{series_ip_block}"
             f"{trailer_block}"
             f"{episode_generation_guidance_block}"
+            f"{prefill_block}"
             f"Project Title: {project_title}\n"
             f"Episode Number: {'预告片' if call_is_trailer else idx}\n"
             f"Episode Title (current DB value): {ep_title}\n"

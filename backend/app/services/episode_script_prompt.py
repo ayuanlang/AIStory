@@ -2,7 +2,12 @@
 """Prompt-block helpers for episode-script generation."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
+
+from app.services.story_generator_llm import (
+    format_story_creative_input_block,
+    structured_prefill_has_text,
+)
 
 
 def build_episode_generation_guidance_prompt_block(guidance: Optional[str]) -> str:
@@ -21,6 +26,34 @@ def build_episode_generation_guidance_prompt_block(guidance: Optional[str]) -> s
         "If a request conflicts with those hard constraints, keep the hard constraint and fulfill the rest of the guidance.\n\n"
         f"{text}\n\n"
     )
+
+
+def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
+    """Inject the structured prefill as a required source for episode and trailer writing.
+
+    A blank prefill yields an empty string. Trailer length stays 6–10 beats; the four
+    pillars ride inside 建置, 娱乐时间, and 反派逼近.
+    """
+    if not structured_prefill_has_text(source):
+        return ""
+    body = format_story_creative_input_block(source).strip()
+    if trailer:
+        rules = (
+            "【结构化预填 — 预告片重要依据】\n"
+            "下面这份预填与全局大纲同级。预告必须让观众从短拍里读到四样：概念=I1，思想=I2，对抗=I3，人物弧光=I5。\n"
+            "节奏与篇幅不变：仍是 2200 字内、6–10 个短拍。不另开说明拍，不口播，不把预告拉长。\n"
+            "概念和思想落在建置，各用一个动作或一句对白。对抗落在娱乐时间，并在反派逼近顶一下。"
+            "弧光只露出旧的自己和被逼要改的那一下，终场变化不演。\n"
+            "预填里的 11–15 拍和谁胜谁负不入选材。空字段不另造一套故事。\n\n"
+        )
+    else:
+        rules = (
+            "【结构化预填 — 分集重要依据】\n"
+            "下面这份预填与全局大纲同级。概念=I1，思想=I2，对抗=I3，人物弧光=I5，救猫咪事件种子都是本集必须回指的依据。\n"
+            "本集只演落在已锁救猫咪拍里的那一层。不把全剧弧光和结局提前演完。专名、对白种子、设定句要进本集相关场面。\n"
+            "本集事件和拍以大纲为准。概念、思想、对抗、弧光的方向以预填为准。空字段不另造一套故事。\n\n"
+        )
+    return f"{rules}{body}\n\n"
 
 
 def resolve_trailer_sample_range(
@@ -215,6 +248,12 @@ def build_trailer_generation_prompt_block(
         "Shape: open on 建置; cut the 娱乐时间 highlights in story order; "
         "end on 反派逼近, and leave the ending unplayed. "
         "Do not reveal the final boss or the ultimate secret.\n"
+        "结构化预填四样进已有短拍: when 【结构化预填】 is in the user message, "
+        "概念 (I1), 思想 (I2), 对抗 (I3), and 人物弧光 (I5) must be seen or heard inside the existing beats. "
+        "概念 and 思想 each land in 建置 as one action or one spoken line. "
+        "对抗 runs through 娱乐时间 and crests at 反派逼近. "
+        "弧光 shows the old self and the pressure to change, and leaves the final change unplayed. "
+        "Do not add a lecture beat. Do not lengthen the trailer. Do not play prefill beats 11–15.\n"
         "Length: within 2200 字, 6–10 short beats, so each highlight has room for an action or a spoken line plus the plot turn.\n"
         "The first non-empty OUTPUT line MUST be: # 预告-{short title}\n"
         "Keep the formal script blocks. 卖点 are the highlights this trailer actually plays. "
