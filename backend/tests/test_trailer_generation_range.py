@@ -52,7 +52,10 @@ def test_prompt_locks_range_and_focus():
 def test_prompt_without_focus_stays_balanced():
     block = build_trailer_generation_prompt_block(episode_from=1, episode_to=4)
     assert "侧重点=未指定" in block
-    assert "均衡取样" in block
+    assert "建置、娱乐时间、反派逼近" in block
+    assert "01–05" in block
+    assert "不收成只有铺垫" in block
+    assert "不取结局" in block
 
 
 def test_title_keeps_each_trailer_distinct():

@@ -425,17 +425,22 @@ def audit_wall_corner_span(text: str) -> List[str]:
 
     Face-on 「从画面左铺到画面右」 plus a gate written 「一头近」 splits the corner.
     The measurable failures are a full-span front beside an invisible side, and
-    「贴在正面墙前」.
+    「贴在正面墙前」. A long street's cross view may keep the shop row full-width
+    while the street ends are invisible.
     """
     raw = str(text or "")
-    issues: List[str] = []
+    cells = []
     for part in re.split(r"(?=\[(?:0|90|180|270)度格)", raw):
         head = _CELL_HEAD.search(part)
-        if not head:
-            continue
-        angle = head.group(1)
+        if head:
+            cells.append((head.group(1), part))
+    street = any("沿长侧" in body for _angle, body in cells)
+    issues: List[str] = []
+    for angle, part in cells:
         if "贴在正面墙前" in part or "贴在这一面墙前" in part or "贴在墙前" in part:
             issues.append(f"{angle}度格写了贴在墙前。墙身保持连续，邻件写在墙朝向镜头的一侧。")
+        if street and "沿长侧" not in part:
+            continue
         chunks = _face_chunks(part)
         front = chunks.get("正面", "")
         if "从画面左铺到画面右" not in front:
@@ -445,6 +450,54 @@ def audit_wall_corner_span(text: str) -> List[str]:
                 issues.append(
                     f"{angle}度格{side}不可见，正面仍写从画面左铺到画面右。墙收到可见端为止。"
                 )
+    return issues
+
+
+_LATERAL_METER = re.compile(r"画面(?:左|右)\s*(\d+(?:\.\d+)?)\s*米")
+_FRONT_DEPTH_METER = re.compile(r"远离镜头\s*(\d+(?:\.\d+)?)\s*米")
+
+
+def audit_front_double(text: str) -> List[str]:
+    """Each side is compared with the front depth, not with the other side.
+
+    A subject whose lateral distance is more than twice the front depth is
+    outside this cell. Equal left and right distances do not keep both.
+    Cells without a front depth in meters are skipped.
+    """
+    raw = str(text or "")
+    issues: List[str] = []
+    for part in re.split(r"(?=\[(?:0|90|180|270)度格)", raw):
+        head = _CELL_HEAD.search(part)
+        if not head:
+            continue
+        angle = head.group(1)
+        chunks = _face_chunks(part)
+        depths = [float(item) for item in _FRONT_DEPTH_METER.findall(chunks.get("正面", ""))]
+        if not depths:
+            continue
+        front = max(depths)
+        limit = front * 2
+        for side in ("左侧面", "右侧面", "正面"):
+            chunk = chunks.get(side, "")
+            if side != "正面" and chunk.strip().startswith("不可见"):
+                continue
+            for span in re.split(r"(?=\[@)", chunk):
+                laterals = [float(item) for item in _LATERAL_METER.findall(span)]
+                if not laterals:
+                    continue
+                distance = max(laterals)
+                if distance <= limit:
+                    continue
+                codes = _named_codes(span)
+                label = codes[0] if codes else "该侧"
+                if side == "正面":
+                    issues.append(
+                        f"{angle}度格正面{label}左右距离超出正面纵深的 2 倍，不写入这一格。"
+                    )
+                else:
+                    issues.append(
+                        f"{angle}度格{side}{label}左右距离超出正面纵深的 2 倍，这一侧只写不可见。"
+                    )
     return issues
 
 
@@ -568,17 +621,22 @@ def plan_consistency_writes(
     piece_issues = audit_piece_count_reconciliation(audit_target)
     street_issues = audit_street_end_phrases(audit_target)
     wall_issues = audit_wall_corner_span(audit_target)
-    if piece_issues or street_issues or wall_issues:
+    front_issues = audit_front_double(audit_target)
+    if piece_issues or street_issues or wall_issues or front_issues:
         if piece_issues:
             prefix = PIECE_COUNT_PREFIX
         elif street_issues:
             prefix = "长街两端未通过"
-        else:
+        elif wall_issues:
             prefix = "城墙衔接未通过"
+        else:
+            prefix = "正面两倍未通过"
         return {
             "consistent": False,
             "kind": kind,
-            "summary": piece_count_block(summary, piece_issues + street_issues + wall_issues).replace(
+            "summary": piece_count_block(
+                summary, piece_issues + street_issues + wall_issues + front_issues
+            ).replace(
                 PIECE_COUNT_PREFIX, prefix, 1
             ),
             "writes": [],
@@ -750,11 +808,13 @@ def build_consistency_messages(
         "长街：地面一条至少是另一条两倍时，长轴两端的坊、门、露台是街端。"
         "顺着长边，街端是正面，左右对齐，两端一样远，禁止没有实墙，禁止用天际代替。"
         "靠近镜头这一头是路面短边，禁止写成短头或一扇门。"
-        "沿短边，街端在画面左端或画面右端，两端一样远，禁止一头近。"
+        "沿短边，街端先按正面两倍：大于正面纵深 2 倍的不写入该格；小于或等于才写在画面端，两端一样远，禁止一头近。"
         "连绵铺面在沿短边的格里中心左右对齐。开篇只登记一根的灯杆，四格只写这一根。\n"
+        "正面两倍：左右是否入画，每侧跟本格正面纵深比，不跟另一侧比。"
+        "左右距离大于正面纵深的 2 倍，该侧只写不可见。两侧一样远不能因此一起留下。\n"
         "城墙衔接：城垣一端接到城门楼或角楼时，写接到这座楼为止，和它一样远。"
         "禁止这座楼再写一头近，禁止这一端从画面左铺到画面右。"
-        "一侧不可见时，正面不写从画面左铺到画面右。"
+        "城垣或通铺墙一侧不可见时，正面不写从画面左铺到画面右。沿短边的侧列仍可铺满。"
         "禁止贴在正面墙前。牌坊写在城垣朝向镜头的一侧，墙身仍连续。\n"
         "朝向：先用开篇竖边推出这一格的长边画面轴。"
         "南北走向时，0度和180度的长边从靠近镜头伸向远离镜头，90度和270度的长边从画面左铺到画面右。"

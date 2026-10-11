@@ -2,6 +2,7 @@
 from app.services.script_analysis_flow.environment_consistency import (
     ConsistencyApplyError,
     apply_consistency_writes,
+    audit_front_double,
     audit_piece_count_reconciliation,
     audit_street_end_phrases,
     audit_wall_corner_span,
@@ -177,6 +178,7 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "禁止一头近" in system
     assert "城墙衔接" in system
     assert "贴在正面墙前" in system
+    assert "正面两倍" in system
     assert "朝向" in system
     assert "位置" in system
     assert "开篇有误：" in system
@@ -297,6 +299,40 @@ def test_invisible_side_stops_a_full_width_wall():
     assert plan["consistent"] is False
     assert plan["writes"] == []
     assert plan["summary"].startswith("城墙衔接未通过")
+    street = """[0度格-左上·北]
+正面：[@北侧商肆]（N-002）。远离镜头15米。从画面左铺到画面右。
+左侧面：不可见。
+右侧面：不可见。
+[90度格-右上·东]
+中部：本格沿长侧看[@青石地面]（F-001）。
+正面：[@出入石坊]（W-001）。
+"""
+    assert audit_wall_corner_span(street) == []
+
+
+def test_front_double_drops_equal_far_ends():
+    quad = """[0度格-左上·北]
+正面：[@北侧商肆]（N-002）。中心在画布原点的左右对齐、远离镜头15米。从画面左铺到画面右。
+左侧面：[@出入石坊]（W-001）。中心在画布原点的画面左50米、纵深对齐0米。
+右侧面：[@酒肆露台]（E-001）。中心在画布原点的画面右50米、纵深对齐0米。
+"""
+    issues = audit_front_double(quad)
+    assert any("左侧面W-001" in item for item in issues)
+    assert any("右侧面E-001" in item for item in issues)
+    near = quad.replace("画面左50米", "画面左8米").replace("画面右50米", "画面右8米")
+    assert audit_front_double(near) == []
+    edge = quad.replace("画面左50米", "画面左30米").replace("画面右50米", "画面右30米")
+    assert audit_front_double(edge) == []
+    entity = Dummy(id=13, prompt=quad)
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        quad,
+        {"consistent": True, "summary": "一致", "revised_prompt": quad, "revised_main_prompt": None},
+    )
+    assert plan["consistent"] is False
+    assert plan["writes"] == []
+    assert plan["summary"].startswith("正面两倍未通过")
 
 
 def test_image_edit_instruction_survives_when_prompts_stay():
