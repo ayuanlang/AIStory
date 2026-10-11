@@ -3772,14 +3772,17 @@ export const resolveScriptAnalysisSystemApiId = (functionName = 'script_analysis
     return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
 };
 
-export const checkEnvironmentImageConsistency = async (entityId, { prompt, systemApiId } = {}) => {
+export const checkEnvironmentImageConsistency = async (entityId, { prompt, note, systemApiId } = {}) => {
     const finalApiId = systemApiId || resolveScriptAnalysisSystemApiId('script_analysis', null);
     const params = new URLSearchParams();
     if (finalApiId) params.append('system_api_id', String(finalApiId));
     let url = `/entities/${entityId}/environment-consistency`;
     const qs = params.toString();
     if (qs) url += `?${qs}`;
-    const response = await api.post(url, { prompt: String(prompt || '') });
+    const response = await api.post(url, {
+        prompt: String(prompt || ''),
+        note: String(note || '').trim(),
+    });
     return response.data;
 };
 

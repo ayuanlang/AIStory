@@ -658,6 +658,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [imageModalTab, setImageModalTab] = useState('library'); // library, upload, generate
     const [generating, setGenerating] = useState(false);
     const [environmentConsistency, setEnvironmentConsistency] = useState({ entityId: '', running: false, text: '', tone: '' });
+    const [consistencyNotes, setConsistencyNotes] = useState({});
     const [uploadState, setUploadState] = useState('idle'); // idle, uploading, analyzing, completed
     const [assetReuseBusy, setAssetReuseBusy] = useState(false);
     const [isAutoReusingAssets, setIsAutoReusingAssets] = useState(false);
@@ -7244,6 +7245,25 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
     };
 
+    const sealCellEditInstruction = (instruction) => {
+        let text = String(instruction || '').trim();
+        if (!text) return '';
+        if (text.includes('不要重画整张四宫')) return text;
+        const angles = [];
+        for (const match of text.matchAll(/(0|90|180|270)度格/g)) {
+            if (!angles.includes(match[1])) angles.push(match[1]);
+        }
+        if (angles.length > 1) {
+            const others = angles.slice(1).map((angle) => `${angle}度格`).join('、');
+            text = `这次只改${angles[0]}度格里点名的那一处，不要改${others}。${text}`;
+        }
+        if (!text.includes('只改这一格里点名的这一处')) {
+            if (!text.endsWith('。')) text += '。';
+            text += '只改这一格里点名的这一处。另外三格、格线、角标、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。';
+        }
+        return text;
+    };
+
     const submitAdvancedLocalModify = async (entity, instruction) => {
         const appended = String(instruction || '').trim();
         const target = entity || viewingEntity;
@@ -7251,7 +7271,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         setIsAdvancedLocalModifying(true);
         try {
             const base = target?.generation_prompt_cn || '';
-            const finalPrompt = base ? `${base}. ${appended}, keeping everything else unchanged.` : appended;
+            const quadEdit = isEnvironmentEntity(target) && /四向拼图|2×2|四宫格/.test(base);
+            const editInstruction = quadEdit ? sealCellEditInstruction(appended) : appended;
+            const finalPrompt = base ? `${base}. ${editInstruction}` : editInstruction;
             setPromptDrafts((prev) => ({ ...prev, cn: finalPrompt }));
             setPrompt(finalPrompt);
             const updated = { ...target, generation_prompt_cn: finalPrompt };
@@ -7268,7 +7290,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             await handleGenerate(target, autoRefs, finalPrompt, {
                 is_gemini_multi_turn_edit: true,
                 gemini_base_prompt: base,
-                gemini_edit_instruction: appended,
+                gemini_edit_instruction: editInstruction,
             });
         } finally {
             setIsAdvancedLocalModifying(false);
@@ -7327,8 +7349,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             return;
         }
         setEnvironmentConsistency({ entityId, running: true, text: '', tone: '' });
+        const note = String(consistencyNotes[entityId] || '').trim();
         try {
-            const result = await checkEnvironmentImageConsistency(entityId, { prompt });
+            const result = await checkEnvironmentImageConsistency(entityId, { prompt, note });
             const rows = Array.isArray(result?.updated) ? result.updated : [];
             rows.forEach((row) => {
                 const rowId = String(row?.id || '').trim();
@@ -7389,16 +7412,31 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const hasImage = Boolean(String(entity?.image_url || '').trim());
         const checking = environmentConsistency.running && environmentConsistency.entityId === entityId;
         const busy = checking || isAdvancedLocalModifying || generating;
-        const note = environmentConsistency.entityId === entityId ? String(environmentConsistency.text || '') : '';
+        const resultNote = environmentConsistency.entityId === entityId ? String(environmentConsistency.text || '') : '';
         const tone = environmentConsistency.entityId === entityId ? environmentConsistency.tone : '';
         const noteClass = tone === 'error'
             ? 'text-red-200'
             : tone === 'changed'
                 ? 'text-amber-100'
                 : 'text-emerald-100';
+        const hint = String(consistencyNotes[entityId] || '');
         return (
-            <div className="mb-3 flex flex-col items-start gap-2">
-                {note ? <div className={`text-[11px] leading-relaxed ${noteClass}`}>{note}</div> : null}
+            <div className="mb-3 flex w-full flex-col items-start gap-2">
+                {resultNote ? <div className={`text-[11px] leading-relaxed ${noteClass}`}>{resultNote}</div> : null}
+                <textarea
+                    value={hint}
+                    onChange={(event) => {
+                        const value = event.target.value;
+                        setConsistencyNotes((prev) => ({ ...prev, [entityId]: value }));
+                    }}
+                    disabled={busy}
+                    rows={2}
+                    placeholder={t(
+                        '可空。有特别要改或要提示的点再写，例如：90度格城墙接到城门楼。',
+                        'Optional. Add a change or a hint only when you have one, for example: join the wall to the gatehouse in the 90° cell.'
+                    )}
+                    className="w-full text-xs bg-white/5 border border-white/10 rounded-md px-3 py-2 text-white placeholder-white/30 resize-y outline-none focus:border-primary/50 disabled:cursor-not-allowed disabled:opacity-50"
+                />
                 <button
                     type="button"
                     onClick={() => { void handleEnvironmentConsistencyCheck(entity); }}

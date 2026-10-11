@@ -240,6 +240,12 @@ QUAD_MARK = "【四向拼图】"
 OPENING_ERROR_PREFIX = "开篇有误"
 PIECE_COUNT_PREFIX = "件数核销未通过"
 _CELL_HEAD = re.compile(r"\[(0|90|180|270)度格")
+_EDIT_CELL = re.compile(r"(0|90|180|270)度格")
+_CELL_EDIT_LOCK = (
+    "只改这一格里点名的这一处。"
+    "另外三格、格线、角标、没有点名的主体、光色和构图都保持原图不动。"
+    "不要重画整张四宫。"
+)
 _FACE_HEAD = re.compile(r"(正面|左侧面|右侧面|中部|上)：")
 _SUBJECT_CODE = re.compile(r"\[@[^\]]+\]（([^）]+)）")
 _LEDGER_FACE = re.compile(
@@ -595,6 +601,30 @@ def _prompt_keeps_world_lock(original: str, revised: str) -> Optional[str]:
     return None
 
 
+def seal_cell_edit_instruction(text: Optional[str]) -> Optional[str]:
+    """Keep one cell edit and pin the rest of the quad to the current image.
+
+    Several cells in one instruction make the image model redraw the whole grid.
+    The first named cell stays. The lock sentence is added once.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    angles: List[str] = []
+    for match in _EDIT_CELL.finditer(raw):
+        angle = match.group(1)
+        if angle not in angles:
+            angles.append(angle)
+    if len(angles) > 1:
+        others = "、".join(f"{angle}度格" for angle in angles[1:])
+        raw = f"这次只改{angles[0]}度格里点名的那一处，不要改{others}。{raw}"
+    if "只改这一格里点名的这一处" not in raw:
+        if not raw.endswith("。"):
+            raw += "。"
+        raw += _CELL_EDIT_LOCK
+    return raw
+
+
 def plan_consistency_writes(
     entity: Any,
     main_entity: Optional[Any],
@@ -611,7 +641,7 @@ def plan_consistency_writes(
     """
     kind = classify_checked_prompt(entity, checked_prompt)
     summary = str(payload.get("summary") or "").strip()
-    image_edit_instruction = _blank_to_none(payload.get("image_edit_instruction"))
+    image_edit_instruction = seal_cell_edit_instruction(payload.get("image_edit_instruction"))
     main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "") if main_entity is not None else ""
     source_quad = main_prompt or checked_prompt
     revised = _blank_to_none(payload.get("revised_prompt"))
@@ -786,6 +816,7 @@ def build_consistency_messages(
     main_entity: Optional[Any],
     checked_prompt: str,
     kind: str,
+    note: str = "",
 ) -> List[Dict[str, Any]]:
     system_prompt = (
         "你是环境资产一致性校对。主环境开篇在【四向拼图】之前，是权威。"
@@ -847,10 +878,20 @@ def build_consistency_messages(
         "状态衍生上的临时变化，例如沙尘、天气、破损，留在衍生正文里，不要写回主环境。\n"
         "重生修正或衍生描写和开篇不符时，只改这份衍生提示词，revised_main_prompt 必须为 null。\n"
         "一致时 revised_prompt 和 revised_main_prompt 都必须为 null。\n"
-        "改图指令：图片里某一格的主体个数、朝向或位置和开篇旋出的结果不同时，"
-        "image_edit_instruction 写给改图模型的中文指令。点名哪一格、哪一件、要改成的个数或朝向或位置，"
-        "并写明其余画面保持不动。用画面左、画面右、靠近镜头、远离镜头，不要写东南西北，不要重写整段环境提示词。"
-        "图片已经相符时，image_edit_instruction 必须为 null。\n"
+        "改图指令：一次只改一格里的一件。多格都错时，只写最严重的一格："
+        "先写正面墙认错的格，再写座具脸朝或长边认错的格，再写个数认错的格。其余错误留到下一次。"
+        "image_edit_instruction 只写给改图模型，不重写环境提示词，不写米，不写东南西北。"
+        "句式：改{0|90|180|270}度格的{主体名}。现在{只见坐垫朝向镜头|长边横在画面里|正面是另一面墙}。"
+        "改成{只见靠背，坐垫朝向远离镜头|只见短头，长边从靠近镜头伸向远离镜头|正面是这一格该有的那面墙}。"
+        "句尾必须是：只改这一格里点名的这一处。另外三格、格线、角标、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。"
+        "图片已经相符、又没有用户补充点名的画面差异时，image_edit_instruction 必须为 null。\n"
+        "用户补充：用户消息里出现「用户补充」时，那是这次额外要改或要提示的点。"
+        "先按开篇完成核对，再处理补充里点名的画面和句子。"
+        "补充点名的画面差异写入 image_edit_instruction，一次仍只改一格。"
+        "补充写了多格时，只改补充里先写到的那一格。"
+        "补充点名的宫格句子，在不违背开篇时写入改后提示词。"
+        "没有「用户补充」就只按开篇。"
+        "补充不能新造开篇没有的主体，也不能改掉已锁的东南西北、占地、竖边。\n"
         "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
         '{"consistent": true或false, "summary": "一两句中文", "revised_prompt": null或完整提示词, "revised_main_prompt": null或完整主环境提示词, "image_edit_instruction": null或改图指令}'
     )
@@ -887,6 +928,16 @@ def build_consistency_messages(
             "这是主环境四宫格图。按左上0度、右上90度、左下180度、右下270度，逐格核对正文和图片的主体个数、件数核销、朝向、位置。"
             "和开篇不符时，把完整主环境提示词写进 revised_prompt，只改【四向拼图】，revised_main_prompt 置 null。"
             "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_prompt 里改正开篇。"
+        )
+    extra = str(note or "").strip()
+    if extra:
+        parts.append("用户补充，这次要特别处理：")
+        parts.append(extra)
+        parts.append(
+            "先完成开篇核对，再处理这段补充。"
+            "补充点名的画面差异写进 image_edit_instruction，一次只改一格。"
+            "补充点名的宫格句子，在不违背开篇的前提下写进改后的提示词。"
+            "补充没有写到的，不要另造。"
         )
     return [
         {"role": "system", "content": system_prompt},

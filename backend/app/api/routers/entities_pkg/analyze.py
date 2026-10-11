@@ -1212,6 +1212,7 @@ def apply_entity_analysis(
 
 class EnvironmentConsistencyBody(BaseModel):
     prompt: Optional[str] = None
+    note: Optional[str] = None
 
 
 @router.post("/entities/{entity_id}/environment-consistency")
@@ -1297,12 +1298,14 @@ async def check_environment_consistency(
     if not image_url_final:
         raise HTTPException(status_code=400, detail="生成图片无法读取，暂时不能做一致性检查。")
 
+    note = str(getattr(payload, "note", None) or "").strip()[:2000]
     messages = build_consistency_messages(
         image_url=image_url_final,
         entity=entity,
         main_entity=main_entity,
         checked_prompt=checked_prompt,
         kind=kind,
+        note=note,
     )
     call_config = {
         "provider": api_provider,

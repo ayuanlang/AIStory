@@ -3,6 +3,7 @@ from app.services.script_analysis_flow.environment_consistency import (
     ConsistencyApplyError,
     apply_consistency_writes,
     audit_front_double,
+    seal_cell_edit_instruction,
     audit_piece_count_reconciliation,
     audit_street_end_phrases,
     audit_wall_corner_span,
@@ -185,8 +186,23 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "左上是0度格望北" in system
     assert "image_edit_instruction" in system
     assert "改图指令" in system
+    assert "只改这一格里点名的这一处" in system
+    assert "不要重画整张四宫" in system
+    assert "用户补充" in system
     user = messages[1]["content"][0]["text"]
     assert "主体个数、件数核销、朝向、位置" in user
+    assert "用户补充，这次要特别处理" not in user
+    noted = build_consistency_messages(
+        image_url="http://example.test/grid.png",
+        entity=entity,
+        main_entity=entity,
+        checked_prompt=MAIN_PROMPT,
+        kind="main",
+        note="90度格城墙接到城门楼",
+    )
+    noted_user = noted[1]["content"][0]["text"]
+    assert "用户补充，这次要特别处理" in noted_user
+    assert "90度格城墙接到城门楼" in noted_user
     assert messages[1]["content"][1]["image_url"]["url"] == "http://example.test/grid.png"
 
 
@@ -352,7 +368,13 @@ def test_image_edit_instruction_survives_when_prompts_stay():
     )
     assert plan["consistent"] is True
     assert plan["writes"] == []
-    assert plan["image_edit_instruction"] == instruction
+    assert plan["image_edit_instruction"].startswith("把左上0度格的台改到画面前方")
+    assert "只改这一格里点名的这一处" in plan["image_edit_instruction"]
+    assert "不要重画整张四宫" in plan["image_edit_instruction"]
+    sealed = seal_cell_edit_instruction("改90度格的沙发，只见靠背。再改180度格的正面墙。")
+    assert sealed.startswith("这次只改90度格")
+    assert "不要改180度格" in sealed
+    assert seal_cell_edit_instruction("  ") is None
 
 
 def test_consistency_check_passes_public_image_link():
