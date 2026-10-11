@@ -4,6 +4,7 @@ from app.services.script_analysis_flow.environment_consistency import (
     apply_consistency_writes,
     audit_piece_count_reconciliation,
     audit_street_end_phrases,
+    audit_wall_corner_span,
     build_consistency_messages,
     classify_checked_prompt,
     parse_consistency_payload,
@@ -174,6 +175,8 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "四格中部件数必须相同" in system
     assert "街端" in system
     assert "禁止一头近" in system
+    assert "城墙衔接" in system
+    assert "贴在正面墙前" in system
     assert "朝向" in system
     assert "位置" in system
     assert "开篇有误：" in system
@@ -267,6 +270,33 @@ def test_street_end_rejects_near_depth_and_short_head():
     assert plan["consistent"] is False
     assert plan["writes"] == []
     assert plan["summary"].startswith("长街两端未通过")
+
+
+def test_invisible_side_stops_a_full_width_wall():
+    quad = """[90度格-右上·东]
+正面：[@夯土高耸城墙]（E-001）。从画面左铺到画面右。[@送行木牌坊]（E-002）。贴在正面墙前。
+左侧面：[@重檐城门楼]（N-001）。一头近、一头远。
+右侧面：不可见。
+"""
+    issues = audit_wall_corner_span(quad)
+    assert any("贴在墙前" in item for item in issues)
+    assert any("右侧面不可见" in item for item in issues)
+    room = """[0度格-左上·北]
+正面：[@北墙]（N-001）。从画面左铺到画面右。
+左侧面：[@西墙]（W-001）。一头近、一头远。
+右侧面：[@东墙]（E-001）。一头近、一头远。
+"""
+    assert audit_wall_corner_span(room) == []
+    entity = Dummy(id=12, prompt=quad)
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        quad,
+        {"consistent": True, "summary": "一致", "revised_prompt": quad, "revised_main_prompt": None},
+    )
+    assert plan["consistent"] is False
+    assert plan["writes"] == []
+    assert plan["summary"].startswith("城墙衔接未通过")
 
 
 def test_image_edit_instruction_survives_when_prompts_stay():

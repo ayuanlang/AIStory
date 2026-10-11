@@ -420,6 +420,34 @@ def audit_street_end_phrases(text: str) -> List[str]:
     return issues
 
 
+def audit_wall_corner_span(text: str) -> List[str]:
+    """A front wall must stop at an invisible side and must not be drawn in front of itself.
+
+    Face-on 「从画面左铺到画面右」 plus a gate written 「一头近」 splits the corner.
+    The measurable failures are a full-span front beside an invisible side, and
+    「贴在正面墙前」.
+    """
+    raw = str(text or "")
+    issues: List[str] = []
+    for part in re.split(r"(?=\[(?:0|90|180|270)度格)", raw):
+        head = _CELL_HEAD.search(part)
+        if not head:
+            continue
+        angle = head.group(1)
+        if "贴在正面墙前" in part or "贴在这一面墙前" in part or "贴在墙前" in part:
+            issues.append(f"{angle}度格写了贴在墙前。墙身保持连续，邻件写在墙朝向镜头的一侧。")
+        chunks = _face_chunks(part)
+        front = chunks.get("正面", "")
+        if "从画面左铺到画面右" not in front:
+            continue
+        for side in ("左侧面", "右侧面"):
+            if (chunks.get(side) or "").strip().startswith("不可见"):
+                issues.append(
+                    f"{angle}度格{side}不可见，正面仍写从画面左铺到画面右。墙收到可见端为止。"
+                )
+    return issues
+
+
 def _face_chunks(body: str) -> Dict[str, str]:
     ledger_at = body.find("件数核销")
     faces_blob = body[:ledger_at] if ledger_at >= 0 else body
@@ -539,13 +567,20 @@ def plan_consistency_writes(
     audit_target = revised_quad if ("件数核销" in revised_quad or "件数=" in revised_quad) else source_quad
     piece_issues = audit_piece_count_reconciliation(audit_target)
     street_issues = audit_street_end_phrases(audit_target)
-    if piece_issues or street_issues:
-        detail = piece_issues + street_issues
-        prefix = PIECE_COUNT_PREFIX if piece_issues else "长街两端未通过"
+    wall_issues = audit_wall_corner_span(audit_target)
+    if piece_issues or street_issues or wall_issues:
+        if piece_issues:
+            prefix = PIECE_COUNT_PREFIX
+        elif street_issues:
+            prefix = "长街两端未通过"
+        else:
+            prefix = "城墙衔接未通过"
         return {
             "consistent": False,
             "kind": kind,
-            "summary": piece_count_block(summary, detail).replace(PIECE_COUNT_PREFIX, prefix, 1),
+            "summary": piece_count_block(summary, piece_issues + street_issues + wall_issues).replace(
+                PIECE_COUNT_PREFIX, prefix, 1
+            ),
             "writes": [],
             "updated_targets": [],
             "image_edit_instruction": image_edit_instruction,
@@ -717,6 +752,10 @@ def build_consistency_messages(
         "靠近镜头这一头是路面短边，禁止写成短头或一扇门。"
         "沿短边，街端在画面左端或画面右端，两端一样远，禁止一头近。"
         "连绵铺面在沿短边的格里中心左右对齐。开篇只登记一根的灯杆，四格只写这一根。\n"
+        "城墙衔接：城垣一端接到城门楼或角楼时，写接到这座楼为止，和它一样远。"
+        "禁止这座楼再写一头近，禁止这一端从画面左铺到画面右。"
+        "一侧不可见时，正面不写从画面左铺到画面右。"
+        "禁止贴在正面墙前。牌坊写在城垣朝向镜头的一侧，墙身仍连续。\n"
         "朝向：先用开篇竖边推出这一格的长边画面轴。"
         "南北走向时，0度和180度的长边从靠近镜头伸向远离镜头，90度和270度的长边从画面左铺到画面右。"
         "东西走向把这两类对调。0度与180度对调两端，90度与270度对调左右。"
