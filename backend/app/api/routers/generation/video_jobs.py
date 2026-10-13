@@ -113,6 +113,7 @@ from app.services.generation_runtime.voice_generation_runner import (  # noqa: E
 from app.services.generation_runtime.video_generation_runner import (  # noqa: E402,F401
     _run_generate_video,
 )
+from app.services.video_submit_dedup import video_scope_reservation_is_active  # noqa: E402
 
 @router.post("/generate/callback/{ticket}")
 async def receive_generation_callback(ticket: str, request: Request, response: Response):
@@ -371,8 +372,8 @@ async def submit_generate_video_endpoint(
         active_scope_job_id = str(VIDEO_ACTIVE_SCOPE_STORE.get(scope_key) or "").strip()
         if active_scope_job_id:
             active_scope_job = dict(VIDEO_JOB_STORE.get(active_scope_job_id) or {})
-            active_status = str(active_scope_job.get("status") or "").strip().lower()
-            if active_scope_job and active_status in {"queued", "running"}:
+            if video_scope_reservation_is_active(active_scope_job):
+                active_status = str(active_scope_job.get("status") or "").strip().lower() or "queued"
                 logger.info(
                     "[VideoSubmit] scope deduplicated | user_id=%s scope=%s job_id=%s status=%s",
                     current_user.id,
@@ -382,7 +383,7 @@ async def submit_generate_video_endpoint(
                 )
                 return {
                     "job_id": active_scope_job_id,
-                    "status": active_scope_job.get("status") or "queued",
+                    "status": active_status,
                     "created_at": active_scope_job.get("created_at") or now_bj_iso(),
                     "deduplicated": True,
                     "scope_deduplicated": True,
@@ -395,18 +396,18 @@ async def submit_generate_video_endpoint(
             if not existing_job_id:
                 continue
             existing_job = dict(VIDEO_JOB_STORE.get(existing_job_id) or {})
-            existing_status = str(existing_job.get("status") or "").strip().lower()
-            if existing_job and existing_status in {"queued", "running"}:
+            if video_scope_reservation_is_active(existing_job):
+                existing_status = str(existing_job.get("status") or "").strip().lower() or "queued"
                 logger.info(
                     "[VideoSubmit] deduplicated | user_id=%s key=%s job_id=%s status=%s",
                     current_user.id,
                     store_key,
                     existing_job_id,
-                    existing_job.get("status"),
+                    existing_status,
                 )
                 return {
                     "job_id": existing_job_id,
-                    "status": existing_job.get("status") or "queued",
+                    "status": existing_status,
                     "created_at": existing_job.get("created_at") or now_bj_iso(),
                     "deduplicated": True,
                 }
@@ -430,10 +431,73 @@ async def submit_generate_video_endpoint(
                 "job_id": job_id,
                 "created_at": now,
             }
+        # Reserve the job record in the same lock as the scope slot. A second
+        # request must not treat a not-yet-written job as a stale scope and pop it.
+        VIDEO_JOB_STORE[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "user_id": current_user.id,
+            "username": current_user.username,
+            "task_scope": scope_key,
+            "project_id": req_payload.get("project_id"),
+            "episode_id": req_payload.get("episode_id"),
+            "shot_id": req_payload.get("shot_id"),
+            "asset_type": req_payload.get("asset_type"),
+            "prompt": req_payload.get("prompt"),
+            "created_at": now,
+        }
         VIDEO_ACTIVE_SCOPE_STORE[scope_key] = job_id
 
     if not job_id:
         job_id = uuid.uuid4().hex
+
+    from app.services.generation_task_queue import claim_or_reuse_generation_scope
+
+    owned_job_id = claim_or_reuse_generation_scope(
+        scope_key=scope_key,
+        job_id=job_id,
+        kind="video",
+        user_id=int(current_user.id),
+        job_payload={
+            "job_id": job_id,
+            "status": "queued",
+            "user_id": current_user.id,
+            "username": current_user.username,
+            "task_scope": scope_key,
+            "project_id": req_payload.get("project_id"),
+            "episode_id": req_payload.get("episode_id"),
+            "shot_id": req_payload.get("shot_id"),
+            "shot_number": req_payload.get("shot_number"),
+            "shot_name": req_payload.get("shot_name"),
+            "asset_type": req_payload.get("asset_type"),
+            "created_at": now,
+        },
+    )
+    if owned_job_id and owned_job_id != job_id:
+        with VIDEO_JOB_LOCK:
+            if VIDEO_ACTIVE_SCOPE_STORE.get(scope_key) == job_id:
+                VIDEO_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+            current_placeholder = VIDEO_JOB_STORE.get(job_id) or {}
+            if str(current_placeholder.get("status") or "").strip().lower() == "queued" and not current_placeholder.get("started_at"):
+                VIDEO_JOB_STORE.pop(job_id, None)
+            for store_key in store_keys:
+                mapped = VIDEO_SUBMIT_IDEMPOTENCY_STORE.get(store_key) or {}
+                if str(mapped.get("job_id") or "").strip() == job_id:
+                    VIDEO_SUBMIT_IDEMPOTENCY_STORE.pop(store_key, None)
+        logger.info(
+            "[VideoSubmit] cross-process scope deduplicated | user_id=%s scope=%s dropped=%s kept=%s",
+            current_user.id,
+            scope_key,
+            job_id,
+            owned_job_id,
+        )
+        return {
+            "job_id": owned_job_id,
+            "status": "queued",
+            "created_at": now,
+            "deduplicated": True,
+            "scope_deduplicated": True,
+        }
 
     provider_callback_ticket = f"video-job-{job_id}"
     try:
@@ -468,12 +532,21 @@ async def submit_generate_video_endpoint(
         error=None,
     )
 
-    video_task = _submit_generation_background_task(
-        job_id=job_id,
-        kind="video",
-        user_id=int(current_user.id),
-        payload=req_payload,
-    )
+    try:
+        video_task = _submit_generation_background_task(
+            job_id=job_id,
+            kind="video",
+            user_id=int(current_user.id),
+            payload=req_payload,
+        )
+    except Exception:
+        _set_video_job(
+            job_id,
+            status="failed",
+            error="Failed to enqueue video generation",
+            finished_at=now_bj_iso(),
+        )
+        raise
     with VIDEO_JOB_LOCK:
         VIDEO_JOB_TASKS[job_id] = video_task
     _release_media_generation_job_after_limit_race(

@@ -1013,6 +1013,335 @@ def enqueue_generation_task(*, job_id: str, kind: str, user_id: int, payload: Di
     return str(job_id)
 
 
+_SUBMIT_SCOPE_TABLE_READY = False
+_SUBMIT_SCOPE_TABLE_LOCK = threading.Lock()
+# Window where a scope row may exist before its queue row is inserted.
+_SUBMIT_SCOPE_RESERVE_SECONDS = 45.0
+_SUBMIT_SCOPE_ACTIVE_STATUSES = frozenset({
+    "queued",
+    "submit",
+    "pending",
+    "running",
+    "processing",
+    "waiting_callback",
+    "callback_processing",
+    "storing_asset",
+})
+_SUBMIT_SCOPE_TERMINAL_STATUSES = frozenset({
+    "succeeded",
+    "completed",
+    "done",
+    "success",
+    "failed",
+    "canceled",
+    "cancelled",
+    "error",
+})
+
+
+def _ensure_submit_scope_table_ready() -> None:
+    global _SUBMIT_SCOPE_TABLE_READY
+    if _SUBMIT_SCOPE_TABLE_READY:
+        return
+    with _SUBMIT_SCOPE_TABLE_LOCK:
+        if _SUBMIT_SCOPE_TABLE_READY:
+            return
+        ddl = """
+        CREATE TABLE IF NOT EXISTS generation_submit_scope (
+            scope_key TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """
+        with engine.begin() as conn:
+            conn.execute(text(ddl))
+        _SUBMIT_SCOPE_TABLE_READY = True
+
+
+def _upsert_job_state_in_session(db, *, kind: str, job_id: str, payload: Dict[str, Any], now: float) -> None:
+    stable_payload = dict(payload or {})
+    stable_payload["job_id"] = str(job_id)
+    db.execute(
+        text(
+            """
+            INSERT INTO generation_job_state (
+                kind, job_id, user_id, status, provider_callback_ticket, payload_json, updated_at
+            ) VALUES (
+                :kind, :job_id, :user_id, :status, :provider_callback_ticket, :payload_json, :updated_at
+            )
+            ON CONFLICT(kind, job_id) DO UPDATE SET
+                user_id = excluded.user_id,
+                status = excluded.status,
+                provider_callback_ticket = excluded.provider_callback_ticket,
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at
+            """
+        ),
+        {
+            "kind": str(kind),
+            "job_id": str(job_id),
+            "user_id": stable_payload.get("user_id"),
+            "status": str(stable_payload.get("status") or "").strip().lower() or None,
+            "provider_callback_ticket": str(
+                stable_payload.get("provider_callback_ticket")
+                or stable_payload.get("callback_ticket")
+                or ""
+            ).strip() or None,
+            "payload_json": json.dumps(stable_payload, ensure_ascii=False, default=str),
+            "updated_at": float(now),
+        },
+    )
+
+
+def generation_scope_owner_blocks_status(
+    *,
+    queue_status: str,
+    state_status: str,
+    age_seconds: float,
+    reserve_seconds: float = _SUBMIT_SCOPE_RESERVE_SECONDS,
+) -> bool:
+    """Whether an existing scope owner should suppress a new provider submit.
+
+    A queue row in waiting_callback still owns the scope. A scope row with no
+    queue row only owns it during the short reserve window between claim and
+    enqueue; a crashed claim must not block the shot forever.
+    """
+    queue = str(queue_status or "").strip().lower()
+    state = str(state_status or "").strip().lower()
+    if queue in _SUBMIT_SCOPE_ACTIVE_STATUSES:
+        return True
+    if queue in _SUBMIT_SCOPE_TERMINAL_STATUSES or state in _SUBMIT_SCOPE_TERMINAL_STATUSES:
+        return False
+    age = float(age_seconds or 0.0)
+    return age >= 0 and age < float(reserve_seconds)
+
+
+def _generation_scope_owner_blocks(db, job_id: str, created_at: float, now: float, *, kind: str) -> bool:
+    queue_row = db.execute(
+        text(
+            """
+            SELECT status
+            FROM generation_task_queue
+            WHERE job_id = :job_id
+            """
+        ),
+        {"job_id": str(job_id)},
+    ).mappings().first()
+    queue_status = str((queue_row or {}).get("status") or "").strip().lower()
+
+    state_row = db.execute(
+        text(
+            """
+            SELECT status
+            FROM generation_job_state
+            WHERE kind = :kind AND job_id = :job_id
+            """
+        ),
+        {"kind": str(kind or "").strip().lower(), "job_id": str(job_id)},
+    ).mappings().first()
+    state_status = str((state_row or {}).get("status") or "").strip().lower()
+    return generation_scope_owner_blocks_status(
+        queue_status=queue_status,
+        state_status=state_status,
+        age_seconds=float(now) - float(created_at or 0.0),
+    )
+
+
+def claim_or_reuse_generation_scope(
+    *,
+    scope_key: str,
+    job_id: str,
+    kind: str,
+    user_id: int,
+    job_payload: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Cross-process submit lock.
+
+    Returns ``job_id`` when this caller owns the scope and should enqueue.
+    Returns another job id when an in-flight submit already owns it.
+    Process-local maps cannot see gunicorn siblings; this table can.
+    """
+    stable_scope = str(scope_key or "").strip()
+    stable_job_id = str(job_id or "").strip()
+    if not stable_scope or not stable_job_id:
+        return stable_job_id
+
+    try:
+        _ensure_queue_table_ready()
+        _ensure_job_state_table_ready()
+        _ensure_submit_scope_table_ready()
+    except Exception as exc:
+        logger.warning(
+            "[GenerationScope] table ensure failed; allowing submit | scope=%s job_id=%s err=%s",
+            stable_scope,
+            stable_job_id,
+            exc,
+        )
+        return stable_job_id
+
+    payload = dict(job_payload or {})
+    payload.setdefault("job_id", stable_job_id)
+    payload.setdefault("status", "queued")
+    payload.setdefault("user_id", int(user_id))
+    payload.setdefault("task_scope", stable_scope)
+    safe_kind = str(kind or "").strip().lower() or "video"
+
+    db = SessionLocal()
+    try:
+        for _attempt in range(2):
+            now = time.time()
+            db.execute(
+                text(
+                    """
+                    INSERT INTO generation_submit_scope (
+                        scope_key, job_id, kind, user_id, created_at
+                    ) VALUES (
+                        :scope_key, :job_id, :kind, :user_id, :created_at
+                    )
+                    ON CONFLICT(scope_key) DO NOTHING
+                    """
+                ),
+                {
+                    "scope_key": stable_scope,
+                    "job_id": stable_job_id,
+                    "kind": safe_kind,
+                    "user_id": int(user_id),
+                    "created_at": now,
+                },
+            )
+            row = db.execute(
+                text(
+                    """
+                    SELECT job_id, created_at
+                    FROM generation_submit_scope
+                    WHERE scope_key = :scope_key
+                    """
+                ),
+                {"scope_key": stable_scope},
+            ).mappings().first()
+            owner = str((row or {}).get("job_id") or "").strip()
+            created_at = float((row or {}).get("created_at") or 0.0)
+            if not owner or owner == stable_job_id:
+                _upsert_job_state_in_session(
+                    db,
+                    kind=safe_kind,
+                    job_id=stable_job_id,
+                    payload=payload,
+                    now=now,
+                )
+                db.commit()
+                return stable_job_id
+
+            if _generation_scope_owner_blocks(db, owner, created_at, now, kind=safe_kind):
+                db.commit()
+                logger.info(
+                    "[GenerationScope] reused in-flight submit | kind=%s user_id=%s scope=%s job_id=%s owner=%s",
+                    safe_kind,
+                    int(user_id),
+                    stable_scope,
+                    stable_job_id,
+                    owner,
+                )
+                return owner
+
+            taken = db.execute(
+                text(
+                    """
+                    UPDATE generation_submit_scope
+                    SET job_id = :job_id,
+                        kind = :kind,
+                        user_id = :user_id,
+                        created_at = :created_at
+                    WHERE scope_key = :scope_key
+                      AND job_id = :owner_job_id
+                    """
+                ),
+                {
+                    "scope_key": stable_scope,
+                    "job_id": stable_job_id,
+                    "kind": safe_kind,
+                    "user_id": int(user_id),
+                    "created_at": now,
+                    "owner_job_id": owner,
+                },
+            )
+            changed = int(taken.rowcount if taken.rowcount is not None else -1)
+            if changed < 0:
+                db.commit()
+                continue
+            if changed > 0:
+                _upsert_job_state_in_session(
+                    db,
+                    kind=safe_kind,
+                    job_id=stable_job_id,
+                    payload=payload,
+                    now=now,
+                )
+                db.commit()
+                return stable_job_id
+            db.commit()
+        logger.warning(
+            "[GenerationScope] claim lost twice; allowing submit | scope=%s job_id=%s",
+            stable_scope,
+            stable_job_id,
+        )
+        return stable_job_id
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning(
+            "[GenerationScope] claim failed; allowing submit | scope=%s job_id=%s err=%s",
+            stable_scope,
+            stable_job_id,
+            exc,
+        )
+        return stable_job_id
+    finally:
+        db.close()
+
+
+def release_generation_scope(*, scope_key: str, job_id: str) -> None:
+    """Drop a scope claim once its job is terminal, so the next submit can start."""
+    stable_scope = str(scope_key or "").strip()
+    stable_job_id = str(job_id or "").strip()
+    if not stable_scope or not stable_job_id:
+        return
+    try:
+        _ensure_submit_scope_table_ready()
+    except Exception as exc:
+        logger.warning("[GenerationScope] release skipped; table not ready | err=%s", exc)
+        return
+    db = SessionLocal()
+    try:
+        db.execute(
+            text(
+                """
+                DELETE FROM generation_submit_scope
+                WHERE scope_key = :scope_key AND job_id = :job_id
+                """
+            ),
+            {"scope_key": stable_scope, "job_id": stable_job_id},
+        )
+        db.commit()
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning(
+            "[GenerationScope] release failed | scope=%s job_id=%s err=%s",
+            stable_scope,
+            stable_job_id,
+            exc,
+        )
+    finally:
+        db.close()
+
+
 def patch_generation_task_payload(job_id: str, patch: Dict[str, Any]) -> bool:
     _ensure_queue_table_ready()
     if not isinstance(patch, dict) or not patch:

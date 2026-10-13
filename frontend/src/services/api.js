@@ -735,6 +735,8 @@ const summarizePromptDebug = (debugPayload) => {
 
 const IMAGE_SUBMIT_IDEMPOTENCY_WINDOW_MS = 30 * 1000;
 const imageSubmitIdempotencyCache = new Map();
+const VIDEO_SUBMIT_IDEMPOTENCY_WINDOW_MS = 30 * 1000;
+const videoSubmitIdempotencyCache = new Map();
 
 const normalizeRefImageValue = (value) => {
     if (Array.isArray(value)) {
@@ -789,6 +791,39 @@ const getOrCreateImageSubmitIdempotencyKey = (payload, explicitKey = null) => {
 
     const key = `img-${now}-${Math.random().toString(36).slice(2, 12)}`;
     imageSubmitIdempotencyCache.set(signature, {
+        key,
+        createdAt: now,
+    });
+    return key;
+};
+
+const buildVideoSubmitSignature = (payload) => {
+    const source = { ...(payload || {}) };
+    delete source.callback_url;
+    delete source.callbackUrl;
+    delete source.callBackUrl;
+    return JSON.stringify(source);
+};
+
+const getOrCreateVideoSubmitIdempotencyKey = (payload, explicitKey = null) => {
+    const custom = String(explicitKey || '').trim();
+    if (custom) return custom;
+
+    const now = Date.now();
+    for (const [signature, info] of videoSubmitIdempotencyCache.entries()) {
+        if (!info || (now - Number(info.createdAt || 0)) > VIDEO_SUBMIT_IDEMPOTENCY_WINDOW_MS) {
+            videoSubmitIdempotencyCache.delete(signature);
+        }
+    }
+
+    const signature = buildVideoSubmitSignature(payload);
+    const cached = videoSubmitIdempotencyCache.get(signature);
+    if (cached && (now - Number(cached.createdAt || 0)) <= VIDEO_SUBMIT_IDEMPOTENCY_WINDOW_MS) {
+        return cached.key;
+    }
+
+    const key = `vid-${now}-${Math.random().toString(36).slice(2, 12)}`;
+    videoSubmitIdempotencyCache.set(signature, {
         key,
         createdAt: now,
     });
@@ -2954,7 +2989,7 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
         ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),
     };
 
-    const idempotencyKey = `vid-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+    const idempotencyKey = getOrCreateVideoSubmitIdempotencyKey(payload, options?.idempotency_key);
 
     let submitResp;
     try {

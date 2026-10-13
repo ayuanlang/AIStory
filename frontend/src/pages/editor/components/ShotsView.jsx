@@ -991,6 +991,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const videoCreditEstimateOkKeyRef = useRef('');
     const videoCreditEstimateInflightKeyRef = useRef('');
     const refreshVideoCreditEstimateRef = useRef(null);
+    const videoSubmitInFlightRef = useRef(new Set());
 
     const projectVideoResolution = project?.global_info?.tech_params?.visual_standard?.video_resolution
         || project?.global_info?.project_generation_defaults?.video_resolution
@@ -9603,12 +9604,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (!editingShot) return;
         let shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
+        const flightKey = String(targetShotId || '').trim();
+        if (flightKey && videoSubmitInFlightRef.current.has(flightKey)) return;
         const previousVideoUrl = String(shotSnapshot?.video_url || '').trim();
         const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
         const isVideoGenerating = isShotVideoUiRunning(targetShotId, targetGeneratingState);
         if (targetGeneratingState.start || targetGeneratingState.end || isVideoGenerating) {
              return; 
         }
+        if (flightKey) videoSubmitInFlightRef.current.add(flightKey);
+        try {
 
         const resolvedEntities = await awaitShotGenerationEntities();
 
@@ -10356,6 +10361,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     ignoredCount: ignoredAsyncJobCallbackCount,
                 });
             }
+        }
+        } finally {
+            if (flightKey) videoSubmitInFlightRef.current.delete(flightKey);
         }
     };
 

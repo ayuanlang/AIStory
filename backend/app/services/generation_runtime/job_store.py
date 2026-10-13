@@ -1245,6 +1245,7 @@ def _promote_provider_task_ids_into_job_fields(fields: Dict[str, Any], current: 
 
 
 def _set_video_job(job_id: str, **fields) -> None:
+    released_scope = ""
     with VIDEO_JOB_LOCK:
         _prune_video_jobs_locked()
         current = VIDEO_JOB_STORE.get(job_id, {})
@@ -1299,14 +1300,29 @@ def _set_video_job(job_id: str, **fields) -> None:
                 result_url or None,
                 current.get("error"),
             )
-        if status in {"succeeded", "failed", "canceled", "cancelled", "error"}:
+        if status in {"succeeded", "completed", "done", "success", "failed", "canceled", "cancelled", "error"}:
             task_scope = str(current.get("task_scope") or "").strip()
             if task_scope and VIDEO_ACTIVE_SCOPE_STORE.get(task_scope) == job_id:
                 VIDEO_ACTIVE_SCOPE_STORE.pop(task_scope, None)
+            if task_scope:
+                released_scope = task_scope
             _slim_terminal_job_fields(current)
 
         VIDEO_JOB_STORE[job_id] = current
         _write_video_job_file(job_id, current)
+
+    if released_scope:
+        try:
+            from app.services.generation_task_queue import release_generation_scope
+
+            release_generation_scope(scope_key=released_scope, job_id=job_id)
+        except Exception:
+            logger.warning(
+                "[VideoJob] release submit scope failed | job_id=%s scope=%s",
+                job_id,
+                released_scope,
+                exc_info=True,
+            )
 
     _clear_generation_job_pool_cache()
 

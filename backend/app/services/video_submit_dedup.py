@@ -16,6 +16,34 @@ _VIDEO_INFLIGHT_BY_KEY: Dict[str, asyncio.Task] = {}
 _VIDEO_RECENT_RESULTS_BY_KEY: Dict[str, Dict[str, Any]] = {}
 _VIDEO_DEDUP_LOCK = asyncio.Lock()
 
+# A scope slot blocks another provider submit until the job is terminal.
+# waiting_callback is still in flight: the provider task has already been sent.
+_VIDEO_SCOPE_TERMINAL_STATUSES = frozenset({
+    "succeeded",
+    "completed",
+    "done",
+    "success",
+    "failed",
+    "canceled",
+    "cancelled",
+    "error",
+})
+
+
+def video_scope_reservation_is_active(job: Any) -> bool:
+    """True when this scope must not start a second provider video task.
+
+    A missing record is stale and should be released. A present record with a
+    non-terminal status — including queued, submit, and waiting_callback —
+    stays reserved. An empty status on a just-written placeholder also stays.
+    """
+    if not isinstance(job, dict) or not job:
+        return False
+    status = str(job.get("status") or "").strip().lower()
+    if not status:
+        return True
+    return status not in _VIDEO_SCOPE_TERMINAL_STATUSES
+
 
 def _digest_text_for_dedup(value: Any) -> str:
     text = str(value or "")
