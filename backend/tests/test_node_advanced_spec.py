@@ -66,3 +66,30 @@ def test_scene_step_specs_are_separate():
     ) == ""
     assert resolve_storyboard_advanced_spec(episode, "EP01_SC01") == "开场先给全景"
     assert resolve_storyboard_advanced_spec(episode, "") == ""
+
+
+def test_row_and_scene_specs_join_the_node_spec():
+    episode = _episode()
+    episode.episode_info["node_advanced_specs"]["art_direction_row"] = "整排保持雨夜"
+    episode.episode_info["node_advanced_specs"]["scene_rerun:EP01_SC01"] = "这一场只在店内"
+    split_spec = resolve_flow_node_advanced_spec(episode, node_key="scene_split")
+    assert split_spec.index("整排保持雨夜") < split_spec.index("全剧一场")
+    assert "本排规格" in split_spec
+    assert "本节点规格" in split_spec
+    assert resolve_flow_node_advanced_spec(episode, node_key="environment_plan") == "整排保持雨夜"
+    assert resolve_flow_node_advanced_spec(episode, node_key="script_optimization") == ""
+    drama_spec = resolve_subskill_advanced_spec(
+        episode,
+        prompt_file="skills/scene_analysis_feature_stack/scene_planning_1_subskill_drama_standardization.md",
+        scene_id="EP01_SC01",
+    )
+    assert drama_spec.index("这一场只在店内") < drama_spec.index("这场对白放慢")
+    assert resolve_subskill_advanced_spec(
+        episode,
+        prompt_file="skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md",
+        scene_id="EP01_SC01",
+    ) == "这一场只在店内"
+    board_spec = resolve_storyboard_advanced_spec(episode, "EP01_SC01")
+    assert "这一场只在店内" in board_spec
+    assert "开场先给全景" in board_spec
+    assert resolve_storyboard_advanced_spec(episode, "EP01_SC02") == ""

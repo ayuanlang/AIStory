@@ -31,6 +31,16 @@ _REEXTRACT_SPEC_KEYS = {
     "character": "asset_design_character",
     "prop": "asset_design_prop",
 }
+ART_DIRECTION_ROW_SPEC_KEY = "art_direction_row"
+SCENE_RERUN_SPEC_PREFIX = "scene_rerun:"
+_ART_DIRECTION_NODE_KEYS = {
+    "scene_split",
+    "environment_plan",
+    "asset_design_character",
+    "asset_design_prop",
+    "asset_design_environment",
+    "asset_design_environment_quad",
+}
 
 
 def read_node_advanced_specs(episode: Any) -> Dict[str, str]:
@@ -49,6 +59,15 @@ def read_node_advanced_specs(episode: Any) -> Dict[str, str]:
 
 def lookup_node_advanced_spec(specs: Dict[str, str], key: str) -> str:
     return str((specs or {}).get(str(key or "").strip()) or "").strip()
+
+
+def combine_node_advanced_specs(broader: str, own: str, broader_label: str) -> str:
+    """Keep a single node spec unchanged. A row or scene spec is added in front of it."""
+    shared = str(broader or "").strip()
+    local = str(own or "").strip()
+    if shared and local:
+        return f"{broader_label}\n{shared}\n\n本节点规格\n{local}"
+    return local or shared
 
 
 def format_node_advanced_spec_block(spec_text: str) -> str:
@@ -75,12 +94,16 @@ def prepend_node_advanced_spec(user_content: str, spec_text: str) -> str:
 def resolve_flow_node_advanced_spec(episode: Any, *, node_key: str, reextract_target: str = "") -> str:
     specs = read_node_advanced_specs(episode)
     reextract_key = _REEXTRACT_SPEC_KEYS.get(str(reextract_target or "").strip().lower(), "")
-    if reextract_key:
-        return lookup_node_advanced_spec(specs, reextract_key)
-    spec_key = _FLOW_NODE_SPEC_KEYS.get(str(node_key or "").strip(), "")
+    spec_key = reextract_key or _FLOW_NODE_SPEC_KEYS.get(str(node_key or "").strip(), "")
     if not spec_key:
         return ""
-    return lookup_node_advanced_spec(specs, spec_key)
+    own = lookup_node_advanced_spec(specs, spec_key)
+    row = (
+        lookup_node_advanced_spec(specs, ART_DIRECTION_ROW_SPEC_KEY)
+        if spec_key in _ART_DIRECTION_NODE_KEYS
+        else ""
+    )
+    return combine_node_advanced_specs(row, own, "本排规格")
 
 
 def resolve_subskill_advanced_spec(episode: Any, *, prompt_file: str, scene_id: str) -> str:
@@ -88,14 +111,24 @@ def resolve_subskill_advanced_spec(episode: Any, *, prompt_file: str, scene_id: 
     scene = str(scene_id or "").strip()
     if not step_key or not scene:
         return ""
-    return lookup_node_advanced_spec(read_node_advanced_specs(episode), f"{step_key}:{scene}")
+    specs = read_node_advanced_specs(episode)
+    return combine_node_advanced_specs(
+        lookup_node_advanced_spec(specs, f"{SCENE_RERUN_SPEC_PREFIX}{scene}"),
+        lookup_node_advanced_spec(specs, f"{step_key}:{scene}"),
+        "本场规格",
+    )
 
 
 def resolve_storyboard_advanced_spec(episode: Any, scene_no: str) -> str:
     scene = str(scene_no or "").strip()
     if not scene:
         return ""
-    return lookup_node_advanced_spec(read_node_advanced_specs(episode), f"storyboard:{scene}")
+    specs = read_node_advanced_specs(episode)
+    return combine_node_advanced_specs(
+        lookup_node_advanced_spec(specs, f"{SCENE_RERUN_SPEC_PREFIX}{scene}"),
+        lookup_node_advanced_spec(specs, f"storyboard:{scene}"),
+        "本场规格",
+    )
 
 
 def _load_episode(db: Session, episode_id: Any) -> Any:

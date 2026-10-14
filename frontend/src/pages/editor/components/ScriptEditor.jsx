@@ -5531,6 +5531,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         open: false,
         key: '',
         label: '',
+        scope: 'node',
         draft: '',
         saving: false,
     });
@@ -27110,10 +27111,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const openNodeAdvancedSpecModal = (specKey, label) => {
         const key = String(specKey || '').trim();
         if (!key || !activeEpisode?.id) return;
+        const scope = key === 'art_direction_row'
+            ? 'row'
+            : (key.startsWith('scene_rerun:') ? 'scene' : 'node');
         setNodeAdvancedSpecModal({
             open: true,
             key,
             label: String(label || key),
+            scope,
             draft: String(nodeAdvancedSpecs?.[key] || ''),
             saving: false,
         });
@@ -27136,7 +27141,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 },
             });
             setNodeAdvancedSpecs(next);
-            setNodeAdvancedSpecModal({ open: false, key: '', label: '', draft: '', saving: false });
+            setNodeAdvancedSpecModal({ open: false, key: '', label: '', scope: 'node', draft: '', saving: false });
             onLog?.(t('已保存本节点高级规格。', 'Saved this node’s advanced spec.'), 'success');
         } catch (error) {
             setNodeAdvancedSpecModal((prev) => ({ ...prev, saving: false }));
@@ -36121,6 +36126,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const diagnosticBtnClass = 'text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-40 disabled:cursor-not-allowed hover:text-white transition-colors';
                         const renderNodeSpecButton = (specKey, label) => {
                             const filled = Boolean(String(nodeAdvancedSpecs?.[specKey] || '').trim());
+                            const scope = specKey === 'art_direction_row'
+                                ? 'row'
+                                : (String(specKey || '').startsWith('scene_rerun:') ? 'scene' : 'node');
+                            const title = scope === 'row'
+                                ? (filled
+                                    ? t('这一排已有高级规格，排内各节点提交时会注入', 'This row has an advanced spec. It is injected when any node in the row is submitted.')
+                                    : t('填写这一排的高级规格，排内各节点提交时注入', 'Write an advanced spec for this row. It is injected when any node in the row is submitted.'))
+                                : scope === 'scene'
+                                    ? (filled
+                                        ? t('这一场已有高级规格，场内各节点提交时会注入', 'This scene has an advanced spec. It is injected when any node in the scene is submitted.')
+                                        : t('填写这一场的高级规格，场内各节点提交时注入', 'Write an advanced spec for this scene. It is injected when any node in the scene is submitted.'))
+                                    : (filled
+                                        ? t('本节点已有高级规格，提交时会注入用户提示词', 'This node has an advanced spec. It is injected into the user prompt on submit.')
+                                        : t('填写本节点高级规格，提交时注入用户提示词', 'Write an advanced spec for this node. It is injected into the user prompt on submit.'));
                             return (
                                 <button
                                     type="button"
@@ -36129,9 +36148,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     className={filled
                                         ? 'text-[10px] px-1 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-300/40 text-amber-100 disabled:opacity-40'
                                         : diagnosticBtnClass}
-                                    title={filled
-                                        ? t('本节点已有高级规格，提交时会注入用户提示词', 'This node has an advanced spec. It is injected into the user prompt on submit.')
-                                        : t('填写本节点高级规格，提交时注入用户提示词', 'Write an advanced spec for this node. It is injected into the user prompt on submit.')}
+                                    title={title}
                                 >
                                     {t('规格', 'Spec')}
                                 </button>
@@ -37321,6 +37338,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <span className="text-xs font-bold text-white/80 leading-tight">
                                     {t('美术指导', 'Art Direction')}
                                 </span>
+                                {renderNodeSpecButton('art_direction_row', t('美术指导这一排', 'Art Direction row'))}
                                 <button
                                     type="button"
                                     onClick={() => handleRerunArtDirectionRow()}
@@ -37420,6 +37438,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             <span className="line-clamp-2 leading-tight text-[11px] font-semibold text-white/75">
                                                 {formatDiagnosticSceneLabel(row.sceneId, row.order, row.sceneName)}
                                             </span>
+                                            {renderNodeSpecButton(
+                                                `scene_rerun:${row.sceneId}`,
+                                                formatDiagnosticSceneLabel(row.sceneId, row.order, row.sceneName)
+                                            )}
                                             <button
                                                 type="button"
                                                 onClick={() => handleRerunSceneMatrixNode('drama_opt', row.sceneId)}
@@ -37872,10 +37894,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
                         <div className="p-4 flex flex-col gap-3">
                             <p className="text-xs text-white/50 leading-relaxed">
-                                {t(
-                                    '这里只写本节点的特殊要求。保存后，该节点下次提交模型时，非空内容会注入用户提示词，并标为必须满足的高级规格。',
-                                    'Write only this node’s special requirements. On the next model submit, non-empty text is injected into the user prompt as an advanced spec that must be met.'
-                                )}
+                                {nodeAdvancedSpecModal.scope === 'row'
+                                    ? t(
+                                        '这里写美术指导这一排的特殊要求。保存后，这一排的全局统筹、环境规划、角色、道具、主环境和衍生环境下次提交时都会注入，并标为必须满足的高级规格。各节点自己的规格仍然有效。',
+                                        'Write the special requirements for this Art Direction row. On the next submit, they are injected into global orchestration, environment planning, character, prop, main environment, and derived environment, and marked as an advanced spec that must be met. Each node’s own spec still applies.'
+                                    )
+                                    : nodeAdvancedSpecModal.scope === 'scene'
+                                        ? t(
+                                            '这里写这一场的特殊要求。保存后，该场文戏、武戏、现场编排、建置入戏和分镜下次提交时都会注入，并标为必须满足的高级规格。各节点自己的规格仍然有效。',
+                                            'Write the special requirements for this scene. On the next submit, they are injected into drama, action, floor staging, blocking, and storyboard, and marked as an advanced spec that must be met. Each node’s own spec still applies.'
+                                        )
+                                        : t(
+                                            '这里只写本节点的特殊要求。保存后，该节点下次提交模型时，非空内容会注入用户提示词，并标为必须满足的高级规格。',
+                                            'Write only this node’s special requirements. On the next model submit, non-empty text is injected into the user prompt as an advanced spec that must be met.'
+                                        )}
                             </p>
                             <textarea
                                 value={nodeAdvancedSpecModal.draft}
