@@ -30614,11 +30614,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             const output = String(extractAnalysisTextFromResult(result) || '').trim();
             if (!output) throw new Error(t('节点未返回内容。', 'The node returned no output.'));
-            latestStage1RawTextRef.current = output;
-            const adapted = String(extractStage1AdaptedScriptBody(output) || output).trim();
+            const nodeSlotKey = stableNode === 'scene_subskill_pipeline' ? 'scene_subskills' : stableNode;
+            let nodeText = output;
+            try {
+                const freshEpisode = await fetchEpisode(activeEpisode.id);
+                const savedNodeText = String(
+                    readStage1OutputSlotContent(freshEpisode?.ai_stage_outputs, nodeSlotKey) || ''
+                ).trim();
+                if (savedNodeText) nodeText = savedNodeText;
+            } catch (_) {}
+            latestStage1RawTextRef.current = nodeText;
+            latestStage1NodeOutputsRef.current = {
+                ...latestStage1NodeOutputsRef.current,
+                [nodeSlotKey]: nodeText,
+            };
+            const adapted = String(extractStage1AdaptedScriptBody(nodeText) || nodeText).trim();
             if (adapted) setAdaptationText(adapted);
-            setLlmRawResultContent(output);
-            setLlmResultContent(normalizeLlmMarkdownTable(output));
+            setLlmRawResultContent(nodeText);
+            setLlmResultContent(normalizeLlmMarkdownTable(nodeText));
             await triggerStageOutputsRefresh();
             setAnalysisFlowStatus({
                 phase: 'completed',
@@ -31679,11 +31692,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || getStageOutputContent('stage1', 'scene_split')
             || ''
         ).trim();
-        const liveEnvPlan = String(
-            latestStage1NodeOutputsRef.current?.environment_plan
-            || getStageOutputContent('stage1', 'environment_plan')
-            || ''
-        ).trim();
+        let liveEnvPlan = '';
+        try {
+            const freshEpisode = await fetchEpisode(activeEpisode.id);
+            liveEnvPlan = String(
+                readStage1OutputSlotContent(freshEpisode?.ai_stage_outputs, 'environment_plan') || ''
+            ).trim();
+        } catch (_) {}
+        if (!liveEnvPlan) {
+            liveEnvPlan = String(
+                latestStage1NodeOutputsRef.current?.environment_plan
+                || getStageOutputContent('stage1', 'environment_plan')
+                || ''
+            ).trim();
+        }
         const liveSubskills = String(
             latestStage1NodeOutputsRef.current?.scene_subskills
             || adaptedText

@@ -513,6 +513,12 @@ def test_scene_rerun_reuses_saved_environment_plan_without_node_success():
     assert persisted_environment_plan_for_scene_rerun(planned, explicit) == planned
     assert persisted_environment_plan_for_scene_rerun("", explicit) == explicit
     assert persisted_environment_plan_for_scene_rerun("[SCENE_START:EP01_SC01]", "") == ""
+    newer = (
+        "[ENV_BLOCK_START]\n【主环境】客栈大堂\n[ENV_BLOCK_END]\n"
+        "[ENV_BLOCK_START]\n【主环境】大厦尖顶外空域\n[ENV_BLOCK_END]"
+    )
+    assert persisted_environment_plan_for_scene_rerun(planned, newer) == newer
+    assert persisted_environment_plan_for_scene_rerun(newer, planned) == newer
 
 
 def test_merge_keeps_one_block_per_main_environment_name():

@@ -59,6 +59,7 @@ from app.services.script_analysis_flow.environment_reuse import (
     collect_episode_env_blocks_by_name,
     collect_project_main_environment_catalog,
     extract_scene_env_ident_block,
+    normalize_environment_name,
     parse_scene_env_ident_items,
     script_has_environment_plan_payload,
 )
@@ -2276,6 +2277,45 @@ def environment_plan_terminal_without_payload(
     )
 
 
+def _main_environment_name_keys(text: str) -> set:
+    from app.services.script_analysis_flow.environment_reuse import _clean_env_name
+
+    keys = set()
+    for item in parse_scene_env_ident_items(text):
+        key = normalize_environment_name(item.get("name"))
+        if key:
+            keys.add(key)
+    for match in re.finditer(r"【主环境】\s*([^｜\|\r\n]+)", str(text or "")):
+        key = normalize_environment_name(_clean_env_name(match.group(1)))
+        if key:
+            keys.add(key)
+    return keys
+
+
+def choose_environment_plan_text(persisted_text: str, explicit_text: str = "") -> str:
+    """Pick the plan framing should read.
+
+    The saved node output stays the source when it already lists every main
+    environment in the client copy. A client copy that only adds names — the
+    new flashback host the saved scene slice dropped — replaces that older copy.
+    """
+    persisted = str(persisted_text or "").strip()
+    explicit = str(explicit_text or "").strip()
+    persisted_ok = script_has_environment_blocks(persisted)
+    explicit_ok = script_has_environment_blocks(explicit)
+    if persisted_ok and explicit_ok:
+        persisted_names = _main_environment_name_keys(persisted)
+        explicit_names = _main_environment_name_keys(explicit)
+        if explicit_names - persisted_names and not (persisted_names - explicit_names):
+            return explicit
+        return persisted
+    if persisted_ok:
+        return persisted
+    if explicit_ok:
+        return explicit
+    return ""
+
+
 def persisted_environment_plan_for_scene_rerun(
     persisted_text: str,
     explicit_text: str = "",
@@ -2284,15 +2324,10 @@ def persisted_environment_plan_for_scene_rerun(
 
     That rerun does not execute environment_plan. The stored plan is the
     injection source. A stale running or queued node must not park the scene
-    on 等待主环境注入.
+    on 等待主环境注入. A client copy is used only when it adds main environments
+    the saved plan does not list.
     """
-    persisted = str(persisted_text or "").strip()
-    if script_has_environment_blocks(persisted):
-        return persisted
-    explicit = str(explicit_text or "").strip()
-    if script_has_environment_blocks(explicit):
-        return explicit
-    return ""
+    return choose_environment_plan_text(persisted_text, explicit_text)
 
 
 def _ensure_reused_main_env_block(
@@ -2582,6 +2617,24 @@ def _scene_block_from_script(script_text: str, scene_id: str) -> str:
     return ""
 
 
+def _attach_scene_environment_patches(env_script: str, scene_id: str, env_scene: str) -> str:
+    """Keep a flashback host that asset design already reads from a leftover patch."""
+    from app.services.script_analysis_flow.environment_asset_brief import (
+        _iter_env_scene_patches,
+    )
+
+    sid = str(scene_id or "").strip().lower()
+    extras = [
+        str(body or "").strip()
+        for patch_id, body in _iter_env_scene_patches(env_script)
+        if str(patch_id or "").strip().lower() == sid and str(body or "").strip()
+    ]
+    base = str(env_scene or "").strip()
+    if not extras:
+        return base
+    return "\n\n".join([base, *extras]).strip() if base else "\n\n".join(extras)
+
+
 def resolve_env_scene_for_staging(
     env_script: str,
     scene_id: str,
@@ -2591,11 +2644,17 @@ def resolve_env_scene_for_staging(
 
     Staging-only reruns must read this block from the environment plan.
     The framing draft no longer carries 【主环境】, so using it as the env
-    source makes the asset-quad gate fail immediately.
+    source makes the asset-quad gate fail immediately. A leftover
+    ENV_SCENE_PATCH for this scene is part of that plan: asset design already
+    harvests it, and framing must see the same new main environments.
     """
     sid = str(scene_id or "").strip()
     env_scene = _ensure_reused_main_env_block(
-        _scene_block_from_script(env_script, sid),
+        _attach_scene_environment_patches(
+            env_script,
+            sid,
+            _scene_block_from_script(env_script, sid),
+        ),
         sid,
         env_catalog,
     )
@@ -2706,13 +2765,16 @@ async def await_environment_planned_script(
                     detail=f"STAGING_ENVIRONMENT_PLAN_FAILED:{last_status}",
                 )
             persisted = load_environment_planned_script(poll_db, int(episode_id))
-            if last_status in {"success", "warning"} and script_has_environment_blocks(explicit):
-                logger.info(
-                    "[scene_subskill_pipeline] environment_plan ready via explicit text episode_id=%s status=%s",
-                    episode_id,
-                    last_status,
-                )
-                return explicit
+            if last_status in {"success", "warning"}:
+                resolved = choose_environment_plan_text(persisted, explicit)
+                if resolved:
+                    logger.info(
+                        "[scene_subskill_pipeline] environment_plan ready for framing episode_id=%s status=%s source=%s",
+                        episode_id,
+                        last_status,
+                        "explicit" if resolved == explicit and resolved != persisted else "persisted",
+                    )
+                    return resolved
             if environment_plan_ready_for_framing(last_status, persisted):
                 logger.info(
                     "[scene_subskill_pipeline] environment_plan ready for framing episode_id=%s status=%s",

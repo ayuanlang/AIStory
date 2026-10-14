@@ -166,6 +166,7 @@ def _build_optimize_user_prompt(*, draft_markdown: str, scene_context: str = "")
         "# Instruction\n"
         "1. Improve each `Video Content (CN)` for AI video models "
         "(start with 运镜与动作流, not `ENV:[…]` or 全局动态风格; "
+        "Shot-open P1 starts with 当前环境 plus 全程空间锁位; "
         "P1 and ENV-name-change Pn write that beat's 【建置】 then 背景参考图为 ENV:; "
         "later Pn in the same derived environment drop repeated 当前环境, 环境保持, 仍在该环境, 背景参考图, and that beat's 【建置】; "
         "keep only camera, perspective, and action that changed; "

@@ -560,6 +560,24 @@ def test_staging_rerun_reads_main_env_from_environment_plan_not_framing():
 """
     env_scene = resolve_env_scene_for_staging(env_plan, "EP01_SC01")
     assert collect_staging_main_environment_names(env_scene) == ["客栈大堂"]
+    with_flashback_patch = env_plan.replace(
+        "[SCENES_BLOCK_END]",
+        "\n".join([
+            "[ENV_SCENE_PATCH_START:EP01_SC01]",
+            "[SCENE_ENV_IDENT_START:EP01_SC01]",
+            "[ENV] 名称=客栈大堂｜复用=否｜来源=新建",
+            "[ENV] 名称=大厦尖顶外空域｜复用=否｜来源=新建",
+            "[SCENE_ENV_IDENT_END:EP01_SC01]",
+            "[ENV_BLOCK_START]",
+            "【主环境】大厦尖顶外空域",
+            "[ENV_BLOCK_END]",
+            "[ENV_SCENE_PATCH_END:EP01_SC01]",
+            "[SCENES_BLOCK_END]",
+        ]),
+    )
+    patched_scene = resolve_env_scene_for_staging(with_flashback_patch, "EP01_SC01")
+    assert "大厦尖顶外空域" in patched_scene
+    assert "客栈大堂" in patched_scene
     try:
         resolve_env_scene_for_staging(framing_only, "EP01_SC01")
     except HTTPException as exc:
