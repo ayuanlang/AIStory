@@ -6881,6 +6881,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [analysisUiReport?.startedAt, analysisHeartbeatTick, analysisProgressDisplay.isLive]);
 
     const analysisHeartbeatElapsedMs = useMemo(() => {
+        if (isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+            localStopRequested: analysisStopRequestedRef.current,
+            localStopReason: analysisStopReasonRef.current,
+        })) {
+            return 0;
+        }
         const startedAt = Number(analysisProgressStartedAt || 0);
         const reported = Number(analysisUiReport?.durationMs || 0);
         if (!Number.isFinite(startedAt) || startedAt <= 0) {
@@ -6893,6 +6899,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Not live and no frozen duration yet — use wall clock once (heal effect will persist durationMs).
         return Math.max(0, Date.now() - startedAt);
     }, [
+        activeEpisode?.id,
+        analysisFlowStatus?.phase,
         analysisProgressDisplay.isLive,
         analysisProgressStartedAt,
         analysisUiReport?.durationMs,
@@ -7270,6 +7278,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     useEffect(() => {
         if (isAnalyzing || isRetryingPhase2) return;
         if (analysisProgressDisplay.isLive) return;
+        if (isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+            localStopRequested: analysisStopRequestedRef.current,
+            localStopReason: analysisStopReasonRef.current,
+        })) {
+            return;
+        }
 
         const phase = String(analysisFlowStatus?.phase || '').trim().toLowerCase();
         const reportStatus = String(analysisUiReport?.status || '').trim().toLowerCase();
@@ -18344,10 +18358,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisUiReport(nextReport);
         setAnalysisFlowStatusHistory((prev) => {
             if (!Array.isArray(prev) || prev.length === 0) return prev;
-            const now = Date.now();
-            return prev.map((item) => (
-                hasAnalysisHistoryEndedAt(item) ? item : { ...item, endedAt: now }
-            ));
+            return prev.map((item) => {
+                const started = Number(item?.createdAt || item?.at || 0);
+                return {
+                    ...item,
+                    endedAt: started > 0 ? started : Date.now(),
+                    durationMs: 0,
+                    timerCleared: true,
+                };
+            });
         });
 
         const canceledNodes = markPipelineNodesCanceledLocally(diagnosticsPipelineNodesRef.current);
@@ -20568,48 +20587,55 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     onLog?.('[Stage 3 Asset Design] 四宫格技能缺失，主环境停在设计稿。', 'error');
                     return false;
                 }
-                const source = pending.map((item) => {
-                    const body = force
-                        ? openingOf(item)
-                        : String(item.generation_prompt_cn || '').trim();
-                    return `【主环境设计稿】${String(item.name).trim()}\n${body}\n【/主环境设计稿】`;
-                }).join('\n\n');
                 onLog?.(
                     `[Stage 3 Asset Design] 开始四宫格转换 mains=${pending.length} trace_id=${traceId}`,
                     'info'
                 );
-                throwIfAnalysisStopped();
+                let readyCount = 0;
                 try {
-                    const res = await runScriptAnalysisFlowAnalyzeNode(
-                        'asset_design_environment_quad',
-                        source,
-                        quadPrompt,
-                        null,
-                        episodeIdForAssetSubtasks,
-                        analysisAttentionNotes,
-                        selectedReuseSubjectAssets,
-                        {
-                            skipEpisodePersist: true,
-                            analysisTraceId: `${traceId}-quad`,
-                        },
-                        projectId,
-                        'script_analysis',
-                        scriptAnalysisApiId,
-                        'environment_quad'
-                    );
-                    const text = extractAnalysisTextFromResult(res);
-                    const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
-                    const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
-                    const readyCount = returned.filter((item) => (
-                        pending.some((row) => String(row?.name || '').trim() === String(item?.name || '').trim())
-                        && mainEnvironmentPromptHasQuad(item?.generation_prompt_cn)
-                    )).length;
-                    if (readyCount < pending.length) {
+                    for (let index = 0; index < pending.length; index += 1) {
+                        const item = pending[index];
+                        const name = String(item.name).trim();
+                        const body = force
+                            ? openingOf(item)
+                            : String(item.generation_prompt_cn || '').trim();
+                        throwIfAnalysisStopped();
                         onLog?.(
-                            `[Stage 3 Asset Design] 四宫格转换未写满四格 got=${readyCount}/${pending.length}`,
-                            'error'
+                            `[Stage 3 Asset Design] 四宫格 ${index + 1}/${pending.length} ${name}`,
+                            'info'
                         );
-                        return false;
+                        const res = await runScriptAnalysisFlowAnalyzeNode(
+                            'asset_design_environment_quad',
+                            `【主环境设计稿】${name}\n${body}\n【/主环境设计稿】`,
+                            quadPrompt,
+                            null,
+                            episodeIdForAssetSubtasks,
+                            analysisAttentionNotes,
+                            selectedReuseSubjectAssets,
+                            {
+                                skipEpisodePersist: true,
+                                analysisTraceId: `${traceId}-quad-${index + 1}`,
+                            },
+                            projectId,
+                            'script_analysis',
+                            scriptAnalysisApiId,
+                            'environment_quad'
+                        );
+                        const text = extractAnalysisTextFromResult(res);
+                        const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
+                        const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
+                        const wrote = returned.some((row) => (
+                            String(row?.name || '').trim() === name
+                            && mainEnvironmentPromptHasQuad(row?.generation_prompt_cn)
+                        ));
+                        if (!wrote) {
+                            onLog?.(
+                                `[Stage 3 Asset Design] 四宫格未写满四格 name=${name}`,
+                                'error'
+                            );
+                            return false;
+                        }
+                        readyCount += 1;
                     }
                     await refreshEpisodeOwnedEntities();
                     onLog?.(`[Stage 3 Asset Design] 四宫格最后提示词已写回 mains=${readyCount}`, 'success');
@@ -33126,47 +33152,58 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     `These main environments have no opening to rotate: ${missingOpening.map((item) => item.name).join(', ')}`
                 ));
             }
-            const source = mains.map((item) => (
-                `【主环境设计稿】${String(item.name).trim()}\n${String(item.opening || item.prompt || '').trim()}\n【/主环境设计稿】`
-            )).join('\n\n');
             // A stopped run's clock is already zero. This rerun is a new action
             // and gets its own 60-minute budget from now.
             analysisStopRequestedRef.current = false;
             analysisStopReasonRef.current = '';
             clearEpisodeAnalysisPipelineControl(activeEpisode.id);
             armAnalysisPipelineDeadline(Date.now());
-            throwIfAnalysisStopped();
-            const res = await runScriptAnalysisFlowAnalyzeNode(
-                'asset_design_environment_quad',
-                source,
-                quadPrompt,
-                null,
-                activeEpisode.id,
-                analysisAttentionNotes,
-                selectedReuseSubjectAssets,
-                {
-                    skipEpisodePersist: true,
-                    analysisTraceId: `environment-quad-rerun-${activeEpisode.id}-${Date.now()}`,
-                },
-                projectId,
-                'script_analysis',
-                resolveSelectedScriptAnalysisApiId(),
-                'environment_quad'
-            );
-            const text = extractAnalysisTextFromResult(res);
-            const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
-            const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
-            const readyCount = returned.filter((item) => (
-                mains.some((row) => String(row?.name || '').trim() === String(item?.name || '').trim())
-                && mainEnvironmentPromptHasQuad(item?.generation_prompt_cn)
-            )).length;
-            await refreshEpisodeOwnedEntities();
-            if (readyCount < mains.length) {
-                throw new Error(t(
-                    `四宫格未写满 ${readyCount}/${mains.length}`,
-                    `Four-grid prompts are incomplete: ${readyCount}/${mains.length}`
+            let readyCount = 0;
+            for (let index = 0; index < mains.length; index += 1) {
+                const item = mains[index];
+                const name = String(item.name).trim();
+                const body = String(item.opening || item.prompt || '').trim();
+                throwIfAnalysisStopped();
+                onLog?.(
+                    t(
+                        `四宫格 ${index + 1}/${mains.length}：${name}`,
+                        `Four-grid ${index + 1}/${mains.length}: ${name}`
+                    ),
+                    'process'
+                );
+                const res = await runScriptAnalysisFlowAnalyzeNode(
+                    'asset_design_environment_quad',
+                    `【主环境设计稿】${name}\n${body}\n【/主环境设计稿】`,
+                    quadPrompt,
+                    null,
+                    activeEpisode.id,
+                    analysisAttentionNotes,
+                    selectedReuseSubjectAssets,
+                    {
+                        skipEpisodePersist: true,
+                        analysisTraceId: `environment-quad-rerun-${activeEpisode.id}-${Date.now()}-${index + 1}`,
+                    },
+                    projectId,
+                    'script_analysis',
+                    resolveSelectedScriptAnalysisApiId(),
+                    'environment_quad'
+                );
+                const text = extractAnalysisTextFromResult(res);
+                const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
+                const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
+                const wrote = returned.some((row) => (
+                    String(row?.name || '').trim() === name
+                    && mainEnvironmentPromptHasQuad(row?.generation_prompt_cn)
                 ));
+                if (!wrote) {
+                    throw new Error(t(
+                        `四宫格未写满：${name}（${readyCount}/${mains.length}）`,
+                        `Four-grid prompt is incomplete for ${name} (${readyCount}/${mains.length})`
+                    ));
+                }
+                readyCount += 1;
             }
+            await refreshEpisodeOwnedEntities();
             onLog?.(
                 wantedName
                     ? t(`主环境四宫格已重跑：${wantedName}`, `Main-environment four-grid rerun wrote ${wantedName}.`)
@@ -38033,8 +38070,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         // 资产设计（并行）的行尾时间是状态文案写下之后的几秒，不是本轮生成耗时。
                                         // 失败、按类重试和停止都会改写这一行，时间立刻清零，避免冻成 4.9s 这类误导数字。
                                         const assetDesignParallelRow = itemPhaseKey === 'assets_gen' || itemPhaseKey === 'supplement';
+                                        const userStoppedTimers = isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+                                            localStopRequested: analysisStopRequestedRef.current,
+                                            localStopReason: analysisStopReasonRef.current,
+                                        });
                                         const itemDurationMs = (
-                                            !assetDesignParallelRow
+                                            !userStoppedTimers
+                                            && !item?.timerCleared
+                                            && !assetDesignParallelRow
                                             && Number.isFinite(itemStartedAt)
                                             && itemStartedAt > 0
                                             && item.kind === 'history'

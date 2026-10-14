@@ -78,9 +78,9 @@ _FLOW_DOWNSTREAM_NODES = {
     "environment_plan": [
         "asset_design_environment",
     ],
-    "asset_design_environment": [
-        "asset_design_environment_quad",
-    ],
+    # The four-grid is started by the frontend after environment design returns.
+    # Queuing it here left asset_design_environment_quad queued for the whole
+    # design call, and finalize_stale marked it NODE_TIMEOUT after 900s.
     # Storyboard is frontend-owned (per-scene generateSceneShots after staging+ENV).
     # Queuing a backend placeholder here left storyboard_generation stuck in queued
     # until finalize_stale marked it NODE_TIMEOUT after 900s.

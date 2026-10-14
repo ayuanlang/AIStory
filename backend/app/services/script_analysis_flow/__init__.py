@@ -3175,6 +3175,13 @@ def finalize_stale_pipeline_nodes(
         )
         if node_name in _COORDINATOR_PIPELINE_NODES and row_episode_id in fresh_child_episodes:
             continue
+        # Queued four-grid is waiting for the frontend call after design.
+        # It is not an in-flight LLM job, so 900s of queue time is not a timeout.
+        if (
+            node_name == "asset_design_environment_quad"
+            and str(getattr(row, "status", "") or "").strip().lower() == "queued"
+        ):
+            continue
         if node_name in _FRONTEND_OWNED_STORYBOARD_NODES:
             scene_marker = str(getattr(row, "scene_id", "") or "").strip()
             scene_ready = False
