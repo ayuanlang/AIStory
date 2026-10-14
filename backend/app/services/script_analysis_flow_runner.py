@@ -86,6 +86,7 @@ _FLOW_DOWNSTREAM_NODES = {
     # until finalize_stale marked it NODE_TIMEOUT after 900s.
 }
 
+_REEXTRACT_MARK = re.compile(r"(?im)^[ \t]*\[REEXTRACT:(?:CHAR|PROP)\][ \t]*\r?\n?")
 _ENV_SCENE_PATCH_PATTERN = re.compile(
     r"`?\[ENV_SCENE_PATCH_START:([^\s\]]+)\]`?"
     r"(.*?)"
@@ -96,6 +97,56 @@ _NESTED_SCENE_MARKER_IN_PATCH_RE = re.compile(
     r"`?\[SCENE_(?:CONTENT_)?(?:START|END):[^\s\]]+\]`?",
     re.IGNORECASE,
 )
+
+
+def _normalize_reextract_target(value: object) -> str:
+    target = str(value or "").strip().lower()
+    if target in {"char", "character", "characters", "角色"}:
+        return "character"
+    if target in {"prop", "props", "道具"}:
+        return "prop"
+    return ""
+
+
+def _strip_reextract_marker(text: str) -> str:
+    return _REEXTRACT_MARK.sub("", str(text or "")).strip()
+
+
+def _choose_reextract_base(request_text: str, stored_text: str) -> str:
+    request_base = _strip_reextract_marker(request_text)
+    stored = str(stored_text or "").strip()
+    if stored and "[SCENE_START" in stored.upper() and "[SCENE_START" not in request_base.upper():
+        return stored
+    return request_base or stored
+
+
+def _apply_list_reextract(*, llm_text: str, request_text: str, stored_text: str, target: str) -> Tuple[str, str]:
+    """Keep the current script and swap only the requested extract block."""
+    from app.services.script_analysis_flow.character_asset_brief import (
+        char_extract_has_items,
+        char_extract_is_explicit_none,
+        latest_char_extract_block,
+        replace_char_extract_in_script,
+    )
+    from app.services.script_analysis_flow.prop_asset_brief import (
+        latest_prop_extract_block,
+        prop_extract_has_items,
+        prop_extract_is_explicit_none,
+        replace_prop_extract_in_script,
+    )
+
+    base = _choose_reextract_base(request_text, stored_text)
+    if not base.strip():
+        raise HTTPException(status_code=422, detail="当前没有可更新的全局统筹剧本")
+    if target == "character":
+        block = latest_char_extract_block(llm_text)
+        if not block or not (char_extract_has_items(block) or char_extract_is_explicit_none(block)):
+            raise HTTPException(status_code=422, detail="重新抽取未返回角色列表")
+        return replace_char_extract_in_script(base, block), block
+    block = latest_prop_extract_block(llm_text)
+    if not block or not (prop_extract_has_items(block) or prop_extract_is_explicit_none(block)):
+        raise HTTPException(status_code=422, detail="重新抽取未返回道具列表")
+    return replace_prop_extract_in_script(base, block), block
 
 
 def _strip_nested_scene_markers_from_patch(body: str) -> str:
@@ -383,6 +434,11 @@ async def execute_scene_analysis_flow_node(
         raw_payload["prompt_file"] = raw_payload.get("prompt_file") or node.get("prompt_file")
         raw_payload["function_name"] = raw_payload.get("function_name") or request.function_name or "script_analysis"
         raw_payload["system_api_id"] = raw_payload.get("system_api_id") or request.system_api_id
+        raw_reextract = str(raw_payload.get("reextract_target") or "").strip()
+        reextract_target = _normalize_reextract_target(raw_reextract)
+        if node_key == "scene_split" and raw_reextract and not reextract_target:
+            raise HTTPException(status_code=400, detail="reextract_target must be character or prop")
+        list_reextract = node_key == "scene_split" and bool(reextract_target)
         target_scene_id = str(raw_payload.get("target_scene_id") or "").strip()
         # Scene markdown still reads 「本次仅处理 Scene ID」 from its own user text.
         # A full-episode 逐场优化 continue must not: that line inside an older
@@ -409,6 +465,8 @@ async def execute_scene_analysis_flow_node(
                 f"逐场优化 · {target_scene_id}"
                 + (f" · {start_from_step}" if start_from_step else "")
             )
+        elif list_reextract:
+            scoped_action_name = "重新抽取角色" if reextract_target == "character" else "重新抽取道具"
         else:
             scoped_action_name = _FLOW_NODE_ACTION_LABELS.get(node_key)
         raw_payload["action_name"] = (
@@ -458,7 +516,7 @@ async def execute_scene_analysis_flow_node(
             
         node_project_id = int(raw_payload.get("project_id") or request.project_id or 0)
         node_episode_id = int(raw_payload.get("episode_id") or request.episode_id or 0)
-        if node_project_id > 0 and node_episode_id > 0:
+        if node_project_id > 0 and node_episode_id > 0 and not list_reextract:
             upsert_pipeline_node_status(
                 db,
                 project_id=node_project_id,
@@ -727,7 +785,7 @@ async def execute_scene_analysis_flow_node(
             else:
                 result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
         except Exception as exc:
-            if node_project_id > 0 and node_episode_id > 0:
+            if node_project_id > 0 and node_episode_id > 0 and not list_reextract:
                 error_text = http_exception_detail_text(exc)
                 credit_hit = is_insufficient_credits_error(exc)
                 if credit_hit:
@@ -784,7 +842,31 @@ async def execute_scene_analysis_flow_node(
                 .first()
             )
             scene_split_text = _extract_analysis_text_from_result(result)
-            if scene_split_episode is not None and scene_split_text.strip():
+            if list_reextract:
+                if scene_split_episode is None or not str(scene_split_text or "").strip():
+                    raise HTTPException(status_code=422, detail="重新抽取未返回列表")
+                from app.services.script_analysis_flow import (  # noqa: WPS433
+                    load_stage1_output_text,
+                    persist_reextracted_list,
+                )
+
+                stored_scene_split = load_stage1_output_text(db, node_episode_id, "scene_split")
+                merged_text, new_block = _apply_list_reextract(
+                    llm_text=scene_split_text,
+                    request_text=str(raw_payload.get("text") or ""),
+                    stored_text=stored_scene_split,
+                    target=reextract_target,
+                )
+                result = _replace_analysis_result_text(result, merged_text)
+                persist_reextracted_list(
+                    db=db,
+                    episode=scene_split_episode,
+                    merged_scene_split=merged_text,
+                    tag="CHAR" if reextract_target == "character" else "PROP",
+                    new_block=new_block,
+                )
+                result = _mark_analysis_result_persisted(result, int(node_episode_id))
+            elif scene_split_episode is not None and scene_split_text.strip():
                 from app.services.script_analysis_flow import (
                     extract_char_extract_blocks,
                     extract_prop_extract_blocks,
@@ -888,7 +970,7 @@ async def execute_scene_analysis_flow_node(
                     detail=f"ENVIRONMENT_QUAD_NOT_APPLIED: {failure_message}",
                 )
 
-        if node_project_id > 0 and node_episode_id > 0:
+        if node_project_id > 0 and node_episode_id > 0 and not list_reextract:
             if node_key != "scene_markdown":
                 partial_failure = isinstance(result, dict) and bool(result.get("partial_failure"))
                 failed_scene_ids = (

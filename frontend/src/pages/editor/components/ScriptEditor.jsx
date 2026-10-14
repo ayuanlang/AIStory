@@ -5731,6 +5731,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [isRetryingPhase2, setIsRetryingPhase2] = useState(false);
     const [retryingAssetCategoryKeys, setRetryingAssetCategoryKeys] = useState([]);
     const [isRegeneratingDerivedEnvs, setIsRegeneratingDerivedEnvs] = useState(false);
+    const [reextractingAssetList, setReextractingAssetList] = useState('');
     const [environmentQuadRerunActive, setEnvironmentQuadRerunActive] = useState(false);
     const [environmentQuadRerunModal, setEnvironmentQuadRerunModal] = useState({
         open: false,
@@ -16284,6 +16285,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             return out;
         };
+        const patchExtractSlot = (key) => {
+            const slot = outputs[key];
+            const content = String(slot?.content || '');
+            if (!content.trim() || !hasAssetRerunExtractSignals(content)) return;
+            outputs[key] = {
+                ...(slot && typeof slot === 'object' ? slot : {}),
+                key,
+                content: patchExtractsInText(content),
+            };
+        };
+        patchExtractSlot('raw_text');
+        patchExtractSlot('adapted_script');
 
         let nextAdaptation = String(adaptationText || activeEpisode?.ai_scene_analysis_adaptation || '');
         if (hasAssetRerunExtractSignals(nextAdaptation)) {
@@ -30275,6 +30288,87 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         await executeSceneBeatsRerun({ mode, sceneId });
     }, [executeSceneBeatsRerun, reportAnalysisPanelNotice, sceneBeatsRerunModal.mode, sceneBeatsRerunModal.sceneId, t]);
 
+    const handleReextractAssetList = async (kind) => {
+        const target = kind === 'prop' ? 'prop' : 'character';
+        if (isAnalyzing || reextractingAssetList || !activeEpisode?.id) return;
+        const source = String(
+            currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content
+            || latestStage1NodeOutputsRef.current?.scene_split
+            || getStageOutputContent('stage1', 'scene_split')
+            || ''
+        ).trim();
+        if (!source) {
+            reportAnalysisPanelNotice(t(
+                '还没有全局统筹剧本，无法重新抽取。',
+                'Global orchestration script is missing, so the list cannot be re-extracted.'
+            ), 'warning');
+            return;
+        }
+        const labelZh = target === 'character' ? '角色列表' : '道具列表';
+        const labelEn = target === 'character' ? 'character list' : 'prop list';
+        if (!window.confirm(t(
+            `将按当前剧本重新抽取${labelZh}，并只更新这一份提取列表。确认继续吗？`,
+            `Re-extract the ${labelEn} from the current script and update only that list. Continue?`
+        ))) return;
+
+        const startedAt = Date.now();
+        const marker = target === 'character' ? '[REEXTRACT:CHAR]' : '[REEXTRACT:PROP]';
+        setReextractingAssetList(target);
+        analysisRunInFlightRef.current = true;
+        latestIsAnalyzingRef.current = true;
+        setIsAnalyzing(true);
+        setAnalysisFlowStatus({
+            phase: 'running',
+            message: t(`正在重新抽取${labelZh}…`, `Re-extracting the ${labelEn}...`),
+        });
+        try {
+            const promptRes = await fetchPrompt(
+                'skills/scene_analysis_feature_stack/scene_planning_1_subskill_cut_transition.md'
+            );
+            const result = await awaitAnalyzeSceneWithRecovery(
+                () => runScriptAnalysisFlowAnalyzeNode(
+                    'scene_split',
+                    `${marker}\n\n${source}`,
+                    String(promptRes?.content || '').trim(),
+                    null,
+                    activeEpisode.id,
+                    analysisAttentionNotes,
+                    selectedReuseSubjectAssets,
+                    {
+                        reextractTarget: target,
+                        onTaskCreated: (taskId) => {
+                            setActiveAnalysisTaskId(String(taskId || '').trim());
+                        },
+                    },
+                    projectId,
+                    'script_analysis',
+                    resolveSelectedScriptAnalysisApiId()
+                ),
+                { startedAt, baselineText: source, disableEpisodeRecovery: true }
+            );
+            const output = String(extractAnalysisTextFromResult(result) || '').trim();
+            if (!output) {
+                throw new Error(t(`重新抽取未返回${labelZh}。`, `Re-extract returned no ${labelEn}.`));
+            }
+            await persistSceneSplitExtractSource(output);
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: t(`${labelZh}已重新抽取。`, `${labelEn} re-extracted.`),
+            });
+            onLog?.(t(`${labelZh}已重新抽取。`, `${labelEn} re-extracted.`), 'success');
+        } catch (error) {
+            const message = error?.response?.data?.detail || error?.message || String(error);
+            setAnalysisFlowStatus({ phase: 'failed', message });
+            reportAnalysisPanelNotice(t(`重新抽取失败：${message}`, `Re-extract failed: ${message}`), 'error');
+        } finally {
+            latestIsAnalyzingRef.current = false;
+            setIsAnalyzing(false);
+            analysisRunInFlightRef.current = false;
+            setReextractingAssetList('');
+            setActiveAnalysisTaskId('');
+        }
+    };
+
     const handleRerunStage1NodeOnly = async (nodeKey) => {
         if (isAnalyzing || !activeEpisode?.id) return;
         const stableNode = String(nodeKey || '').trim();
@@ -36069,6 +36163,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             {state.failed ? renderFailedReasonButton(inspectAssetFailure) : null}
                                             {renderImportButton('assets', canImportCategory)}
                                             {(spec.key === 'character' || spec.key === 'prop') ? (
+                                                <>
                                                 <button
                                                     type="button"
                                                     onClick={() => openStageArtifactEditModal(
@@ -36082,6 +36177,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 >
                                                     {t('编辑', 'Edit')}
                                                 </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => { void handleReextractAssetList(spec.key); }}
+                                                    disabled={!canEditExtract || Boolean(reextractingAssetList) || isAnalyzing}
+                                                    className={diagnosticBtnClass}
+                                                    title={spec.key === 'character'
+                                                        ? t('按当前剧本重新抽取角色列表，只更新角色提取块', 'Re-extract the character list from the current script and update only that list')
+                                                        : t('按当前剧本重新抽取道具列表，只更新道具提取块', 'Re-extract the prop list from the current script and update only that list')}
+                                                >
+                                                    {reextractingAssetList === spec.key
+                                                        ? t('抽取中', 'Extracting')
+                                                        : t('重新抽取', 'Re-extract')}
+                                                </button>
+                                                </>
                                             ) : null}
                                             <button
                                                 type="button"

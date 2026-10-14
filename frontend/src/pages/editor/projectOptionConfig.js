@@ -1004,7 +1004,7 @@ export const normalizeProjectSceneAnalysisSafety = (value) => {
     return PROJECT_SCENE_ANALYSIS_SAFETY_LEGACY_MAP[raw] || raw;
 
 };
-export const PROJECT_EP_LENS_PREFERENCE_OPTIONS = ['长镜头 / Long Take', '短镜头 / Short Take'];
+export const PROJECT_EP_LENS_PREFERENCE_OPTIONS = ['短镜头 / Short Take', '长镜头 / Long Take'];
 export const PROJECT_EP_RESOLUTION_OPTIONS = ['1080p', '2K', '4K', '8K'];
 
 /** Project video generation short-edge tier (provider 480p / 720p). */

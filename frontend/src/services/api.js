@@ -4169,6 +4169,10 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
         // Concurrent Stage 3 category calls share one episode field; frontend merges then persists.
         analyze_payload.skip_episode_persist = true;
     }
+    const reextractTarget = String(runtimeHooks?.reextractTarget || runtimeHooks?.reextract_target || '').trim().toLowerCase();
+    if (reextractTarget === 'character' || reextractTarget === 'prop') {
+        analyze_payload.reextract_target = reextractTarget;
+    }
     const analysisTraceId = String(runtimeHooks?.analysisTraceId || runtimeHooks?.requestId || '').trim();
     if (analysisTraceId) analyze_payload.analysis_trace_id = analysisTraceId;
     if (runtimeHooks?.analysisFeatures && typeof runtimeHooks.analysisFeatures === 'object') {

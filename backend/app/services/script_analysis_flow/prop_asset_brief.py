@@ -109,6 +109,31 @@ def splice_prop_extract_into_script(script_text: str, prop_extract: str) -> str:
     return f"{before}\n\n{extract}\n{end_token}{after}"
 
 
+def latest_prop_extract_block(script_text: str) -> str:
+    """Return the last wrapped prop list. A refreshed list is written after any echoed copy."""
+    matches = list(PROP_EXTRACT_BLOCK_PATTERN.finditer(str(script_text or "")))
+    if matches:
+        return _clean(matches[-1].group(0))
+    return ensure_prop_extract_block(script_text)
+
+
+def replace_prop_extract_in_script(script_text: str, prop_extract: str) -> str:
+    """Swap the prop list in place. Scene bodies stay. Insert once when the list is absent."""
+    extract = _clean(prop_extract)
+    merged = str(script_text or "").strip()
+    if not extract:
+        return merged
+    matches = list(PROP_EXTRACT_BLOCK_PATTERN.finditer(merged))
+    if not matches:
+        return splice_prop_extract_into_script(merged, extract)
+    first = matches[0]
+    replaced = f"{merged[:first.start()].rstrip()}\n\n{extract}\n{merged[first.end():].lstrip()}"
+    extras = list(PROP_EXTRACT_BLOCK_PATTERN.finditer(replaced))
+    for match in reversed(extras[1:]):
+        replaced = f"{replaced[:match.start()].rstrip()}\n{replaced[match.end():].lstrip()}"
+    return replaced.strip()
+
+
 def prop_extract_is_explicit_none(script_text: str) -> bool:
     text = str(script_text or "")
     if not PROP_EXTRACT_START_PATTERN.search(text):

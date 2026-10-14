@@ -50,6 +50,7 @@ logger = logging.getLogger("api_logger")
 
 DEFAULT_MAX_SHOT_SECONDS = 15
 MIN_SHOT_DURATION_SECONDS = 4
+DEFAULT_SHOT_PREFERENCE = "短镜头 / Short Take"
 
 
 def _parse_max_shot_seconds(raw: Any) -> int:
@@ -69,27 +70,37 @@ def _parse_max_shot_seconds(raw: Any) -> int:
     return max(MIN_SHOT_DURATION_SECONDS, value)
 
 
-def _is_short_take_preference(raw: Any) -> bool:
-    """Only an explicit 短镜头 / Short Take is short. Empty and 长镜头 stay long."""
+def _is_long_take_preference(raw: Any) -> bool:
+    """Only an explicit 长镜头 / Long Take is long. Empty stays short."""
     text = str(raw or "")
     folded = text.lower()
-    return ("短镜头" in text) or ("short take" in folded)
+    if ("短镜头" in text) or ("short take" in folded):
+        return False
+    return ("长镜头" in text) or ("long take" in folded)
+
+
+def _is_short_take_preference(raw: Any) -> bool:
+    """Default is short. Empty, 短镜头, and Short Take are short."""
+    return not _is_long_take_preference(raw)
 
 
 def _shot_merge_gate_line(raw: Any) -> str:
-    """First merge instruction. Short takes never share a shot across derived-env names."""
+    """Short takes split same-main viewpoint changes and keep montage across mains."""
     if _is_short_take_preference(raw):
         return (
-            "【短镜头闸·最高】镜头偏好=短镜头。一镜只覆盖一个衍生环境："
-            "【建置】当前环境=逐字相同的相邻Beat才可合镜；"
-            "名字有任何差异（0度与180度、切角、反打、OTS、状态后缀、闪回换名、换主、同主不同名）"
-            "必须在该拍另起一镜，写未继续合并说明:镜头偏好=短镜头，衍生环境名不同。"
+            "【短镜头闸·最高】镜头偏好=短镜头。另起只认同一主环境的不同视角："
+            "剥掉度数和状态后缀后主名段相同，而【建置】当前环境完整名不同"
+            "（0度与180度、切角、反打、OTS、仰天、同主状态后缀），"
+            "必须在该拍另起一镜，写未继续合并说明:镜头偏好=短镜头，同一主环境不同视角。"
             "禁止因同主、不是换场景、对戏、转身、时长未过门槛、将超时、切角必须合，"
-            "把不同衍生环境并进同一Shot。"
-            "禁止在一条Video里写「背景切换到参考图」去接第二张衍生图。"
-            "同名才进入时长门槛。"
-            "下文若写「ENV名变只写转换运镜」「禁止因跨主或闪回拆镜」「同主切角必须合镜」"
-            "「相邻拍ENV名变时写背景切换到参考图」，短镜头一律不执行，改作另起一镜。"
+            "把同一主环境的不同衍生环境并进同一Shot，"
+            "也禁止用「背景切换到参考图」把这两张视角图接回同一镜。"
+            "蒙太奇类、主名段完全不同的相邻拍必须合进同一镜："
+            "写背景切换到参考图，并抄该拍建置；禁止按短镜头把这条链拆开。"
+            "不是蒙太奇的换主不按这条另起，走时长门槛。"
+            "同一视角、当前环境逐字相同，才按时长门槛合。"
+            "下文若写「名字有任何差异必须另起」「一镜只许一个衍生环境」「换主必须另起」，"
+            "短镜头不执行；只拆同一主环境的不同视角。"
         )
     return (
         "合镜不认主环境：相邻Beat默认合镜，只按时长门槛封口；"
@@ -517,7 +528,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     if region_culture:
         project_context_lines.append(f"Region / Country (国家地域): {region_culture}")
     if not shot_preference:
-        shot_preference = "长镜头 / Long Take"
+        shot_preference = DEFAULT_SHOT_PREFERENCE
     project_context_lines.append(f"Shot / Lens Preference (镜头偏好): {shot_preference}")
     project_context_lines.append(f"Max Shot Seconds (分镜最长秒数): {max_shot_seconds}")
     if broadcast_security_level:
@@ -1231,7 +1242,8 @@ def _build_shot_prompts(
             "Same-main-environment matching identifies the main ENV family for naming and optics only. "
             "env_role / reference_env / derivative_base_zh|en / base_name may prove the same main family; "
             "that match does not authorize putting different derived-environment names into one shot. "
-            "Shot merge follows 镜头偏好: short take merges only when 当前环境= is character-identical.",
+            "Shot merge follows 镜头偏好: a short take splits only when the main environment stays the same and the derived viewpoint changes. "
+            "Montage beats whose main environments are completely different must stay in one shot.",
         ]
         lines.extend(header_lines)
         lines.extend(separator_lines if header_lines else [])
@@ -1288,7 +1300,7 @@ def _build_shot_prompts(
             system_prompt = render_shot_generation_routed_prompt(system_prompt, feature_bundle)
         project_metadata = project_context.get("metadata") or {}
         max_shot_seconds = _parse_max_shot_seconds(project_metadata.get("max_shot_seconds"))
-        shot_preference = project_metadata.get("shot_preference") or "长镜头 / Long Take"
+        shot_preference = project_metadata.get("shot_preference") or DEFAULT_SHOT_PREFERENCE
         merge_gate = _shot_merge_gate_line(shot_preference)
         system_prompt = (
             f"【本场时长上限】MaxShotSeconds={max_shot_seconds}"
@@ -1298,7 +1310,7 @@ def _build_shot_prompts(
             f"{merge_gate}"
             f"合镜完成后必须评估每一对上下镜如何合理衔接：转镜运镜与转镜其他要求拆成转出/转入两半，分别写入上镜末P与下镜P1；禁止只写Logic衔接、禁止只改一侧、禁止下镜P1重开Wide。"
             f"进出场不得压成一句：须落地在场者反应、已锁景别跨档与运镜衬托（反应近用Soft Push/Rack，入画出画过程用Follow/Pull Reveal）；上游无反应标upstream_missing_entry_reaction，禁止自造众人震惊，禁止为衬托另选景别。"
-            f"符合合并逻辑时须一直累计到基准合镜Duration>门槛才封口；短镜头下当前环境名不同不属于合并逻辑，先拆，不进入这条累计；"
+            f"符合合并逻辑时须一直累计到基准合镜Duration>门槛才封口；短镜头下同一主环境的不同视角不属于合并逻辑，先拆，不进入这条累计；蒙太奇类完全不同的主环境必须进入这条累计，禁止先拆；"
             f"若基准已>MaxShotSeconds，表列Duration强制=MaxShotSeconds，禁止超时拆镜。"
             f"镜末语言延续：本镜最后一个Beat为语言类（有非空台词的对白/OS/V.O./旁白/自白等）时，Duration在Duration0之后固定+1s（不参与封口判定，不得被下浮吃掉）；Video末秒须写说完后余韵定格，禁止卡音节切断。"
             f"合镜计时：Beat小计=建置串行+并行核Max(语言/动作/微表情/特效/运镜/音效)，禁止七类分项全额相加灌到MaxShotSeconds；同ENV的P2+建置=0s（合镜建置分写：同一镜内角色道具与衍生环境完全不变才不重复建置；有朝向/落位/手持/在场差异则该P只抄本拍建置，禁止把两拍朝向并成一句；有变而照抄不计秒）；跨P同一连续运镜只计一次；ENV微动/窗雨/雨丝/配乐特效=0s。无对白且无复杂动作且无宏大特效的建立/凝视合镜Duration落5–8（~可到9），禁止无撑满内容却填MaxShotSeconds。"

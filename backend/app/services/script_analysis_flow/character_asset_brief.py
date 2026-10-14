@@ -149,6 +149,31 @@ def splice_char_extract_into_script(script_text: str, char_extract: str) -> str:
     return f"{before}\n\n{extract}\n{end_token}{after}"
 
 
+def latest_char_extract_block(script_text: str) -> str:
+    """Return the last wrapped character list. A refreshed list is written after any echoed copy."""
+    matches = list(CHAR_EXTRACT_BLOCK_PATTERN.finditer(str(script_text or "")))
+    if matches:
+        return _clean(matches[-1].group(0))
+    return ensure_char_extract_block(script_text)
+
+
+def replace_char_extract_in_script(script_text: str, char_extract: str) -> str:
+    """Swap the character list in place. Scene bodies stay. Insert once when the list is absent."""
+    extract = _clean(char_extract)
+    merged = str(script_text or "").strip()
+    if not extract:
+        return merged
+    matches = list(CHAR_EXTRACT_BLOCK_PATTERN.finditer(merged))
+    if not matches:
+        return splice_char_extract_into_script(merged, extract)
+    first = matches[0]
+    replaced = f"{merged[:first.start()].rstrip()}\n\n{extract}\n{merged[first.end():].lstrip()}"
+    extras = list(CHAR_EXTRACT_BLOCK_PATTERN.finditer(replaced))
+    for match in reversed(extras[1:]):
+        replaced = f"{replaced[:match.start()].rstrip()}\n{replaced[match.end():].lstrip()}"
+    return replaced.strip()
+
+
 def char_extract_is_explicit_none(script_text: str) -> bool:
     text = str(script_text or "")
     if not CHAR_EXTRACT_START_PATTERN.search(text):

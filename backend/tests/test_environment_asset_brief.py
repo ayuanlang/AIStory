@@ -7,6 +7,8 @@ from app.services.script_analysis_flow.character_asset_brief import (
     current_world_identity,
     first_text_with_char_extract,
     parse_char_extract_records,
+    latest_char_extract_block,
+    replace_char_extract_in_script,
     splice_char_extract_into_script,
 )
 from app.core.prompt_injection import wrap_injection_section
@@ -25,6 +27,8 @@ from app.services.script_analysis_flow.prop_asset_brief import (
     first_text_with_prop_extract,
     prop_extract_has_items,
     prop_extract_is_explicit_none,
+    latest_prop_extract_block,
+    replace_prop_extract_in_script,
     splice_prop_extract_into_script,
 )
 from app.services.script_analysis_flow.registry import get_script_analysis_flow_registry
@@ -426,6 +430,42 @@ body
     assert splice_prop_extract_into_script(merged, extract).count("[PROP_EXTRACT_START") == 1
 
 
+def test_replace_prop_extract_swaps_only_the_prop_list():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+正文甲
+[SCENE_END:EP01_SC01]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青
+[CHAR_EXTRACT_END]
+[PROP_EXTRACT_START]
+[PROP] 名称=旧佩
+[PROP_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    refreshed = """[PROP_EXTRACT_START]
+[PROP] 名称=新佩
+[PROP_EXTRACT_END]"""
+    merged = replace_prop_extract_in_script(script, refreshed)
+    assert "正文甲" in merged
+    assert "名称=沈青" in merged
+    assert "名称=新佩" in merged
+    assert "名称=旧佩" not in merged
+    assert merged.count("[PROP_EXTRACT_START") == 1
+
+
+def test_latest_prop_extract_block_uses_the_refreshed_copy():
+    text = """[PROP_EXTRACT_START]
+[PROP] 名称=旧佩
+[PROP_EXTRACT_END]
+[PROP_EXTRACT_START]
+[PROP] 名称=新佩
+[PROP_EXTRACT_END]"""
+    block = latest_prop_extract_block(text)
+    assert "名称=新佩" in block
+    assert "名称=旧佩" not in block
+
+
 def _script_with_char_extract() -> str:
     return """[SCENES_BLOCK_START]
 [SCENE_START:EP01_SC01]
@@ -607,6 +647,42 @@ body
     assert merged.index("[CHAR] 名称=沈青") < merged.index("[SCENES_BLOCK_END]")
     assert merged.index("[SCENES_BLOCK_END]") < merged.index("project_visual_backfill")
     assert splice_char_extract_into_script(merged, extract).count("[CHAR_EXTRACT_START") == 1
+
+
+def test_replace_char_extract_swaps_only_the_character_list():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+正文甲
+[SCENE_END:EP01_SC01]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=甲
+[CHAR_EXTRACT_END]
+[PROP_EXTRACT_START]
+[PROP] 名称=玉佩
+[PROP_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    refreshed = """[CHAR_EXTRACT_START]
+[CHAR] 名称=乙
+[CHAR_EXTRACT_END]"""
+    merged = replace_char_extract_in_script(script, refreshed)
+    assert "正文甲" in merged
+    assert "名称=乙" in merged
+    assert "名称=甲" not in merged
+    assert "名称=玉佩" in merged
+    assert merged.count("[CHAR_EXTRACT_START") == 1
+
+
+def test_latest_char_extract_block_uses_the_refreshed_copy():
+    text = """[CHAR_EXTRACT_START]
+[CHAR] 名称=甲
+[CHAR_EXTRACT_END]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=乙
+[CHAR_EXTRACT_END]"""
+    block = latest_char_extract_block(text)
+    assert "名称=乙" in block
+    assert "名称=甲" not in block
 
 
 def test_trim_stage1_keeps_extracts_after_scenes_block_end():

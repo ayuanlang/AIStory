@@ -793,6 +793,74 @@ def _patch_episode_stage1_outputs(
     episode.ai_stage_outputs = json.dumps(obj, ensure_ascii=False, indent=2)
 
 
+def persist_reextracted_list(
+    *,
+    db: Session,
+    episode: Episode,
+    merged_scene_split: str,
+    tag: str,
+    new_block: str,
+) -> None:
+    """Write one refreshed CHAR/PROP list into scene_split. Leave scene bodies and other nodes alone."""
+    from app.services.script_analysis_flow.character_asset_brief import replace_char_extract_in_script
+    from app.services.script_analysis_flow.prop_asset_brief import replace_prop_extract_in_script
+
+    raw_text = str(merged_scene_split or "").strip()
+    block = str(new_block or "").strip()
+    stable_tag = "PROP" if str(tag or "").strip().upper() == "PROP" else "CHAR"
+    replace = replace_prop_extract_in_script if stable_tag == "PROP" else replace_char_extract_in_script
+    marker = f"[{stable_tag}_EXTRACT_START"
+    _assert_safe_persist(raw_text, source="persist.reextract_list", db=db, episode=episode)
+    _assert_safe_persist(block, source="persist.reextract_list.block", db=db, episode=episode)
+    eid = int(getattr(episode, "id", 0) or 0)
+    lock = _get_stage_output_patch_lock(eid) if eid > 0 else threading.Lock()
+    with lock:
+        query = getattr(db, "query", None)
+        if eid > 0 and callable(query):
+            from app.services.soft_delete import _active_episode_clause
+
+            fresh = (
+                query(Episode)
+                .filter(Episode.id == eid, _active_episode_clause())
+                .populate_existing()
+                .first()
+            )
+            if fresh is not None:
+                episode = fresh
+        obj = _load_stage_outputs_obj(episode)
+        outputs = _ensure_stage_outputs(obj, "stage1")
+        slot = outputs.get("scene_split") if isinstance(outputs.get("scene_split"), dict) else {}
+        outputs["scene_split"] = {
+            **slot,
+            "key": "scene_split",
+            "kind": slot.get("kind") or "markdown",
+            "title": slot.get("title") or "scene_split",
+            "content": raw_text,
+        }
+        for key in ("raw_text", "adapted_script"):
+            existing_slot = outputs.get(key) if isinstance(outputs.get(key), dict) else None
+            if not existing_slot:
+                continue
+            existing = str(existing_slot.get("content") or "")
+            if marker.upper() not in existing.upper():
+                continue
+            patched = dict(existing_slot)
+            patched["content"] = replace(existing, block)
+            outputs[key] = patched
+        _dump_stage_outputs_obj(episode, obj)
+        adaptation = str(getattr(episode, "ai_scene_analysis_adaptation", "") or "")
+        if marker.upper() in adaptation.upper():
+            episode.ai_scene_analysis_adaptation = replace(adaptation, block)
+        result_text = str(getattr(episode, "ai_scene_analysis_result", "") or "")
+        if marker.upper() in result_text.upper():
+            episode.ai_scene_analysis_result = replace(result_text, block)
+        db.commit()
+    try:
+        db.refresh(episode)
+    except Exception:
+        pass
+
+
 def persist_script_optimization_stage(
     *,
     db: Session,
