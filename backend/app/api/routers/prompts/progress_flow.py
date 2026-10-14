@@ -87,6 +87,10 @@ class StoryboardGenerationFailedRequest(BaseModel):
     error_code: Optional[str] = None
 
 
+class CancelRunningSceneAnalysisRequest(BaseModel):
+    episode_id: int
+
+
 class StoryboardGenerationStartedRequest(BaseModel):
     project_id: int
     episode_id: int
@@ -447,6 +451,33 @@ async def reset_storyboard_generation_progress(
         "episode_id": int(request.episode_id),
         "scene_markers": markers,
         **summary,
+    }
+
+
+@router.post("/prompts/scene-analysis/progress/cancel-running")
+def cancel_running_scene_analysis(
+    request: CancelRunningSceneAnalysisRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stop parked 建置等待 rows. A finished task id cannot clear them."""
+    from app.services.scene_subskill_pipeline_runner import cancel_running_scene_subskill_nodes
+
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == int(request.episode_id), _active_episode_clause())
+        .first()
+    )
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
+    _require_project_access(db, episode.project_id, current_user)
+    closed = cancel_running_scene_subskill_nodes(db, episode_id=int(request.episode_id))
+    if closed:
+        db.commit()
+    return {
+        "status": "ok",
+        "episode_id": int(request.episode_id),
+        "closed": closed,
     }
 
 

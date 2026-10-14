@@ -21,6 +21,75 @@ def _quad(name: str = "客栈大堂") -> str:
     )
 
 
+def test_quad_name_match_ignores_spacing_and_fullwidth_bar():
+    from app.services.scene_subskill_pipeline_runner import match_ready_environment_asset_quads
+
+    loaded = {"客栈 大堂｜室内": _quad("客栈大堂")}
+    ready = match_ready_environment_asset_quads(loaded, ["客栈大堂"])
+    assert list(ready) == ["客栈大堂"]
+    assert environment_asset_quad_ready(ready["客栈大堂"]) is True
+
+
+def test_cancel_running_scene_subskill_closes_parked_wait_only():
+    from types import SimpleNamespace
+    from app.services.scene_subskill_pipeline_runner import cancel_running_scene_subskill_nodes
+
+    waiting = SimpleNamespace(
+        node_name="scene_subskill_scene",
+        status="running",
+        runtime_meta={"current_step": "wait_env_asset", "business_event": "waiting"},
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+        updated_at=None,
+    )
+    done = SimpleNamespace(
+        node_name="scene_subskill_scene",
+        status="success",
+        runtime_meta={},
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+        updated_at=None,
+    )
+    design = SimpleNamespace(
+        node_name="asset_design_environment",
+        status="running",
+        runtime_meta={},
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+        updated_at=None,
+    )
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return [waiting, done, design]
+
+    class _Session:
+        def query(self, *_args, **_kwargs):
+            return _Query()
+
+    assert cancel_running_scene_subskill_nodes(_Session(), episode_id=1) == 1
+    assert waiting.status == "failed"
+    assert waiting.last_error_code == "SCENE_SUBSKILL_CANCELLED"
+    assert waiting.runtime_meta["business_event"] == "cancelled"
+    assert done.status == "success"
+    assert design.status == "running"
+
+
+def test_canceled_task_status_counts_as_stop():
+    from types import SimpleNamespace
+    from app.services.task_manager import task_record_cancel_is_set
+
+    assert task_record_cancel_is_set(SimpleNamespace(cancel_requested=False, status="canceled")) is True
+    assert task_record_cancel_is_set(SimpleNamespace(cancel_requested=True, status="running")) is True
+    assert task_record_cancel_is_set(SimpleNamespace(cancel_requested=False, status="running")) is False
+
+
 def test_quad_ready_requires_all_four_cells():
     assert environment_asset_quad_ready(_quad()) is True
     assert environment_asset_quad_ready("【四向拼图】\n[0度格-左上") is False

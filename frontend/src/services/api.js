@@ -4526,6 +4526,9 @@ export const reportStoryboardGenerationStarted = async (payload = {}) => (await 
 export const reportStoryboardGenerationApplied = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/storyboard-applied', payload || {})).data;
 export const resetStoryboardGenerationProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/storyboard-reset', payload || {})).data;
 export const getEpisodeProgressSnapshot = async (episodeId) => (await api.get(`/prompts/scene-analysis/progress/episodes/${episodeId}`)).data;
+export const cancelRunningSceneAnalysis = async (payload = {}) => (
+    await api.post('/prompts/scene-analysis/progress/cancel-running', payload || {})
+).data;
 export const getProjectProgressOverview = async (projectId) => (await api.get(`/prompts/scene-analysis/progress/projects/${projectId}/overview`)).data;
 export const getProjectProgressIssues = async (projectId, params = {}) => (await api.get(`/prompts/scene-analysis/progress/projects/${projectId}/issues`, { params: params || {} })).data;
 export const resolveProjectProgressIssue = async (issueId) => (await api.post('/prompts/scene-analysis/progress/issues/resolve', { issue_id: issueId })).data;

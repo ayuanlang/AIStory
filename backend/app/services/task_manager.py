@@ -347,6 +347,9 @@ def _load_task_from_db(task_id: str) -> Optional["_TaskRecord"]:
             rec.error_code = row["error_code"]
             rec.created_at = float(row["created_at"] or time.time())
             rec.finished_at = float(row["finished_at"]) if row["finished_at"] is not None else None
+            if rec.status == "canceled":
+                rec.cancel_requested = True
+                rec.cancel_reason = str(row["error"] or "Task canceled by user")
             return rec
         finally:
             db.close()
@@ -389,17 +392,36 @@ def _get_or_load_task_record(task_id: str) -> Optional["_TaskRecord"]:
     return rec
 
 
+def task_record_cancel_is_set(rec: Any) -> bool:
+    """True when this record was canceled in memory or already stored as canceled."""
+    if rec is None:
+        return False
+    if getattr(rec, "cancel_requested", False):
+        return True
+    return str(getattr(rec, "status", "") or "").strip().lower() == "canceled"
+
+
 def is_current_task_cancel_requested() -> bool:
     """True when the task running on this worker thread was canceled.
 
-    Scene pipelines call this between scenes. Cancel only flips a flag; the
-    worker otherwise keeps writing the next scene into the new analysis.
+    Scene pipelines call this between scenes and while waiting on environment
+    assets. Cancel flips a flag in this process. Another worker only writes
+    status=canceled to the database, so a still-running waiter must re-read that.
     """
     task_id = str(_current_task_id.get() or "").strip()
     if not task_id:
         return False
     rec = _get_or_load_task_record(task_id)
-    return bool(rec and getattr(rec, "cancel_requested", False))
+    if task_record_cancel_is_set(rec):
+        return True
+    fresh = _load_task_from_db(task_id)
+    if not task_record_cancel_is_set(fresh):
+        return False
+    if rec is not None:
+        rec.cancel_requested = True
+        rec.status = "canceled"
+        rec.cancel_reason = str(getattr(fresh, "error", "") or rec.cancel_reason or "Task canceled by user")
+    return True
 
 
 def _resolve_task_result_for_client(rec: "_TaskRecord") -> Any:

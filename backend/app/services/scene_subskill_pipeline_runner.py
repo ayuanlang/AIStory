@@ -2756,6 +2756,7 @@ async def await_environment_planned_script(
         episode_id,
     )
     while time.monotonic() < deadline:
+        _raise_if_parent_task_cancelled()
         poll_db = SessionLocal()
         try:
             last_status = _environment_plan_node_status(poll_db, int(episode_id))
@@ -2909,6 +2910,36 @@ def _asset_design_environment_status(db: Session, episode_id: int) -> str:
     return ""
 
 
+def match_ready_environment_asset_quads(
+    loaded: Dict[str, str],
+    main_names: List[str],
+) -> Dict[str, str]:
+    """Pair each scene main-env with a stored four-cell prompt.
+
+    Asset rows and the environment plan can differ by spaces or a fullwidth bar.
+    A ready prompt under the same normalized name still unlocks staging.
+    """
+    from app.services.script_analysis_flow.environment_reuse import normalize_environment_name
+
+    folded = {str(key).lower(): value for key, value in (loaded or {}).items()}
+    by_norm: Dict[str, str] = {}
+    for key, value in (loaded or {}).items():
+        norm = normalize_environment_name(key)
+        prompt = str(value or "")
+        if norm and environment_asset_quad_ready(prompt) and norm not in by_norm:
+            by_norm[norm] = prompt
+    ready: Dict[str, str] = {}
+    for name in main_names:
+        prompt = str((loaded or {}).get(name) or "")
+        if not environment_asset_quad_ready(prompt):
+            prompt = str(folded.get(str(name).lower()) or "")
+        if not environment_asset_quad_ready(prompt):
+            prompt = str(by_norm.get(normalize_environment_name(name)) or "")
+        if environment_asset_quad_ready(prompt):
+            ready[name] = prompt
+    return ready
+
+
 def _load_ready_environment_asset_quads(
     db: Session,
     *,
@@ -2924,15 +2955,42 @@ def _load_ready_environment_asset_quads(
         episode_id=int(episode_id),
         names=main_names,
     )
-    ready: Dict[str, str] = {}
-    for name in main_names:
-        prompt = str(loaded.get(name) or "")
-        if not prompt:
-            folded = {key.lower(): value for key, value in loaded.items()}
-            prompt = str(folded.get(name.lower()) or "")
-        if environment_asset_quad_ready(prompt):
-            ready[name] = prompt
-    return ready
+    return match_ready_environment_asset_quads(loaded, main_names)
+
+
+def cancel_running_scene_subskill_nodes(db: Session, *, episode_id: int) -> int:
+    """Close scene-analysis nodes that are still running so Stop is not a no-op.
+
+    A quad wait parks the node as running after the task itself has finished.
+    Canceling that finished task does not clear the row, and the UI stays on 等待环境.
+    """
+    if int(episode_id or 0) <= 0:
+        return 0
+    rows = (
+        db.query(ScriptProgressPipelineNode)
+        .filter(ScriptProgressPipelineNode.episode_id == int(episode_id))
+        .all()
+    )
+    now_iso = now_bj_iso()
+    closed = 0
+    for row in rows:
+        name = str(getattr(row, "node_name", "") or "").strip()
+        status = str(getattr(row, "status", "") or "").strip().lower()
+        if name not in {"scene_subskill_scene", "scene_subskill_pipeline"}:
+            continue
+        if status not in {"running", "queued"}:
+            continue
+        meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
+        meta["business_event"] = "cancelled"
+        meta["business_reason"] = "用户已停止"
+        row.status = "failed"
+        row.last_error_code = "SCENE_SUBSKILL_CANCELLED"
+        row.last_error_message = "scene subskill cancelled"
+        row.runtime_meta = meta
+        row.ended_at = now_iso
+        row.updated_at = now_iso
+        closed += 1
+    return closed
 
 
 async def await_environment_asset_quad_injection(
@@ -2974,6 +3032,7 @@ async def await_environment_asset_quad_injection(
         main_names,
     )
     while time.monotonic() < deadline:
+        _raise_if_parent_task_cancelled()
         poll_db = SessionLocal()
         try:
             last_status = _asset_design_environment_status(poll_db, int(episode_id))

@@ -166,6 +166,7 @@ import {
     resetSceneOrchestrationProgress,
     resetEpisodeAnalysisProgress,
     getEpisodeProgressSnapshot,
+    cancelRunningSceneAnalysis,
     reportStoryboardGenerationApplied,
     reportStoryboardGenerationFailed,
     reportStoryboardGenerationStarted,
@@ -11389,6 +11390,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [t]);
 
     const flushPendingStoryboardKickoffsRef = useRef(async () => ({ started: 0 }));
+    const resumeParkedStagingAfterEnvRef = useRef(async () => {});
+    const stagingResumeKickedRef = useRef(new Set());
 
     const markEnvironmentAssetDesignReady = useCallback((reason = '') => {
         const alreadyReady = environmentAssetReadyRef.current;
@@ -14950,6 +14953,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     && isThisRunPipelineNode(node, analysisTimerStartedAtRef.current)
                     && environmentAssetDesignLaunchedRef.current
                 ));
+                void resumeParkedStagingAfterEnvRef.current?.(nodes);
                 if (envNodeDone && (analysisFullRestartGateRef.current || !environmentAssetReadyRef.current)) {
                     analysisFullRestartGateRef.current = false;
                     environmentAssetReadyRef.current = true;
@@ -18362,7 +18366,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || getEpisodeAnalysisRun(activeEpisode.id)?.promise
             || isEpisodeAnalysisClaimed(activeEpisode.id)
         );
-        if (taskIds.length <= 0 && !hasLocalRun) {
+        const hasParkedPipeline = hasInFlightPipelineNodes(diagnosticsPipelineNodesRef.current);
+        if (taskIds.length <= 0 && !hasLocalRun && !hasParkedPipeline) {
             setAnalysisFlowStatus({
                 phase: 'warning',
                 message: t('当前没有正在运行的场景推演任务需要被终止。', 'No running analysis task found to stop.'),
@@ -18375,8 +18380,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ? t('已请求停止当前剧本分析流程。', 'Stop requested for the current script analysis flow.')
             : t('已请求停止当前剧本分析任务。', 'Stop requested for the current scene analysis task.');
         clearLocalAnalysisRunningStateAfterUserStop(activeEpisode.id, { message: stopMessage });
+        void cancelRunningSceneAnalysis({ episode_id: activeEpisode.id }).catch((cancelErr) => {
+            if (onLog) onLog(`Failed to close parked scene analysis: ${cancelErr?.message || cancelErr}`, 'warning');
+        });
         if (taskIds.length <= 0) {
-            if (onLog) onLog('Scene analysis stop requested before backend task id was available.', 'warning');
+            if (onLog) onLog(
+                hasParkedPipeline
+                    ? 'Scene analysis stop closed the parked environment wait.'
+                    : 'Scene analysis stop requested before backend task id was available.',
+                hasParkedPipeline ? 'info' : 'warning'
+            );
             setIsStoppingAnalysisTask(false);
             return;
         }
@@ -28968,6 +28981,71 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } finally {
             analysisRunInFlightRef.current = false;
         }
+    };
+
+    resumeParkedStagingAfterEnvRef.current = async (nodes) => {
+        if (isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+            localStopRequested: analysisStopRequestedRef.current,
+            localStopReason: analysisStopReasonRef.current,
+        })) return;
+        if (sceneMatrixRerunInFlightRef.current || artDirectionRerunInFlightRef.current) return;
+        const mainCount = countDbMainEnvironmentEntities(episodeOwnedEntities);
+        const promptCount = countDbMainEnvironmentEntitiesWithPrompt(episodeOwnedEntities);
+        if (mainCount <= 0 || promptCount < mainCount) return;
+        const sceneSplitText = resolveFullEpisodeSceneScript();
+        if (!sceneSplitText) return;
+        const now = Date.now();
+        const waitingIds = [];
+        (Array.isArray(nodes) ? nodes : []).forEach((node) => {
+            if (String(node?.node_name || '').trim() !== 'scene_subskill_scene') return;
+            const status = String(node?.status || '').trim().toLowerCase();
+            if (!['running', 'queued'].includes(status)) return;
+            const meta = node?.runtime_meta && typeof node.runtime_meta === 'object' ? node.runtime_meta : {};
+            if (String(meta.current_step || '').trim().toLowerCase() !== 'wait_env_asset') return;
+            const parked = String(meta.business_event || '').trim().toLowerCase() === 'waiting';
+            const updatedAt = Date.parse(String(node?.updated_at || ''));
+            const stale = !Number.isFinite(updatedAt) || (now - updatedAt) > 20000;
+            if (!parked && !stale) return;
+            const sceneId = String(node?.scene_id || '').trim();
+            if (!sceneId || stagingResumeKickedRef.current.has(sceneId)) return;
+            waitingIds.push(sceneId);
+        });
+        if (!waitingIds.length) return;
+        waitingIds.forEach((sceneId) => stagingResumeKickedRef.current.add(sceneId));
+        const episodeId = Number(activeEpisode?.id || 0);
+        onLog?.(t(
+            `环境资产四宫格已齐，继续建置入戏：${waitingIds.join('、')}`,
+            `Environment four-grids are ready; continuing staging: ${waitingIds.join(', ')}`
+        ), 'process');
+        void runScriptAnalysisFlowAnalyzeNode(
+            'scene_subskill_pipeline',
+            sceneSplitText,
+            '',
+            null,
+            episodeId || null,
+            analysisAttentionNotes,
+            selectedReuseSubjectAssets,
+            {
+                targetSceneIds: waitingIds,
+                onTaskCreated: (taskId) => {
+                    registerActiveAnalysisTask(taskId);
+                    saveAnalysisTaskMarker(episodeId, {
+                        taskId,
+                        startedAt: Date.now(),
+                        phase: 'scene_subskills',
+                    });
+                },
+            },
+            projectId,
+            'script_analysis',
+            resolveSelectedScriptAnalysisApiId()
+        ).catch((resumeErr) => {
+            waitingIds.forEach((sceneId) => stagingResumeKickedRef.current.delete(sceneId));
+            onLog?.(t(
+                `建置入戏续跑失败：${resumeErr?.message || resumeErr}`,
+                `Failed to continue staging: ${resumeErr?.message || resumeErr}`
+            ), 'warning');
+        });
     };
 
     ensureUnfinishedAnalysisNodesRef.current = async ({ allowWhileLive = false } = {}) => {
