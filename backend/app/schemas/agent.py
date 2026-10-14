@@ -47,3 +47,5 @@ class AnalyzeSceneRequest(BaseModel):
     # Marker IDs (EPxx_SCyy) for single/subset scene-beats orchestration.
     target_scene_id: Optional[str] = None
     target_scene_ids: Optional[List[str]] = None
+    # User-written requirement for this node. Injected into the user prompt when non-empty.
+    node_advanced_spec: Optional[str] = None

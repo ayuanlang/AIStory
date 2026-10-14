@@ -76,6 +76,7 @@ def _build_analyze_scene_dedup_key(user_id: int, request: AnalyzeSceneRequest) -
         "scene_analysis_mode": getattr(request, "scene_analysis_mode", None),
         "scene_analysis_features": getattr(request, "scene_analysis_features", None),
         "analysis_attention_notes": getattr(request, "analysis_attention_notes", None),
+        "node_advanced_spec": getattr(request, "node_advanced_spec", None),
         "reuse_subject_assets": getattr(request, "reuse_subject_assets", None),
         "include_negative_prompt": getattr(request, "include_negative_prompt", True),
         "function_name": getattr(request, "function_name", None),

@@ -5526,6 +5526,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [analysisRuntimeMeta, setAnalysisRuntimeMeta] = useState(null);
     const [isRawMode, setIsRawMode] = useState(false);
     const [analysisAttentionNotes, setAnalysisAttentionNotes] = useState('');
+    const [nodeAdvancedSpecs, setNodeAdvancedSpecs] = useState({});
+    const [nodeAdvancedSpecModal, setNodeAdvancedSpecModal] = useState({
+        open: false,
+        key: '',
+        label: '',
+        draft: '',
+        saving: false,
+    });
     const [isSavingAnalysisAttentionNotes, setIsSavingAnalysisAttentionNotes] = useState(false);
     const [availableSubjectAssets, setAvailableSubjectAssets] = useState([]);
     const [episodeOwnedEntities, setEpisodeOwnedEntities] = useState([]);
@@ -14620,6 +14628,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const nextAttentionNotes = String(activeEpisode?.episode_info?.analysis_attention_notes || '');
         const nextConsistencyText = String(activeEpisode?.episode_info?.subject_check_result || '');
+        const rawNodeSpecs = activeEpisode?.episode_info?.node_advanced_specs;
+        const nextNodeSpecs = (
+            rawNodeSpecs && typeof rawNodeSpecs === 'object' && !Array.isArray(rawNodeSpecs)
+        ) ? rawNodeSpecs : {};
+        setNodeAdvancedSpecs((prev) => (
+            JSON.stringify(prev || {}) === JSON.stringify(nextNodeSpecs) ? prev : nextNodeSpecs
+        ));
         setAnalysisAttentionNotes((prev) => (prev === nextAttentionNotes ? prev : nextAttentionNotes));
         setSubjectConsistencyResultText((prev) => (prev === nextConsistencyText ? prev : nextConsistencyText));
 
@@ -27069,6 +27084,46 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
+    const openNodeAdvancedSpecModal = (specKey, label) => {
+        const key = String(specKey || '').trim();
+        if (!key || !activeEpisode?.id) return;
+        setNodeAdvancedSpecModal({
+            open: true,
+            key,
+            label: String(label || key),
+            draft: String(nodeAdvancedSpecs?.[key] || ''),
+            saving: false,
+        });
+    };
+
+    const saveNodeAdvancedSpecModal = async () => {
+        if (!activeEpisode?.id || !onUpdateEpisodeInfo || nodeAdvancedSpecModal.saving) return;
+        const key = String(nodeAdvancedSpecModal.key || '').trim();
+        if (!key) return;
+        const text = String(nodeAdvancedSpecModal.draft || '').trim();
+        const next = { ...(nodeAdvancedSpecs || {}) };
+        if (text) next[key] = text;
+        else delete next[key];
+        setNodeAdvancedSpecModal((prev) => ({ ...prev, saving: true }));
+        try {
+            await onUpdateEpisodeInfo(activeEpisode.id, {
+                episode_info: {
+                    ...(activeEpisode?.episode_info || {}),
+                    node_advanced_specs: next,
+                },
+            });
+            setNodeAdvancedSpecs(next);
+            setNodeAdvancedSpecModal({ open: false, key: '', label: '', draft: '', saving: false });
+            onLog?.(t('已保存本节点高级规格。', 'Saved this node’s advanced spec.'), 'success');
+        } catch (error) {
+            setNodeAdvancedSpecModal((prev) => ({ ...prev, saving: false }));
+            reportAnalysisPanelNotice(
+                t(`保存高级规格失败：${error?.message || error}`, `Failed to save the advanced spec: ${error?.message || error}`),
+                'error'
+            );
+        }
+    };
+
     const saveAnalysisAttentionNotesValue = async (nextNotes) => {
         if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
         const mergedEpisodeInfo = {
@@ -36002,6 +36057,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const canImportAssets = Boolean(resolveDiagnosticAssetDesignImport().assetDesignJson) && !assetDesignActive;
                         const canRerunStoryboard = Boolean((storyboardCanStart || storyboardSettled) && !storyboardInFlight && !isRerunningStoryboard);
                         const diagnosticBtnClass = 'text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-40 disabled:cursor-not-allowed hover:text-white transition-colors';
+                        const renderNodeSpecButton = (specKey, label) => {
+                            const filled = Boolean(String(nodeAdvancedSpecs?.[specKey] || '').trim());
+                            return (
+                                <button
+                                    type="button"
+                                    onClick={() => openNodeAdvancedSpecModal(specKey, label)}
+                                    disabled={!activeEpisode?.id}
+                                    className={filled
+                                        ? 'text-[10px] px-1 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-300/40 text-amber-100 disabled:opacity-40'
+                                        : diagnosticBtnClass}
+                                    title={filled
+                                        ? t('本节点已有高级规格，提交时会注入用户提示词', 'This node has an advanced spec. It is injected into the user prompt on submit.')
+                                        : t('填写本节点高级规格，提交时注入用户提示词', 'Write an advanced spec for this node. It is injected into the user prompt on submit.')}
+                                >
+                                    {t('规格', 'Spec')}
+                                </button>
+                            );
+                        };
                         const failedInspectBtnClass = 'text-[10px] px-1 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors';
                         const renderFailedReasonButton = (onInspect) => (
                             <button
@@ -36162,6 +36235,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
                                             {state.failed ? renderFailedReasonButton(inspectAssetFailure) : null}
                                             {renderImportButton('assets', canImportCategory)}
+                                            {renderNodeSpecButton(spec.nodeName, getAnalysisStageLabel(spec.stepKey, t))}
                                             {(spec.key === 'character' || spec.key === 'prop') ? (
                                                 <>
                                                 <button
@@ -36362,6 +36436,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         {failed ? renderFailedReasonPreview(state) : null}
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
                                             {failed ? renderFailedReasonButton(inspectQuadFailure) : null}
+                                            {renderNodeSpecButton(
+                                                'asset_design_environment_quad',
+                                                getAnalysisStageLabel('assets_gen_derived', t)
+                                            )}
                                             <button
                                                 type="button"
                                                 onClick={() => { void openEnvironmentQuadRerunModal(); }}
@@ -36468,6 +36546,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 rerunKind: 'stage1',
                                             }))
                                             : null}
+                                        {renderNodeSpecButton(nodeKey, getAnalysisStageLabel(stepKey, t))}
                                         <button
                                             type="button"
                                             onClick={() => openStageArtifactEditModal(stepKey)}
@@ -37099,6 +37178,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 {state.failed ? renderFailedReasonPreview(state) : null}
                                 <div className="flex items-center gap-1 flex-wrap justify-center">
                                     {state.failed ? renderFailedReasonButton(inspectSceneFailure) : null}
+                                    {renderNodeSpecButton(
+                                        `${stepKey}:${sceneId}`,
+                                        `${sceneLabel || sceneId} · ${getAnalysisStageLabel(stepKey, t)}`
+                                    )}
                                     <button
                                         type="button"
                                         onClick={() => openSceneNodeEditModal(stepKey, sceneId)}
@@ -37699,6 +37782,69 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 </div>
             </div>
+
+            {nodeAdvancedSpecModal.open && (
+                <div
+                    className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                    onClick={() => {
+                        if (nodeAdvancedSpecModal.saving) return;
+                        setNodeAdvancedSpecModal((prev) => ({ ...prev, open: false }));
+                    }}
+                >
+                    <div
+                        className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
+                            <h3 className="text-lg font-bold">
+                                {t('高级规格', 'Advanced spec')} · {nodeAdvancedSpecModal.label}
+                            </h3>
+                            <button
+                                type="button"
+                                disabled={nodeAdvancedSpecModal.saving}
+                                onClick={() => setNodeAdvancedSpecModal((prev) => ({ ...prev, open: false }))}
+                                className="text-white/50 hover:text-white"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-4 flex flex-col gap-3">
+                            <p className="text-xs text-white/50 leading-relaxed">
+                                {t(
+                                    '这里只写本节点的特殊要求。保存后，该节点下次提交模型时，非空内容会注入用户提示词，并标为必须满足的高级规格。',
+                                    'Write only this node’s special requirements. On the next model submit, non-empty text is injected into the user prompt as an advanced spec that must be met.'
+                                )}
+                            </p>
+                            <textarea
+                                value={nodeAdvancedSpecModal.draft}
+                                onChange={(event) => setNodeAdvancedSpecModal((prev) => ({ ...prev, draft: event.target.value }))}
+                                rows={8}
+                                disabled={nodeAdvancedSpecModal.saving}
+                                className="w-full rounded-lg bg-black/40 border border-white/10 text-sm text-white/90 p-3 outline-none focus:border-amber-300/50"
+                                placeholder={t('例如：本场角色名牌只用职业，不要写关系。', 'Example: nameplates use occupation only.')}
+                            />
+                        </div>
+                        <div className="flex items-center justify-end gap-2 p-4 border-t border-white/10">
+                            <button
+                                type="button"
+                                disabled={nodeAdvancedSpecModal.saving}
+                                onClick={() => setNodeAdvancedSpecModal((prev) => ({ ...prev, open: false }))}
+                                className="text-sm px-3 py-1.5 rounded border border-white/10 text-white/70 hover:bg-white/5"
+                            >
+                                {t('取消', 'Cancel')}
+                            </button>
+                            <button
+                                type="button"
+                                disabled={nodeAdvancedSpecModal.saving}
+                                onClick={() => { void saveNodeAdvancedSpecModal(); }}
+                                className="text-sm px-3 py-1.5 rounded bg-amber-500/80 hover:bg-amber-500 text-black font-medium disabled:opacity-50"
+                            >
+                                {nodeAdvancedSpecModal.saving ? t('保存中', 'Saving') : t('保存', 'Save')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {stageArtifactEditModal.open && (
                 <div

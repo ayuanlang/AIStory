@@ -3000,6 +3000,7 @@ def _build_subskill_request(
     scene_input: str,
     scene_id: str,
     system_api_id: Any = None,
+    node_advanced_spec: str = "",
 ) -> AnalyzeSceneRequest:
     """Build a fresh request so parent node prompt/action cannot leak into this step."""
     action_name = f"{_subskill_action_label(prompt_file)} · {scene_id}"
@@ -3022,6 +3023,7 @@ def _build_subskill_request(
         analysis_trace_id=base_payload.get("analysis_trace_id"),
         skip_episode_persist=True,
         subject_index_text=base_payload.get("subject_index_text"),
+        node_advanced_spec=str(node_advanced_spec or "").strip() or None,
     )
 
 
@@ -3058,6 +3060,14 @@ async def _call_scene_subskill(
         scene_id,
         max_attempts,
     )
+    from app.services.script_analysis_flow.node_advanced_spec import load_subskill_advanced_spec
+
+    node_advanced_spec = load_subskill_advanced_spec(
+        task_db,
+        base_payload.get("episode_id"),
+        prompt_file,
+        scene_id,
+    )
     for attempt, api_id in enumerate(api_attempts, start=1):
         request = _build_subskill_request(
             base_payload,
@@ -3065,6 +3075,7 @@ async def _call_scene_subskill(
             scene_input=scene_input,
             scene_id=scene_id,
             system_api_id=api_id or base_payload.get("system_api_id"),
+            node_advanced_spec=node_advanced_spec,
         )
         from app.core.time_utils import now_bj_iso
 

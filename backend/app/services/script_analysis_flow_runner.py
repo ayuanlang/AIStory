@@ -556,6 +556,19 @@ async def execute_scene_analysis_flow_node(
             )
             db.commit()
 
+        if episode is not None:
+            from app.services.script_analysis_flow.node_advanced_spec import (  # noqa: WPS433
+                resolve_flow_node_advanced_spec,
+            )
+
+            flow_spec = resolve_flow_node_advanced_spec(
+                episode,
+                node_key=node_key,
+                reextract_target=reextract_target if list_reextract else "",
+            )
+            if flow_spec:
+                raw_payload["node_advanced_spec"] = flow_spec
+
         llm_started_perf = time.perf_counter()
         logger.info("[剧本分析流程] 开始调用 evaluate_scene 执行节点 %s...", node_key)
         try:

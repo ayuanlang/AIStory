@@ -218,6 +218,20 @@ async def execute_ai_generate_shots(
                   explicit_features=(req.shot_generation_features if req else None),
                )
 
+        from app.services.script_analysis_flow.node_advanced_spec import (
+            load_storyboard_advanced_spec,
+            prepend_node_advanced_spec,
+        )
+
+        storyboard_spec = load_storyboard_advanced_spec(episode, persist_scene_no or "")
+        if storyboard_spec:
+            user_input = prepend_node_advanced_spec(user_input, storyboard_spec)
+            logger.info(
+                "[ai_generate_shots] injected node advanced spec scene_no=%s chars=%s",
+                persist_scene_no or "",
+                len(storyboard_spec),
+            )
+
         logger.info(f"[ai_generate_shots] system_prompt_len={len(system_prompt)}")
         logger.info(f"[ai_generate_shots] user_input_len={len(user_input)}")
 
@@ -733,6 +747,16 @@ async def execute_ai_regenerate_shots(
                 )
         except FileNotFoundError:
             raise HTTPException(status_code=500, detail=f"Prompt file '{prompt_filename}' could not be loaded.")
+
+        from app.services.script_analysis_flow.node_advanced_spec import (
+            load_storyboard_advanced_spec,
+            prepend_node_advanced_spec,
+        )
+
+        regenerate_scene_no = str(getattr(scene, "scene_no", "") or "").strip()
+        storyboard_spec = load_storyboard_advanced_spec(episode, regenerate_scene_no)
+        if storyboard_spec:
+            user_input = prepend_node_advanced_spec(user_input, storyboard_spec)
 
         function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
         system_api_id = getattr(req, "system_api_id", None) if req else None

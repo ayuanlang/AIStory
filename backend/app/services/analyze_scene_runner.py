@@ -1302,6 +1302,17 @@ async def execute_analyze_scene(
                 scoped_asset_category,
             )
 
+        node_advanced_spec = str(getattr(request, "node_advanced_spec", None) or "").strip()
+        if node_advanced_spec:
+            from app.services.script_analysis_flow.node_advanced_spec import prepend_node_advanced_spec
+
+            user_content = prepend_node_advanced_spec(user_content, node_advanced_spec)
+            logger.info(
+                "Injected node advanced spec into prompt: chars=%s tokens_est=%s",
+                len(node_advanced_spec),
+                _estimate_tokens(node_advanced_spec),
+            )
+
         # Construct messages
         messages = [
             {"role": "system", "content": system_instruction},
