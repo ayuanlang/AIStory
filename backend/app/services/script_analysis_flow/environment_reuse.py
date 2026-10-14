@@ -240,10 +240,8 @@ def _episode_tag(episode: Any, fallback: str = "") -> str:
 def _extract_env_blocks_by_name(script_text: str) -> Dict[str, str]:
     from app.services.script_analysis_flow import (
         extract_env_block_from_scene_text,
-        extract_environment_names_from_scene_text,
         parse_scene_units_from_markers,
     )
-    from app.services.script_analysis_flow.subject_index_name_align import split_scene_subject_field
 
     mapped: Dict[str, str] = {}
     source = str(script_text or "").strip()
@@ -258,12 +256,9 @@ def _extract_env_blocks_by_name(script_text: str) -> Dict[str, str]:
         block = extract_env_block_from_scene_text(text)
         if not block:
             continue
-        names = extract_environment_names_from_scene_text(text) or extract_environment_names_from_scene_text(block)
-        for raw_name in split_scene_subject_field(names):
-            name = _clean_env_name(raw_name)
-            key = normalize_environment_name(name)
-            if name and key and key not in mapped:
-                mapped[key] = block
+        for key, section in _main_env_sections(block).items():
+            if key and key not in mapped and str(section or "").strip():
+                mapped[key] = str(section).strip()
     return mapped
 
 
@@ -769,6 +764,48 @@ def build_reused_environment_patch(
     )
 
 
+def dedupe_main_environment_blocks(text: str) -> str:
+    """One 【主环境】 per registration name. Keep the fuller non-placeholder copy."""
+    from app.services.script_analysis_flow import extract_env_block_from_scene_text
+
+    source = str(text or "").strip()
+    if not source:
+        return ""
+    block = extract_env_block_from_scene_text(source) or source
+    chosen: Dict[str, str] = {}
+    order: List[str] = []
+    for part in re.split(r"(?=【主环境】)", block):
+        match = re.search(r"【主环境】\s*([^｜\|\r\n]+)", part)
+        if not match:
+            continue
+        key = normalize_environment_name(_clean_env_name(match.group(1)))
+        cleaned = re.sub(
+            r"\[ENV_BLOCK_(?:START|END)(?::[^\]]+)?\]",
+            "",
+            part,
+            flags=re.IGNORECASE,
+        ).strip()
+        if not key or not cleaned:
+            continue
+        previous = chosen.get(key) or ""
+        if key not in chosen:
+            order.append(key)
+            chosen[key] = cleaned
+            continue
+        previous_thin = environment_text_is_inherit_placeholder(previous)
+        current_thin = environment_text_is_inherit_placeholder(cleaned)
+        if previous_thin and not current_thin:
+            chosen[key] = cleaned
+        elif not current_thin and len(cleaned) > len(previous):
+            chosen[key] = cleaned
+    if not order:
+        return source
+    return "\n\n".join(
+        "\n".join(("[ENV_BLOCK_START]", chosen[key].strip(), "[ENV_BLOCK_END]"))
+        for key in order
+    ).strip()
+
+
 def merge_reused_and_new_env_blocks(reused_patch: str, new_patch: str) -> str:
     """Keep reused library skeletons and append newly designed ENV_BLOCKs."""
     from app.services.script_analysis_flow import extract_env_block_from_scene_text
@@ -776,8 +813,10 @@ def merge_reused_and_new_env_blocks(reused_patch: str, new_patch: str) -> str:
     reused_block = extract_env_block_from_scene_text(reused_patch) if reused_patch else ""
     new_block = extract_env_block_from_scene_text(new_patch) if new_patch else ""
     if reused_block and new_block:
-        return f"{reused_block}\n\n{new_block}".strip()
-    return (new_block or reused_block or str(new_patch or reused_patch or "")).strip()
+        combined = f"{reused_block}\n\n{new_block}".strip()
+    else:
+        combined = (new_block or reused_block or str(new_patch or reused_patch or "")).strip()
+    return dedupe_main_environment_blocks(combined)
 
 
 def _main_env_sections(block: str) -> Dict[str, str]:

@@ -501,6 +501,49 @@ def test_scene_rerun_reuses_saved_environment_plan_without_node_success():
     assert persisted_environment_plan_for_scene_rerun("[SCENE_START:EP01_SC01]", "") == ""
 
 
+def test_merge_keeps_one_block_per_main_environment_name():
+    from app.services.script_analysis_flow.environment_reuse import (
+        collect_episode_env_blocks_by_name,
+        merge_reused_and_new_env_blocks,
+    )
+
+    reused = """[ENV_BLOCK_START]
+【主环境】玄极科技总裁办
+四向已写
+[ENV_BLOCK_END]
+[ENV_BLOCK_START]
+【主环境】上一世浮空艇机舱
+舱内
+[ENV_BLOCK_END]"""
+    fresh = """[ENV_BLOCK_START]
+【主环境】玄极科技总裁办
+四向已写得更完整一些
+[ENV_BLOCK_END]
+[ENV_BLOCK_START]
+【主环境】大厦尖顶外空域
+宿主空域
+[ENV_BLOCK_END]
+[ENV_BLOCK_START]
+【主环境】上一世浮空艇机舱
+舱内座椅
+[ENV_BLOCK_END]
+[ENV_BLOCK_START]
+【主环境】玄极科技总裁办
+四向已写得更完整一些，再写一遍
+[ENV_BLOCK_END]"""
+    merged = merge_reused_and_new_env_blocks(reused, fresh)
+    assert merged.count("【主环境】玄极科技总裁办") == 1
+    assert merged.count("【主环境】上一世浮空艇机舱") == 1
+    assert merged.count("【主环境】大厦尖顶外空域") == 1
+    assert "再写一遍" in merged
+    assert "舱内座椅" in merged
+
+    script = f"[SCENES_BLOCK_START]\n[SCENE_START:EP00_SC01]\n{fresh}\n[SCENE_END:EP00_SC01]\n[SCENES_BLOCK_END]"
+    by_name = collect_episode_env_blocks_by_name(script)
+    assert "大厦尖顶外空域" not in by_name["玄极科技总裁办"]
+    assert "宿主空域" in by_name["大厦尖顶外空域"]
+
+
 def test_reuse_ident_backfills_inherited_main_env_block():
     from app.services.scene_subskill_pipeline_runner import _ensure_reused_main_env_block
 
@@ -570,6 +613,7 @@ standardized beat
     )
     assert spliced.index("[ENV_BLOCK_START]") < spliced.index("[SCENE_CONTENT_START:EP01_SC01]")
     assert "【主环境】客栈大堂" in spliced
+    assert spliced.count("[ENV_BLOCK_START]") == 1
     assert "drama body" in spliced
     assert "standardized beat" in spliced
     assert "split body" not in spliced
@@ -582,6 +626,39 @@ standardized beat
     extracted_env = extract_environment_planning_sections(env_scene)
     assert "[SCENE_ENV_IDENT_START:EP01_SC01]" in extracted_env
     assert "【主环境】客栈大堂" in extracted_env
+
+
+def test_framing_splice_keeps_every_main_environment_block():
+    from app.services.scene_subskill_pipeline_runner import splice_environment_and_enhance_scene
+
+    env_scene = """[SCENE_START:EP00_SC01]
+[SCENE_ENV_IDENT_START:EP00_SC01]
+[ENV] 名称=玄极科技总裁办｜复用=是｜来源=项目库
+[ENV] 名称=大厦尖顶外空域｜复用=否｜来源=新建
+[ENV] 名称=上一世浮空艇机舱｜复用=是｜来源=项目库
+[SCENE_ENV_IDENT_END:EP00_SC01]
+[ENV_BLOCK_START]
+【主环境】玄极科技总裁办
+[ENV_BLOCK_END]
+[ENV_BLOCK_START]
+【主环境】大厦尖顶外空域
+[ENV_BLOCK_END]
+[ENV_BLOCK_START]
+【主环境】上一世浮空艇机舱
+[ENV_BLOCK_END]
+[SCENE_END:EP00_SC01]"""
+    enhance = """[SCENE_START:EP00_SC01]
+【场景名称】喋血重影
+[SCENE_CONTENT_START:EP00_SC01]
+drama body
+[SCENE_CONTENT_END:EP00_SC01]
+[SCENE_END:EP00_SC01]"""
+
+    spliced = splice_environment_and_enhance_scene("EP00_SC01", env_scene, enhance)
+    assert spliced.count("[ENV_BLOCK_START]") == 3
+    assert "【主环境】大厦尖顶外空域" in spliced
+    assert "【主环境】上一世浮空艇机舱" in spliced
+    assert spliced.index("【主环境】上一世浮空艇机舱") < spliced.index("[SCENE_CONTENT_START:EP00_SC01]")
 
 
 def test_framing_splice_drops_prior_derived_environment_tables():

@@ -2422,8 +2422,10 @@ _COVERAGE_AFTER_ENV = re.compile(
 def extract_environment_planning_sections(scene_text: str) -> str:
     source = str(scene_text or "")
     ident = extract_scene_env_ident_block(source)
-    match = _ENV_BLOCK_WITH_COVERAGE_PATTERN.search(source)
-    env = str(match.group(0) or "").strip() if match else extract_env_block_from_scene_text(source).strip()
+    env = extract_env_block_from_scene_text(source).strip()
+    if not env:
+        match = _ENV_BLOCK_WITH_COVERAGE_PATTERN.search(source)
+        env = str(match.group(0) or "").strip() if match else ""
     return "\n".join(part for part in (ident, env) if str(part or "").strip())
 
 
