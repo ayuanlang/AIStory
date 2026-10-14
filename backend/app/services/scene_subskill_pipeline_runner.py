@@ -59,7 +59,6 @@ from app.services.script_analysis_flow.environment_reuse import (
     collect_episode_env_blocks_by_name,
     collect_project_main_environment_catalog,
     extract_scene_env_ident_block,
-    normalize_environment_name,
     parse_scene_env_ident_items,
     script_has_environment_plan_payload,
 )
@@ -2343,41 +2342,18 @@ def environment_plan_terminal_without_payload(
     )
 
 
-def _main_environment_name_keys(text: str) -> set:
-    from app.services.script_analysis_flow.environment_reuse import _clean_env_name
-
-    keys = set()
-    for item in parse_scene_env_ident_items(text):
-        key = normalize_environment_name(item.get("name"))
-        if key:
-            keys.add(key)
-    for match in re.finditer(r"【主环境】\s*([^｜\|\r\n]+)", str(text or "")):
-        key = normalize_environment_name(_clean_env_name(match.group(1)))
-        if key:
-            keys.add(key)
-    return keys
-
-
 def choose_environment_plan_text(persisted_text: str, explicit_text: str = "") -> str:
-    """Pick the plan framing should read.
+    """Framing reads the saved environment plan. A client copy is not a source.
 
-    The saved node output stays the source when it already lists every main
-    environment in the client copy. A client copy that only adds names — the
-    new flashback host the saved scene slice dropped — replaces that older copy.
+    The saved slot is whatever the environment-plan node persisted. Downstream
+    nodes must not replace it with an in-memory copy, even when that copy
+    lists extra names.
     """
     persisted = str(persisted_text or "").strip()
+    if script_has_environment_blocks(persisted):
+        return persisted
     explicit = str(explicit_text or "").strip()
-    persisted_ok = script_has_environment_blocks(persisted)
-    explicit_ok = script_has_environment_blocks(explicit)
-    if persisted_ok and explicit_ok:
-        persisted_names = _main_environment_name_keys(persisted)
-        explicit_names = _main_environment_name_keys(explicit)
-        if explicit_names - persisted_names and not (persisted_names - explicit_names):
-            return explicit
-        return persisted
-    if persisted_ok:
-        return persisted
-    if explicit_ok:
+    if script_has_environment_blocks(explicit):
         return explicit
     return ""
 
@@ -2390,8 +2366,7 @@ def persisted_environment_plan_for_scene_rerun(
 
     That rerun does not execute environment_plan. The stored plan is the
     injection source. A stale running or queued node must not park the scene
-    on 等待主环境注入. A client copy is used only when it adds main environments
-    the saved plan does not list.
+    on 等待主环境注入. The client copy is used only when nothing has been saved.
     """
     return choose_environment_plan_text(persisted_text, explicit_text)
 

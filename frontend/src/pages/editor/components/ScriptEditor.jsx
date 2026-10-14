@@ -4707,21 +4707,6 @@ const pickFirstMatchingText = (candidates, predicate) => {
     return '';
 };
 
-const pickRichestEnvironmentPlanText = (candidates) => {
-    let best = '';
-    let bestCount = -1;
-    (candidates || []).forEach((text) => {
-        const value = String(text || '').trim();
-        if (!value) return;
-        const count = collectMainEnvironmentNames(value).length;
-        const usable = count > 0 || textHasEnvironmentPlanSignals(value);
-        if (!usable || count <= bestCount) return;
-        best = value;
-        bestCount = count;
-    });
-    return best;
-};
-
 const resolveCategoryAssetSourceText = (candidates, category) => {
     const key = String(category || '').trim().toLowerCase();
     if (key === 'characters') {
@@ -4735,7 +4720,9 @@ const resolveCategoryAssetSourceText = (candidates, category) => {
         return pickFirstMatchingText(candidates, (text) => textHasTaggedExtractItems(text, 'PROP'));
     }
     if (key === 'environments') {
-        return pickRichestEnvironmentPlanText(candidates);
+        const withSkeleton = pickFirstMatchingText(candidates, textHasMainEnvironmentSkeleton);
+        if (withSkeleton) return withSkeleton;
+        return pickFirstMatchingText(candidates, (text) => textHasEnvironmentPlanSignals(text) || collectMainEnvironmentNames(text).length > 0);
     }
     return pickFirstMatchingText(candidates, hasAssetRerunExtractSignals);
 };
@@ -13761,7 +13748,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return rows.length;
     }, [llmMarkdownTable]);
 
-    const buildStageOutputsObject = useCallback(({ analysisRawText = '', assetRawText = '', stage1RawText = '', stage2RawText = '', stage2_1Text = '', sceneMarkdownByScene = null, replaceSceneMarkdownByScene = false, replaceSubjectIndex = false, stage1NodeOutputs = null } = {}) => {
+    const buildStageOutputsObject = useCallback(({ analysisRawText = '', assetRawText = '', stage1RawText = '', stage2RawText = '', stage2_1Text = '', sceneMarkdownByScene = null, replaceSceneMarkdownByScene = false, replaceSubjectIndex = false, stage1NodeOutputs = null, persistedNodeOutputs = null } = {}) => {
         const resolvedAnalysisRawText = String(analysisRawText || '').trim();
         const resolvedAssetRawText = String(assetRawText || '').trim();
         const resolvedStage1RawText = String(stage1RawText || '').trim();
@@ -13896,7 +13883,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             : resolvedAssetRawText;
 
         const persistedStage1Outputs = (() => {
-            if (trustLiveDownstreamOnly) return {};
             try {
                 const raw = String(activeEpisode?.ai_stage_outputs || '').trim();
                 if (!raw) return {};
@@ -13907,9 +13893,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return {};
             }
         })();
+        // Saved node slots win over the in-memory copy. A later node must not
+        // write that copy back over environment_plan / scene_split. The map
+        // passed in is a fresh episode read and beats the React copy. Only the
+        // keys of the node being saved may replace what is already stored.
         const mergedNodeOutputs = {
-            ...collectStage1NodeOutputsFromSlotMap(persistedStage1Outputs),
             ...collectStage1NodeOutputsFromSlotMap(latestStage1NodeOutputsRef.current),
+            ...collectStage1NodeOutputsFromSlotMap(persistedStage1Outputs),
+            ...collectStage1NodeOutputsFromSlotMap(persistedNodeOutputs),
             ...collectStage1NodeOutputsFromSlotMap(stage1NodeOutputs),
         };
         const stage1Outputs = {
@@ -14207,27 +14198,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 Object.entries(latestStage1NodeOutputsRef.current || {}).forEach(([key, content]) => {
                     const text = String(content || '').trim();
                     if (!text || ['adapted_script', 'raw_text', 'project_visual_backfill'].includes(key)) return;
-                    const slot = ensureOutputSlot(outputs, key, {
+                    const existingSlot = outputs[key];
+                    const existing = existingSlot && typeof existingSlot === 'object' && !Array.isArray(existingSlot)
+                        ? String(existingSlot.content || '').trim()
+                        : String(existingSlot || '').trim();
+                    if (existing) return;
+                    outputs[key] = {
+                        key,
                         kind: key === 'scene_subskill_results' ? 'json' : 'markdown',
                         title: key,
-                    });
-                    if (key === 'scene_subskill_results') {
-                        slot.content = mergeSceneSubskillResultsPreferringFresh(text, slot.content);
-                        return;
-                    }
-                    slot.content = text;
-                });
-            }
-            if (trustLiveDownstreamOnly && persisted.stages?.stage1?.outputs) {
-                const outputs = persisted.stages.stage1.outputs;
-                const liveNodeKeys = new Set(
-                    Object.entries(latestStage1NodeOutputsRef.current || {})
-                        .filter(([, content]) => String(content || '').trim())
-                        .map(([key]) => key)
-                );
-                Object.keys(outputs).forEach((key) => {
-                    if (['adapted_script', 'raw_text', 'project_visual_backfill'].includes(key)) return;
-                    if (!liveNodeKeys.has(key)) delete outputs[key];
+                        content: text,
+                    };
                 });
             }
             if (persisted.stages?.stage2?.outputs) {
@@ -15448,13 +15429,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let mergedNodeOutputs = {
                 ...collectStage1NodeOutputsFromSlotMap(latestStage1NodeOutputsRef.current),
             };
+            let freshStage1Outputs = null;
             try {
                 const freshEpisode = await fetchEpisode(activeEpisode.id);
+                freshStage1Outputs = parseStageOutputsObject(freshEpisode?.ai_stage_outputs || '')?.stages?.stage1?.outputs || null;
                 mergedNodeOutputs = {
                     ...mergedNodeOutputs,
-                    ...collectStage1NodeOutputsFromSlotMap(
-                        parseStageOutputsObject(freshEpisode?.ai_stage_outputs || '')?.stages?.stage1?.outputs
-                    ),
+                    ...collectStage1NodeOutputsFromSlotMap(freshStage1Outputs),
                 };
             } catch (_) {}
             if (options?.stage1NodeOutputs && typeof options.stage1NodeOutputs === 'object') {
@@ -15552,6 +15533,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         sceneMarkdownByScene: resolvedSceneMarkdownByScene,
                         replaceSceneMarkdownByScene: true,
                         replaceSubjectIndex: true,
+                        persistedNodeOutputs: freshStage1Outputs,
+                        stage1NodeOutputs: options?.stage1NodeOutputs,
                     };
                     Object.assign(updatePayload, {
                         ai_scene_analysis_adaptation: adaptationValue,
@@ -15624,6 +15607,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     sceneMarkdownByScene: resolvedSceneMarkdownByScene,
                     replaceSceneMarkdownByScene,
                     replaceSubjectIndex: true,
+                    persistedNodeOutputs: freshStage1Outputs,
+                    stage1NodeOutputs: options?.stage1NodeOutputs,
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length} subject_index_len=${normalizedSubjectIndexValue.length} adaptation_len=${adaptationValue.length}`, 'info');
@@ -15640,6 +15625,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     sceneMarkdownByScene: resolvedSceneMarkdownByScene,
                     replaceSceneMarkdownByScene,
                     replaceSubjectIndex: true,
+                    persistedNodeOutputs: freshStage1Outputs,
+                    stage1NodeOutputs: options?.stage1NodeOutputs,
                 }), null, 2);
                 onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length}`, 'info');
 
@@ -15665,6 +15652,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     sceneMarkdownByScene: resolvedSceneMarkdownByScene,
                     replaceSceneMarkdownByScene: trustLiveDownstreamOnly || hasLiveByScene,
                     replaceSubjectIndex: true,
+                    persistedNodeOutputs: freshStage1Outputs,
+                    stage1NodeOutputs: options?.stage1NodeOutputs,
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=ai_stage_outputs source=${logSource} bundle_len=${String(updatePayload.ai_stage_outputs || '').length}`, 'info');
@@ -15684,6 +15673,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     sceneMarkdownByScene: resolvedSceneMarkdownByScene,
                     replaceSceneMarkdownByScene: trustLiveDownstreamOnly || hasLiveByScene,
                     replaceSubjectIndex: true,
+                    persistedNodeOutputs: freshStage1Outputs,
+                    stage1NodeOutputs: options?.stage1NodeOutputs,
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=ai_stage_outputs source=${logSource} bundle_len=${String(updatePayload.ai_stage_outputs || '').length}`, 'info');
@@ -16261,7 +16252,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         : null,
                     replaceSceneMarkdownByScene: false,
                     replaceSubjectIndex: true,
-                    stage1NodeOutputs: latestStage1NodeOutputsRef.current,
                 }), null, 2),
             });
             onLog?.(`[Stage 1 Adapted Script] Saved manual beats edit (len=${normalizedValue.length})`, 'success');
@@ -20017,11 +20007,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     : [];
                 const extractSourceCandidates = [
                     readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
-                    latestStage1RawTextRef.current,
-                    latestStage1NodeOutputsRef.current?.environment_plan,
-                    typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'environment_plan') : '',
-                    options?.extractSourceText,
-                    explicitText,
+                    readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'adapted_script'),
+                    readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'raw_text'),
+                    activeEpisode?.ai_scene_analysis_adaptation,
                     latestStage1NodeOutputsRef.current?.scene_split,
                     typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '',
                     adaptationText,
@@ -20647,11 +20635,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ]
                         : [
                             readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
-                            latestStage1RawTextRef.current,
-                            latestStage1NodeOutputsRef.current?.environment_plan,
-                            typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'environment_plan') : '',
-                            options?.extractSourceText,
-                            explicitText,
+                            readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'adapted_script'),
+                            readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'raw_text'),
+                            activeEpisode?.ai_scene_analysis_adaptation,
                             sceneSplitSource,
                             adaptationText,
                             activeEpisode?.ai_scene_analysis_adaptation,
@@ -31942,7 +31928,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     {
                         targetSceneIds: [targetSceneId],
                         startFromStep: resolvedStartFrom,
-                        environmentPlannedText: liveEnvPlan,
                         onTaskCreated: (taskId) => {
                             const stableTaskId = String(taskId || '').trim();
                             setActiveAnalysisTaskId(stableTaskId);
@@ -32366,16 +32351,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || (textHasTaggedExtractItems(liveRaw, 'CHAR') || textHasTaggedExtractItems(liveRaw, 'PROP') ? liveRaw : '')
             || ''
         ).trim();
-        const envPlan = pickRichestEnvironmentPlanText([
+        const envPlan = pickFirstMatchingText([
             readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
-            liveRaw,
-            latestStage1NodeOutputsRef.current?.environment_plan,
-            getStageOutputContent('stage1', 'environment_plan'),
-            getStageOutputContent('stage1', 'adapted_script'),
-            adaptationText,
+            readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'adapted_script'),
+            readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'raw_text'),
             activeEpisode?.ai_scene_analysis_adaptation,
-            activeEpisode?.ai_scene_analysis_result,
-        ]);
+        ], (text) => textHasMainEnvironmentSkeleton(text) || textHasEnvironmentPlanSignals(text) || collectMainEnvironmentNames(text).length > 0);
         const parts = [];
         if (envPlan) parts.push(envPlan);
         if (sceneSplit && sceneSplit !== envPlan) parts.push(sceneSplit);

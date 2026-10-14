@@ -517,7 +517,7 @@ def test_scene_rerun_reuses_saved_environment_plan_without_node_success():
         "[ENV_BLOCK_START]\n【主环境】客栈大堂\n[ENV_BLOCK_END]\n"
         "[ENV_BLOCK_START]\n【主环境】大厦尖顶外空域\n[ENV_BLOCK_END]"
     )
-    assert persisted_environment_plan_for_scene_rerun(planned, newer) == newer
+    assert persisted_environment_plan_for_scene_rerun(planned, newer) == planned
     assert persisted_environment_plan_for_scene_rerun(newer, planned) == newer
 
 
