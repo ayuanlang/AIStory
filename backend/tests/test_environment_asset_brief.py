@@ -296,6 +296,19 @@ def test_pick_environment_plan_prefers_main_env_over_ident_only():
     assert "[ENV_BLOCK_START]" in brief
     assert "────【主环境】────" in brief
     assert "【主环境】客栈大堂" in brief
+    newer = planned.replace(
+        "【主环境】客栈大堂｜日夜内外=夜·内｜主环境角色=当下主线",
+        "【主环境】客栈大堂｜日夜内外=夜·内｜主环境角色=当下主线\n"
+        "────【主环境】────\n"
+        "【主环境】大厦尖顶外空域｜日夜内外=夜·外｜主环境角色=闪回宿主",
+    ).replace(
+        "[ENV] 名称=客栈大堂｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“大堂”",
+        "[ENV] 名称=客栈大堂｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“大堂”\n"
+        "[ENV] 名称=大厦尖顶外空域｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文：“尖顶”",
+    )
+    source, brief = pick_environment_plan_source_and_brief(planned, newer)
+    assert "大厦尖顶外空域" in source
+    assert "大厦尖顶外空域" in brief
 
 
 def test_environment_brief_reads_reuse_ident_patch_without_env_block():

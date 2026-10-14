@@ -147,6 +147,12 @@ export default function LlmLogViewer({ log, onClose }) {
         </div>
 
         <div className="space-y-4 overflow-y-auto pr-2 custom-scrollbar flex-1">
+          {String(log.error_msg || '').trim() ? (
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200 whitespace-pre-wrap break-words">
+              <div className="text-xs font-bold uppercase tracking-wider text-red-300 mb-2">{t('错误', 'Error')}</div>
+              {String(log.error_msg)}
+            </div>
+          ) : null}
           {messages.length > 0 ? messages.map((m, i) => (
             <details key={i} className={`rounded-xl border ${m.role === 'system' ? 'bg-purple-500/10 border-purple-500/20' : m.role === 'user' ? 'bg-blue-500/10 border-blue-500/20' : 'bg-emerald-500/10 border-emerald-500/20'} relative group`}>
               <summary className="flex justify-between items-center p-4 cursor-pointer outline-none select-none list-none [&::-webkit-details-marker]:hidden">

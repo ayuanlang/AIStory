@@ -1832,7 +1832,73 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
         return "本轮环境规划失败，不能进入现场编排"
     if "STAGING_ENV_SCENE_MISSING" in text:
         return "本场缺少主环境注入，不能进入现场编排"
+    storyboard_reason = _storyboard_step_failure_reason(text)
+    if storyboard_reason:
+        return storyboard_reason
     return "逐场子技能执行失败"
+
+
+def _persist_storyboard_step_failure(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene_marker: str,
+    exc: BaseException,
+) -> None:
+    """Leave the storyboard node failed with the real reason, so a later poll does not start another call."""
+    from app.services.script_analysis_flow import mark_storyboard_generation_failed
+
+    detail = _exception_detail_text(exc).strip() or str(exc)
+    reason = _storyboard_step_failure_reason(detail) or _scene_subskill_failure_reason(exc)
+    code = "STORYBOARD_GENERATION_FAILED"
+    if "SHOT_GENERATION_INCOMPLETE" in detail:
+        code = "SHOT_GENERATION_INCOMPLETE"
+    elif "STORYBOARD_" in detail:
+        code = detail.split(":", 1)[0].strip() or code
+    try:
+        mark_storyboard_generation_failed(
+            db,
+            project_id=int(project_id or 0),
+            episode_id=int(episode_id or 0),
+            scene_marker=str(scene_marker or ""),
+            error_message=reason or detail,
+            error_code=code,
+        )
+        db.commit()
+    except Exception:
+        logger.warning(
+            "[scene_subskill_pipeline] failed to persist storyboard error scene=%s",
+            scene_marker,
+            exc_info=True,
+        )
+
+
+def _storyboard_step_failure_reason(text: str) -> str:
+    """Keep the shot-table rejection text. A generic scene-step label hides it."""
+    cleaned = str(text or "").strip()
+    if cleaned.lower().startswith("error:"):
+        cleaned = cleaned.split(":", 1)[1].strip()
+    markers = (
+        "SHOT_GENERATION_INCOMPLETE",
+        "STORYBOARD_",
+        "Generate Shots",
+        "Generated shot table",
+        "LLM response became empty after sanitize",
+        "LLM returned empty response",
+        "PROHIBITED_CONTENT",
+    )
+    if "storyboard_generation_already_running" in cleaned:
+        return "分镜生成已在进行中，等待结束后仍未写入镜头"
+    if not any(marker in cleaned for marker in markers):
+        return ""
+    if len(cleaned) > 420:
+        cleaned = cleaned[:420].rstrip() + "…"
+    if cleaned.startswith("SHOT_GENERATION_INCOMPLETE"):
+        return f"分镜表未通过完整性校验：{cleaned}"
+    if cleaned.startswith("STORYBOARD_"):
+        return f"分镜未能落库：{cleaned}"
+    return f"分镜生成未通过校验：{cleaned}"
 
 
 def _completion_marker_pattern(marker: str):
@@ -2958,11 +3024,11 @@ def _load_ready_environment_asset_quads(
     return match_ready_environment_asset_quads(loaded, main_names)
 
 
-def cancel_running_scene_subskill_nodes(db: Session, *, episode_id: int) -> int:
-    """Close scene-analysis nodes that are still running so Stop is not a no-op.
+def cancel_running_pipeline_nodes(db: Session, *, episode_id: int) -> int:
+    """Close every running or queued node on this episode.
 
-    A quad wait parks the node as running after the task itself has finished.
-    Canceling that finished task does not clear the row, and the UI stays on 等待环境.
+    Stop has to cover 文戏、环境、四宫格、建置等待 and 分镜. A finished task id
+    does not clear a row that was left on running.
     """
     if int(episode_id or 0) <= 0:
         return 0
@@ -2974,23 +3040,25 @@ def cancel_running_scene_subskill_nodes(db: Session, *, episode_id: int) -> int:
     now_iso = now_bj_iso()
     closed = 0
     for row in rows:
-        name = str(getattr(row, "node_name", "") or "").strip()
         status = str(getattr(row, "status", "") or "").strip().lower()
-        if name not in {"scene_subskill_scene", "scene_subskill_pipeline"}:
-            continue
         if status not in {"running", "queued"}:
             continue
         meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
         meta["business_event"] = "cancelled"
-        meta["business_reason"] = "用户已停止"
+        meta["business_reason"] = "用户已停止，已取消"
         row.status = "failed"
-        row.last_error_code = "SCENE_SUBSKILL_CANCELLED"
-        row.last_error_message = "scene subskill cancelled"
+        row.last_error_code = "ANALYSIS_CANCELLED"
+        row.last_error_message = "analysis cancelled by user"
         row.runtime_meta = meta
         row.ended_at = now_iso
         row.updated_at = now_iso
         closed += 1
     return closed
+
+
+def cancel_running_scene_subskill_nodes(db: Session, *, episode_id: int) -> int:
+    """Backward-compatible name. Stop closes every in-flight node, not one kind."""
+    return cancel_running_pipeline_nodes(db, episode_id=episode_id)
 
 
 async def await_environment_asset_quad_injection(
@@ -3675,6 +3743,13 @@ async def _run_scene_storyboard_step(
         )
     except HTTPException as exc:
         if int(getattr(exc, "status_code", 0) or 0) != 409:
+            _persist_storyboard_step_failure(
+                task_db,
+                project_id=int(project_id),
+                episode_id=int(episode_id),
+                scene_marker=scene_id,
+                exc=exc,
+            )
             raise
         for _ in range(120):
             await asyncio.sleep(5)
@@ -3689,6 +3764,22 @@ async def _run_scene_storyboard_step(
                 )
                 task_db.commit()
                 return existing
+        _persist_storyboard_step_failure(
+            task_db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            scene_marker=scene_id,
+            exc=exc,
+        )
+        raise
+    except Exception as exc:
+        _persist_storyboard_step_failure(
+            task_db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            scene_marker=scene_id,
+            exc=exc,
+        )
         raise
     if isinstance(result, dict) and result.get("skipped_existing"):
         kept = int(result.get("existing_shot_count") or 0)
@@ -3703,7 +3794,15 @@ async def _run_scene_storyboard_step(
         return kept
     rows = list((result or {}).get("content") or []) if isinstance(result, dict) else []
     if not rows:
-        raise HTTPException(status_code=422, detail=f"STORYBOARD_EMPTY:{scene_id}")
+        empty_exc = HTTPException(status_code=422, detail=f"STORYBOARD_EMPTY:{scene_id}")
+        _persist_storyboard_step_failure(
+            task_db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            scene_marker=scene_id,
+            exc=empty_exc,
+        )
+        raise empty_exc
     apply_scene_id = int((result or {}).get("remapped_scene_id") or db_scene_id) if isinstance(result, dict) else db_scene_id
     episode = task_db.query(EpisodeModel).filter(EpisodeModel.id == int(episode_id)).first()
     project = (
@@ -3713,7 +3812,15 @@ async def _run_scene_storyboard_step(
     )
     scene_row = task_db.query(SceneModel).filter(SceneModel.id == apply_scene_id).first()
     if episode is None or project is None or scene_row is None:
-        raise HTTPException(status_code=422, detail=f"STORYBOARD_SCENE_NOT_IMPORTED:{scene_id}")
+        missing_exc = HTTPException(status_code=422, detail=f"STORYBOARD_SCENE_NOT_IMPORTED:{scene_id}")
+        _persist_storyboard_step_failure(
+            task_db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            scene_marker=scene_id,
+            exc=missing_exc,
+        )
+        raise missing_exc
     _import_scene_shot_rows_to_db(
         scene_id=apply_scene_id,
         db=task_db,
@@ -3726,7 +3833,15 @@ async def _run_scene_storyboard_step(
     task_db.commit()
     written = _count_active_shots(task_db, apply_scene_id)
     if written <= 0:
-        raise HTTPException(status_code=422, detail=f"STORYBOARD_NOT_PERSISTED:{scene_id}")
+        persist_exc = HTTPException(status_code=422, detail=f"STORYBOARD_NOT_PERSISTED:{scene_id}")
+        _persist_storyboard_step_failure(
+            task_db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            scene_marker=scene_id,
+            exc=persist_exc,
+        )
+        raise persist_exc
     mark_storyboard_generation_applied(
         task_db,
         project_id=int(project_id),

@@ -645,12 +645,20 @@ async def execute_analyze_scene(
                             try:
                                 payload = json.loads(raw_outputs)
                                 outputs = ((payload.get("stages") or {}).get("stage1") or {}).get("outputs") or {}
-                                for key in ("environment_plan", "adapted_script", "raw_text"):
+                                plan_slot = ""
+                        for key in ("environment_plan", "adapted_script", "raw_text"):
                                     slot = outputs.get(key)
+                                    content = ""
                                     if isinstance(slot, dict):
-                                        episode_plan_texts.append(str(slot.get("content") or ""))
+                                        content = str(slot.get("content") or "")
                                     elif isinstance(slot, str):
-                                        episode_plan_texts.append(slot)
+                                        content = slot
+                                    if key == "environment_plan":
+                                        plan_slot = content
+                                    else:
+                                        episode_plan_texts.append(content)
+                        if plan_slot:
+                            episode_plan_texts.insert(0, plan_slot)
                             except Exception:
                                 pass
                         episode_plan_texts.append(

@@ -82,7 +82,11 @@ const classifyFailureKind = ({ errorCode, errorMessage, businessReason, detail, 
     if (code === 'OUTPUT_SCENE_MISMATCH' || raw.includes('OUTPUT_SCENE_MISMATCH')) {
         return 'scene_mismatch';
     }
-    if (code === 'SCENE_SUBSKILL_CANCELLED' || /canceled|cancelled|已取消/.test(lower)) {
+    if (
+        code === 'SCENE_SUBSKILL_CANCELLED'
+        || code === 'ANALYSIS_CANCELLED'
+        || /canceled|cancelled|已取消/.test(lower)
+    ) {
         return 'cancelled';
     }
     const looksLikeEnvWait = /waiting_env|wait_env|等待环境/.test(lower)
@@ -128,7 +132,9 @@ export const explainScriptAnalysisNodeFailure = (source, tFn) => {
         timeout: t('该节点超时，长时间没有新进展。', 'This node timed out with no further progress.'),
         prompt_injection: t('内容被识别为提示词注入，已拦截。', 'The content was flagged as prompt injection and blocked.'),
         prompt_leak: t('内容被识别为提示词泄漏，已拦截。', 'The content was flagged as a prompt leak and blocked.'),
-        incomplete_output: t('模型返回的 Markdown 不完整，自动重试后仍未闭合。', 'The model returned incomplete markdown even after automatic retry.'),
+        incomplete_output: rawError
+            ? t(`模型返回不完整：${rawError}`, `Incomplete model output: ${rawError}`)
+            : t('模型返回的 Markdown 不完整，自动重试后仍未闭合。', 'The model returned incomplete markdown even after automatic retry.'),
         parse_failed: t('返回的结构无法解析，不能作为本节点成稿。', 'The returned structure could not be parsed, so this node has no usable draft.'),
         scene_mismatch: t('返回的场号与当前场次不一致。', 'The returned scene ID does not match this scene.'),
         cancelled: t('该节点已被取消或中途停止。', 'This node was canceled or stopped mid-run.'),

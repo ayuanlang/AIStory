@@ -617,6 +617,25 @@ def _delete_stale_scene_progress_rows(
     return stale_ids
 
 
+def _stop_write_if_task_canceled(
+    status: Optional[str],
+    runtime_meta: Optional[Dict[str, object]],
+    error_code: Optional[str],
+    error_message: Optional[str],
+) -> tuple:
+    """A canceled analysis task must not put a node back to running or success."""
+    from app.services.task_manager import is_current_task_cancel_requested
+
+    if not is_current_task_cancel_requested():
+        return status, runtime_meta, error_code, error_message
+    if str(status or "").strip().lower() not in {"running", "queued", "success", "warning"}:
+        return status, runtime_meta, error_code, error_message
+    meta = dict(runtime_meta or {})
+    meta["business_event"] = "cancelled"
+    meta["business_reason"] = "用户已停止，已取消"
+    return "failed", meta, "ANALYSIS_CANCELLED", "analysis cancelled by user"
+
+
 def normalize_node_status(value: Optional[str], default: str = "queued") -> str:
     candidate = str(value or "").strip().lower()
     if candidate in NODE_STATUS_VALUES:
@@ -2526,6 +2545,12 @@ def upsert_pipeline_node_status(
     error_code: Optional[str] = None,
     error_message: Optional[str] = None,
 ) -> ScriptProgressPipelineNode:
+    status, runtime_meta, error_code, error_message = _stop_write_if_task_canceled(
+        status,
+        runtime_meta,
+        error_code,
+        error_message,
+    )
     normalized_status = normalize_node_status(status)
     now_iso = now_bj_iso()
     node_name_norm = str(node_name or "").strip()

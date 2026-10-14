@@ -30,9 +30,9 @@ def test_quad_name_match_ignores_spacing_and_fullwidth_bar():
     assert environment_asset_quad_ready(ready["客栈大堂"]) is True
 
 
-def test_cancel_running_scene_subskill_closes_parked_wait_only():
+def test_cancel_running_pipeline_closes_every_open_node():
     from types import SimpleNamespace
-    from app.services.scene_subskill_pipeline_runner import cancel_running_scene_subskill_nodes
+    from app.services.scene_subskill_pipeline_runner import cancel_running_pipeline_nodes
 
     waiting = SimpleNamespace(
         node_name="scene_subskill_scene",
@@ -73,12 +73,13 @@ def test_cancel_running_scene_subskill_closes_parked_wait_only():
         def query(self, *_args, **_kwargs):
             return _Query()
 
-    assert cancel_running_scene_subskill_nodes(_Session(), episode_id=1) == 1
+    assert cancel_running_pipeline_nodes(_Session(), episode_id=1) == 2
     assert waiting.status == "failed"
-    assert waiting.last_error_code == "SCENE_SUBSKILL_CANCELLED"
+    assert waiting.last_error_code == "ANALYSIS_CANCELLED"
     assert waiting.runtime_meta["business_event"] == "cancelled"
     assert done.status == "success"
-    assert design.status == "running"
+    assert design.status == "failed"
+    assert design.last_error_code == "ANALYSIS_CANCELLED"
 
 
 def test_canceled_task_status_counts_as_stop():

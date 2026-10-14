@@ -2686,7 +2686,18 @@ const markPipelineNodesCanceledLocally = (nodes) => (
     (Array.isArray(nodes) ? nodes : []).map((node) => {
         const status = String(node?.status || '').trim().toLowerCase();
         if (!['running', 'queued'].includes(status)) return node;
-        return { ...node, status: 'canceled' };
+        const meta = node?.runtime_meta && typeof node.runtime_meta === 'object'
+            ? { ...node.runtime_meta }
+            : {};
+        meta.business_event = 'cancelled';
+        meta.business_reason = '用户已停止，已取消';
+        return {
+            ...node,
+            status: 'failed',
+            last_error_code: 'ANALYSIS_CANCELLED',
+            last_error_message: 'analysis cancelled by user',
+            runtime_meta: meta,
+        };
     })
 );
 
@@ -4696,6 +4707,21 @@ const pickFirstMatchingText = (candidates, predicate) => {
     return '';
 };
 
+const pickRichestEnvironmentPlanText = (candidates) => {
+    let best = '';
+    let bestCount = -1;
+    (candidates || []).forEach((text) => {
+        const value = String(text || '').trim();
+        if (!value) return;
+        const count = collectMainEnvironmentNames(value).length;
+        const usable = count > 0 || textHasEnvironmentPlanSignals(value);
+        if (!usable || count <= bestCount) return;
+        best = value;
+        bestCount = count;
+    });
+    return best;
+};
+
 const resolveCategoryAssetSourceText = (candidates, category) => {
     const key = String(category || '').trim().toLowerCase();
     if (key === 'characters') {
@@ -4709,9 +4735,7 @@ const resolveCategoryAssetSourceText = (candidates, category) => {
         return pickFirstMatchingText(candidates, (text) => textHasTaggedExtractItems(text, 'PROP'));
     }
     if (key === 'environments') {
-        const withSkeleton = pickFirstMatchingText(candidates, textHasMainEnvironmentSkeleton);
-        if (withSkeleton) return withSkeleton;
-        return pickFirstMatchingText(candidates, (text) => textHasEnvironmentPlanSignals(text) || collectMainEnvironmentNames(text).length > 0);
+        return pickRichestEnvironmentPlanText(candidates);
     }
     return pickFirstMatchingText(candidates, hasAssetRerunExtractSignals);
 };
@@ -14930,6 +14954,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const nodes = Array.isArray(snapshot?.pipeline_nodes) ? snapshot.pipeline_nodes : [];
                 const units = Array.isArray(snapshot?.scene_units) ? snapshot.scene_units : [];
                 applySnapshot(nodes, units);
+                if (isEpisodeAnalysisUserStopRequested(episodeId, {
+                    localStopRequested: analysisStopRequestedRef.current,
+                    localStopReason: analysisStopReasonRef.current,
+                })) {
+                    if (timer) {
+                        window.clearInterval(timer);
+                        timer = null;
+                    }
+                    return;
+                }
                 const liveAnalysis = Boolean(
                     isAnalyzing
                     || isRetryingPhase2
@@ -18273,6 +18307,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisResumeCoordinatorRef.current = { running: false, episodeId: null };
         phase2InFlightCategoriesRef.current = new Set();
         activeAnalysisTaskIdsRef.current = new Set();
+        environmentAssetDesignPendingRef.current = false;
+        environmentAssetDesignLaunchedRef.current = false;
+        stagingResumeKickedRef.current = new Set();
         storyboardKickoffByMarkerRef.current = new Set();
         storyboardKickoffByIdentityRef.current = new Set();
         storyboardKickoffByDbIdRef.current = new Set();
@@ -18292,6 +18329,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setIsAnalyzing(false);
         setIsRetryingPhase2(false);
         setRetryingAssetCategoryKeys([]);
+        setLiveAssetDesignTaskKeys([]);
+        setEnvironmentQuadRerunActive(false);
+        setIsRegeneratingDerivedEnvs(false);
+        setSceneMatrixRerun(null);
         setIsRerunningStoryboard(false);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
@@ -18338,7 +18379,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisFlowStatus,
         setAnalysisFlowStatusHistory,
         setAnalysisUiReport,
+        setEnvironmentQuadRerunActive,
+        setIsRegeneratingDerivedEnvs,
         setIsRerunningStoryboard,
+        setLiveAssetDesignTaskKeys,
+        setSceneMatrixRerun,
         setStoryboardTaskProgress,
         t,
     ]);
@@ -18380,20 +18425,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ? t('已请求停止当前剧本分析流程。', 'Stop requested for the current script analysis flow.')
             : t('已请求停止当前剧本分析任务。', 'Stop requested for the current scene analysis task.');
         clearLocalAnalysisRunningStateAfterUserStop(activeEpisode.id, { message: stopMessage });
-        void cancelRunningSceneAnalysis({ episode_id: activeEpisode.id }).catch((cancelErr) => {
-            if (onLog) onLog(`Failed to close parked scene analysis: ${cancelErr?.message || cancelErr}`, 'warning');
-        });
-        if (taskIds.length <= 0) {
-            if (onLog) onLog(
-                hasParkedPipeline
-                    ? 'Scene analysis stop closed the parked environment wait.'
-                    : 'Scene analysis stop requested before backend task id was available.',
-                hasParkedPipeline ? 'info' : 'warning'
-            );
-            setIsStoppingAnalysisTask(false);
-            return;
-        }
         try {
+            await cancelRunningSceneAnalysis({ episode_id: activeEpisode.id });
+            if (taskIds.length <= 0) {
+                if (onLog) onLog(
+                    hasParkedPipeline
+                        ? 'Scene analysis stop closed every open node.'
+                        : 'Scene analysis stop requested before backend task id was available.',
+                    hasParkedPipeline ? 'info' : 'warning'
+                );
+                return;
+            }
             const stopResults = await Promise.allSettled(taskIds.map((taskId) => stopAsyncTask(taskId)));
             const failedStops = stopResults.filter((item) => item.status === 'rejected');
             const confirmedMessage = failedStops.length > 0
@@ -19974,14 +20016,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ? options.targetEntityTypes.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
                     : [];
                 const extractSourceCandidates = [
-                    options?.extractSourceText,
-                    explicitText,
+                    readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                    latestStage1RawTextRef.current,
                     latestStage1NodeOutputsRef.current?.environment_plan,
                     typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'environment_plan') : '',
-                    readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                    options?.extractSourceText,
+                    explicitText,
                     latestStage1NodeOutputsRef.current?.scene_split,
                     typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '',
-                    latestStage1RawTextRef.current,
                     adaptationText,
                     activeEpisode?.ai_scene_analysis_adaptation,
                     activeEpisode?.ai_scene_analysis_result,
@@ -20604,13 +20646,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
                         ]
                         : [
-                            options?.extractSourceText,
-                            explicitText,
+                            readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                            latestStage1RawTextRef.current,
                             latestStage1NodeOutputsRef.current?.environment_plan,
                             typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'environment_plan') : '',
-                            readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                            options?.extractSourceText,
+                            explicitText,
                             sceneSplitSource,
-                            latestStage1RawTextRef.current,
                             adaptationText,
                             activeEpisode?.ai_scene_analysis_adaptation,
                             activeEpisode?.ai_scene_analysis_result,
@@ -31362,40 +31404,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 storyboardTaskProgressRef.current = scopedProgress;
                 setStoryboardTaskProgress(scopedProgress);
             }
-            // Clear existing shot temp for selected scenes before force regenerate/replace.
-            const pid = Number(projectId || activeEpisode?.project_id || 0);
-            const episodeId = Number(activeEpisode?.id || 0);
-            if (pid > 0 && episodeId > 0) {
-                try {
-                    await resetStoryboardGenerationProgress({
-                        project_id: pid,
-                        episode_id: episodeId,
-                        scene_markers: rerunMode === 'single'
-                            ? targets.map((item) => String(item?.sceneId || '').trim()).filter(Boolean)
-                            : undefined,
-                    });
-                } catch (resetErr) {
-                    onLog?.(
-                        t(
-                            `分镜重跑状态重置未完成：${resetErr?.message || resetErr}`,
-                            `Storyboard rerun status reset did not finish: ${resetErr?.message || resetErr}`
-                        ),
-                        'warning'
-                    );
+            // A finished environment-asset node must open the gate before this
+            // rerun. Otherwise a name mismatch blocks kickoff, and the reset
+            // below would queue storyboard after staging and the poller would
+            // never start it.
+            if (!analysisFullRestartGateRef.current) {
+                const envNodeDone = (diagnosticsPipelineNodesRef.current || []).some((node) => (
+                    String(node?.node_name || '').trim() === 'asset_design_environment'
+                    && ['success', 'warning'].includes(String(node?.status || '').trim().toLowerCase())
+                ));
+                if (envNodeDone) {
+                    environmentAssetReadyRef.current = true;
+                    environmentAssetDesignPendingRef.current = false;
                 }
             }
-            await clearAnalysisArtifactsFromStage('storyboard', {
-                preserveProgressUi: true,
-                markerSceneIds: targets.map((item) => item?.sceneId).filter(Boolean),
-                dbSceneIds: targets.map((item) => item?.dbSceneId).filter(Boolean),
-                partialSceneScope: rerunMode === 'single',
-                allowShotPurgeEpisodeFallback: rerunMode === 'all',
-                reason: rerunMode === 'single' ? 'storyboard-rerun-single-clear' : 'storyboard-rerun-all-clear',
-                refreshEpisode: false,
-                resetRuntimePanels: true,
-            });
+            await isEnvironmentAssetDesignReady();
 
-            // Preflight: only rerun scenes whose linked ENV assets are already designed.
+            // Preflight before reset. A blocked scene must keep the queue that
+            // was written at rerun start, which is older than staging success.
             storyboardEnvEntityCacheRef.current = { projectId: 0, episodeId: 0, at: 0, entities: null };
             const envEntities = await loadEnvironmentEntitiesForStoryboardGate();
             const readyTargets = [];
@@ -31437,9 +31463,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
             }
             if (!readyTargets.length) {
+                blockedTargets.forEach((item) => {
+                    const missingLabel = dedupeSubjectDisplayNames(item.missing || []).join('、')
+                        || t('关联环境', 'linked ENV');
+                    updateStoryboardTaskItem(item.sceneId, {
+                        sceneOrder: item.sceneOrder,
+                        status: 'waiting_env',
+                        error: t(
+                            `本场关联环境 ENV 尚未完成资产设计：${missingLabel}`,
+                            `Scene-linked ENV asset design incomplete: ${missingLabel}`
+                        ),
+                        dbSceneId: Number(item.dbSceneId || 0) || undefined,
+                    });
+                    enqueuePendingStoryboardKickoff({
+                        markerSceneId: item.sceneId,
+                        sceneOrder: item.sceneOrder,
+                        dbSceneIdHint: item.dbSceneId,
+                    });
+                });
                 const msg = t(
-                    '所选场景的关联环境 ENV 尚未完成资产设计，无法重跑分镜。请先完成环境资产设计后再试。',
-                    'Linked ENV asset design is incomplete for the selected scene(s). Finish environment asset design before rerunning storyboard.'
+                    '所选场景的关联环境 ENV 尚未完成资产设计，分镜将在环境完成后自动调起。',
+                    'Linked ENV asset design is incomplete. Storyboard will start after environment design finishes.'
                 );
                 setAnalysisFlowStatus({ phase: 'warning', message: msg });
                 setAnalysisUiReport((prev) => ({
@@ -31450,6 +31494,37 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }));
                 return;
             }
+
+            // Clear existing shots only for scenes that will actually regenerate.
+            const pid = Number(projectId || activeEpisode?.project_id || 0);
+            const episodeId = Number(activeEpisode?.id || 0);
+            if (pid > 0 && episodeId > 0) {
+                try {
+                    await resetStoryboardGenerationProgress({
+                        project_id: pid,
+                        episode_id: episodeId,
+                        scene_markers: readyTargets.map((item) => String(item?.sceneId || '').trim()).filter(Boolean),
+                    });
+                } catch (resetErr) {
+                    onLog?.(
+                        t(
+                            `分镜重跑状态重置未完成：${resetErr?.message || resetErr}`,
+                            `Storyboard rerun status reset did not finish: ${resetErr?.message || resetErr}`
+                        ),
+                        'warning'
+                    );
+                }
+            }
+            await clearAnalysisArtifactsFromStage('storyboard', {
+                preserveProgressUi: true,
+                markerSceneIds: readyTargets.map((item) => item?.sceneId).filter(Boolean),
+                dbSceneIds: readyTargets.map((item) => item?.dbSceneId).filter(Boolean),
+                partialSceneScope: rerunMode === 'single',
+                allowShotPurgeEpisodeFallback: rerunMode === 'all',
+                reason: rerunMode === 'single' ? 'storyboard-rerun-single-clear' : 'storyboard-rerun-all-clear',
+                refreshEpisode: false,
+                resetRuntimePanels: true,
+            });
 
             for (const item of readyTargets) {
                 const ok = await kickoffStoryboardForImportedScene({
@@ -31521,8 +31596,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         awaitPendingStoryboardTasks,
         beginStageRerunUi,
         checkSceneLinkedEnvironmentDesignReady,
+        enqueuePendingStoryboardKickoff,
+        isEnvironmentAssetDesignReady,
         kickoffStoryboardForImportedScene,
         loadEnvironmentEntitiesForStoryboardGate,
+        updateStoryboardTaskItem,
         onLog,
         projectId,
         t,
@@ -31758,6 +31836,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             [targetSceneId],
             episodePrefix
         );
+        orchestrationCanonicalSceneIdsRef.current = mergeSceneIdAllowlist(
+            orchestrationCanonicalSceneIdsRef.current,
+            [targetSceneId],
+            episodePrefix
+        );
         beginStageRerunUi({
             phase: 'scene_subskills',
             message: t(`正在重跑${targetSceneId} · ${label}…`, `Rerunning ${targetSceneId} · ${label}...`),
@@ -31919,6 +32002,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     `${targetSceneId} ${label} did not finish, so storyboard was not rerun.`
                 ));
             }
+            const sceneOutputRow = (
+                Array.isArray(pipelinePayload?.per_scene_outputs) ? pipelinePayload.per_scene_outputs : []
+            ).find((item) => sceneUnitIdsMatch(
+                String(item?.scene_id || ''),
+                targetSceneId,
+                deriveSceneOrderFromSceneId(targetSceneId),
+                episodePrefix
+            ));
+            const waitingForAsset = Boolean(sceneOutputRow?.waiting_asset) || (
+                Array.isArray(pipelinePayload?.waiting_scene_ids) ? pipelinePayload.waiting_scene_ids : []
+            ).some((sceneId) => sceneUnitIdsMatch(
+                String(sceneId || ''),
+                targetSceneId,
+                deriveSceneOrderFromSceneId(targetSceneId),
+                episodePrefix
+            ));
+            if (waitingForAsset) {
+                onLog?.(
+                    t(
+                        `${targetSceneId} 建置仍在等待环境资产，分镜生成会在建置完成后自动调起。`,
+                        `${targetSceneId} staging is still waiting on environment assets; storyboard will start after staging finishes.`
+                    ),
+                    'info'
+                );
+                return;
+            }
             clearAnalysisTaskMarker(activeEpisode.id);
             latestStage1RawTextRef.current = output;
             const adapted = String(extractStage1AdaptedScriptBody(output) || output).trim();
@@ -31944,34 +32053,45 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ),
                 'info'
             );
-            const { hit, candidates } = await resolveWorkspaceSceneForStoryboardRerun(targetSceneId, {
+            let { hit, candidates } = await resolveWorkspaceSceneForStoryboardRerun(targetSceneId, {
                 importIfMissing: true,
             });
             if (!hit?.dbSceneId) {
+                const stagingBlock = String(sceneOutputRow?.scene_block || '').trim();
+                const importNode = {
+                    node_name: 'scene_subskill_scene',
+                    status: 'success',
+                    scene_id: String(sceneOutputRow?.scene_id || targetSceneId),
+                    scene_order: Number(sceneOutputRow?.scene_order || 0) || deriveSceneOrderFromSceneId(targetSceneId),
+                    runtime_meta: {
+                        scene_block: stagingBlock,
+                        called_subskills: Array.isArray(sceneOutputRow?.called_subskills) && sceneOutputRow.called_subskills.length
+                            ? sceneOutputRow.called_subskills
+                            : ['staging'],
+                    },
+                };
+                if (pipelineNodeHasStagingImportBody(importNode)) {
+                    await importStagingSceneForStoryboardRerun(targetSceneId, importNode);
+                    const imported = await resolveWorkspaceSceneForStoryboardRerun(targetSceneId, {
+                        importIfMissing: true,
+                    });
+                    hit = imported.hit;
+                    candidates = imported.candidates;
+                }
+            }
+            if (!hit?.dbSceneId) {
                 onLog?.(
                     t(
-                        `${targetSceneId} 尚未从建置稿入库，已跳过分镜重跑。已有分镜保持完成状态。`,
-                        `${targetSceneId} is not imported from staging yet; storyboard rerun skipped. Existing storyboards stay completed.`
+                        `${targetSceneId} 建置已完成，但还没有入库场景，分镜生成未调起。`,
+                        `${targetSceneId} staging finished, but no imported scene was found, so storyboard was not started.`
                     ),
                     'warning'
                 );
-                const existingProgress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
-                const existingItem = findStoryboardProgressItem(existingProgress, targetSceneId, {
-                    sceneOrder: deriveSceneOrderFromSceneId(targetSceneId),
-                    markerSceneId: targetSceneId,
-                });
-                if (String(existingItem?.status || '').toLowerCase() !== 'completed') {
-                    updateStoryboardTaskItem(targetSceneId, {
-                        sceneOrder: deriveSceneOrderFromSceneId(targetSceneId),
-                        status: 'completed',
-                        error: '',
-                    });
-                }
                 setAnalysisFlowStatus({
                     phase: 'warning',
                     message: t(
-                        `${targetSceneId} 文戏已完成，但未找到可重跑的入库场景。`,
-                        `${targetSceneId} drama finished, but no imported scene was found for storyboard rerun.`
+                        `${targetSceneId} 建置已完成，但未找到可生成分镜的入库场景。`,
+                        `${targetSceneId} staging finished, but no imported scene was found for storyboard.`
                     ),
                 });
                 setAnalysisUiReport((prev) => ({
@@ -32246,23 +32366,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || (textHasTaggedExtractItems(liveRaw, 'CHAR') || textHasTaggedExtractItems(liveRaw, 'PROP') ? liveRaw : '')
             || ''
         ).trim();
-        const envPlan = String(
-            latestStage1NodeOutputsRef.current?.environment_plan
-            || getStageOutputContent('stage1', 'environment_plan')
-            || readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs)
-            || getStageOutputContent('stage1', 'adapted_script')
-            || adaptationText
-            || activeEpisode?.ai_scene_analysis_adaptation
-            || liveRaw
-            || ''
-        ).trim();
+        const envPlan = pickRichestEnvironmentPlanText([
+            readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+            liveRaw,
+            latestStage1NodeOutputsRef.current?.environment_plan,
+            getStageOutputContent('stage1', 'environment_plan'),
+            getStageOutputContent('stage1', 'adapted_script'),
+            adaptationText,
+            activeEpisode?.ai_scene_analysis_adaptation,
+            activeEpisode?.ai_scene_analysis_result,
+        ]);
         const parts = [];
-        if (sceneSplit) parts.push(sceneSplit);
-        if (envPlan && envPlan !== sceneSplit) parts.push(envPlan);
-        collectStage1SlotTexts(activeEpisode?.ai_stage_outputs).forEach((text) => {
-            const slot = String(text || '').trim();
-            if (slot && !parts.includes(slot)) parts.push(slot);
-        });
+        if (envPlan) parts.push(envPlan);
+        if (sceneSplit && sceneSplit !== envPlan) parts.push(sceneSplit);
+        if (!envPlan) {
+            collectStage1SlotTexts(activeEpisode?.ai_stage_outputs).forEach((text) => {
+                const slot = String(text || '').trim();
+                if (slot && !parts.includes(slot)) parts.push(slot);
+            });
+        }
         const merged = parts.join('\n\n').trim();
         if (hasAssetRerunExtractSignals(merged)) return merged;
         return String(
@@ -37029,14 +37151,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             let rank = Number(SUBSKILL_STEP_RANK[step] ?? 0);
                             if (event === 'completed' || status === 'success' || status === 'warning') rank = 7;
                             if (event === 'queued' && !step) rank = 0;
-                            const failed = status === 'failed' || status === 'blocked';
+                            const stopped = ['canceled', 'cancelled', 'stopped'].includes(status)
+                                || event === 'cancelled'
+                                || event === 'canceled';
+                            const failed = status === 'failed' || status === 'blocked' || stopped;
                             const quadWaitText = [
                                 meta.business_reason,
                                 node?.last_error_message,
                                 node?.last_error_code,
                             ].join('\n');
                             // 四宫格未齐只挡住建置。场景现场编排只依赖主环境，自身已完成则成功。
-                            const quadWait = /环境资产四宫格未齐|等待环境资产四宫格|STAGING_ENVIRONMENT_ASSET_EMPTY|STAGING_ENVIRONMENT_ASSET_TIMEOUT/.test(quadWaitText);
+                            const quadWait = !stopped && /环境资产四宫格未齐|等待环境资产四宫格|STAGING_ENVIRONMENT_ASSET_EMPTY|STAGING_ENVIRONMENT_ASSET_TIMEOUT/.test(quadWaitText);
                             if (quadWait && group === 'framing') {
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
@@ -37139,6 +37264,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const liveKickoff = sceneHasLiveStoryboardKickoff(sceneId);
                             const node = findScenePipelineNode('storyboard_generation', sceneId);
                             const fromNode = stateFromPipelineNode(node);
+                            const nodeEvent = String(node?.runtime_meta?.business_event || '').trim().toLowerCase();
+                            const nodeStopped = ['cancelled', 'canceled'].includes(nodeEvent)
+                                || String(node?.last_error_code || '').trim() === 'ANALYSIS_CANCELLED';
+                            if (nodeStopped) {
+                                return {
+                                    ...fromNode,
+                                    ready: false,
+                                    active: false,
+                                    failed: true,
+                                    parked: false,
+                                    detail: t('已停止', 'Stopped'),
+                                };
+                            }
                             // Scene rerun queues storyboard_generation before 文戏 finishes.
                             // Success / applied is finished. A leftover queued event must not keep 等待中.
                             const storyboardQueuedPlaceholder = isStoryboardQueuedPlaceholderNode(node);

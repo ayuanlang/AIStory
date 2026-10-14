@@ -2808,6 +2808,7 @@ class LLMService:
         usage: Dict[str, Any] = {}
         finish_reason = "stop"
         parts_count = 0
+        stream_error = ""
 
         import uuid
         if extra_config is None:
@@ -2845,6 +2846,7 @@ class LLMService:
                     parts_count, _collect_exc,
                 )
                 finish_reason = "incomplete"
+                stream_error = str(_collect_exc or "").strip()
 
             content = self._sanitize_response_content(raw_content)
             usage = self._normalize_provider_llm_usage(usage)
@@ -2869,6 +2871,7 @@ class LLMService:
                 "usage": usage,
                 "finish_reason": finish_reason,
                 "request_id": extra_config.get("request_id"),
+                "stream_error": stream_error,
             }
 
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -2909,6 +2912,8 @@ class LLMService:
                 result["plan"] = []
             result["usage"] = usage
             result["finish_reason"] = finish_reason
+            if aggregated.get("stream_error"):
+                result["stream_error"] = aggregated.get("stream_error")
             if extra_config and extra_config.get("request_id"):
                 result.setdefault("request_id", extra_config.get("request_id"))
             return result
@@ -2921,6 +2926,7 @@ class LLMService:
             "usage": usage,
             "finish_reason": finish_reason,
             "request_id": (extra_config or {}).get("request_id"),
+            "stream_error": aggregated.get("stream_error") or "",
         }
 
     def _try_parse_json_plan(self, text: str) -> Optional[Dict[str, Any]]:
@@ -3055,7 +3061,13 @@ class LLMService:
                  if not content and "content" in response:
                      content = response["content"] # fallback if _call_openai_compatible returns typical dict
                  
-                 return {"content": content, "usage": usage, "finish_reason": finish_reason}
+                 return {
+                     "content": content,
+                     "usage": usage,
+                     "finish_reason": finish_reason,
+                     "request_id": response.get("request_id"),
+                     "stream_error": response.get("stream_error"),
+                 }
 
             except Exception as e:
                  logger.error(f"Generate Content Error: {e}")
@@ -4374,6 +4386,23 @@ class LLMService:
         }
         return result
 
+    def _note_postprocess_rejection(self, result: Dict[str, Any], reason: str, candidate_config: Dict[str, Any]) -> str:
+        """Write the validator reason onto the call that already logged 成功, before the next model starts."""
+        detail = str(reason or "").strip() or "response postprocess validation failed"
+        stream_error = str((result or {}).get("stream_error") or "").strip()
+        if stream_error and stream_error not in detail:
+            detail = f"{detail}；上游中断：{stream_error[:300]}"
+        request_id = str((result or {}).get("request_id") or "").strip()
+        routing = self._build_routing_metadata_from_config(candidate_config or {})
+        if request_id:
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "request_id": request_id,
+                "provider": routing.get("provider") or (candidate_config or {}).get("provider"),
+                "model": routing.get("model") or (candidate_config or {}).get("model"),
+                "error": detail,
+            })
+        return detail
+
     async def generate_content_with_fallback(
         self,
         user_prompt: str,
@@ -4474,6 +4503,7 @@ class LLMService:
                     validation_ok, validation_error = _validate_response(result, config)
                     if validation_ok:
                         return self._attach_routing_metadata(result, config)
+                    validation_error = self._note_postprocess_rejection(result, validation_error, config)
                     content = f"Error: {validation_error}"
                     last_failure_kind = "postprocess"
                     validation_failed_this_attempt = True
@@ -4491,7 +4521,7 @@ class LLMService:
                     return self._attach_routing_metadata({"content": last_err, "usage": {}, "finish_reason": None}, config)
                 logger.warning(
                     "[llm_fallback] active attempt %d/%d failed | provider=%s model=%s err=%s",
-                    attempt, active_retry_attempts, config.get("provider"), config.get("model"), content[:200],
+                    attempt, active_retry_attempts, config.get("provider"), config.get("model"), content[:800],
                 )
 
             # ── fallback candidates ──
@@ -4523,6 +4553,7 @@ class LLMService:
                     validation_ok, validation_error = _validate_response(result, fb_cfg)
                     if validation_ok:
                         return self._attach_routing_metadata(result, fb_cfg)
+                    validation_error = self._note_postprocess_rejection(result, validation_error, fb_cfg)
                     content = f"Error: {validation_error}"
                     last_failure_kind = "postprocess"
                     validation_failed_this_attempt = True
@@ -4540,7 +4571,7 @@ class LLMService:
                     return self._attach_routing_metadata({"content": last_err, "usage": {}, "finish_reason": None}, fb_cfg)
                 logger.warning(
                     "[llm_fallback] fallback %d/%d failed | provider=%s model=%s err=%s",
-                    idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), content[:200],
+                    idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), content[:800],
                 )
 
             return self._attach_routing_metadata({

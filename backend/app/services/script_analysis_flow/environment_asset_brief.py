@@ -386,13 +386,36 @@ def _environment_brief_rank(brief: str) -> int:
     return score
 
 
+_MAIN_ENV_NAME_RE = re.compile(r"【主环境】\s*([^｜\|\r\n]+)")
+
+
+def count_main_environment_names(text: str) -> int:
+    """IDENT names plus 【主环境】 headings. Derived angles are not main environments."""
+    keys = set()
+    for name in collect_ident_environment_names(text):
+        key = normalize_environment_name(name)
+        if key and not _is_derived_environment_name(name):
+            keys.add(key)
+    for match in _MAIN_ENV_NAME_RE.finditer(str(text or "")):
+        raw = _clean(match.group(1))
+        key = normalize_environment_name(raw)
+        if key and not _is_derived_environment_name(raw):
+            keys.add(key)
+    return len(keys)
+
+
 def pick_environment_plan_source_and_brief(*sources: object) -> Tuple[str, str]:
-    """Prefer the source whose brief still has ENV_BLOCK / 【主环境】, not IDENT-only."""
+    """Prefer a real main-env skeleton, then the copy that lists more main environments.
+
+    The first text that merely contains one 【主环境】 must not hide a later
+    environment-plan slot that added a flashback host.
+    """
     fallback = ""
     seen: set = set()
     best_source = ""
     best_brief = ""
     best_rank = -1
+    best_count = -1
     for source in sources:
         cleaned = _clean(source)
         if not cleaned or cleaned in seen:
@@ -404,8 +427,7 @@ def pick_environment_plan_source_and_brief(*sources: object) -> Tuple[str, str]:
         if not brief:
             continue
         rank = _environment_brief_rank(brief)
-        if rank > best_rank:
-            best_source, best_brief, best_rank = cleaned, brief, rank
-            if rank >= 8:
-                return best_source, best_brief
+        count = count_main_environment_names(cleaned)
+        if rank > best_rank or (rank == best_rank and count > best_count):
+            best_source, best_brief, best_rank, best_count = cleaned, brief, rank, count
     return (best_source or fallback), best_brief

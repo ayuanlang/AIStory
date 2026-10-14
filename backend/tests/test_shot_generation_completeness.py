@@ -115,14 +115,26 @@ def test_header_only_is_incomplete_markdown():
     assert errors
 
 
-def test_finish_reason_incomplete_is_rejected_even_if_markdown_is_closed():
+def test_finish_reason_incomplete_does_not_reject_a_closed_table():
     markdown = _table(_closed_row("EP01_SC01_SH01"))
+    errors = collect_shot_generation_completeness_errors(
+        markdown_text=markdown,
+        raw_text=markdown,
+        finish_reason="incomplete",
+        continuation_stopped_by_max_segments=True,
+    )
+    assert errors == []
+
+
+def test_finish_reason_incomplete_is_kept_when_markdown_is_cut():
+    markdown = _table(_cut_row("EP01_SC01_SH01"))
     errors = collect_shot_generation_completeness_errors(
         markdown_text=markdown,
         raw_text=markdown,
         finish_reason="incomplete",
     )
     assert "finish_reason=incomplete" in errors
+    assert any("closed" in item or "cells" in item for item in errors)
 
 
 def test_length_finish_is_accepted_when_markdown_is_complete():

@@ -1171,15 +1171,19 @@ def collect_shot_generation_completeness_errors(
     Parse/apply tolerance pads missing cells and can skip a cut-off last row.
     Completeness must inspect the raw markdown, not the padded parse result.
     """
-    errors: List[str] = []
+    source = str(raw_text or "").strip() or str(markdown_text or "").strip()
+    errors = inspect_complete_shot_markdown_return(source)
+    # A closed Shot List is the success signal. Providers (and a late stream
+    # glitch) often set finish_reason=incomplete after the table is already
+    # complete; that must not start another model. Only an incomplete table
+    # keeps the finish-reason / continuation flags, so the caller can show them.
+    if not errors:
+        return []
     finish_norm = _normalize_shot_finish_reason(finish_reason)
     if finish_norm in _SHOT_HARD_INCOMPLETE_FINISH_REASONS:
-        errors.append(f"finish_reason={finish_norm}")
+        errors.insert(0, f"finish_reason={finish_norm}")
     if continuation_stopped_by_max_segments:
-        errors.append("continuation_stopped_by_max_segments")
-
-    source = str(raw_text or "").strip() or str(markdown_text or "").strip()
-    errors.extend(inspect_complete_shot_markdown_return(source))
+        errors.insert(0, "continuation_stopped_by_max_segments")
     return errors
 
 

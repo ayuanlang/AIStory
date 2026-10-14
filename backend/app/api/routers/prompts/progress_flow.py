@@ -461,7 +461,7 @@ def cancel_running_scene_analysis(
     current_user: User = Depends(get_current_user),
 ):
     """Stop parked 建置等待 rows. A finished task id cannot clear them."""
-    from app.services.scene_subskill_pipeline_runner import cancel_running_scene_subskill_nodes
+    from app.services.scene_subskill_pipeline_runner import cancel_running_pipeline_nodes
 
     episode = (
         db.query(Episode)
@@ -471,7 +471,7 @@ def cancel_running_scene_analysis(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
     _require_project_access(db, episode.project_id, current_user)
-    closed = cancel_running_scene_subskill_nodes(db, episode_id=int(request.episode_id))
+    closed = cancel_running_pipeline_nodes(db, episode_id=int(request.episode_id))
     if closed:
         db.commit()
     return {

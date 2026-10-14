@@ -35,6 +35,13 @@ def test_asset_wait_is_not_an_llm_timeout_and_batch_message_says_so():
     )
     assert is_timeout_like_error(asset_failed) is False
     assert "超时" not in _scene_subskill_failure_reason(asset_failed)
+    shot_incomplete = HTTPException(
+        status_code=502,
+        detail="Error: SHOT_GENERATION_INCOMPLETE: Generate Shots markdown return incomplete: markdown data row 2 is not a closed | ... | row",
+    )
+    shot_reason = _scene_subskill_failure_reason(shot_incomplete)
+    assert "逐场子技能执行失败" not in shot_reason
+    assert "markdown data row 2" in shot_reason
     assert is_environment_asset_wait_error(asset_failed) is False
     assert is_environment_asset_wait_error(HTTPException(
         status_code=422,
