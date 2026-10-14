@@ -279,6 +279,20 @@ def test_scene_env_ident_parse_and_reuse_decision():
     assert "view_angle" not in main_injection
     assert "已声明衍生名" not in main_injection
 
+    flashback_items = [
+        {"name": "玄极科技总裁办", "reuse": True, "matched_name": "玄极科技总裁办"},
+        {"name": "大厦尖顶外空域", "reuse": False, "matched_name": "", "evidence": "原文：“擦过大厦尖顶”"},
+    ]
+    flashback_injection = build_reused_main_environment_injection(
+        flashback_items,
+        [],
+        episode_env_blocks={
+            "大厦尖顶外空域": "【主环境】大厦尖顶外空域\n【四向与中心】尖顶在北。",
+        },
+    )
+    assert "所属主环境=大厦尖顶外空域｜新建" in flashback_injection
+    assert "尖顶在北" in flashback_injection
+
 
 def test_reused_environment_opening_is_rewritten_for_downstream():
     from app.services.script_analysis_flow.environment_reuse import (
@@ -659,6 +673,35 @@ drama body
     assert "【主环境】大厦尖顶外空域" in spliced
     assert "【主环境】上一世浮空艇机舱" in spliced
     assert spliced.index("【主环境】上一世浮空艇机舱") < spliced.index("[SCENE_CONTENT_START:EP00_SC01]")
+
+
+def test_framing_splice_keeps_bare_flashback_main_environment():
+    from app.services.scene_subskill_pipeline_runner import splice_environment_and_enhance_scene
+
+    env_scene = """[SCENE_START:EP00_SC01]
+[SCENE_ENV_IDENT_START:EP00_SC01]
+[ENV] 名称=玄极科技总裁办｜复用=是｜来源=项目库
+[ENV] 名称=大厦尖顶外空域｜复用=否｜来源=新建
+[SCENE_ENV_IDENT_END:EP00_SC01]
+[ENV_BLOCK_START]
+────【主环境】────
+【主环境】玄极科技总裁办
+[ENV_BLOCK_END]
+────【主环境】────
+【主环境】大厦尖顶外空域
+【四向与中心】尖顶在北
+[SCENE_CONTENT_START:EP00_SC01]
+plan body
+[SCENE_END:EP00_SC01]"""
+    enhance = """[SCENE_START:EP00_SC01]
+【场景名称】喋血重影
+[SCENE_CONTENT_START:EP00_SC01]
+drama body
+[SCENE_CONTENT_END:EP00_SC01]
+[SCENE_END:EP00_SC01]"""
+    spliced = splice_environment_and_enhance_scene("EP00_SC01", env_scene, enhance)
+    assert "【主环境】大厦尖顶外空域" in spliced
+    assert spliced.index("【主环境】大厦尖顶外空域") < spliced.index("[SCENE_CONTENT_START:EP00_SC01]")
 
 
 def test_framing_splice_drops_prior_derived_environment_tables():

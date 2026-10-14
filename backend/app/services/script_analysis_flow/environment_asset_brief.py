@@ -151,23 +151,22 @@ def extract_main_environment_block(scene_text: str) -> str:
     from app.services.script_analysis_flow import extract_env_block_from_scene_text
 
     source = str(scene_text or "")
+    wrapped = ""
     block = extract_env_block_from_scene_text(source).strip()
     if block:
         cleaned = _DERIVED_ENV_SECTION_PATTERN.sub("", block).strip()
-        if text_has_main_env_skeleton(cleaned) and (
-            "────【主环境】" in cleaned or "────【主环境】" not in source
-        ):
-            return _merge_unique_env_blocks(cleaned)
+        if text_has_main_env_skeleton(cleaned):
+            wrapped = cleaned
     bare_sections = [
         _DERIVED_ENV_SECTION_PATTERN.sub("", match.group(0)).strip()
         for match in _BARE_MAIN_ENV_SECTION_RE.finditer(source)
     ]
-    wrapped = [
+    bare_blocks = [
         _wrap_env_block_markers(body)
         for body in bare_sections
         if text_has_main_env_skeleton(body)
     ]
-    return _merge_unique_env_blocks(*wrapped)
+    return _merge_unique_env_blocks(wrapped, *bare_blocks)
 
 
 def _scene_brief_parts(scene_id: str, scene_text: str, extra_text: str = "") -> List[str]:

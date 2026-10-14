@@ -979,22 +979,32 @@ def build_reused_main_environment_injection(
     *,
     episode_env_blocks: Optional[Dict[str, str]] = None,
 ) -> str:
-    """Inject reused main-environment prose for framing. No derivative name list."""
+    """Inject every IDENT main environment for framing, including new flashback blocks."""
     sections: List[str] = []
-    for name in scene_reused_environment_names(items):
+    seen: set = set()
+    for item in items or []:
+        name = _clean_env_name(item.get("name"))
+        key = normalize_environment_name(name)
+        if not name or not key or key in seen:
+            continue
+        seen.add(key)
         catalog_item = find_catalog_environment(catalog, name)
-        local_block = str((episode_env_blocks or {}).get(normalize_environment_name(name)) or "")
+        local_block = str((episode_env_blocks or {}).get(key) or "")
         prose = framing_reused_main_environment_prose(name, catalog_item, local_block)
         if not prose:
-            continue
-        sections.append(f"所属主环境={name}\n{prose}")
+            prose = local_block.strip()
+        if not prose:
+            evidence = str(item.get("evidence") or "").strip()
+            prose = evidence or "本场 IDENT 已列此主环境"
+        kind = "复用" if item.get("reuse") else "新建"
+        sections.append(f"所属主环境={name}｜{kind}\n{prose}")
     if not sections:
         return ""
     return wrap_injection_section(
         REUSED_MAIN_ENV_LABEL,
-        "以下是本场复用主环境的正文，空间与注册名只读。"
-        "本场正文写明的门窗开闭、以及已经移位的物品，按本场正文锁，不要沿用正文里已经改变的旧开闭或旧落点。"
-        "按此空间锁站位与望向；禁止另起空间，禁止把正文收成继承或复用。\n\n"
+        "以下是本场全部主环境，含复用、新建、闪回、回忆和宿主。每一块都要读。"
+        "空间与注册名只读。禁止漏掉新建或闪回块，禁止另起未列出的空间。"
+        "本场正文写明的门窗开闭、以及已经移位的物品，按本场正文锁，不要沿用正文里已经改变的旧开闭或旧落点。\n\n"
         + "\n\n".join(sections),
     )
 
