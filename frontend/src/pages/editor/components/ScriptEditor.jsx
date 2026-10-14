@@ -28741,9 +28741,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const triggerStageOutputsRefresh = useCallback(async () => {
         setDiagnosticsRefreshNonce((value) => value + 1);
         if (typeof onRefreshEpisodes === 'function') {
-            await onRefreshEpisodes();
+            const episodeId = Number(activeEpisode?.id || 0);
+            await onRefreshEpisodes(episodeId > 0
+                ? { reloadFullEpisodeIds: [episodeId] }
+                : undefined);
         }
-    }, [onRefreshEpisodes]);
+    }, [activeEpisode?.id, onRefreshEpisodes]);
 
     const hasFramingForDerivedRegen = useMemo(() => {
         const map = parseSceneSubskillResultsMap(

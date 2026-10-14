@@ -504,12 +504,6 @@ const Editor = ({
         return normalized;
     }, [mergeEpisodeListWithCachedFields, pickMaxEpisodeId]);
 
-    const refreshEpisodesForEditor = useCallback(async (options = {}) => {
-        if (!id) return [];
-        const fresh = await fetchEpisodes(id).catch(() => []);
-        return hydrateEpisodesState(fresh, options);
-    }, [id, hydrateEpisodesState]);
-
     const reloadEpisodeIntoState = useCallback(async (episodeId) => {
         const fullEp = await fetchEpisode(episodeId);
         setEpisodes((prev) => sortEpisodesForEditor(
@@ -521,6 +515,19 @@ const Editor = ({
         ));
         return fullEp;
     }, [sortEpisodesForEditor]);
+
+    const refreshEpisodesForEditor = useCallback(async (options = {}) => {
+        if (!id) return [];
+        const fresh = await fetchEpisodes(id).catch(() => []);
+        const normalized = hydrateEpisodesState(fresh, options);
+        const reloadIds = (Array.isArray(options.reloadFullEpisodeIds) ? options.reloadFullEpisodeIds : [])
+            .map((episodeId) => Number(episodeId))
+            .filter((episodeId) => Number.isFinite(episodeId) && episodeId > 0);
+        for (const episodeId of reloadIds) {
+            await reloadEpisodeIntoState(episodeId);
+        }
+        return normalized;
+    }, [id, hydrateEpisodesState, reloadEpisodeIntoState]);
 
     const loadEpisodesForEditor = useCallback(async (projectSnapshot = null) => {
         if (!id) return [];
