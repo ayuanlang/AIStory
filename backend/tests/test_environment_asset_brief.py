@@ -28,6 +28,7 @@ from app.services.script_analysis_flow.prop_asset_brief import (
     prop_extract_has_items,
     prop_extract_is_explicit_none,
     latest_prop_extract_block,
+    pick_refreshed_prop_extract_block,
     replace_prop_extract_in_script,
     splice_prop_extract_into_script,
 )
@@ -452,6 +453,144 @@ def test_replace_prop_extract_swaps_only_the_prop_list():
     assert "名称=新佩" in merged
     assert "名称=旧佩" not in merged
     assert merged.count("[PROP_EXTRACT_START") == 1
+
+
+def test_pick_refreshed_prop_extract_keeps_the_new_list_ahead_of_the_echo():
+    current = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+正文甲
+[SCENE_END:EP01_SC01]
+[PROP_EXTRACT_START]
+[PROP] 名称=旧佩
+[PROP_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    llm = """[PROP_EXTRACT_START]
+[PROP] 名称=新佩
+[PROP_EXTRACT_END]
+
+[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+正文甲
+[SCENE_END:EP01_SC01]
+[PROP_EXTRACT_START]
+[PROP] 名称=旧佩
+[PROP_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    block = pick_refreshed_prop_extract_block(llm, current)
+    assert "名称=新佩" in block
+    assert "名称=旧佩" not in block
+    merged = replace_prop_extract_in_script(current, block)
+    assert "名称=新佩" in merged
+    assert "名称=旧佩" not in merged
+    assert "正文甲" in merged
+
+
+def test_shot_prose_is_not_a_prop_list_and_reextract_contract_closes_the_prompt():
+    import pytest
+    from fastapi import HTTPException
+
+    from app.services.script_analysis_flow_runner import (
+        _apply_list_reextract,
+        _compose_reextract_user_text,
+    )
+
+    shot = (
+        "(P1 0s–2s) 当前环境=ENV:[0度上一世浮空艇机舱]。"
+        "镜头在破损操纵台朝向前风挡航向窗的那一边离前风挡航向窗更远大约五步远的位置。"
+    )
+    current = """[SCENE_START:EP01_SC01]
+正文甲
+[PROP_EXTRACT_START]
+[PROP] 名称=旧佩
+[PROP_EXTRACT_END]
+"""
+    assert pick_refreshed_prop_extract_block(shot, current) == ""
+    with pytest.raises(HTTPException) as exc:
+        _apply_list_reextract(
+            llm_text=shot,
+            request_text=current,
+            stored_text=current,
+            target="prop",
+        )
+    assert "镜头句" in str(exc.value.detail)
+    composed = _compose_reextract_user_text(current, "prop")
+    assert composed.startswith("[REEXTRACT:PROP]")
+    assert "正文甲" in composed
+    assert composed.rstrip().endswith("不要在列表前后写任何别的字。")
+    assert "[PROP_EXTRACT_START]" in composed
+
+
+def test_multiline_prop_list_replaces_the_old_list_and_keeps_the_scene():
+    current = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+正文甲
+[SCENE_END:EP01_SC01]
+[PROP_EXTRACT_START]
+[PROP] 名称=旧佩
+[PROP_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    llm = """[PROP_EXTRACT_START]
+[PROP] 名称=墨绿帆布行李箱｜名称_en=Dark Green Canvas Suitcase｜基名=None｜全局性道具=是｜挂场ENV=无
+定位=苏晚秋流离失所与人生转折的唯一实体承载物
+外形=墨绿色粗帆布拉杆箱
+宿主=苏晚秋｜wear_side=左侧手持｜mount_body_part=手｜detachable=是
+提取理由=手持挽着
+适用场=EP01_SC01|EP01_SC02
+
+[PROP] 名称=青花老粗陶料罐｜名称_en=Blue and White Coarse Pottery Jar｜基名=None｜全局性道具=否｜挂场ENV=无
+依赖=PROP:[青花老粗陶料罐_碎裂态]｜依赖因=状态互依
+状态=变化前｜状态对=青花老粗陶料罐_碎裂态
+提取理由=状态互依
+适用场=EP01_SC01
+
+[PROP] 名称=青花老粗陶料罐_碎裂态｜名称_en=Shattered Pottery Jar｜基名=青花老粗陶料罐｜全局性道具=否｜挂场ENV=无
+依赖=PROP:[青花老粗陶料罐]｜依赖因=状态互依
+状态=变化后｜状态对=青花老粗陶料罐
+提取理由=状态互依
+适用场=EP01_SC01
+[PROP_EXTRACT_END]
+"""
+    from app.services.script_analysis_flow_runner import _apply_list_reextract
+
+    merged, block = _apply_list_reextract(
+        llm_text=llm,
+        request_text=current,
+        stored_text=current,
+        target="prop",
+    )
+    assert "名称=墨绿帆布行李箱" in block
+    assert "名称=青花老粗陶料罐_碎裂态" in merged
+    assert "名称=旧佩" not in merged
+    assert "正文甲" in merged
+    assert merged.count("[PROP_EXTRACT_START") == 1
+
+
+def test_unclosed_prop_list_still_replaces_the_stored_list():
+    current = """[SCENE_START:EP01_SC01]
+正文甲
+[PROP_EXTRACT_START]
+[PROP] 名称=旧佩
+适用场=EP01_SC01
+"""
+    llm = """[PROP_EXTRACT_START]
+[PROP] 名称=布包｜名称_en=Cloth Bag｜基名=None
+提取理由=手持挽着
+适用场=EP01_SC01
+"""
+    from app.services.script_analysis_flow_runner import _apply_list_reextract
+
+    merged, _block = _apply_list_reextract(
+        llm_text=llm,
+        request_text=current,
+        stored_text=current,
+        target="prop",
+    )
+    assert "名称=布包" in merged
+    assert "名称=旧佩" not in merged
+    assert "正文甲" in merged
 
 
 def test_latest_prop_extract_block_uses_the_refreshed_copy():

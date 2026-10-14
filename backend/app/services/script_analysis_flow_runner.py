@@ -112,6 +112,34 @@ def _strip_reextract_marker(text: str) -> str:
     return _REEXTRACT_MARK.sub("", str(text or "")).strip()
 
 
+def _compose_reextract_user_text(script_text: str, target: str) -> str:
+    """Reference script plus a closing contract, so the model does not continue the last shot."""
+    kind = "角色" if target == "character" else "道具"
+    tag = "CHAR" if target == "character" else "PROP"
+    marker = "[REEXTRACT:CHAR]" if target == "character" else "[REEXTRACT:PROP]"
+    body = _strip_reextract_marker(script_text)
+    return (
+        f"{marker}\n\n"
+        "下面【当前剧本】只作重抽依据。禁止续写，禁止复述，禁止输出镜头、建置、入戏、"
+        "P1、音效或当前环境。\n\n"
+        f"【当前剧本】\n{body}\n【当前剧本结束】\n\n"
+        f"本轮唯一合法输出是一块{kind}列表："
+        f"从 [{tag}_EXTRACT_START] 开始，到 [{tag}_EXTRACT_END] 结束。"
+        f"每一件单独一行 [{tag}]，字段按本技能 §8 模板。"
+        "不要在列表前后写任何别的字。"
+    )
+
+
+def _reextract_system_contract(target: str) -> str:
+    kind = "角色" if target == "character" else "道具"
+    tag = "CHAR" if target == "character" else "PROP"
+    return (
+        "【重新抽取输出合同】\n"
+        f"本轮只重抽{kind}列表。唯一合法输出是 [{tag}_EXTRACT_START] 到 [{tag}_EXTRACT_END]。"
+        "禁止续写镜头句、建置、入戏、P1、音效、当前环境，禁止输出 Project Visual Backfill。"
+    )
+
+
 def _choose_reextract_base(request_text: str, stored_text: str) -> str:
     request_base = _strip_reextract_marker(request_text)
     stored = str(stored_text or "").strip()
@@ -125,11 +153,11 @@ def _apply_list_reextract(*, llm_text: str, request_text: str, stored_text: str,
     from app.services.script_analysis_flow.character_asset_brief import (
         char_extract_has_items,
         char_extract_is_explicit_none,
-        latest_char_extract_block,
+        pick_refreshed_char_extract_block,
         replace_char_extract_in_script,
     )
     from app.services.script_analysis_flow.prop_asset_brief import (
-        latest_prop_extract_block,
+        pick_refreshed_prop_extract_block,
         prop_extract_has_items,
         prop_extract_is_explicit_none,
         replace_prop_extract_in_script,
@@ -139,14 +167,22 @@ def _apply_list_reextract(*, llm_text: str, request_text: str, stored_text: str,
     if not base.strip():
         raise HTTPException(status_code=422, detail="当前没有可更新的全局统筹剧本")
     if target == "character":
-        block = latest_char_extract_block(llm_text)
+        block = pick_refreshed_char_extract_block(llm_text, base)
         if not block or not (char_extract_has_items(block) or char_extract_is_explicit_none(block)):
-            raise HTTPException(status_code=422, detail="重新抽取未返回角色列表")
+            raise HTTPException(status_code=422, detail=_reextract_reject_detail("character", llm_text))
         return replace_char_extract_in_script(base, block), block
-    block = latest_prop_extract_block(llm_text)
+    block = pick_refreshed_prop_extract_block(llm_text, base)
     if not block or not (prop_extract_has_items(block) or prop_extract_is_explicit_none(block)):
-        raise HTTPException(status_code=422, detail="重新抽取未返回道具列表")
+        raise HTTPException(status_code=422, detail=_reextract_reject_detail("prop", llm_text))
     return replace_prop_extract_in_script(base, block), block
+
+
+def _reextract_reject_detail(target: str, llm_text: str) -> str:
+    label = "角色列表" if target == "character" else "道具列表"
+    text = str(llm_text or "")
+    if re.search(r"镜头在|当前环境\s*=|Bird's-Eye|\bP\d+\s*\d", text, flags=re.IGNORECASE):
+        return f"重新抽取未返回{label}。模型续写了镜头句，没有返回提取块。"
+    return f"重新抽取未返回{label}"
 
 
 def _strip_nested_scene_markers_from_patch(body: str) -> str:
@@ -569,6 +605,15 @@ async def execute_scene_analysis_flow_node(
             if flow_spec:
                 raw_payload["node_advanced_spec"] = flow_spec
 
+        reextract_base_text = ""
+        if list_reextract:
+            reextract_base_text = _strip_reextract_marker(str(raw_payload.get("text") or ""))
+            raw_payload["text"] = _compose_reextract_user_text(reextract_base_text, reextract_target)
+            contract = _reextract_system_contract(reextract_target)
+            system_prompt = str(raw_payload.get("system_prompt") or "")
+            if contract not in system_prompt:
+                raw_payload["system_prompt"] = f"{system_prompt.rstrip()}\n\n{contract}".strip()
+
         llm_started_perf = time.perf_counter()
         logger.info("[剧本分析流程] 开始调用 evaluate_scene 执行节点 %s...", node_key)
         try:
@@ -683,12 +728,16 @@ async def execute_scene_analysis_flow_node(
                         async_mode="0",
                     )
                     result_text = _extract_analysis_text_from_result(result)
-                    backfill_ok = _script_optimization_has_project_visual_backfill(result_text)
+                    backfill_ok = list_reextract or _script_optimization_has_project_visual_backfill(result_text)
                     promo_meta = raw_payload.get("project_metadata")
                     promo_ok = (
-                        promo_scene_split_is_valid(result_text, promo_meta)
-                        if node_key == "scene_split"
-                        else True
+                        True
+                        if list_reextract
+                        else (
+                            promo_scene_split_is_valid(result_text, promo_meta)
+                            if node_key == "scene_split"
+                            else True
+                        )
                     )
                     if backfill_ok and promo_ok:
                         if attempt > 1:
@@ -866,7 +915,7 @@ async def execute_scene_analysis_flow_node(
                 stored_scene_split = load_stage1_output_text(db, node_episode_id, "scene_split")
                 merged_text, new_block = _apply_list_reextract(
                     llm_text=scene_split_text,
-                    request_text=str(raw_payload.get("text") or ""),
+                    request_text=reextract_base_text or str(raw_payload.get("text") or ""),
                     stored_text=stored_scene_split,
                     target=reextract_target,
                 )

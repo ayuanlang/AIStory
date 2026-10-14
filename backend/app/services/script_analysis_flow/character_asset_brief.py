@@ -150,11 +150,35 @@ def splice_char_extract_into_script(script_text: str, char_extract: str) -> str:
 
 
 def latest_char_extract_block(script_text: str) -> str:
-    """Return the last wrapped character list. A refreshed list is written after any echoed copy."""
+    """Return the last wrapped character list."""
     matches = list(CHAR_EXTRACT_BLOCK_PATTERN.finditer(str(script_text or "")))
     if matches:
         return _clean(matches[-1].group(0))
     return ensure_char_extract_block(script_text)
+
+
+def _normalize_char_extract_block(text: str) -> str:
+    return re.sub(r"\s+", "", str(text or "")).lower()
+
+
+def pick_refreshed_char_extract_block(llm_text: str, current_script: str = "") -> str:
+    """Prefer the character list that differs from the list already in the script."""
+    text = str(llm_text or "")
+    matches = list(CHAR_EXTRACT_BLOCK_PATTERN.finditer(text))
+    blocks = [_clean(match.group(0)) for match in matches if _clean(match.group(0))]
+    if matches:
+        loose = collect_loose_char_item_blocks(text[: matches[0].start()])
+        if loose:
+            blocks.insert(0, "[CHAR_EXTRACT_START]\n" + "\n\n".join(loose) + "\n[CHAR_EXTRACT_END]")
+    if not blocks:
+        return ensure_char_extract_block(text)
+    current_matches = list(CHAR_EXTRACT_BLOCK_PATTERN.finditer(str(current_script or "")))
+    current_key = _normalize_char_extract_block(current_matches[0].group(0) if current_matches else "")
+    if current_key:
+        for block in blocks:
+            if _normalize_char_extract_block(block) != current_key:
+                return block
+    return blocks[0]
 
 
 def replace_char_extract_in_script(script_text: str, char_extract: str) -> str:

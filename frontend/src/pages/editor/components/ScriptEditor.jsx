@@ -16292,11 +16292,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const patchExtractsInText = (text) => {
             let out = String(text || '');
             if (!out.trim()) return out;
-            if (/\[CHAR_EXTRACT_START/i.test(out) || /\[CHAR\]/i.test(out)) {
-                out = replaceTaggedExtractBlock(out, 'CHAR', takeTaggedExtractInner(next, 'CHAR') || '无');
+            const innerFor = (tagName) => {
+                const wrapped = takeTaggedExtractBlock(next, tagName);
+                const inner = normalizeExtractReplacementInner(wrapped, tagName);
+                if (!wrapped || !inner || inner === '无') return '';
+                return inner;
+            };
+            const charInner = innerFor('CHAR');
+            if (charInner && (/\[CHAR_EXTRACT_START/i.test(out) || /\[CHAR\](?!_)/i.test(out))) {
+                out = replaceTaggedExtractBlock(out, 'CHAR', charInner);
             }
-            if (/\[PROP_EXTRACT_START/i.test(out) || /\[PROP\]/i.test(out)) {
-                out = replaceTaggedExtractBlock(out, 'PROP', takeTaggedExtractInner(next, 'PROP') || '无');
+            const propInner = innerFor('PROP');
+            if (propInner && (/\[PROP_EXTRACT_START/i.test(out) || /\[PROP\](?!_)/i.test(out))) {
+                out = replaceTaggedExtractBlock(out, 'PROP', propInner);
             }
             return out;
         };
@@ -20565,20 +20573,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                     // Skip empty category (no rows of this type, or all already in DB).
                     // Environment design no longer requires Index ENV rows — the environment plan is enough.
-                    const extractSourceCandidates = [
-                        options?.extractSourceText,
-                        explicitText,
-                        latestStage1NodeOutputsRef.current?.environment_plan,
-                        typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'environment_plan') : '',
-                        readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
-                        latestStage1NodeOutputsRef.current?.scene_split,
-                        typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '',
-                        latestStage1RawTextRef.current,
-                        adaptationText,
-                        activeEpisode?.ai_scene_analysis_adaptation,
-                        activeEpisode?.ai_scene_analysis_result,
-                        ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
-                    ];
+                    const sceneSplitSource = String(
+                        latestStage1NodeOutputsRef.current?.scene_split
+                        || (typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '')
+                        || ''
+                    ).trim();
+                    const extractSourceCandidates = (pData.key === 'characters' || pData.key === 'props')
+                        ? [
+                            sceneSplitSource,
+                            options?.extractSourceText,
+                            explicitText,
+                            latestStage1RawTextRef.current,
+                            adaptationText,
+                            activeEpisode?.ai_scene_analysis_adaptation,
+                            activeEpisode?.ai_scene_analysis_result,
+                            ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
+                        ]
+                        : [
+                            options?.extractSourceText,
+                            explicitText,
+                            latestStage1NodeOutputsRef.current?.environment_plan,
+                            typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'environment_plan') : '',
+                            readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                            sceneSplitSource,
+                            latestStage1RawTextRef.current,
+                            adaptationText,
+                            activeEpisode?.ai_scene_analysis_adaptation,
+                            activeEpisode?.ai_scene_analysis_result,
+                            ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
+                        ];
                     const extractSourceText = resolveCategoryAssetSourceText(extractSourceCandidates, pData.key)
                         || String(
                             options?.extractSourceText
@@ -30401,11 +30424,50 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ),
                 { startedAt, baselineText: source, disableEpisodeRecovery: true }
             );
-            const output = String(extractAnalysisTextFromResult(result) || '').trim();
-            if (!output) {
-                throw new Error(t(`重新抽取未返回${labelZh}。`, `Re-extract returned no ${labelEn}.`));
+            const tag = target === 'character' ? 'CHAR' : 'PROP';
+            const previousInner = normalizeExtractReplacementInner(takeTaggedExtractBlock(source, tag), tag);
+            let freshEpisode = null;
+            try {
+                freshEpisode = await fetchEpisode(activeEpisode.id);
+            } catch (_) {
+                freshEpisode = null;
             }
-            await persistSceneSplitExtractSource(output);
+            const savedSplit = readStage1OutputSlotContent(freshEpisode?.ai_stage_outputs, 'scene_split');
+            const savedInner = normalizeExtractReplacementInner(takeTaggedExtractBlock(savedSplit, tag), tag);
+            const serverHasNewList = Boolean(
+                savedInner
+                && savedInner !== '无'
+                && savedInner !== previousInner
+                && /\[SCENE_START/i.test(savedSplit)
+            );
+            if (serverHasNewList) {
+                latestStage1NodeOutputsRef.current = {
+                    ...latestStage1NodeOutputsRef.current,
+                    scene_split: savedSplit,
+                };
+                const stageOutputs = freshEpisode?.ai_stage_outputs;
+                if (stageOutputs && onUpdateEpisodeInfo) {
+                    await onUpdateEpisodeInfo(activeEpisode.id, {
+                        ai_stage_outputs: typeof stageOutputs === 'string'
+                            ? stageOutputs
+                            : JSON.stringify(stageOutputs),
+                    });
+                }
+            } else {
+                const output = String(extractAnalysisTextFromResult(result) || '').trim();
+                const truncated = Boolean(result?.__truncated__ || result?.__truncated_without_subjects__);
+                const block = truncated ? '' : takeTaggedExtractBlock(output, tag);
+                if (!block) {
+                    throw new Error(t(
+                        `重新抽取未返回${labelZh}。需要 [${tag}_EXTRACT] 列表。`,
+                        `Re-extract returned no ${labelEn}. A [${tag}_EXTRACT] list is required.`
+                    ));
+                }
+                const toSave = /\[SCENE_START/i.test(output)
+                    ? output
+                    : replaceTaggedExtractBlock(source, tag, normalizeExtractReplacementInner(block, tag));
+                await persistSceneSplitExtractSource(toSave);
+            }
             setAnalysisFlowStatus({
                 phase: 'completed',
                 message: t(`${labelZh}已重新抽取。`, `${labelEn} re-extracted.`),

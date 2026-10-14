@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_subskill_cut_transition.md
-# Prompt Updated At: 2026-10-14 10:15:00 +08:00
+# Prompt Updated At: 2026-10-14 14:30:00 +08:00
 # Skill 1-1-CUT: 全局统筹 · 多线确认 · 场景识别 · 时地锁定 · 场际衔接 · 分场切法 · 全局风格 · 光线风格 · 角色/道具提取 · 商业宣传片单场
 # Parent: scene_planning_1_script_optimization.md（只读基线，本文件不改原文）
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]
@@ -18,7 +18,7 @@
 - `[REEXTRACT:CHAR]`：只输出一个 `[CHAR_EXTRACT_START]` … `[CHAR_EXTRACT_END]`。按 §8 角色规则重抽。仍符合规则的行保留已登记名称与外形，缺的补上，不再符合的从列表去掉。
 - `[REEXTRACT:PROP]`：只输出一个 `[PROP_EXTRACT_START]` … `[PROP_EXTRACT_END]`。按 §8 道具规则重抽。手持或挽着的物件、前后外形变化的两条互相依赖状态道具、载具裁定照旧执行。
 - 本集没有可提取对象时，块内只写一行 `无`。
-- 输出只有这一块列表。不要复述输入剧本，不要输出另一种提取块，不要写出 `[REEXTRACT:CHAR]` 或 `[REEXTRACT:PROP]`。
+- 输出只有这一块列表，每一件单独一行 `[CHAR]` 或 `[PROP]`，字段按 §8 模板。禁止复述输入剧本，禁止续写场正文、建置、入戏、镜头句、`P1` 时间码、音效、`当前环境=`。禁止输出另一种提取块，禁止写出 `[REEXTRACT:CHAR]` 或 `[REEXTRACT:PROP]`。没有 `名称=` 的散文不算列表。
 
 
 ## 目标（最高）

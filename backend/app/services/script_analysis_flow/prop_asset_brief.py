@@ -110,11 +110,39 @@ def splice_prop_extract_into_script(script_text: str, prop_extract: str) -> str:
 
 
 def latest_prop_extract_block(script_text: str) -> str:
-    """Return the last wrapped prop list. A refreshed list is written after any echoed copy."""
+    """Return the last wrapped prop list."""
     matches = list(PROP_EXTRACT_BLOCK_PATTERN.finditer(str(script_text or "")))
     if matches:
         return _clean(matches[-1].group(0))
     return ensure_prop_extract_block(script_text)
+
+
+def _normalize_prop_extract_block(text: str) -> str:
+    return re.sub(r"\s+", "", str(text or "")).lower()
+
+
+def pick_refreshed_prop_extract_block(llm_text: str, current_script: str = "") -> str:
+    """Prefer the prop list that differs from the list already in the script.
+
+    A reextract answer often leads with the new list, then echoes the input script.
+    The echoed copy is the old list and must not replace the new one.
+    """
+    text = str(llm_text or "")
+    matches = list(PROP_EXTRACT_BLOCK_PATTERN.finditer(text))
+    blocks = [_clean(match.group(0)) for match in matches if _clean(match.group(0))]
+    if matches:
+        loose = collect_loose_prop_item_blocks(text[: matches[0].start()])
+        if loose:
+            blocks.insert(0, "[PROP_EXTRACT_START]\n" + "\n\n".join(loose) + "\n[PROP_EXTRACT_END]")
+    if not blocks:
+        return ensure_prop_extract_block(text)
+    current_matches = list(PROP_EXTRACT_BLOCK_PATTERN.finditer(str(current_script or "")))
+    current_key = _normalize_prop_extract_block(current_matches[0].group(0) if current_matches else "")
+    if current_key:
+        for block in blocks:
+            if _normalize_prop_extract_block(block) != current_key:
+                return block
+    return blocks[0]
 
 
 def replace_prop_extract_in_script(script_text: str, prop_extract: str) -> str:
@@ -125,13 +153,32 @@ def replace_prop_extract_in_script(script_text: str, prop_extract: str) -> str:
         return merged
     matches = list(PROP_EXTRACT_BLOCK_PATTERN.finditer(merged))
     if not matches:
-        return splice_prop_extract_into_script(merged, extract)
+        return _replace_unclosed_prop_extract(merged, extract)
     first = matches[0]
     replaced = f"{merged[:first.start()].rstrip()}\n\n{extract}\n{merged[first.end():].lstrip()}"
     extras = list(PROP_EXTRACT_BLOCK_PATTERN.finditer(replaced))
     for match in reversed(extras[1:]):
         replaced = f"{replaced[:match.start()].rstrip()}\n{replaced[match.end():].lstrip()}"
     return replaced.strip()
+
+
+def _replace_unclosed_prop_extract(script_text: str, prop_extract: str) -> str:
+    """A start tag without a matching end must still be swapped, not left in place."""
+    start = PROP_EXTRACT_START_PATTERN.search(script_text)
+    if not start:
+        return splice_prop_extract_into_script(script_text, prop_extract)
+    after = start.end()
+    end = PROP_EXTRACT_END_PATTERN.search(script_text, after)
+    if end:
+        end_at = end.end()
+    else:
+        cut = re.search(
+            r"`?\[(?:CHAR_EXTRACT_START|SCENES_BLOCK_END)[^\]]*\]`?",
+            script_text[after:],
+            re.IGNORECASE,
+        )
+        end_at = after + cut.start() if cut else len(script_text)
+    return f"{script_text[:start.start()].rstrip()}\n\n{prop_extract}\n{script_text[end_at:].lstrip()}".strip()
 
 
 def prop_extract_is_explicit_none(script_text: str) -> bool:
