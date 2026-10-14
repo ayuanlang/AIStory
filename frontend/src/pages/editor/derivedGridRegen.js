@@ -365,8 +365,12 @@ function looksLikeFullDesignOpening(text) {
 
 export function mainEnvironmentOpeningDraft(entity) {
     const attrs = readAttrs(entity);
-    return openingBeforeQuad(attrs.main_environment_opening || '')
-        || openingBeforeQuad(entity?.generation_prompt_cn || entity?.prompt || '');
+    const fromPrompt = openingBeforeQuad(entity?.generation_prompt_cn || entity?.prompt || '');
+    const fromAttr = openingBeforeQuad(attrs.main_environment_opening || '');
+    // A new environment design writes the full opening into the prompt.
+    // The saved attribute is the opening frozen by the previous four-grid.
+    if (looksLikeFullDesignOpening(fromPrompt)) return fromPrompt;
+    return fromAttr || fromPrompt;
 }
 
 export function withMainEnvironmentOpening(entity, opening) {

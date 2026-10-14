@@ -20534,14 +20534,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // skip_episode_persist avoids concurrent overwrite of ai_entity_design_result (frontend merges).
             // Failed / incomplete categories auto-retry until DB coverage, user stop, or pipeline timeout.
             const episodeIdForAssetSubtasks = activeEpisode?.id || null;
-            const runEnvironmentQuadConversion = async (environments, traceId) => {
+            const runEnvironmentQuadConversion = async (environments, traceId, options = {}) => {
+                const force = Boolean(options?.force);
                 const mains = (Array.isArray(environments) ? environments : []).filter((item) => (
                     isMainEnvironmentCompletenessAsset({ ...item, type: item?.type || 'environment' })
                     && String(item?.name || '').trim()
                     && String(item?.generation_prompt_cn || '').trim()
                 ));
                 if (!mains.length) return false;
-                const pending = mains.filter((item) => !mainEnvironmentPromptHasQuad(item.generation_prompt_cn));
+                // A fresh design already carries the previous four cells when the
+                // stored prompt was echoed. Those cells are the old grid. Rebuild
+                // from the new opening instead of treating the markers as done.
+                const openingOf = (item) => String(mainEnvironmentOpeningDraft(item) || '').trim();
+                if (force) {
+                    const missingOpening = mains.filter((item) => !openingOf(item));
+                    if (missingOpening.length) {
+                        onLog?.(
+                            `[Stage 3 Asset Design] 四宫格缺少可旋转开篇：${missingOpening.map((item) => item.name).join('、')}`,
+                            'error'
+                        );
+                        return false;
+                    }
+                }
+                const pending = force
+                    ? mains
+                    : mains.filter((item) => !mainEnvironmentPromptHasQuad(item.generation_prompt_cn));
                 if (!pending.length) return true;
                 const quadPromptRes = await fetchPrompt(
                     'skills/scene_analysis_feature_stack/environment_quad_prompt.md'
@@ -20551,9 +20568,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     onLog?.('[Stage 3 Asset Design] 四宫格技能缺失，主环境停在设计稿。', 'error');
                     return false;
                 }
-                const source = pending.map((item) => (
-                    `【主环境设计稿】${String(item.name).trim()}\n${String(item.generation_prompt_cn).trim()}\n【/主环境设计稿】`
-                )).join('\n\n');
+                const source = pending.map((item) => {
+                    const body = force
+                        ? openingOf(item)
+                        : String(item.generation_prompt_cn || '').trim();
+                    return `【主环境设计稿】${String(item.name).trim()}\n${body}\n【/主环境设计稿】`;
+                }).join('\n\n');
                 onLog?.(
                     `[Stage 3 Asset Design] 开始四宫格转换 mains=${pending.length} trace_id=${traceId}`,
                     'info'
@@ -21030,7 +21050,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         }
 
                         if (pData.key === 'environments' && !subtaskImportError && subtaskHasImportableSubjects) {
-                            const quadOk = await runEnvironmentQuadConversion(subtaskPayload.environments, subtaskTraceId);
+                            const quadOk = await runEnvironmentQuadConversion(subtaskPayload.environments, subtaskTraceId, { force: true });
                             if (!quadOk) subtaskImportError = 'environment_quad_not_ready';
                         }
 
@@ -21205,7 +21225,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     + Number(counts.poster || 0)
                 );
                 if (key === 'environments' && !subtaskImportError) {
-                    const quadOk = await runEnvironmentQuadConversion(subtaskPayload.environments, subtaskTraceId);
+                    const quadOk = await runEnvironmentQuadConversion(subtaskPayload.environments, subtaskTraceId, { force: true });
                     if (!quadOk) subtaskImportError = 'environment_quad_not_ready';
                 }
                 const assetImportReady = Boolean(
@@ -32972,6 +32992,64 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }))
     );
 
+    const loadLatestEnvironmentDesignRows = async () => {
+        let designText = String(llmAssetRawResultContent || '').trim();
+        if (activeEpisode?.id) {
+            try {
+                const episode = await fetchEpisode(activeEpisode.id);
+                const persisted = String(episode?.ai_entity_design_result || '').trim();
+                if (persisted) designText = persisted;
+            } catch (_) {}
+        }
+        const payload = getAnalysisEntitiesPayloadFromJsonText(designText) || {};
+        return Array.isArray(payload.environments) ? payload.environments : [];
+    };
+
+    const collectQuadRerunCandidates = (entities, designRows, planText = '') => {
+        const byName = new Map();
+        collectRerunnableMainEnvironments(entities).forEach((item) => {
+            byName.set(item.name, item);
+        });
+        (Array.isArray(designRows) ? designRows : []).forEach((item) => {
+            const named = { ...item, type: item?.type || 'environment' };
+            if (!isMainEnvironmentCompletenessAsset(named)) return;
+            const name = String(item?.name || '').trim();
+            const prompt = String(item?.generation_prompt_cn || '').trim();
+            if (!name || !prompt) return;
+            const opening = mainEnvironmentOpeningDraft(named);
+            const previous = byName.get(name);
+            byName.set(name, {
+                name,
+                hasQuad: Boolean(previous?.hasQuad) || mainEnvironmentPromptHasQuad(prompt),
+                prompt,
+                opening: opening || previous?.opening || '',
+                fromDesign: true,
+            });
+        });
+        collectMainEnvironmentNames(planText).forEach((name) => {
+            const stableName = String(name || '').trim();
+            if (!stableName || byName.has(stableName)) return;
+            const plan = sliceEnvironmentEditorText(planText, stableName);
+            const planBody = String(plan?.text || '').trim();
+            byName.set(stableName, {
+                name: stableName,
+                hasQuad: false,
+                prompt: '',
+                opening: planBody,
+                fromDesign: false,
+            });
+        });
+        const planNames = collectMainEnvironmentNames(planText)
+            .map((name) => String(name || '').trim())
+            .filter(Boolean);
+        if (planNames.length) {
+            return planNames.map((name) => byName.get(name)).filter((item) => (
+                item && String(item.opening || item.prompt || '').trim()
+            ));
+        }
+        return Array.from(byName.values()).filter((item) => String(item.opening || item.prompt || '').trim());
+    };
+
     const openEnvironmentQuadRerunModal = async () => {
         if (!projectId || !activeEpisode?.id || environmentQuadRerunActive) return;
         if (isAssetCategoryBusy('environments')) {
@@ -32981,8 +33059,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ), 'warning');
             return;
         }
-        const owned = await refreshEpisodeOwnedEntities();
-        const candidates = collectRerunnableMainEnvironments(owned);
+        const [owned, designRows] = await Promise.all([
+            refreshEpisodeOwnedEntities(),
+            loadLatestEnvironmentDesignRows(),
+        ]);
+        const candidates = collectQuadRerunCandidates(owned, designRows, resolveAssetRerunSourceText());
         if (!candidates.length) {
             reportAnalysisPanelNotice(t(
                 '没有可重跑的主环境设计稿。',
@@ -33017,10 +33098,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             'process'
         );
         try {
-            const owned = await refreshEpisodeOwnedEntities();
-            const mains = collectRerunnableMainEnvironments(owned).filter((item) => (
+            const [owned, designRows] = await Promise.all([
+                refreshEpisodeOwnedEntities(),
+                loadLatestEnvironmentDesignRows(),
+            ]);
+            const mains = collectQuadRerunCandidates(owned, designRows, resolveAssetRerunSourceText()).filter((item) => (
                 !wantedName || item.name === wantedName
-            ));
+            )).filter((item) => item.fromDesign !== false || String(item.prompt || '').trim());
             if (!mains.length) {
                 reportAnalysisPanelNotice(t(
                     '没有可重跑的主环境设计稿。',
@@ -33043,7 +33127,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ));
             }
             const source = mains.map((item) => (
-                `【主环境设计稿】${String(item.name).trim()}\n${String(item.opening).trim()}\n【/主环境设计稿】`
+                `【主环境设计稿】${String(item.name).trim()}\n${String(item.opening || item.prompt || '').trim()}\n【/主环境设计稿】`
             )).join('\n\n');
             // A stopped run's clock is already zero. This rerun is a new action
             // and gets its own 60-minute budget from now.
@@ -38549,8 +38633,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${active ? 'border-emerald-300/60 bg-emerald-500/20 text-emerald-50' : 'border-white/10 bg-white/5 hover:bg-white/10 text-white/80'}`}
                                                 >
                                                     <div className="text-sm font-semibold">{item.name}</div>
-                                                    <div className="text-[11px] text-white/50 mt-0.5">
-                                                        {item.hasQuad ? t('四宫格已写', 'Four-grid written') : t('四宫格未写', 'Four-grid missing')}
+                                                    <div className="text-[11px] text-white/50 mt-0.5 truncate">
+                                                        {item.fromDesign === false
+                                                            ? t('尚无设计稿', 'No design draft yet')
+                                                            : (item.hasQuad ? t('四宫格已写', 'Four-grid written') : t('四宫格未写', 'Four-grid missing'))}
+                                                        {String(item.opening || '').trim()
+                                                            ? ` · ${String(item.opening).trim().slice(0, 80)}`
+                                                            : ''}
                                                     </div>
                                                 </button>
                                             );
