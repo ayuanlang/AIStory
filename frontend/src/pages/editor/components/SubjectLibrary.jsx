@@ -6801,9 +6801,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const targetEntityId = Number(activeEntity?.id || 0);
         if (!Number.isFinite(targetEntityId) || targetEntityId <= 0) return;
         const targetEntityName = String(activeEntity?.name || activeEntity?.name_en || targetEntityId);
+        const imageEditOnly = Boolean(generationOptions?.imageEditOnly);
         const selectedLangPrompt = getEntityPromptByLang(activeEntity, 'cn');
         const draftPrompt = String(promptDrafts?.cn || '').trim();
-        const promptToUse = customPrompt || String(draftPrompt || selectedLangPrompt || '').trim();
+        const promptToUse = imageEditOnly
+            ? String(customPrompt || '').trim()
+            : (customPrompt || String(draftPrompt || selectedLangPrompt || '').trim());
         if (!promptToUse) return;
 
         const entityNameMap = buildEntityNameMap(allEntities);
@@ -6831,7 +6834,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             entityNameMap
         ).filter(({ token }) => !excludedDepKeySet.has(String(token || '').trim()));
         const qualityRegen = Boolean(generationOptions?.qualityRegen);
-        if (!qualityRegen && missingDependencyTargets.length > 0) {
+        if (!qualityRegen && !imageEditOnly && missingDependencyTargets.length > 0) {
             const missingLabels = missingDependencyTargets.map(formatEntityDependencyLabel).join('、');
             showSubjectNotification(
                 t(
@@ -6859,13 +6862,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         // prompt likely already has suffixes appended from initialization, 
         // but we run processPrompt again in case user added new variables.
         // Use allEntities for resolution
-        const processedPrompt = qualityRegen ? promptToUse : processPrompt(promptToUse, epInfo, allEntities);
-        const finalPrompt = qualityRegen
+        const processedPrompt = (qualityRegen || imageEditOnly) ? promptToUse : processPrompt(promptToUse, epInfo, allEntities);
+        const finalPrompt = (qualityRegen || imageEditOnly)
             ? processedPrompt
             : prependEntityGlobalStyleToPromptHead(processedPrompt, { injectIfMissing: true });
 
         const preserveStoredPrompt = Boolean(generationOptions?.preserveStoredPrompt);
-        if (!generationOptions?.keepPromptDraft && !qualityRegen && !preserveStoredPrompt) {
+        if (!generationOptions?.keepPromptDraft && !qualityRegen && !preserveStoredPrompt && !imageEditOnly) {
             // Update UI to show processed prompt (in case var replacement happened)
             setPrompt(finalPrompt);
             setPromptDrafts(prev => ({
@@ -6897,11 +6900,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     const url = typeof ref === 'object' ? ref.url : String(ref);
                     if (url) allRefs.push(url);
                 });
-            } else if (refImage?.url) {
+            } else if (!imageEditOnly && refImage?.url) {
                 allRefs.push(refImage.url);
             }
-            if (!qualityRegen && depUrls.length > 0) allRefs.push(...depUrls);
-            if (!qualityRegen) {
+            if (!qualityRegen && !imageEditOnly && depUrls.length > 0) allRefs.push(...depUrls);
+            if (!qualityRegen && !imageEditOnly) {
                 collectPromoSourceImageUrls(activeEntity, project?.global_info).forEach((url) => allRefs.push(url));
             }
             
@@ -6917,20 +6920,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
             let effectiveFinalPrompt = finalPrompt;
             let effectivePromptToUse = promptToUse;
-            if (inheritAppearance && uniqueRefs.length > 0) {
+            if (inheritAppearance && uniqueRefs.length > 0 && !imageEditOnly) {
                 effectiveFinalPrompt = effectiveFinalPrompt.replace(/【相貌】[\s\S]*?【\/相貌】/g, '【相貌】根据参考图生成【/相貌】');
                 effectivePromptToUse = effectivePromptToUse.replace(/【相貌】[\s\S]*?【\/相貌】/g, '【相貌】根据参考图生成【/相貌】');
             }
 
-            const imagePrompt = (!qualityRegen && isMainEnvironmentEntity(activeEntity))
+            const imagePrompt = (!qualityRegen && !imageEditOnly && isMainEnvironmentEntity(activeEntity))
                 ? quadImagePrompt(effectiveFinalPrompt)
                 : effectiveFinalPrompt;
-            const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = buildEntityImageGenerationPrompts(
-                imagePrompt,
-                effectivePromptToUse,
-                promptEntity,
-                allEntities
-            );
+            const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = imageEditOnly
+                ? { prompt: String(imagePrompt || '').trim(), negative_prompt: '' }
+                : buildEntityImageGenerationPrompts(
+                    imagePrompt,
+                    effectivePromptToUse,
+                    promptEntity,
+                    allEntities
+                );
 
             const submitResult = await submitImageGenerationJob(submissionPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                 function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
@@ -7265,28 +7270,36 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return text;
     };
 
-    const submitAdvancedLocalModify = async (entity, instruction) => {
+    const submitAdvancedLocalModify = async (entity, instruction, options = null) => {
         const appended = String(instruction || '').trim();
         const target = entity || viewingEntity;
+        const sourceUrl = String(options?.referenceImageUrl || target?.image_url || '').trim();
         if (!appended || !target) return;
+        if (!sourceUrl) {
+            showSubjectNotification(
+                t('还没有原图，无法局部修改。', 'There is no source image to edit.'),
+                'warning'
+            );
+            return;
+        }
         setIsAdvancedLocalModifying(true);
         try {
             const base = String(target?.generation_prompt_cn || '');
             const quadEdit = isEnvironmentEntity(target) && /四向拼图|2×2|四宫格/.test(base);
             const editInstruction = quadEdit ? sealCellEditInstruction(appended) : appended;
-            const autoRefs = [];
-            if (target?.image_url) {
-                autoRefs.push({
-                    url: target.image_url,
-                    type: 'image',
-                    weight: 0.8,
-                });
+            if (onLog) {
+                onLog(
+                    t('按当前画面做图生图修改，只提交输入框里的修改指令。', 'Editing the current image. Only the instruction in the text box is submitted.'),
+                    'info'
+                );
             }
-            await handleGenerate(target, autoRefs, base.trim() || editInstruction, {
-                is_gemini_multi_turn_edit: true,
-                gemini_base_prompt: base,
-                gemini_edit_instruction: editInstruction,
-            }, { preserveStoredPrompt: true });
+            await handleGenerate(
+                target,
+                [{ url: sourceUrl, type: 'image', weight: 0.8 }],
+                editInstruction,
+                null,
+                { preserveStoredPrompt: true, imageEditOnly: true }
+            );
         } finally {
             setIsAdvancedLocalModifying(false);
         }
@@ -7330,10 +7343,23 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return String(error?.message || '').trim() || t('一致性检查失败', 'Consistency check failed');
     };
 
+    const resolveConsistencyReferenceUrl = async (entity) => {
+        const own = String(entity?.image_url || '').trim();
+        if (isMainEnvironmentEntity(entity)) return own;
+        if (!isGridCropDerivedEntity(entity)) return own;
+        const plan = planDerivedGridRegen(entity, allEntities);
+        if (!plan?.ok) {
+            throw new Error(derivedGridRegenErrorText(plan?.errorCode));
+        }
+        const mainUrl = String(plan.mainEntity?.image_url || '').trim();
+        if (own && mainUrl && own !== mainUrl) return own;
+        return cropMainEnvironmentGridCell(mainUrl, plan.position);
+    };
+
     const handleEnvironmentConsistencyCheck = async (entity) => {
         const entityId = String(entity?.id || '').trim();
         if (!entityId || entityId === 'new' || !isEnvironmentEntity(entity)) return;
-        if (!String(entity?.image_url || '').trim()) {
+        if (!String(entity?.image_url || '').trim() && !isGridCropDerivedEntity(entity)) {
             showSubjectNotification(t('还没有生成图片，无法做一致性检查。', 'There is no generated image to check.'), 'warning');
             return;
         }
@@ -7345,8 +7371,23 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
         setEnvironmentConsistency({ entityId, running: true, text: '', tone: '' });
         const note = String(consistencyNotes[entityId] || '').trim();
+        let referenceImageUrl = '';
         try {
-            const result = await checkEnvironmentImageConsistency(entityId, { prompt, note });
+            referenceImageUrl = await resolveConsistencyReferenceUrl(entity);
+        } catch (error) {
+            const message = String(error?.message || '').trim() || t('一致性检查失败', 'Consistency check failed');
+            setEnvironmentConsistency({ entityId, running: false, text: message, tone: 'error' });
+            showSubjectNotification(message, 'error');
+            return;
+        }
+        if (!referenceImageUrl) {
+            const message = t('还没有可提交的当前图片。', 'There is no current image to submit.');
+            setEnvironmentConsistency({ entityId, running: false, text: message, tone: 'error' });
+            showSubjectNotification(message, 'warning');
+            return;
+        }
+        try {
+            const result = await checkEnvironmentImageConsistency(entityId, { prompt, note, imageUrl: referenceImageUrl });
             const rows = Array.isArray(result?.updated) ? result.updated : [];
             rows.forEach((row) => {
                 const rowId = String(row?.id || '').trim();
@@ -7393,7 +7434,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             setAdvancedInstruction(imageEditInstruction);
             setEnvironmentConsistency({ entityId, running: false, text, tone: 'changed' });
             showSubjectNotification(text, 'success');
-            await submitAdvancedLocalModify(nextEntity, imageEditInstruction);
+            await submitAdvancedLocalModify(nextEntity, imageEditInstruction, { referenceImageUrl });
         } catch (error) {
             const message = consistencyDetailText(error);
             setEnvironmentConsistency({ entityId, running: false, text: message, tone: 'error' });
@@ -10885,7 +10926,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                 <button
                                                     type="button"
                                                     className="flex-1 bg-white/10 hover:bg-white/20 text-white border-none py-6 flex items-center justify-center gap-2 rounded-md"
-                                                    disabled={!advancedInstruction.trim() || isAdvancedLocalModifying || generating}
+                                                    disabled={!advancedInstruction.trim() || !String(viewingEntity?.image_url || '').trim() || isAdvancedLocalModifying || generating}
                                                     onClick={() => { void submitAdvancedLocalModify(viewingEntity, advancedInstruction); }}
                                                 >
                                                     {isAdvancedLocalModifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paintbrush className="w-4 h-4" />}

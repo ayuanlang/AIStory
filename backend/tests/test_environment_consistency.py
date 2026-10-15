@@ -206,6 +206,31 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert messages[1]["content"][1]["image_url"]["url"] == "http://example.test/grid.png"
 
 
+def test_derived_consistency_message_includes_opening_and_cell():
+    opening = "【六面一次】\n占地=2.4×0.9米。竖边=东西走向。\n【北壁】\n别名=窗。"
+    main = Dummy(
+        id=3,
+        name="厨房",
+        prompt="【定位】\n厨房。\n" + MAIN_PROMPT.split("【六面一次】", 1)[1],
+        description=opening,
+        attrs={"main_environment_opening": opening},
+    )
+    derived = Dummy(id=9, name="90度厨房", prompt=CROP_PROMPT, attrs={"view_angle_from_main": 90})
+    messages = build_consistency_messages(
+        image_url="http://example.test/crop.png",
+        entity=derived,
+        main_entity=main,
+        checked_prompt=CROP_PROMPT,
+        kind="crop",
+    )
+    user = messages[1]["content"][0]["text"]
+    assert "开篇：" in user
+    assert "【北壁】" in user
+    assert "别名=窗。" in user
+    assert "对应宫格=90度格：" in user
+    assert "台在画面侧面。" in user
+
+
 def test_piece_count_ledger_blocks_a_consistent_verdict():
     quad = """【四向拼图】
 [0度格-左上·北]

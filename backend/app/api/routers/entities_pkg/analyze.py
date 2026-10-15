@@ -1213,6 +1213,7 @@ def apply_entity_analysis(
 class EnvironmentConsistencyBody(BaseModel):
     prompt: Optional[str] = None
     note: Optional[str] = None
+    image_url: Optional[str] = None
 
 
 @router.post("/entities/{entity_id}/environment-consistency")
@@ -1253,7 +1254,9 @@ async def check_environment_consistency(
     _require_project_access(db, entity.project_id, current_user)
     if not is_environment_entity(entity):
         raise HTTPException(status_code=400, detail="一致性检查只用于主环境和衍生环境。")
-    if not str(getattr(entity, "image_url", "") or "").strip():
+    requested_image = str(getattr(payload, "image_url", None) or "").strip()
+    source_image = requested_image or str(getattr(entity, "image_url", "") or "").strip()
+    if not source_image:
         raise HTTPException(status_code=400, detail="还没有生成图片，无法做一致性检查。")
 
     checked_prompt = resolve_checked_prompt(entity, getattr(payload, "prompt", None))
@@ -1286,7 +1289,7 @@ async def check_environment_consistency(
         cost = billing_service.estimate_cost(db, "analysis_character", api_provider, api_model)
         billing_service.check_can_proceed(current_user, cost)
 
-    refreshed_image_url = _refresh_managed_media_url(str(entity.image_url or ""), db)
+    refreshed_image_url = _refresh_managed_media_url(source_image, db)
     image_url_final = remote_vision_image_link(refreshed_image_url)
     if image_url_final:
         logger.info(
@@ -1294,7 +1297,7 @@ async def check_environment_consistency(
             urlparse(image_url_final).hostname,
         )
     else:
-        image_url_final = await resolve_image_url_for_llm(str(entity.image_url or ""), db)
+        image_url_final = await resolve_image_url_for_llm(source_image, db)
     if not image_url_final:
         raise HTTPException(status_code=400, detail="生成图片无法读取，暂时不能做一致性检查。")
 

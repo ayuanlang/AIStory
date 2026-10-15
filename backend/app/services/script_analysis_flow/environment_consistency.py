@@ -17,7 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.models.all_models import Entity
 from app.services.script_analysis_flow.derived_env_ingest import (
+    MAIN_ENVIRONMENT_OPENING_ATTR,
     SOURCE_FLAG,
+    environment_opening_to_keep,
     extract_grid_cell_prompt,
     main_environment_quad_prompt_ready,
     quad_cells_prompt_ready,
@@ -783,6 +785,18 @@ def apply_consistency_writes(entities_by_id: Dict[int, Any], writes: List[Dict[s
     return touched
 
 
+def main_environment_opening_text(entity: Any) -> str:
+    """The world-lock opening, even when the Chinese prompt only kept the four cells."""
+    if entity is None:
+        return ""
+    attrs = attrs_of(entity)
+    return environment_opening_to_keep(
+        str(getattr(entity, "generation_prompt_cn", "") or ""),
+        str(attrs.get(MAIN_ENVIRONMENT_OPENING_ATTR) or ""),
+        str(getattr(entity, "description", "") or ""),
+    )
+
+
 def entity_consistency_payload(entity: Any) -> Dict[str, Any]:
     return {
         "id": int(getattr(entity, "id", 0) or 0),
@@ -903,23 +917,30 @@ def build_consistency_messages(
     if kind != "main" and main_entity is not None:
         angle = derived_view_angle(entity)
         main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "").strip()
-        parts.append(f"所属主环境={getattr(main_entity, 'name', '')}。")
+        opening = main_environment_opening_text(main_entity)
+        cell = ""
         if angle is not None and main_prompt:
-            cell = extract_grid_cell_prompt(main_prompt, angle).get("cell_prompt") or ""
-            parts.append(f"这张衍生图对应 {angle} 度格。该格当前正文：")
+            cell = str(extract_grid_cell_prompt(main_prompt, angle).get("cell_prompt") or "").strip()
+        parts.append(f"所属主环境={getattr(main_entity, 'name', '')}。")
+        parts.append("开篇：")
+        parts.append(opening or "（主环境没有开篇）")
+        if angle is None:
+            parts.append("对应宫格：未能从衍生环境识别角度。")
+        else:
+            parts.append(f"对应宫格={angle}度格：")
             parts.append(cell or "（主环境提示词里没有这一格）")
         parts.append("主环境完整提示词：")
         parts.append(main_prompt or "（空）")
         if kind == "crop":
             parts.append(
                 "这次生成用的是切割提示词。不要改写切割提示词。"
-                "核对该角度图片和该格正文的主体个数、件数核销、朝向、位置。"
+                "只对照上面的开篇和对应宫格，核对该角度图片的主体个数、件数核销、朝向、位置。"
                 "和开篇不符时，把完整主环境提示词写进 revised_main_prompt，只改【四向拼图】。"
                 "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_main_prompt 里改正开篇。"
             )
         else:
             parts.append(
-                "核对该角度图片和这份衍生正文的主体个数、件数核销、朝向、位置。"
+                "只对照上面的开篇和对应宫格，核对该角度图片和这份衍生正文的主体个数、件数核销、朝向、位置。"
                 "和开篇不符时，把对齐开篇后的完整衍生提示词写进 revised_prompt。revised_main_prompt 置 null。"
                 "重生和衍生检查不改开篇，也不改主环境。"
             )
