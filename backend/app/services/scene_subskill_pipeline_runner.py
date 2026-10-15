@@ -2869,16 +2869,37 @@ def environment_asset_quad_ready(prompt: str) -> bool:
     return all(marker in text for marker in _QUAD_CELL_MARKERS)
 
 
-def _clean_staging_env_name(raw: Any) -> str:
+_SECTION_RULE_CHARS_RE = re.compile(r"^[─—－\-_=*\s.。·]+$")
+_FIELD_PAIR_RE = re.compile(r"^[^=＝:：]{1,12}[=＝:：]")
+
+
+def _finish_staging_env_name(raw: Any) -> str:
     text = str(raw or "").strip().strip("`\"'“”‘’")
-    text = re.split(r"[｜|]", text, maxsplit=1)[0].strip()
     text = re.sub(r"^(?:ENV\s*[:=＝]\s*)", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"^\[+|\]+$", "", text).strip()
+    text = re.sub(r"^[─—－\-_=*]+", "", text)
+    text = re.sub(r"[─—－\-_=*]+$", "", text).strip()
     if not text or text in {"无", "空", "N/A", "n/a", "none", "None", "-"}:
+        return ""
+    if _SECTION_RULE_CHARS_RE.match(text) or _FIELD_PAIR_RE.match(text):
         return ""
     if _DEGREE_ENV_NAME_RE.match(text):
         return ""
     return text
+
+
+def _clean_staging_env_name(raw: Any) -> str:
+    """First real main-env name on a 【主环境】 line.
+
+    A section rule such as 【主环境】──── is not a name. When that rule sits in
+    the first field, the name may be the next field.
+    """
+    raw_text = str(raw or "").strip()
+    for segment in re.split(r"[｜|]", raw_text):
+        cleaned = _finish_staging_env_name(segment)
+        if cleaned:
+            return cleaned
+    return ""
 
 
 def collect_staging_main_environment_names(env_scene: str) -> List[str]:

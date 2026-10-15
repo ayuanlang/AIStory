@@ -106,6 +106,24 @@ def test_collect_main_env_names_skips_degree_derivatives():
     assert collect_staging_main_environment_names(text) == ["客栈大堂", "飞行器驾驶舱"]
 
 
+def test_collect_main_env_names_skips_section_rule():
+    text = """
+────【主环境】────
+【主环境】────
+【主环境】────｜玄极科技总裁办｜环境族=普通｜日夜内外=黄昏·内
+[SCENE_ENV_IDENT_START:EP00_SC01]
+[ENV] 名称=大厦尖顶外空域｜复用=否｜来源=新建｜匹配主环境=无｜依据=场头
+[ENV] 名称=────｜复用=否｜来源=新建｜匹配主环境=无｜依据=分隔
+[ENV] 名称=上一世浮空艇机舱｜复用=否｜来源=新建｜匹配主环境=无｜依据=闪回
+[SCENE_ENV_IDENT_END:EP00_SC01]
+"""
+    assert collect_staging_main_environment_names(text) == [
+        "玄极科技总裁办",
+        "大厦尖顶外空域",
+        "上一世浮空艇机舱",
+    ]
+
+
 def test_collect_main_env_names_uses_matched_main_not_scene_nickname():
     text = """
 【主环境】博弈室｜室内
