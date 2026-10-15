@@ -1787,6 +1787,8 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
         return "等待环境资产四宫格超时，不能进入建置与入戏"
     if "STAGING_ENVIRONMENT_ASSET_FAILED" in text:
         return "环境资产四宫格失败，不能进入建置与入戏"
+    if "STAGING_ENVIRONMENT_ASSET_UNMATCHED" in text:
+        return "四宫格已完成，但本场主环境名称对不上已有四宫格，不能进入建置与入戏"
     if "STAGING_ENVIRONMENT_ASSET_EMPTY" in text:
         return "环境资产四宫格未齐，不能进入建置与入戏"
     if "STAGING_ENVIRONMENT_ASSET_NAMES_MISSING" in text or "STAGING_ENVIRONMENT_ASSET_MISSING" in text:
@@ -2867,8 +2869,24 @@ def environment_asset_quad_ready(prompt: str) -> bool:
     return all(marker in text for marker in _QUAD_CELL_MARKERS)
 
 
+def _clean_staging_env_name(raw: Any) -> str:
+    text = str(raw or "").strip().strip("`\"'“”‘’")
+    text = re.split(r"[｜|]", text, maxsplit=1)[0].strip()
+    text = re.sub(r"^(?:ENV\s*[:=＝]\s*)", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"^\[+|\]+$", "", text).strip()
+    if not text or text in {"无", "空", "N/A", "n/a", "none", "None", "-"}:
+        return ""
+    if _DEGREE_ENV_NAME_RE.match(text):
+        return ""
+    return text
+
+
 def collect_staging_main_environment_names(env_scene: str) -> List[str]:
-    """Main-env display names this scene must match to an asset-design quad."""
+    """Main-env names this scene must match to an asset-design quad.
+
+    A scene nickname that IDENT already matches onto another main environment
+    does not need its own four-grid. The quad lives on the matched main.
+    """
     from app.services.script_analysis_flow.environment_reuse import (
         normalize_environment_name,
         parse_scene_env_ident_items,
@@ -2876,15 +2894,11 @@ def collect_staging_main_environment_names(env_scene: str) -> List[str]:
 
     names: List[str] = []
     seen: set = set()
+    alias_to_main: Dict[str, str] = {}
 
     def add(raw: Any) -> None:
-        text = str(raw or "").strip().strip("`\"'“”‘’")
-        text = re.split(r"[｜|]", text, maxsplit=1)[0].strip()
-        text = re.sub(r"^(?:ENV\s*[:=＝]\s*)", "", text, flags=re.IGNORECASE).strip()
-        text = re.sub(r"^\[+|\]+$", "", text).strip()
-        if not text or text in {"无", "空", "N/A", "n/a", "none", "None", "-"}:
-            return
-        if _DEGREE_ENV_NAME_RE.match(text):
+        text = _clean_staging_env_name(raw)
+        if not text:
             return
         key = normalize_environment_name(text)
         if not key or key in seen:
@@ -2895,9 +2909,25 @@ def collect_staging_main_environment_names(env_scene: str) -> List[str]:
     for match in _MAIN_ENV_NAME_LINE_RE.finditer(str(env_scene or "")):
         add(match.group(1))
     for item in parse_scene_env_ident_items(str(env_scene or "")):
-        add(item.get("matched_name") or item.get("name"))
-        add(item.get("name"))
-    return names
+        local = _clean_staging_env_name(item.get("name"))
+        matched = _clean_staging_env_name(item.get("matched_name"))
+        if matched:
+            add(matched)
+            local_key = normalize_environment_name(local)
+            matched_key = normalize_environment_name(matched)
+            if local_key and matched_key and local_key != matched_key:
+                alias_to_main[local_key] = matched_key
+        else:
+            add(local)
+    if not alias_to_main:
+        return names
+    kept: List[str] = []
+    for name in names:
+        target = alias_to_main.get(normalize_environment_name(name))
+        if target and target in seen and target != normalize_environment_name(name):
+            continue
+        kept.append(name)
+    return kept
 
 
 def build_environment_asset_quad_injection(prompts_by_name: Dict[str, str]) -> str:
@@ -2981,6 +3011,15 @@ def match_ready_environment_asset_quads(
     return ready
 
 
+def environment_asset_quad_job_still_open(status: str) -> bool:
+    """True while the four-grid node can still write prompts.
+
+    Success, warning, and failure are settled. An empty status means the node
+    has not been recorded yet, so a full-episode run may still be about to start it.
+    """
+    return str(status or "").strip().lower() in {"", "queued", "running", "pending"}
+
+
 def _load_ready_environment_asset_quads(
     db: Session,
     *,
@@ -2988,13 +3027,12 @@ def _load_ready_environment_asset_quads(
     episode_id: int,
     main_names: List[str],
 ) -> Dict[str, str]:
-    from app.services.script_analysis_flow.derived_env_ingest import load_main_environment_prompts
+    from app.services.script_analysis_flow.derived_env_ingest import load_all_main_environment_prompts
 
-    loaded = load_main_environment_prompts(
+    loaded = load_all_main_environment_prompts(
         db,
         project_id=int(project_id),
         episode_id=int(episode_id),
-        names=main_names,
     )
     return match_ready_environment_asset_quads(loaded, main_names)
 
@@ -3036,6 +3074,36 @@ def cancel_running_scene_subskill_nodes(db: Session, *, episode_id: int) -> int:
     return cancel_running_pipeline_nodes(db, episode_id=episode_id)
 
 
+def lookup_ready_environment_asset_quad_injection(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    env_scene: str,
+    explicit_text: str = "",
+) -> str:
+    """Injection text when every scene main already has a stored four-grid. Empty if not."""
+    explicit = str(explicit_text or "").strip()
+    if explicit and (
+        "环境资产四宫格开始" in explicit or environment_asset_quad_ready(explicit)
+    ):
+        if "环境资产四宫格开始" in explicit:
+            return explicit
+        return build_environment_asset_quad_injection({"本场主环境": explicit})
+    main_names = collect_staging_main_environment_names(env_scene)
+    if not main_names or int(project_id or 0) <= 0 or int(episode_id or 0) <= 0:
+        return ""
+    ready = _load_ready_environment_asset_quads(
+        db,
+        project_id=int(project_id),
+        episode_id=int(episode_id),
+        main_names=main_names,
+    )
+    if len(ready) != len(main_names):
+        return ""
+    return build_environment_asset_quad_injection(ready)
+
+
 async def await_environment_asset_quad_injection(
     *,
     project_id: int,
@@ -3045,7 +3113,13 @@ async def await_environment_asset_quad_injection(
     explicit_text: str = "",
     timeout_seconds: float = _ENV_PLAN_WAIT_SECONDS,
 ) -> str:
-    """Block staging until each scene main-env has an asset-design four-cell prompt."""
+    """Block staging until each scene main-env has an asset-design four-cell prompt.
+
+    A four-grid that is already stored is returned on the first read. Waiting is
+    only for a quad node that is still going to write. Once that node has settled
+    and the stored prompts still do not cover this scene's mains, stop instead of
+    parking 建置 on 等待环境.
+    """
     explicit = str(explicit_text or "").strip()
     if explicit and (
         "环境资产四宫格开始" in explicit or environment_asset_quad_ready(explicit)
@@ -3069,6 +3143,7 @@ async def await_environment_asset_quad_injection(
 
     deadline = time.monotonic() + float(timeout_seconds)
     last_status = ""
+    settled_misses = 0
     logger.info(
         "[scene_subskill_pipeline] waiting for environment asset quads before staging scene=%s mains=%s",
         sid,
@@ -3098,8 +3173,19 @@ async def await_environment_asset_quad_injection(
                     status_code=422,
                     detail=f"STAGING_ENVIRONMENT_ASSET_FAILED:{sid}:{last_status}",
                 )
-            # Quad-node success before the four cells are visible is still a wait.
-            # Scene analysis only needs the main environment and must not fail here.
+            if environment_asset_quad_job_still_open(last_status):
+                settled_misses = 0
+            else:
+                # The node already finished. A few polls cover a prompt commit that
+                # lands just after the status flip. After that the stored quads will
+                # not appear, so another twenty minutes of 等待环境 cannot help.
+                settled_misses += 1
+                if settled_misses >= _ENV_PLAN_EMPTY_GRACE_POLLS:
+                    missing = [name for name in main_names if name not in ready]
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"STAGING_ENVIRONMENT_ASSET_UNMATCHED:{sid}:{','.join(missing)}",
+                    )
             _heartbeat_environment_wait(
                 poll_db,
                 project_id=int(project_id or 0),
@@ -3127,22 +3213,38 @@ async def _attach_environment_asset_quads(
     env_scene: str,
     explicit_text: str = "",
 ) -> str:
-    """Staging prerequisite: inject the asset-design quad before the staging LLM."""
-    _mark_scene_subskill_step(
-        task_db,
-        project_id=project_id,
-        episode_id=episode_id,
-        scene_id=scene_id,
-        step_name="wait_env_asset",
-        step_label="等待环境资产四宫格",
-    )
-    quad = await await_environment_asset_quad_injection(
-        project_id=project_id,
-        episode_id=episode_id,
-        env_scene=env_scene,
-        scene_id=scene_id,
-        explicit_text=explicit_text,
-    )
+    """Staging prerequisite: inject the asset-design quad before the staging LLM.
+
+    Stored four-grids are injected immediately. The waiting step is published
+    only when this scene's mains are not in the library yet.
+    """
+    peek_db = SessionLocal()
+    try:
+        quad = lookup_ready_environment_asset_quad_injection(
+            peek_db,
+            project_id=project_id,
+            episode_id=episode_id,
+            env_scene=env_scene,
+            explicit_text=explicit_text,
+        )
+    finally:
+        _release_db_connection(peek_db)
+    if not quad:
+        _mark_scene_subskill_step(
+            task_db,
+            project_id=project_id,
+            episode_id=episode_id,
+            scene_id=scene_id,
+            step_name="wait_env_asset",
+            step_label="等待环境资产四宫格",
+        )
+        quad = await await_environment_asset_quad_injection(
+            project_id=project_id,
+            episode_id=episode_id,
+            env_scene=env_scene,
+            scene_id=scene_id,
+            explicit_text=explicit_text,
+        )
     if quad and quad not in staging_input:
         return f"{quad}\n\n{staging_input}"
     return staging_input

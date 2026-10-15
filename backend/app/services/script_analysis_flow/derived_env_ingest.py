@@ -305,6 +305,53 @@ def load_main_environment_prompts(
     for row in rows:
         _consider(row)
     return by_name
+
+
+def load_all_main_environment_prompts(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+) -> Dict[str, str]:
+    """Every non-derived main-env prompt in this project, keyed by registered name.
+
+    Staging matches these with spacing and fullwidth-bar folding. An exact SQL
+    name filter drops a stored quad whose registered name is not the scene's
+    spelling, and the gate then waits even though the four-grid is already written.
+    Episode rows win over the same name on another episode.
+    """
+    if int(project_id or 0) <= 0:
+        return {}
+    rows = (
+        db.query(Entity)
+        .filter(
+            Entity.project_id == int(project_id),
+            _active_entity_clause(),
+            func.lower(func.trim(func.coalesce(Entity.type, ""))) == "environment",
+        )
+        .all()
+    )
+    by_name: Dict[str, str] = {}
+
+    def _consider(entity: Entity) -> None:
+        if _is_derived_environment_entity(entity):
+            return
+        prompt = _clean(getattr(entity, "generation_prompt_cn", None))
+        if not prompt:
+            return
+        for raw in (getattr(entity, "name", None), getattr(entity, "name_en", None)):
+            key = _clean(raw)
+            if key and key not in by_name:
+                by_name[key] = prompt
+
+    episode_rows = [row for row in rows if int(getattr(row, "episode_id", 0) or 0) == int(episode_id or 0)]
+    for row in episode_rows:
+        _consider(row)
+    for row in rows:
+        _consider(row)
+    return by_name
+
+
 LOOK_UP_SUFFIXES = {"仰天", "仰视", "屋顶"}
 USAGE_MERGE_TOKENS = (
     "反打", "近景", "远景", "特写", "乙侧", "覆盖", "过肩", "空镜",

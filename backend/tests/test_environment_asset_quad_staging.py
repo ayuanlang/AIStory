@@ -106,6 +106,41 @@ def test_collect_main_env_names_skips_degree_derivatives():
     assert collect_staging_main_environment_names(text) == ["客栈大堂", "飞行器驾驶舱"]
 
 
+def test_collect_main_env_names_uses_matched_main_not_scene_nickname():
+    text = """
+【主环境】博弈室｜室内
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=博弈室｜复用=是｜来源=项目库｜匹配主环境=总裁办公室｜依据=闪回
+[SCENE_ENV_IDENT_END:EP01_SC01]
+"""
+    assert collect_staging_main_environment_names(text) == ["总裁办公室"]
+
+
+def test_settled_quad_node_is_not_still_open():
+    from app.services.scene_subskill_pipeline_runner import environment_asset_quad_job_still_open
+
+    assert environment_asset_quad_job_still_open("running") is True
+    assert environment_asset_quad_job_still_open("") is True
+    assert environment_asset_quad_job_still_open("success") is False
+    assert environment_asset_quad_job_still_open("warning") is False
+
+
+def test_unmatched_quad_is_not_a_wait():
+    from fastapi import HTTPException
+    from app.services.scene_subskill_pipeline_runner import (
+        _scene_subskill_failure_reason,
+        is_environment_asset_wait_error,
+    )
+
+    exc = HTTPException(
+        status_code=422,
+        detail="STAGING_ENVIRONMENT_ASSET_UNMATCHED:EP01_SC01:博弈室",
+    )
+    assert is_environment_asset_wait_error(exc) is False
+    assert "等待" not in _scene_subskill_failure_reason(exc)
+    assert "对不上" in _scene_subskill_failure_reason(exc)
+
+
 def test_injection_keeps_grid_cells_readable():
     wrapped = build_environment_asset_quad_injection({"客栈大堂": _quad()})
     assert "环境资产四宫格开始" in wrapped

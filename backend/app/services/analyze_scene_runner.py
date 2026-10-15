@@ -77,6 +77,9 @@ from app.services.scene_subject_helpers import (
     _extract_subjects_json_from_text,
     _normalize_prior_entity_design_type,
 )
+from app.services.script_analysis_flow.character_asset_brief import slice_char_extract_to_names
+from app.services.script_analysis_flow.environment_asset_brief import slice_one_main_environment
+from app.services.script_analysis_flow.prop_asset_brief import slice_prop_extract_to_names
 from app.services.script_analysis_flow import (
     align_environment_json_names_with_ident,
     assemble_character_asset_design_user_content,
@@ -444,6 +447,10 @@ async def execute_analyze_scene(
         is_character_asset_design = scoped_asset_category == "character"
         is_scoped_asset_design = bool(scoped_asset_category)
         environment_design_name_source = ""
+        _single_features = getattr(request, "scene_analysis_features", None)
+        _single_features = _single_features if isinstance(_single_features, dict) else {}
+        single_entity_name = str(_single_features.get("single_entity_name") or "").strip()
+        single_entity_name = single_entity_name.split("｜")[0].split("|")[0].strip()
 
 
         persisted_subject_index_for_prompt = ""
@@ -679,9 +686,15 @@ async def execute_analyze_scene(
                 *episode_plan_texts,
             )
             brief_source = choose_environment_design_source(request_text, picked_plan)
+            if single_entity_name:
+                brief_source = (
+                    slice_one_main_environment(picked_plan, single_entity_name)
+                    or slice_one_main_environment(request_text, single_entity_name)
+                    or slice_one_main_environment(brief_source, single_entity_name)
+                )
             env_brief = build_environment_asset_design_brief(brief_source)
             environment_design_name_source = brief_source
-            cover_brief = build_cover_poster_brief(brief_source)
+            cover_brief = "" if single_entity_name else build_cover_poster_brief(brief_source)
             user_content = assemble_environment_asset_design_user_content(
                 cover_brief,
                 env_brief,
@@ -721,8 +734,15 @@ async def execute_analyze_scene(
                     except Exception:
                         persisted_scene_split = ""
             chosen_prop_source = choose_prop_design_source(request_text, persisted_scene_split)
+            if single_entity_name:
+                chosen_prop_source = slice_prop_extract_to_names(
+                    "\n\n".join(
+                        part for part in (persisted_scene_split, request_text, chosen_prop_source) if part
+                    ),
+                    [single_entity_name],
+                )
             extra_prop_sources = []
-            if not chosen_prop_source and getattr(request, "episode_id", None):
+            if not single_entity_name and not chosen_prop_source and getattr(request, "episode_id", None):
                 try:
                     _ep_for_prop = (
                         db.query(Episode)
@@ -756,14 +776,17 @@ async def execute_analyze_scene(
                         "[analyze_scene] failed loading adaptation for prop design brief: %s",
                         prop_brief_err,
                     )
-            brief_source = chosen_prop_source or (
-                first_text_with_prop_extract(
-                    request_text,
-                    episode_adaptation_for_scene_beats,
-                    *extra_prop_sources,
+            if single_entity_name:
+                brief_source = chosen_prop_source
+            else:
+                brief_source = chosen_prop_source or (
+                    first_text_with_prop_extract(
+                        request_text,
+                        episode_adaptation_for_scene_beats,
+                        *extra_prop_sources,
+                    )
+                    or episode_adaptation_for_scene_beats
                 )
-                or episode_adaptation_for_scene_beats
-            )
             prop_brief = build_prop_asset_design_brief(brief_source)
             user_content = assemble_prop_asset_design_user_content(prop_brief)
             logger.info(
@@ -796,8 +819,15 @@ async def execute_analyze_scene(
                     except Exception:
                         persisted_char_split = ""
             chosen_char_source = choose_char_design_source(request_text, persisted_char_split)
+            if single_entity_name:
+                chosen_char_source = slice_char_extract_to_names(
+                    "\n\n".join(
+                        part for part in (persisted_char_split, request_text, chosen_char_source) if part
+                    ),
+                    [single_entity_name],
+                )
             extra_char_sources = []
-            if not chosen_char_source and getattr(request, "episode_id", None):
+            if not single_entity_name and not chosen_char_source and getattr(request, "episode_id", None):
                 try:
                     _ep_for_char = (
                         db.query(Episode)
@@ -831,14 +861,17 @@ async def execute_analyze_scene(
                         "[analyze_scene] failed loading adaptation for character design brief: %s",
                         char_brief_err,
                     )
-            brief_source = chosen_char_source or (
-                first_text_with_char_extract(
-                    request_text,
-                    episode_adaptation_for_scene_beats,
-                    *extra_char_sources,
+            if single_entity_name:
+                brief_source = chosen_char_source
+            else:
+                brief_source = chosen_char_source or (
+                    first_text_with_char_extract(
+                        request_text,
+                        episode_adaptation_for_scene_beats,
+                        *extra_char_sources,
+                    )
+                    or episode_adaptation_for_scene_beats
                 )
-                or episode_adaptation_for_scene_beats
-            )
             char_brief = build_character_asset_design_brief(brief_source)
             appearance_block = ""
             try:
@@ -1283,7 +1316,14 @@ async def execute_analyze_scene(
                     prior_prompt_types = set(_PRIOR_ENTITY_DESIGN_TYPES)
 
             if prior_prompt_types and request_episode_id_for_prior and request_episode_id_for_prior > 0:
-                if is_scoped_asset_design:
+                if is_scoped_asset_design and single_entity_name:
+                    if is_prop_asset_design:
+                        subject_index_for_prior_lookup = f"[PROP] 名称={single_entity_name}"
+                    elif is_character_asset_design:
+                        subject_index_for_prior_lookup = f"[CHAR] 名称={single_entity_name}"
+                    else:
+                        subject_index_for_prior_lookup = f"【主环境】{single_entity_name}"
+                elif is_scoped_asset_design:
                     subject_index_for_prior_lookup = (
                         str(user_content or "").strip()
                         or str(getattr(request, "text", "") or "").strip()

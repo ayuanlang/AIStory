@@ -21017,6 +21017,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 analysisFeatures: {
                                     target_entity_types: subtaskRequestedTargets,
                                     asset_task_key: pData.key || `slot${index + 1}`,
+                                    ...(isolateThisEntity && String(options?.rerunSubject?.name || '').trim()
+                                        ? {
+                                            single_entity_name: String(options.rerunSubject.name || '').trim(),
+                                            single_entity_type: pData.key === 'characters'
+                                                ? 'character'
+                                                : (pData.key === 'props' ? 'prop' : 'environment'),
+                                        }
+                                        : {}),
                                 },
                             }, 
                             projectId,

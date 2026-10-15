@@ -221,6 +221,34 @@ def _prop_items_in_order(text: str) -> List[tuple]:
     return ordered
 
 
+def _prop_name_key(name: str) -> str:
+    text = _clean(name).split("｜")[0].split("|")[0]
+    return re.sub(r"\s+", "", text)
+
+
+def slice_prop_extract_to_names(text: str, names: List[str]) -> str:
+    """Keep only the named prop items. An empty result must not fall back to the full list."""
+    wanted = []
+    seen = set()
+    for raw in names or []:
+        key = _prop_name_key(raw)
+        if key and key not in seen:
+            seen.add(key)
+            wanted.append(key)
+    if not wanted:
+        return ""
+    chosen = []
+    used = set()
+    for name, block in _prop_items_in_order(text):
+        key = _prop_name_key(name)
+        if key in wanted and key not in used:
+            used.add(key)
+            chosen.append(block)
+    if not chosen:
+        return ""
+    return "[PROP_EXTRACT_START]\n" + "\n\n".join(chosen) + "\n[PROP_EXTRACT_END]"
+
+
 def choose_prop_design_source(request_text: str, persisted_text: str = "") -> str:
     """Saved prop extract is the editor copy. A request block must not hide it.
 

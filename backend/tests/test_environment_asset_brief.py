@@ -3,6 +3,7 @@ from app.services.script_analysis_flow.character_asset_brief import (
     assemble_character_asset_design_user_content,
     build_character_asset_design_brief,
     choose_char_design_source,
+    slice_char_extract_to_names,
     char_extract_has_items,
     char_extract_is_explicit_none,
     current_world_identity,
@@ -19,6 +20,7 @@ from app.services.script_analysis_flow.environment_asset_brief import (
     assemble_environment_asset_design_user_content,
     build_environment_asset_design_brief,
     choose_environment_design_source,
+    slice_one_main_environment,
     collect_ident_environment_names,
     environment_plan_has_ident,
     pick_environment_plan_source_and_brief,
@@ -27,6 +29,7 @@ from app.services.script_analysis_flow.prop_asset_brief import (
     assemble_prop_asset_design_user_content,
     build_prop_asset_design_brief,
     choose_prop_design_source,
+    slice_prop_extract_to_names,
     first_text_with_prop_extract,
     prop_extract_has_items,
     prop_extract_is_explicit_none,
@@ -989,6 +992,55 @@ def test_choose_prop_design_source_keeps_single_prop_scope_with_saved_text():
     assert "编辑后" in chosen
     assert "铜钥匙" not in chosen
     assert "旧缓存" not in chosen
+
+
+def test_slice_prop_extract_to_names_drops_every_other_prop():
+    full = """[PROP_EXTRACT_START]
+[PROP] 名称=时空暗金灵石｜名称_en=Temporal Dark-Gold Stone
+外形=暗金棱面
+[PROP] 名称=白曼青的涂毒晶粉杯
+外形=八角杯
+[PROP] 名称=钛合金战术风雷刃
+外形=战术直刃
+[PROP_EXTRACT_END]"""
+    sliced = slice_prop_extract_to_names(full, ["时空暗金灵石"])
+    brief = build_prop_asset_design_brief(sliced)
+    assert "时空暗金灵石" in brief
+    assert "涂毒晶粉杯" not in brief
+    assert "风雷刃" not in brief
+    assert slice_prop_extract_to_names(full, ["没有这件"]) == ""
+
+
+def test_slice_char_extract_to_names_drops_every_other_character():
+    full = """[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青
+外形=瘦长
+[CHAR] 名称=阿岚
+外形=圆脸
+[CHAR_EXTRACT_END]"""
+    sliced = slice_char_extract_to_names(full, ["沈青"])
+    assert "沈青" in sliced
+    assert "阿岚" not in sliced
+
+
+def test_slice_one_main_environment_from_a_full_plan():
+    plan = """[SCENE_ENV_IDENT_START]
+[ENV] 名称=客栈大堂｜复用=否
+定位=堂内
+[ENV] 名称=后厨｜复用=否
+定位=灶间
+[SCENE_ENV_IDENT_END]
+[ENV_BLOCK_START]
+────【主环境】────
+【主环境】客栈大堂
+[ENV_BLOCK_END]
+[ENV_BLOCK_START]
+────【主环境】────
+【主环境】后厨
+[ENV_BLOCK_END]"""
+    sliced = slice_one_main_environment(plan, "客栈大堂")
+    assert "客栈大堂" in sliced
+    assert "后厨" not in sliced
 
 
 def test_choose_prop_design_source_uses_request_when_nothing_saved():

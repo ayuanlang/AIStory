@@ -230,6 +230,34 @@ def _char_items_in_order(text: str) -> List[tuple]:
     return ordered
 
 
+def _char_name_key(name: str) -> str:
+    text = _clean(name).split("｜")[0].split("|")[0]
+    return re.sub(r"\s+", "", text)
+
+
+def slice_char_extract_to_names(text: str, names: List[str]) -> str:
+    """Keep only the named character items. An empty result must not fall back to the full list."""
+    wanted = []
+    seen = set()
+    for raw in names or []:
+        key = _char_name_key(raw)
+        if key and key not in seen:
+            seen.add(key)
+            wanted.append(key)
+    if not wanted:
+        return ""
+    chosen = []
+    used = set()
+    for name, block in _char_items_in_order(text):
+        key = _char_name_key(name)
+        if key in wanted and key not in used:
+            used.add(key)
+            chosen.append(block)
+    if not chosen:
+        return ""
+    return "[CHAR_EXTRACT_START]\n" + "\n\n".join(chosen) + "\n[CHAR_EXTRACT_END]"
+
+
 def choose_char_design_source(request_text: str, persisted_text: str = "") -> str:
     """Saved character extract is the editor copy. A one-character request stays one character."""
     request = _clean(request_text)
