@@ -374,6 +374,23 @@ def test_front_double_drops_equal_far_ends():
     assert plan["consistent"] is False
     assert plan["writes"] == []
     assert plan["summary"].startswith("正面两倍未通过")
+    assert plan["image_edit_instruction"] is None
+    blocked = plan_consistency_writes(
+        entity,
+        entity,
+        quad,
+        {
+            "consistent": True,
+            "summary": "四向正文与开篇一致。图片中270度格的驾驶座朝向错误，180度格的客舱座椅朝向错误。",
+            "revised_prompt": None,
+            "image_edit_instruction": "改270度格的驾驶座。现在只见坐垫朝向镜头。改成椅面朝画面右。",
+        },
+    )
+    assert blocked["image_edit_instruction"] is None
+    assert "四向正文与开篇一致" not in blocked["summary"]
+    assert "这次不改图" in blocked["summary"]
+    assert "180度格的客舱座椅" in blocked["summary"]
+    assert "左侧面W-001" in blocked["summary"]
 
 
 def test_image_edit_instruction_survives_when_prompts_stay():
@@ -397,8 +414,10 @@ def test_image_edit_instruction_survives_when_prompts_stay():
     assert "只改这一格里点名的这一处" in plan["image_edit_instruction"]
     assert "不要重画整张四宫" in plan["image_edit_instruction"]
     sealed = seal_cell_edit_instruction("改90度格的沙发，只见靠背。再改180度格的正面墙。")
-    assert sealed.startswith("这次只改90度格")
-    assert "不要改180度格" in sealed
+    assert "改90度格的沙发" in sealed
+    assert "再改180度格的正面墙" in sealed
+    assert "不要改180度格" not in sealed
+    assert "只改90度格、180度格里点名的这几处" in sealed
     assert seal_cell_edit_instruction("  ") is None
 
 

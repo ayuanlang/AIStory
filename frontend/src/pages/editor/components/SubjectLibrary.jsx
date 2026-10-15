@@ -207,14 +207,13 @@ const parseDependencyEntityId = (value) => {
     return '';
 };
 
-const resolveDependencyEntity = (dependencyToken, entities) => {
+const resolveDependencyEntity = (dependencyToken, entities, preferredEpisodeId = null) => {
     const rawToken = String(dependencyToken || '').trim();
     if (!rawToken) return null;
 
     const normalizedToken = normalizeEntityToken(rawToken);
     const resolvedEntityId = parseDependencyEntityId(rawToken);
-
-    return (Array.isArray(entities) ? entities : []).find((entity) => {
+    const matches = (Array.isArray(entities) ? entities : []).filter((entity) => {
         if (!entity || entity?.is_deleted) return false;
 
         const entityId = String(entity.id || '').trim();
@@ -227,7 +226,26 @@ const resolveDependencyEntity = (dependencyToken, entities) => {
         if (normalizedToken && entityNameEn && entityNameEn === normalizedToken) return true;
 
         return false;
-    }) || null;
+    });
+    if (!matches.length) return null;
+
+    // An explicit entity id stays bound to that row.
+    if (resolvedEntityId) {
+        const exact = matches.find((entity) => String(entity.id || '').trim() === resolvedEntityId);
+        if (exact) return exact;
+    }
+    if (/^\d+$/.test(rawToken)) {
+        const rawIdHit = matches.find((entity) => String(entity.id || '').trim() === rawToken);
+        if (rawIdHit) return rawIdHit;
+    }
+
+    // Same name across episodes: the host episode's row is the dependency graph.
+    const preferred = String(preferredEpisodeId || '').trim();
+    if (preferred) {
+        const episodeMatch = matches.find((entity) => String(entity?.episode_id || '').trim() === preferred);
+        if (episodeMatch) return episodeMatch;
+    }
+    return matches[0];
 };
 
 const buildEntityNameMap = (entities) => {
@@ -319,12 +337,19 @@ const getEntityVisualDependencyTargets = (entity, allEntities, nameMap = null) =
     const deps = parseVisualDependencies(entity?.visual_dependencies);
     const seen = new Set();
     const targets = [];
+    const preferredEpisodeId = entity?.episode_id;
     deps.forEach((depRaw) => {
         if (isDirectImageRefToken(depRaw)) return;
         const dep = normalizeEntityToken(depRaw);
-        const target = resolveDependencyEntity(depRaw, allEntities)
-            || nameMap?.get?.(dep)
-            || null;
+        let target = resolveDependencyEntity(depRaw, allEntities, preferredEpisodeId);
+        if (!target) {
+            const mapped = nameMap?.get?.(dep) || null;
+            const preferred = String(preferredEpisodeId || '').trim();
+            const mappedEpisode = String(mapped?.episode_id || '').trim();
+            if (mapped && (!preferred || !mappedEpisode || mappedEpisode === preferred)) {
+                target = mapped;
+            }
+        }
         if (!target || seen.has(target.id)) return;
         seen.add(target.id);
         targets.push({ token: depRaw, entity: target });
@@ -983,12 +1008,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             currentlyExcluded ? prev.filter((item) => item !== key) : [...prev, key]
         ));
         if (willExclude) {
-            const entityId = depEntity?.id ?? resolveDependencyEntity(dep, allEntities)?.id;
+            const entityId = depEntity?.id ?? resolveDependencyEntity(
+                dep,
+                allEntities,
+                viewingEntity?.episode_id || selectedEntity?.episode_id || currentEpisode?.id
+            )?.id;
             if (entityId && refImage?.entity_id && String(refImage.entity_id) === String(entityId)) {
                 setRefImage(null);
             }
         }
-    }, [allEntities, excludedVisualDepKeys, getVisualDepKey, refImage?.entity_id]);
+    }, [allEntities, currentEpisode?.id, excludedVisualDepKeys, getVisualDepKey, refImage?.entity_id, selectedEntity?.episode_id, viewingEntity?.episode_id]);
 
     useEffect(() => {
         try {
@@ -4137,7 +4166,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const depUrls = [];
         const deps = parseVisualDependencies(analyzed.visual_dependencies);
         deps.forEach(dep => {
-            const target = resolveDependencyEntity(dep, allEntities);
+            const target = resolveDependencyEntity(
+                dep,
+                allEntities,
+                analyzed?.episode_id || entity?.episode_id || currentEpisode?.id
+            );
             if (target?.image_url) depUrls.push(target.image_url);
         });
         const combinedRefs = [primaryRefUrl, ...depUrls]
@@ -6477,7 +6510,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const hostId = String(host?.id || '').trim();
         if (!hostId || hostId === 'new') return { ok: true };
 
-        const resolved = resolveDependencyEntity(token, allEntities);
+        const resolved = resolveDependencyEntity(token, allEntities, host?.episode_id || currentEpisode?.id);
         if (resolved && String(resolved.id || '').trim() === hostId) {
             return { ok: false, reason: 'self' };
         }
@@ -6495,7 +6528,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             }
         }
         return { ok: true };
-    }, [activeAssetLibraryEntity, allEntities, selectedEntity, viewingEntity]);
+    }, [activeAssetLibraryEntity, allEntities, currentEpisode?.id, selectedEntity, viewingEntity]);
 
     useEffect(() => {
         const pickerOpen = (showImageModal && imageModalTab === 'library') || refSelectionMode === 'assets';
@@ -6884,7 +6917,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                  const deps = parseVisualDependencies(activeEntity.visual_dependencies);
                  deps.forEach(dep => {
                      if (excludedDepKeySet.has(String(dep || '').trim())) return;
-                     const target = resolveDependencyEntity(dep, allEntities);
+                     const target = resolveDependencyEntity(
+                         dep,
+                         allEntities,
+                         activeEntity?.episode_id || currentEpisode?.id
+                     );
                      if (target && omitDependencyEntityIds.has(String(target.id || ''))) return;
 
                      if (target && target.image_url) {
@@ -7254,17 +7291,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const sealCellEditInstruction = (instruction) => {
         let text = String(instruction || '').trim();
         if (!text) return '';
-        if (text.includes('不要重画整张四宫')) return text;
+        if (text.includes('不要重画整张四宫') && text.includes('保持原图不动')) return text;
         const angles = [];
         for (const match of text.matchAll(/(0|90|180|270)度格/g)) {
             if (!angles.includes(match[1])) angles.push(match[1]);
         }
+        if (!text.endsWith('。')) text += '。';
         if (angles.length > 1) {
-            const others = angles.slice(1).map((angle) => `${angle}度格`).join('、');
-            text = `这次只改${angles[0]}度格里点名的那一处，不要改${others}。${text}`;
+            const named = angles.map((angle) => `${angle}度格`).join('、');
+            text += `只改${named}里点名的这几处。其余格子、格线、角标、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。`;
+            return text;
         }
         if (!text.includes('只改这一格里点名的这一处')) {
-            if (!text.endsWith('。')) text += '。';
             text += '只改这一格里点名的这一处。另外三格、格线、角标、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。';
         }
         return text;
@@ -8156,7 +8194,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         depUrls.push(dep);
                         return;
                     }
-                    const target = resolveDependencyEntity(dep, allEntities);
+                    const target = resolveDependencyEntity(
+                        dep,
+                        allEntities,
+                        entity?.episode_id || currentEpisode?.id
+                    );
 
                     if (target && urlMap.has(target.id)) {
                         depUrls.push(urlMap.get(target.id));
@@ -8812,10 +8854,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 const unresolved = deps.filter((depName) => {
                     const key = normalizeSubjectKey(depName);
                     if (!key) return false;
-                    const match = (allEntities || []).find((candidate) => (
-                        normalizeSubjectKey(candidate?.name) === key
-                        || normalizeSubjectKey(candidate?.name_en) === key
-                    ));
+                    const match = resolveDependencyEntity(depName, allEntities, entity?.episode_id || currentEpisode?.id);
                     return !match || !String(match?.image_url || '').trim();
                 });
                 if (!unresolved.length) return null;
@@ -9526,7 +9565,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                 <span
                                                     className={`shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${isCharacter ? 'border-amber-300/40 text-amber-200 bg-amber-500/20' : 'border-sky-300/40 text-sky-200 bg-sky-500/20'}`}
                                                     title={dependencies.map((depToken) => {
-                                                        const depEntity = resolveDependencyEntity(depToken, allEntities);
+                                                        const depEntity = resolveDependencyEntity(depToken, allEntities, entity?.episode_id);
                                                         const info = getDependencySourceInfo(depEntity, entity, depToken);
                                                         return info?.fullTitle || depToken;
                                                     }).join('\n')}
@@ -10465,7 +10504,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                     <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('资产参考', 'Asset References')}</label>
                                                     <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                         {parseVisualDependencies(viewingEntity.visual_dependencies).map((dep, idx) => {
-                                                            const depEntity = resolveDependencyEntity(dep, allEntities);
+                                                            const depEntity = resolveDependencyEntity(dep, allEntities, viewingEntity?.episode_id);
                                                             const depExcluded = isVisualDepExcluded(dep);
                                                             const depSourceInfo = getDependencySourceInfo(depEntity, viewingEntity, dep);
 
@@ -11374,7 +11413,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                 <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('资产参考', 'Asset References')}</label>
                                                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                     {parseVisualDependencies(selectedEntity.visual_dependencies).map((dep, idx) => {
-                                                        const depEntity = resolveDependencyEntity(dep, allEntities);
+                                                        const depEntity = resolveDependencyEntity(dep, allEntities, selectedEntity?.episode_id);
                                                         const depExcluded = isVisualDepExcluded(dep);
                                                         const depSourceInfo = getDependencySourceInfo(depEntity, selectedEntity, dep);
                                                         

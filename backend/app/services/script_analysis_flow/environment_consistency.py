@@ -520,6 +520,11 @@ def _face_chunks(body: str) -> Dict[str, str]:
     return chunks
 
 
+_TEXT_CONSISTENT_CLAIM = re.compile(
+    r"(?:四向)?正文(?:已经)?与开篇一致[。；]?|正文已经对齐开篇[，。]?|宫格和衍生环境与主环境开篇一致[。；]?"
+)
+
+
 def piece_count_block(summary: str, issues: List[str]) -> str:
     detail = "；".join(issues)
     prefix = f"{PIECE_COUNT_PREFIX}：{detail}"
@@ -527,6 +532,19 @@ def piece_count_block(summary: str, issues: List[str]) -> str:
     if not rest or rest.startswith(PIECE_COUNT_PREFIX):
         return prefix
     return f"{prefix}。{rest}"
+
+
+def audit_blocked_summary(summary: str, issues: List[str], prefix: str) -> str:
+    """Text audit failed, so drop the claim that the grid text already matches.
+
+    Picture notes from the model stay as a report. They are not this round's edit.
+    """
+    rest = _TEXT_CONSISTENT_CLAIM.sub("", str(summary or ""))
+    rest = re.sub(r"^[。；\s]+", "", rest).strip()
+    rest = re.sub(r"。{2,}", "。", rest).strip("。").strip()
+    if rest:
+        rest = f"图片另报，正文未通过，这次不改图。{rest}"
+    return piece_count_block(rest, issues).replace(PIECE_COUNT_PREFIX, prefix, 1)
 
 
 def split_opening_and_quad(text: str) -> tuple:
@@ -617,12 +635,15 @@ def seal_cell_edit_instruction(text: Optional[str]) -> Optional[str]:
         angle = match.group(1)
         if angle not in angles:
             angles.append(angle)
+    if "保持原图不动" in raw and "不要重画整张四宫" in raw:
+        return raw
+    if not raw.endswith("。"):
+        raw += "。"
     if len(angles) > 1:
-        others = "、".join(f"{angle}度格" for angle in angles[1:])
-        raw = f"这次只改{angles[0]}度格里点名的那一处，不要改{others}。{raw}"
+        named = "、".join(f"{angle}度格" for angle in angles)
+        raw += f"只改{named}里点名的这几处。其余格子、格线、角标、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。"
+        return raw
     if "只改这一格里点名的这一处" not in raw:
-        if not raw.endswith("。"):
-            raw += "。"
         raw += _CELL_EDIT_LOCK
     return raw
 
@@ -666,14 +687,12 @@ def plan_consistency_writes(
         return {
             "consistent": False,
             "kind": kind,
-            "summary": piece_count_block(
-                summary, piece_issues + street_issues + wall_issues + front_issues
-            ).replace(
-                PIECE_COUNT_PREFIX, prefix, 1
+            "summary": audit_blocked_summary(
+                summary, piece_issues + street_issues + wall_issues + front_issues, prefix
             ),
             "writes": [],
             "updated_targets": [],
-            "image_edit_instruction": image_edit_instruction,
+            "image_edit_instruction": None,
         }
     if payload.get("consistent"):
         return {
@@ -873,7 +892,9 @@ def build_consistency_messages(
         "缝档、光色、材质的小差异算一致。"
         "正文已经对齐开篇、只有图片画错时，也算一致，summary 写明哪一格的图片错在个数、朝向或位置。"
         "revised_prompt 和 revised_main_prompt 都为 null。提示词保持对齐开篇。"
-        "这时 image_edit_instruction 仍要写出怎么改这张图。\n"
+        "这时 image_edit_instruction 仍要写出怎么改这张图。"
+        "summary 里点名的每一处画面错误都要写进 image_edit_instruction，不能摘要写两格、指令只改一格。"
+        "正文还有错误时，不要写「四向正文与开篇一致」。\n"
         "不一致：同一件的宫格长边或朝向和开篇竖边旋出的画面轴相反；件数和开篇不同；"
         "左右或远近和开篇心点、在桌侧旋出的结果相反；衍生正文和开篇不是同一处空间。\n"
         "修改：只改宫格或衍生里和开篇不符的句子，保留主体名字。不要新造第二套房间。\n"
@@ -892,12 +913,13 @@ def build_consistency_messages(
         "状态衍生上的临时变化，例如沙尘、天气、破损，留在衍生正文里，不要写回主环境。\n"
         "重生修正或衍生描写和开篇不符时，只改这份衍生提示词，revised_main_prompt 必须为 null。\n"
         "一致时 revised_prompt 和 revised_main_prompt 都必须为 null。\n"
-        "改图指令：一次只改一格里的一件。多格都错时，只写最严重的一格："
-        "先写正面墙认错的格，再写座具脸朝或长边认错的格，再写个数认错的格。其余错误留到下一次。"
+        "改图指令和 summary 说的是同一批画面错误。summary 点了哪一格的哪一件，指令里就改那一格的那一件。"
+        "两格都错就两格都写，不能只留最严重的一格。"
         "image_edit_instruction 只写给改图模型，不重写环境提示词，不写米，不写东南西北。"
         "句式：改{0|90|180|270}度格的{主体名}。现在{只见坐垫朝向镜头|长边横在画面里|正面是另一面墙}。"
         "改成{只见靠背，坐垫朝向远离镜头|只见短头，长边从靠近镜头伸向远离镜头|正面是这一格该有的那面墙}。"
-        "句尾必须是：只改这一格里点名的这一处。另外三格、格线、角标、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。"
+        "只改一格时，句尾是：只改这一格里点名的这一处。另外三格、格线、角标、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。"
+        "改了多格时，句尾列出这些格，其余格子保持原图不动。不要重画整张四宫。"
         "图片已经相符、又没有用户补充点名的画面差异时，image_edit_instruction 必须为 null。\n"
         "用户补充：用户消息里出现「用户补充」时，那是这次额外要改或要提示的点。"
         "先按开篇完成核对，再处理补充里点名的画面和句子。"

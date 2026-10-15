@@ -4269,24 +4269,39 @@ Output ONLY the JSON object now."""
                              
                              deps = _coerce_visual_dependencies(entity.visual_dependencies)
                              if isinstance(deps, list):
+                                 preferred_episode_id = getattr(entity, "episode_id", None)
+                                 project_rows = session.query(Entity).filter(
+                                     Entity.project_id == int(project_id),
+                                     Entity.is_deleted == False,  # noqa: E712
+                                 ).all()
                                  for dep_name in deps:
                                      dep_key = normalize_entity_token(dep_name)
-                                     # Try match by name or ID
-                                     dep_entity = session.query(Entity).filter(
-                                         Entity.project_id == int(project_id), 
-                                         Entity.name == str(dep_name)
-                                     ).first()
-                                     if not dep_entity:
+                                     dep_entity = None
+                                     if str(dep_name).isdigit():
                                          dep_entity = next(
                                              (
-                                                 item for item in session.query(Entity).filter(Entity.project_id == int(project_id)).all()
-                                                 if normalize_entity_token(getattr(item, "name", "")) == dep_key
-                                                 or normalize_entity_token(getattr(item, "name_en", "")) == dep_key
+                                                 item for item in project_rows
+                                                 if int(getattr(item, "id", 0) or 0) == int(dep_name)
                                              ),
                                              None,
                                          )
-                                     if not dep_entity and str(dep_name).isdigit():
-                                          dep_entity = session.query(Entity).filter(Entity.id == int(dep_name)).first()
+                                     if dep_entity is None:
+                                         matches = [
+                                             item for item in project_rows
+                                             if str(getattr(item, "name", "") or "") == str(dep_name)
+                                             or normalize_entity_token(getattr(item, "name", "")) == dep_key
+                                             or normalize_entity_token(getattr(item, "name_en", "")) == dep_key
+                                         ]
+                                         if preferred_episode_id:
+                                             dep_entity = next(
+                                                 (
+                                                     item for item in matches
+                                                     if getattr(item, "episode_id", None) == preferred_episode_id
+                                                 ),
+                                                 None,
+                                             )
+                                         if dep_entity is None and matches:
+                                             dep_entity = matches[0]
 
                                      if dep_entity and dep_entity.image_url:
                                          print(f"DEBUG: Found dependency image for {dep_name}: {dep_entity.image_url}")
