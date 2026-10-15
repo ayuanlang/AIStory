@@ -4736,6 +4736,11 @@ const resolveCategoryAssetBriefText = (sourceText, category) => {
     return source;
 };
 
+// Prop / character editor shows the saved scene_split. The in-memory ref is only a gap-fill.
+const preferEditorSceneSplitText = (persistedSplit, liveSplit, resultText = '', adaptation = '') => String(
+    persistedSplit || liveSplit || resultText || adaptation || ''
+).trim();
+
 const CHAR_EXTRACT_FIELD_KEYS = [
     '名称', '名称_en', '番位', '适用场',
     '定位', '外形', '衣着', '性情', '特定动作', '身份',
@@ -10653,6 +10658,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const hasPropExtractForAssetDesign = useCallback((extraText = '') => {
         const liveSources = [
             extraText,
+            readPersistedStage1Slot('scene_split'),
             latestStage1NodeOutputsRef.current?.scene_split,
             adaptationText,
             latestStage1RawTextRef.current,
@@ -10669,11 +10675,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
         ];
         return leftovers.some((text) => textHasTaggedExtractItems(text, 'PROP'));
-    }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, adaptationText]);
+    }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, adaptationText, readPersistedStage1Slot]);
 
     const hasCharExtractForAssetDesign = useCallback((extraText = '') => {
         const liveSources = [
             extraText,
+            readPersistedStage1Slot('scene_split'),
             latestStage1NodeOutputsRef.current?.scene_split,
             adaptationText,
             latestStage1RawTextRef.current,
@@ -10690,7 +10697,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
         ];
         return leftovers.some((text) => textHasTaggedExtractItems(text, 'CHAR'));
-    }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, adaptationText]);
+    }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, adaptationText, readPersistedStage1Slot]);
 
     const hasPersistedCharacterAssetDesign = useCallback((dbEntities) => {
         const entities = Array.isArray(dbEntities) ? dbEntities : episodeOwnedEntities;
@@ -16932,14 +16939,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 await persistAdaptedScriptEdit(content);
             } else if (kind === 'char_extract' || kind === 'prop_extract') {
                 const tag = kind === 'char_extract' ? 'CHAR' : 'PROP';
-                const base = String(
-                    latestStage1NodeOutputsRef.current?.scene_split
-                    || currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content
-                    || activeEpisode?.ai_scene_analysis_result
-                    || adaptationText
-                    || content
-                    || ''
-                ).trim();
+                const base = preferEditorSceneSplitText(
+                    currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content,
+                    latestStage1NodeOutputsRef.current?.scene_split,
+                    activeEpisode?.ai_scene_analysis_result,
+                    adaptationText || content
+                );
                 const nextSceneSplit = replaceTaggedExtractBlock(
                     base,
                     tag,
@@ -20036,13 +20041,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     activeEpisode?.ai_scene_analysis_result,
                     ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
                 ];
+                const editorSceneSplitForProbe = preferEditorSceneSplitText(
+                    typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '',
+                    readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
+                    latestStage1NodeOutputsRef.current?.scene_split
+                );
+                const propCharCandidates = [
+                    editorSceneSplitForProbe,
+                    options?.extractSourceText,
+                    ...extractSourceCandidates,
+                ];
                 const extractSourceText = (
-                    (requestedTypes.includes('characters') && resolveCategoryAssetSourceText(extractSourceCandidates, 'characters'))
-                    || (requestedTypes.includes('props') && resolveCategoryAssetSourceText(extractSourceCandidates, 'props'))
+                    (requestedTypes.includes('characters') && resolveCategoryAssetSourceText(propCharCandidates, 'characters'))
+                    || (requestedTypes.includes('props') && resolveCategoryAssetSourceText(propCharCandidates, 'props'))
                     || (requestedTypes.some((item) => ['environments', 'posters', 'covers'].includes(String(item || '').trim().toLowerCase()))
                         && resolveCategoryAssetSourceText(extractSourceCandidates, 'environments'))
                     || resolveCategoryAssetSourceText(extractSourceCandidates, '')
-                    || String(options?.extractSourceText || explicitText || latestStage1NodeOutputsRef.current?.scene_split || '').trim()
+                    || String(options?.extractSourceText || explicitText || editorSceneSplitForProbe || '').trim()
                 );
                 const wantsCharacters = requestedTypes.length === 0 || requestedTypes.includes('characters');
                 const wantsProps = requestedTypes.length === 0 || requestedTypes.includes('props');
@@ -20553,13 +20568,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // skip_episode_persist avoids concurrent overwrite of ai_entity_design_result (frontend merges).
             // Failed / incomplete categories auto-retry until DB coverage, user stop, or pipeline timeout.
             const episodeIdForAssetSubtasks = activeEpisode?.id || null;
-            const runEnvironmentQuadConversion = async (environments, traceId, options = {}) => {
-                const force = Boolean(options?.force);
-                const mains = (Array.isArray(environments) ? environments : []).filter((item) => (
+            const singleEnvironmentQuadNames = collectEntityPurgeNameCandidates(
+                options?.rerunSubject?.name,
+                options?.rerunSubject?.fields,
+            );
+            const runEnvironmentQuadConversion = async (environments, traceId, quadOptions = {}) => {
+                const force = Boolean(quadOptions?.force);
+                const onlyNames = Array.isArray(quadOptions?.onlyNames) ? quadOptions.onlyNames : [];
+                let mains = (Array.isArray(environments) ? environments : []).filter((item) => (
                     isMainEnvironmentCompletenessAsset({ ...item, type: item?.type || 'environment' })
                     && String(item?.name || '').trim()
                     && String(item?.generation_prompt_cn || '').trim()
                 ));
+                if (onlyNames.length) {
+                    const matched = mains.filter((item) => entityPayloadMatchesPurgeNames(item, onlyNames));
+                    mains = matched.length ? matched : (mains.length === 1 ? mains : []);
+                    if (!mains.length) {
+                        onLog?.(
+                            `[Stage 3 Asset Design] 单实体重跑不转其他主环境四宫格：${onlyNames.join('、')}`,
+                            'info'
+                        );
+                        return true;
+                    }
+                }
                 if (!mains.length) return false;
                 // A fresh design already carries the previous four cells when the
                 // stored prompt was echoed. Those cells are the old grid. Rebuild
@@ -20663,38 +20694,82 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                     // Skip empty category (no rows of this type, or all already in DB).
                     // Environment design no longer requires Index ENV rows — the environment plan is enough.
-                    const sceneSplitSource = String(
-                        latestStage1NodeOutputsRef.current?.scene_split
-                        || (typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '')
-                        || ''
-                    ).trim();
+                    const editorSceneSplit = preferEditorSceneSplitText(
+                        (typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : ''),
+                        readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
+                        latestStage1NodeOutputsRef.current?.scene_split,
+                        activeEpisode?.ai_scene_analysis_result || adaptationText
+                    );
+                    const singleEntityNames = collectEntityPurgeNameCandidates(
+                        options?.rerunSubject?.name,
+                        options?.rerunSubject?.fields,
+                    );
+                    const unscopedExtract = String(options?.extractSourceText || explicitText || '').trim();
+                    const isolateThisEntity = singleEntityNames.length && (
+                        pData.key === 'characters'
+                        || pData.key === 'props'
+                        || (
+                            pData.key === 'environments'
+                            && String(options?.rerunSubject?.type || '').trim().toLowerCase() !== 'cover_poster'
+                        )
+                    );
+                    let explicitExtract = unscopedExtract;
+                    if (isolateThisEntity && (pData.key === 'characters' || pData.key === 'props')) {
+                        const tag = pData.key === 'characters' ? 'CHAR' : 'PROP';
+                        explicitExtract = filterTaggedExtractByNames(
+                            unscopedExtract || editorSceneSplit,
+                            tag,
+                            singleEntityNames,
+                        );
+                    } else if (isolateThisEntity && pData.key === 'environments') {
+                        const planBase = String(
+                            readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs)
+                            || unscopedExtract
+                            || editorSceneSplit
+                            || ''
+                        ).trim();
+                        explicitExtract = singleEntityNames
+                            .map((name) => String(sliceEnvironmentEditorText(planBase, name)?.text || '').trim())
+                            .filter(Boolean)
+                            .join('\n\n')
+                            .trim();
+                    }
+                    const sceneSplitSource = editorSceneSplit;
                     const extractSourceCandidates = (pData.key === 'characters' || pData.key === 'props')
                         ? [
-                            sceneSplitSource,
-                            options?.extractSourceText,
-                            explicitText,
-                            latestStage1RawTextRef.current,
-                            adaptationText,
-                            activeEpisode?.ai_scene_analysis_adaptation,
-                            activeEpisode?.ai_scene_analysis_result,
-                            ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
+                            explicitExtract,
+                            ...(isolateThisEntity ? [] : [editorSceneSplit]),
+                            ...((explicitExtract || editorSceneSplit || isolateThisEntity) ? [] : [
+                                latestStage1RawTextRef.current,
+                                adaptationText,
+                                activeEpisode?.ai_scene_analysis_adaptation,
+                                activeEpisode?.ai_scene_analysis_result,
+                                ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
+                            ]),
                         ]
                         : [
-                            readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
-                            readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'adapted_script'),
-                            readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'raw_text'),
-                            activeEpisode?.ai_scene_analysis_adaptation,
-                            sceneSplitSource,
-                            adaptationText,
-                            activeEpisode?.ai_scene_analysis_adaptation,
-                            activeEpisode?.ai_scene_analysis_result,
-                            ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
+                            ...(explicitExtract ? [explicitExtract] : []),
+                            ...(isolateThisEntity ? [] : [
+                                readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                                readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'adapted_script'),
+                                readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'raw_text'),
+                                activeEpisode?.ai_scene_analysis_adaptation,
+                                sceneSplitSource,
+                                adaptationText,
+                                activeEpisode?.ai_scene_analysis_adaptation,
+                                activeEpisode?.ai_scene_analysis_result,
+                                ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
+                            ]),
                         ];
                     const extractSourceText = resolveCategoryAssetSourceText(extractSourceCandidates, pData.key)
                         || String(
-                            options?.extractSourceText
-                            || explicitText
-                            || latestStage1NodeOutputsRef.current?.scene_split
+                            isolateThisEntity
+                                ? explicitExtract
+                                : (
+                                    (pData.key === 'characters' || pData.key === 'props')
+                                        ? (explicitExtract || editorSceneSplit)
+                                        : (options?.extractSourceText || explicitText || latestStage1NodeOutputsRef.current?.scene_split)
+                                )
                             || ''
                         ).trim();
                     const categoryBriefText = resolveCategoryAssetBriefText(extractSourceText, pData.key);
@@ -20796,8 +20871,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const envSkipHasMain = pData.key !== 'environments'
                             || hasPersistedEnvironmentAssetDesign();
                         let envQuadOk = true;
-                        if (pData.key === 'environments' && envSkipHasMain) {
+                        if (pData.key === 'environments' && envSkipHasMain && !singleEnvironmentQuadNames.length) {
                             envQuadOk = await runEnvironmentQuadConversion(episodeOwnedEntities, subtaskTraceId);
+                        } else if (pData.key === 'environments' && singleEnvironmentQuadNames.length) {
+                            envQuadOk = true;
                         }
                         if (envSkipHasMain && envQuadOk && pData.key && !assetsLlmDoneKeys.includes(pData.key)) {
                             assetsLlmDoneKeys.push(pData.key);
@@ -20864,6 +20941,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         || taggedExtractIsExplicitNone(nodeInputText, extractTag)
                         || !textHasTaggedExtractItems(nodeInputText, extractTag)
                     );
+                    if (isolateThisEntity && pData.key === 'environments' && !nodeInputText) {
+                        onLog?.(
+                            t(
+                                '[Stage 3 Asset Design] 没有切出该主环境，已跳过 LLM，避免提交全部主环境',
+                                '[Stage 3 Asset Design] Could not isolate this main environment; skipping LLM instead of sending every environment'
+                            ),
+                            'warning'
+                        );
+                        return {
+                            key: pData.key,
+                            traceId: subtaskTraceId,
+                            importSessionId: subtaskImportSessionId,
+                            result: null,
+                            analysisText: '',
+                            subjectsJson: null,
+                            hasImportableSubjects: false,
+                            subtaskImportReport: null,
+                            subtaskImportError: 'empty extract',
+                            skippedExisting: false,
+                        };
+                    }
                     if ((pData.key === 'characters' || pData.key === 'props') && extractIsEmpty) {
                         onLog?.(
                             t(
@@ -21076,7 +21174,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         }
 
                         if (pData.key === 'environments' && !subtaskImportError && subtaskHasImportableSubjects) {
-                            const quadOk = await runEnvironmentQuadConversion(subtaskPayload.environments, subtaskTraceId, { force: true });
+                            const quadOk = await runEnvironmentQuadConversion(subtaskPayload.environments, subtaskTraceId, {
+                                force: true,
+                                onlyNames: singleEnvironmentQuadNames,
+                            });
                             if (!quadOk) subtaskImportError = 'environment_quad_not_ready';
                         }
 
@@ -21251,7 +21352,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     + Number(counts.poster || 0)
                 );
                 if (key === 'environments' && !subtaskImportError) {
-                    const quadOk = await runEnvironmentQuadConversion(subtaskPayload.environments, subtaskTraceId, { force: true });
+                    const quadOk = await runEnvironmentQuadConversion(subtaskPayload.environments, subtaskTraceId, {
+                        force: true,
+                        onlyNames: singleEnvironmentQuadNames,
+                    });
                     if (!quadOk) subtaskImportError = 'environment_quad_not_ready';
                 }
                 const assetImportReady = Boolean(
@@ -29482,13 +29586,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 markEnvironmentAssetDesignReady('restart-stage2-env-auto-start-off');
             }
             if (restartPlanTargets.length > 0) {
-                const restartExtractSource = String(
-                    latestStage1NodeOutputsRef.current?.scene_split
-                    || (typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '')
-                    || stage1SourceText
-                    || latestStage1RawTextRef.current
-                    || ''
-                ).trim();
+                const restartExtractSource = preferEditorSceneSplitText(
+                    (typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : ''),
+                    latestStage1NodeOutputsRef.current?.scene_split,
+                    stage1SourceText,
+                    latestStage1RawTextRef.current
+                );
                 planAssetDesignPromise = runPostImportSceneSubjectPipeline(
                     null,
                     restartExtractSource,
@@ -32393,13 +32496,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const resolveAssetRerunSourceText = useCallback(() => {
         const liveRaw = String(latestStage1RawTextRef.current || '').trim();
-        const sceneSplit = String(
-            latestStage1NodeOutputsRef.current?.scene_split
-            || getStageOutputContent('stage1', 'scene_split')
-            || activeEpisode?.ai_scene_analysis_result
-            || (textHasTaggedExtractItems(liveRaw, 'CHAR') || textHasTaggedExtractItems(liveRaw, 'PROP') ? liveRaw : '')
-            || ''
-        ).trim();
+        const sceneSplit = preferEditorSceneSplitText(
+            getStageOutputContent('stage1', 'scene_split') || readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
+            latestStage1NodeOutputsRef.current?.scene_split,
+            activeEpisode?.ai_scene_analysis_result,
+            (textHasTaggedExtractItems(liveRaw, 'CHAR') || textHasTaggedExtractItems(liveRaw, 'PROP') ? liveRaw : '')
+        );
         const envPlan = pickFirstMatchingText([
             readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
             readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'adapted_script'),
@@ -32709,10 +32811,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             if (!siblingAssetLive) resetAutoSubjectsImportCache();
             onLog?.(`Retrying Stage 3 asset design... targetTypes: ${options.targetEntityTypes ? options.targetEntityTypes.join(',') : 'all'} envScope=${options.envScope || 'main'}`, 'process');
+            const singleEntityRequested = Boolean(String(options?.rerunSubject?.name || '').trim());
             const extractSourceText = String(
-                options.extractSourceText
-                || resolveAssetRerunSourceText()
-                || ''
+                singleEntityRequested
+                    ? (options.extractSourceText || '')
+                    : (options.extractSourceText || resolveAssetRerunSourceText() || '')
             ).trim();
             const resolvedSubjectIndexText = extractPureSubjectIndexText(String(
                 options.explicitSubjectIndexText
@@ -33361,16 +33464,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const filterExtractSourceForSingleEntity = useCallback((sourceText, entry) => {
         const source = String(sourceText || '');
-        if (!source || !entry?.name) return source;
+        if (!source || !entry?.name) return '';
         const names = collectEntityPurgeNameCandidates(entry.name, entry.fields);
         const type = String(entry.type || '').trim().toLowerCase();
         if (type === 'character' || entry.category === 'characters') {
-            return filterTaggedExtractByNames(source, 'CHAR', names) || source;
+            return filterTaggedExtractByNames(source, 'CHAR', names);
         }
         if (type === 'prop' || entry.category === 'props') {
-            return filterTaggedExtractByNames(source, 'PROP', names) || source;
+            return filterTaggedExtractByNames(source, 'PROP', names);
         }
-        return source;
+        if (type === 'environment' || entry.category === 'environments') {
+            if (type === 'cover_poster') return source;
+            const slices = names
+                .map((name) => String(sliceEnvironmentEditorText(source, name)?.text || '').trim())
+                .filter(Boolean);
+            return slices.join('\n\n').trim();
+        }
+        return '';
     }, []);
 
     const parseSubjectIndexEntriesForAssetRerun = useCallback((sourceText) => {
@@ -34565,12 +34675,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }));
             setIsSavingPhase2RerunSubjectIndex(true);
             try {
-                const sceneSplitBase = String(
-                    latestStage1NodeOutputsRef.current?.scene_split
-                    || getStageOutputContent('stage1', 'scene_split')
-                    || resolveAssetRerunSourceText()
-                    || ''
-                ).trim();
+                const sceneSplitBase = preferEditorSceneSplitText(
+                    getStageOutputContent('stage1', 'scene_split'),
+                    latestStage1NodeOutputsRef.current?.scene_split,
+                    resolveAssetRerunSourceText()
+                );
                 const newBlock = serializeTaggedExtractItem(tag, fields, draft.fieldOrder || displayEntry?.fieldOrder);
                 const patched = replaceTaggedExtractItemInSource(
                     sceneSplitBase,
@@ -34857,12 +34966,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const resolvedEditedText = editedSubjectIndexText || legacyIndexText;
 
         if (isExtractDriven && (hasEdits || hasDeletions)) {
-            const sceneSplitBase = String(
-                latestStage1NodeOutputsRef.current?.scene_split
-                || getStageOutputContent('stage1', 'scene_split')
-                || extractSourceText
-                || ''
-            ).trim();
+            const sceneSplitBase = preferEditorSceneSplitText(
+                getStageOutputContent('stage1', 'scene_split'),
+                latestStage1NodeOutputsRef.current?.scene_split,
+                extractSourceText
+            );
             const patchedSplit = applyExtractEntryPatchesToSource(
                 sceneSplitBase,
                 phase2RerunDisplayEntries,
@@ -34929,6 +35037,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 reportAnalysisPanelNotice(t('请选择一个实体后再重跑。', 'Select one entity before rerunning.'), 'warning');
                 return;
             }
+            const singleExtract = filterExtractSourceForSingleEntity(extractSourceText, selected);
+            if (!singleExtract && String(selected.type || '').trim().toLowerCase() !== 'cover_poster') {
+                reportAnalysisPanelNotice(t(
+                    '没有切出该实体的描述，已停止，避免把全部实体提交给模型。',
+                    'Could not isolate this entity, so the run stopped instead of sending every entity.'
+                ), 'warning');
+                return;
+            }
             const selectedType = String(selected.type || '').trim().toLowerCase();
             const envScope = selectedType === 'environment'
                 ? (isDerivedEnvironmentName(selected.name) ? 'derived' : 'main')
@@ -34936,7 +35052,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             retryOptions = {
                 ...retryOptions,
                 targetEntityTypes: selected.targetEntityTypes,
-                extractSourceText: filterExtractSourceForSingleEntity(extractSourceText, selected) || extractSourceText,
+                extractSourceText: filterExtractSourceForSingleEntity(extractSourceText, selected),
                 rerunSubject: {
                     subjectNo: selected.subjectNo,
                     name: selected.name,

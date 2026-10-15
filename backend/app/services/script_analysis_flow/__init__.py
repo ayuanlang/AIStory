@@ -73,6 +73,7 @@ from .environment_asset_brief import (
     build_environment_asset_design_brief,
     collect_ident_environment_names,
     environment_plan_has_ident,
+    choose_environment_design_source,
     pick_environment_plan_source_and_brief,
 )
 from .character_asset_brief import (
@@ -83,6 +84,7 @@ from .character_asset_brief import (
     ensure_char_extract_block,
     extract_char_extract_blocks,
     extract_char_field,
+    choose_char_design_source,
     first_text_with_char_extract,
     latest_char_extract_block,
     parse_char_extract_records,
@@ -92,6 +94,7 @@ from .character_asset_brief import (
 from .prop_asset_brief import (
     assemble_prop_asset_design_user_content,
     build_prop_asset_design_brief,
+    choose_prop_design_source,
     ensure_prop_extract_block,
     extract_prop_extract_blocks,
     first_text_with_prop_extract,
@@ -3732,6 +3735,7 @@ __all__ = [
     "splice_char_extract_into_script",
     "assemble_prop_asset_design_user_content",
     "build_prop_asset_design_brief",
+    "choose_prop_design_source",
     "ensure_prop_extract_block",
     "extract_prop_extract_blocks",
     "first_text_with_prop_extract",

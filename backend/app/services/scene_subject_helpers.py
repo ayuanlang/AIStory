@@ -225,6 +225,16 @@ def _parse_subject_index_entries_for_prior_prompts(
         if len(parts) >= 4 and re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE):
             _push(parts[1], parts[2], parts[3] if len(parts) > 3 else "")
 
+    raw_text = str(subject_index_text or "")
+    for match in re.finditer(r"\[CHAR\][^\n]{0,160}名称\s*[=：:]\s*([^\n｜|]+)", raw_text, flags=re.IGNORECASE):
+        _push("character", match.group(1))
+    for match in re.finditer(r"\[PROP\][^\n]{0,160}名称\s*[=：:]\s*([^\n｜|]+)", raw_text, flags=re.IGNORECASE):
+        _push("prop", match.group(1))
+    for match in re.finditer(r"【主环境】\s*([^｜|\r\n]+)", raw_text):
+        _push("environment", match.group(1))
+    for match in re.finditer(r"\[ENV\]\s*名称\s*[=：:]\s*([^\n｜|]+)", raw_text, flags=re.IGNORECASE):
+        _push("environment", match.group(1))
+
     return entries
 
 

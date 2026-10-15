@@ -83,9 +83,13 @@ from app.services.script_analysis_flow import (
     assemble_environment_asset_design_user_content,
     assemble_prop_asset_design_user_content,
     build_character_asset_design_brief,
+    choose_char_design_source,
     build_cover_poster_brief,
+    build_environment_asset_design_brief,
+    choose_environment_design_source,
     pick_environment_plan_source_and_brief,
     build_prop_asset_design_brief,
+    choose_prop_design_source,
     first_text_with_char_extract,
     first_text_with_prop_extract,
     extract_derived_environment_names_from_scene_text,
@@ -646,7 +650,7 @@ async def execute_analyze_scene(
                                 payload = json.loads(raw_outputs)
                                 outputs = ((payload.get("stages") or {}).get("stage1") or {}).get("outputs") or {}
                                 plan_slot = ""
-                        for key in ("environment_plan", "adapted_script", "raw_text"):
+                                for key in ("environment_plan", "adapted_script", "raw_text"):
                                     slot = outputs.get(key)
                                     content = ""
                                     if isinstance(slot, dict):
@@ -657,8 +661,8 @@ async def execute_analyze_scene(
                                         plan_slot = content
                                     else:
                                         episode_plan_texts.append(content)
-                        if plan_slot:
-                            episode_plan_texts.insert(0, plan_slot)
+                                if plan_slot:
+                                    episode_plan_texts.insert(0, plan_slot)
                             except Exception:
                                 pass
                         episode_plan_texts.append(
@@ -669,11 +673,13 @@ async def execute_analyze_scene(
                         "[analyze_scene] failed loading adaptation for env design brief: %s",
                         brief_load_err,
                     )
-            brief_source, env_brief = pick_environment_plan_source_and_brief(
+            picked_plan, _picked_brief = pick_environment_plan_source_and_brief(
                 request_text,
                 episode_adaptation_for_scene_beats,
                 *episode_plan_texts,
             )
+            brief_source = choose_environment_design_source(request_text, picked_plan)
+            env_brief = build_environment_asset_design_brief(brief_source)
             environment_design_name_source = brief_source
             cover_brief = build_cover_poster_brief(brief_source)
             user_content = assemble_environment_asset_design_user_content(
@@ -697,8 +703,26 @@ async def execute_analyze_scene(
             request_has_prop_block = bool(
                 "[PROP_EXTRACT_START" in request_text.upper() or re.search(r"\[PROP\]", request_text)
             )
+            persisted_scene_split = ""
+            episode_for_prop = request_episode
+            if episode_for_prop is not None:
+                raw_outputs = str(getattr(episode_for_prop, "ai_stage_outputs", "") or "").strip()
+                if raw_outputs:
+                    try:
+                        payload = json.loads(raw_outputs)
+                        slot = (
+                            ((payload.get("stages") or {}).get("stage1") or {})
+                            .get("outputs") or {}
+                        ).get("scene_split")
+                        if isinstance(slot, dict):
+                            persisted_scene_split = str(slot.get("content") or "")
+                        elif isinstance(slot, str):
+                            persisted_scene_split = slot
+                    except Exception:
+                        persisted_scene_split = ""
+            chosen_prop_source = choose_prop_design_source(request_text, persisted_scene_split)
             extra_prop_sources = []
-            if not request_has_prop_block and getattr(request, "episode_id", None):
+            if not chosen_prop_source and getattr(request, "episode_id", None):
                 try:
                     _ep_for_prop = (
                         db.query(Episode)
@@ -732,25 +756,22 @@ async def execute_analyze_scene(
                         "[analyze_scene] failed loading adaptation for prop design brief: %s",
                         prop_brief_err,
                     )
-            brief_source = (
-                request_text
-                if request_has_prop_block
-                else (
-                    first_text_with_prop_extract(
-                        request_text,
-                        episode_adaptation_for_scene_beats,
-                        *extra_prop_sources,
-                    )
-                    or episode_adaptation_for_scene_beats
+            brief_source = chosen_prop_source or (
+                first_text_with_prop_extract(
+                    request_text,
+                    episode_adaptation_for_scene_beats,
+                    *extra_prop_sources,
                 )
+                or episode_adaptation_for_scene_beats
             )
             prop_brief = build_prop_asset_design_brief(brief_source)
             user_content = assemble_prop_asset_design_user_content(prop_brief)
             logger.info(
-                "[analyze_scene] prop asset design user seed episode_id=%s prop_brief=%s script_block=omitted char_brief=omitted request_has_block=%s",
+                "[analyze_scene] prop asset design user seed episode_id=%s prop_brief=%s script_block=omitted char_brief=omitted request_has_block=%s saved_scene_split=%s",
                 getattr(request, "episode_id", None),
                 len(prop_brief or ""),
                 request_has_prop_block,
+                bool(str(persisted_scene_split or "").strip()),
             )
 
         elif is_character_asset_design:
@@ -758,8 +779,25 @@ async def execute_analyze_scene(
             request_has_char_block = bool(
                 "[CHAR_EXTRACT_START" in request_text.upper() or re.search(r"\[CHAR\]", request_text)
             )
+            persisted_char_split = ""
+            if request_episode is not None:
+                raw_outputs = str(getattr(request_episode, "ai_stage_outputs", "") or "").strip()
+                if raw_outputs:
+                    try:
+                        payload = json.loads(raw_outputs)
+                        slot = (
+                            ((payload.get("stages") or {}).get("stage1") or {})
+                            .get("outputs") or {}
+                        ).get("scene_split")
+                        if isinstance(slot, dict):
+                            persisted_char_split = str(slot.get("content") or "")
+                        elif isinstance(slot, str):
+                            persisted_char_split = slot
+                    except Exception:
+                        persisted_char_split = ""
+            chosen_char_source = choose_char_design_source(request_text, persisted_char_split)
             extra_char_sources = []
-            if not request_has_char_block and getattr(request, "episode_id", None):
+            if not chosen_char_source and getattr(request, "episode_id", None):
                 try:
                     _ep_for_char = (
                         db.query(Episode)
@@ -793,17 +831,13 @@ async def execute_analyze_scene(
                         "[analyze_scene] failed loading adaptation for character design brief: %s",
                         char_brief_err,
                     )
-            brief_source = (
-                request_text
-                if request_has_char_block
-                else (
-                    first_text_with_char_extract(
-                        request_text,
-                        episode_adaptation_for_scene_beats,
-                        *extra_char_sources,
-                    )
-                    or episode_adaptation_for_scene_beats
+            brief_source = chosen_char_source or (
+                first_text_with_char_extract(
+                    request_text,
+                    episode_adaptation_for_scene_beats,
+                    *extra_char_sources,
                 )
+                or episode_adaptation_for_scene_beats
             )
             char_brief = build_character_asset_design_brief(brief_source)
             appearance_block = ""
@@ -1185,6 +1219,12 @@ async def execute_analyze_scene(
                         "anchor_description": anchor_description,
                     })
 
+                if is_scoped_asset_design and str(user_content or "").strip():
+                    brief_text = str(user_content or "")
+                    normalized_assets = [
+                        asset for asset in normalized_assets
+                        if asset.get("name") and str(asset.get("name")) in brief_text
+                    ]
                 if normalized_assets:
                     lines = [
                         "Reusable Subject Assets (High Priority):",
@@ -1243,11 +1283,17 @@ async def execute_analyze_scene(
                     prior_prompt_types = set(_PRIOR_ENTITY_DESIGN_TYPES)
 
             if prior_prompt_types and request_episode_id_for_prior and request_episode_id_for_prior > 0:
-                subject_index_for_prior_lookup = (
-                    persisted_subject_index_for_prompt
-                    or sanitize_subject_index_text(getattr(request, "text", None))
-                    or sanitize_subject_index_text(user_content)
-                )
+                if is_scoped_asset_design:
+                    subject_index_for_prior_lookup = (
+                        str(user_content or "").strip()
+                        or str(getattr(request, "text", "") or "").strip()
+                    )
+                else:
+                    subject_index_for_prior_lookup = (
+                        persisted_subject_index_for_prompt
+                        or sanitize_subject_index_text(getattr(request, "text", None))
+                        or sanitize_subject_index_text(user_content)
+                    )
                 try:
                     prior_prompts_block = _build_prior_entity_generation_prompts_block(
                         db,

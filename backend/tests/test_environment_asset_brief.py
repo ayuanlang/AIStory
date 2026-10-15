@@ -2,6 +2,7 @@
 from app.services.script_analysis_flow.character_asset_brief import (
     assemble_character_asset_design_user_content,
     build_character_asset_design_brief,
+    choose_char_design_source,
     char_extract_has_items,
     char_extract_is_explicit_none,
     current_world_identity,
@@ -17,6 +18,7 @@ from app.services.script_analysis_flow.environment_asset_brief import (
     align_environment_json_names_with_ident,
     assemble_environment_asset_design_user_content,
     build_environment_asset_design_brief,
+    choose_environment_design_source,
     collect_ident_environment_names,
     environment_plan_has_ident,
     pick_environment_plan_source_and_brief,
@@ -24,6 +26,7 @@ from app.services.script_analysis_flow.environment_asset_brief import (
 from app.services.script_analysis_flow.prop_asset_brief import (
     assemble_prop_asset_design_user_content,
     build_prop_asset_design_brief,
+    choose_prop_design_source,
     first_text_with_prop_extract,
     prop_extract_has_items,
     prop_extract_is_explicit_none,
@@ -951,6 +954,103 @@ def test_character_brief_keeps_extract_only_request_text():
     assert "[CHAR_EXTRACT_START]" in composed
     assert "沈青" in composed
     assert "[待分析剧本开始]" not in composed
+
+
+def test_choose_prop_design_source_uses_saved_extract_not_cached_request():
+    saved = """[PROP_EXTRACT_START]
+[PROP] 名称=银打火机｜名称_en=Silver Lighter
+外形=编辑后的扁长方形
+[PROP_EXTRACT_END]"""
+    cached = """[PROP_EXTRACT_START]
+[PROP] 名称=银打火机｜名称_en=Silver Lighter
+外形=旧缓存的圆形
+[PROP_EXTRACT_END]"""
+    chosen = choose_prop_design_source(cached, saved)
+    brief = build_prop_asset_design_brief(chosen)
+    assert "编辑后的扁长方形" in brief
+    assert "旧缓存的圆形" not in brief
+
+
+def test_choose_prop_design_source_keeps_single_prop_scope_with_saved_text():
+    saved = """[SCENE_START:EP00_SC01]
+[PROP_EXTRACT_START]
+[PROP] 名称=银打火机
+外形=编辑后
+[PROP] 名称=铜钥匙
+外形=黄铜
+[PROP_EXTRACT_END]
+[SCENE_END]"""
+    request = """[PROP_EXTRACT_START]
+[PROP] 名称=银打火机
+外形=旧缓存
+[PROP_EXTRACT_END]"""
+    chosen = choose_prop_design_source(request, saved)
+    assert "银打火机" in chosen
+    assert "编辑后" in chosen
+    assert "铜钥匙" not in chosen
+    assert "旧缓存" not in chosen
+
+
+def test_choose_prop_design_source_uses_request_when_nothing_saved():
+    request = """[PROP_EXTRACT_START]
+[PROP] 名称=银打火机
+外形=新抽取
+[PROP_EXTRACT_END]"""
+    chosen = choose_prop_design_source(request, "")
+    assert "新抽取" in chosen
+
+
+def test_choose_char_design_source_keeps_one_character():
+    saved = """[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青｜名称_en=Shen Qing
+外形=编辑后的瘦长
+[CHAR] 名称=阿岚
+外形=圆脸
+[CHAR_EXTRACT_END]"""
+    request = """[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青｜名称_en=Shen Qing
+外形=旧缓存
+[CHAR_EXTRACT_END]"""
+    chosen = choose_char_design_source(request, saved)
+    brief = build_character_asset_design_brief(chosen)
+    assert "沈青" in brief
+    assert "编辑后的瘦长" in brief
+    assert "阿岚" not in brief
+    assert "旧缓存" not in brief
+
+
+def test_choose_environment_design_source_keeps_one_main_environment():
+    saved = """[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=客栈大堂｜复用=否
+定位=堂内
+[ENV] 名称=后厨｜复用=否
+定位=灶间
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[ENV_BLOCK_START]
+────【主环境】────
+【主环境】客栈大堂
+[ENV_BLOCK_END]
+[ENV_BLOCK_START]
+────【主环境】────
+【主环境】后厨
+[ENV_BLOCK_END]"""
+    request = """[ENV] 名称=客栈大堂｜复用=否
+【主环境】客栈大堂"""
+    chosen = choose_environment_design_source(request, saved)
+    brief = build_environment_asset_design_brief(chosen)
+    assert "客栈大堂" in brief
+    assert "后厨" not in brief
+
+
+def test_choose_prop_design_source_honors_saved_explicit_none():
+    saved = "[PROP_EXTRACT_START]\n无\n[PROP_EXTRACT_END]"
+    cached = """[PROP_EXTRACT_START]
+[PROP] 名称=银打火机
+外形=旧缓存
+[PROP_EXTRACT_END]"""
+    chosen = choose_prop_design_source(cached, saved)
+    assert prop_extract_is_explicit_none(chosen)
+    assert build_prop_asset_design_brief(chosen) == ""
 
 
 def test_prop_brief_keeps_extract_only_request_text():

@@ -220,6 +220,45 @@ def _looks_like_char_extract(script_text: str) -> bool:
     return bool(collect_loose_char_item_blocks(text))
 
 
+def _char_items_in_order(text: str) -> List[tuple]:
+    ordered: List[tuple] = []
+    for record in parse_char_extract_records(text):
+        name = _clean(record.get("name"))
+        block = _clean(record.get("text"))
+        if name and block:
+            ordered.append((name, block))
+    return ordered
+
+
+def choose_char_design_source(request_text: str, persisted_text: str = "") -> str:
+    """Saved character extract is the editor copy. A one-character request stays one character."""
+    request = _clean(request_text)
+    persisted = _clean(persisted_text)
+    if persisted and char_extract_is_explicit_none(persisted):
+        matches = list(CHAR_EXTRACT_BLOCK_PATTERN.finditer(persisted))
+        return _clean(matches[0].group(0)) if matches else persisted
+    persisted_block = ""
+    if persisted:
+        matches = list(CHAR_EXTRACT_BLOCK_PATTERN.finditer(persisted))
+        persisted_block = _clean(matches[0].group(0)) if matches else ensure_char_extract_block(persisted)
+    if persisted_block and char_extract_is_explicit_none(persisted_block):
+        return persisted_block
+    if not persisted_block or not char_extract_has_items(persisted_block):
+        return request or persisted
+    if not request or char_extract_is_explicit_none(request) or not char_extract_has_items(request):
+        return persisted_block
+    persisted_items = _char_items_in_order(persisted_block)
+    request_items = _char_items_in_order(request)
+    persisted_names = {name for name, _block in persisted_items}
+    request_names = {name for name, _block in request_items}
+    if request_items and persisted_items and not persisted_names <= request_names:
+        by_name = {name: block for name, block in persisted_items}
+        chosen = [by_name.get(name) or block for name, block in request_items]
+        body = "\n\n".join(block for block in chosen if block)
+        return f"[CHAR_EXTRACT_START]\n{body}\n[CHAR_EXTRACT_END]"
+    return persisted_block
+
+
 def first_text_with_char_extract(*candidates: object) -> str:
     for candidate in candidates:
         text = _clean(candidate)

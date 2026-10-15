@@ -431,3 +431,113 @@ def pick_environment_plan_source_and_brief(*sources: object) -> Tuple[str, str]:
         if rank > best_rank or (rank == best_rank and count > best_count):
             best_source, best_brief, best_rank, best_count = cleaned, brief, rank, count
     return (best_source or fallback), best_brief
+
+
+def _environment_title_name(raw: str) -> str:
+    title = _clean(raw).split("｜")[0].split("|")[0]
+    title = re.split(r"[；;]", title)[0]
+    title = re.sub(r"【活动空间】.*$", "", title).strip()
+    return title
+
+
+def _environment_title_matches(raw: str, wanted_key: str) -> bool:
+    return bool(wanted_key) and normalize_environment_name(_environment_title_name(raw)) == wanted_key
+
+
+def list_main_environment_names(text: str) -> List[str]:
+    """IDENT names plus 【主环境】 headings, derived angles excluded."""
+    names: List[str] = []
+    seen: set = set()
+
+    def _add(raw: str) -> None:
+        title = _environment_title_name(raw)
+        if not title or _is_derived_environment_name(title):
+            return
+        key = normalize_environment_name(title)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        names.append(title)
+
+    for name in collect_ident_environment_names(text):
+        _add(name)
+    for match in _MAIN_ENV_NAME_RE.finditer(str(text or "")):
+        _add(match.group(1))
+    return names
+
+
+def slice_one_main_environment(text: str, name: str) -> str:
+    """IDENT line plus that main environment's skeleton. Other mains stay out."""
+    wanted = normalize_environment_name(name)
+    lines = str(text or "").replace("\r\n", "\n").split("\n")
+    if not wanted or not lines:
+        return ""
+    skeleton = ""
+    for index, line in enumerate(lines):
+        title = re.match(r"^\s*【主环境】\s*(.+)$", line)
+        if not title or not _environment_title_matches(title.group(1), wanted):
+            continue
+        start = index
+        for cursor in range(index, max(-1, index - 4), -1):
+            if re.search(r"\[ENV_BLOCK_START\]", lines[cursor], re.IGNORECASE) or "────【主环境】" in lines[cursor]:
+                start = cursor
+                if re.search(r"\[ENV_BLOCK_START\]", lines[cursor], re.IGNORECASE):
+                    break
+        end = len(lines)
+        for cursor in range(index + 1, len(lines)):
+            if re.search(r"\[ENV_BLOCK_END\]", lines[cursor], re.IGNORECASE):
+                end = cursor + 1
+                break
+            if re.match(r"^\[ENV_BLOCK_START\]", lines[cursor], re.IGNORECASE):
+                end = cursor
+                break
+            other = re.match(r"^\s*【主环境】\s*(.+)$", lines[cursor])
+            if other and not _environment_title_matches(other.group(1), wanted):
+                end = cursor
+                break
+        skeleton = "\n".join(lines[start:end]).strip()
+        break
+    ident = ""
+    for index, line in enumerate(lines):
+        header = re.match(r"^\s*\[ENV\]\s*名称\s*[=：:]\s*(.+)$", line, re.IGNORECASE)
+        if not header or not _environment_title_matches(header.group(1), wanted):
+            continue
+        chunk = [line]
+        for cursor in range(index + 1, len(lines)):
+            if (
+                re.match(r"^\s*\[ENV\]", lines[cursor], re.IGNORECASE)
+                or re.match(r"^\[SCENE_ENV_IDENT_END", lines[cursor], re.IGNORECASE)
+                or re.match(r"^\[ENV_BLOCK_START\]", lines[cursor], re.IGNORECASE)
+            ):
+                break
+            chunk.append(lines[cursor])
+        ident = "\n".join(chunk).strip()
+        break
+    parts = [part for part in (ident, skeleton) if part]
+    return "\n\n".join(parts).strip()
+
+
+def choose_environment_design_source(request_text: str, persisted_text: str = "") -> str:
+    """A one-environment request keeps that environment. A full plan stays a full plan.
+
+    The saved plan supplies the wording for the requested names. Other main
+    environments in the saved plan are not added.
+    """
+    request = _clean(request_text)
+    persisted = _clean(persisted_text)
+    request_names = list_main_environment_names(request)
+    persisted_names = list_main_environment_names(persisted)
+    request_keys = {normalize_environment_name(name) for name in request_names}
+    persisted_keys = {normalize_environment_name(name) for name in persisted_names}
+    if request_names and persisted_names and not persisted_keys <= request_keys:
+        sliced = [
+            slice_one_main_environment(persisted, name) or slice_one_main_environment(request, name)
+            for name in request_names
+        ]
+        sliced = [part for part in sliced if part]
+        if sliced:
+            return "\n\n".join(sliced).strip()
+        return request
+    if persisted and (text_has_main_env_skeleton(persisted) or environment_plan_has_ident(persisted)):
+        return persisted
+    return request or persisted
