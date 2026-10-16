@@ -631,22 +631,6 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     }
 
 
-def _preserve_env_generation_prompt_cn(raw: Any) -> str:
-    """Keep the full ENV design prompt, including four-panel line breaks."""
-    return str(raw or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-
-
-def _format_main_env_prompt_block(header_line: str, prompt_cn: str) -> str:
-    """Family header + intact main-ENV generation_prompt_cn (宫格 must stay readable)."""
-    return (
-        f"{header_line}\n"
-        "【主环境整份 generation_prompt_cn｜开篇世界锁+四向拼图宫格；"
-        "光线只读当前衍生度数对应格】\n"
-        f"{prompt_cn}\n"
-        "【/主环境整份 generation_prompt_cn】"
-    )
-
-
 def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
     return _build_project_prompt_context(project.global_info)
 
@@ -657,16 +641,10 @@ def _build_scene_subject_image_prompts_cn_section(
     *,
     scene_id: Optional[int] = None,
 ) -> str:
-    """Inject main-ENV prompts for scene-linked environments.
+    """Inject only this scene's derived-environment info.
 
-    A scene may use a view/state derivative, but its optical source is the
-    derivative's main environment.  Inject that main ENV's FULL
-    generation_prompt_cn (opening world lock + 【四向拼图】 four-panel grid)
-    and retain the selected derivative -> main ENV mapping so the storyboard
-    model knows which view/state is actually in use. Multiple derivatives that
-    resolve to the same main ENV are merged into one family (prompt injected
-    once, grid structure preserved). CHAR/PROP image prompts are intentionally
-    excluded from this injection.
+    Do not inject the main ENV generation_prompt_cn, its opening world lock,
+    or its four-panel grid. CHAR/PROP image prompts stay excluded.
     """
     if not subject_match_keys:
         return ""
@@ -746,8 +724,23 @@ def _build_scene_subject_image_prompts_cn_section(
                     return possible_main
         return None
 
-    families: Dict[str, Dict[str, Any]] = {}
-    family_order: List[str] = []
+    derived_degree = re.compile(r"^\d+\s*度")
+
+    def _is_scene_derived(ent: Any, resolved_main: Optional[Any]) -> bool:
+        name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
+        attrs = getattr(ent, "custom_attributes", None)
+        if not isinstance(attrs, dict):
+            attrs = {}
+        if str(attrs.get("main_environment") or attrs.get("所属主环境") or "").strip():
+            return True
+        if attrs.get("view_angle_from_main") is not None:
+            return True
+        if derived_degree.match(name):
+            return True
+        return resolved_main is not None and resolved_main is not ent
+
+    derived_ents: List[Any] = []
+    main_by_name: Dict[str, str] = {}
     seen_refs: set = set()
     for ent in matched_entities:
         used_env_name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
@@ -757,190 +750,47 @@ def _build_scene_subject_image_prompts_cn_section(
         if used_env_ref in seen_refs:
             continue
         seen_refs.add(used_env_ref)
-
         resolved_main = _find_main_environment(ent)
-        main_ent = resolved_main or ent
-        main_env_name = str(
-            getattr(main_ent, "name", None) or getattr(main_ent, "name_en", None) or ""
-        ).strip()
-        prompt_cn = _preserve_env_generation_prompt_cn(
-            getattr(main_ent, "generation_prompt_cn", None)
-        )
-        if not prompt_cn or not main_env_name:
+        if not _is_scene_derived(ent, resolved_main):
             continue
-
-        family_key = str(getattr(main_ent, "id", None) or "") or subject_compare_key(main_env_name)
-        family = families.get(family_key)
-        if family is None:
-            family = {
-                "main_ent": main_ent,
-                "main_env_name": main_env_name,
-                "prompt_cn": prompt_cn,
-                "derived_refs": [],
-                "derived_ents": [],
-                "includes_main": False,
-            }
-            families[family_key] = family
-            family_order.append(family_key)
-
-        if main_ent is ent:
-            family["includes_main"] = True
-        else:
-            family["derived_refs"].append(used_env_ref)
-            family["derived_ents"].append(ent)
-
-    prompt_lines: List[str] = []
-    for family_key in family_order:
-        family = families[family_key]
-        main_ref = f"ENV:[{family['main_env_name']}]"
-        prompt_cn = str(family["prompt_cn"])
-        derived_refs = list(family["derived_refs"])
-        if derived_refs:
-            derived_list = "、".join(derived_refs)
-            main_clause = (
-                f"明确：以上衍生环境对应同一个主环境={main_ref}"
-                if len(derived_refs) > 1
-                else f"对应主环境={main_ref}"
-            )
-            if family["includes_main"]:
-                main_clause = f"{main_clause}（本场亦使用该主环境）"
-            if len(derived_refs) > 1:
-                header = (
-                    f"- 同一主环境族：主环境={main_ref} | "
-                    f"本场使用的衍生环境={derived_list}（{main_clause}）"
-                )
-            else:
-                header = (
-                    f"- 当前场景使用的衍生环境={derived_list} | "
-                    f"{main_clause}"
-                )
-            prompt_lines.append(_format_main_env_prompt_block(header, prompt_cn))
-        else:
-            prompt_lines.append(
-                _format_main_env_prompt_block(
-                    f"- 当前场景环境={main_ref}（主环境）",
-                    prompt_cn,
-                )
-            )
-
-    if not prompt_lines:
+        main_name = ""
+        if resolved_main is not None and resolved_main is not ent:
+            main_name = str(
+                getattr(resolved_main, "name", None) or getattr(resolved_main, "name_en", None) or ""
+            ).strip()
+        derived_ents.append(ent)
+        main_by_name[used_env_name] = main_name
+    derived_info_block = build_derived_env_info_injection_from_entities(
+        derived_ents,
+        main_by_name=main_by_name,
+    )
+    if not derived_info_block:
         logger.info(
-            "[_build_shot_prompts] no scene ENV image prompts matched scene_id=%s keys=%s",
+            "[_build_shot_prompts] no scene derived-env info matched scene_id=%s keys=%s",
             scene_id,
             len(subject_match_keys),
         )
         return ""
 
-    derived_ents: List[Any] = []
-    main_by_name: Dict[str, str] = {}
-    for family_key in family_order:
-        family = families[family_key]
-        main_name = str(family["main_env_name"])
-        for ent in family.get("derived_ents") or []:
-            derived_ents.append(ent)
-            used_name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
-            if used_name:
-                main_by_name[used_name] = main_name
-    derived_info_block = build_derived_env_info_injection_from_entities(
-        derived_ents,
-        main_by_name=main_by_name,
-    )
-
-    body_parts = [
+    body = (
         "# Scene Subject Image Prompts (CN)\n"
-        "Inject the FULL environment-asset-design generation_prompt_cn for each mapped main ENV "
-        "(opening world lock + 【四向拼图】 four-panel 宫格). Do not flatten or omit grid cells. "
-        "Each family injects that main prompt once. When several scene-used ENV derivatives belong "
-        "to the same main ENV, they are merged into one family that explicitly states they "
-        "correspond to that same main ENV; do not treat those derivatives as unrelated spaces. "
-        "Preserve each derivative's declared view/state. "
-        "When a derived-environment info block is present, each used derivative lists 所属主环境 / view_angle "
-        "and this camera's 背景 / 画左 / 画右 entity map for internal placement checks only "
-        "(left/right flip after a cut — look up the new ENV row). "
-        "Copy staging's relative/absolute/enclosed placement for CHAR/PROP; keep the structure and use those "
-        "entities in place of the words 画左/画右. "
-        "Video Content cites 背景参考图为 ENV:[…] once on the first P of a same-derived-environment run, "
-        "and 背景切换到参考图 ENV:[…] when the derived name changes. Later P in the same derived environment "
-        "do not repeat 当前环境, 空间结构, 环境保持, 仍在该环境, or 背景参考图为. "
-        "Do not restate the environment plate — no 远景/画左/画右 set-dressing, materials, or wall tours. "
-        "Lighting control MUST follow the current derived-degree ENV's corresponding 宫格 in this "
-        "injected main prompt: world lock 主光/辅光/点缀/源形/Key世界向 + that cell's 来光三轴/"
-        "受光半/影子投向 (+ the derivative's §C optical Delta if any). Keep Key/Fill/Rim side, "
-        "color, contrast, and soft/hard identical to that cell — do not invent lights or copy "
-        "another cell. In the two lighting sections, state the exposure effect of that lighting "
-        "on CHAR/PROP (key-side highlight, fill lift, shadow density, catchlight, over/under) "
-        "together with shutter speed 1/Xs + freeze/smear/grain. "
-        "Write optics in the two lighting sections; do not turn the ENV plate into Video scenery prose. "
-        "Do not invent lights, colors, background objects, or background actions outside those two sources; "
-        "background micro-motion must be physically motivated by the visible object's material/state and the "
-        "shot's established environment. "
-        "Do NOT expect CHAR/PROP prompts here — character/prop appearance is reference-image bound downstream. "
-        "Translate ENV optics into dynamic video language; do not paste static framing/canvas instructions verbatim. "
+        "本场只注入用到的衍生环境信息。不注入主环境整份 generation_prompt_cn，"
+        "不注入开篇世界锁，不注入四宫格。\n"
+        "【衍生环境信息】只供脑内核对这一角的所属主环境、背景、画面左、画面右、画外、可见与不可见。"
+        "禁止把这些字段扩写成环境导游，禁止把未注入的主环境四壁或光句补进本段。\n"
+        "Video 只点名本场衍生环境名。角色与道具落位照建置抄。\n"
+        "Do NOT expect CHAR/PROP prompts or the main-environment plate here. "
         "Entity naming authority remains Scene Subject Index. "
-        "Do not replace the used derivative with its main ENV name in shot output.\n"
-        "注入的是环境资产设计主环境整份 generation_prompt_cn（开篇世界锁+【四向拼图】四宫格），"
-        "宫格结构必须保持可读。光线控制只读当前拍衍生度数 ENV 对应宫格的光源与光线描述，"
-        "须与该格同核，并在两光影段说明曝光效果。\n"
-    ]
-    if derived_info_block:
-        body_parts.append(derived_info_block + "\n")
-    body_parts.append("\n".join(prompt_lines) + "\n")
-    body = "\n".join(body_parts)
+        "Do not replace the used derivative with its main ENV name in shot output.\n\n"
+        f"{derived_info_block}\n"
+    )
     logger.info(
         "[_build_shot_prompts] injected scene ENV image prompts scene_id=%s keys=%s rows=%s",
         scene_id,
         len(subject_match_keys),
-        len(prompt_lines),
+        len(derived_ents),
     )
     return wrap_injection_section("实体中文生图提示词", body)
-
-
-def collect_missing_main_env_prompt_names(
-    project_entities: List[Any],
-    subject_match_keys: set,
-) -> List[str]:
-    """Return main-ENV names used by the scene that still lack generation_prompt_cn."""
-    if not subject_match_keys:
-        return []
-
-    def _entity_matches(ent: Any) -> bool:
-        for alias in (getattr(ent, "name", None), getattr(ent, "name_en", None)):
-            alias_text = str(alias or "").strip()
-            if not alias_text:
-                continue
-            if subject_compare_key(alias_text) in subject_match_keys:
-                return True
-            if subject_match_keys.intersection(subject_compare_key_variants(alias_text)):
-                return True
-        return False
-
-    environment_entities = [
-        ent for ent in (project_entities or [])
-        if not bool(getattr(ent, "is_deleted", False))
-        and _normalize_subject_entity_type(getattr(ent, "type", None)) == "environment"
-    ]
-    matched = [ent for ent in environment_entities if _entity_matches(ent)]
-    if not matched:
-        return []
-
-    missing: List[str] = []
-    seen: set = set()
-    injected = _build_scene_subject_image_prompts_cn_section(
-        project_entities,
-        subject_match_keys,
-    )
-    if str(injected or "").strip():
-        return []
-    for ent in matched:
-        name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
-        if not name:
-            continue
-        key = subject_compare_key(name)
-        if key in seen:
-            continue
-        seen.add(key)
-        missing.append(name)
-    return missing or ["主环境"]
 
 
 def _build_shot_prompts(
@@ -1273,19 +1123,6 @@ def _build_shot_prompts(
         subject_match_keys,
         scene_id=getattr(scene, "id", None),
     )
-    missing_main_prompts = collect_missing_main_env_prompt_names(
-        project_entities,
-        subject_match_keys,
-    )
-    if missing_main_prompts:
-        missing_label = "、".join(missing_main_prompts)
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"本场关联环境尚未写入主环境 generation_prompt_cn，不能启动分镜：{missing_label}"
-            ),
-        )
-
     # 3. Prepare System Prompt
     system_prompt = ""
     try:
@@ -1319,7 +1156,7 @@ def _build_shot_prompts(
             f"合镜计时：Beat小计=建置串行+并行核Max(语言/动作/微表情/特效/运镜/音效)，禁止七类分项全额相加灌到MaxShotSeconds；同一衍生环境的后续P建置=0s，不抄该拍建置，不写当前环境、环境保持、仍在该环境、背景参考图；机位和透视与上一P相同的不再写，变了只写变化和该拍入戏；跨P同一连续运镜只计一次；ENV微动/窗雨/雨丝/配乐特效=0s。无对白且无复杂动作且无宏大特效的建立/凝视合镜Duration落5–8（~可到9），禁止无撑满内容却填MaxShotSeconds。"
             f"景别构图与镜头角度：镜首与ENV名变Pn抄该拍【建置】拍摄键进Logic与Video。同一衍生环境合镜的后续P，和上一P已经写出的机位、景别、俯仰、视角、透视、构图相同就不再写，只写变了的档和接到新机位的运镜。禁止本层另选锁档。缺锁定标upstream_missing_framing回流。"
             f"影视语言：焦距/视角°/光学/运镜/构图/镜头位置/跟焦/帧率/快门速度/曝光三角/光比/色温/柔硬/色调须可回指Video；每项技术动作点名后须接§四.0该档执行效果（47°标准人眼=日常叙事对话全景纪实无畸变画面自然；84°广角=人物+环境融合近身动作透视自然扩张；107°超广角=大场景灾难宏大环境沉浸式空间感；29°中长焦=人物近景情绪特写背景柔和虚化；18°长焦=五官细节微表情极致压缩景深；8°超长焦=远距离观察偷窥画面扁平化；压迫光影=仅保留轮廓光高光眼神光勾勒层次，面部沉入压暗阴影；运镜/构图/机位距侧同样参数+效果）。光学须点名快门速度1/Xs（与帧率同核：24fps冻结=1/96s、微拖=1/48s；48fps冻结=1/192s、微拖=1/96s；60fps冻结=1/240s、微拖=1/120s），允许写1/48s等EXIF速度，禁止只写冻结/微拖不写速度。高速追逐/飙车/急飞须点§四.4B技巧词：光学≥2（Background Motion Blur/Strong Parallax/Speed Tunnel/Ground Rush/Light Streak等）＋运镜≥2（Distance Lock Follow＋Follow/Lead/Car Mount/Hood Mount/Pursuit Cam/Drone Chase/Bank Follow/FPV Dive）＋构图落地≥1（灭点吸力/速度隧道框/运动前留白/追逃同轴/垂直层位叠，只实现已锁构图）；禁止只写Follow或背景糊了。打斗/仙攻/魔法须点§四.4C技巧词：光学≥2（Impact Flash/Dust Burst/Aura Attachment/Particle Lattice/Spatial Warp/Cast Glow/Rune Circle/Spell Beam Volume/Elemental Wash等）＋运镜≥2（Handheld Combat/Attack Axis Track/Whip/Crash Zoom/Bullet Time/Speed Ramp/Scale Contrast/Impact Shake/Orbit Cast/Follow Beam）＋构图落地≥1（攻击同轴/攻防同框/体量对比框/阵形满幅/阵盘铺地/咒束引导线，只实现已锁构图）；快相48/60fps，升格24fps+Ramp；禁止只写快速打斗/金光爆发/放了个魔法。"
-            f"美术锚=ENV CN四宫格同方向格，不另起无锚光。"
+            f"美术锚=项目 Lighting、Tone 与本场氛围，不读未注入的主环境四宫格。"
             f"最终提示词镜头语言：Video四段须中英专业词并列点名（MCU/OTS/Eye-level/47°标准人眼/29°中长焦/Shallow DOF/Follow Focus/24fps/Key/Fill/Soft Light/Medium Contrast/Cool等）并接§四.0该档执行效果，禁止只点名mm/DOF/Freeze/三分/一臂/技法名不写效果，禁止口语冲淡（有光/推近一点/背景糊了/电影感）。光学视场闭集8°/18°/29°/47°/84°/107°必须写入Video，禁止把ENV名180度当视角档。"
             f"P段描述逻辑：先按合并逻辑把该并的Beat并进同一镜，再写Video。一般一P对应一Beat，必须按播放时间序一一对应（时序不可变，禁止因卖点/高潮倒排Pn，禁止同一Shot把一Beat拆成多个P）；每个Pn必须标本镜内起止秒，写法=(Pn 0s–4s)，P1从0s起、相邻P首尾相接、末P止秒=本镜Duration，禁止只写(P1)无秒；同拍内CHAR/PROP按上游【卖点综合】【情绪峰谷综合】【叙事综合】的重点对象/峰谷承载/关键人物优先写到建置句序、主拍与Associated Entities前列，只覆盖该拍建置已写入的可见角色与道具；该拍暂不可见的不写入这一 Pn，换衍生环境后建置重新写入的才从对应 P 提及；Video以运镜与动作流起笔（禁以ENV或全局风格起笔）；开镜P1第一句写「当前环境=ENV:[本段名]。全程空间锁位，空间结构必须完全按当前背景参考图。」同一衍生环境只在开镜写当前环境、空间结构、该拍建置和背景参考图。后续同衍生环境的P不再写当前环境、空间结构、环境保持、仍在该环境、前环境、背景参考图，也不抄该拍建置。机位、景别、俯仰、视角、透视、构图、落位、朝向、手持与上一P相同的不再写，只写变了的部分和该拍入戏。有推拉摇移环绕跟或升降时，已在画内、本拍仍在的非主拍各写半句「CHAR:[@名]仍在原位」，不重写落位；入画只写从哪一侧进入，出画写裁出画缘或走出画面，禁止凭空出现或直接消失。ENV名变的P整句抄该拍建置，并写背景切换到参考图ENV:[新]。禁止把两拍建置揉成一句，禁止用承上掩盖入戏里的变化；成稿顺序=运镜与动作流→两光影段→全局动态风格→品质收束；禁止另起物理文字段。"
             f"配乐与音效：上游【配乐】听感在（）内、【音效】在<>内，嵌在对应动作或运镜句上并保持原符号，与锚=/配合=同一瞬间同拍同频；禁止堆到段末或光影段；禁止把听感或音效改写成{{}}；禁止因品质收束「无背景音乐」删已写入的配乐/音效。"
