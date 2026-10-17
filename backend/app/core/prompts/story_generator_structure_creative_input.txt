@@ -63,7 +63,7 @@ Also:
 - "suspense": the questions the audience chases. They complement the dilemma; they do not replace it.
 - "foreshadowing": lines, objects, and payoffs that must survive. A gun shown early must be able to fire on a later beat.
 - "classic_framework": see I10 below.
-- "ai_vfx_strategy": required. This is the assessment 「AI优势应用与劣势回避」, not a second plot. Evaluate how AI visual effects make THIS story's pictures stronger, and which actions to rewrite so the picture still reads.
+- "ai_vfx_strategy": required and never "". The JSON key must be exactly ai_vfx_strategy. This is the assessment 「AI优势应用与劣势回避」, not a second plot. Evaluate how AI visual effects make THIS story's pictures stronger, and which actions to rewrite so the picture still reads.
   Advantage: at least two lines, each tied to a beat number. Format: `拍=01|04|14｜特效=具象化形|环境奇观|满幅异象|天气与季节介质|垂直空域|集体动势|物件特写｜画面增量=the shape, scale, light, or season the audience newly sees｜服务=the choice or hook of that beat`. Write what the effect becomes, how wide it reads, and what remains. Forbidden: 能量爆发, 金光一闪, and glow with no body.
   When 【项目季节】 is `档=已锁`, at least one line uses that season's visible medium (leaf, snow, rain veil, heat, light color) to strengthen a beat. Do not change the event.
   Avoidance: if a beat hides or fetches from a sleeve, bosom, pocket, waist, boot, or hair, or needs fingertip work, three or more people in fine interaction, a five-person close-quarters brawl, or obstacle-chasing through dense furniture, rewrite that delivery and write `原风险=…｜改写=…｜画面仍保留=…`. Continuous attacks and combo strings are not avoidance items. If none of these risks exist, write `劣势回避=本脑洞无高风险互动`.

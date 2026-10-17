@@ -706,7 +706,9 @@ class StructureCreativeInputRequest(BaseModel):
 from app.services.story_generator_llm import (  # noqa: E402,F401
     _loads_json5_if_available,
     _CREATIVE_INPUT_STRUCTURE_KEYS,
+    apply_ai_vfx_from_llm,
     apply_classic_framework_from_llm,
+    ensure_ai_vfx_strategy_filled,
     ensure_classic_framework_filled,
     format_story_creative_input_block,
     rollup_save_the_cat,
@@ -834,8 +836,19 @@ async def structure_project_creative_input_to_story_fields(
     )
     normalized = _normalize_story_field_map(data, _CREATIVE_INPUT_STRUCTURE_KEYS)
     apply_classic_framework_from_llm(normalized, data)
+    apply_ai_vfx_from_llm(normalized, data)
     normalized.update(rollup_save_the_cat(normalized))
     normalized = await ensure_classic_framework_filled(
+        db=db,
+        user_id=user_id,
+        project_global_info=project_global_info,
+        req=req,
+        normalized=normalized,
+        creative_text=creative_text,
+        project_context=project_context,
+        llm_config=structure_llm_config,
+    )
+    normalized = await ensure_ai_vfx_strategy_filled(
         db=db,
         user_id=user_id,
         project_global_info=project_global_info,

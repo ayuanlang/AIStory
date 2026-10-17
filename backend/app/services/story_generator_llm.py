@@ -294,6 +294,18 @@ _CLASSIC_FRAMEWORK_ALIASES = (
     "经典作品框架",
 )
 
+_AI_VFX_ALIASES = (
+    "ai_vfx_strategy",
+    "AI优势应用与劣势回避",
+    "ai优势应用与劣势回避",
+    "I11",
+    "i11",
+    "AI特效",
+    "ai_vfx",
+)
+
+_AI_VFX_KEY_HINTS = ("优势应用", "劣势回避", "AI特效", "ai_vfx")
+
 _CLASSIC_FRAMEWORK_PLACEHOLDERS = frozenset({
     "",
     "无",
@@ -526,6 +538,158 @@ async def ensure_classic_framework_filled(
         status_code=500,
         detail="I10 classic_framework remained empty after required completion",
     )
+
+
+def ai_vfx_needs_fill(text: str) -> bool:
+    """True when the AI-advantage field is missing or only a placeholder."""
+    compact = _classic_framework_compact(text)
+    if not compact:
+        return True
+    lowered = compact.lower()
+    if lowered in _CLASSIC_FRAMEWORK_PLACEHOLDERS:
+        return True
+    if _CLASSIC_FRAMEWORK_PLACEHOLDER_RE.fullmatch(lowered):
+        return True
+    return len(compact) < 8
+
+
+def ai_vfx_text(val: Any) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, list):
+        parts = [ai_vfx_text(item) for item in val]
+        return "\n".join(part for part in parts if part)
+    if isinstance(val, dict):
+        for key in ("ai_vfx_strategy", "text", "content", "I11", "i11", "AI优势应用与劣势回避"):
+            if key in val:
+                nested = ai_vfx_text(val.get(key))
+                if not ai_vfx_needs_fill(nested):
+                    return nested
+        lines = []
+        for key, item in val.items():
+            piece = ai_vfx_text(item)
+            if piece:
+                lines.append(f"{key}：{piece}")
+        return "\n".join(lines)
+    return str(val).strip()
+
+
+def _ai_vfx_from_payload(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+    for key in _AI_VFX_ALIASES:
+        salvaged = ai_vfx_text(data.get(key))
+        if not ai_vfx_needs_fill(salvaged):
+            return salvaged
+    for key, val in data.items():
+        name = str(key)
+        if any(hint in name for hint in _AI_VFX_KEY_HINTS):
+            salvaged = ai_vfx_text(val)
+            if not ai_vfx_needs_fill(salvaged):
+                return salvaged
+    return ""
+
+
+def apply_ai_vfx_from_llm(normalized: Dict[str, str], data: Any) -> Dict[str, str]:
+    """Keep a non-empty AI-advantage field. Salvage Chinese or I11 keys."""
+    salvaged = _ai_vfx_from_payload(data)
+    if salvaged:
+        normalized["ai_vfx_strategy"] = salvaged
+        return normalized
+    current = ai_vfx_text(normalized.get("ai_vfx_strategy"))
+    normalized["ai_vfx_strategy"] = "" if ai_vfx_needs_fill(current) else current
+    return normalized
+
+
+def build_ai_vfx_fill_prompts(
+    normalized: Dict[str, str],
+    *,
+    creative_text: str,
+    project_context: str,
+) -> tuple[str, str]:
+    system = (
+        "You complete one missing story field. "
+        "Output ONLY a JSON object whose single key is ai_vfx_strategy. "
+        "The first character must be '{' and the last character must be '}'. "
+        "No markdown fences, no explanation. "
+        "ai_vfx_strategy MUST be a non-empty string in the same language as the story fields. "
+        "This is 「AI优势应用与劣势回避」: how AI visual effects make THIS story's pictures stronger, "
+        "and which actions to rewrite so the picture still reads. Not a second plot. "
+        "Advantage: at least two lines. Format: "
+        "拍=01|04|14｜特效=具象化形|环境奇观|满幅异象|天气与季节介质|垂直空域|集体动势|物件特写｜"
+        "画面增量=the shape, scale, light, or season the audience newly sees｜服务=the choice or hook of that beat. "
+        "Write what the effect becomes. Forbidden: 能量爆发, 金光一闪, and glow with no body. "
+        "When the project season block says 档=已锁, at least one line uses that season's visible medium. "
+        "Avoidance: rewrite sleeve, bosom, pocket, fingertip, three-person fine interaction, "
+        "five-person brawl, or dense-furniture chase as 原风险=…｜改写=…｜画面仍保留=…. "
+        "Continuous attacks are not avoidance items. If none of these risks exist, write 劣势回避=本脑洞无高风险互动. "
+        "Do not write wires, doubles, or green screen."
+    )
+    user = (
+        "The structured prefill left ai_vfx_strategy empty. Fill it now for this same story.\n\n"
+        f"{project_context}\n"
+        f"Wild Creative Brainstorm:\n{creative_text}\n\n"
+        "Structured fields already accepted:\n"
+        f"{_classic_framework_story_context(normalized)}"
+    )
+    return system, user
+
+
+async def ensure_ai_vfx_strategy_filled(
+    *,
+    db: Session,
+    user_id: int,
+    project_global_info: Optional[Dict[str, Any]],
+    req: Any,
+    normalized: Dict[str, str],
+    creative_text: str,
+    project_context: str,
+    llm_config: Optional[Dict[str, Any]] = None,
+    max_attempts: int = 2,
+) -> Dict[str, str]:
+    """When structured prefill omits the AI-advantage field, call the LLM again to fill it."""
+    if not ai_vfx_needs_fill(normalized.get("ai_vfx_strategy", "")):
+        return normalized
+
+    logger.warning("[structure_creative_input] ai_vfx_strategy empty; requesting required fill")
+    system, user = build_ai_vfx_fill_prompts(
+        normalized,
+        creative_text=creative_text,
+        project_context=project_context,
+    )
+    attempts = max(1, int(max_attempts))
+    for attempt in range(1, attempts + 1):
+        raw = await _run_structure_llm_call(
+            db=db,
+            user_id=user_id,
+            project_global_info=project_global_info,
+            req=req,
+            sys_prompt=system,
+            user_prompt=user,
+            billing_item="structure_creative_input_ai_vfx",
+            llm_context="structure_creative_input_ai_vfx",
+        )
+        data = await _normalize_llm_json_object_with_repair(
+            raw,
+            context="structure_creative_input_ai_vfx",
+            llm_config=llm_config,
+        )
+        filled = _ai_vfx_from_payload(data)
+        if filled:
+            normalized["ai_vfx_strategy"] = filled
+            logger.info(
+                "[structure_creative_input] ai_vfx_strategy filled on attempt %s len=%s",
+                attempt,
+                len(filled),
+            )
+            return normalized
+        logger.warning(
+            "[structure_creative_input] ai_vfx_strategy still empty after fill attempt %s",
+            attempt,
+        )
+    return normalized
 
 
 def _normalize_story_field_map(data: Dict[str, Any], keys: List[str]) -> Dict[str, str]:

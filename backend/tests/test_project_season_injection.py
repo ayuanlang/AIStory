@@ -25,6 +25,23 @@ def test_year_and_open_seasons():
     assert classify_project_season("秋季")["season"] == "秋"
 
 
+def test_ai_vfx_chinese_key_is_kept():
+    from app.services.story_generator_llm import apply_ai_vfx_from_llm
+
+    body = "拍=14｜特效=满幅异象｜画面增量=雨幕铺到街口｜服务=当众公开\n劣势回避=本脑洞无高风险互动"
+    normalized = apply_ai_vfx_from_llm(
+        {"ai_vfx_strategy": ""},
+        {"AI优势应用与劣势回避": body},
+    )
+    assert normalized["ai_vfx_strategy"] == body
+    split = apply_ai_vfx_from_llm(
+        {"ai_vfx_strategy": ""},
+        {"ai_vfx_strategy": {"优势应用": "拍=08｜特效=天气与季节介质｜画面增量=雪盖住台阶｜服务=中点", "劣势回避": "本脑洞无高风险互动"}},
+    )
+    assert "拍=08" in split["ai_vfx_strategy"]
+    assert "劣势回避" in split["ai_vfx_strategy"]
+
+
 def test_prefill_and_prompts_carry_season_and_ai_vfx():
     assert "ai_vfx_strategy" in _CREATIVE_INPUT_STRUCTURE_KEYS
     block = format_story_creative_input_block({"ai_vfx_strategy": "拍=14｜特效=满幅异象"})
