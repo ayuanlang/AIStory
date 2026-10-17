@@ -809,6 +809,17 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
     const pickerCallbackRef = useRef(null);
     const [generatingStateByShot, setGeneratingStateByShot] = useState({});
+    const previewGeneratingByShotRef = useRef({});
+    const [previewGeneratingByShot, setPreviewGeneratingByShot] = useState({});
+    const setShotPreviewGenerating = useCallback((shotId, value) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return;
+        const next = { ...(previewGeneratingByShotRef.current || {}) };
+        if (value) next[stableShotId] = true;
+        else delete next[stableShotId];
+        previewGeneratingByShotRef.current = next;
+        setPreviewGeneratingByShot(next);
+    }, []);
     const [videoStatuses, setVideoStatuses] = useState({});
     const [shotMediaOssPersistBusy, setShotMediaOssPersistBusy] = useState({});
     const [mediaPersistGraceRefreshSeq, setMediaPersistGraceRefreshSeq] = useState(0);
@@ -2132,8 +2143,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             if (!stableKey || !stableShotId || !stableJobId) return;
             if (startedAt > 0 && (now - startedAt) > IMAGE_JOB_STATE_TTL_MS) return;
 
-            // Extract the original mode to handle joint diptych correctly across reloads
-            const originalMode = payload?.mode === 'joint_diptych' ? 'joint_diptych' : 'single';
+            // Keep multi-panel distinct from start-frame jobs so a preview does not resume as start/end/video.
+            const originalMode = payload?.mode === 'joint_diptych'
+                ? 'joint_diptych'
+                : (payload?.mode === 'multi_panel' ? 'multi_panel' : 'single');
 
             cleaned[stableKey] = {
                 shotId: stableShotId,
@@ -2533,6 +2546,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const stableKind = kind === 'end' ? 'end' : 'start';
         const stableJobId = String(payload?.jobId || '').trim();
         const isJointDiptych = payload?.mode === 'joint_diptych';
+        const isMultiPanel = payload?.mode === 'multi_panel';
         const ownerLabel = describeShotJobOwner(payload, stableShotId, stableKind);
         const reasonText = String(reason || 'forced clear').trim();
 
@@ -2549,7 +2563,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
         }
 
-        if (isJointDiptych) {
+        if (isMultiPanel) {
+            clearPendingImageJob(stableShotId, stableKind);
+            setShotPreviewGenerating(stableShotId, false);
+            setShotGeneratingState(stableShotId, 'start', false);
+            setShotGeneratingState(stableShotId, 'end', false);
+            setShotGeneratingState(stableShotId, 'cropping', false);
+        } else if (isJointDiptych) {
             clearPendingJointDiptychImageJob(stableShotId);
             setShotGeneratingState(stableShotId, 'start', false);
             setShotGeneratingState(stableShotId, 'end', false);
@@ -2560,7 +2580,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
 
         onLog?.(`Shot image job force-cleared: ${ownerLabel}. Reason: ${reasonText}`, 'warning');
-    }, [clearPendingImageJob, clearPendingJointDiptychImageJob, deleteGenerationJob, describeShotJobOwner, onLog, setShotGeneratingState, stopGenerationJob]);
+    }, [clearPendingImageJob, clearPendingJointDiptychImageJob, deleteGenerationJob, describeShotJobOwner, onLog, setShotGeneratingState, setShotPreviewGenerating, stopGenerationJob]);
 
     const forceClearShotVideoJob = useCallback(async ({ shotId, payload, reason }) => {
         const stableShotId = String(shotId || payload?.ownerShotId || '').trim();
@@ -2891,6 +2911,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         };
 
         const localJobId = getJobId();
+        if (!isVideo && getPendingImageJobPayload(stableShotId, stableMediaKey)?.mode === 'multi_panel') {
+            // Storyboard preview owns its own running flag. Do not mark start/end/video as running.
+            if (hasGeneratingFlag) {
+                setShotGeneratingState(stableShotId, stableMediaKey, false);
+            }
+            return { state: 'idle', jobId: localJobId, source: 'preview' };
+        }
         if (localJobId) {
             const localState = await readStatus(localJobId);
             if (localState.state === 'running' || localState.state === 'terminal' || localState.state === 'unknown') {
@@ -2930,6 +2957,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }, [
         findMatchingShotMediaJobInPool,
         getPendingImageJobId,
+        getPendingImageJobPayload,
         getPendingVideoJobId,
         isMissingJobError,
         releaseShotImageUiByShotId,
@@ -3210,8 +3238,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         [showNotification, t]
     );
     const hasActiveGeneration = useMemo(
-        () => Object.values(generatingStateByShot || {}).some(s => !!(s?.start || s?.end || s?.video || s?.cropping)),
-        [generatingStateByShot]
+        () => Object.values(generatingStateByShot || {}).some(s => !!(s?.start || s?.end || s?.video || s?.cropping))
+            || Object.keys(previewGeneratingByShot || {}).length > 0,
+        [generatingStateByShot, previewGeneratingByShot]
     );
 
     const [assetDetailModal, setAssetDetailModal] = useState({ open: false, type: 'start', keyframeIndex: -1 });
@@ -6198,7 +6227,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                 let errorStreak = 0;
                 let waitMs = 2500;
-                if (isJointDiptych || isMultiPanel) {
+                if (isMultiPanel) {
+                    setShotPreviewGenerating(stableShotId, true);
+                    // Older runs stored preview as start+end, which also spun video. Clear those.
+                    setShotGeneratingState(stableShotId, 'start', false);
+                    setShotGeneratingState(stableShotId, 'end', false);
+                    setShotGeneratingState(stableShotId, 'cropping', false);
+                } else if (isJointDiptych) {
                     setShotGeneratingState(stableShotId, 'start', true);
                     setShotGeneratingState(stableShotId, 'end', true);
                 } else {
@@ -6232,7 +6267,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         }
 
                         if (resultUrl || phase === 'succeeded') {
-                            if (isJointDiptych || isMultiPanel) {
+                            if (isMultiPanel) {
+                                clearPendingImageJob(stableShotId, stableKind);
+                                setShotGeneratingState(stableShotId, 'start', false);
+                                setShotGeneratingState(stableShotId, 'end', false);
+                                setShotGeneratingState(stableShotId, 'cropping', false);
+                            } else if (isJointDiptych) {
                                 clearPendingJointDiptychImageJob(stableShotId);
                                 clearPendingImageJob(stableShotId, stableKind);
                                 setShotGeneratingState(stableShotId, 'start', false);
@@ -6252,7 +6292,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         setShotGeneratingState(stableShotId, 'cropping', true);
                                         await applyJointShotDiptychResult({ shotRecord: currentShot, compositeUrl: resultUrl });
                                     } else if (isMultiPanel) {
-                                        setShotGeneratingState(stableShotId, 'cropping', true);
                                         let recoveredTech = {};
                                         try {
                                             recoveredTech = JSON.parse(currentShot?.technical_notes || '{}');
@@ -6342,16 +6381,28 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             ? `Failed to apply recovered multi-panel result for shot ${stableShotId}: ${applyErr.message}`
                                             : `Failed to apply recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} result for shot ${stableShotId}: ${applyErr.message}`), 'error');
                                 } finally {
-                                    if (isJointDiptych || isMultiPanel) {
+                                    if (isJointDiptych) {
                                         setShotGeneratingState(stableShotId, 'cropping', false);
                                     }
+                                    if (isMultiPanel) {
+                                        setShotPreviewGenerating(stableShotId, false);
+                                    }
                                 }
+                            }
+                            if (isMultiPanel) {
+                                setShotPreviewGenerating(stableShotId, false);
                             }
                             break;
                         }
 
                         if (phase === 'failed' || phase === 'canceled') {
-                            if (isJointDiptych || isMultiPanel) {
+                            if (isMultiPanel) {
+                                clearPendingImageJob(stableShotId, stableKind);
+                                setShotPreviewGenerating(stableShotId, false);
+                                setShotGeneratingState(stableShotId, 'start', false);
+                                setShotGeneratingState(stableShotId, 'end', false);
+                                setShotGeneratingState(stableShotId, 'cropping', false);
+                            } else if (isJointDiptych) {
                                 clearPendingJointDiptychImageJob(stableShotId);
                                 clearPendingImageJob(stableShotId, stableKind);
                                 setShotGeneratingState(stableShotId, 'start', false);
@@ -6374,18 +6425,26 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         const detail = e?.response?.data?.detail || e?.message || '';
                         const detailLower = String(detail).toLowerCase();
                         if (detailLower.includes('job not found')) {
-                            if (isJointDiptych) {
+                            if (isMultiPanel) {
+                                clearPendingImageJob(stableShotId, stableKind);
+                                setShotPreviewGenerating(stableShotId, false);
+                                setShotGeneratingState(stableShotId, 'start', false);
+                                setShotGeneratingState(stableShotId, 'end', false);
+                                setShotGeneratingState(stableShotId, 'cropping', false);
+                            } else if (isJointDiptych) {
                                 clearPendingJointDiptychImageJob(stableShotId);
                                 setShotGeneratingState(stableShotId, 'start', false);
                                 setShotGeneratingState(stableShotId, 'end', false);
-    setShotGeneratingState(stableShotId, 'cropping', false);
+                                setShotGeneratingState(stableShotId, 'cropping', false);
                             } else {
                                 clearPendingImageJob(stableShotId, stableKind);
                                 setShotGeneratingState(stableShotId, stableKind, false);
                             }
                             onLog?.(isJointDiptych
                                 ? `Recovered joint start/end job missing for shot ${stableShotId}; cleared pending state.`
-                                : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
+                                : (isMultiPanel
+                                    ? `Recovered multi-panel job missing for shot ${stableShotId}; cleared pending state.`
+                                    : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} job missing for shot ${stableShotId}; cleared pending state.`), 'warning');
                             break;
                         }
 
@@ -6447,6 +6506,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         setPendingJointDiptychImageJob,
         setEditingShot,
         setShotGeneratingState,
+        setShotPreviewGenerating,
         t,
     ]);
 
@@ -9146,7 +9206,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [batchMultiPanelPresetKey, setBatchMultiPanelPresetKey] = useState('4panel');
     const [batchUsePrevEndFrameAsMultiPanelStart, setBatchUsePrevEndFrameAsMultiPanelStart] = useState(false);
     const [multiPanelPresetInstruction, setMultiPanelPresetInstruction] = useState(() => getMultiPanelPresetFallbackInstruction('4panel', 'cn'));
-    const [isGeneratingMultiPanelImage, setIsGeneratingMultiPanelImage] = useState(false);
     const [isResplittingMultiPanelImage, setIsResplittingMultiPanelImage] = useState(false);
     const [usePrevEndFrameAsMultiPanelStart, setUsePrevEndFrameAsMultiPanelStart] = useState(false);
 
@@ -9218,14 +9277,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             throw new Error('Missing shot id for multi-panel preview generation');
         }
 
-        const resolvedEntities = Array.isArray(inputEntities) && inputEntities.length > 0
-            ? inputEntities
-            : await awaitShotGenerationEntities();
-
-        setShotGeneratingState(targetShotId, 'start', true);
-        setShotGeneratingState(targetShotId, 'end', true);
+        setShotPreviewGenerating(targetShotId, true);
 
         try {
+            const resolvedEntities = Array.isArray(inputEntities) && inputEntities.length > 0
+                ? inputEntities
+                : await awaitShotGenerationEntities();
+
             const techNotes = JSON.parse(stableShot.technical_notes || '{}');
             const cnVideoPrompt = String(techNotes.video_prompt_cn || '').trim();
             const rawVideoPrompt = (resolvedPromptSubmitLang === 'cn'
@@ -9428,10 +9486,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 console.warn('Failed to persist multi-panel composite URL before split:', persistErr);
             }
 
-            setShotGeneratingState(targetShotId, 'start', false);
-            setShotGeneratingState(targetShotId, 'end', false);
-            setShotGeneratingState(targetShotId, 'cropping', true);
-
             const splitResult = await applyMultiPanelImageResult({
                 shotRecord: { ...stableShot, technical_notes: nextStr },
                 compositeUrl: finalUrl,
@@ -9449,9 +9503,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             };
         } finally {
             clearPendingImageJob(targetShotId, 'start');
-            setShotGeneratingState(targetShotId, 'start', false);
-            setShotGeneratingState(targetShotId, 'end', false);
-            setShotGeneratingState(targetShotId, 'cropping', false);
+            setShotPreviewGenerating(targetShotId, false);
         }
     }, [
         activeEpisode?.episode_info,
@@ -9475,13 +9527,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         resolveShotVideoImageRefs,
         resolvedPromptSubmitLang,
         setPendingImageJob,
-        setShotGeneratingState,
+        setShotPreviewGenerating,
         t,
     ]);
 
     const handleGenerateMultiPanelImage = async () => {
         if (!editingShot) return;
-        setIsGeneratingMultiPanelImage(true);
+        const targetShotId = String(editingShot.id || '').trim();
+        if (targetShotId && previewGeneratingByShotRef.current?.[targetShotId]) return;
         try {
             const resolvedEntities = await awaitShotGenerationEntities();
             await generateMultiPanelPreviewForShot({
@@ -9495,8 +9548,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         } catch (e) {
             onLog?.(`${t('生成多画格图失败', 'Failed to generate multi-panel image')}: ${e.message}`, 'error');
             showNotification(`${t('生成多画格图失败', 'Failed to generate multi-panel image')}: ${e.message}`, 'error');
-        } finally {
-            setIsGeneratingMultiPanelImage(false);
         }
     };
 
@@ -12481,7 +12532,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         {hasActiveGeneration && (
                             <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/20 text-primary border border-primary/30 flex items-center gap-1">
                                 <Loader2 className="w-3 h-3 animate-spin" />
-                                {Object.values(generatingStateByShot || {}).some((s) => s?.cropping) ? t('处理图片中', 'Processing Image') : t('生成中', 'Generating')}
+                                {Object.values(generatingStateByShot || {}).some((s) => s?.cropping)
+                                    ? t('处理图片中', 'Processing Image')
+                                    : (!Object.values(generatingStateByShot || {}).some((s) => s?.start || s?.end || s?.video)
+                                        && Object.keys(previewGeneratingByShot || {}).length > 0
+                                        ? t('预览生成中', 'Preview generating')
+                                        : t('生成中', 'Generating'))}
                             </span>
                         )}
                     </h2>
@@ -12775,6 +12831,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             const isVideoGeneratingThisShot = isShotVideoUiRunning(shot.id, shotState);
                             const isGeneratingThisShot = !!(shotState.start || shotState.end || isVideoGeneratingThisShot);
                             const isCroppingThisShot = !!(shotState.cropping);
+                            const isPreviewGeneratingThisShot = Boolean(previewGeneratingByShot[String(shot.id)]);
                             const shotCardPromptPreview = getShotCardPromptPreview(shot);
                             const shotCardPosterUrl = resolveShotVideoPosterUrl(shot) || shot.image_url || getShotEndFrameUrl(shot);
                             return (
@@ -12868,10 +12925,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     <div className="absolute bottom-2 right-2 bg-primary text-black px-2 py-0.5 rounded text-[10px] font-bold pointer-events-none">
                                         {getShotDurationDisplayValue(shot.duration) || '0s'}
                                     </div>
-                                    {(isGeneratingThisShot || isCroppingThisShot) && (
+                                    {(isGeneratingThisShot || isCroppingThisShot || isPreviewGeneratingThisShot) && (
                                         <div className="absolute bottom-2 left-2 bg-primary/20 text-primary border border-primary/30 px-2 py-0.5 rounded text-[10px] font-bold pointer-events-none flex items-center gap-1">
                                             <Loader2 className="w-3 h-3 animate-spin" />
-                                            {isCroppingThisShot ? t('处理图片中', 'Processing Image') : t('生成中', 'Generating')}
+                                            {isCroppingThisShot
+                                                ? t('处理图片中', 'Processing Image')
+                                                : (isPreviewGeneratingThisShot && !isGeneratingThisShot
+                                                    ? t('预览生成中', 'Preview generating')
+                                                    : t('生成中', 'Generating'))}
                                         </div>
                                     )}
                                 </div>
@@ -14200,11 +14261,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => handleGenerateMultiPanelImage()}
-                                                                    disabled={isGeneratingMultiPanelImage}
+                                                                    disabled={Boolean(previewGeneratingByShot[String(editingShot?.id || '')])}
                                                                     title={t('按当前视频提示词生成并自动拆分到关键帧', 'Generate from the current video prompt and auto-split into keyframes')}
-                                                                    className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${isGeneratingMultiPanelImage ? 'bg-white/10 text-white/40 cursor-wait' : 'bg-white/10 text-white/80 hover:bg-white/20'}`}
+                                                                    className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${previewGeneratingByShot[String(editingShot?.id || '')] ? 'bg-white/10 text-white/40 cursor-wait' : 'bg-white/10 text-white/80 hover:bg-white/20'}`}
                                                                 >
-                                                                    {isGeneratingMultiPanelImage ? t('生成中...', 'Generating...') : t('生成并拆分', 'Generate + Split')}
+                                                                    {previewGeneratingByShot[String(editingShot?.id || '')] ? t('生成中...', 'Generating...') : t('生成并拆分', 'Generate + Split')}
                                                                 </button>
                                                                 <button
                                                                     type="button"
