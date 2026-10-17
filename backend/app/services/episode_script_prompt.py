@@ -31,8 +31,8 @@ def build_episode_generation_guidance_prompt_block(guidance: Optional[str]) -> s
 def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
     """Inject the structured prefill as a required source for episode and trailer writing.
 
-    A blank prefill yields an empty string. Trailer length stays 6–10 beats; the four
-    pillars ride inside 建置, 娱乐时间, and 反派逼近.
+    A blank prefill yields an empty string. Trailer length stays 6–10 beats. 核心建置,
+    人物弧光, and the foundational worldview ride inside 建置, 娱乐时间, and 反派逼近.
     """
     if not structured_prefill_has_text(source):
         return ""
@@ -40,10 +40,15 @@ def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
     if trailer:
         rules = (
             "【结构化预填 — 预告片重要依据】\n"
-            "下面这份预填与全局大纲同级。预告必须让观众从短拍里读到四样：概念=I1，思想=I2，对抗=I3，人物弧光=I5。\n"
+            "下面这份预填与全局大纲同级。预告必须把核心建置、人物弧光和基础世界观演进已有短拍，让没看过正片的观众读得出来。\n"
+            "核心建置＝概念=I1 高概念、思想=I2 主控思想、对抗=I3、I3b 三幕价值弧、I4 故事世界。人物弧光＝I5。基础世界观＝世界背景＋剧情背景，并含 I4。\n"
             "节奏与篇幅不变：仍是 2200 字内、6–10 个短拍。不另开说明拍，不口播，不把预告拉长。\n"
-            "概念和思想落在建置，各用一个动作或一句对白。对抗落在娱乐时间，并在反派逼近顶一下。"
-            "弧光只露出旧的自己和被逼要改的那一下，终场变化不演。\n"
+            "概念=I1：一个动作或一句对白点出谁要什么、谁在挡、失败失去什么。"
+            "思想=I2：一个动作或一句对白点出价值加原因，不宣布成主题。"
+            "对抗=I3：落在娱乐时间，并在反派逼近顶一下，两句相反的原则当场相撞。"
+            "I3b 只演取材范围内各幕的价值方向，不演谁胜谁负。"
+            "I4 与世界背景落在建置：时代、制度、礼法、能力边界里，缺了就看不懂这一拍选择的那一句，用动作或对白演出来。\n"
+            "人物弧光要能读出极性：旧的自己、被这套世界逼着要改的那一下、弧光往哪边走。用动作或对白演。终场的胜负和秘密答案不说破。\n"
             "预填里的 11–15 拍和谁胜谁负不入选材。空字段不另造一套故事。\n\n"
         )
     else:
@@ -189,6 +194,19 @@ def build_trailer_generation_prompt_block(
         "Do not use that beat to state later plot, the ending, the final boss, or an unrevealed secret. "
         "When 取材范围 does not start at episode 1, that background is the public situation already in force "
         "at the first episode of the range.\n"
+        "世界背景: the trailer must also play the world background, the other half of the foundational worldview. "
+        "Read the framework lines whose text starts with 世界背景. "
+        "That line is the rule, institution, rite, or ability boundary without which the opening choice cannot be understood. "
+        "Play it in 建置 with a visible action or a spoken line, in the same stretch as I4 故事世界. "
+        "Do not paste the Lore sentence as narration. "
+        "Do not use that beat to state later plot, the ending, the final boss, or an unrevealed secret.\n"
+        "核心建置与人物弧光: the trailer must embody both, inside the beats it already plays. "
+        "核心建置 is who wants what and who blocks it (I1), the value plus its because (I2), "
+        "the opposing principle and the costly choice (I3), the value direction of each act inside the locked range (I3b), "
+        "and the story world that forces the choice (I4). "
+        "人物弧光 (I5) must be readable as a polarity: the old self, the moment this world forces a change, and which way the arc turns. "
+        "Play each with an action or a spoken line. Do not announce them as a theme. "
+        "Leave who wins, and any secret answer, unsaid.\n"
         "选材重点锁三段，按故事顺序：建置（01–05：Opening、ThemeStated、铺垫、Inciting、Debate）→ 娱乐时间（FunGames）→ 反派逼近（BadGuysCloseIn）。建置含这五拍，不收成只有铺垫。\n"
         "建置 includes all five beats. Do not collapse it to Set-up alone. "
         "It plays the opening image, the stated theme, who these people are, the catalyst, and the debate. "
@@ -248,16 +266,22 @@ def build_trailer_generation_prompt_block(
         "Shape: open on 建置; cut the 娱乐时间 highlights in story order; "
         "end on 反派逼近, and leave the ending unplayed. "
         "Do not reveal the final boss or the ultimate secret.\n"
-        "结构化预填四样进已有短拍: when 【结构化预填】 is in the user message, "
-        "概念 (I1), 思想 (I2), 对抗 (I3), and 人物弧光 (I5) must be seen or heard inside the existing beats. "
-        "概念 and 思想 each land in 建置 as one action or one spoken line. "
-        "对抗 runs through 娱乐时间 and crests at 反派逼近. "
-        "弧光 shows the old self and the pressure to change, and leaves the final change unplayed. "
-        "Do not add a lecture beat. Do not lengthen the trailer. Do not play prefill beats 11–15.\n"
+        "核心建置、人物弧光与基础世界观进已有短拍: when 【结构化预填】 is in the user message, "
+        "embody 核心建置 and 人物弧光 inside the existing beats, together with the foundational worldview. "
+        "核心建置 is 概念 (I1), 思想 (I2), 对抗 (I3), the three-act value direction (I3b), and the story world (I4). "
+        "人物弧光 (I5) must be readable: the old self, the pressure that forces a change, and which way the arc turns. "
+        "基础世界观 is 世界背景 plus 剧情背景, and includes I4. "
+        "概念 (I1) and 思想 (I2) each land as one action or one spoken line. "
+        "对抗 (I3) runs through 娱乐时间 and crests at 反派逼近. "
+        "I3b plays only the value direction of the acts inside the locked range, and does not show who wins. "
+        "I4 and 世界背景 land in 建置 as the rule without which this choice cannot be understood. "
+        "Do not announce the theme. Do not add a lecture beat. Do not lengthen the trailer. Do not play prefill beats 11–15.\n"
         "Length: within 2200 字, 6–10 short beats, so each highlight has room for an action or a spoken line plus the plot turn.\n"
         "The first non-empty OUTPUT line MUST be: # 预告-{short title}\n"
         "Keep the formal script blocks. 卖点 are the highlights this trailer actually plays. "
         "重要情节 must state the locked 取材范围, the 侧重点, that the trailer plays 建置, 娱乐时间, and 反派逼近, "
+        "which beats embody 核心建置 (I1–I4) and 人物弧光 (I5), "
+        "the 世界背景 it plays (the rule, institution, or ability boundary), "
         "the 剧情背景 it plays "
         "(public situation, relationship history, why this conflict cannot wait), the ending beats it leaves unplayed, "
         "and which beats play `#信念对撞` plus the locked `#底层`. "

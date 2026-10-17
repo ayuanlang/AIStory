@@ -93,6 +93,9 @@ def test_prefill_is_required_input_and_trailer_keeps_length():
     trailer = build_structured_prefill_prompt_block(source, trailer=True)
     episode = build_structured_prefill_prompt_block(source, trailer=False)
     assert "概念=I1" in trailer
+    assert "核心建置" in trailer
+    assert "人物弧光" in trailer
+    assert "世界背景" in trailer
     assert "林一要留证" in trailer
     assert "不把预告拉长" in trailer
     assert "11–15" in trailer
@@ -100,6 +103,8 @@ def test_prefill_is_required_input_and_trailer_keeps_length():
     assert "证据比职位贵" in episode
     block = build_trailer_generation_prompt_block(episode_from=1, episode_to=4)
     assert "概念 (I1)" in block
+    assert "人物弧光" in block
+    assert "世界背景" in block
     assert "Do not lengthen the trailer" in block
 
 
@@ -107,3 +112,6 @@ def test_series_ip_note_uses_the_same_range():
     note = build_series_ip_trailer_note(episode_from=2, episode_to=5)
     assert "第2集到第5集" in note
     assert "只从这一段已经写好的分集摘要取样" in note
+    assert "核心建置" in note
+    assert "人物弧光" in note
+    assert "世界背景" in note
