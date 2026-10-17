@@ -20638,82 +20638,43 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     )));
                 };
                 try {
-                    // A named asset rerun converts only that environment.
-                    // Overall analysis sends every pending main in one call.
-                    if (onlyNames.length) {
-                        for (let index = 0; index < pending.length; index += 1) {
-                            const item = pending[index];
-                            const name = String(item.name).trim();
-                            throwIfAnalysisStopped();
-                            onLog?.(
-                                `[Stage 3 Asset Design] 四宫格 ${name}`,
-                                'info'
-                            );
-                            const res = await runScriptAnalysisFlowAnalyzeNode(
-                                'asset_design_environment_quad',
-                                quadDraftText([item]),
-                                quadPrompt,
-                                null,
-                                episodeIdForAssetSubtasks,
-                                analysisAttentionNotes,
-                                selectedReuseSubjectAssets,
-                                {
-                                    skipEpisodePersist: true,
-                                    analysisTraceId: `${traceId}-quad-${index + 1}`,
-                                },
-                                projectId,
-                                'script_analysis',
-                                scriptAnalysisApiId,
-                                'environment_quad'
-                            );
-                            const text = extractAnalysisTextFromResult(res);
-                            const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
-                            const missing = quadNamesMissing(parsed, [name]);
-                            if (missing.length) {
-                                onLog?.(
-                                    `[Stage 3 Asset Design] 四宫格未写满四格 name=${name}`,
-                                    'error'
-                                );
-                                return false;
-                            }
-                            readyCount += 1;
-                        }
-                    } else {
-                        const names = pending.map((item) => String(item.name).trim());
-                        throwIfAnalysisStopped();
+                    // Pending mains are already limited to the named asset when this
+                    // is a single-environment rerun. Every other case, including a
+                    // named match that resolved to several mains, goes out together.
+                    const names = pending.map((item) => String(item.name).trim());
+                    throwIfAnalysisStopped();
+                    onLog?.(
+                        `[Stage 3 Asset Design] 四宫格一次性转换 mains=${names.length} ${names.join('、')}`,
+                        'info'
+                    );
+                    const res = await runScriptAnalysisFlowAnalyzeNode(
+                        'asset_design_environment_quad',
+                        quadDraftText(pending),
+                        quadPrompt,
+                        null,
+                        episodeIdForAssetSubtasks,
+                        analysisAttentionNotes,
+                        selectedReuseSubjectAssets,
+                        {
+                            skipEpisodePersist: true,
+                            analysisTraceId: `${traceId}-quad`,
+                        },
+                        projectId,
+                        'script_analysis',
+                        scriptAnalysisApiId,
+                        'environment_quad'
+                    );
+                    const text = extractAnalysisTextFromResult(res);
+                    const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
+                    const missing = quadNamesMissing(parsed, names);
+                    if (missing.length) {
                         onLog?.(
-                            `[Stage 3 Asset Design] 四宫格一次性转换 mains=${names.length} ${names.join('、')}`,
-                            'info'
+                            `[Stage 3 Asset Design] 四宫格未一次写满：${missing.join('、')}`,
+                            'error'
                         );
-                        const res = await runScriptAnalysisFlowAnalyzeNode(
-                            'asset_design_environment_quad',
-                            quadDraftText(pending),
-                            quadPrompt,
-                            null,
-                            episodeIdForAssetSubtasks,
-                            analysisAttentionNotes,
-                            selectedReuseSubjectAssets,
-                            {
-                                skipEpisodePersist: true,
-                                analysisTraceId: `${traceId}-quad`,
-                            },
-                            projectId,
-                            'script_analysis',
-                            scriptAnalysisApiId,
-                            'environment_quad'
-                        );
-                        const text = extractAnalysisTextFromResult(res);
-                        const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
-                        const missing = quadNamesMissing(parsed, names);
-                        if (missing.length) {
-                            onLog?.(
-                                `[Stage 3 Asset Design] 四宫格未一次写满：${missing.join('、')}`,
-                                'error'
-                            );
-                            return false;
-                        }
-                        readyCount = names.length;
+                        return false;
                     }
+                    readyCount = names.length;
                     await refreshEpisodeOwnedEntities();
                     onLog?.(`[Stage 3 Asset Design] 四宫格最后提示词已写回 mains=${readyCount}`, 'success');
                     return true;

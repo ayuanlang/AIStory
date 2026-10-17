@@ -31,7 +31,7 @@ def build_episode_generation_guidance_prompt_block(guidance: Optional[str]) -> s
 def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
     """Inject the structured prefill as a required source for episode and trailer writing.
 
-    A blank prefill yields an empty string. Trailer length stays 6–10 beats. 核心建置,
+    A blank prefill yields an empty string. Trailer length is the 5000 字 scale. 核心建置,
     人物弧光, and the foundational worldview ride inside 建置, 娱乐时间, and 反派逼近.
     """
     if not structured_prefill_has_text(source):
@@ -42,7 +42,7 @@ def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
             "【结构化预填 — 预告片重要依据】\n"
             "注入链是项目信息 → 结构化预填 → 剧本框架 → 剧本生成。预告必须严格落实这份预填；框架已经写了不同内容时以框架为准，框架没写的预填内容仍然要演。预告必须把核心建置、人物弧光和基础世界观演进已有短拍，让没看过正片的观众读得出来。\n"
             "核心建置＝概念=I1 高概念、思想=I2 主控思想、对抗=I3、I3b 三幕价值弧、I4 故事世界。人物弧光＝I5。基础世界观＝世界背景＋剧情背景，并含 I4。\n"
-            "节奏与篇幅不变：仍是 2200 字内、6–10 个短拍。不另开说明拍，不口播，不把预告拉长。\n"
+            "节奏与篇幅：按 5000 字写，不超过 5000 字。高光短拍 10–20 拍。不另开说明拍，不口播。不得为了少于 10 拍把多人多空间写回一句，也不得拆过 20 拍。\n"
             "概念=I1：一个动作或一句对白点出谁要什么、谁在挡、失败失去什么。"
             "思想=I2：一个动作或一句对白点出价值加原因，不宣布成主题。"
             "对抗=I3：落在娱乐时间，并在反派逼近顶一下，两句相反的原则当场相撞。"
@@ -279,8 +279,8 @@ def build_trailer_generation_prompt_block(
         "对抗 (I3) runs through 娱乐时间 and crests at 反派逼近. "
         "I3b plays only the value direction of the acts inside the locked range, and does not show who wins. "
         "I4 and 世界背景 land in 建置 as the rule without which this choice cannot be understood. "
-        "Do not announce the theme. Do not add a lecture beat. Do not lengthen the trailer. Do not play prefill beats 11–15.\n"
-        "Length: within 2200 字, 6–10 short beats, so each highlight has room for an action or a spoken line plus the plot turn.\n"
+        "Do not announce the theme. Do not add a lecture beat. Write at the 5000 字 scale, and do not exceed 5000 字. Do not play prefill beats 11–15.\n"
+        "Length: 5000 字. Short beats stay within 10–20, so each highlight has room for an action or a spoken line plus the plot turn. Do not compress different people or spaces back into one beat to stay under 10, and do not split past 20.\n"
         "The first non-empty OUTPUT line MUST be: # 预告-{short title}\n"
         "Keep the formal script blocks. 卖点 are the highlights this trailer actually plays. "
         "重要情节 must state the locked 取材范围, the 侧重点, that the trailer plays 建置, 娱乐时间, and 反派逼近, "

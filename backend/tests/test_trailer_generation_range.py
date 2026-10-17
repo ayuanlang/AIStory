@@ -97,7 +97,8 @@ def test_prefill_is_required_input_and_trailer_keeps_length():
     assert "人物弧光" in trailer
     assert "世界背景" in trailer
     assert "林一要留证" in trailer
-    assert "不把预告拉长" in trailer
+    assert "5000 字" in trailer
+    assert "10–20" in trailer
     assert "11–15" in trailer
     assert "已锁救猫咪拍" in episode
     assert "证据比职位贵" in episode
@@ -105,7 +106,8 @@ def test_prefill_is_required_input_and_trailer_keeps_length():
     assert "概念 (I1)" in block
     assert "人物弧光" in block
     assert "世界背景" in block
-    assert "Do not lengthen the trailer" in block
+    assert "5000 字" in block
+    assert "10–20" in block
 
 
 def test_series_ip_note_uses_the_same_range():
