@@ -87,6 +87,7 @@ async def generate_project_story_dna_global(
         "Do not echo the INPUT block into OUTPUT.\n\n"
     )
 
+    from app.services.project_season import format_project_season_prompt  # noqa: E402
     from app.services.script_mode_helpers import build_story_episode_coverage_block  # noqa: E402
     from app.services.series_ip_mode import (  # noqa: E402
         build_series_ip_global_prompt_block,
@@ -112,6 +113,7 @@ async def generate_project_story_dna_global(
         f"Base Positioning: {base_positioning}\n"
         f"Global Style: {global_style}\n"
         f"\n"
+        f"{format_project_season_prompt(getattr(req, 'season_occurrence', None), gi_existing)}\n"
         f"Episodes Count: {int(episodes_count)}\n"
         f"{episode_coverage_block}"
         f"Episode Duration (minutes): {_resolve_episode_duration_minutes(getattr(req, 'episode_duration_minutes', None))}\n"
@@ -694,6 +696,7 @@ class StructureCreativeInputRequest(BaseModel):
     target_audience: Optional[str] = None
     type: Optional[str] = None
     language: Optional[str] = None
+    season_occurrence: Optional[str] = None
     function_name: Optional[str] = None
     system_api_id: Optional[int] = None
 
@@ -749,12 +752,15 @@ async def structure_project_creative_input_to_story_fields(
     script_mode = (getattr(req, "script_mode", None) or "").strip()
     target_audience = (getattr(req, "target_audience", None) or "").strip()
 
+    from app.services.project_season import format_project_season_prompt
+
     project_context = (
         f"Project Title: {project_title_str}\n"
         f"Type: {project_type}\n"
         f"Language: {language}\n"
         f"Script Mode: {script_mode}\n"
         f"Target Audience: {target_audience}\n"
+        f"{format_project_season_prompt(getattr(req, 'season_occurrence', None), gi_existing)}\n"
     )
 
     try:
@@ -789,7 +795,9 @@ async def structure_project_creative_input_to_story_fields(
         "Beats 01-15 must be physically shootable: no long-distance conversation without a comms tool or same-space staging. "
         "Do NOT casually copy scene/environment names from the brainstorm or from reference works. "
         "Name a location only if the plot hard-needs that space, it matches character status/access (prisons/monitor rooms/vaults are restricted), and arrival is logical; otherwise omit place and write the event only — later nodes will plan environments. "
-        "Put the must-have climax inside beat 14, and rhyme beat 15 with beat 01."
+        "Put the must-have climax inside beat 14, and rhyme beat 15 with beat 01. "
+        "Apply 【项目季节 — 必须应用】 to the world and to every beat that does not state a time jump. "
+        "ai_vfx_strategy is mandatory: at least two advantage lines tied to beats, plus avoidance rewrites or 劣势回避=本脑洞无高风险互动."
     )
     from app.services.series_ip_mode import is_series_ip_script_mode as _is_series_ip_script_mode
 

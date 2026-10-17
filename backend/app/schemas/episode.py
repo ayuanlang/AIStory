@@ -81,6 +81,7 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     trailer_episode_to: Optional[int] = None  # inclusive; default series length
     target_audience: Optional[str] = None
     script_title: Optional[str] = None
+    season_occurrence: Optional[str] = None
     function_name: Optional[str] = None
     system_api_id: Optional[int] = None
     overwrite_existing: bool = True

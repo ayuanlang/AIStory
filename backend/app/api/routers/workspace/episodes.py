@@ -847,7 +847,10 @@ async def generate_episode_story_dna(
         logger.error("Story generator prompt not found: %s", prompt_filename)
         raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
 
+    from app.services.project_season import format_project_season_prompt  # noqa: E402
+
     user_prompt_body = (
+        f"{format_project_season_prompt(getattr(req, 'season_occurrence', None), project.global_info or {})}\n"
         f"Mode: {mode}\n"
         f"Episodes Count: {req.episodes_count or ''}\n"
         f"Episode Duration (minutes): {_resolve_episode_duration_minutes(getattr(req, 'episode_duration_minutes', None))}\n"

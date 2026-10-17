@@ -1840,6 +1840,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 target_audience: globalStoryInput.target_audience,
                 type: info.type,
                 language: info.language,
+                season_occurrence: info.season_occurrence,
             }));
             setGlobalStoryInput(prev => {
                 const next = { ...prev, wild_creative_notes: prev.wild_creative_notes };
@@ -1849,7 +1850,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 return { ...next, ...rollupSaveTheCat(next) };
             });
             setStoryGenFocusStep('structure_prefill');
-            alert(t('已按救猫咪 15 节拍预填。请核对：主控思想是否是「价值+因为」，人物是否有前提、三维和弧光，15 拍是否一拍压一拍，主框架是否现代/当代且辅助至少 5 部。', 'Prefilled on the Save the Cat 15 beats. Check: controlling idea is value-plus-because, characters have premise, dimensions, and an arc, the 15 beats chain, and the primary is modern/contemporary with at least 5 auxiliaries.'));
+            alert(t('已按救猫咪 15 节拍预填。请核对：主控思想是否是「价值+因为」，人物是否有前提、三维和弧光，15 拍是否一拍压一拍，主框架是否现代/当代且辅助至少 5 部，AI优势应用是否挂在具体拍上并沿用项目季节。', 'Prefilled on the Save the Cat 15 beats. Check: controlling idea is value-plus-because, characters have premise, dimensions, and an arc, the 15 beats chain, the primary is modern/contemporary with at least 5 auxiliaries, and the AI-advantage notes name beats and keep the project season.'));
         } catch (e) {
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
@@ -1880,6 +1881,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 language: info.language,
                 base_positioning: info.base_positioning,
                 Global_Style: info.Global_Style,
+                season_occurrence: info.season_occurrence,
                 ...storyPrefillPayloadFields(globalStoryInput),
             };
             const updated = await generateProjectStoryGlobal(id, buildScriptAnalysisApiPayload(payload));
@@ -2170,6 +2172,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 script_mode: globalStoryInput.script_mode,
                 target_audience: globalStoryInput.target_audience,
                 script_title: String(info?.script_title || project?.title || '').trim(),
+                season_occurrence: info?.season_occurrence || '',
                 overwrite_existing: overwriteExisting,
                 retry_failed_only: retryFailedOnly,
                 ...(trailerMode ? {
@@ -4110,6 +4113,23 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         />
                                     </div>
                                 ))}
+                            </div>
+                            <div>
+                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('AI优势应用与劣势回避', 'AI Advantage and Avoidance')}</label>
+                                <div className="text-[11px] text-muted-foreground/80 mb-0.5">
+                                    {t('评估怎样用 AI 特效把这一部的画面做强：优势挂到具体节拍，写出变成什么、铺多满、季节介质怎么加强。劣势只改写袖藏、精细指法和多人贴身缠斗，连招保留。', 'How AI effects strengthen this story: advantages name a beat, the shape, the scale, and the season medium. Avoidance rewrites sleeve-hides, fingertip business, and multi-person grappling. Combos stay.')}
+                                </div>
+                                <div className="text-[11px] text-primary/70 mb-1.5 italic">
+                                    {t('例：拍=14｜特效=满幅异象｜画面增量=雨幕从楼面铺到街口｜服务=当众公开。劣势回避=本脑洞无高风险互动。', 'e.g. Beat 14 | full-frame weather | rain from the facade to the street | serves the public reveal. Avoidance: none in this brainstorm.')}
+                                </div>
+                                <textarea
+                                    className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                    rows={5}
+                                    value={globalStoryInput.ai_vfx_strategy || ''}
+                                    onFocus={() => setStoryGenFocusStep('structure_prefill')}
+                                    onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, ai_vfx_strategy: e.target.value }))}
+                                    placeholder={t('拍=…｜特效=…｜画面增量=…｜服务=…', 'Beat=… | effect=… | what the picture gains=… | serves=…')}
+                                />
                             </div>
                             <div>
                                 <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('I9 自由脑洞补充', 'I9 Raw Creative Fragments')}</label>

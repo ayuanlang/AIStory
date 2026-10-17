@@ -172,6 +172,7 @@ export const STORY_PREFILL_KEYS = [
     'suspense',
     'foreshadowing',
     'classic_framework',
+    'ai_vfx_strategy',
     'extra_notes',
 ];
 

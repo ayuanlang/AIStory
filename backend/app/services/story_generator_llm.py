@@ -79,6 +79,7 @@ _CREATIVE_INPUT_STRUCTURE_KEYS = [
     "suspense",
     "foreshadowing",
     "classic_framework",
+    "ai_vfx_strategy",
     "extra_notes",
     "setup",
     "development",
@@ -121,6 +122,7 @@ _PREFILL_TEXT_KEYS = (
     "foreshadowing",
     "extra_notes",
     "classic_framework",
+    "ai_vfx_strategy",
     "wild_creative_notes",
     "setup",
     "development",
@@ -169,6 +171,7 @@ def format_story_creative_input_block(source: Any) -> str:
         f"I8b 伏笔与必留: {_field_text(source, 'foreshadowing')}",
         f"I9 自由补充: {_field_text(source, 'extra_notes')}",
         f"I10 经典作品框架: {_field_text(source, 'classic_framework')}",
+        f"I11 AI优势应用与劣势回避: {_field_text(source, 'ai_vfx_strategy')}",
         f"天马行空原文: {_field_text(source, 'wild_creative_notes')}",
     ])
     return "\n".join(lines)

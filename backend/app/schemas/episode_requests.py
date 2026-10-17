@@ -50,6 +50,8 @@ class StoryGeneratorRequest(BaseModel):
     language: Optional[str] = None
     base_positioning: Optional[str] = None
     Global_Style: Optional[str] = None
+    season_occurrence: Optional[str] = None
+    ai_vfx_strategy: Optional[str] = None
     foreshadowing: Optional[str] = None
     logline: Optional[str] = None
     theme: Optional[str] = None

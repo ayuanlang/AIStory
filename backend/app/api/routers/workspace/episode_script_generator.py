@@ -40,6 +40,7 @@ from app.services.episode_script_output import (  # noqa: E402,F401
     extract_episode_script_output_between_markers,
     extract_official_episode_script,
 )
+from app.services.project_season import format_project_season_prompt  # noqa: E402,F401
 from app.services.episode_script_prompt import (  # noqa: E402,F401
     build_structured_prefill_prompt_block,
     build_trailer_generation_prompt_block,
@@ -1669,6 +1670,7 @@ async def generate_project_episode_scripts_from_global_framework(
             f"{episode_generation_guidance_block}"
             f"{prefill_block}"
             f"Project Title: {project_title}\n"
+            f"{format_project_season_prompt(getattr(req, 'season_occurrence', None), gi)}\n"
             f"Episode Number: {'预告片' if call_is_trailer else idx}\n"
             f"Episode Title (current DB value): {ep_title}\n"
             f"Extra Notes: {req.extra_notes or ''}\n\n"
