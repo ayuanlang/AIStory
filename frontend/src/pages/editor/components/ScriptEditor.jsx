@@ -20623,21 +20623,71 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     'info'
                 );
                 let readyCount = 0;
+                const quadDraftText = (items) => items.map((item) => {
+                    const name = String(item.name).trim();
+                    const body = force
+                        ? openingOf(item)
+                        : String(item.generation_prompt_cn || '').trim();
+                    return `【主环境设计稿】${name}\n${body}\n【/主环境设计稿】`;
+                }).join('\n\n');
+                const quadNamesMissing = (parsed, names) => {
+                    const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
+                    return names.filter((name) => !returned.some((row) => (
+                        String(row?.name || '').trim() === name
+                        && mainEnvironmentPromptHasQuad(row?.generation_prompt_cn)
+                    )));
+                };
                 try {
-                    for (let index = 0; index < pending.length; index += 1) {
-                        const item = pending[index];
-                        const name = String(item.name).trim();
-                        const body = force
-                            ? openingOf(item)
-                            : String(item.generation_prompt_cn || '').trim();
+                    // A named asset rerun converts only that environment.
+                    // Overall analysis sends every pending main in one call.
+                    if (onlyNames.length) {
+                        for (let index = 0; index < pending.length; index += 1) {
+                            const item = pending[index];
+                            const name = String(item.name).trim();
+                            throwIfAnalysisStopped();
+                            onLog?.(
+                                `[Stage 3 Asset Design] 四宫格 ${name}`,
+                                'info'
+                            );
+                            const res = await runScriptAnalysisFlowAnalyzeNode(
+                                'asset_design_environment_quad',
+                                quadDraftText([item]),
+                                quadPrompt,
+                                null,
+                                episodeIdForAssetSubtasks,
+                                analysisAttentionNotes,
+                                selectedReuseSubjectAssets,
+                                {
+                                    skipEpisodePersist: true,
+                                    analysisTraceId: `${traceId}-quad-${index + 1}`,
+                                },
+                                projectId,
+                                'script_analysis',
+                                scriptAnalysisApiId,
+                                'environment_quad'
+                            );
+                            const text = extractAnalysisTextFromResult(res);
+                            const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
+                            const missing = quadNamesMissing(parsed, [name]);
+                            if (missing.length) {
+                                onLog?.(
+                                    `[Stage 3 Asset Design] 四宫格未写满四格 name=${name}`,
+                                    'error'
+                                );
+                                return false;
+                            }
+                            readyCount += 1;
+                        }
+                    } else {
+                        const names = pending.map((item) => String(item.name).trim());
                         throwIfAnalysisStopped();
                         onLog?.(
-                            `[Stage 3 Asset Design] 四宫格 ${index + 1}/${pending.length} ${name}`,
+                            `[Stage 3 Asset Design] 四宫格一次性转换 mains=${names.length} ${names.join('、')}`,
                             'info'
                         );
                         const res = await runScriptAnalysisFlowAnalyzeNode(
                             'asset_design_environment_quad',
-                            `【主环境设计稿】${name}\n${body}\n【/主环境设计稿】`,
+                            quadDraftText(pending),
                             quadPrompt,
                             null,
                             episodeIdForAssetSubtasks,
@@ -20645,7 +20695,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             selectedReuseSubjectAssets,
                             {
                                 skipEpisodePersist: true,
-                                analysisTraceId: `${traceId}-quad-${index + 1}`,
+                                analysisTraceId: `${traceId}-quad`,
                             },
                             projectId,
                             'script_analysis',
@@ -20654,19 +20704,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         );
                         const text = extractAnalysisTextFromResult(res);
                         const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
-                        const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
-                        const wrote = returned.some((row) => (
-                            String(row?.name || '').trim() === name
-                            && mainEnvironmentPromptHasQuad(row?.generation_prompt_cn)
-                        ));
-                        if (!wrote) {
+                        const missing = quadNamesMissing(parsed, names);
+                        if (missing.length) {
                             onLog?.(
-                                `[Stage 3 Asset Design] 四宫格未写满四格 name=${name}`,
+                                `[Stage 3 Asset Design] 四宫格未一次写满：${missing.join('、')}`,
                                 'error'
                             );
                             return false;
                         }
-                        readyCount += 1;
+                        readyCount = names.length;
                     }
                     await refreshEpisodeOwnedEntities();
                     onLog?.(`[Stage 3 Asset Design] 四宫格最后提示词已写回 mains=${readyCount}`, 'success');
@@ -33269,22 +33315,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             analysisStopReasonRef.current = '';
             clearEpisodeAnalysisPipelineControl(activeEpisode.id);
             armAnalysisPipelineDeadline(Date.now());
-            let readyCount = 0;
-            for (let index = 0; index < mains.length; index += 1) {
-                const item = mains[index];
+            const quadDraftText = (items) => items.map((item) => {
                 const name = String(item.name).trim();
                 const body = String(item.opening || item.prompt || '').trim();
-                throwIfAnalysisStopped();
+                return `【主环境设计稿】${name}\n${body}\n【/主环境设计稿】`;
+            }).join('\n\n');
+            const quadNamesMissing = (parsed, names) => {
+                const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
+                return names.filter((name) => !returned.some((row) => (
+                    String(row?.name || '').trim() === name
+                    && mainEnvironmentPromptHasQuad(row?.generation_prompt_cn)
+                )));
+            };
+            let readyCount = 0;
+            throwIfAnalysisStopped();
+            if (wantedName) {
+                const item = mains[0];
+                const name = String(item.name).trim();
                 onLog?.(
-                    t(
-                        `四宫格 ${index + 1}/${mains.length}：${name}`,
-                        `Four-grid ${index + 1}/${mains.length}: ${name}`
-                    ),
+                    t(`四宫格：${name}`, `Four-grid: ${name}`),
                     'process'
                 );
                 const res = await runScriptAnalysisFlowAnalyzeNode(
                     'asset_design_environment_quad',
-                    `【主环境设计稿】${name}\n${body}\n【/主环境设计稿】`,
+                    quadDraftText([item]),
                     quadPrompt,
                     null,
                     activeEpisode.id,
@@ -33292,7 +33346,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     selectedReuseSubjectAssets,
                     {
                         skipEpisodePersist: true,
-                        analysisTraceId: `environment-quad-rerun-${activeEpisode.id}-${Date.now()}-${index + 1}`,
+                        analysisTraceId: `environment-quad-rerun-${activeEpisode.id}-${Date.now()}`,
                     },
                     projectId,
                     'script_analysis',
@@ -33301,18 +33355,49 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
                 const text = extractAnalysisTextFromResult(res);
                 const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
-                const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
-                const wrote = returned.some((row) => (
-                    String(row?.name || '').trim() === name
-                    && mainEnvironmentPromptHasQuad(row?.generation_prompt_cn)
-                ));
-                if (!wrote) {
+                if (quadNamesMissing(parsed, [name]).length) {
                     throw new Error(t(
-                        `四宫格未写满：${name}（${readyCount}/${mains.length}）`,
-                        `Four-grid prompt is incomplete for ${name} (${readyCount}/${mains.length})`
+                        `四宫格未写满：${name}`,
+                        `Four-grid prompt is incomplete for ${name}`
                     ));
                 }
-                readyCount += 1;
+                readyCount = 1;
+            } else {
+                const names = mains.map((item) => String(item.name).trim());
+                onLog?.(
+                    t(
+                        `四宫格一次性转换 ${names.length} 个主环境`,
+                        `Four-grid conversion for ${names.length} main environment(s) in one pass`
+                    ),
+                    'process'
+                );
+                const res = await runScriptAnalysisFlowAnalyzeNode(
+                    'asset_design_environment_quad',
+                    quadDraftText(mains),
+                    quadPrompt,
+                    null,
+                    activeEpisode.id,
+                    analysisAttentionNotes,
+                    selectedReuseSubjectAssets,
+                    {
+                        skipEpisodePersist: true,
+                        analysisTraceId: `environment-quad-rerun-${activeEpisode.id}-${Date.now()}`,
+                    },
+                    projectId,
+                    'script_analysis',
+                    resolveSelectedScriptAnalysisApiId(),
+                    'environment_quad'
+                );
+                const text = extractAnalysisTextFromResult(res);
+                const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
+                const missing = quadNamesMissing(parsed, names);
+                if (missing.length) {
+                    throw new Error(t(
+                        `四宫格未一次写满：${missing.join('、')}`,
+                        `Four-grid prompts are incomplete for ${missing.join(', ')}`
+                    ));
+                }
+                readyCount = names.length;
             }
             await refreshEpisodeOwnedEntities();
             onLog?.(

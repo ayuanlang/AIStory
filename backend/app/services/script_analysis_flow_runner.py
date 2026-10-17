@@ -983,6 +983,7 @@ async def execute_scene_analysis_flow_node(
                 apply_main_environment_quad_prompts,
                 extract_named_design_openings,
                 format_main_environment_quad_apply_failure,
+                missing_requested_quad_drafts,
                 quad_cells_prompt_ready,
             )
 
@@ -1001,15 +1002,30 @@ async def execute_scene_analysis_flow_node(
                 row for row in named_rows
                 if quad_cells_prompt_ready(row.get("generation_prompt_cn"))
             ]
-            applied = apply_main_environment_quad_prompts(
-                db,
-                project_id=node_project_id,
-                episode_id=node_episode_id,
-                rows=ready_rows,
-                openings=extract_named_design_openings(str(raw_payload.get("text") or "")),
+            source_text = str(raw_payload.get("text") or "")
+            openings = extract_named_design_openings(source_text)
+            missing_requested = missing_requested_quad_drafts(source_text, named_rows)
+            complete = bool(named_rows) and len(ready_rows) == len(named_rows) and not missing_requested
+            applied = (
+                apply_main_environment_quad_prompts(
+                    db,
+                    project_id=node_project_id,
+                    episode_id=node_episode_id,
+                    rows=ready_rows,
+                    openings=openings,
+                )
+                if complete
+                else {"updated": [], "missing": [], "skipped": []}
             )
-            if not named_rows or len(ready_rows) != len(named_rows) or len(applied.get("updated") or []) != len(ready_rows):
+            if (
+                not complete
+                or len(applied.get("updated") or []) != len(ready_rows)
+            ):
                 failure_message = format_main_environment_quad_apply_failure(named_rows, applied)
+                if missing_requested:
+                    shown = missing_requested[:8]
+                    tail = f"等{len(missing_requested)}条" if len(missing_requested) > len(shown) else ""
+                    failure_message += f"请求里的设计稿未一次写回：{'、'.join(shown)}{tail}。"
                 logger.error(
                     "[environment_quad] not applied episode_id=%s project_id=%s %s",
                     node_episode_id,

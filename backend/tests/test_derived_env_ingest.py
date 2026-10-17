@@ -11,6 +11,8 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     environment_opening_to_keep,
     extract_named_design_openings,
     format_main_environment_quad_apply_failure,
+    list_main_environment_draft_names,
+    missing_requested_quad_drafts,
     main_environment_quad_prompt_ready,
     quad_cells_prompt_ready,
     parse_quad_degrees_from_prompt,
@@ -342,6 +344,34 @@ def test_quad_apply_failure_names_the_gap():
     assert "提示词合格1条，已写入0条" in unmatched
     assert "库中无同名环境：地下军械库" in unmatched
     assert format_main_environment_quad_apply_failure([], {}) == "四宫格未写回：结果里没有可写回的主环境。"
+
+
+def test_quad_batch_requires_every_requested_draft():
+    opening = "【六面一次】\n北壁=封闭面。\n"
+    cells = (
+        "【四向拼图】\n"
+        "[0度格-左上·北]\n"
+        "[90度格-右上·东]\n"
+        "[180度格-左下·南]\n"
+        "[270度格-右下·西]\n"
+    )
+    source = (
+        f"【主环境设计稿】寰宇集团总裁办公室\n{opening}\n【/主环境设计稿】\n"
+        f"【主环境设计稿】摩天大楼玻璃幕墙外空域\n{opening}\n【/主环境设计稿】"
+    )
+    assert list_main_environment_draft_names(source) == [
+        "寰宇集团总裁办公室",
+        "摩天大楼玻璃幕墙外空域",
+    ]
+    partial = [{"name": "寰宇集团总裁办公室", "generation_prompt_cn": opening + cells}]
+    assert missing_requested_quad_drafts(source, partial) == ["摩天大楼玻璃幕墙外空域"]
+    complete = partial + [{"name": "摩天大楼玻璃幕墙外空域", "generation_prompt_cn": opening + cells}]
+    assert missing_requested_quad_drafts(source, complete) == []
+    incomplete = [
+        {"name": "寰宇集团总裁办公室", "generation_prompt_cn": opening},
+        {"name": "摩天大楼玻璃幕墙外空域", "generation_prompt_cn": opening + cells},
+    ]
+    assert missing_requested_quad_drafts(source, incomplete) == ["寰宇集团总裁办公室"]
 
 
 def test_build_item_persists_frame_anchors():

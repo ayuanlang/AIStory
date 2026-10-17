@@ -1990,6 +1990,38 @@ def extract_named_design_openings(source_text: str) -> Dict[str, str]:
     return found
 
 
+def list_main_environment_draft_names(source_text: str) -> List[str]:
+    """Original names of every 【主环境设计稿】 block, in order."""
+    names: List[str] = []
+    seen: Set[str] = set()
+    for match in _DESIGN_BLOCK_RE.finditer(str(source_text or "")):
+        name = _clean(match.group(1))
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
+
+
+def missing_requested_quad_drafts(
+    source_text: str,
+    rows: Sequence[Dict[str, Any]],
+) -> List[str]:
+    """Drafts in the request whose four-grid prompt is absent from this result."""
+    ready_keys: Set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        name = _clean(row.get("name"))
+        if name and quad_cells_prompt_ready(row.get("generation_prompt_cn")):
+            ready_keys.add(name.lower())
+    return [
+        name for name in list_main_environment_draft_names(source_text)
+        if name.lower() not in ready_keys
+    ]
+
+
 def compose_stored_quad_prompt(
     existing_prompt: str,
     returned_prompt: str,
