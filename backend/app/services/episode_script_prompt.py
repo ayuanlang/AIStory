@@ -2,7 +2,8 @@
 """Prompt-block helpers for episode-script generation."""
 from __future__ import annotations
 
-from typing import Any, Optional
+import re
+from typing import Any, Iterable, Optional
 
 from app.services.story_generator_llm import (
     format_story_creative_input_block,
@@ -23,7 +24,8 @@ def build_episode_generation_guidance_prompt_block(guidance: Optional[str]) -> s
         "The following is the user's explicit high-priority writing brief for THIS episode only.\n"
         "You MUST fulfill it in the episode script. It outranks Extra Notes, optional flavor, and default stylistic preferences.\n"
         "It MUST NOT violate hard format contracts, previous-episode handoff, character-canon identity, or safety constraints.\n"
-        "If a request conflicts with those hard constraints, keep the hard constraint and fulfill the rest of the guidance.\n\n"
+        "If a request conflicts with those hard constraints, keep the hard constraint and fulfill the rest of the guidance.\n"
+        "这条指导只约束正文。标题不抄这条指导，也不抄预告片侧重点、取材范围或其他指导原句。标题是不超过 8 字的剧情名。\n\n"
         f"{text}\n\n"
     )
 
@@ -42,13 +44,13 @@ def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
             "【结构化预填 — 预告片重要依据】\n"
             "注入链是项目信息 → 结构化预填 → 剧本框架 → 剧本生成。预告必须严格落实这份预填；框架已经写了不同内容时以框架为准，框架没写的预填内容仍然要演。预告必须把核心建置、人物弧光和基础世界观演进已有短拍，让没看过正片的观众读得出来。\n"
             "核心建置＝概念=I1 高概念、思想=I2 主控思想、对抗=I3、I3b 三幕价值弧、I4 故事世界。人物弧光＝I5。基础世界观＝世界背景＋剧情背景，并含 I4。\n"
-            "节奏与篇幅：按 5000 字写，不超过 5000 字。高光短拍 10–20 拍。不另开说明拍，不口播。不得为了少于 10 拍把多人多空间写回一句，也不得拆过 20 拍。\n"
+            "节奏与篇幅：按 5000 字写，不超过 5000 字。高光短拍 10–20 拍。不另开说明拍，不口播。不得为了少于 10 拍把多人多空间写回一句，也不得拆过 20 拍。跑、追、飞、掠、行驶的主体仍写从哪到哪、跨距和用时，速度由这两数读出；这段路落在宿主，不落在驾驶舱。\n"
             "概念=I1：一个动作或一句对白点出谁要什么、谁在挡、失败失去什么。"
             "思想=I2：一个动作或一句对白点出价值加原因，不宣布成主题。"
             "对抗=I3：落在娱乐时间，并在反派逼近顶一下，两句相反的原则当场相撞。"
             "I3b 只演取材范围内各幕的价值方向，不演谁胜谁负。"
             "I4 与世界背景落在建置：时代、制度、礼法、能力边界里，缺了就看不懂这一拍选择的那一句，用动作或对白演出来。\n"
-            "人物弧光要能读出极性：旧的自己、被这套世界逼着要改的那一下、弧光往哪边走。用动作或对白演。终场的胜负和秘密答案不说破。\n"
+            "人物弧光要能读出极性：旧的自己、被这套世界逼着要改的那一下、弧光往哪边走。用动作或对白演。终场的胜负和秘密答案不说破。取材范围内节拍上的对话种子，针对主控思想、对抗鸿沟危机、价值弧、压力场、人物前提弧光的，原句入短拍，并写出说者的微动作和表情；对白再写听者的。自白只写说者。\n"
             "预填里的 11–15 拍和谁胜谁负不入选材。空字段不另造一套故事。"
             "AI优势应用与劣势回避若点了本段要演的拍，短拍里写出那一层特效画面；回避项保持改写，不把风险动作写回。"
             "预告还要单独写「本集AI优势应用与劣势回避」：继承上游已经点给这些拍的条目，再只针对本条预告的场面新分析一次，并在短拍里演出来。\n\n"
@@ -57,7 +59,7 @@ def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
         rules = (
             "【结构化预填 — 分集重要依据】\n"
             "注入链是项目信息 → 结构化预填 → 剧本框架 → 剧本生成。必须严格落实这份预填；框架已经写了不同内容时以框架为准，框架没写的预填内容仍然要演。概念=I1，思想=I2，对抗=I3，人物弧光=I5，救猫咪事件种子都是本集必须回指的依据。\n"
-            "本集只演落在已锁救猫咪拍里的那一层。不把全剧弧光和结局提前演完。专名、对白种子、设定句要进本集相关场面。\n"
+            "本集只演落在已锁救猫咪拍里的那一层。不把全剧弧光和结局提前演完。专名、对白种子、设定句要进本集相关场面。落到本集拍上、针对主控思想、对抗鸿沟危机、价值弧、压力场、人物前提弧光的对话种子，原句入戏，并写出说者与听者的微动作和表情。自白只写说者。\n"
             "本集事件和拍以大纲为准。概念、思想、对抗、弧光的方向以预填为准。空字段不另造一套故事。"
             "AI优势应用与劣势回避和大纲本集 AI 行点名了本集的特效时，正文写出那一层形状、规模或季节介质；回避项保持改写。"
             "另外必须单独写「本集AI优势应用与劣势回避」：继承行登记上游已经点给本集的条目，本集分析只看本集场面再写一次，两段都要在 Beat 里演出来，不能只抄上游。\n\n"
@@ -108,6 +110,85 @@ def resolve_trailer_sample_range(
     return start, end
 
 
+PLOT_TITLE_MAX = 8
+TRAILER_LIST_TITLE_MAX = 24
+
+_TITLE_INSTRUCTION_LABELS = (
+    "本集生成指导",
+    "生成指导",
+    "预告片侧重点",
+    "预告片重点",
+    "侧重点",
+    "取材范围",
+    "结构化预填",
+)
+
+
+def clamp_plot_title(
+    raw: str,
+    *,
+    limit: int = PLOT_TITLE_MAX,
+    instructions: Optional[Iterable[str]] = None,
+) -> str:
+    """Short plot name. Guidance, focus, and other briefs never become the title."""
+    text = " ".join(str(raw or "").split())
+    if not text:
+        return ""
+    text = re.split(r"[。！？!?；;\n]", text, maxsplit=1)[0].strip()
+    for label in _TITLE_INSTRUCTION_LABELS:
+        if text.startswith(label):
+            text = text[len(label):].lstrip("：:，, ")
+            break
+    if "·" in text and text.startswith("预告"):
+        text = text.split("·")[-1].strip()
+    text = re.sub(r"^预告(?:片)?\s*[-—:：]\s*", "", text).strip()
+    text = text.strip("·-— ")
+    if re.fullmatch(r"第\d+-\d+集", text):
+        return ""
+    compact = re.sub(r"\s+", "", text)
+    for brief in instructions or ():
+        blob = re.sub(r"\s+", "", str(brief or ""))
+        if not compact or not blob:
+            continue
+        if compact == blob or (len(compact) >= 5 and compact in blob):
+            return ""
+    for sep in ("：", ":"):
+        if sep not in text:
+            continue
+        left, right = text.split(sep, 1)
+        left = left.strip()
+        if left and len(left) <= limit and len(right.strip()) > limit:
+            text = left
+        break
+    if len(text) > limit:
+        text = text[:limit].rstrip()
+    return text
+
+
+def rewrite_script_heading(
+    content: str,
+    plot_title: str,
+    *,
+    trailer: bool,
+    episode_number: int = 0,
+) -> str:
+    """Make the saved H1 match the short list title."""
+    title = str(plot_title or "").strip()
+    if trailer:
+        replacement = f"# 预告-{title}" if title else "# 预告"
+    elif title:
+        replacement = f"# {int(episode_number)}-{title}"
+    else:
+        return content
+    lines = str(content or "").splitlines()
+    for index, line in enumerate(lines):
+        if not line.strip().startswith("#"):
+            continue
+        lines[index] = replacement
+        return "\n".join(lines)
+    return content
+
+
 def format_trailer_episode_title(
     *,
     seq: int,
@@ -117,18 +198,25 @@ def format_trailer_episode_title(
     series_episode_count: int,
     focus: Optional[str] = None,
 ) -> str:
-    """Title that keeps each trailer row distinct in the episode list."""
+    """List title. Sequence and range stay; focus and briefs stay out."""
     parts = [f"预告片{int(seq)}"]
     if int(episode_from) != 1 or int(episode_to) != int(series_episode_count):
         parts.append(f"第{int(episode_from)}-{int(episode_to)}集")
-    focus_label = " ".join(str(focus or "").split())
-    if focus_label:
-        if len(focus_label) > 16:
-            focus_label = focus_label[:16].rstrip() + "…"
-        parts.append(focus_label)
-    title = str(episode_title or "").strip()
+    title = clamp_plot_title(
+        episode_title,
+        instructions=(focus,) if str(focus or "").strip() else (),
+    )
     if title:
         parts.append(title)
+    composed = "·".join(parts)
+    if len(composed) <= TRAILER_LIST_TITLE_MAX or not title:
+        return composed
+    prefix_len = len(composed) - len(title)
+    room = TRAILER_LIST_TITLE_MAX - prefix_len
+    if room < 2:
+        parts.pop()
+        return "·".join(parts)
+    parts[-1] = title[:room].rstrip()
     return "·".join(parts)
 
 
@@ -170,7 +258,7 @@ def build_trailer_generation_prompt_block(
     if focus_text:
         focus_block = (
             f"侧重点={focus_text}\n"
-            "选材、高光比重和收口都围着这一侧重，但只在建置、娱乐时间、反派逼近里加重。侧重点不改取材范围，不改去结局，也不许因此揭秘最终 Boss 或终极秘密。\n"
+            "选材、高光比重和收口都围着这一侧重，但只在建置、娱乐时间、反派逼近里加重。侧重点不改取材范围，不改去结局，也不许因此揭秘最终 Boss 或终极秘密。侧重点不写进标题。\n"
         )
     else:
         focus_block = "侧重点=未指定。比重按建置、娱乐时间、反派逼近来分，娱乐时间最重。不取结局。\n"
@@ -279,9 +367,12 @@ def build_trailer_generation_prompt_block(
         "对抗 (I3) runs through 娱乐时间 and crests at 反派逼近. "
         "I3b plays only the value direction of the acts inside the locked range, and does not show who wins. "
         "I4 and 世界背景 land in 建置 as the rule without which this choice cannot be understood. "
+        "A dialogue seed on a sampled beat, aimed at the controlling idea, the gap and crisis, the value arc, the pressure field, or the character premise and arc, is spoken in those words, with the speaker's micro-action and expression, and the listener's when the line is spoken to someone. A 自白 writes the speaker only. "
         "Do not announce the theme. Do not add a lecture beat. Write at the 5000 字 scale, and do not exceed 5000 字. Do not play prefill beats 11–15.\n"
         "Length: 5000 字. Short beats stay within 10–20, so each highlight has room for an action or a spoken line plus the plot turn. Do not compress different people or spaces back into one beat to stay under 10, and do not split past 20.\n"
+        "A running, chasing, flying, or driving subject still states where it starts, where it ends, how far, and how long. Speed is that distance over that time. The span belongs to the host space (street, road, sea, sky, building gap, or airway), not the cabin.\n"
         "The first non-empty OUTPUT line MUST be: # 预告-{short title}\n"
+        "短题不超过 8 字，从这段预告的剧情起名。不把侧重点、取材范围、本集生成指导或其他指导原句写进短题。\n"
         "Keep the formal script blocks. 卖点 are the highlights this trailer actually plays. "
         "重要情节 must state the locked 取材范围, the 侧重点, that the trailer plays 建置, 娱乐时间, and 反派逼近, "
         "which beats embody 核心建置 (I1–I4) and 人物弧光 (I5), "

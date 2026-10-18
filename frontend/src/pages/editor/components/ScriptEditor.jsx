@@ -63,7 +63,7 @@ import {
     filterGlobalReuseDropdownAssets,
     isAssetFromEpisode,
 } from '../reuseEnvAssets';
-import { hasSuccessfulPipelineNode, isStoryboardQueuedPlaceholderNode, isThisRunPipelineNode, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff, storyboardShotsLanded } from '../analysisRestartGuards';
+import { hasSuccessfulPipelineNode, isStoryboardQueuedPlaceholderNode, isThisRunPipelineNode, pickDiagnosticPipelineNode, resolveAssetCategoryDiagnosticState, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff, storyboardShotsLanded } from '../analysisRestartGuards';
 
 import { 
     fetchProject, 
@@ -14719,6 +14719,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 return;
             }
+            const seq = ++assetLibrarySyncSeqRef.current;
             setIsLoadingSubjectAssets(true);
             try {
                 // Reuse picker = project entities excluding this episode.
@@ -14728,14 +14729,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     fetchEntities(projectId),
                     fetchEntities(projectId, { episode_id: Number(episodeId) || undefined }),
                 ]);
-                if (!mounted) return;
+                if (!mounted || seq !== assetLibrarySyncSeqRef.current) return;
                 const all = Array.isArray(allEntities) ? allEntities : [];
                 const owned = Array.isArray(ownedEntities) ? ownedEntities : [];
                 setAvailableSubjectAssets(all.filter((asset) => !isAssetFromEpisode(asset, episodeId)));
                 setEpisodeOwnedEntities(owned);
             } catch (e) {
                 console.error(e);
-                if (mounted) {
+                if (mounted && seq === assetLibrarySyncSeqRef.current) {
                     setAvailableSubjectAssets([]);
                     setEpisodeOwnedEntities([]);
                 }
@@ -36358,11 +36359,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             retryingAssetCategoryKeys.length > 0
                             || liveAssetDesignTaskKeys.length > 0
                         );
-                        const pipelineNodeByName = Object.fromEntries(
-                            (diagnosticsPipelineNodes || [])
-                                .filter((node) => String(node?.node_name || '').trim())
-                                .map((node) => [String(node.node_name).trim(), node])
-                        );
+                        const pipelineNodeByName = {};
+                        (diagnosticsPipelineNodes || []).forEach((node) => {
+                            const name = String(node?.node_name || '').trim();
+                            if (!name || pipelineNodeByName[name]) return;
+                            const picked = pickDiagnosticPipelineNode(diagnosticsPipelineNodes, name);
+                            if (picked) pipelineNodeByName[name] = picked;
+                        });
                         const resolveNodeState = (nodeName, fallbackReady = false, fallbackActive = false) => {
                             const node = pipelineNodeByName[nodeName];
                             const status = String(node?.status || '').trim().toLowerCase();
@@ -36502,28 +36505,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const designUnlocked = spec.key === 'environment'
                                 ? environmentPlanDone
                                 : sceneSplitDone;
-                            const skipped = Boolean(
-                                designUnlocked
-                                && expected <= 0
-                                && imported <= 0
-                                && !hasUpstreamContract
-                                && !completeness?.failed
-                                && (!completeness || status === 'none')
-                            );
-                            const readyByData = spec.key === 'environment'
-                                ? Boolean(
-                                    imported > 0
-                                    && (
-                                        ['ok', 'extra'].includes(status)
-                                        || (expected > 0 && imported >= expected)
-                                        || (expected <= 0 && hasUpstreamContract)
-                                    )
-                                )
-                                : Boolean(
-                                    ['ok', 'extra'].includes(status)
-                                    || (imported > 0 && expected > 0 && imported >= expected)
-                                    || (imported > 0 && expected <= 0)
-                                );
                             const targeted = !runningAssetTargets?.length
                                 || spec.targets.some((target) => runningAssetTargets.includes(target))
                                 || retryingAssetCategoryKeys.includes(spec.category);
@@ -36548,31 +36529,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             // or the global analysis-live flag. Only this category's own launch counts.
                             const nodeLooksRunning = Boolean(nodeState.active)
                                 && (thisRunLaunched || (analysisLive && !retryingAssetCategoryKeys.length && !isRetryingPhase2));
-                            const active = Boolean(
-                                designUnlocked
-                                && !skipped
-                                && (!readyByData || envDesignStillLive)
-                                && (thisRunLaunched || envDesignStillLive || (targeted && nodeLooksRunning))
-                            );
-                            const failed = Boolean(
-                                designUnlocked
-                                && !active
-                                && !skipped
-                                && !readyByData
-                                && !waitingForLibrary
-                                && (
-                                    completeness?.failed
-                                    || (status === 'missing' && expected > 0 && imported <= 0)
-                                    || (nodeState.failed && imported <= 0 && !settledThisRun && !thisRunLaunched)
-                                )
-                            );
-                            const ready = Boolean(
-                                designUnlocked
-                                && !active
-                                && !failed
-                                && !envDesignStillLive
-                                && (readyByData || skipped)
-                            );
+                            const categoryState = resolveAssetCategoryDiagnosticState({
+                                key: spec.key,
+                                nodeStatus: nodeState.status,
+                                expected,
+                                imported,
+                                completenessStatus: status,
+                                completenessFailed: Boolean(completeness?.failed),
+                                hasUpstreamContract,
+                                designUnlocked,
+                                thisRunLaunched,
+                                envDesignStillLive,
+                                nodeLooksRunning,
+                                targeted,
+                                waitingForLibrary,
+                                settledThisRun,
+                                nodeFailed: Boolean(nodeState.failed),
+                            });
+                            const skipped = categoryState.skipped;
+                            const active = categoryState.active;
+                            const failed = categoryState.failed;
+                            const ready = categoryState.ready;
                             const waitingUpstream = spec.key === 'character'
                                 ? !hasCharExtractForAssetDesign()
                                 : spec.key === 'prop'

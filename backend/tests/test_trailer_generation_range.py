@@ -4,8 +4,10 @@ import pytest
 from app.services.episode_script_prompt import (
     build_structured_prefill_prompt_block,
     build_trailer_generation_prompt_block,
+    clamp_plot_title,
     format_trailer_episode_title,
     resolve_trailer_sample_range,
+    rewrite_script_heading,
 )
 from app.services.series_ip_mode import build_series_ip_trailer_note
 
@@ -48,6 +50,8 @@ def test_prompt_locks_range_and_focus():
     assert "侧重点=感情线" in block
     assert "does not replace any earlier trailer" in block
     assert "不把范围外的高光" in block
+    assert "侧重点不写进标题" in block
+    assert "不超过 8 字" in block
 
 
 def test_prompt_without_focus_stays_balanced():
@@ -67,7 +71,7 @@ def test_title_keeps_each_trailer_distinct():
         episode_to=8,
         series_episode_count=12,
         focus="感情线",
-    ) == "预告片2·第3-8集·感情线·雨夜"
+    ) == "预告片2·第3-8集·雨夜"
     assert format_trailer_episode_title(
         seq=1,
         episode_title="开场",
@@ -75,6 +79,50 @@ def test_title_keeps_each_trailer_distinct():
         episode_to=12,
         series_episode_count=12,
     ) == "预告片1·开场"
+
+
+def test_title_drops_focus_and_caps_length():
+    brief = "把感情线写成雨夜对峙并且交代来龙去脉"
+    assert format_trailer_episode_title(
+        seq=2,
+        episode_title=brief,
+        episode_from=3,
+        episode_to=8,
+        series_episode_count=12,
+        focus=brief,
+    ) == "预告片2·第3-8集"
+    assert format_trailer_episode_title(
+        seq=2,
+        episode_title="预告-雨夜交牌留证之后她走了",
+        episode_from=3,
+        episode_to=8,
+        series_episode_count=12,
+        focus="感情线",
+    ) == "预告片2·第3-8集·雨夜交牌留证之后"
+    long_row = format_trailer_episode_title(
+        seq=100,
+        episode_title="一二三四五六七八",
+        episode_from=100,
+        episode_to=120,
+        series_episode_count=200,
+    )
+    assert long_row == "预告片100·第100-120集·一二三四五六七"
+    assert len(long_row) <= 24
+
+
+def test_plot_title_ignores_guidance_and_stays_short():
+    guidance = "本集把开场写成雨夜对峙，并且回收门铃。"
+    assert clamp_plot_title(guidance, instructions=(guidance,)) == ""
+    assert clamp_plot_title("侧重点：把感情线写满直到交牌", instructions=("把感情线写满直到交牌",)) == ""
+    assert clamp_plot_title("雨夜交牌") == "雨夜交牌"
+    assert clamp_plot_title("一二三四五六七八九十") == "一二三四五六七八"
+    rewritten = rewrite_script_heading(
+        "# 3-本集把开场写成雨夜对峙\n\n正文",
+        "雨夜交牌",
+        trailer=False,
+        episode_number=3,
+    )
+    assert rewritten.startswith("# 3-雨夜交牌\n")
 
 
 def test_blank_prefill_is_omitted():
@@ -99,8 +147,11 @@ def test_prefill_is_required_input_and_trailer_keeps_length():
     assert "林一要留证" in trailer
     assert "5000 字" in trailer
     assert "10–20" in trailer
+    assert "跨距" in trailer
     assert "11–15" in trailer
+    assert "原句入短拍" in trailer
     assert "已锁救猫咪拍" in episode
+    assert "说者与听者的微动作和表情" in episode
     assert "证据比职位贵" in episode
     block = build_trailer_generation_prompt_block(episode_from=1, episode_to=4)
     assert "概念 (I1)" in block
@@ -108,6 +159,8 @@ def test_prefill_is_required_input_and_trailer_keeps_length():
     assert "世界背景" in block
     assert "5000 字" in block
     assert "10–20" in block
+    assert "host space" in block
+    assert "speaker's micro-action" in block
 
 
 def test_series_ip_note_uses_the_same_range():

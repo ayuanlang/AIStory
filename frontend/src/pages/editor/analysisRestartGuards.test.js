@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
     isThisRunPipelineNode,
     isStoryboardQueuedPlaceholderNode,
+    pickDiagnosticPipelineNode,
+    resolveAssetCategoryDiagnosticState,
     shouldHoldStoryboardKickoffForQueuedPlaceholder,
     shouldRejectLeftoverStagingKickoff,
     storyboardShotsLanded,
@@ -140,5 +142,84 @@ describe('analysisRestartGuards', () => {
         assert.equal(isThisRunPipelineNode({
             updated_at: '2026-09-18 22:10:00.123456',
         }, runStartedAt), true);
+    });
+});
+
+describe('asset category diagnostic cell', () => {
+    it('marks character ready when the pipeline node succeeded but the episode count is partial', () => {
+        const state = resolveAssetCategoryDiagnosticState({
+            key: 'character',
+            nodeStatus: 'success',
+            expected: 8,
+            imported: 3,
+            completenessStatus: 'partial',
+            hasUpstreamContract: true,
+            designUnlocked: true,
+        });
+        assert.equal(state.ready, true);
+        assert.equal(state.active, false);
+        assert.equal(state.failed, false);
+    });
+
+    it('keeps character processing while this run is still importing', () => {
+        const state = resolveAssetCategoryDiagnosticState({
+            key: 'character',
+            nodeStatus: 'success',
+            expected: 8,
+            imported: 0,
+            completenessStatus: 'missing',
+            hasUpstreamContract: true,
+            designUnlocked: true,
+            thisRunLaunched: true,
+        });
+        assert.equal(state.ready, false);
+        assert.equal(state.active, true);
+    });
+
+    it('keeps a failed character import incomplete after the node log', () => {
+        const state = resolveAssetCategoryDiagnosticState({
+            key: 'character',
+            nodeStatus: 'success',
+            expected: 4,
+            imported: 0,
+            completenessStatus: 'missing',
+            completenessFailed: true,
+            hasUpstreamContract: true,
+            designUnlocked: true,
+        });
+        assert.equal(state.ready, false);
+        assert.equal(state.failed, true);
+    });
+
+    it('does not treat environment node success as ready without imported main environments', () => {
+        const state = resolveAssetCategoryDiagnosticState({
+            key: 'environment',
+            nodeStatus: 'success',
+            expected: 2,
+            imported: 0,
+            completenessStatus: 'missing',
+            hasUpstreamContract: true,
+            designUnlocked: true,
+        });
+        assert.equal(state.ready, false);
+        assert.equal(state.failed, true);
+    });
+
+    it('prefers the episode-level character node over a later scene-scoped row', () => {
+        const picked = pickDiagnosticPipelineNode([
+            {
+                node_name: 'asset_design_character',
+                status: 'success',
+                updated_at: '2026-10-18 00:56:41',
+            },
+            {
+                node_name: 'asset_design_character',
+                scene_id: 'EP01_SC01',
+                status: 'queued',
+                updated_at: '2026-10-18 00:57:00',
+            },
+        ], 'asset_design_character');
+        assert.equal(picked.status, 'success');
+        assert.equal(picked.scene_id, undefined);
     });
 });

@@ -109,3 +109,124 @@ export function hasSuccessfulPipelineNode(nodes, name) {
     if (!wanted) return false;
     return (Array.isArray(nodes) ? nodes : []).some((node) => isSuccessfulPipelineNode(node, [wanted]));
 }
+
+const DIAGNOSTIC_NODE_STATUS_RANK = {
+    success: 50,
+    warning: 45,
+    running: 40,
+    failed: 30,
+    blocked: 25,
+    queued: 10,
+};
+
+/**
+ * Episode-level diagnostic cells must read the episode row, not a later
+ * scene-scoped duplicate. When two episode rows exist, the newer write wins.
+ */
+export function pickDiagnosticPipelineNode(nodes, nodeName) {
+    const wanted = String(nodeName || '').trim();
+    if (!wanted) return null;
+    const matches = (Array.isArray(nodes) ? nodes : []).filter(
+        (node) => String(node?.node_name || '').trim() === wanted
+    );
+    if (!matches.length) return null;
+    const episodeLevel = matches.filter((node) => !String(node?.scene_id || '').trim());
+    const pool = episodeLevel.length ? episodeLevel : matches;
+    return pool.reduce((best, node) => {
+        if (!best) return node;
+        const bestTime = pipelineNodeInstant(best, ['updated_at', 'ended_at', 'started_at']);
+        const nextTime = pipelineNodeInstant(node, ['updated_at', 'ended_at', 'started_at']);
+        if (bestTime && nextTime && bestTime !== nextTime) {
+            return nextTime > bestTime ? node : best;
+        }
+        const bestRank = DIAGNOSTIC_NODE_STATUS_RANK[String(best?.status || '').trim().toLowerCase()] || 0;
+        const nextRank = DIAGNOSTIC_NODE_STATUS_RANK[String(node?.status || '').trim().toLowerCase()] || 0;
+        if (nextRank !== bestRank) return nextRank > bestRank ? node : best;
+        return nextTime >= bestTime ? node : best;
+    }, null);
+}
+
+/**
+ * Character / prop cells follow the pipeline node that logs 「已完成」.
+ * Episode-owned counts stay partial when reused characters are not copied
+ * onto this episode, and that used to leave the cell on 等待中.
+ * Environment still requires imported main-environment rows.
+ */
+export function resolveAssetCategoryDiagnosticState({
+    key = '',
+    nodeStatus = '',
+    expected = 0,
+    imported = 0,
+    completenessStatus = '',
+    completenessFailed = false,
+    hasUpstreamContract = false,
+    designUnlocked = false,
+    thisRunLaunched = false,
+    envDesignStillLive = false,
+    nodeLooksRunning = false,
+    targeted = true,
+    waitingForLibrary = false,
+    settledThisRun = false,
+    nodeFailed = false,
+} = {}) {
+    const status = String(completenessStatus || '').trim().toLowerCase();
+    const nodeStatusNorm = String(nodeStatus || '').trim().toLowerCase();
+    const skipped = Boolean(
+        designUnlocked
+        && Number(expected || 0) <= 0
+        && Number(imported || 0) <= 0
+        && !hasUpstreamContract
+        && !completenessFailed
+        && (!completenessStatus || status === 'none')
+    );
+    const readyByData = key === 'environment'
+        ? Boolean(
+            Number(imported || 0) > 0
+            && (
+                ['ok', 'extra'].includes(status)
+                || (Number(expected || 0) > 0 && Number(imported || 0) >= Number(expected || 0))
+                || (Number(expected || 0) <= 0 && hasUpstreamContract)
+            )
+        )
+        : Boolean(
+            ['ok', 'extra'].includes(status)
+            || (Number(imported || 0) > 0 && Number(expected || 0) > 0 && Number(imported || 0) >= Number(expected || 0))
+            || (Number(imported || 0) > 0 && Number(expected || 0) <= 0)
+        );
+    const nodeSettledOk = ['success', 'warning'].includes(nodeStatusNorm);
+    const trustNodeSuccess = key === 'character' || key === 'prop';
+    const readyByNode = Boolean(
+        trustNodeSuccess
+        && nodeSettledOk
+        && !thisRunLaunched
+        && !completenessFailed
+    );
+    const active = Boolean(
+        designUnlocked
+        && !skipped
+        && (!readyByData || envDesignStillLive)
+        && !readyByNode
+        && (thisRunLaunched || envDesignStillLive || (targeted && nodeLooksRunning))
+    );
+    const failed = Boolean(
+        designUnlocked
+        && !active
+        && !skipped
+        && !readyByData
+        && !readyByNode
+        && !waitingForLibrary
+        && (
+            completenessFailed
+            || (status === 'missing' && Number(expected || 0) > 0 && Number(imported || 0) <= 0)
+            || (nodeFailed && Number(imported || 0) <= 0 && !settledThisRun && !thisRunLaunched)
+        )
+    );
+    const ready = Boolean(
+        designUnlocked
+        && !active
+        && !failed
+        && !envDesignStillLive
+        && (readyByData || skipped || readyByNode)
+    );
+    return { ready, active, failed, skipped, readyByData, readyByNode };
+}

@@ -44,8 +44,10 @@ from app.services.project_season import format_project_season_prompt  # noqa: E4
 from app.services.episode_script_prompt import (  # noqa: E402,F401
     build_structured_prefill_prompt_block,
     build_trailer_generation_prompt_block,
+    clamp_plot_title,
     format_trailer_episode_title,
     resolve_episode_generation_guidance_for_prompt,
+    rewrite_script_heading,
     resolve_trailer_sample_range,
 )
 from app.services.series_ip_mode import (  # noqa: E402,F401
@@ -1495,25 +1497,33 @@ async def generate_project_episode_scripts_from_global_framework(
 
         episode_title_is_placeholder = _is_placeholder_episode_title(ep_title, idx)
         call_is_trailer = str(ep_data.get("output_kind") or "") == "trailer"
+        title_length_rule = (
+            "- The H1 title is a plot name of at most 8 characters.\n"
+            "- Name it from what happens in this piece. Do not copy 本集生成指导, 预告片侧重点, 取材范围, or any other instruction sentence into the title.\n"
+            "- If the current title already repeats those briefs or runs past 8 characters, replace it with a new plot name.\n"
+        )
         if call_is_trailer:
             episode_title_policy_block = (
                 "Episode Title Policy (Hard Constraint):\n"
                 "- This piece is a trailer. The H1 short title should name the hook, not the episode number.\n"
-                "- Do NOT title it Episode 1, 第1集, or a series episode title.\n\n"
+                "- Do NOT title it Episode 1, 第1集, or a series episode title.\n"
+                f"{title_length_rule}\n"
             )
         elif episode_title_is_placeholder:
             episode_title_policy_block = (
                 "Episode Title Policy (Hard Constraint):\n"
                 f"- Current DB title is a placeholder: {ep_title}\n"
                 "- You MUST create a specific, plot-relevant episode title in the H1 heading.\n"
-                "- Do NOT output placeholder titles such as 'Episode N', 'EPN', '第N集', 'Untitled', or 'TBD'.\n\n"
+                "- Do NOT output placeholder titles such as 'Episode N', 'EPN', '第N集', 'Untitled', or 'TBD'.\n"
+                f"{title_length_rule}\n"
             )
         else:
             episode_title_policy_block = (
                 "Episode Title Policy (Hard Constraint):\n"
                 f"- Current DB title reference: {ep_title}\n"
                 "- Keep or refine this title, but keep it specific and plot-relevant.\n"
-                "- Do NOT output placeholder titles such as 'Episode N', 'EPN', '第N集', 'Untitled', or 'TBD'.\n\n"
+                "- Do NOT output placeholder titles such as 'Episode N', 'EPN', '第N集', 'Untitled', or 'TBD'.\n"
+                f"{title_length_rule}\n"
             )
 
         if call_is_trailer:
@@ -1532,6 +1542,7 @@ async def generate_project_episode_scripts_from_global_framework(
                 "- Do not reveal the final boss or the ultimate secret. Public face, subordinates, and event pressure may appear. The reveal beat and the secret's answer may not.\n\n"
                 "Output Format Contract (Hard Constraint):\n"
                 "- The first non-empty line MUST be exactly one H1 heading: # 预告-{short title}\n"
+                "- That short title is at most 8 characters. The focus and the sample range stay out of it.\n"
                 "- Output MUST be pure Markdown text only.\n"
                 "- Do NOT output JSON, XML, YAML, code fences, or any wrapper text.\n"
                 "- Do NOT output a numbered episode heading such as # 1-标题.\n"
@@ -1550,6 +1561,7 @@ async def generate_project_episode_scripts_from_global_framework(
             "- Even in batch generation mode, each call must output exactly one episode script (the current episode only).\n\n"
             "Output Format Contract (Hard Constraint):\n"
             f"- The first non-empty line MUST be exactly one H1 heading: # {idx}-{{episode_title}}\n"
+            "- episode_title is a plot name of at most 8 characters. Generation guidance stays out of it.\n"
             "- Output MUST be pure Markdown text only.\n"
             "- Do NOT output JSON, XML, YAML, code fences, or any wrapper text.\n"
             "- Do NOT output any preface, analysis, explanation, or postscript.\n"
@@ -1876,18 +1888,40 @@ async def generate_project_episode_scripts_from_global_framework(
                 if not ep_db:
                     raise RuntimeError(f"Episode {ep_id} not found in database for update.")
                 previous_title = str(ep_db.title or "")
+                guidance_raw = str(getattr(req, "episode_generation_guidance", None) or "").strip()
+                if not guidance_raw:
+                    guidance_raw = str(gi_story_input.get("episode_generation_guidance") or "").strip()
+                focus_raw = str(ep_data.get("trailer_focus") or "").strip()
+                title_briefs = [item for item in (guidance_raw, focus_raw) if item]
+                plot_title = clamp_plot_title(llm_episode_title, instructions=title_briefs)
+                if not plot_title:
+                    fallback_title = clamp_plot_title(previous_title, instructions=title_briefs)
+                    if fallback_title and not _is_placeholder_episode_title(fallback_title, idx):
+                        plot_title = fallback_title
+                if (
+                    not call_is_trailer
+                    and not plot_title
+                    and not _is_placeholder_episode_title(previous_title, idx)
+                ):
+                    plot_title = "本集"
+                content = rewrite_script_heading(
+                    content,
+                    plot_title,
+                    trailer=call_is_trailer,
+                    episode_number=int(idx),
+                )
                 ep_db.script_content = content
                 if call_is_trailer:
                     ep_db.title = format_trailer_episode_title(
                         seq=int(ep_data.get("trailer_seq") or 1),
-                        episode_title=llm_episode_title,
+                        episode_title=plot_title,
                         episode_from=int(ep_data.get("trailer_episode_from") or 1),
                         episode_to=int(ep_data.get("trailer_episode_to") or target_n),
                         series_episode_count=int(target_n),
-                        focus=ep_data.get("trailer_focus"),
+                        focus=focus_raw,
                     )
-                elif llm_episode_title:
-                    ep_db.title = llm_episode_title
+                elif plot_title:
+                    ep_db.title = plot_title
                 ep_script_content = content
                 ei = _episode_runtime_info_from_episode(ep_db)
                 ei["episode_script_generated_at"] = now_bj_iso()
@@ -1902,8 +1936,10 @@ async def generate_project_episode_scripts_from_global_framework(
                     ei.pop("episode_script_episode_number", None)
                 else:
                     ei["episode_script_episode_number"] = int(idx)
-                if llm_episode_title:
-                    ei["episode_title"] = llm_episode_title
+                if plot_title:
+                    ei["episode_title"] = plot_title
+                else:
+                    ei.pop("episode_title", None)
                 if generator_kind == "promo":
                     ei["episode_script_source"] = "promo_global_framework_plus_project_character_canon"
                 else:

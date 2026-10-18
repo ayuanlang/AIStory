@@ -4049,7 +4049,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     <div className="text-[11px] text-muted-foreground/80 mt-0.5">
                                         {seriesIpMode
                                             ? t('可留空。若填写，只作为全剧走向，不会被拆成各集剧情框架。', 'Optional. If filled, this is series direction only and will not be split into episode frameworks.')
-                                            : t('情节按这 15 拍往下接。每一拍写谁对谁做了什么、期望和实际差在哪、价值往哪边翻。上一拍的结果是下一拍的压力。地点拿不准就不写。', 'The plot runs down these 15 beats. Each beat: who does what to whom, the gap between expected and actual, and which way the value turns. One beat\'s result is the next beat\'s pressure. Omit a location if you are unsure.')}
+                                            : t('情节按这 15 拍往下接。每一拍写谁对谁做了什么、期望和实际差在哪、价值往哪边翻。上一拍的结果是下一拍的压力。主控思想、对抗鸿沟危机、价值弧、压力场、人物前提与弧光，要在承载它们的拍上留下对话种子，含自白。地点拿不准就不写。', 'The plot runs down these 15 beats. Each beat: who does what to whom, the gap between expected and actual, and which way the value turns. One beat\'s result is the next beat\'s pressure. Leave a dialogue seed, including a self-addressed line, on the beat that carries the controlling idea, the gap and crisis, the value arc, the pressure field, and the character premise and arc. Omit a location if you are unsure.')}
                                     </div>
                                 </div>
                                 {SAVE_THE_CAT_ACTS.map((act) => (

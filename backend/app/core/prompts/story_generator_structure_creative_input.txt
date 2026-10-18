@@ -59,6 +59,14 @@ Layer 3 — Save the Cat. Each beat is 1–3 sentences: who does what to whom, t
 - "stc_14_finale": the last fight under the new belief. The crisis choice lands here and proves the controlling idea. This is the must-have iconic beat: key line and physical action.
 - "stc_15_final_image": the new equilibrium, rhymed with beat 01, so the arc is visible.
 
+Dialogue seeds, including 自白, are required on the beats that carry these five ideas. The concept fields stay the idea. The speakable line lives on the beat. Each of the five has at least one seed. At least one seed among them is 自白.
+- 主控思想: the beat where someone states the value-plus-because, and the beat that proves it. Normally 02 and 14.
+- 对抗鸿沟危机: the beat where the expected result and the actual result are spoken as the gap, and the crisis beat where both horns of the dilemma are spoken. The crisis seed is normally on 14.
+- 价值弧: one seed for each act, on the beat where that act's value turn is spoken. Act I on 04 or 06, Act II on 09, Act III on 14. Do not put all three on 14.
+- 压力场: the beat where the institution, custom, or limit of ability is spoken as the reason this choice cannot wait.
+- 人物前提弧光: the old pole, spoken early, and the new pole, spoken when the arc turns. The inner turn the person in the room should not hear is 自白.
+Append each seed to that beat, after the event sentences: `对话种子=对白|自白｜针对=主控思想|对抗鸿沟危机|价值弧|压力场|人物前提弧光｜说=谁｜听=谁|无｜句=「…」`. 自白 uses `听=无`. The line is spoken to the air or to oneself, not to the person in the room. One beat may carry more than one seed. A beat with none of these duties does not invent a seed. If the listener should not hear the line, the channel is 自白. The quote is the one exception to "do not duplicate": the same `句` is not also pasted into theme, core_conflict, three_act, background, or characters.
+
 Also:
 - "suspense": the questions the audience chases. They complement the dilemma; they do not replace it.
 - "foreshadowing": lines, objects, and payoffs that must survive. A gun shown early must be able to fire on a later beat.
@@ -84,7 +92,7 @@ Hard constraints on the beats (and on foreshadowing when it carries plot):
 - **Scene/environment**: do not copy a place name from the brainstorm or from a reference just to make a picture. Name a location only when the plot fails without that space's function, the people present are allowed in, and the arrival is logical. Restricted rooms (monitor, prison, vault, executive office) need a duty, an escort, a summons, a token, or an intrusion with a cost. Otherwise write the event, the line, the action, and the stake, and leave the room for a later node.
 - **Hidden villain**: a character who is not a public antagonist must not expose themselves by behavior or dialogue on arrival. The larger the villain, the later the first crack. Early beats show subordinates, proxies, and consequences. The person themselves becomes suspect only after the hero finds a contradiction. A public opponent from the opening is exempt. Forbidden early: the hidden villain's own cruel line, their own dirty hands, a read that settles the secret at a glance.
 
-Keep concept fields and each beat concise. "characters", beat 14, and "classic_framework" may run longer.
+Keep concept fields and each beat concise. "characters", beat 14, "classic_framework", and any beat that carries a dialogue seed may run longer.
 
 Input:
 {creative_text}
