@@ -1886,6 +1886,28 @@ const parseSceneUnitsFromScriptMarkersText = (scriptText) => {
     return units;
 };
 
+/** SCENE_START ids without the strict block walker. One bad END must not hide every scene row. */
+const listSceneStartIds = (scriptText) => {
+    let text = '';
+    try {
+        text = normalizeSceneMarkerScriptText(scriptText);
+    } catch (_) {
+        text = String(scriptText || '');
+    }
+    const ids = [];
+    const seen = new Set();
+    const pattern = /\[SCENE_START:([^\s\]]+)\]/gi;
+    let match;
+    while ((match = pattern.exec(text))) {
+        const id = String(match[1] || '').trim();
+        const key = id.toUpperCase();
+        if (!id || seen.has(key)) continue;
+        seen.add(key);
+        ids.push(id);
+    }
+    return ids;
+};
+
 const SCENE_SUBSKILL_EDIT_KINDS = new Set(['drama_opt', 'combat_opt', 'framing_opt', 'staging_opt']);
 const SCENE_SUBSKILL_RESULT_KEYS = {
     drama_opt: 'drama',
@@ -4005,13 +4027,16 @@ const collectThisRunDiagnosticSceneAllowlist = (sceneSplitText, canonicalIds, ep
     const ids = [];
     const text = String(sceneSplitText || '').trim();
     if (text) {
+        let parsedIds = [];
         try {
-            parseSceneUnitsFromScriptMarkersText(text).forEach((unit) => {
-                if (unit?.sceneId) ids.push(unit.sceneId);
-            });
+            parsedIds = parseSceneUnitsFromScriptMarkersText(text)
+                .map((unit) => String(unit?.sceneId || '').trim())
+                .filter(Boolean);
         } catch (_) {
-            // Scene-split text may not be marker-wrapped yet.
+            parsedIds = [];
         }
+        if (parsedIds.length <= 0) parsedIds = listSceneStartIds(text);
+        parsedIds.forEach((id) => ids.push(id));
     }
     (canonicalIds instanceof Set ? [...canonicalIds] : (Array.isArray(canonicalIds) ? canonicalIds : [])).forEach((id) => {
         if (id) ids.push(id);
@@ -37215,32 +37240,70 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const scopedMatrixRerun = Boolean(sceneMatrixRerun?.sceneId);
                             const trustLiveOnly = Boolean(analysisTrustLiveDownstreamOnlyRef.current)
                                 && !scopedMatrixRerun;
-                            const thisRunSplit = String(
-                                latestStage1NodeOutputsRef.current?.scene_split
-                                || resolveSceneSplitSourceText?.()
-                                || ''
-                            ).trim();
+                            const sceneSplitSettled = Boolean(
+                                sceneSplitState.ready
+                                && !sceneSplitState.active
+                                && !sceneSplitState.failed
+                            );
+                            const pickSplitWithSceneIds = (candidates) => {
+                                let best = '';
+                                let bestCount = 0;
+                                (candidates || []).forEach((raw) => {
+                                    const text = String(raw || '').trim();
+                                    if (!text) return;
+                                    const count = listSceneStartIds(text).length;
+                                    if (count > bestCount) {
+                                        best = text;
+                                        bestCount = count;
+                                    }
+                                });
+                                return best;
+                            };
+                            let thisRunSplit = pickSplitWithSceneIds([
+                                latestStage1NodeOutputsRef.current?.scene_split,
+                                getStageOutputContent('stage1', 'scene_split'),
+                                resolveSceneSplitSourceText?.(),
+                            ]);
+                            if (!thisRunSplit && (!trustLiveOnly || sceneSplitSettled)) {
+                                thisRunSplit = pickSplitWithSceneIds([
+                                    resolveScriptOptBeatsContent?.(),
+                                    activeEpisode?.ai_scene_analysis_result,
+                                    activeEpisode?.ai_scene_analysis_adaptation,
+                                ]);
+                            }
                             const thisRunAllowlist = collectThisRunDiagnosticSceneAllowlist(
                                 thisRunSplit,
-                                [],
+                                (trustLiveOnly && !sceneSplitSettled) ? [] : orchestrationCanonicalSceneIdsRef.current,
                                 episodePrefix
                             );
-                            if (trustLiveOnly && thisRunAllowlist.size <= 0) {
+                            // Before this run's global orchestration settles, hide leftover rows.
+                            // Once it is done, a strict-parse miss must not blank the scene table.
+                            if (trustLiveOnly && thisRunAllowlist.size <= 0 && !sceneSplitSettled) {
                                 return [];
                             }
+                            const addLooseSceneStarts = (text) => {
+                                listSceneStartIds(text).forEach((id, index) => add(id, index + 1));
+                            };
                             try {
                                 if (thisRunSplit) {
-                                    parseSceneUnitsFromScriptMarkersText(thisRunSplit).forEach((unit) => {
-                                        addFromText(unit.sceneId, unit.sceneOrder, unit.sceneText);
-                                    });
+                                    const units = parseSceneUnitsFromScriptMarkersText(thisRunSplit);
+                                    if (units.length > 0) {
+                                        units.forEach((unit) => {
+                                            addFromText(unit.sceneId, unit.sceneOrder, unit.sceneText);
+                                        });
+                                    } else {
+                                        addLooseSceneStarts(thisRunSplit);
+                                    }
                                 }
                             } catch (_) {
-                                // Scene-split text may not be marker-wrapped yet.
+                                addLooseSceneStarts(thisRunSplit);
                             }
+                            const liveSubskillResults = String(
+                                latestStage1NodeOutputsRef.current?.scene_subskill_results || ''
+                            ).trim();
                             const subskillMap = parseSceneSubskillResultsMap(
-                                trustLiveOnly && !latestStage1NodeOutputsRef.current?.scene_subskill_results
-                                    ? ''
-                                    : getStageOutputContent('stage1', 'scene_subskill_results')
+                                liveSubskillResults
+                                || (trustLiveOnly ? '' : getStageOutputContent('stage1', 'scene_subskill_results'))
                             );
                             Object.entries(subskillMap).forEach(([id, scene]) => {
                                 if (thisRunAllowlist.size > 0 && !isSceneIdInAllowlist(id, thisRunAllowlist, episodePrefix)) {
@@ -37968,7 +38031,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             })}
                             {diagnosticSceneRows.length <= 0 ? (
                                 <div className="col-span-6 px-1 py-2 text-[10px] text-white/35 border-t border-white/10">
-                                    {t('分场行将在全局统筹完成后出现。', 'Scene rows appear after global orchestration completes.')}
+                                    {sceneSplitState.ready && !sceneSplitState.active
+                                        ? t(
+                                            '全局统筹已完成，但没有解析到场次。请打开全局统筹稿确认 [SCENE_START:场号] 后再重跑。',
+                                            'Global orchestration is done, but no scene ids were found. Check [SCENE_START:id] in that draft, then rerun.'
+                                        )
+                                        : t('分场行将在全局统筹完成后出现。', 'Scene rows appear after global orchestration completes.')}
                                 </div>
                             ) : null}
                         </div>
