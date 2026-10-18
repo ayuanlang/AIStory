@@ -405,13 +405,15 @@ const canonicalizeSceneUnitId = (sceneId, sceneOrder, episodePrefix) => {
     const sid = String(sceneId || '').trim();
     const prefix = String(episodePrefix || 'EP01').trim().toUpperCase();
     const order = Math.max(1, Number(sceneOrder) || 0);
-    const canonicalMatch = sid.match(/^([A-Za-z]+)(\d+)_SC(\d+)([A-Za-z]*)$/i);
+    const canonicalMatch = sid.match(/^([A-Za-z]+)(\d*)_SC(\d+)([A-Za-z]*)$/i);
     if (canonicalMatch) {
         const head = String(canonicalMatch[1] || '').toUpperCase();
+        const headDigits = String(canonicalMatch[2] || '');
         const scNum = String(Number(canonicalMatch[3])).padStart(2, '0');
         const suffix = String(canonicalMatch[4] || '').toUpperCase();
+        if (!headDigits) return `${head}_SC${scNum}${suffix}`;
         if (head === 'EP') return `${prefix}_SC${scNum}${suffix}`;
-        return `${head}${String(Number(canonicalMatch[2])).padStart(2, '0')}_SC${scNum}${suffix}`;
+        return `${head}${String(Number(headDigits)).padStart(2, '0')}_SC${scNum}${suffix}`;
     }
     if (/^\d+$/.test(sid)) return `${prefix}_SC${String(Number(sid)).padStart(2, '0')}`;
     const scMatch = sid.match(/^SC?(\d+)$/i);
@@ -439,7 +441,7 @@ const applyCanonicalSceneIdsToUnits = (units, episodePrefix) => (
 );
 
 const sceneIdHasLetterSuffix = (sceneId) => (
-    /^EP\d+_SC\d+[A-Za-z]+$/i.test(String(sceneId || '').trim())
+    /^[A-Za-z]+\d*_SC\d+[A-Za-z]+$/i.test(String(sceneId || '').trim())
 );
 
 const normalizeSceneIdToken = (value) => (
@@ -449,12 +451,12 @@ const normalizeSceneIdToken = (value) => (
 const deriveSceneOrderFromSceneId = (sceneId) => {
     const sid = String(sceneId || '').trim();
     if (!sid) return null;
-    const suffixMatch = sid.match(/^EP\d+_SC(\d+)[A-Za-z]+$/i);
+    const suffixMatch = sid.match(/^[A-Za-z]+\d*_SC(\d+)[A-Za-z]+$/i);
     if (suffixMatch) {
         const order = Number(suffixMatch[1]);
         return Number.isFinite(order) && order > 0 ? order : null;
     }
-    const canonicalMatch = sid.match(/^EP\d+_SC(\d+)$/i);
+    const canonicalMatch = sid.match(/^[A-Za-z]+\d*_SC(\d+)$/i);
     if (canonicalMatch) {
         const order = Number(canonicalMatch[1]);
         return Number.isFinite(order) && order > 0 ? order : null;
@@ -667,7 +669,7 @@ const findDesignedMainEnvironmentEntity = (entities, envName, preferredEpisodeId
 };
 
 const isCanonicalOrchestrationSceneId = (id) => (
-    /^[A-Za-z]+\d+_SC\d+[A-Za-z]*$/i.test(String(id || '').trim())
+    /^[A-Za-z]+\d*_SC\d+[A-Za-z]*$/i.test(String(id || '').trim())
 );
 
 const storyboardProgressIdentityKey = (marker, item = {}) => {
