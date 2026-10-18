@@ -303,6 +303,9 @@ def audit_piece_count_reconciliation(text: str) -> List[str]:
     issues: List[str] = []
     center_codes: Dict[str, List[str]] = {}
     center_counts: Dict[str, int] = {}
+    center_struck: Dict[str, List[str]] = {}
+    center_moved: Dict[str, int] = {}
+    wall_struck: Dict[str, int] = {}
     for angle, body in cells:
         ledger_at = body.find("件数核销")
         if ledger_at < 0:
@@ -358,6 +361,11 @@ def audit_piece_count_reconciliation(text: str) -> List[str]:
                 issues.append(
                     f"{angle}度格{face}划出名仍写在正文里。"
                 )
+            if face == "中部":
+                center_struck[angle] = struck_codes
+                center_moved[angle] = moved_in
+            elif face != "上":
+                wall_struck[angle] = wall_struck.get(angle, 0) + struck
     if len(center_codes) >= 2:
         union = []
         for codes in center_codes.values():
@@ -366,13 +374,25 @@ def audit_piece_count_reconciliation(text: str) -> List[str]:
                     union.append(code)
         for angle, codes in center_codes.items():
             missing = [code for code in union if code not in codes]
-            if missing:
+            struck_here = center_struck.get(angle, [])
+            unexplained = [code for code in missing if code not in struck_here]
+            if unexplained:
                 issues.append(
-                    f"{angle}度格中部少了{'、'.join(missing)}，邻格已经点名，不能划出。"
+                    f"{angle}度格中部少了{'、'.join(unexplained)}，邻格已经点名，不能划出。"
                 )
     if len(set(center_counts.values())) > 1:
-        detail = "、".join(f"{angle}度={count}" for angle, count in center_counts.items())
-        issues.append(f"四格中部件数不一致：{detail}。")
+        max_count = max(center_counts.values())
+        unexplained_angles = [
+            angle
+            for angle, count in center_counts.items()
+            if max_count - count > 0 and len(center_struck.get(angle, [])) < max_count - count
+        ]
+        if unexplained_angles:
+            detail = "、".join(f"{angle}度={count}" for angle, count in center_counts.items())
+            issues.append(f"四格中部件数不一致：{detail}。")
+    for angle, moved in center_moved.items():
+        if moved > 0 and wall_struck.get(angle, 0) <= 0:
+            issues.append(f"{angle}度格中部改入={moved}，壁上没有划出。")
     return issues
 
 
@@ -864,11 +884,12 @@ def build_consistency_messages(
         "点名+划出等于开篇；中部再减去改入。算式对上还不够。"
         "划出大于 0 必须写划出名，逐个列出本面没有的主体，个数等于划出。"
         "只写划出数字、没有划出名，就是不一致。"
-        "镜头脚停在后壁近面之前。原点与后壁之间的桌、案、椅、凳在镜头脚前面。"
-        "望北写在远离镜头的公案和椅，望南必须写成靠近镜头并点名，禁止划出。"
-        "四格中部件数必须相同，点名的主体是同一批。"
-        "脚停在原点地毯或中岛外沿之外，不把书桌、椅子、屏幕写成镜头脚后方。"
-        "某一格中部点过的主体，另外三格中部仍要点名。少一件就改这一格的正文和件数核销。\n"
+        "镜头脚停在原点主体靠近镜头那一侧外沿之外。两端都大于脚深的，这一格划出，划出名写它。"
+        "一端仍在脚前的书桌、椅子、屏幕不整具划出。"
+        "望北写在远离镜头、仍在脚前的公案和椅，望南必须写成靠近镜头并点名。"
+        "四格中部点名除掉各格脚后划出的，是同一批。划出名没有这具却少了它，就不一致。"
+        "中区原有的件禁止用改入配平。改入大于 0 时，某一壁必须同时划出。"
+        "心点重合的地面和台上的台各自点名，台不铺满。\n"
         "长街：地面一条至少是另一条两倍时，长轴两端的坊、门、露台是街端。"
         "顺着长边，街端是正面，左右对齐，两端一样远，禁止没有实墙，禁止用天际代替。"
         "靠近镜头这一头是路面短边，禁止写成短头或一扇门。"

@@ -174,7 +174,7 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "个数" in system
     assert "件数核销" in system
     assert "划出名" in system
-    assert "四格中部件数必须相同" in system
+    assert "脚后划出" in system
     assert "街端" in system
     assert "禁止一头近" in system
     assert "城墙衔接" in system
@@ -262,7 +262,7 @@ def test_piece_count_ledger_blocks_a_consistent_verdict():
     assert any("四格中部件数不一致" in item for item in issues)
 
 
-def test_center_count_rejects_desk_hidden_behind_camera():
+def test_center_count_accepts_foot_depth_strike_when_named():
     quad = """【四向拼图】
 [0度格-左上·北]
 中部：件数=1。[@地毯]（F-001）。[@书桌]（M-001）在镜头脚后方，镜后整包不入画。
@@ -278,8 +278,27 @@ def test_center_count_rejects_desk_hidden_behind_camera():
 件数核销：正面点名=0开篇=0划出=0划出名=无｜左侧面点名=0开篇=0划出=0划出名=无｜右侧面点名=0开篇=0划出=0划出名=无｜中部点名=2开篇=2划出=0改入=0划出名=无｜上点名=0开篇=0划出=0划出名=无。
 """
     issues = audit_piece_count_reconciliation(quad)
-    assert any("0度格中部少了M-001" in item for item in issues)
-    assert any("四格中部件数不一致" in item for item in issues)
+    assert not any("0度格中部少了M-001" in item for item in issues)
+    assert not any("四格中部件数不一致" in item for item in issues)
+
+
+def test_center_moved_in_requires_a_wall_strike():
+    quad = """【四向拼图】
+[0度格-左上·北]
+中部：件数=2。[@地毯]（F-001）。[@机组]（M-001）。
+件数核销：正面点名=0开篇=0划出=0划出名=无｜左侧面点名=0开篇=0划出=0划出名=无｜右侧面点名=0开篇=0划出=0划出名=无｜中部点名=2开篇=1划出=0改入=1划出名=无｜上点名=0开篇=0划出=0划出名=无。
+[90度格-右上·东]
+中部：件数=2。[@地毯]（F-001）。[@机组]（M-001）。
+件数核销：正面点名=0开篇=0划出=0划出名=无｜左侧面点名=0开篇=0划出=0划出名=无｜右侧面点名=0开篇=0划出=0划出名=无｜中部点名=2开篇=2划出=0改入=0划出名=无｜上点名=0开篇=0划出=0划出名=无。
+[180度格-左下·南]
+中部：件数=2。[@地毯]（F-001）。[@机组]（M-001）。
+件数核销：正面点名=0开篇=0划出=0划出名=无｜左侧面点名=0开篇=0划出=0划出名=无｜右侧面点名=0开篇=0划出=0划出名=无｜中部点名=2开篇=2划出=0改入=0划出名=无｜上点名=0开篇=0划出=0划出名=无。
+[270度格-右下·西]
+中部：件数=2。[@地毯]（F-001）。[@机组]（M-001）。
+件数核销：正面点名=0开篇=0划出=0划出名=无｜左侧面点名=0开篇=0划出=0划出名=无｜右侧面点名=0开篇=0划出=0划出名=无｜中部点名=2开篇=2划出=0改入=0划出名=无｜上点名=0开篇=0划出=0划出名=无。
+"""
+    issues = audit_piece_count_reconciliation(quad)
+    assert any("0度格中部改入=1，壁上没有划出" in item for item in issues)
 
 
 def test_street_end_rejects_near_depth_and_short_head():
