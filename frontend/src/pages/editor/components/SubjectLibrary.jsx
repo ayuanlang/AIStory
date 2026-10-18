@@ -28,7 +28,11 @@ import {
     isGridCropDerivedEntity,
     assetCardIntro,
     isMainEnvironmentEntity,
+    planDerivedGridCell,
     planDerivedGridRegen,
+    QUAD_CELL_POSITIONS,
+    readQuadCellImages,
+    singleCellEditInstruction,
     mainEnvironmentDesignDescription,
     withMainEnvironmentOpening,
     quadImagePrompt,
@@ -1374,6 +1378,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const subjectImageJobPollTokenRef = useRef(0);
     const recentlyCompletedSubjectImageUrlsRef = useRef({});
     const allEntitiesRef = useRef([]);
+    const onMainEnvironmentImageReadyRef = useRef(null);
+    const quadCellStoreRef = useRef(new Map());
+    const quadCellInflightRef = useRef({});
     const loadEntitiesRef = useRef(async () => []);
     const RECENT_SUBJECT_IMAGE_URL_TTL_MS = 1000 * 60 * 10;
     const subjectImageJobTerminalLogRef = useRef(new Set());
@@ -3219,6 +3226,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             return String(currentEntry?.jobId || '').trim() === stableExpectedJobId ? currentEntry : null;
         };
 
+        const notifyMainEnvironmentImage = (entityId, imageUrl) => {
+            const notify = onMainEnvironmentImageReadyRef.current;
+            if (typeof notify !== 'function') return;
+            void Promise.resolve(notify(entityId, imageUrl)).catch((error) => {
+                console.warn('main environment quad crop failed', error);
+            });
+        };
+
         const pollOnce = async () => {
             if (disposed || subjectImageJobPollingRef.current) return;
             subjectImageJobPollingRef.current = true;
@@ -3365,6 +3380,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                 onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
                             }
                             refreshSubjectAssetsAfterImageCompletion(entityId);
+                            notifyMainEnvironmentImage(entityId, recoveredUrl);
                             continue;
                         }
 
@@ -3455,6 +3471,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                 onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
                             }
                             refreshSubjectAssetsAfterImageCompletion(entityId);
+                            notifyMainEnvironmentImage(entityId, recoveredUrl);
                             continue;
                         }
 
@@ -7089,6 +7106,113 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return url;
     }, [uploadAsset]);
 
+    const persistMainEnvironmentQuadCells = useCallback(async (mainEntity, imageUrl) => {
+        const sourceUrl = String(imageUrl || mainEntity?.image_url || '').trim();
+        const mainId = String(mainEntity?.id || '').trim();
+        if (!mainId || mainId === 'new' || !sourceUrl) return null;
+        const cacheKey = `${mainId}::${sourceUrl}`;
+        const inflight = quadCellInflightRef.current[cacheKey];
+        if (inflight) return inflight;
+        const job = (async () => {
+            const cached = quadCellStoreRef.current.get(cacheKey);
+            if (cached && QUAD_CELL_POSITIONS.every((position) => cached[position])) return cached;
+            const stored = readQuadCellImages(mainEntity, sourceUrl);
+            if (stored && QUAD_CELL_POSITIONS.every((position) => stored[position])) {
+                quadCellStoreRef.current.set(cacheKey, stored);
+                return stored;
+            }
+            const mainName = mainEntity?.name || mainEntity?.name_en || mainId;
+            onLog?.(
+                t(
+                    `正在把主环境四宫格裁成四张并保存：${mainName}`,
+                    `Cropping the main-environment four-grid into four images: ${mainName}`
+                ),
+                'process'
+            );
+            const entries = await Promise.all(QUAD_CELL_POSITIONS.map(async (position) => {
+                const url = await cropMainEnvironmentGridCell(sourceUrl, position);
+                return [position, url];
+            }));
+            const cells = Object.fromEntries(entries);
+            const saved = await updateEntity(mainId, {
+                quad_cell_images: { source_url: sourceUrl, cells },
+            });
+            quadCellStoreRef.current.set(cacheKey, cells);
+            const nextAttrs = {
+                ...parseEntityCustomAttributes(mainEntity),
+                ...(saved?.custom_attributes && typeof saved.custom_attributes === 'object' ? saved.custom_attributes : {}),
+                quad_cell_images: { source_url: sourceUrl, cells },
+            };
+            applyEntityLocalPatch(mainId, { custom_attributes: nextAttrs, image_url: sourceUrl });
+            allEntitiesRef.current = (allEntitiesRef.current || []).map((item) => (
+                String(item?.id) === mainId
+                    ? { ...item, image_url: sourceUrl, custom_attributes: nextAttrs }
+                    : item
+            ));
+            onLog?.(
+                t(
+                    `已保存四张宫格：${mainName}`,
+                    `Saved the four grid cells: ${mainName}`
+                ),
+                'success'
+            );
+            return cells;
+        })();
+        quadCellInflightRef.current[cacheKey] = job;
+        try {
+            return await job;
+        } finally {
+            if (quadCellInflightRef.current[cacheKey] === job) {
+                delete quadCellInflightRef.current[cacheKey];
+            }
+        }
+    }, [applyEntityLocalPatch, cropMainEnvironmentGridCell, onLog, t]);
+
+    const ensureMainQuadCellUrl = useCallback(async (mainEntity, position, sourceUrl) => {
+        const stablePosition = String(position || '').trim();
+        const stableSource = String(sourceUrl || mainEntity?.image_url || '').trim();
+        const mainId = String(mainEntity?.id || '').trim();
+        if (!stablePosition || !stableSource || !mainId) return '';
+        const cacheKey = `${mainId}::${stableSource}`;
+        const cached = quadCellStoreRef.current.get(cacheKey);
+        if (cached?.[stablePosition]) return cached[stablePosition];
+        const stored = readQuadCellImages(mainEntity, stableSource);
+        if (stored?.[stablePosition]) {
+            quadCellStoreRef.current.set(cacheKey, { ...(cached || {}), ...stored });
+            return stored[stablePosition];
+        }
+        onLog?.(
+            t(
+                `缺少${stablePosition}宫格文件，正在重新裁剪并保存。`,
+                `The ${stablePosition} grid file is missing. Cropping and saving it again.`
+            ),
+            'process'
+        );
+        const cells = await persistMainEnvironmentQuadCells(
+            { ...mainEntity, image_url: stableSource },
+            stableSource
+        );
+        return String(cells?.[stablePosition] || '').trim();
+    }, [onLog, persistMainEnvironmentQuadCells, t]);
+
+    onMainEnvironmentImageReadyRef.current = async (entityId, imageUrl) => {
+        const stableId = String(entityId || '').trim();
+        const sourceUrl = String(imageUrl || '').trim();
+        if (!stableId || !sourceUrl) return null;
+        const entity = (allEntitiesRef.current || []).find((item) => String(item?.id) === stableId);
+        if (!entity || !isMainEnvironmentEntity(entity)) return null;
+        try {
+            return await persistMainEnvironmentQuadCells({ ...entity, image_url: sourceUrl }, sourceUrl);
+        } catch (error) {
+            const detail = error?.response?.data?.detail || error?.message || t('未知错误', 'Unknown error');
+            onLog?.(
+                t(`主环境四宫裁剪失败：${detail}`, `Failed to crop the main-environment grid: ${detail}`),
+                'warning'
+            );
+            return null;
+        }
+    };
+
     const gridRegenPromptFor = (entity, plan) => {
         const entityId = String(entity?.id || '').trim();
         const draft = entityId && Object.prototype.hasOwnProperty.call(gridRegenPromptDrafts, entityId)
@@ -7230,12 +7354,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         ) ? entityOverride : null;
         const targetEntity = overrideEntity || selectedEntity;
         const regenRequested = derivedImageGenMode === 'regen' && isGridCropDerivedEntity(targetEntity);
-        if (!regenRequested) {
+        const cropRequested = derivedImageGenMode === 'crop' && isGridCropDerivedEntity(targetEntity);
+        if (!regenRequested && !cropRequested) {
             if (overrideEntity) {
                 await handleGenerate(overrideEntity, null, getEntityPromptByLang(overrideEntity, effectivePromptSubmitLang));
             } else {
                 await handleGenerate();
             }
+            return;
+        }
+        if (cropRequested) {
+            if (gridRegenPreparing || generating || subjectImageJobs[String(targetEntity?.id || '')]) return;
+            await generateDerivedEnvironmentFromCell(targetEntity);
             return;
         }
         const plan = planOverride || planDerivedGridRegen(targetEntity, allEntities);
@@ -7262,9 +7392,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 ),
                 'process'
             );
-            const cropUrl = await cropMainEnvironmentGridCell(
-                plan.mainEntity.image_url,
-                plan.position
+            const cropUrl = await ensureMainQuadCellUrl(
+                plan.mainEntity,
+                plan.position,
+                plan.mainEntity.image_url
             );
             const refs = [cropUrl];
             if (!options?.skipManualRef && refImage?.url) refs.push(refImage.url);
@@ -7343,9 +7474,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
     };
 
-    const submitAssetQualityRegen = async (entity) => {
+    const ASSET_QUALITY_REGEN_PROMPT = '以参考图为唯一依据，只提高分辨率和清晰度，重新输出同一张图。主体、姿态、表情、服装、道具、环境、文字、颜色、光影、构图和所有细节都保持与参考图一致。不新增、不删除、不替换、不改写任何内容。';
+
+    const submitAssetQualityRegen = async (entity, options = null) => {
         const target = entity || viewingEntity;
-        const sourceUrl = String(target?.image_url || '').trim();
+        const sourceUrl = String(options?.sourceUrl || target?.image_url || '').trim();
         if (!target || !sourceUrl) {
             showSubjectNotification(
                 t('还没有原图，无法提质重生。', 'There is no source image to enhance.'),
@@ -7355,7 +7488,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
         const currentSize = getEpisodePreferredImageSize(currentEpisode?.episode_info || {});
         const nextSize = bumpImageSizeOption(currentSize);
-        const fidelityPrompt = '以参考图为唯一依据，只提高分辨率和清晰度，重新输出同一张图。主体、姿态、表情、服装、道具、环境、文字、颜色、光影、构图和所有细节都保持与参考图一致。不新增、不删除、不替换、不改写任何内容。';
+        const fidelityPrompt = ASSET_QUALITY_REGEN_PROMPT;
         if (onLog) {
             onLog(
                 t(`正在提质重生，分辨率提升到 ${nextSize}，画面内容保持不变。`, `Enhancing the current image to ${nextSize} without changing its content.`),
@@ -7385,13 +7518,58 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const own = String(entity?.image_url || '').trim();
         if (isMainEnvironmentEntity(entity)) return own;
         if (!isGridCropDerivedEntity(entity)) return own;
-        const plan = planDerivedGridRegen(entity, allEntities);
+        const plan = planDerivedGridCell(entity, allEntities);
         if (!plan?.ok) {
             throw new Error(derivedGridRegenErrorText(plan?.errorCode));
         }
         const mainUrl = String(plan.mainEntity?.image_url || '').trim();
         if (own && mainUrl && own !== mainUrl) return own;
-        return cropMainEnvironmentGridCell(mainUrl, plan.position);
+        return ensureMainQuadCellUrl(plan.mainEntity, plan.position, mainUrl);
+    };
+
+    const absorbEnvironmentConsistencyResult = (entity, result) => {
+        const entityId = String(entity?.id || '').trim();
+        const rows = Array.isArray(result?.updated) ? result.updated : [];
+        rows.forEach((row) => {
+            const rowId = String(row?.id || '').trim();
+            if (!rowId) return;
+            const patch = {};
+            if (typeof row.generation_prompt_cn === 'string') patch.generation_prompt_cn = row.generation_prompt_cn;
+            if (typeof row.description === 'string') patch.description = row.description;
+            if (row.custom_attributes && typeof row.custom_attributes === 'object') {
+                patch.custom_attributes = row.custom_attributes;
+                if (Object.prototype.hasOwnProperty.call(row.custom_attributes, 'grid_regen_prompt')) {
+                    setGridRegenPromptDrafts((prev) => ({
+                        ...prev,
+                        [rowId]: String(row.custom_attributes.grid_regen_prompt || ''),
+                    }));
+                }
+            }
+            applyEntityLocalPatch(rowId, patch);
+            if (typeof row.generation_prompt_cn === 'string' && String(selectedEntity?.id) === rowId) {
+                setPrompt(row.generation_prompt_cn);
+                setPromptDrafts((prev) => ({ ...prev, cn: row.generation_prompt_cn }));
+            }
+        });
+        const summary = String(result?.summary || '').trim();
+        const targets = Array.isArray(result?.updated_targets) ? result.updated_targets.filter(Boolean) : [];
+        const imageEditInstruction = String(result?.image_edit_instruction || '').trim();
+        const selfRow = rows.find((row) => String(row?.id || '') === entityId);
+        const nextEntity = selfRow
+            ? {
+                ...entity,
+                ...(typeof selfRow.generation_prompt_cn === 'string' ? { generation_prompt_cn: selfRow.generation_prompt_cn } : {}),
+                ...(typeof selfRow.description === 'string' ? { description: selfRow.description } : {}),
+                ...(selfRow.custom_attributes && typeof selfRow.custom_attributes === 'object' ? { custom_attributes: selfRow.custom_attributes } : {}),
+            }
+            : entity;
+        return {
+            summary,
+            targets,
+            imageEditInstruction,
+            nextEntity,
+            consistent: Boolean(result?.consistent),
+        };
     };
 
     const handleEnvironmentConsistencyCheck = async (entity) => {
@@ -7426,40 +7604,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
         try {
             const result = await checkEnvironmentImageConsistency(entityId, { prompt, note, imageUrl: referenceImageUrl });
-            const rows = Array.isArray(result?.updated) ? result.updated : [];
-            rows.forEach((row) => {
-                const rowId = String(row?.id || '').trim();
-                if (!rowId) return;
-                const patch = {};
-                if (typeof row.generation_prompt_cn === 'string') patch.generation_prompt_cn = row.generation_prompt_cn;
-                if (typeof row.description === 'string') patch.description = row.description;
-                if (row.custom_attributes && typeof row.custom_attributes === 'object') {
-                    patch.custom_attributes = row.custom_attributes;
-                    if (Object.prototype.hasOwnProperty.call(row.custom_attributes, 'grid_regen_prompt')) {
-                        setGridRegenPromptDrafts((prev) => ({
-                            ...prev,
-                            [rowId]: String(row.custom_attributes.grid_regen_prompt || ''),
-                        }));
-                    }
-                }
-                applyEntityLocalPatch(rowId, patch);
-                if (typeof row.generation_prompt_cn === 'string' && String(selectedEntity?.id) === rowId) {
-                    setPrompt(row.generation_prompt_cn);
-                    setPromptDrafts((prev) => ({ ...prev, cn: row.generation_prompt_cn }));
-                }
-            });
-            const summary = String(result?.summary || '').trim();
-            const targets = Array.isArray(result?.updated_targets) ? result.updated_targets.filter(Boolean) : [];
-            const imageEditInstruction = String(result?.image_edit_instruction || '').trim();
-            const selfRow = rows.find((row) => String(row?.id || '') === entityId);
-            const nextEntity = selfRow
-                ? {
-                    ...entity,
-                    ...(typeof selfRow.generation_prompt_cn === 'string' ? { generation_prompt_cn: selfRow.generation_prompt_cn } : {}),
-                    ...(typeof selfRow.description === 'string' ? { description: selfRow.description } : {}),
-                    ...(selfRow.custom_attributes && typeof selfRow.custom_attributes === 'object' ? { custom_attributes: selfRow.custom_attributes } : {}),
-                }
-                : entity;
+            const absorbed = absorbEnvironmentConsistencyResult(entity, result);
+            const { summary, targets, imageEditInstruction, nextEntity } = absorbed;
             if (!imageEditInstruction) {
                 const text = result?.consistent
                     ? (summary || t('图片与主环境开篇一致，不用改图。', 'The image matches the main-environment opening, so no edit is needed.'))
@@ -7477,6 +7623,136 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             const message = consistencyDetailText(error);
             setEnvironmentConsistency({ entityId, running: false, text: message, tone: 'error' });
             showSubjectNotification(message, 'error');
+        }
+    };
+
+    const generateDerivedEnvironmentFromCell = async (entity, options = null) => {
+        const waitForImage = Boolean(options?.waitForImage);
+        const entities = options?.entities || allEntitiesRef.current || allEntities;
+        const plan = options?.plan?.ok ? options.plan : planDerivedGridCell(entity, entities);
+        const entityId = String(entity?.id || '').trim();
+        const entityName = entity?.name || entity?.name_en || entityId;
+        if (!plan?.ok) {
+            const message = derivedGridRegenErrorText(plan?.errorCode);
+            if (!waitForImage) showSubjectNotification(message, 'warning');
+            return waitForImage
+                ? { skippedGridRegen: true, cropPipeline: true, regenErrorCode: plan?.errorCode || 'unavailable' }
+                : { ok: false, errorCode: plan?.errorCode };
+        }
+        const prompt = String(entity?.generation_prompt_cn || '').trim();
+        if (!prompt) {
+            const message = t('没有可对照的生成提示词。', 'There is no generation prompt to compare.');
+            if (!waitForImage) showSubjectNotification(message, 'warning');
+            return waitForImage ? { skippedPrompt: true } : { ok: false };
+        }
+        const mainUrl = String(plan.mainEntity?.image_url || '').trim();
+        if (!waitForImage) setGridRegenPreparing(true);
+        try {
+            const cropUrl = await ensureMainQuadCellUrl(plan.mainEntity, plan.position, mainUrl);
+            if (!cropUrl) {
+                throw new Error(t('对应宫格没有裁出来。', 'The matching grid cell could not be cropped.'));
+            }
+            onLog?.(
+                t(
+                    `正在用裁出的${plan.grid || plan.position}做一致性检查：${entityName}`,
+                    `Checking ${entityName} against the cropped ${plan.grid || plan.position}.`
+                ),
+                'process'
+            );
+            if (!waitForImage) setEnvironmentConsistency({ entityId, running: true, text: '', tone: '' });
+            const result = await checkEnvironmentImageConsistency(entityId, { prompt, imageUrl: cropUrl });
+            const absorbed = absorbEnvironmentConsistencyResult(entity, result);
+            const instruction = absorbed.imageEditInstruction;
+            if (!waitForImage) {
+                if (instruction) {
+                    const text = absorbed.summary || t('已按差异生成改图指令，正在局部修改图片。', 'Built an edit instruction from the differences and started a local image edit.');
+                    setAdvancedInstruction(singleCellEditInstruction(instruction));
+                    setEnvironmentConsistency({ entityId, running: false, text, tone: 'changed' });
+                    showSubjectNotification(text, 'success');
+                    await handleGenerate(
+                        absorbed.nextEntity,
+                        [{ url: cropUrl, type: 'image', weight: 0.8 }],
+                        singleCellEditInstruction(instruction),
+                        { aspect_ratio: '16:9' },
+                        { preserveStoredPrompt: true, imageEditOnly: true }
+                    );
+                    return { ok: true, mode: 'edit' };
+                }
+                const text = absorbed.consistent
+                    ? (absorbed.summary || t('图片与主环境开篇一致，不用改图，正在提质重生。', 'The image matches the opening, so no edit is needed. Enhancing it.'))
+                    : `${absorbed.summary || t('图片本身不用改，正在提质重生。', 'The image does not need an edit. Enhancing it.')}${absorbed.targets.length ? `（${absorbed.targets.join('、')}）` : ''}`;
+                setEnvironmentConsistency({ entityId, running: false, text, tone: absorbed.consistent ? 'ok' : 'changed' });
+                showSubjectNotification(text, 'success');
+                await submitAssetQualityRegen(absorbed.nextEntity, { sourceUrl: cropUrl });
+                return { ok: true, mode: 'enhance' };
+            }
+            onLog?.(
+                instruction
+                    ? t(`一致性检查要求局部修改：${entityName}`, `Consistency check requested a local edit: ${entityName}`)
+                    : t(`一致性检查无需修改，正在提质重生：${entityName}`, `Consistency check needs no edit. Enhancing: ${entityName}`),
+                'process'
+            );
+            const currentSize = getEpisodePreferredImageSize(currentEpisode?.episode_info || {});
+            const nextSize = instruction ? currentSize : bumpImageSizeOption(currentSize);
+            let promptToSend = instruction
+                ? singleCellEditInstruction(instruction)
+                : ASSET_QUALITY_REGEN_PROMPT;
+            let negativePrompt = '';
+            if (!instruction) {
+                const built = buildEntityImageGenerationPrompts(promptToSend, promptToSend, entity, entities);
+                promptToSend = built.prompt;
+                negativePrompt = built.negative_prompt;
+            }
+            const res = await generateImage(promptToSend, null, [cropUrl], {
+                function_name: 'generate_subjects_i2i',
+                project_id: projectId,
+                episode_id: currentEpisode?.id,
+                entity_id: entity?.id,
+                entity_name: entityName,
+                subject_name: entityName,
+                subject_type: entity?.type,
+                entity_type: entity?.type,
+                prompt_language: resolvedPromptSubmitLang,
+                asset_type: 'subject',
+                aspect_ratio: '16:9',
+                negative_prompt: negativePrompt,
+                ...(nextSize ? { image_size: nextSize } : {}),
+                ...(options?.shouldCancel ? { shouldCancel: options.shouldCancel, parallel_limit_poll_ms: 60_000 } : {}),
+                ...(options?.onJobCreated ? { on_job_created: options.onJobCreated } : {}),
+            });
+            if (options?.shouldCancel?.()) return { entity, stopped: true };
+            const generatedImageUrl = extractImageJobResultUrl(res);
+            let resolvedImageUrl = String(generatedImageUrl || '').trim();
+            if (!resolvedImageUrl) throw new Error('Generated result missing image URL');
+            if (isEphemeralProviderMediaUrl(resolvedImageUrl)) {
+                onLog?.(
+                    t(
+                        `衍生环境返回了临时图片地址，正在等待稳定图片入库：${entityName}`,
+                        `The derived environment returned a temporary image URL; waiting for a durable image: ${entityName}`
+                    ),
+                    'process'
+                );
+                resolvedImageUrl = await awaitPersistedSubjectEntityImage(entity.id, {
+                    initialUrl: resolvedImageUrl,
+                    entityName,
+                });
+                if (!resolvedImageUrl) throw new Error('Timed out waiting for durable subject image URL');
+            }
+            await updateEntity(entity.id, { image_url: resolvedImageUrl });
+            return {
+                entity,
+                updatedEnt: { ...absorbed.nextEntity, image_url: resolvedImageUrl },
+                imageUrl: resolvedImageUrl,
+            };
+        } catch (error) {
+            if (waitForImage) throw error;
+            const message = consistencyDetailText(error);
+            setEnvironmentConsistency({ entityId, running: false, text: message, tone: 'error' });
+            showSubjectNotification(message, 'error');
+            onLog?.(t(`衍生环境宫格检查失败：${message}`, `Derived grid check failed: ${message}`), 'error');
+            return { ok: false };
+        } finally {
+            if (!waitForImage && isMountedRef.current) setGridRegenPreparing(false);
         }
     };
 
@@ -8082,9 +8358,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         });
 
         const gridRegenReadiness = (ent) => {
-            if (derivedImageGenMode !== 'regen' || !isGridCropDerivedEntity(ent)) return { state: 'plain' };
-            const plan = planDerivedGridRegen(ent, entitiesWithLatestImages());
-            if (plan?.ok) return { state: 'ready', plan };
+            if (!isGridCropDerivedEntity(ent)) return { state: 'plain' };
+            const latestEntities = entitiesWithLatestImages();
+            if (derivedImageGenMode === 'regen') {
+                const plan = planDerivedGridRegen(ent, latestEntities);
+                if (plan?.ok) return { state: 'ready', plan };
+                if (plan?.errorCode === 'missing_main_image') {
+                    const label = String(plan.mainName || plan.mainEntity?.name || '主环境').trim();
+                    return { state: 'waiting', missingLabels: label ? [label] : [] };
+                }
+                return { state: 'blocked', errorCode: plan?.errorCode || 'unavailable' };
+            }
+            if (derivedImageGenMode !== 'crop') return { state: 'plain' };
+            const plan = planDerivedGridCell(ent, latestEntities);
+            if (plan?.ok) return { state: 'crop', plan };
             if (plan?.errorCode === 'missing_main_image') {
                 const label = String(plan.mainName || plan.mainEntity?.name || '主环境').trim();
                 return { state: 'waiting', missingLabels: label ? [label] : [] };
@@ -8129,8 +8416,34 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     return {
                         entity,
                         skippedGridRegen: true,
+                        cropPipeline: derivedImageGenMode === 'crop',
                         regenErrorCode: regenReadiness.errorCode,
                     };
+                }
+                if (regenReadiness.state === 'crop') {
+                    let createdJobId = '';
+                    try {
+                        return await generateDerivedEnvironmentFromCell(entity, {
+                            waitForImage: true,
+                            plan: regenReadiness.plan,
+                            entities: entitiesWithLatestImages(),
+                            shouldCancel: shouldStopBatchGenerate,
+                            onJobCreated: (jobId) => {
+                                const stableJobId = String(jobId || '').trim();
+                                if (!stableJobId) return;
+                                createdJobId = stableJobId;
+                                if (shouldStopBatchGenerate()) {
+                                    void stopGenerationJob('image', stableJobId, { force: true });
+                                    return;
+                                }
+                                trackSubjectBatchImageJob('generate', entity, stableJobId);
+                            },
+                        });
+                    } finally {
+                        if (createdJobId) {
+                            untrackSubjectBatchImageJob('generate', entity?.id);
+                        }
+                    }
                 }
                 const epInfo = currentEpisode?.episode_info || {};
                 const preferredImageSize = getEpisodePreferredImageSize(epInfo);
@@ -8217,7 +8530,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         ),
                         'process'
                     );
-                    const cropUrl = await cropMainEnvironmentGridCell(mainUrl, regenPlan.position);
+                    const cropUrl = await ensureMainQuadCellUrl(
+                        { ...regenPlan.mainEntity, image_url: mainUrl },
+                        regenPlan.position,
+                        mainUrl
+                    );
                     uniqueRefs = [cropUrl, ...uniqueRefs.filter((url) => url !== cropUrl)];
                 }
 
@@ -8301,6 +8618,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     }
 
                     await updateEntity(entity.id, { image_url: resolvedImageUrl });
+                    if (isMainEnvironmentEntity(entity)) {
+                        try {
+                            await persistMainEnvironmentQuadCells({ ...entity, image_url: resolvedImageUrl }, resolvedImageUrl);
+                        } catch (cropErr) {
+                            const detail = cropErr?.response?.data?.detail || cropErr?.message || t('未知错误', 'Unknown error');
+                            onLog?.(
+                                t(`主环境四宫裁剪失败：${detail}`, `Failed to crop the main-environment grid: ${detail}`),
+                                'warning'
+                            );
+                        }
+                    }
                     return {
                         entity,
                         updatedEnt: { ...entity, image_url: resolvedImageUrl },
@@ -8514,8 +8842,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             clearLocalSubjectImageJobState(entity.id);
                             onLog?.(
                                 t(
-                                    `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 无法重生修正。${derivedGridRegenErrorText(settledTask.value?.regenErrorCode)}`,
-                                    `Batch image generation skipped: ${entity?.name || entity?.name_en || entity?.id} cannot use grid regen. ${derivedGridRegenErrorText(settledTask.value?.regenErrorCode)}`
+                                    `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} ${settledTask.value?.cropPipeline ? '无法按宫格裁剪' : '无法重生修正'}。${derivedGridRegenErrorText(settledTask.value?.regenErrorCode)}`,
+                                    `Batch image generation skipped: ${entity?.name || entity?.name_en || entity?.id} ${settledTask.value?.cropPipeline ? 'has no saved grid cell' : 'cannot use grid regen'}. ${derivedGridRegenErrorText(settledTask.value?.regenErrorCode)}`
                                 ),
                                 'warning'
                             );
@@ -8686,8 +9014,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         clearLocalSubjectImageJobState(entity.id);
                         onLog?.(
                             t(
-                                `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 无法重生修正。${derivedGridRegenErrorText(regenReadiness.errorCode)}`,
-                                `Batch image generation skipped: ${entity?.name || entity?.name_en || entity?.id} cannot use grid regen. ${derivedGridRegenErrorText(regenReadiness.errorCode)}`
+                                `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} ${derivedImageGenMode === 'crop' ? '无法按宫格裁剪' : '无法重生修正'}。${derivedGridRegenErrorText(regenReadiness.errorCode)}`,
+                                `Batch image generation skipped: ${entity?.name || entity?.name_en || entity?.id} ${derivedImageGenMode === 'crop' ? 'has no saved grid cell' : 'cannot use grid regen'}. ${derivedGridRegenErrorText(regenReadiness.errorCode)}`
                             ),
                             'warning'
                         );
@@ -8733,7 +9061,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 }
                 if (skippedGridRegenCount > 0) {
                     summaryParts.push(
-                        t(`跳过 ${skippedGridRegenCount} 个无法重生修正项`, `skipped ${skippedGridRegenCount} item(s) that could not use grid regen`)
+                        t(`跳过 ${skippedGridRegenCount} 个无法按宫格处理的项`, `skipped ${skippedGridRegenCount} item(s) that could not use a grid cell`)
                     );
                 }
                 if (failedAttemptCount > 0) {
@@ -10473,7 +10801,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                     <p className="text-[11px] leading-relaxed text-white/60">
                                                         {derivedImageGenMode === 'regen'
                                                             ? t('下面是提交给生图模型的重生修正提示词，可直接修改。离开输入框或点保存后写入该衍生环境，裁剪宫格仍用原来的资产提示词。', 'The text below is the regen prompt sent to the image model. Edit it, then leave the field or click Save. Crop mode still uses the original asset prompt.')
-                                                            : t('按当前提示词截取主环境四向拼图里的对应宫格。', 'Crop the matching cell from the main environment four-grid using the current prompt.')}
+                                                            : t('用已保存的对应宫格做一致性检查。没有这张图就重新裁剪并保存。要改的做局部修改，不用改的直接提质重生。', 'Check the saved matching cell. If that file is missing, crop and save it again. Edit locally when a change is required; otherwise enhance the cell.')}
                                                     </p>
                                                     {renderDerivedGridRegenEditor(viewingEntity, viewingGridRegenPlan)}
                                                 </div>
@@ -11390,7 +11718,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                 <p className="text-[11px] leading-relaxed text-white/60">
                                                     {derivedImageGenMode === 'regen'
                                                         ? t('下面是提交给生图模型的重生修正提示词，可直接修改。离开输入框或点保存后写入该衍生环境，裁剪宫格仍用原来的资产提示词。', 'The text below is the regen prompt sent to the image model. Edit it, then leave the field or click Save. Crop mode still uses the original asset prompt.')
-                                                        : t('按当前提示词截取主环境四向拼图里的对应宫格。', 'Crop the matching cell from the main environment four-grid using the current prompt.')}
+                                                        : t('用已保存的对应宫格做一致性检查。没有这张图就重新裁剪并保存。要改的做局部修改，不用改的直接提质重生。', 'Check the saved matching cell. If that file is missing, crop and save it again. Edit locally when a change is required; otherwise enhance the cell.')}
                                                 </p>
                                                 {renderDerivedGridRegenEditor(selectedEntity, derivedGridRegenPlan)}
                                             </div>

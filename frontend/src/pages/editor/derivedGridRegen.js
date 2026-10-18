@@ -155,6 +155,42 @@ export function gridCellBody(cellPrompt) {
     return String(cellPrompt || '').replace(/^\[[^\]]*\]\s*/, '').trim();
 }
 
+export const QUAD_CELL_POSITIONS = ['左上', '右上', '左下', '右下'];
+export const QUAD_CELL_IMAGES_ATTR = 'quad_cell_images';
+
+export function readQuadCellImages(entity, sourceUrl = '') {
+    const record = readAttrs(entity)[QUAD_CELL_IMAGES_ATTR];
+    if (!record || typeof record !== 'object') return null;
+    const storedSource = String(record.source_url || '').trim();
+    const wanted = String(sourceUrl || '').trim();
+    if (wanted && storedSource && storedSource !== wanted) return null;
+    const cells = record.cells && typeof record.cells === 'object' ? record.cells : null;
+    if (!cells) return null;
+    const saved = {};
+    QUAD_CELL_POSITIONS.forEach((position) => {
+        const url = String(cells[position] || '').trim();
+        if (url) saved[position] = url;
+    });
+    return saved;
+}
+
+const QUAD_EDIT_LOCKS = [
+    '只改这一格里点名的这一处。另外三格、格线、角标、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。',
+    '其余格子、格线、角标、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。',
+];
+
+export function singleCellEditInstruction(instruction) {
+    let text = String(instruction || '').trim();
+    QUAD_EDIT_LOCKS.forEach((lock) => {
+        text = text.split(lock).join('');
+    });
+    text = text.replace(/\n{3,}/g, '\n\n').trim();
+    if (!text) return '';
+    const prefix = '这张参考图是已经裁出的单格画面，不是四宫整图。只改这一张图里点名的地方，其余保持原图。不要把另外三格画回来。';
+    if (text.includes('已经裁出的单格画面')) return text;
+    return `${prefix}\n${text}`;
+}
+
 export function gridCropPixels(width, height, position) {
     const sourceWidth = Math.max(0, Math.round(Number(width) || 0));
     const sourceHeight = Math.max(0, Math.round(Number(height) || 0));
@@ -426,6 +462,32 @@ export function buildDerivedGridRegenPrompt({ mainName, grid, cellPrompt, mainPr
         '',
         [locating, subjects, color, quad].filter(Boolean).join('\n\n'),
     ].join('\n');
+}
+
+export function planDerivedGridCell(entity, entities) {
+    if (!isGridCropDerivedEntity(entity)) return { ok: false, errorCode: 'not_grid_crop' };
+    const angle = resolveDerivedViewAngle(entity);
+    if (angle == null) return { ok: false, errorCode: 'missing_angle' };
+    const mainEntity = findOwningMainEnvironment(entity, entities);
+    if (!mainEntity) return { ok: false, errorCode: 'missing_main' };
+    const crop = resolveGridForAngle(angle, mainEntity.generation_prompt_cn || '');
+    const mainName = String(mainEntity.name || mainEntity.name_en || '').trim();
+    if (!String(mainEntity.image_url || '').trim()) {
+        return {
+            ok: false,
+            errorCode: 'missing_main_image',
+            mainEntity,
+            mainName,
+            ...crop,
+        };
+    }
+    return {
+        ok: true,
+        errorCode: '',
+        mainEntity,
+        mainName,
+        ...crop,
+    };
 }
 
 export function planDerivedGridRegen(entity, entities) {
