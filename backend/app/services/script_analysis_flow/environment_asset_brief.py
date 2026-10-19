@@ -359,7 +359,7 @@ def build_environment_asset_design_brief(adapted_script: str) -> str:
         "environments[].name 必须与 IDENT [ENV] 名称= / name 逐字符完全一致；"
         "定位/目标/情绪表达原样写入开篇。"
         "严格遵守【主环境】对表演区/活动空间的空间要求：四面只深化规划已列围合；"
-        "中区默认空区无障碍，仅规划明文要求桌椅等主体时才落，禁止擅自增加主体。"
+        "规划已有的床、窗、桌留在原位，动线中间不加障碍，不另起未列主体。"
         "不要等待逐场分析。Subject Index 若仍含 environment 行只作旧稿兼容，不得压过本块。"
     )
     return wrap_injection_section("环境规划", f"{preface}\n\n{body}")

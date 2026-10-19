@@ -4863,14 +4863,41 @@ const normalizeExtractReplacementInner = (content, tag) => {
     return raw.replace(new RegExp(`\\[${tag}_EXTRACT_(START|END)[^\\]]*\\]`, 'gi'), '').trim() || '无';
 };
 
+const collectTaggedExtractItems = (text, tag) => {
+    const source = String(text || '');
+    const blockRe = new RegExp(`\\[${tag}_EXTRACT_START[^\\]]*\\]([\\s\\S]*?)\\[${tag}_EXTRACT_END[^\\]]*\\]`, 'gi');
+    const chunks = [];
+    let match = blockRe.exec(source);
+    while (match) {
+        const chunk = String(match[1] || '').trim();
+        if (chunk && chunk !== '无') chunks.push(chunk);
+        match = blockRe.exec(source);
+    }
+    const body = chunks.length ? chunks.join('\n\n') : source;
+    return splitTaggedExtractItems(`[${tag}_EXTRACT_START]\n${body}\n[${tag}_EXTRACT_END]`, tag);
+};
+
+const preferSupersetExtractText = (primary, secondary) => {
+    const first = String(primary || '').trim();
+    const second = String(secondary || '').trim();
+    if (!first) return second;
+    if (!second || first === second) return first;
+    const namesOf = (text) => new Set(
+        ['CHAR', 'PROP'].flatMap((tag) => collectTaggedExtractItems(text, tag).map((item) => normalizeSubjectKey(item.name))).filter(Boolean),
+    );
+    const primaryNames = namesOf(first);
+    const secondaryNames = namesOf(second);
+    const secondaryHasMore = [...secondaryNames].some((name) => !primaryNames.has(name));
+    const primaryHasMore = [...primaryNames].some((name) => !secondaryNames.has(name));
+    if (secondaryHasMore && !primaryHasMore) return second;
+    return first;
+};
+
 const mergeTaggedExtractIncrement = (source, tag, deltaText) => {
     const existingItems = splitTaggedExtractItems(source, tag);
     const deltaInner = normalizeExtractReplacementInner(deltaText, tag);
     if (!deltaInner || deltaInner === '无') return source;
-    const deltaItems = splitTaggedExtractItems(
-        `[${tag}_EXTRACT_START]\n${deltaInner}\n[${tag}_EXTRACT_END]`,
-        tag,
-    );
+    const deltaItems = collectTaggedExtractItems(deltaText, tag);
     const seen = new Set(
         existingItems.map((item) => normalizeSubjectKey(item.name)).filter(Boolean),
     );
@@ -30791,12 +30818,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const handleReextractAssetList = async (kind) => {
         const target = kind === 'prop' ? 'prop' : 'character';
         if (isAnalyzing || reextractingAssetList || !activeEpisode?.id) return;
-        const source = String(
+        const source = preferSupersetExtractText(
             currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content
-            || latestStage1NodeOutputsRef.current?.scene_split
             || getStageOutputContent('stage1', 'scene_split')
-            || ''
-        ).trim();
+            || '',
+            latestStage1NodeOutputsRef.current?.scene_split,
+        );
         if (!source) {
             reportAnalysisPanelNotice(t(
                 '还没有全局统筹剧本，无法重新抽取。',
@@ -30863,31 +30890,40 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 && savedInner !== previousInner
                 && /\[SCENE_START/i.test(savedSplit)
             );
-            if (serverHasNewList) {
+            const output = String(extractAnalysisTextFromResult(result) || '').trim();
+            const truncated = Boolean(result?.__truncated__ || result?.__truncated_without_subjects__);
+            const returnedBlock = truncated ? '' : (takeTaggedExtractBlock(output, tag) || output);
+            const importedSplit = returnedBlock
+                ? mergeTaggedExtractIncrement(serverHasNewList ? savedSplit : source, tag, returnedBlock)
+                : (serverHasNewList ? savedSplit : '');
+            if (!importedSplit || !collectTaggedExtractItems(importedSplit, tag).length && !serverHasNewList) {
+                throw new Error(t(
+                    `重新抽取未返回${labelZh}。需要 [${tag}_EXTRACT] 列表。`,
+                    `Re-extract returned no ${labelEn}. A [${tag}_EXTRACT] list is required.`
+                ));
+            }
+            if (importedSplit !== source) {
+                latestStage1NodeOutputsRef.current = {
+                    ...latestStage1NodeOutputsRef.current,
+                    scene_split: importedSplit,
+                };
+                if (serverHasNewList && importedSplit === savedSplit) {
+                    const stageOutputs = freshEpisode?.ai_stage_outputs;
+                    if (stageOutputs && onUpdateEpisodeInfo) {
+                        await onUpdateEpisodeInfo(activeEpisode.id, {
+                            ai_stage_outputs: typeof stageOutputs === 'string'
+                                ? stageOutputs
+                                : JSON.stringify(stageOutputs),
+                        });
+                    }
+                } else {
+                    await persistSceneSplitExtractSource(importedSplit);
+                }
+            } else if (serverHasNewList) {
                 latestStage1NodeOutputsRef.current = {
                     ...latestStage1NodeOutputsRef.current,
                     scene_split: savedSplit,
                 };
-                const stageOutputs = freshEpisode?.ai_stage_outputs;
-                if (stageOutputs && onUpdateEpisodeInfo) {
-                    await onUpdateEpisodeInfo(activeEpisode.id, {
-                        ai_stage_outputs: typeof stageOutputs === 'string'
-                            ? stageOutputs
-                            : JSON.stringify(stageOutputs),
-                    });
-                }
-            } else {
-                const output = String(extractAnalysisTextFromResult(result) || '').trim();
-                const truncated = Boolean(result?.__truncated__ || result?.__truncated_without_subjects__);
-                const block = truncated ? '' : takeTaggedExtractBlock(output, tag);
-                if (!block) {
-                    throw new Error(t(
-                        `重新抽取未返回${labelZh}。需要 [${tag}_EXTRACT] 列表。`,
-                        `Re-extract returned no ${labelEn}. A [${tag}_EXTRACT] list is required.`
-                    ));
-                }
-                const toSave = mergeTaggedExtractIncrement(source, tag, block);
-                await persistSceneSplitExtractSource(toSave);
             }
             setAnalysisFlowStatus({
                 phase: 'completed',
@@ -32654,11 +32690,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const resolveAssetRerunSourceText = useCallback(() => {
         const liveRaw = String(latestStage1RawTextRef.current || '').trim();
-        const sceneSplit = preferEditorSceneSplitText(
-            getStageOutputContent('stage1', 'scene_split') || readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
+        const sceneSplit = preferSupersetExtractText(
+            preferEditorSceneSplitText(
+                getStageOutputContent('stage1', 'scene_split') || readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
+                '',
+                activeEpisode?.ai_scene_analysis_result,
+                (textHasTaggedExtractItems(liveRaw, 'CHAR') || textHasTaggedExtractItems(liveRaw, 'PROP') ? liveRaw : '')
+            ),
             latestStage1NodeOutputsRef.current?.scene_split,
-            activeEpisode?.ai_scene_analysis_result,
-            (textHasTaggedExtractItems(liveRaw, 'CHAR') || textHasTaggedExtractItems(liveRaw, 'PROP') ? liveRaw : '')
         );
         const envPlan = pickFirstMatchingText([
             readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),

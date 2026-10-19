@@ -63,6 +63,10 @@ def test_prefill_and_prompts_carry_season_and_ai_vfx():
     assert "【项目季节 — 必须应用】" in writer
     assert "继承=项目季节" in writer
     assert "不得用项目季节改掉框架或预填已经写明的另一季" in writer
+    assert "框架符合预填" in architect
+    assert "以预填的逻辑和内容为准" in writer
+    assert "剧本框架优先于结构化预填" not in writer
+    assert "以结构化预填已经写明的那一季为准" in writer
     assert "对话种子=对白|自白" in structure
     assert "概念对话种子的细节响应" in architect
     assert "概念种子的细节响应" in writer

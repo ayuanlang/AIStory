@@ -42,6 +42,7 @@ from app.services.episode_script_output import (  # noqa: E402,F401
 )
 from app.services.project_season import format_project_season_prompt  # noqa: E402,F401
 from app.services.episode_script_prompt import (  # noqa: E402,F401
+    build_framework_prompt_block,
     build_structured_prefill_prompt_block,
     build_trailer_generation_prompt_block,
     clamp_plot_title,
@@ -1676,6 +1677,7 @@ async def generate_project_episode_scripts_from_global_framework(
             else ""
         )
         prefill_block = build_structured_prefill_prompt_block(gi_story_input, trailer=call_is_trailer)
+        framework_block = build_framework_prompt_block(global_md, gi_story_input)
         user_prompt = (
             f"{series_ip_block}"
             f"{trailer_block}"
@@ -1691,7 +1693,7 @@ async def generate_project_episode_scripts_from_global_framework(
             f"{generation_scope_block}"
             f"{episode_title_policy_block}"
             f"{prev_episode_block}"
-            f"Global Story DNA (Markdown):\n{global_md}\n\n"
+            f"Global Story DNA (Markdown):\n{framework_block}\n\n"
             f"Character Canon (Markdown):\n{character_canon_md}\n\n"
             f"{relationships_block}"
         )

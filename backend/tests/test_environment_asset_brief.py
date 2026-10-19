@@ -556,6 +556,38 @@ def test_shot_prose_is_not_a_prop_list_and_reextract_contract_closes_the_prompt(
     assert "腕上铁铐已解开" in char_composed
 
 
+def test_reextract_keeps_new_rows_that_follow_an_echoed_old_list():
+    from app.services.script_analysis_flow_runner import _apply_list_reextract
+
+    current = """[SCENE_START:EP01_SC01]
+正文甲
+[PROP_EXTRACT_START]
+[PROP] 名称=旧佩
+[PROP_EXTRACT_END]
+"""
+    llm = """[PROP_EXTRACT_START]
+[PROP] 名称=旧佩
+外形=回声改写
+[PROP_EXTRACT_END]
+
+[PROP_EXTRACT_START]
+[PROP] 名称=黑色浮空艇｜名称_en=Black Airship
+载具裁定=双出｜整车PROP=黑色浮空艇｜舱内ENV=上一世浮空艇机舱
+提取理由=载具整车本体
+[PROP_EXTRACT_END]
+"""
+    merged, block = _apply_list_reextract(
+        llm_text=llm,
+        request_text=current,
+        stored_text=current,
+        target="prop",
+    )
+    assert "名称=旧佩" in merged
+    assert "外形=回声改写" not in merged
+    assert "名称=黑色浮空艇" in block
+    assert "正文甲" in merged
+
+
 def test_reextract_appends_only_new_names_and_keeps_a_none_increment():
     from app.services.script_analysis_flow_runner import _apply_list_reextract
 

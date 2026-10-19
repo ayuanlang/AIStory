@@ -220,14 +220,17 @@ def _apply_list_reextract(*, llm_text: str, request_text: str, stored_text: str,
         raise HTTPException(status_code=422, detail="当前没有可更新的全局统筹剧本")
     if target == "character":
         block = pick_refreshed_char_extract_block(llm_text, base)
-        if not block or not (char_extract_has_items(block) or char_extract_is_explicit_none(block)):
+        has_list = char_extract_has_items(block) or char_extract_has_items(llm_text)
+        if not block or not (has_list or char_extract_is_explicit_none(block) or char_extract_is_explicit_none(llm_text)):
             raise HTTPException(status_code=422, detail=_reextract_reject_detail("character", llm_text))
-        merged_block = merge_char_extract_increment(base, block)
+        # The answer may echo the old list and put the new rows in a later block.
+        merged_block = merge_char_extract_increment(base, llm_text if has_list else block)
         return replace_char_extract_in_script(base, merged_block), merged_block
     block = pick_refreshed_prop_extract_block(llm_text, base)
-    if not block or not (prop_extract_has_items(block) or prop_extract_is_explicit_none(block)):
+    has_list = prop_extract_has_items(block) or prop_extract_has_items(llm_text)
+    if not block or not (has_list or prop_extract_is_explicit_none(block) or prop_extract_is_explicit_none(llm_text)):
         raise HTTPException(status_code=422, detail=_reextract_reject_detail("prop", llm_text))
-    merged_block = merge_prop_extract_increment(base, block)
+    merged_block = merge_prop_extract_increment(base, llm_text if has_list else block)
     return replace_prop_extract_in_script(base, merged_block), merged_block
 
 

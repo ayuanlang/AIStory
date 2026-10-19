@@ -6,6 +6,8 @@ import re
 from typing import Any, Iterable, Optional
 
 from app.services.story_generator_llm import (
+    _PREFILL_TEXT_KEYS,
+    _field_text,
     format_story_creative_input_block,
     structured_prefill_has_text,
 )
@@ -42,7 +44,7 @@ def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
     if trailer:
         rules = (
             "【结构化预填 — 预告片重要依据】\n"
-            "注入链是项目信息 → 结构化预填 → 剧本框架 → 剧本生成。预告必须严格落实这份预填；框架已经写了不同内容时以框架为准，框架没写的预填内容仍然要演。预告必须把核心建置、人物弧光和基础世界观演进已有短拍，让没看过正片的观众读得出来。\n"
+            "注入链是项目信息 → 结构化预填 → 剧本框架 → 剧本生成。预告必须同时落实这份预填和已经合并去重的剧本框架。概念、思想、对抗、人物弧光、节拍事件和对白种子以预填为准。框架只补预填没有的分集落点、时间、环境和钩子；框架写成另一套时改回预填。预告必须把核心建置、人物弧光和基础世界观演进已有短拍，让没看过正片的观众读得出来。\n"
             "核心建置＝概念=I1 高概念、思想=I2 主控思想、对抗=I3、I3b 三幕价值弧、I4 故事世界。人物弧光＝I5。基础世界观＝世界背景＋剧情背景，并含 I4。\n"
             "节奏与篇幅：按 5000 字写，不超过 5000 字。高光短拍 10–20 拍。不另开说明拍，不口播。不得为了少于 10 拍把多人多空间写回一句，也不得拆过 20 拍。跑、追、飞、掠、行驶的主体仍写从哪到哪、跨距和用时，速度由这两数读出；这段路落在宿主，不落在驾驶舱。\n"
             "概念=I1：一个动作或一句对白点出谁要什么、谁在挡、失败失去什么。"
@@ -58,13 +60,149 @@ def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
     else:
         rules = (
             "【结构化预填 — 分集重要依据】\n"
-            "注入链是项目信息 → 结构化预填 → 剧本框架 → 剧本生成。必须严格落实这份预填；框架已经写了不同内容时以框架为准，框架没写的预填内容仍然要演。概念=I1，思想=I2，对抗=I3，人物弧光=I5，救猫咪事件种子都是本集必须回指的依据。\n"
+            "注入链是项目信息 → 结构化预填 → 剧本框架 → 剧本生成。必须同时落实这份预填和已经合并去重的剧本框架。概念=I1，思想=I2，对抗=I3，人物弧光=I5，节拍事件和对白种子以预填为准，都是本集必须回指的依据。\n"
             "本集只演落在已锁救猫咪拍里的那一层。不把全剧弧光和结局提前演完。专名、对白种子、设定句要进本集相关场面。落到本集拍上、针对主控思想、对抗鸿沟危机、价值弧、压力场、人物前提弧光的对话种子，原句入戏，并写出说者与听者的微动作和表情。自白只写说者。\n"
-            "本集事件和拍以大纲为准。概念、思想、对抗、弧光的方向以预填为准。空字段不另造一套故事。"
+            "本集落在哪一拍、时间、环境和在场名用框架。这一拍的事件、概念、思想、对抗、弧光以预填为准。框架把同一拍写成另一件事时，改回预填。空字段不另造一套故事。"
             "AI优势应用与劣势回避和大纲本集 AI 行点名了本集的特效时，正文写出那一层形状、规模或季节介质；回避项保持改写。"
             "另外必须单独写「本集AI优势应用与劣势回避」：继承行登记上游已经点给本集的条目，本集分析只看本集场面再写一次，两段都要在 Beat 里演出来，不能只抄上游。\n\n"
         )
     return f"{rules}{body}\n\n"
+
+
+_SENTENCE_SPLIT = re.compile(r"([。！？；])")
+_SENTENCE_NORM = re.compile(r"[\s，。！？；、,.!?;:：\"“”'‘’「」【】（）()|｜\-—#*]+")
+_LABEL_PREFIX = re.compile(r"^(?:[#*\-]+\s*)?(?:[^。！？；:：\n]{1,24}[:：]\s*)")
+_MIN_DUP_CHARS = 8
+
+
+def _norm_sentence(text: str) -> str:
+    return _SENTENCE_NORM.sub("", str(text or ""))
+
+
+def _compare_body(text: str) -> str:
+    return _norm_sentence(_LABEL_PREFIX.sub("", str(text or "").strip(), count=1))
+
+
+def _prefill_sentence_norms(source: Any) -> set[str]:
+    norms: set[str] = set()
+    for key in _PREFILL_TEXT_KEYS:
+        raw = _field_text(source, key)
+        if not raw:
+            continue
+        for part in re.split(r"[。！？；\n]+", raw):
+            norm = _norm_sentence(part)
+            if len(norm) >= _MIN_DUP_CHARS:
+                norms.add(norm)
+        whole = _norm_sentence(raw)
+        if len(whole) >= _MIN_DUP_CHARS:
+            norms.add(whole)
+    return norms
+
+
+def _sentence_repeats_prefill(text: str, norms: set[str]) -> bool:
+    norm = _compare_body(text)
+    if len(norm) < _MIN_DUP_CHARS:
+        return False
+    if norm in norms:
+        return True
+    return any(_near_copy(norm, other) for other in norms)
+
+
+def _near_copy(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    short, long = (left, right) if len(left) <= len(right) else (right, left)
+    if len(short) < _MIN_DUP_CHARS or short not in long:
+        return False
+    return len(short) / len(long) >= 0.9
+
+
+def _framework_line_is_structural(line: str) -> bool:
+    stripped = line.strip()
+    if stripped.startswith("##"):
+        return True
+    markers = (
+        "[STORY_DNA_",
+        "[SCRIPT_TITLE:",
+        "Episode Coverage",
+        "Planned:",
+        "时间节点",
+        "世界背景",
+        "剧情背景",
+        "#功能",
+        "#身份",
+    )
+    return any(marker in line for marker in markers)
+
+
+def _drop_duplicate_sentences(line: str, norms: set[str]) -> str:
+    pieces = _SENTENCE_SPLIT.split(line)
+    kept: list[str] = []
+    index = 0
+    while index < len(pieces):
+        text = pieces[index]
+        delim = ""
+        step = 1
+        if index + 1 < len(pieces) and pieces[index + 1] in "。！？；":
+            delim = pieces[index + 1]
+            step = 2
+        if text.strip() and _sentence_repeats_prefill(text, norms):
+            index += step
+            continue
+        kept.append(text + delim)
+        index += step
+    return "".join(kept).strip()
+
+
+def dedupe_framework_against_prefill(framework_md: str, source: Any) -> str:
+    """Drop framework sentences that already appear in the structured prefill.
+
+    Episode blocks stay whole: they place a beat in an episode and add the
+    because/so/but chain plus listener detail. Headings, time nodes, world
+    lines, and registered entities stay whole for the same reason.
+    """
+    raw = str(framework_md or "")
+    if not raw.strip() or not structured_prefill_has_text(source):
+        return raw
+    norms = _prefill_sentence_norms(source)
+    if not norms:
+        return raw
+    kept_lines: list[str] = []
+    in_episode = False
+    for line in raw.splitlines():
+        if "[EPISODE_BLOCK_START" in line:
+            in_episode = True
+            kept_lines.append(line)
+            continue
+        if "[EPISODE_BLOCK_END" in line:
+            in_episode = False
+            kept_lines.append(line)
+            continue
+        if in_episode or _framework_line_is_structural(line):
+            kept_lines.append(line)
+            continue
+        kept = _drop_duplicate_sentences(line, norms)
+        if kept:
+            kept_lines.append(kept)
+    return "\n".join(kept_lines)
+
+
+def build_framework_prompt_block(framework_md: str, source: Any) -> str:
+    """Framework input for script generation, with prefill repeats removed."""
+    raw = str(framework_md or "").strip()
+    if not raw:
+        return ""
+    if not structured_prefill_has_text(source):
+        return f"{raw}\n\n"
+    body = dedupe_framework_against_prefill(raw, source).strip() or raw
+    return (
+        "【剧本框架 — 与结构化预填合并去重后】\n"
+        "结构化预填和这份框架都是剧本生成的输入，两份都要落实。\n"
+        "同一事实预填已经写了的，以预填的逻辑和内容为准。与预填重复的句子已经从框架里删去。\n"
+        "框架留下预填没有的部分：本集落在哪一拍、本集时间、环境与道具注册、钩子、在场名、摘要里多出来的因为所以但是、说者和听者的微动作，以及落到本集的 AI 行。\n"
+        "这些落点必须符合预填。框架若把同一拍写成另一件事、另一个人或另一季，改回预填，分集落点仍用框架。\n\n"
+        f"{body}\n\n"
+    )
 
 
 def resolve_trailer_sample_range(
