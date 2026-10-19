@@ -158,20 +158,65 @@ export function gridCellBody(cellPrompt) {
 export const QUAD_CELL_POSITIONS = ['左上', '右上', '左下', '右下'];
 export const QUAD_CELL_IMAGES_ATTR = 'quad_cell_images';
 
-export function readQuadCellImages(entity, sourceUrl = '') {
-    const record = readAttrs(entity)[QUAD_CELL_IMAGES_ATTR];
-    if (!record || typeof record !== 'object') return null;
-    const storedSource = String(record.source_url || '').trim();
+const parseJsonRecord = (value) => {
+    if (!value) return null;
+    if (typeof value === 'string') {
+        const text = value.trim();
+        if (!text.startsWith('{') && !text.startsWith('[')) return null;
+        try {
+            return parseJsonRecord(JSON.parse(text));
+        } catch {
+            return null;
+        }
+    }
+    return typeof value === 'object' ? value : null;
+};
+
+const COLLIDING_GRID_CELL_NAME = /^grid-cell-(?:左上|右上|左下|右下|cell)\.jpe?g$/i;
+
+export function isCollidingGridCellUrl(url) {
+    const text = String(url || '').trim();
+    if (!text) return false;
+    const path = text.split('?')[0].split('#')[0];
+    let decoded = path;
+    try {
+        decoded = decodeURIComponent(path);
+    } catch {
+        decoded = path;
+    }
+    const base = decoded.split('/').pop() || '';
+    return COLLIDING_GRID_CELL_NAME.test(base);
+}
+
+const cellImageUrl = (value) => {
+    if (!value) return '';
+    if (typeof value === 'string') {
+        const text = value.trim();
+        const nested = parseJsonRecord(text);
+        if (nested) return cellImageUrl(nested.url || nested.image_url || nested.href || '');
+        if (isCollidingGridCellUrl(text)) return '';
+        return /^https?:\/\//i.test(text) || text.startsWith('/') ? text : '';
+    }
+    const record = parseJsonRecord(value);
+    if (!record || Array.isArray(record)) return '';
+    return cellImageUrl(record.url || record.image_url || record.href || '');
+};
+
+export function readQuadCellImages(entity, sourceUrl = '', options = {}) {
+    const allowStale = Boolean(options.allowStale);
+    const record = parseJsonRecord(readAttrs(entity)[QUAD_CELL_IMAGES_ATTR]);
+    if (!record || Array.isArray(record)) return null;
+    const storedSource = String(record.source_url || record.sourceUrl || '').trim();
     const wanted = String(sourceUrl || '').trim();
-    if (wanted && storedSource && storedSource !== wanted) return null;
-    const cells = record.cells && typeof record.cells === 'object' ? record.cells : null;
-    if (!cells) return null;
+    if (!allowStale && wanted && storedSource && storedSource !== wanted) return null;
+    const cells = parseJsonRecord(record.cells);
+    if (!cells || Array.isArray(cells)) return null;
     const saved = {};
     QUAD_CELL_POSITIONS.forEach((position) => {
-        const url = String(cells[position] || '').trim();
+        const url = cellImageUrl(cells[position]);
         if (url) saved[position] = url;
     });
-    return saved;
+    return Object.keys(saved).length ? saved : null;
 }
 
 const QUAD_EDIT_LOCKS = [
@@ -238,7 +283,7 @@ export function isGridCropDerivedEntity(entity) {
 export function mainQuadCellAddresses(entity) {
     if (!isMainEnvironmentEntity(entity)) return [];
     const sourceUrl = String(entity?.image_url || '').trim();
-    const cells = readQuadCellImages(entity, sourceUrl);
+    const cells = readQuadCellImages(entity, sourceUrl, { allowStale: true });
     if (!cells) return [];
     const mapping = parseQuadDegreesFromPrompt(entity?.generation_prompt_cn || '');
     return QUAD_CELL_POSITIONS.map((position) => ({

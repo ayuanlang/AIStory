@@ -35,6 +35,7 @@ import {
     planDerivedGridCell,
     planDerivedGridRegen,
     QUAD_CELL_POSITIONS,
+    isCollidingGridCellUrl,
     readQuadCellImages,
     singleCellEditInstruction,
     mainEnvironmentDesignDescription,
@@ -7101,7 +7102,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 resolve(value);
             }, 'image/jpeg', 0.95);
         });
-        const file = new File([outBlob], `grid-cell-${position || 'cell'}.jpg`, { type: 'image/jpeg' });
+        const positionCode = { 左上: 'tl', 右上: 'tr', 左下: 'bl', 右下: 'br' }[position] || 'cell';
+        const uniqueName = `grid-cell-${positionCode}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}.jpg`;
+        const file = new File([outBlob], uniqueName, { type: 'image/jpeg' });
         const uploaded = await uploadAsset(file, {
             asset_type: 'subject',
             remark: 'derived_grid_regen_ref',
@@ -7120,7 +7123,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         if (inflight) return inflight;
         const job = (async () => {
             const cached = quadCellStoreRef.current.get(cacheKey);
-            if (cached && QUAD_CELL_POSITIONS.every((position) => cached[position])) return cached;
+            const cachedReady = cached && QUAD_CELL_POSITIONS.every((position) => {
+                const url = String(cached[position] || '').trim();
+                return url && !isCollidingGridCellUrl(url);
+            });
+            if (!cachedReady && cached) quadCellStoreRef.current.delete(cacheKey);
+            if (cachedReady) return cached;
             const stored = readQuadCellImages(mainEntity, sourceUrl);
             if (stored && QUAD_CELL_POSITIONS.every((position) => stored[position])) {
                 quadCellStoreRef.current.set(cacheKey, stored);
@@ -7180,7 +7188,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         if (!stablePosition || !stableSource || !mainId) return '';
         const cacheKey = `${mainId}::${stableSource}`;
         const cached = quadCellStoreRef.current.get(cacheKey);
-        if (cached?.[stablePosition]) return cached[stablePosition];
+        const cachedUrl = String(cached?.[stablePosition] || '').trim();
+        if (cachedUrl && !isCollidingGridCellUrl(cachedUrl)) return cachedUrl;
+        if (cachedUrl) quadCellStoreRef.current.delete(cacheKey);
         const stored = readQuadCellImages(mainEntity, stableSource);
         if (stored?.[stablePosition]) {
             quadCellStoreRef.current.set(cacheKey, { ...(cached || {}), ...stored });
@@ -10599,7 +10609,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                     (() => {
                                         const hiddenFields = ['id', 'project_id', 'image_url', 'video_url', 'audio_url', 'created_at', 'updated_at', 'name', 'name_en', 'description', 
                                             'author_id', 'role', 'archetype', 'gender', 'appearance_cn', 'clothing', 'generation_prompt_cn', 'generation_prompt_en', 'visual_dependencies', 'type', 'project', 'dependency_strategy', 'action_characteristics', 'anchor_description', 'custom_attributes'];
-                                        hiddenFields.push('reference_image_urls', 'reference_video_urls', 'reference_audio_urls');
+                                        hiddenFields.push('reference_image_urls', 'reference_video_urls', 'reference_audio_urls', 'quad_cell_images');
                                         hiddenFields.push('source_image_urls', 'source_images_overridden', 'promo_source_attached');
                                         
                                         // Flatten custom_attributes into the view if they exist

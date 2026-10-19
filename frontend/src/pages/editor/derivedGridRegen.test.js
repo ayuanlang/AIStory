@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     derivedDependencyImageUrl,
+    isCollidingGridCellUrl,
     isGridCropDerivedEntity,
     isStateDerivedEntity,
     mainQuadCellAddresses,
@@ -31,6 +32,26 @@ describe('saved quad cells', () => {
             右下: 'https://cdn.example/br.jpg',
         });
         assert.equal(readQuadCellImages(entity, 'https://cdn.example/other.jpg'), null);
+        assert.deepEqual(readQuadCellImages(entity, 'https://cdn.example/other.jpg', { allowStale: true }), {
+            左上: 'https://cdn.example/tl.jpg',
+            右上: 'https://cdn.example/tr.jpg',
+            右下: 'https://cdn.example/br.jpg',
+        });
+        const stringified = {
+            custom_attributes: {
+                quad_cell_images: JSON.stringify({
+                    source_url: 'https://cdn.example/main.jpg',
+                    cells: {
+                        左上: '{"url":"https://cdn.example/tl.jpg"}',
+                        右上: 'https://cdn.example/tr.jpg',
+                    },
+                }),
+            },
+        };
+        assert.deepEqual(readQuadCellImages(stringified, 'https://cdn.example/main.jpg'), {
+            左上: 'https://cdn.example/tl.jpg',
+            右上: 'https://cdn.example/tr.jpg',
+        });
     });
 
     it('turns a quad edit instruction into a single-cell edit', () => {
@@ -111,5 +132,26 @@ describe('saved quad cells', () => {
         assert.equal(isGridCropDerivedEntity(stateDerived), false);
         assert.equal(derivedDependencyImageUrl(stateDerived, derived, [main, derived, stateDerived]), 'https://cdn.example/derived.jpg');
         assert.equal(derivedDependencyImageUrl(stateDerived, main, [main, derived, stateDerived]), 'https://cdn.example/main.jpg');
+    });
+
+    it('drops shared grid-cell filenames so another project image is not reused', () => {
+        const shared = 'https://qn.woola.fun/aistory/upload/202610/3/uploads/grid-cell-%E5%B7%A6%E4%B8%8A.jpg?e=1&token=abc';
+        assert.equal(isCollidingGridCellUrl(shared), true);
+        assert.equal(isCollidingGridCellUrl('https://cdn.example/grid-cell-tl-m5k2-ab12.jpg'), false);
+        const entity = {
+            image_url: 'https://cdn.example/main.jpg',
+            custom_attributes: {
+                quad_cell_images: {
+                    source_url: 'https://cdn.example/main.jpg',
+                    cells: {
+                        左上: shared,
+                        右上: 'https://cdn.example/grid-cell-tr-unique.jpg',
+                    },
+                },
+            },
+        };
+        assert.deepEqual(readQuadCellImages(entity, 'https://cdn.example/main.jpg'), {
+            右上: 'https://cdn.example/grid-cell-tr-unique.jpg',
+        });
     });
 });
