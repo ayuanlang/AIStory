@@ -257,6 +257,56 @@ def test_derived_consistency_message_includes_opening_and_cell():
     assert "两件核对" in messages[0]["content"]
 
 
+def test_derived_main_angle_injects_source_walls_cell_and_delta():
+    opening = (
+        "【六面一次】\n上=天花。\n"
+        "【北壁】\n别名=窗。\n"
+        "【东壁】\n别名=门。\n"
+        "【南壁】\n别名=柜。\n"
+        "【西壁】\n别名=镜。\n"
+        "【中区】\n桌。\n"
+    )
+    source = Dummy(
+        id=3,
+        name="天穹顶层办公室",
+        prompt=MAIN_PROMPT,
+        description=opening,
+        attrs={"main_environment_opening": opening},
+    )
+    derived_main = Dummy(
+        id=8,
+        name="天穹顶层办公室_破损",
+        prompt="衍生主环境=天穹顶层办公室_破损。状态Delta=幕墙破口。",
+        attrs={"derived_kind": "derived_main", "state_delta": "幕墙破口"},
+    )
+    angle = Dummy(
+        id=9,
+        name="90度天穹顶层办公室_破损",
+        prompt="",
+        attrs={"derived_kind": "first_cut", "view_angle_from_main": 90, "derived_from_state": True},
+    )
+    messages = build_consistency_messages(
+        image_url="http://example.test/crop.png",
+        entity=angle,
+        main_entity=derived_main,
+        checked_prompt="",
+        kind="cell",
+        depended_entity=source,
+    )
+    user = messages[1]["content"][0]["text"]
+    assert "被依赖主环境开篇可见五壁" in user
+    assert "正面（东壁）" in user
+    assert "别名=门。" in user
+    assert "别名=镜。" not in user
+    assert "对应宫格=90度格：" in user
+    assert "台在画面侧面。" in user
+    assert "衍生Delta：" in user
+    assert "幕墙破口" in user
+    assert "被依赖主环境提示词" not in user
+    assert "主环境完整提示词" not in user
+    assert "revised_cell 必须为 null" in messages[0]["content"]
+
+
 def test_piece_count_ledger_blocks_a_consistent_verdict():
     quad = """【四向拼图】
 [0度格-左上·北]
@@ -612,3 +662,48 @@ def test_regen_ignores_opening_fix_even_when_marked():
     )
     assert all(item["entity_id"] == 9 for item in plan["writes"])
     assert main.generation_prompt_cn == MAIN_PROMPT
+
+
+def test_derived_main_consistency_injects_source_prompt_and_delta():
+    source = Dummy(id=3, name="天穹顶层办公室", prompt=MAIN_PROMPT)
+    derived_main = Dummy(
+        id=8,
+        name="天穹顶层办公室_破损",
+        prompt="衍生主环境=天穹顶层办公室_破损。被依赖主环境=天穹顶层办公室。状态Delta=幕墙破口。",
+        attrs={
+            "derived_kind": "derived_main",
+            "source_main_environment": "天穹顶层办公室",
+            "main_environment": "天穹顶层办公室",
+            "state_delta": "幕墙破口",
+        },
+    )
+    assert classify_checked_prompt(derived_main, derived_main.generation_prompt_cn) == "derived_main"
+    messages = build_consistency_messages(
+        image_url="https://cdn.example/derived-main.jpg",
+        entity=derived_main,
+        main_entity=source,
+        checked_prompt=derived_main.generation_prompt_cn,
+        kind="derived_main",
+    )
+    user_text = messages[1]["content"][0]["text"]
+    assert "被依赖主环境提示词" in user_text
+    assert "台在画面前方" in user_text
+    assert "衍生Delta" in user_text
+    assert "幕墙破口" in user_text
+    assert "一起改" in messages[0]["content"]
+    plan = plan_consistency_writes(
+        derived_main,
+        source,
+        derived_main.generation_prompt_cn,
+        {
+            "consistent": False,
+            "summary": "只有一格破了",
+            "revised_prompt": None,
+            "image_edit_instruction": "幕墙破口在四格里都要看见。",
+        },
+    )
+    assert plan["kind"] == "derived_main"
+    assert plan["writes"] == []
+    assert "一起改" in plan["image_edit_instruction"]
+    assert "不要只改一格" in plan["image_edit_instruction"]
+    assert source.generation_prompt_cn == MAIN_PROMPT

@@ -121,10 +121,12 @@ FIRST_CUT_PROMPT = (
     "再确认一次：成稿只有{grid}这一格铺满整张16:9，{drop}三格不在画面里。"
     "只切割，不要改画。"
 )
-STATE_CUT_PROMPT = (
-    "所属主环境={main}。angle_key={main}|{angle}。"
-    "以已切割的同角衍生「{parent}」参考图为本镜头最终画面。16:9，高分辨率。"
-    "不要改构图，不要重切宫格，不要描述未改实体。禁止画回宫格分割线、格标或拼缝。"
+DERIVED_MAIN_PROMPT = (
+    "衍生主环境={name}。被依赖主环境={source}。"
+    "参考图是「{source}」已经生成的四格拼图，左上0度、右上90度、左下180度、右下270度。"
+    "在这张四格拼图上，对同一主体的相关内容四格一起改。每一格只改该格里已经出现的那一面，四格仍是同一处空间。"
+    "状态Delta={delta}。"
+    "未写入状态Delta的实体保持参考图原样。不要拆成单格，不要另造房间。"
 )
 FIRST_CUT_NEGATIVE = (
     "people, person, human, dutch angle, tilted horizon, looking into a room corner, "
@@ -1231,11 +1233,6 @@ def build_derived_environment_item(
     quad_line = crop["quad_line"]
     resolved = {**raw_item, "name": name, "main": main, "angle": angle}
     is_state = _is_state_row(resolved)
-    parent = _clean(item.get("parent") or item.get("同角切割父"))
-    if parent in {"无", "n/a", "none", "-", ""}:
-        parent = _same_angle_parent(name, main, angle) if is_state else ""
-    if is_state and parent == name:
-        parent = _same_angle_parent(name, main, angle)
     lens = _clean(item.get("lens_profile")) or ("Wide" if angle == 0 else "Standard")
     axis_crossing = _clean(item.get("axis_crossing")) or "None"
     spatial_axis = _clean(item.get("spatial_axis")) or "继承主环境"
@@ -1300,23 +1297,25 @@ def build_derived_environment_item(
         far_anchor=background,
         lens_profile=lens,
     )
+    derived_main_name = ""
+    source_main_name = ""
     if is_state:
-        prompt = STATE_CUT_PROMPT.format(main=main, angle=angle, parent=parent or _same_angle_parent(name, main, angle))
-        if delta:
-            prompt = f"{prompt}在此画面基础上叠加：{delta}。"
-        if special_note:
-            prompt = f"{prompt}{SPECIAL_STATE_INJECT.format(note=special_note)}"
+        suffix = _state_suffix(name, main) or "状态"
+        derived_main_name = f"{main}_{suffix}"
+        source_main_name = main
+        prompt = ""
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
-            f"所属主环境={main}。angle_key={main}|{angle}。同角切割父={parent or _same_angle_parent(name, main, angle)}。"
-            f"状态Delta={delta or '无'}。形状Delta=无。未改实体=不写。触发={trigger}。"
+            f"所属主环境={derived_main_name}。被依赖主环境={main}。angle_key={derived_main_name}|{angle}。"
+            f"{quad_line}。截取宫格={grid}。{camera}触发={trigger}。"
+            f"状态Delta={delta or '无'}。衍生主环境={derived_main_name}。四格已在衍生主环境里一起改过。"
         )
         if special_note:
             logic = f"{logic}特别表述={special_note}。"
-        deps = [f"ENV:[{parent or _same_angle_parent(name, main, angle)}]"]
-        negative = STATE_CUT_NEGATIVE
-        atmosphere = f"Same {angle}deg crop with state delta"
-        visual_params = f"{lens}/Derived/State"
+        deps = [f"ENV:[{derived_main_name}]"]
+        negative = FIRST_CUT_NEGATIVE
+        atmosphere = f"Crop of derived main {derived_main_name}"
+        visual_params = f"{lens}/Derived/{angle}"
     elif special_note:
         prompt = SPECIAL_CUT_PROMPT.format(
             main=main,
@@ -1351,7 +1350,7 @@ def build_derived_environment_item(
         atmosphere = f"{'Master' if angle == 0 else 'Angle'} empty plate crop"
         visual_params = f"{lens}/Derived/{angle}"
     gen_hint = _clean(item.get("gen_prompt") or item.get("生成提示"))
-    if prompt and gen_hint and gen_hint.lower() not in _EMPTY_FIELD_MARKERS and gen_hint not in prompt:
+    if (not is_state) and prompt and gen_hint and gen_hint.lower() not in _EMPTY_FIELD_MARKERS and gen_hint not in prompt:
         prompt = f"{prompt}生成提示={gen_hint}。"
     if special_kind == "变形":
         negative = negative.replace("dutch angle, tilted horizon, ", "").replace("dutch angle, ", "")
@@ -1373,14 +1372,16 @@ def build_derived_environment_item(
         },
         "custom_attributes": {
             "source": SOURCE_FLAG,
-            "main_environment": main,
+            "main_environment": derived_main_name or main,
+            "source_main_environment": source_main_name,
+            "derived_main_environment": derived_main_name,
+            "state_delta": delta if is_state else "",
+            "derived_from_state": bool(is_state),
             "view_angle_from_main": angle,
             "grid_cell": grid,
             "grid_token": token,
             "quad_degree_line": quad_line,
-            "derived_kind": (
-                "state" if is_state else ("special" if special_note else "first_cut")
-            ),
+            "derived_kind": "special" if special_note and not is_state else "first_cut",
             "special_kind": special_kind,
             "special_note": special_note,
             "negative_prompt_en": negative,
@@ -1398,6 +1399,50 @@ def build_derived_environment_item(
     }
 
 
+def build_derived_main_environment_item(
+    *,
+    name: str,
+    source: str,
+    delta: str,
+) -> Dict[str, Any]:
+    """One new main environment, generated from another main's four-grid."""
+    clean_name = _clean(name)
+    clean_source = _clean(source)
+    clean_delta = _clean(delta) or "无"
+    prompt = DERIVED_MAIN_PROMPT.format(name=clean_name, source=clean_source, delta=clean_delta)
+    return {
+        "name": clean_name,
+        "name_en": clean_name,
+        "base_name_en": clean_source,
+        "atmosphere": f"Derived main from {clean_source}",
+        "visual_params": "DerivedMain/Quad",
+        "description_cn": "",
+        "generation_prompt_cn": prompt,
+        "generation_prompt_en": "",
+        "negative_prompt_en": (
+            "people, person, human, single quadrant only, cropped one cell, "
+            "different room per cell, inconsistent change across panels"
+        ),
+        "anchor_description": "",
+        "visual_dependencies": [f"ENV:[{clean_source}]"],
+        "dependency_strategy": {
+            "type": "Type A",
+            "logic": (
+                f"衍生主环境={clean_name}。被依赖主环境={clean_source}。"
+                f"状态Delta={clean_delta}。四格对同一主体的相关内容一起改。"
+            ),
+        },
+        "custom_attributes": {
+            "source": SOURCE_FLAG,
+            "derived_kind": "derived_main",
+            "main_environment": clean_source,
+            "source_main_environment": clean_source,
+            "derived_main_environment": clean_name,
+            "state_delta": clean_delta if clean_delta != "无" else "",
+        },
+    }
+
+
 def group_derived_environment_jsons(
     items: Sequence[Dict[str, Any]],
     *,
@@ -1406,6 +1451,7 @@ def group_derived_environment_jsons(
     """One JSON string per main environment, environments[] = derived rows only."""
     prompts = main_prompts or {}
     grouped: Dict[str, List[Dict[str, Any]]] = {}
+    pending_derived_mains: Dict[str, Dict[str, Any]] = {}
 
     def _prompt_for(name: str) -> str:
         if not name:
@@ -1429,6 +1475,32 @@ def group_derived_environment_jsons(
         if any(_clean(existing.get("name")) == _clean(payload.get("name")) for existing in bucket):
             continue
         bucket.append(payload)
+        attrs = payload.get("custom_attributes") or {}
+        derived_name = _clean(attrs.get("derived_main_environment"))
+        if attrs.get("derived_from_state") and derived_name:
+            slot = pending_derived_mains.setdefault(
+                derived_name,
+                {
+                    "name": derived_name,
+                    "source": _clean(attrs.get("source_main_environment")) or main,
+                    "group": main,
+                    "deltas": [],
+                },
+            )
+            delta = _clean(attrs.get("state_delta"))
+            if delta and delta not in slot["deltas"]:
+                slot["deltas"].append(delta)
+    for derived_name, slot in pending_derived_mains.items():
+        bucket = grouped.setdefault(slot["group"], [])
+        if any(_clean(existing.get("name")) == derived_name for existing in bucket):
+            continue
+        bucket.append(
+            build_derived_main_environment_item(
+                name=derived_name,
+                source=slot["source"],
+                delta="；".join(slot["deltas"]),
+            )
+        )
     result: List[Dict[str, Any]] = []
     for main, rows in grouped.items():
         rows.sort(key=lambda row: (

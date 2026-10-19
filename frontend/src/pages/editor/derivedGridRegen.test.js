@@ -32,6 +32,11 @@ describe('saved quad cells', () => {
             右下: 'https://cdn.example/br.jpg',
         });
         assert.equal(readQuadCellImages(entity, 'https://cdn.example/other.jpg'), null);
+        assert.deepEqual(readQuadCellImages(entity, 'https://cdn.example/main.jpg?e=2&token=new'), {
+            左上: 'https://cdn.example/tl.jpg',
+            右上: 'https://cdn.example/tr.jpg',
+            右下: 'https://cdn.example/br.jpg',
+        });
         assert.deepEqual(readQuadCellImages(entity, 'https://cdn.example/other.jpg', { allowStale: true }), {
             左上: 'https://cdn.example/tl.jpg',
             右上: 'https://cdn.example/tr.jpg',
@@ -128,6 +133,8 @@ describe('saved quad cells', () => {
             '右下270',
         ]);
         assert.equal(derivedDependencyImageUrl(derived, main, [main, derived]), 'https://cdn.example/tr.jpg');
+        const refreshedMain = { ...main, image_url: 'https://cdn.example/main.jpg?e=9&token=refreshed' };
+        assert.equal(derivedDependencyImageUrl(derived, refreshedMain, [refreshedMain, derived]), 'https://cdn.example/tr.jpg');
         assert.equal(isStateDerivedEntity(stateDerived), true);
         assert.equal(isGridCropDerivedEntity(stateDerived), false);
         assert.equal(derivedDependencyImageUrl(stateDerived, derived, [main, derived, stateDerived]), 'https://cdn.example/derived.jpg');

@@ -52,8 +52,17 @@ def is_environment_entity(entity: Any) -> bool:
     return any(token in raw for token in ("env", "环境", "scene", "场景"))
 
 
+def is_derived_main_environment_entity(entity: Any) -> bool:
+    """A new main environment generated from another main's four-grid."""
+    if not is_environment_entity(entity):
+        return False
+    return str(attrs_of(entity).get("derived_kind") or "").strip() == "derived_main"
+
+
 def is_derived_environment_entity(entity: Any) -> bool:
     if not is_environment_entity(entity):
+        return False
+    if is_derived_main_environment_entity(entity):
         return False
     attrs = attrs_of(entity)
     if attrs.get("derived_kind") or attrs.get("source") == SOURCE_FLAG:
@@ -63,6 +72,8 @@ def is_derived_environment_entity(entity: Any) -> bool:
 
 
 def is_main_environment_entity(entity: Any) -> bool:
+    if is_derived_main_environment_entity(entity):
+        return True
     return is_environment_entity(entity) and not is_derived_environment_entity(entity)
 
 
@@ -82,13 +93,15 @@ def resolve_checked_prompt(entity: Any, override: Optional[str] = None) -> str:
 
 
 def classify_checked_prompt(entity: Any, prompt: str) -> str:
-    """main | cell | crop | regen | derived."""
+    """main | derived_main | cell | crop | regen | derived."""
+    if is_derived_main_environment_entity(entity):
+        return "derived_main"
     if is_main_environment_entity(entity):
         return "main"
     text = str(prompt or "")
     attrs = attrs_of(entity)
     derived_kind = str(attrs.get("derived_kind") or "").strip()
-    if derived_kind == "state" or "不要重切宫格" in text or "以已切割的同角衍生" in text:
+    if derived_kind == "state" or "不要重切宫格" in text or "以已切割的同角衍生" in text or "以同角衍生「" in text:
         return "derived"
     generation = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
     regen = str(attrs.get("grid_regen_prompt") or "").strip()
@@ -183,6 +196,66 @@ def find_owning_main_environment(db: Session, entity: Any) -> Optional[Entity]:
         }
         row_names.discard("")
         if wanted & row_names:
+            matches.append(row)
+    if not matches:
+        return None
+    episode_id = getattr(entity, "episode_id", None)
+
+    def _score(row: Entity) -> int:
+        score = 0
+        if episode_id is not None and getattr(row, "episode_id", None) == episode_id:
+            score += 4
+        if str(getattr(row, "generation_prompt_cn", "") or "").strip():
+            score += 2
+        if str(getattr(row, "image_url", "") or "").strip():
+            score += 1
+        return score
+
+    matches.sort(key=_score, reverse=True)
+    return matches[0]
+
+
+def find_depended_main_environment(db: Session, entity: Any) -> Optional[Entity]:
+    """The main environment a derived main was generated from."""
+    attrs = attrs_of(entity)
+    wanted = []
+    for key in ("source_main_environment", "main_environment"):
+        value = _clean_name(attrs.get(key))
+        if value:
+            wanted.append(value)
+    raw_deps = getattr(entity, "visual_dependencies", None) or []
+    if isinstance(raw_deps, str):
+        raw_deps = [part.strip() for part in raw_deps.split(",") if part.strip()]
+    if isinstance(raw_deps, list):
+        for item in raw_deps:
+            value = _clean_name(item)
+            if value:
+                wanted.append(value)
+    self_name = _clean_name(getattr(entity, "name", "")).lower()
+    wanted_keys = {name.lower() for name in wanted if name.lower() and name.lower() != self_name}
+    if not wanted_keys or getattr(entity, "project_id", None) is None:
+        return None
+    rows = (
+        db.query(Entity)
+        .filter(
+            Entity.project_id == int(entity.project_id),
+            _active_entity_clause(),
+        )
+        .all()
+    )
+    matches = []
+    self_id = int(getattr(entity, "id", 0) or 0)
+    for row in rows:
+        if int(getattr(row, "id", 0) or 0) == self_id:
+            continue
+        if not is_main_environment_entity(row) or is_derived_main_environment_entity(row):
+            continue
+        row_names = {
+            _clean_name(getattr(row, "name", "")).lower(),
+            _clean_name(getattr(row, "name_en", "")).lower(),
+        }
+        row_names.discard("")
+        if wanted_keys & row_names:
             matches.append(row)
     if not matches:
         return None
@@ -766,29 +839,32 @@ def _plan_cell_consistency_writes(
     grid_changed = False
     audit_blocked = False
     if revised_cell and not payload.get("consistent"):
-        if main_entity is None or main_id <= 0 or angle is None:
-            raise ConsistencyApplyError("找不到这一格所属的主环境，无法改正宫格。")
-        grafted = replace_grid_cell(main_prompt, angle, revised_cell)
-        piece_issues = audit_piece_count_reconciliation(grafted)
-        street_issues = audit_street_end_phrases(grafted)
-        wall_issues = audit_wall_corner_span(grafted)
-        front_issues = audit_front_double(grafted)
-        issues = piece_issues + street_issues + wall_issues + front_issues
-        if issues:
-            prefix = PIECE_COUNT_PREFIX if piece_issues else "宫格改写未通过"
-            summary = audit_blocked_summary(summary, issues, prefix)
+        if not current_cell:
             revised_cell = None
-            audit_blocked = True
-        elif grafted.strip() != main_prompt.strip():
-            writes.append({
-                "entity_id": main_id,
-                "field": "generation_prompt_cn",
-                "value": grafted,
-                "kind": "main",
-            })
-            targets.append("宫格")
-            grid_changed = True
-            current_cell = str(extract_grid_cell_prompt(grafted, angle).get("cell_prompt") or "").strip()
+        elif main_entity is None or main_id <= 0 or angle is None:
+            raise ConsistencyApplyError("找不到这一格所属的主环境，无法改正宫格。")
+        else:
+            grafted = replace_grid_cell(main_prompt, angle, revised_cell)
+            piece_issues = audit_piece_count_reconciliation(grafted)
+            street_issues = audit_street_end_phrases(grafted)
+            wall_issues = audit_wall_corner_span(grafted)
+            front_issues = audit_front_double(grafted)
+            issues = piece_issues + street_issues + wall_issues + front_issues
+            if issues:
+                prefix = PIECE_COUNT_PREFIX if piece_issues else "宫格改写未通过"
+                summary = audit_blocked_summary(summary, issues, prefix)
+                revised_cell = None
+                audit_blocked = True
+            elif grafted.strip() != main_prompt.strip():
+                writes.append({
+                    "entity_id": main_id,
+                    "field": "generation_prompt_cn",
+                    "value": grafted,
+                    "kind": "main",
+                })
+                targets.append("宫格")
+                grid_changed = True
+                current_cell = str(extract_grid_cell_prompt(grafted, angle).get("cell_prompt") or "").strip()
     prompt_to_store = revised_prompt or (current_cell if grid_changed or not stored_prompt or is_stub_prompt(stored_prompt) else "")
     if prompt_to_store and prompt_to_store.strip() != stored_prompt and entity_id > 0:
         writes.append({
@@ -824,6 +900,55 @@ def _plan_cell_consistency_writes(
     }
 
 
+def _plan_derived_main_consistency_writes(entity: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Derived main: keep the source main, and only revise this four-grid's own prompt or image."""
+    summary = str(payload.get("summary") or "").strip()
+    image_edit_instruction = _blank_to_none(payload.get("image_edit_instruction"))
+    if image_edit_instruction and "四格一起改" not in image_edit_instruction:
+        image_edit_instruction = (
+            f"{image_edit_instruction.rstrip('。')}。"
+            "同一主体的相关内容在四格里一起改，不要只改一格。"
+        )
+    revised = _blank_to_none(payload.get("revised_prompt"))
+    stored = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
+    writes: List[Dict[str, Any]] = []
+    targets: List[str] = []
+    entity_id = int(getattr(entity, "id", 0) or 0)
+    if payload.get("consistent") and not image_edit_instruction:
+        return {
+            "consistent": True,
+            "kind": "derived_main",
+            "summary": summary or "衍生主环境的四格与被依赖主环境和状态Delta一致。",
+            "writes": [],
+            "updated_targets": [],
+            "image_edit_instruction": None,
+        }
+    if not payload.get("consistent") and not revised and not image_edit_instruction:
+        raise ConsistencyApplyError("衍生主环境和被依赖主环境不一致，但没有返回改图指令或改写后的提示词。")
+    if revised and revised.strip() != stored and entity_id > 0:
+        writes.append({
+            "entity_id": entity_id,
+            "field": "generation_prompt_cn",
+            "value": revised.strip(),
+            "kind": "derived_main",
+        })
+        writes.append({
+            "entity_id": entity_id,
+            "field": LAST_SUBMITTED_PROMPT_ATTR,
+            "value": revised.strip(),
+            "kind": "derived_main",
+        })
+        targets.append("衍生主环境提示词")
+    return {
+        "consistent": False,
+        "kind": "derived_main",
+        "summary": summary or "已按被依赖主环境和状态Delta核对衍生主环境。",
+        "writes": writes,
+        "updated_targets": targets,
+        "image_edit_instruction": image_edit_instruction,
+    }
+
+
 def plan_consistency_writes(
     entity: Any,
     main_entity: Optional[Any],
@@ -841,6 +966,8 @@ def plan_consistency_writes(
     kind = classify_checked_prompt(entity, checked_prompt)
     if kind == "cell":
         return _plan_cell_consistency_writes(entity, main_entity, payload)
+    if kind == "derived_main":
+        return _plan_derived_main_consistency_writes(entity, payload)
     summary = str(payload.get("summary") or "").strip()
     image_edit_instruction = seal_cell_edit_instruction(payload.get("image_edit_instruction"))
     main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "") if main_entity is not None else ""
@@ -1020,47 +1147,127 @@ def remote_vision_image_link(url: str) -> str:
     return raw
 
 
-def _build_cell_consistency_messages(
+def _build_derived_main_consistency_messages(
     *,
     image_url: str,
     entity: Any,
     main_entity: Optional[Any],
     note: str = "",
 ) -> List[Dict[str, Any]]:
-    angle = derived_view_angle(entity)
-    opening = main_environment_opening_text(main_entity)
-    main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "").strip() if main_entity is not None else ""
+    attrs = attrs_of(entity)
+    delta = str(attrs.get("state_delta") or "").strip()
+    source_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "").strip() if main_entity is not None else ""
+    source_name = str(getattr(main_entity, "name", "") or attrs.get("source_main_environment") or "").strip()
+    own_prompt = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
+    system_prompt = (
+        "你是衍生主环境一致性校对。这张图是基于被依赖主环境生成的一块新主环境，仍然是四格拼图。\n"
+        "注入只有两部分：被依赖主环境的完整提示词，以及这份衍生Delta。用这两部分一起核对。\n"
+        "四格必须对同一主体的相关内容一起改。某一格改了、另一格同一主体还是原样，就不一致。\n"
+        "未写入 Delta 的实体保持被依赖主环境的样子。不要把 Delta 写回被依赖主环境。revised_main_prompt 必须为 null。\n"
+        "图片要改就写 image_edit_instruction，同一主体在每一格里都改到它在该格出现的那一面。不要写成只改一格，不要写不要重画整张四宫。\n"
+        "衍生主环境自己的提示词需要改 Delta 表述时，把改后的全文写进 revised_prompt。提示词不用改则为 null。\n"
+        "四格都符合被依赖主环境和 Delta 时，consistent 为 true，revised_prompt 和 image_edit_instruction 都为 null。\n"
+        "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
+        '{"consistent": true或false, "summary": "一两句中文", "revised_prompt": null或衍生主环境提示词, "revised_main_prompt": null, "image_edit_instruction": null或改图指令}'
+    )
+    parts = [
+        f"检查对象=衍生主环境。主体={getattr(entity, 'name', '')}。被依赖主环境={source_name or '未知'}。",
+        "被依赖主环境提示词：",
+        source_prompt or "（没有找到被依赖主环境的提示词）",
+        "衍生Delta：",
+        delta or "（没有状态Delta）",
+        "当前衍生主环境提示词：",
+        own_prompt or "（空）",
+    ]
+    extra = str(note or "").strip()
+    if extra:
+        parts.append("用户补充，这次要特别处理：")
+        parts.append(extra)
+    return [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "\n".join(parts)},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        },
+    ]
+
+
+def _cell_wall_and_grid(source: Optional[Any], angle: Optional[int]) -> tuple:
+    opening = main_environment_opening_text(source)
+    main_prompt = str(getattr(source, "generation_prompt_cn", "") or "").strip() if source is not None else ""
     cell = ""
     if angle is not None and main_prompt:
         cell = str(extract_grid_cell_prompt(main_prompt, angle).get("cell_prompt") or "").strip()
-    faces = visible_opening_faces(opening, angle)
+    return visible_opening_faces(opening, angle), cell
+
+
+def _build_cell_consistency_messages(
+    *,
+    image_url: str,
+    entity: Any,
+    main_entity: Optional[Any],
+    note: str = "",
+    depended_entity: Optional[Any] = None,
+) -> List[Dict[str, Any]]:
+    angle = derived_view_angle(entity)
+    from_derived_main = is_derived_main_environment_entity(main_entity)
+    wall_source = depended_entity if from_derived_main else main_entity
+    faces, cell = _cell_wall_and_grid(wall_source, angle)
     stored = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
-    system_prompt = (
-        "你是衍生环境一致性校对。这次只核对本角度的一张已经裁出的单格参考图。\n"
-        "注入只有两部分：开篇里这一角看得见的五壁（正面、左侧面、右侧面、中部、上），以及这一格的四宫格正文。"
-        "镜头后面的那一壁没有注入，不要用它。\n"
-        "做两件核对，两件都要有结论：\n"
-        "1. 四宫格这一格的正文，与这五壁的个数、朝向、位置是否一致。不符就改这一格正文。\n"
-        "2. 参考图是否同时符合这一格正文和这五壁。不符就写改这一张图的指令。\n"
-        "两件可以同时不符。宫格要改就给 revised_cell。图片要改就给 image_edit_instruction。两件都要改就两个都给。\n"
-        "revised_prompt 是写进这个衍生环境、之后用来生图的提示词。"
-        "宫格改了，就用改后的这一格；宫格没改而衍生提示词还空，就用当前这一格正文。"
-        "不要写切割，不要写另外三格，不要写只切割。\n"
-        "开篇五壁不改。另外三格不改。revised_main_prompt 必须为 null。\n"
-        "image_edit_instruction 只改这一张单格图。不写米，不写东南西北，不写另外三格，不写不要重画整张四宫。\n"
-        "两件都相符时 consistent 为 true，revised_cell、revised_prompt、image_edit_instruction 都为 null。\n"
-        "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
-        '{"consistent": true或false, "summary": "一两句中文", "revised_cell": null或这一格全文, "revised_prompt": null或衍生环境提示词, "revised_main_prompt": null, "image_edit_instruction": null或改图指令}'
-    )
+    delta = ""
+    if from_derived_main:
+        delta = str(attrs_of(main_entity).get("state_delta") or attrs_of(entity).get("state_delta") or "").strip()
+    if from_derived_main:
+        system_prompt = (
+            "你是衍生主环境名下这一角的一致性校对。这次只核对本角度的一张已经裁出的单格参考图。\n"
+            "注入只有三部分：被依赖主环境开篇里这一角看得见的五壁（正面、左侧面、右侧面、中部、上），"
+            "被依赖主环境里这一格的四宫格正文，以及衍生Delta。"
+            "镜头后面的那一壁没有注入，不要用它。不要用没注入的其余正文。\n"
+            "做两件核对，两件都要有结论：\n"
+            "1. 这一格正文与这五壁的个数、朝向、位置是否一致。Delta 不改这一格正文。不符就在 summary 里写明。revised_cell 必须为 null。\n"
+            "2. 参考图是否同时符合这一格正文、这五壁，以及 Delta。Delta 写到的变化必须出现在这一张图上。Delta 没写的保持这一格原样。不符就写改这一张图的指令。\n"
+            "不要把 Delta 写回被依赖主环境，也不要改另外三格。revised_main_prompt 必须为 null。\n"
+            "revised_prompt 是写进这个衍生环境、之后用来生图的提示词。只保留这一格正文里仍然成立的句子，并写上 Delta 在这一格的可见变化。不要写切割。\n"
+            "image_edit_instruction 只改这一张单格图。不写米，不写东南西北，不写另外三格，不写不要重画整张四宫。\n"
+            "两件都相符时 consistent 为 true，revised_prompt 和 image_edit_instruction 都为 null，revised_cell 仍为 null。\n"
+            "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
+            '{"consistent": true或false, "summary": "一两句中文", "revised_cell": null, "revised_prompt": null或衍生环境提示词, "revised_main_prompt": null, "image_edit_instruction": null或改图指令}'
+        )
+    else:
+        system_prompt = (
+            "你是衍生环境一致性校对。这次只核对本角度的一张已经裁出的单格参考图。\n"
+            "注入只有两部分：开篇里这一角看得见的五壁（正面、左侧面、右侧面、中部、上），以及这一格的四宫格正文。"
+            "镜头后面的那一壁没有注入，不要用它。\n"
+            "做两件核对，两件都要有结论：\n"
+            "1. 四宫格这一格的正文，与这五壁的个数、朝向、位置是否一致。不符就改这一格正文。\n"
+            "2. 参考图是否同时符合这一格正文和这五壁。不符就写改这一张图的指令。\n"
+            "两件可以同时不符。宫格要改就给 revised_cell。图片要改就给 image_edit_instruction。两件都要改就两个都给。\n"
+            "revised_prompt 是写进这个衍生环境、之后用来生图的提示词。"
+            "宫格改了，就用改后的这一格；宫格没改而衍生提示词还空，就用当前这一格正文。"
+            "不要写切割，不要写另外三格，不要写只切割。\n"
+            "开篇五壁不改。另外三格不改。revised_main_prompt 必须为 null。\n"
+            "image_edit_instruction 只改这一张单格图。不写米，不写东南西北，不写另外三格，不写不要重画整张四宫。\n"
+            "两件都相符时 consistent 为 true，revised_cell、revised_prompt、image_edit_instruction 都为 null。\n"
+            "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
+            '{"consistent": true或false, "summary": "一两句中文", "revised_cell": null或这一格全文, "revised_prompt": null或衍生环境提示词, "revised_main_prompt": null, "image_edit_instruction": null或改图指令}'
+        )
     parts = [
         f"检查对象=衍生环境单格。主体={getattr(entity, 'name', '')}。角度={angle if angle is not None else '未知'}。",
-        "开篇可见五壁：",
+        "开篇可见五壁：" if not from_derived_main else "被依赖主环境开篇可见五壁：",
         faces or "（没能按角度从开篇抽出可见五壁）",
         f"对应宫格={angle if angle is not None else ''}度格：",
         cell or "（主环境提示词里没有这一格）",
+    ]
+    if from_derived_main:
+        parts.append("衍生Delta：")
+        parts.append(delta or "（没有状态Delta）")
+    parts.extend([
         "当前衍生环境提示词：",
         stored or "（空。检查后用这一格正文填上，供之后生图使用。）",
-    ]
+    ])
     extra = str(note or "").strip()
     if extra:
         parts.append("用户补充，这次要特别处理：")
@@ -1085,13 +1292,22 @@ def build_consistency_messages(
     checked_prompt: str,
     kind: str,
     note: str = "",
+    depended_entity: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
+    if kind == "derived_main":
+        return _build_derived_main_consistency_messages(
+            image_url=image_url,
+            entity=entity,
+            main_entity=main_entity,
+            note=note,
+        )
     if kind == "cell":
         return _build_cell_consistency_messages(
             image_url=image_url,
             entity=entity,
             main_entity=main_entity,
             note=note,
+            depended_entity=depended_entity,
         )
     system_prompt = (
         "你是环境资产一致性校对。主环境开篇在【四向拼图】之前，是权威。"

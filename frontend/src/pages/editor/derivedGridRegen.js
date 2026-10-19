@@ -60,9 +60,17 @@ export function isEnvironmentEntity(entity) {
 
 const isAngledName = (value) => /^(?:\d+|[０-９]+)\s*(?:度|°|º|deg(?:ree)?s?\b)/i.test(String(value || '').trim());
 
+export function isDerivedMainEnvironmentEntity(entity) {
+    if (!entity || entity.is_deleted) return false;
+    if (!isEnvironmentEntity(entity)) return false;
+    if (isAngledName(entity.name) || isAngledName(entity.name_en)) return false;
+    return String(readAttrs(entity).derived_kind || '').trim() === 'derived_main';
+}
+
 export function isMainEnvironmentEntity(entity) {
     if (!entity || entity.is_deleted) return false;
     if (!isEnvironmentEntity(entity)) return false;
+    if (isDerivedMainEnvironmentEntity(entity)) return true;
     if (isAngledName(entity.name) || isAngledName(entity.name_en)) return false;
     const attrs = readAttrs(entity);
     if (attrs.source === 'programmatic_derived_framing') return false;
@@ -202,13 +210,33 @@ const cellImageUrl = (value) => {
     return cellImageUrl(record.url || record.image_url || record.href || '');
 };
 
+export function mediaPathname(url) {
+    const text = String(url || '').trim();
+    if (!text) return '';
+    try {
+        return decodeURIComponent(new URL(text, 'https://local.invalid').pathname || '');
+    } catch {
+        return text.split('#')[0].split('?')[0];
+    }
+}
+
+export function sameMediaUrl(left, right) {
+    const a = String(left || '').trim();
+    const b = String(right || '').trim();
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const leftPath = mediaPathname(a);
+    const rightPath = mediaPathname(b);
+    return Boolean(leftPath) && leftPath === rightPath;
+}
+
 export function readQuadCellImages(entity, sourceUrl = '', options = {}) {
     const allowStale = Boolean(options.allowStale);
     const record = parseJsonRecord(readAttrs(entity)[QUAD_CELL_IMAGES_ATTR]);
     if (!record || Array.isArray(record)) return null;
     const storedSource = String(record.source_url || record.sourceUrl || '').trim();
     const wanted = String(sourceUrl || '').trim();
-    if (!allowStale && wanted && storedSource && storedSource !== wanted) return null;
+    if (!allowStale && wanted && storedSource && !sameMediaUrl(storedSource, wanted)) return null;
     const cells = parseJsonRecord(record.cells);
     if (!cells || Array.isArray(cells)) return null;
     const saved = {};
@@ -270,7 +298,7 @@ export function isStateDerivedEntity(entity) {
     const kind = String(readAttrs(entity).derived_kind || '').trim();
     if (kind === 'state') return true;
     const prompt = String(entity?.generation_prompt_cn || '');
-    return prompt.includes('以已切割的同角衍生') || prompt.includes('不要重切宫格');
+    return prompt.includes('以已切割的同角衍生') || prompt.includes('以同角衍生「') || prompt.includes('不要重切宫格');
 }
 
 export function isGridCropDerivedEntity(entity) {

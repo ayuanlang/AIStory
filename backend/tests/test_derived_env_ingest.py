@@ -652,10 +652,15 @@ def test_state_cut_json_hangs_same_angle_parent():
             "state_delta": "地面沙尘加厚",
         }
     )
-    prompt = item["generation_prompt_cn"]
-    assert "以已切割的同角衍生「0度客栈大堂」" in prompt
-    assert "在此画面基础上叠加：地面沙尘加厚" in prompt
-    assert item["visual_dependencies"] == ["ENV:[0度客栈大堂]"]
+    assert item["generation_prompt_cn"] == ""
+    assert item["visual_dependencies"] == ["ENV:[客栈大堂_沙尘]"]
+    attrs = item["custom_attributes"]
+    assert attrs["derived_kind"] == "first_cut"
+    assert attrs["derived_from_state"] is True
+    assert attrs["derived_main_environment"] == "客栈大堂_沙尘"
+    assert attrs["source_main_environment"] == "客栈大堂"
+    assert attrs["main_environment"] == "客栈大堂_沙尘"
+    assert attrs["state_delta"] == "地面沙尘加厚"
 
 
 def test_group_json_by_main_environment():
@@ -669,13 +674,20 @@ def test_group_json_by_main_environment():
     mains = {group["main_environment"]: group for group in groups}
     assert set(mains) == {"客栈大堂", "马车内舱"}
     inn = mains["客栈大堂"]
-    assert inn["count"] == 3
+    assert inn["count"] == 4
     assert '"environments"' in inn["json"]
     assert "0度客栈大堂" in inn["json"]
     assert "180度客栈大堂" in inn["json"]
-    inn_prompts = {row["name"]: row["generation_prompt_cn"] for row in inn["payload"]["environments"]}
-    assert inn_prompts["0度客栈大堂"] == ""
-    assert "以已切割的同角衍生" in inn_prompts["0度客栈大堂_沙尘"]
+    inn_rows = {row["name"]: row for row in inn["payload"]["environments"]}
+    assert inn_rows["0度客栈大堂"]["generation_prompt_cn"] == ""
+    assert inn_rows["0度客栈大堂_沙尘"]["generation_prompt_cn"] == ""
+    assert inn_rows["0度客栈大堂_沙尘"]["visual_dependencies"] == ["ENV:[客栈大堂_沙尘]"]
+    derived_main = inn_rows["客栈大堂_沙尘"]
+    assert derived_main["custom_attributes"]["derived_kind"] == "derived_main"
+    assert derived_main["visual_dependencies"] == ["ENV:[客栈大堂]"]
+    assert "被依赖主环境=客栈大堂" in derived_main["generation_prompt_cn"]
+    assert "状态Delta=地面沙尘加厚" in derived_main["generation_prompt_cn"]
+    assert "四格一起改" in derived_main["generation_prompt_cn"]
     assert mains["马车内舱"]["count"] == 1
 
 
@@ -1094,7 +1106,7 @@ def test_merge_derived_environment_groups_keeps_prior_mains():
     merged = merge_derived_environment_groups(first, second)
     mains = {group["main_environment"]: group for group in merged}
     assert set(mains) == {"客栈大堂", "马车内舱"}
-    assert mains["客栈大堂"]["count"] == 3
+    assert mains["客栈大堂"]["count"] == 4
     assert mains["马车内舱"]["count"] == 1
     overwritten = merge_derived_environment_groups(
         first,
@@ -1105,9 +1117,9 @@ def test_merge_derived_environment_groups_keeps_prior_mains():
         ),
     )
     inn = {group["main_environment"]: group for group in overwritten}["客栈大堂"]
-    assert inn["count"] == 3
+    assert inn["count"] == 4
     by_name = {row["name"]: row for row in inn["payload"]["environments"]}
-    assert set(by_name) == {"0度客栈大堂", "180度客栈大堂", "0度客栈大堂_沙尘"}
+    assert set(by_name) == {"0度客栈大堂", "180度客栈大堂", "0度客栈大堂_沙尘", "客栈大堂_沙尘"}
     assert "触发=覆盖" in by_name["180度客栈大堂"]["dependency_strategy"]["logic"]
 
 
