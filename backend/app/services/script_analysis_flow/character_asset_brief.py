@@ -235,6 +235,30 @@ def _char_name_key(name: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def _wrap_char_extract(items: List[str]) -> str:
+    body = "\n\n".join(block for block in items if _clean(block)) or "无"
+    return f"[CHAR_EXTRACT_START]\n{body}\n[CHAR_EXTRACT_END]"
+
+
+def merge_char_extract_increment(current_script: str, increment_text: str) -> str:
+    """Append character rows whose names are not already registered. Existing rows stay."""
+    current_block = latest_char_extract_block(current_script)
+    existing = [] if char_extract_is_explicit_none(current_block) else [
+        block for _name, block in _char_items_in_order(current_block)
+    ]
+    if not char_extract_has_items(increment_text):
+        return _wrap_char_extract(existing) if existing else (current_block or _wrap_char_extract([]))
+    seen = {_char_name_key(name) for name, _block in _char_items_in_order(current_block)} if existing else set()
+    merged = list(existing)
+    for name, block in _char_items_in_order(increment_text):
+        key = _char_name_key(name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(block)
+    return _wrap_char_extract(merged)
+
+
 def slice_char_extract_to_names(text: str, names: List[str]) -> str:
     """Keep only the named character items. An empty result must not fall back to the full list."""
     wanted = []

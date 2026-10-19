@@ -4174,6 +4174,8 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
     const reextractTarget = String(runtimeHooks?.reextractTarget || runtimeHooks?.reextract_target || '').trim().toLowerCase();
     if (reextractTarget === 'character' || reextractTarget === 'prop') {
         analyze_payload.reextract_target = reextractTarget;
+        const originalScript = String(runtimeHooks?.originalScript || runtimeHooks?.original_script || '').trim();
+        if (originalScript) analyze_payload.original_script = originalScript;
     }
     const analysisTraceId = String(runtimeHooks?.analysisTraceId || runtimeHooks?.requestId || '').trim();
     if (analysisTraceId) analyze_payload.analysis_trace_id = analysisTraceId;

@@ -226,6 +226,30 @@ def _prop_name_key(name: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def _wrap_prop_extract(items: List[str]) -> str:
+    body = "\n\n".join(block for block in items if _clean(block)) or "无"
+    return f"[PROP_EXTRACT_START]\n{body}\n[PROP_EXTRACT_END]"
+
+
+def merge_prop_extract_increment(current_script: str, increment_text: str) -> str:
+    """Append prop rows whose names are not already registered. Existing rows stay."""
+    current_block = latest_prop_extract_block(current_script)
+    existing = [] if prop_extract_is_explicit_none(current_block) else [
+        block for _name, block in _prop_items_in_order(current_block)
+    ]
+    if not prop_extract_has_items(increment_text):
+        return _wrap_prop_extract(existing) if existing else (current_block or _wrap_prop_extract([]))
+    seen = {_prop_name_key(name) for name, _block in _prop_items_in_order(current_block)} if existing else set()
+    merged = list(existing)
+    for name, block in _prop_items_in_order(increment_text):
+        key = _prop_name_key(name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(block)
+    return _wrap_prop_extract(merged)
+
+
 def slice_prop_extract_to_names(text: str, names: List[str]) -> str:
     """Keep only the named prop items. An empty result must not fall back to the full list."""
     wanted = []

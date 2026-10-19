@@ -112,30 +112,80 @@ def _strip_reextract_marker(text: str) -> str:
     return _REEXTRACT_MARK.sub("", str(text or "")).strip()
 
 
-def _compose_reextract_user_text(script_text: str, target: str) -> str:
-    """Reference script plus a closing contract, so the model does not continue the last shot."""
+def _reextract_supplement_brief(target: str) -> str:
+    if target == "character":
+        return (
+            "先通读【原剧本】，再对照【已有全局统筹】里的角色列表，在原列表上补充。"
+            "仍符合规则的行保留已登记名称与外形。"
+            "只输出已有列表里没有的角色。"
+            "要补的是另一可持续状态：换装、缚与解、蒙面与揭面、年龄态、法相、龙、金身。"
+            "已登记的名称不要再写。没有可补的，块内只写一行无。"
+        )
+    return (
+        "先通读【原剧本】，再对照【已有全局统筹】里的道具列表。"
+        "只输出已有列表里没有的道具。"
+        "要补的是：手持或挽着的物件；打破、点燃等前后外形可区分的两条互相依赖状态道具；"
+        "看见整机外形却漏掉的整车，以及驾驶舱或舱内做场缺的载具裁定。"
+        "正文已经看见整机，必须补整车道具，禁止只留驾驶舱。"
+        "只在舱内做场、正文没有整机外形，才写仅内部并留下舱名。"
+        "已登记的名称不要再写。没有可补的，块内只写一行无。"
+    )
+
+
+def _compose_reextract_user_text(script_text: str, target: str, original_script: str = "") -> str:
+    """Original script is the source. The orchestration draft is only the list to supplement."""
     kind = "角色" if target == "character" else "道具"
     tag = "CHAR" if target == "character" else "PROP"
     marker = "[REEXTRACT:CHAR]" if target == "character" else "[REEXTRACT:PROP]"
-    body = _strip_reextract_marker(script_text)
+    orchestration = _strip_reextract_marker(script_text)
+    original = str(original_script or "").strip()
+    if original:
+        original_block = f"【原剧本】\n{original}\n【原剧本结束】"
+    else:
+        original_block = (
+            "【原剧本】\n"
+            "（本集原剧本为空。只得按已有全局统筹补，不得另编原文没有的人与物。）\n"
+            "【原剧本结束】"
+        )
     return (
         f"{marker}\n\n"
-        "下面【当前剧本】只作重抽依据。禁止续写，禁止复述，禁止输出镜头、建置、入戏、"
-        "P1、音效或当前环境。\n\n"
-        f"【当前剧本】\n{body}\n【当前剧本结束】\n\n"
-        f"本轮唯一合法输出是一块{kind}列表："
+        f"{_reextract_supplement_brief(target)}\n"
+        "禁止续写，禁止复述，禁止输出镜头、建置、入戏、P1、音效或当前环境。\n\n"
+        f"{original_block}\n\n"
+        "【已有全局统筹】\n"
+        "下面是当前全局统筹成稿，含已登记的提取块和场次。只用来对照已有名单、适用场和场号，不代替原剧本。\n"
+        f"{orchestration}\n"
+        "【已有全局统筹结束】\n\n"
+        f"本轮唯一合法输出是一块{kind}增量："
         f"从 [{tag}_EXTRACT_START] 开始，到 [{tag}_EXTRACT_END] 结束。"
-        f"每一件单独一行 [{tag}]，字段按本技能 §8 模板。"
+        f"只写已有列表里没有的条目，每一件单独一行 [{tag}]，字段按本技能 §8 模板。"
+        "没有可补的，块内只写一行无。"
         "不要在列表前后写任何别的字。"
     )
+
+
+def _load_reextract_original_script(episode: Any, raw_payload: Dict[str, Any]) -> str:
+    """Editor copy wins when present; otherwise use the saved episode script page."""
+    from app.services.episode_script_output import extract_official_episode_script
+
+    incoming = str(raw_payload.pop("original_script", "") or "").strip()
+    stored = ""
+    if episode is not None:
+        stored = str(getattr(episode, "script_content", "") or "").strip()
+    return extract_official_episode_script(incoming or stored)
 
 
 def _reextract_system_contract(target: str) -> str:
     kind = "角色" if target == "character" else "道具"
     tag = "CHAR" if target == "character" else "PROP"
+    if target == "character":
+        focus = "依据是原剧本。只输出已有角色列表里没有的条目，如换装、缚解、蒙面揭面、年龄态、法相金身。程序会把这些新条目追加进原列表。"
+    else:
+        focus = "依据是原剧本。只输出已有道具列表里没有的条目，如前后状态道具，以及看见整机却漏掉的整车和驾驶舱载具裁定。程序会把这些新条目追加进原列表。"
     return (
         "【重新抽取输出合同】\n"
-        f"本轮只重抽{kind}列表。唯一合法输出是 [{tag}_EXTRACT_START] 到 [{tag}_EXTRACT_END]。"
+        f"本轮只输出{kind}增量。{focus}"
+        f"唯一合法输出是 [{tag}_EXTRACT_START] 到 [{tag}_EXTRACT_END]。"
         "禁止续写镜头句、建置、入戏、P1、音效、当前环境，禁止输出 Project Visual Backfill。"
     )
 
@@ -149,14 +199,16 @@ def _choose_reextract_base(request_text: str, stored_text: str) -> str:
 
 
 def _apply_list_reextract(*, llm_text: str, request_text: str, stored_text: str, target: str) -> Tuple[str, str]:
-    """Keep the current script and swap only the requested extract block."""
+    """Keep registered rows and append only names the increment adds."""
     from app.services.script_analysis_flow.character_asset_brief import (
         char_extract_has_items,
         char_extract_is_explicit_none,
+        merge_char_extract_increment,
         pick_refreshed_char_extract_block,
         replace_char_extract_in_script,
     )
     from app.services.script_analysis_flow.prop_asset_brief import (
+        merge_prop_extract_increment,
         pick_refreshed_prop_extract_block,
         prop_extract_has_items,
         prop_extract_is_explicit_none,
@@ -170,11 +222,13 @@ def _apply_list_reextract(*, llm_text: str, request_text: str, stored_text: str,
         block = pick_refreshed_char_extract_block(llm_text, base)
         if not block or not (char_extract_has_items(block) or char_extract_is_explicit_none(block)):
             raise HTTPException(status_code=422, detail=_reextract_reject_detail("character", llm_text))
-        return replace_char_extract_in_script(base, block), block
+        merged_block = merge_char_extract_increment(base, block)
+        return replace_char_extract_in_script(base, merged_block), merged_block
     block = pick_refreshed_prop_extract_block(llm_text, base)
     if not block or not (prop_extract_has_items(block) or prop_extract_is_explicit_none(block)):
         raise HTTPException(status_code=422, detail=_reextract_reject_detail("prop", llm_text))
-    return replace_prop_extract_in_script(base, block), block
+    merged_block = merge_prop_extract_increment(base, block)
+    return replace_prop_extract_in_script(base, merged_block), merged_block
 
 
 def _reextract_reject_detail(target: str, llm_text: str) -> str:
@@ -608,7 +662,12 @@ async def execute_scene_analysis_flow_node(
         reextract_base_text = ""
         if list_reextract:
             reextract_base_text = _strip_reextract_marker(str(raw_payload.get("text") or ""))
-            raw_payload["text"] = _compose_reextract_user_text(reextract_base_text, reextract_target)
+            original_script = _load_reextract_original_script(episode, raw_payload)
+            raw_payload["text"] = _compose_reextract_user_text(
+                reextract_base_text,
+                reextract_target,
+                original_script,
+            )
             contract = _reextract_system_contract(reextract_target)
             system_prompt = str(raw_payload.get("system_prompt") or "")
             if contract not in system_prompt:

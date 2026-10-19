@@ -4863,6 +4863,32 @@ const normalizeExtractReplacementInner = (content, tag) => {
     return raw.replace(new RegExp(`\\[${tag}_EXTRACT_(START|END)[^\\]]*\\]`, 'gi'), '').trim() || '无';
 };
 
+const mergeTaggedExtractIncrement = (source, tag, deltaText) => {
+    const existingItems = splitTaggedExtractItems(source, tag);
+    const deltaInner = normalizeExtractReplacementInner(deltaText, tag);
+    if (!deltaInner || deltaInner === '无') return source;
+    const deltaItems = splitTaggedExtractItems(
+        `[${tag}_EXTRACT_START]\n${deltaInner}\n[${tag}_EXTRACT_END]`,
+        tag,
+    );
+    const seen = new Set(
+        existingItems.map((item) => normalizeSubjectKey(item.name)).filter(Boolean),
+    );
+    const added = [];
+    deltaItems.forEach((item) => {
+        const key = normalizeSubjectKey(item.name);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        if (String(item.block || '').trim()) added.push(String(item.block).trim());
+    });
+    if (!added.length) return source;
+    const inner = [
+        ...existingItems.map((item) => String(item.block || '').trim()).filter(Boolean),
+        ...added,
+    ].join('\n\n') || '无';
+    return replaceTaggedExtractBlock(source, tag, inner);
+};
+
 const replaceTaggedExtractBlock = (text, tag, nextInner) => {
     const source = String(text || '');
     const inner = String(nextInner || '').trim() || '无';
@@ -30781,8 +30807,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const labelZh = target === 'character' ? '角色列表' : '道具列表';
         const labelEn = target === 'character' ? 'character list' : 'prop list';
         if (!window.confirm(t(
-            `将按当前剧本重新抽取${labelZh}，并只更新这一份提取列表。确认继续吗？`,
-            `Re-extract the ${labelEn} from the current script and update only that list. Continue?`
+            `将按原剧本在现有${labelZh}上补充重抽，并只更新这一份提取列表。确认继续吗？`,
+            `Supplement the current ${labelEn} from the original script and update only that list. Continue?`
         ))) return;
 
         const startedAt = Date.now();
@@ -30810,6 +30836,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     selectedReuseSubjectAssets,
                     {
                         reextractTarget: target,
+                        originalScript: extractOfficialEpisodeScript(rawContent || activeEpisode?.script_content || ''),
                         onTaskCreated: (taskId) => {
                             setActiveAnalysisTaskId(String(taskId || '').trim());
                         },
@@ -30859,9 +30886,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         `Re-extract returned no ${labelEn}. A [${tag}_EXTRACT] list is required.`
                     ));
                 }
-                const toSave = /\[SCENE_START/i.test(output)
-                    ? output
-                    : replaceTaggedExtractBlock(source, tag, normalizeExtractReplacementInner(block, tag));
+                const toSave = mergeTaggedExtractIncrement(source, tag, block);
                 await persistSceneSplitExtractSource(toSave);
             }
             setAnalysisFlowStatus({
@@ -36961,8 +36986,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     disabled={!canEditExtract || Boolean(reextractingAssetList) || isAnalyzing}
                                                     className={diagnosticBtnClass}
                                                     title={spec.key === 'character'
-                                                        ? t('按当前剧本重新抽取角色列表，只更新角色提取块', 'Re-extract the character list from the current script and update only that list')
-                                                        : t('按当前剧本重新抽取道具列表，只更新道具提取块', 'Re-extract the prop list from the current script and update only that list')}
+                                                        ? t('按原剧本在现有角色列表上补充重抽，只更新角色提取块', 'Supplement the character list from the original script and update only that list')
+                                                        : t('按原剧本在现有道具列表上补充重抽，只更新道具提取块', 'Supplement the prop list from the original script and update only that list')}
                                                 >
                                                     {reextractingAssetList === spec.key
                                                         ? t('抽取中', 'Extracting')

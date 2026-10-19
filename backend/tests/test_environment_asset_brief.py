@@ -534,11 +534,59 @@ def test_shot_prose_is_not_a_prop_list_and_reextract_contract_closes_the_prompt(
             target="prop",
         )
     assert "镜头句" in str(exc.value.detail)
-    composed = _compose_reextract_user_text(current, "prop")
+    composed = _compose_reextract_user_text(
+        current,
+        "prop",
+        "黑色浮空艇翻滚着凌空擦过大厦尖顶。残破机舱内有人。花瓶被打破。",
+    )
     assert composed.startswith("[REEXTRACT:PROP]")
+    original_at = composed.index("【原剧本】\n")
+    orchestration_at = composed.index("【已有全局统筹】\n")
+    assert original_at < composed.index("黑色浮空艇") < orchestration_at
     assert "正文甲" in composed
+    assert "整车" in composed
+    assert "驾驶舱" in composed
     assert composed.rstrip().endswith("不要在列表前后写任何别的字。")
     assert "[PROP_EXTRACT_START]" in composed
+    char_composed = _compose_reextract_user_text(current, "character", "她换上另一套衣裳，腕上铁铐已解开。")
+    assert char_composed.startswith("[REEXTRACT:CHAR]")
+    assert "换装" in char_composed
+    assert "已登记的名称不要再写" in char_composed
+    assert "【原剧本】" in char_composed
+    assert "腕上铁铐已解开" in char_composed
+
+
+def test_reextract_appends_only_new_names_and_keeps_a_none_increment():
+    from app.services.script_analysis_flow_runner import _apply_list_reextract
+
+    current = """[SCENE_START:EP01_SC01]
+正文甲
+[PROP_EXTRACT_START]
+[PROP] 名称=旧佩
+[PROP_EXTRACT_END]
+"""
+    repeated = """[PROP_EXTRACT_START]
+[PROP] 名称=旧佩｜外形=改写
+[PROP] 名称=布包
+[PROP_EXTRACT_END]
+"""
+    merged, block = _apply_list_reextract(
+        llm_text=repeated,
+        request_text=current,
+        stored_text=current,
+        target="prop",
+    )
+    assert merged.count("名称=旧佩") == 1
+    assert "外形=改写" not in merged
+    assert "名称=布包" in block
+    unchanged, _kept = _apply_list_reextract(
+        llm_text="[PROP_EXTRACT_START]\n无\n[PROP_EXTRACT_END]",
+        request_text=current,
+        stored_text=current,
+        target="prop",
+    )
+    assert "名称=旧佩" in unchanged
+    assert "名称=布包" not in unchanged
 
 
 def test_multiline_prop_list_replaces_the_old_list_and_keeps_the_scene():
@@ -582,7 +630,8 @@ def test_multiline_prop_list_replaces_the_old_list_and_keeps_the_scene():
     )
     assert "名称=墨绿帆布行李箱" in block
     assert "名称=青花老粗陶料罐_碎裂态" in merged
-    assert "名称=旧佩" not in merged
+    assert "名称=旧佩" in merged
+    assert merged.index("名称=旧佩") < merged.index("名称=墨绿帆布行李箱")
     assert "正文甲" in merged
     assert merged.count("[PROP_EXTRACT_START") == 1
 
@@ -608,7 +657,8 @@ def test_unclosed_prop_list_still_replaces_the_stored_list():
         target="prop",
     )
     assert "名称=布包" in merged
-    assert "名称=旧佩" not in merged
+    assert "名称=旧佩" in merged
+    assert merged.index("名称=旧佩") < merged.index("名称=布包")
     assert "正文甲" in merged
 
 
