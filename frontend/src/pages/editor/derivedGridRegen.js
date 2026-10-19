@@ -514,6 +514,69 @@ function looksLikeFullDesignOpening(text) {
     return Boolean(body) && FULL_OPENING_MARKS.some((mark) => body.includes(mark));
 }
 
+function quadFailureClause(detail, label) {
+    const text = String(detail || '');
+    const start = text.indexOf(label);
+    if (start < 0) return '';
+    const body = text.slice(start + label.length);
+    const end = body.search(/[。\n]/);
+    return (end < 0 ? body : body.slice(0, end)).trim();
+}
+
+function pushQuadFailureName(names, name) {
+    const stable = String(name || '').trim();
+    if (!stable || names.includes(stable)) return;
+    names.push(stable);
+}
+
+/**
+ * Names a four-grid failure already spelled out.
+ * names are the environments to rerun. unmatched are library rows that do not
+ * exist, so another prompt call cannot write them. truncated means the sentence
+ * itself said some names were omitted.
+ */
+export function quadFailureEnvironmentNames(detail) {
+    const text = String(detail || '');
+    const names = [];
+    const unmatched = [];
+    let truncated = false;
+    const takeNames = (clause, bucket) => {
+        let body = String(clause || '').trim();
+        if (!body) return;
+        const tail = body.match(/等(\d+)条\s*$/);
+        if (tail) {
+            const listed = body.slice(0, tail.index).split(/[、,，]/).map((item) => item.trim()).filter(Boolean);
+            if (Number(tail[1]) > listed.length) truncated = true;
+            body = body.slice(0, tail.index);
+        }
+        body.split(/[、,，]/).map((item) => item.trim()).filter(Boolean).forEach((name) => {
+            pushQuadFailureName(bucket, name);
+        });
+    };
+    const takeMarkers = (clause) => {
+        let body = String(clause || '').trim();
+        if (!body) return;
+        const tail = body.match(/[；;]?\s*另有(\d+)条\s*$/);
+        if (tail) {
+            truncated = true;
+            body = body.slice(0, tail.index);
+        }
+        body.split(/[；;]/).forEach((part) => {
+            const piece = String(part || '').trim();
+            if (!piece) return;
+            const splitAt = piece.search(/缺(?=【|\[)/);
+            if (splitAt >= 0) pushQuadFailureName(names, piece.slice(0, splitAt));
+        });
+    };
+    takeNames(quadFailureClause(text, '请求里的设计稿未一次写回：'), names);
+    takeNames(quadFailureClause(text, '已找到但未写入：'), names);
+    takeMarkers(quadFailureClause(text, '提示词缺标记：'));
+    takeNames(quadFailureClause(text, '四宫格未一次写满：'), names);
+    takeNames(quadFailureClause(text, '四宫格未写满：'), names);
+    takeNames(quadFailureClause(text, '库中无同名环境：'), unmatched);
+    return { names, unmatched, truncated };
+}
+
 export function mainEnvironmentOpeningDraft(entity) {
     const attrs = readAttrs(entity);
     const fromPrompt = openingBeforeQuad(entity?.generation_prompt_cn || entity?.prompt || '');

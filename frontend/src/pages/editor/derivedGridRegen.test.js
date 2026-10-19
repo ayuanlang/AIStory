@@ -7,6 +7,7 @@ import {
     isStateDerivedEntity,
     mainQuadCellAddresses,
     planDerivedGridCell,
+    quadFailureEnvironmentNames,
     readQuadCellImages,
     singleCellEditInstruction,
 } from './derivedGridRegen.js';
@@ -139,6 +140,29 @@ describe('saved quad cells', () => {
         assert.equal(isGridCropDerivedEntity(stateDerived), false);
         assert.equal(derivedDependencyImageUrl(stateDerived, derived, [main, derived, stateDerived]), 'https://cdn.example/derived.jpg');
         assert.equal(derivedDependencyImageUrl(stateDerived, main, [main, derived, stateDerived]), 'https://cdn.example/main.jpg');
+    });
+
+    it('reads named four-grid gaps and leaves library misses out of the rerun list', () => {
+        const detail = (
+            'ENVIRONMENT_QUAD_NOT_APPLIED: 四宫格未写回全部主环境。主环境6条，提示词合格5条，已写入0条。'
+            + '提示词缺标记：城北生鲜冷链仓库缺[270度格-右下。'
+            + '请求里的设计稿未一次写回：城北生鲜冷链仓库、城北废弃变电站、七号地下工业堡垒、七号堡垒外围废墟。'
+        );
+        assert.deepEqual(quadFailureEnvironmentNames(detail), {
+            names: ['城北生鲜冷链仓库', '城北废弃变电站', '七号地下工业堡垒', '七号堡垒外围废墟'],
+            unmatched: [],
+            truncated: false,
+        });
+        const truncated = quadFailureEnvironmentNames(
+            '提示词缺标记：甲缺【四向拼图】、[0度格-左上；乙缺[270度格-右下；另有2条。请求里的设计稿未一次写回：甲、乙等4条。'
+        );
+        assert.deepEqual(truncated.names, ['甲', '乙']);
+        assert.equal(truncated.truncated, true);
+        const libraryMiss = quadFailureEnvironmentNames('库中无同名环境：地下军械库。');
+        assert.deepEqual(libraryMiss.names, []);
+        assert.deepEqual(libraryMiss.unmatched, ['地下军械库']);
+        assert.deepEqual(quadFailureEnvironmentNames('四宫格未写回：结果里没有可写回的主环境。').names, []);
+        assert.deepEqual(quadFailureEnvironmentNames('四宫格未一次写满：客栈大堂、天台。').names, ['客栈大堂', '天台']);
     });
 
     it('drops shared grid-cell filenames so another project image is not reused', () => {

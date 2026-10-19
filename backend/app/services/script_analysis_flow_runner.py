@@ -1006,6 +1006,8 @@ async def execute_scene_analysis_flow_node(
             openings = extract_named_design_openings(source_text)
             missing_requested = missing_requested_quad_drafts(source_text, named_rows)
             complete = bool(named_rows) and len(ready_rows) == len(named_rows) and not missing_requested
+            # Keep prompts that already have every cell. The failure still names
+            # the gaps, and the caller reruns only those environments.
             applied = (
                 apply_main_environment_quad_prompts(
                     db,
@@ -1014,7 +1016,7 @@ async def execute_scene_analysis_flow_node(
                     rows=ready_rows,
                     openings=openings,
                 )
-                if complete
+                if ready_rows
                 else {"updated": [], "missing": [], "skipped": []}
             )
             if (

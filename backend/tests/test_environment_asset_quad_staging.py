@@ -196,3 +196,5 @@ def test_art_direction_exposes_rerunnable_derived_environment_node():
     assert "key: 'single', labelZh: '单个主环境'" in src
     assert "asset_design_environment_quad" in src
     assert "rerunKind: 'environment_quad'" in src
+    assert "quadFailureEnvironmentNames" in src
+    assert "四宫格按报错重跑缺失环境" in src

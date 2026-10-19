@@ -14,7 +14,7 @@ import { BookOpen, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users,
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
-import { mainEnvironmentOpeningDraft } from '../derivedGridRegen';
+import { mainEnvironmentOpeningDraft, quadFailureEnvironmentNames } from '../derivedGridRegen';
 import {
     getEpisodeAnalysisRun,
     releaseEpisodeAnalysisRun,
@@ -20686,19 +20686,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         && mainEnvironmentPromptHasQuad(row?.generation_prompt_cn)
                     )));
                 };
-                try {
-                    // Pending mains are already limited to the named asset when this
-                    // is a single-environment rerun. Every other case, including a
-                    // named match that resolved to several mains, goes out together.
-                    const names = pending.map((item) => String(item.name).trim());
+                const submitQuad = async (items, traceSuffix) => {
                     throwIfAnalysisStopped();
-                    onLog?.(
-                        `[Stage 3 Asset Design] 四宫格一次性转换 mains=${names.length} ${names.join('、')}`,
-                        'info'
-                    );
                     const res = await runScriptAnalysisFlowAnalyzeNode(
                         'asset_design_environment_quad',
-                        quadDraftText(pending),
+                        quadDraftText(items),
                         quadPrompt,
                         null,
                         episodeIdForAssetSubtasks,
@@ -20706,7 +20698,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         selectedReuseSubjectAssets,
                         {
                             skipEpisodePersist: true,
-                            analysisTraceId: `${traceId}-quad`,
+                            analysisTraceId: `${traceId}-quad${traceSuffix || ''}`,
                         },
                         projectId,
                         'script_analysis',
@@ -20714,20 +20706,97 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         'environment_quad'
                     );
                     const text = extractAnalysisTextFromResult(res);
-                    const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
-                    const missing = quadNamesMissing(parsed, names);
-                    if (missing.length) {
+                    return resolveSubjectsJsonFromAnalyzeResult(res, text);
+                };
+                const rerunNamedGaps = async (detail) => {
+                    const gap = quadFailureEnvironmentNames(detail);
+                    const targets = [];
+                    gap.names.forEach((name) => {
+                        const wanted = String(name || '').trim();
+                        const item = pending.find((row) => String(row?.name || '').trim() === wanted)
+                            || pending.find((row) => String(row?.name || '').trim().toLowerCase() === wanted.toLowerCase());
+                        if (item && !targets.includes(item)) targets.push(item);
+                    });
+                    if (!targets.length) return false;
+                    onLog?.(
+                        `[Stage 3 Asset Design] 四宫格按报错重跑缺失环境：${targets.map((item) => item.name).join('、')}`,
+                        'info'
+                    );
+                    let wrote = 0;
+                    for (let index = 0; index < targets.length; index += 1) {
+                        const item = targets[index];
+                        const name = String(item.name).trim();
+                        try {
+                            const parsed = await submitQuad([item], `-retry-${index + 1}`);
+                            if (quadNamesMissing(parsed, [name]).length) {
+                                onLog?.(
+                                    `[Stage 3 Asset Design] 四宫格重跑仍未写满：${name}`,
+                                    'error'
+                                );
+                                continue;
+                            }
+                            wrote += 1;
+                            onLog?.(
+                                `[Stage 3 Asset Design] 四宫格已重跑写回：${name}`,
+                                'success'
+                            );
+                        } catch (retryErr) {
+                            if (isTaskCanceledError(retryErr)) throw retryErr;
+                            onLog?.(
+                                `[Stage 3 Asset Design] 四宫格重跑失败：${name} ${retryErr?.message || retryErr}`,
+                                'error'
+                            );
+                        }
+                    }
+                    if (wrote === targets.length && !gap.truncated && gap.unmatched.length === 0) {
+                        await refreshEpisodeOwnedEntities();
                         onLog?.(
-                            `[Stage 3 Asset Design] 四宫格未一次写满：${missing.join('、')}`,
+                            `[Stage 3 Asset Design] 四宫格缺失环境已重跑写回 mains=${wrote}`,
+                            'success'
+                        );
+                        return true;
+                    }
+                    if (gap.truncated) {
+                        onLog?.(
+                            '[Stage 3 Asset Design] 四宫格报错未列出全部缺失环境，已重跑点名的环境。',
                             'error'
                         );
-                        return false;
+                    }
+                    return false;
+                };
+                try {
+                    // Pending mains are already limited to the named asset when this
+                    // is a single-environment rerun. Every other case, including a
+                    // named match that resolved to several mains, goes out together.
+                    // A failure that names the missing environments reruns only those.
+                    const names = pending.map((item) => String(item.name).trim());
+                    onLog?.(
+                        `[Stage 3 Asset Design] 四宫格一次性转换 mains=${names.length} ${names.join('、')}`,
+                        'info'
+                    );
+                    const parsed = await submitQuad(pending, '');
+                    const missing = quadNamesMissing(parsed, names);
+                    if (missing.length) {
+                        const recovered = await rerunNamedGaps(`四宫格未一次写满：${missing.join('、')}。`);
+                        if (!recovered) {
+                            onLog?.(
+                                `[Stage 3 Asset Design] 四宫格未一次写满：${missing.join('、')}`,
+                                'error'
+                            );
+                            return false;
+                        }
                     }
                     readyCount = names.length;
                     await refreshEpisodeOwnedEntities();
                     onLog?.(`[Stage 3 Asset Design] 四宫格最后提示词已写回 mains=${readyCount}`, 'success');
                     return true;
                 } catch (quadErr) {
+                    if (isTaskCanceledError(quadErr)) throw quadErr;
+                    const recovered = await rerunNamedGaps(String(quadErr?.message || quadErr || ''));
+                    if (recovered) {
+                        readyCount = pending.length;
+                        return true;
+                    }
                     onLog?.(
                         `[Stage 3 Asset Design] 四宫格转换失败: ${quadErr?.message || quadErr}`,
                         'error'
@@ -33338,17 +33407,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 )));
             };
             let readyCount = 0;
-            throwIfAnalysisStopped();
-            if (wantedName) {
-                const item = mains[0];
-                const name = String(item.name).trim();
-                onLog?.(
-                    t(`四宫格：${name}`, `Four-grid: ${name}`),
-                    'process'
-                );
+            const submitQuad = async (items, traceSuffix) => {
+                throwIfAnalysisStopped();
                 const res = await runScriptAnalysisFlowAnalyzeNode(
                     'asset_design_environment_quad',
-                    quadDraftText([item]),
+                    quadDraftText(items),
                     quadPrompt,
                     null,
                     activeEpisode.id,
@@ -33356,7 +33419,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     selectedReuseSubjectAssets,
                     {
                         skipEpisodePersist: true,
-                        analysisTraceId: `environment-quad-rerun-${activeEpisode.id}-${Date.now()}`,
+                        analysisTraceId: `environment-quad-rerun-${activeEpisode.id}-${Date.now()}${traceSuffix || ''}`,
                     },
                     projectId,
                     'script_analysis',
@@ -33364,50 +33427,90 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     'environment_quad'
                 );
                 const text = extractAnalysisTextFromResult(res);
-                const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
-                if (quadNamesMissing(parsed, [name]).length) {
-                    throw new Error(t(
-                        `四宫格未写满：${name}`,
-                        `Four-grid prompt is incomplete for ${name}`
-                    ));
-                }
-                readyCount = 1;
-            } else {
-                const names = mains.map((item) => String(item.name).trim());
+                return resolveSubjectsJsonFromAnalyzeResult(res, text);
+            };
+            const rerunNamedGaps = async (detail) => {
+                const gap = quadFailureEnvironmentNames(detail);
+                const targets = [];
+                gap.names.forEach((name) => {
+                    const wanted = String(name || '').trim();
+                    const item = mains.find((row) => String(row?.name || '').trim() === wanted)
+                        || mains.find((row) => String(row?.name || '').trim().toLowerCase() === wanted.toLowerCase());
+                    if (item && !targets.includes(item)) targets.push(item);
+                });
+                if (!targets.length) return false;
                 onLog?.(
                     t(
-                        `四宫格一次性转换 ${names.length} 个主环境`,
-                        `Four-grid conversion for ${names.length} main environment(s) in one pass`
+                        `四宫格按报错重跑缺失环境：${targets.map((item) => item.name).join('、')}`,
+                        `Rerunning the four-grid for the environments named in the error: ${targets.map((item) => item.name).join(', ')}`
                     ),
                     'process'
                 );
-                const res = await runScriptAnalysisFlowAnalyzeNode(
-                    'asset_design_environment_quad',
-                    quadDraftText(mains),
-                    quadPrompt,
-                    null,
-                    activeEpisode.id,
-                    analysisAttentionNotes,
-                    selectedReuseSubjectAssets,
-                    {
-                        skipEpisodePersist: true,
-                        analysisTraceId: `environment-quad-rerun-${activeEpisode.id}-${Date.now()}`,
-                    },
-                    projectId,
-                    'script_analysis',
-                    resolveSelectedScriptAnalysisApiId(),
-                    'environment_quad'
+                let wrote = 0;
+                for (let index = 0; index < targets.length; index += 1) {
+                    const item = targets[index];
+                    const name = String(item.name).trim();
+                    try {
+                        const parsed = await submitQuad([item], `-retry-${index + 1}`);
+                        if (quadNamesMissing(parsed, [name]).length) {
+                            onLog?.(
+                                t(`四宫格重跑仍未写满：${name}`, `Four-grid rerun is still incomplete for ${name}`),
+                                'error'
+                            );
+                            continue;
+                        }
+                        wrote += 1;
+                        onLog?.(
+                            t(`四宫格已重跑写回：${name}`, `Four-grid rerun wrote ${name}.`),
+                            'success'
+                        );
+                    } catch (retryErr) {
+                        if (isTaskCanceledError(retryErr)) throw retryErr;
+                        onLog?.(
+                            t(
+                                `四宫格重跑失败：${name} ${retryErr?.message || retryErr}`,
+                                `Four-grid rerun failed for ${name}: ${retryErr?.message || retryErr}`
+                            ),
+                            'error'
+                        );
+                    }
+                }
+                if (wrote === targets.length && !gap.truncated && gap.unmatched.length === 0) return true;
+                if (gap.truncated) {
+                    onLog?.(
+                        t(
+                            '四宫格报错未列出全部缺失环境，已重跑点名的环境。',
+                            'The four-grid error did not name every missing environment. The named ones were rerun.'
+                        ),
+                        'error'
+                    );
+                }
+                return false;
+            };
+            try {
+                const batch = wantedName ? [mains[0]] : mains;
+                const names = batch.map((item) => String(item.name).trim());
+                onLog?.(
+                    wantedName
+                        ? t(`四宫格：${names[0]}`, `Four-grid: ${names[0]}`)
+                        : t(
+                            `四宫格一次性转换 ${names.length} 个主环境`,
+                            `Four-grid conversion for ${names.length} main environment(s) in one pass`
+                        ),
+                    'process'
                 );
-                const text = extractAnalysisTextFromResult(res);
-                const parsed = resolveSubjectsJsonFromAnalyzeResult(res, text);
+                const parsed = await submitQuad(batch, '');
                 const missing = quadNamesMissing(parsed, names);
                 if (missing.length) {
-                    throw new Error(t(
-                        `四宫格未一次写满：${missing.join('、')}`,
-                        `Four-grid prompts are incomplete for ${missing.join(', ')}`
-                    ));
+                    throw new Error(`四宫格未一次写满：${missing.join('、')}。`);
                 }
                 readyCount = names.length;
+            } catch (batchError) {
+                if (isTaskCanceledError(batchError)) throw batchError;
+                const detail = String(batchError?.response?.data?.detail || batchError?.message || batchError || '');
+                const recovered = await rerunNamedGaps(detail);
+                if (!recovered) throw batchError;
+                readyCount = mains.length;
             }
             await refreshEpisodeOwnedEntities();
             onLog?.(
