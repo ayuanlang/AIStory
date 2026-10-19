@@ -3036,9 +3036,38 @@ const readEntityDependencyStrategyType = (entity) => {
     return String(dep.type || '').trim();
 };
 
-/** Completeness: any persisted main ENV counts. Cover posters and reuse-picker filters do not apply. */
+const COVER_POSTER_TYPE_KEYS = new Set([
+    'poster', 'posters', 'cover', 'covers', 'cover_poster', 'coverposter',
+    '海报', '封面', '封面海报',
+]);
+
+const isCoverPosterName = (value) => {
+    const name = String(value || '').trim();
+    if (!name) return false;
+    if (name === '封面海报' || name === '海报' || name === '封面') return true;
+    return /^(?:cover(?:[\s_-]*poster)?|poster)$/i.test(name);
+};
+
+/** Cover posters are a one-sheet, not a main environment. They never take a four-grid. */
+const isCoverPosterAsset = (entity) => {
+    if (!entity || typeof entity !== 'object') return false;
+    const type = String(entity.type || entity.subject_type || '').trim().toLowerCase();
+    if (COVER_POSTER_TYPE_KEYS.has(type)) return true;
+    const attrs = readEntityCustomAttributes(entity);
+    const attrType = String(attrs.subject_type || attrs.type || attrs.entity_type || '').trim().toLowerCase();
+    if (COVER_POSTER_TYPE_KEYS.has(attrType)) return true;
+    return [
+        entity.name,
+        entity.name_en,
+        entity.name_zh,
+        entity.subject_name,
+        entity.subject_name_exact,
+    ].some(isCoverPosterName);
+};
+
+/** Completeness: persisted main ENVs only. A cover poster never counts and never takes a four-grid. */
 const isMainEnvironmentCompletenessAsset = (entity) => {
-    if (!entity) return false;
+    if (!entity || isCoverPosterAsset(entity)) return false;
     const typed = { ...entity, type: entity.type || 'environment' };
     if (normalizeAssetReportType(typed.type) !== 'environment') return false;
     const names = [typed.name, typed.name_en, typed.name_zh, typed.subject_name, typed.subject_name_exact];
@@ -3055,15 +3084,7 @@ const isMainEnvironmentCompletenessAsset = (entity) => {
     return !/^type\s*[ab]$/i.test(readEntityDependencyStrategyType(typed));
 };
 
-const isCoverPosterCompletenessEntry = (entry) => {
-    const type = String(entry?.type || '').trim().toLowerCase();
-    const name = String(entry?.name || '').trim();
-    return (
-        ['cover_poster', 'poster', 'cover', 'covers'].includes(type)
-        || name === '封面海报'
-        || /^cover\s*poster$/i.test(name)
-    );
-};
+const isCoverPosterCompletenessEntry = (entry) => isCoverPosterAsset(entry);
 
 const isMainEnvironmentCompletenessEntry = (entry) => (
     entry?.category === 'environments'
@@ -5102,7 +5123,7 @@ const collectMainEnvironmentNames = (text) => {
     const add = (raw) => {
         const name = cleanCollectedMainEnvironmentName(raw);
         const key = normalizeSubjectKey(name);
-        if (!name || !key || seen.has(key) || isDummySubject(name) || isDerivedEnvironmentName(name)) {
+        if (!name || !key || seen.has(key) || isDummySubject(name) || isDerivedEnvironmentName(name) || isCoverPosterName(name)) {
             return;
         }
         seen.add(key);

@@ -28,6 +28,10 @@ import {
     isGridCropDerivedEntity,
     assetCardIntro,
     isMainEnvironmentEntity,
+    derivedCellReference,
+    derivedDependencyImageUrl,
+    isStateDerivedEntity,
+    mainQuadCellAddresses,
     planDerivedGridCell,
     planDerivedGridRegen,
     QUAD_CELL_POSITIONS,
@@ -6942,7 +6946,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                      if (target && omitDependencyEntityIds.has(String(target.id || ''))) return;
 
                      if (target && target.image_url) {
-                         depUrls.push(target.image_url);
+                         const refUrl = derivedDependencyImageUrl(activeEntity, target, allEntities);
+                         if (refUrl) depUrls.push(refUrl);
                      }
                  });
             }
@@ -7353,6 +7358,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             && entityOverride.id != null
         ) ? entityOverride : null;
         const targetEntity = overrideEntity || selectedEntity;
+        if (isStateDerivedEntity(targetEntity)) {
+            if (overrideEntity) {
+                await handleGenerate(overrideEntity, null, getEntityPromptByLang(overrideEntity, effectivePromptSubmitLang));
+            } else {
+                await handleGenerate();
+            }
+            return;
+        }
         const regenRequested = derivedImageGenMode === 'regen' && isGridCropDerivedEntity(targetEntity);
         const cropRequested = derivedImageGenMode === 'crop' && isGridCropDerivedEntity(targetEntity);
         if (!regenRequested && !cropRequested) {
@@ -7516,14 +7529,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
     const resolveConsistencyReferenceUrl = async (entity) => {
         const own = String(entity?.image_url || '').trim();
-        if (isMainEnvironmentEntity(entity)) return own;
-        if (!isGridCropDerivedEntity(entity)) return own;
+        if (isMainEnvironmentEntity(entity) || isStateDerivedEntity(entity) || !isGridCropDerivedEntity(entity)) return own;
         const plan = planDerivedGridCell(entity, allEntities);
         if (!plan?.ok) {
             throw new Error(derivedGridRegenErrorText(plan?.errorCode));
         }
         const mainUrl = String(plan.mainEntity?.image_url || '').trim();
-        if (own && mainUrl && own !== mainUrl) return own;
         return ensureMainQuadCellUrl(plan.mainEntity, plan.position, mainUrl);
     };
 
@@ -8514,7 +8525,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     );
 
                     if (target && urlMap.has(target.id)) {
-                        depUrls.push(urlMap.get(target.id));
+                        const refUrl = derivedDependencyImageUrl(
+                            entity,
+                            { ...target, image_url: urlMap.get(target.id) },
+                            entitiesWithLatestImages()
+                        );
+                        if (refUrl) depUrls.push(refUrl);
                     }
                 });
                 collectPromoSourceImageUrls(entity, project?.global_info).forEach((url) => depUrls.push(url));
@@ -10286,6 +10302,47 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                         </div>
                                     </div>
 
+                                    {isMainEnvironmentEntity(viewingEntity) && (() => {
+                                        const cellRows = mainQuadCellAddresses(viewingEntity);
+                                        if (!cellRows.length) return null;
+                                        return (
+                                            <div className="space-y-2">
+                                                <h4 className="text-xs font-bold uppercase text-muted-foreground flex items-center gap-2">
+                                                    <LinkIcon size={12} /> {t('四宫分图', 'Four-grid cells')}
+                                                </h4>
+                                                <div className="bg-black/20 rounded-lg border border-white/5 divide-y divide-white/5">
+                                                    {cellRows.map((row) => {
+                                                        const displayUrl = getFullUrl(row.url);
+                                                        const label = `${row.position}${row.degree != null ? ` ${row.degree}°` : ''}`;
+                                                        return (
+                                                            <div key={row.position} className="p-3 space-y-1.5">
+                                                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
+                                                                <div className="text-[11px] font-mono text-white/75 break-all leading-relaxed select-all">{displayUrl}</div>
+                                                                <div className="flex flex-wrap gap-2 pt-0.5">
+                                                                    <a
+                                                                        href={displayUrl}
+                                                                        target="_blank"
+                                                                        rel="noreferrer"
+                                                                        className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-white/80 hover:bg-white/10"
+                                                                    >
+                                                                        <Maximize2 size={10} /> {t('打开', 'Open')}
+                                                                    </a>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => void copyEntityDetailUrl(row.url, label)}
+                                                                        className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-white/80 hover:bg-white/10"
+                                                                    >
+                                                                        <Copy size={10} /> {t('复制', 'Copy')}
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
+
                                     {/* Environment Details */}
                                     {viewingEntity.type === 'environment' && (
                                         <div className="space-y-4 p-4 bg-white/5 rounded-lg border border-white/5">
@@ -10432,6 +10489,26 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                     <div className="space-y-2 pt-2 border-t border-white/5">
                                          <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('资产参考', 'Asset References')}</h4>
                                          <p className="text-[10px] text-white/40 mb-1">{t('添加主体名称后，生成该主体时会自动引用其图片。', 'Add entity names to use their images as reference when generating this entity.')}</p>
+                                         {isGridCropDerivedEntity(viewingEntity) && (() => {
+                                             const cell = derivedCellReference(viewingEntity, allEntities);
+                                             if (!cell?.url) return null;
+                                             const displayUrl = getFullUrl(cell.url);
+                                             const label = `${t('依赖分图', 'Cell reference')} ${cell.position}${cell.degree != null ? ` ${cell.degree}°` : ''}`;
+                                             return (
+                                                 <div className="mb-2 rounded border border-white/5 bg-black/30 p-2 space-y-1">
+                                                     <div className="text-[10px] font-bold text-muted-foreground">{label}</div>
+                                                     <div className="text-[11px] font-mono text-white/75 break-all select-all">{displayUrl}</div>
+                                                     <div className="flex flex-wrap gap-2">
+                                                         <a href={displayUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-white/80 hover:bg-white/10">
+                                                             <Maximize2 size={10} /> {t('打开', 'Open')}
+                                                         </a>
+                                                         <button type="button" onClick={() => void copyEntityDetailUrl(cell.url, label)} className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-white/80 hover:bg-white/10">
+                                                             <Copy size={10} /> {t('复制', 'Copy')}
+                                                         </button>
+                                                     </div>
+                                                 </div>
+                                             );
+                                         })()}
                                          <div className="bg-black/20 p-3 rounded-lg border border-white/5">
                                              <div className="flex flex-wrap gap-2 mb-2">
                                                  {parseVisualDependencies(viewingEntity.visual_dependencies).map((dep, i) => (
@@ -10833,6 +10910,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                     <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                         {parseVisualDependencies(viewingEntity.visual_dependencies).map((dep, idx) => {
                                                             const depEntity = resolveDependencyEntity(dep, allEntities, viewingEntity?.episode_id);
+                                                            const depImageUrl = derivedDependencyImageUrl(viewingEntity, depEntity, allEntities);
                                                             const depExcluded = isVisualDepExcluded(dep);
                                                             const depSourceInfo = getDependencySourceInfo(depEntity, viewingEntity, dep);
 
@@ -10844,7 +10922,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                     title={depExcluded
                                                                         ? t('已取消本次参考，点击恢复', 'Cancelled for this generation; click to restore')
                                                                         : (depSourceInfo?.fullTitle
-                                                                            || (depEntity?.image_url ? t('单击/双击图片可显示复用或仅参考选项', 'Click or double-click the image to show reuse / reference-only options') : undefined))}
+                                                                            || (depImageUrl ? t('单击/双击图片可显示复用或仅参考选项', 'Click or double-click the image to show reuse / reference-only options') : undefined))}
                                                                 >
                                                                     <button
                                                                         type="button"
@@ -10859,8 +10937,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                         {depExcluded ? <RotateCcw size={10} /> : <X size={10} />}
                                                                     </button>
                                                                     <div className={`relative aspect-square bg-black rounded overflow-hidden z-0 ${depExcluded ? 'grayscale' : ''}`}>
-                                                                         {depEntity?.image_url ? (
-                                                                             <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depEntity.image_url)} />
+                                                                         {depImageUrl ? (
+                                                                             <SafeImage src={depImageUrl} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depImageUrl)} />
                                                                          ) : (
                                                                              <div className="w-full h-full flex items-center justify-center bg-white/5">
                                                                                  <ImageIcon className="w-4 h-4 opacity-40" />
@@ -10872,7 +10950,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                              </div>
                                                                          ) : (
                                                                          <div className="absolute inset-0 z-20 bg-black/80 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto flex flex-col gap-1 items-center justify-center transition-opacity rounded p-1">
-                                                                             {depEntity?.image_url ? (
+                                                                             {depImageUrl ? (
                                                                                  <>
                                                                                      <button
                                                                                          type="button"
@@ -10881,14 +10959,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                                          onClick={async (e) => {
                                                                                              e.preventDefault();
                                                                                              e.stopPropagation();
-                                                                                             if (!depEntity?.image_url || assetReuseBusy) return;
+                                                                                             if (!depImageUrl || assetReuseBusy) return;
                                                                                              if (String(depEntity?.id || '') === String(viewingEntity?.id || '')) {
                                                                                                  showSubjectNotification(t('不能选择当前主体自身作为依赖/复用源。', 'Cannot select the current subject itself as a dependency or reuse source.'), 'warning');
                                                                                                  return;
                                                                                              }
                                                                                              setAssetReuseBusy(true);
                                                                                              try {
-                                                                                                 const updated = await updateEntityImage(depEntity.image_url, false, viewingEntity, {
+                                                                                                 const updated = await updateEntityImage(depImageUrl, false, viewingEntity, {
                                                                                                      skipAnalyze: true,
                                                                                                      notify: true,
                                                                                                      extraFields: { anchor_description: depEntity.anchor_description },
@@ -10917,7 +10995,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                                              setExcludedVisualDepKeys((prev) => prev.filter((item) => item !== getVisualDepKey(dep)));
                                                                                              const sourceInfo = getDependencySourceInfo(depEntity, viewingEntity, dep);
                                                                                              setRefImage({
-                                                                                                 url: depEntity.image_url,
+                                                                                                 url: depImageUrl,
                                                                                                  entity_id: depEntity.id,
                                                                                                  original_name: depEntity.name,
                                                                                                  name: depEntity.name,
@@ -10970,6 +11048,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                     <div className={`text-[10px] truncate font-bold px-0.5 ${depExcluded ? 'text-white/40 line-through' : 'text-white'}`} title={depSourceInfo?.fullTitle || dep}>
                                                                         {depEntity ? depEntity.name : dep}
                                                                     </div>
+                                                                    {(() => {
+                                                                        const cell = derivedCellReference(viewingEntity, allEntities);
+                                                                        if (!cell?.url || cell.url !== depImageUrl) return null;
+                                                                        return (
+                                                                            <div className="text-[8px] text-sky-200/80 px-0.5 truncate" title={cell.url}>
+                                                                                {`${t('分图', 'Cell')} ${cell.position}${cell.degree != null ? `${cell.degree}°` : ''}`}
+                                                                            </div>
+                                                                        );
+                                                                    })()}
                                                                     {renderDependencySourceCaption(depEntity, viewingEntity, dep, { excluded: depExcluded })}
                                                                     {depExcluded ? (
                                                                         <div className="text-[8px] text-amber-300/80 px-0.5">{t('本次不引用', 'Skipped now')}</div>
@@ -11742,6 +11829,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                     {parseVisualDependencies(selectedEntity.visual_dependencies).map((dep, idx) => {
                                                         const depEntity = resolveDependencyEntity(dep, allEntities, selectedEntity?.episode_id);
+                                                        const depImageUrl = derivedDependencyImageUrl(selectedEntity, depEntity, allEntities);
                                                         const depExcluded = isVisualDepExcluded(dep);
                                                         const depSourceInfo = getDependencySourceInfo(depEntity, selectedEntity, dep);
                                                         
@@ -11766,8 +11854,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                     {depExcluded ? <RotateCcw size={10} /> : <X size={10} />}
                                                                 </button>
                                                                 <div className={`aspect-square bg-black rounded overflow-hidden relative ${depExcluded ? 'grayscale' : ''}`}>
-                                                                     {depEntity?.image_url ? (
-                                                                         <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depEntity.image_url)} />
+                                                                     {depImageUrl ? (
+                                                                         <SafeImage src={depImageUrl} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depImageUrl)} />
                                                                      ) : (
                                                                          <div className="w-full h-full flex items-center justify-center bg-white/5">
                                                                              <Users size={16} className="text-white/20"/>
@@ -11782,6 +11870,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                 <div className={`text-[10px] truncate font-bold px-0.5 ${depExcluded ? 'text-white/40 line-through' : 'text-white'}`} title={depSourceInfo?.fullTitle || dep}>
                                                                     {depEntity ? depEntity.name : dep}
                                                                 </div>
+                                                                {(() => {
+                                                                    const cell = derivedCellReference(selectedEntity, allEntities);
+                                                                    if (!cell?.url || cell.url !== depImageUrl) return null;
+                                                                    return (
+                                                                        <div className="text-[8px] text-sky-200/80 px-0.5 truncate" title={cell.url}>
+                                                                            {`${t('分图', 'Cell')} ${cell.position}${cell.degree != null ? `${cell.degree}°` : ''}`}
+                                                                        </div>
+                                                                    );
+                                                                })()}
                                                                 {renderDependencySourceCaption(depEntity, selectedEntity, dep, { excluded: depExcluded })}
                                                                 {depExcluded ? (
                                                                     <div className="text-[8px] text-amber-300/80 px-0.5">{t('本次不引用', 'Skipped now')}</div>

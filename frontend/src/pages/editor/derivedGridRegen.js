@@ -220,13 +220,55 @@ export function resolveDerivedViewAngle(entity) {
     return null;
 }
 
-export function isGridCropDerivedEntity(entity) {
+export function isStateDerivedEntity(entity) {
     if (!isEnvironmentEntity(entity)) return false;
-    const attrs = readAttrs(entity);
-    const kind = String(attrs.derived_kind || '').trim();
-    if (kind === 'state') return false;
+    const kind = String(readAttrs(entity).derived_kind || '').trim();
+    if (kind === 'state') return true;
+    const prompt = String(entity?.generation_prompt_cn || '');
+    return prompt.includes('以已切割的同角衍生') || prompt.includes('不要重切宫格');
+}
+
+export function isGridCropDerivedEntity(entity) {
+    if (!isEnvironmentEntity(entity) || isStateDerivedEntity(entity)) return false;
+    const kind = String(readAttrs(entity).derived_kind || '').trim();
     if (kind === 'first_cut') return true;
     return String(entity?.generation_prompt_cn || '').includes('只切割');
+}
+
+export function mainQuadCellAddresses(entity) {
+    if (!isMainEnvironmentEntity(entity)) return [];
+    const sourceUrl = String(entity?.image_url || '').trim();
+    const cells = readQuadCellImages(entity, sourceUrl);
+    if (!cells) return [];
+    const mapping = parseQuadDegreesFromPrompt(entity?.generation_prompt_cn || '');
+    return QUAD_CELL_POSITIONS.map((position) => ({
+        position,
+        degree: mapping[position],
+        url: String(cells[position] || '').trim(),
+    })).filter((row) => row.url);
+}
+
+export function derivedCellReference(entity, entities) {
+    if (!isGridCropDerivedEntity(entity)) return null;
+    const plan = planDerivedGridCell(entity, entities);
+    if (!plan?.mainEntity || !plan.position) return null;
+    const sourceUrl = String(plan.mainEntity.image_url || '').trim();
+    const cells = readQuadCellImages(plan.mainEntity, sourceUrl) || {};
+    return {
+        mainId: String(plan.mainEntity.id || ''),
+        position: plan.position,
+        degree: plan.angle,
+        url: String(cells[plan.position] || '').trim(),
+    };
+}
+
+export function derivedDependencyImageUrl(owner, depEntity, entities) {
+    const fallback = String(depEntity?.image_url || '').trim();
+    if (!owner || !depEntity || isStateDerivedEntity(owner) || !isGridCropDerivedEntity(owner)) return fallback;
+    if (!isMainEnvironmentEntity(depEntity)) return fallback;
+    const cell = derivedCellReference(owner, entities);
+    if (!cell?.url || String(cell.mainId) !== String(depEntity.id || '')) return fallback;
+    return cell.url;
 }
 
 const dependencyNames = (entity) => {
