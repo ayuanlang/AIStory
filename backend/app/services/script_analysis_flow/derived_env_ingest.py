@@ -1341,19 +1341,7 @@ def build_derived_environment_item(
         atmosphere = f"Special {special_kind or 'plate'} from {grid}"
         visual_params = f"{lens}/Derived/Special/{special_kind or angle}"
     else:
-        region = CROP_REGION[str(crop["position"])]
-        prompt = FIRST_CUT_PROMPT.format(
-            main=main,
-            angle=angle,
-            grid=grid,
-            token=token,
-            quad_line=quad_line,
-            camera=camera,
-            plane=region["plane"],
-            box=region["box"],
-            drop=region["drop"],
-            en=region["en"],
-        )
+        prompt = ""
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
             f"所属主环境={main}。{quad_line}。截取宫格={grid}。{camera}触发={trigger}。"
@@ -1363,7 +1351,7 @@ def build_derived_environment_item(
         atmosphere = f"{'Master' if angle == 0 else 'Angle'} empty plate crop"
         visual_params = f"{lens}/Derived/{angle}"
     gen_hint = _clean(item.get("gen_prompt") or item.get("生成提示"))
-    if gen_hint and gen_hint.lower() not in _EMPTY_FIELD_MARKERS and gen_hint not in prompt:
+    if prompt and gen_hint and gen_hint.lower() not in _EMPTY_FIELD_MARKERS and gen_hint not in prompt:
         prompt = f"{prompt}生成提示={gen_hint}。"
     if special_kind == "变形":
         negative = negative.replace("dutch angle, tilted horizon, ", "").replace("dutch angle, ", "")

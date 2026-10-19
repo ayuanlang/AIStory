@@ -1260,9 +1260,9 @@ async def check_environment_consistency(
         raise HTTPException(status_code=400, detail="还没有生成图片，无法做一致性检查。")
 
     checked_prompt = resolve_checked_prompt(entity, getattr(payload, "prompt", None))
-    if not checked_prompt:
-        raise HTTPException(status_code=400, detail="没有可对照的生成提示词。")
     kind = classify_checked_prompt(entity, checked_prompt)
+    if not checked_prompt and kind != "cell":
+        raise HTTPException(status_code=400, detail="没有可对照的生成提示词。")
     main_entity = find_owning_main_environment(db, entity) if kind != "main" else entity
     if kind != "main" and main_entity is None:
         raise HTTPException(status_code=400, detail="找不到所属主环境，无法核对世界物理。")

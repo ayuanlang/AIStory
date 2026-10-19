@@ -82,18 +82,23 @@ def resolve_checked_prompt(entity: Any, override: Optional[str] = None) -> str:
 
 
 def classify_checked_prompt(entity: Any, prompt: str) -> str:
-    """main | crop | regen | derived."""
+    """main | cell | crop | regen | derived."""
     if is_main_environment_entity(entity):
         return "main"
     text = str(prompt or "")
-    if is_stub_prompt(text):
-        return "crop"
     attrs = attrs_of(entity)
+    derived_kind = str(attrs.get("derived_kind") or "").strip()
+    if derived_kind == "state" or "不要重切宫格" in text or "以已切割的同角衍生" in text:
+        return "derived"
     generation = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
     regen = str(attrs.get("grid_regen_prompt") or "").strip()
     saved_kind = str(attrs.get(LAST_SUBMITTED_KIND_ATTR) or "").strip()
-    if saved_kind == "regen" or (regen and text == regen) or (is_stub_prompt(generation) and text != generation):
+    if saved_kind == "regen" or (regen and text == regen) or (is_stub_prompt(generation) and text and text != generation):
         return "regen"
+    if derived_kind == "first_cut" or ("只切割" in text and "不要重切" not in text):
+        return "cell"
+    if is_stub_prompt(text):
+        return "crop"
     return "derived"
 
 
@@ -234,6 +239,7 @@ def parse_consistency_payload(text: str) -> Dict[str, Any]:
         "summary": str(data.get("summary") or "").strip(),
         "revised_prompt": _blank_to_none(data.get("revised_prompt")),
         "revised_main_prompt": _blank_to_none(data.get("revised_main_prompt")),
+        "revised_cell": _blank_to_none(data.get("revised_cell")),
         "image_edit_instruction": _blank_to_none(data.get("image_edit_instruction")),
     }
 
@@ -668,6 +674,156 @@ def seal_cell_edit_instruction(text: Optional[str]) -> Optional[str]:
     return raw
 
 
+_VISIBLE_FACES = {
+    0: (("正面", "北壁"), ("左侧面", "西壁"), ("右侧面", "东壁"), ("中部", "中区"), ("上", "上")),
+    90: (("正面", "东壁"), ("左侧面", "北壁"), ("右侧面", "南壁"), ("中部", "中区"), ("上", "上")),
+    180: (("正面", "南壁"), ("左侧面", "东壁"), ("右侧面", "西壁"), ("中部", "中区"), ("上", "上")),
+    270: (("正面", "西壁"), ("左侧面", "南壁"), ("右侧面", "北壁"), ("中部", "中区"), ("上", "上")),
+}
+_OPENING_SECTION_RE = re.compile(
+    r"【(定位|主体外形|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|四向拼图)】"
+)
+
+
+def _opening_section(text: str, name: str) -> str:
+    body = str(text or "")
+    marks = list(_OPENING_SECTION_RE.finditer(body))
+    for index, match in enumerate(marks):
+        if match.group(1) != name:
+            continue
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(body)
+        return body[match.start():end].strip()
+    return ""
+
+
+def _opening_up_line(text: str) -> str:
+    six = _opening_section(text, "六面一次")
+    for line in six.splitlines():
+        if "上=" in line:
+            return line.strip()
+    return ""
+
+
+def visible_opening_faces(opening: str, angle: Optional[int]) -> str:
+    """The five faces this view can see: front, left, right, center, and up."""
+    faces = _VISIBLE_FACES.get(int(angle) if angle in (0, 90, 180, 270) else -1)
+    if not faces:
+        return ""
+    lines: List[str] = []
+    for role, section in faces:
+        if section == "上":
+            body = _opening_up_line(opening)
+            lines.append(f"{role}：{body or '（开篇没有上=）'}")
+            continue
+        body = _opening_section(opening, section)
+        lines.append(f"{role}（{section}）：{body or f'（开篇没有【{section}】）'}")
+    return "\n".join(lines)
+
+
+def replace_grid_cell(main_prompt: str, angle: int, revised_cell: str) -> str:
+    """Swap one four-grid cell and leave the opening and the other three cells."""
+    extracted = extract_grid_cell_prompt(main_prompt, int(angle))
+    old = str(extracted.get("cell_prompt") or "").strip()
+    if not old:
+        raise ConsistencyApplyError("主环境提示词里没有这一格。")
+    new = str(revised_cell or "").strip()
+    if not new:
+        raise ConsistencyApplyError("没有返回改写后的宫格。")
+    title = old.splitlines()[0].strip()
+    if title not in new:
+        if new.startswith("["):
+            raise ConsistencyApplyError("改写的宫格标题和这一格对不上。")
+        new = f"{title}\n{new}".strip()
+    if old not in str(main_prompt or ""):
+        raise ConsistencyApplyError("主环境提示词里对不上这一格原文。")
+    updated = str(main_prompt or "").replace(old, new, 1)
+    for marker in ("[0度格-左上", "[90度格-右上", "[180度格-左下", "[270度格-右下"):
+        if marker in str(main_prompt or "") and marker not in updated:
+            raise ConsistencyApplyError("改写结果丢掉了其他宫格。")
+    return updated
+
+
+def _plan_cell_consistency_writes(
+    entity: Any,
+    main_entity: Optional[Any],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    """First-cut check: rewrite this grid cell and the single reference image together."""
+    summary = str(payload.get("summary") or "").strip()
+    image_edit_instruction = _blank_to_none(payload.get("image_edit_instruction"))
+    revised_cell = _blank_to_none(payload.get("revised_cell"))
+    revised_prompt = _blank_to_none(payload.get("revised_prompt"))
+    angle = derived_view_angle(entity)
+    main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "") if main_entity is not None else ""
+    current_cell = ""
+    if angle is not None and main_prompt:
+        current_cell = str(extract_grid_cell_prompt(main_prompt, angle).get("cell_prompt") or "").strip()
+    writes: List[Dict[str, Any]] = []
+    targets: List[str] = []
+    entity_id = int(getattr(entity, "id", 0) or 0)
+    main_id = int(getattr(main_entity, "id", 0) or 0) if main_entity is not None else 0
+    stored_prompt = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
+    grid_changed = False
+    audit_blocked = False
+    if revised_cell and not payload.get("consistent"):
+        if main_entity is None or main_id <= 0 or angle is None:
+            raise ConsistencyApplyError("找不到这一格所属的主环境，无法改正宫格。")
+        grafted = replace_grid_cell(main_prompt, angle, revised_cell)
+        piece_issues = audit_piece_count_reconciliation(grafted)
+        street_issues = audit_street_end_phrases(grafted)
+        wall_issues = audit_wall_corner_span(grafted)
+        front_issues = audit_front_double(grafted)
+        issues = piece_issues + street_issues + wall_issues + front_issues
+        if issues:
+            prefix = PIECE_COUNT_PREFIX if piece_issues else "宫格改写未通过"
+            summary = audit_blocked_summary(summary, issues, prefix)
+            revised_cell = None
+            audit_blocked = True
+        elif grafted.strip() != main_prompt.strip():
+            writes.append({
+                "entity_id": main_id,
+                "field": "generation_prompt_cn",
+                "value": grafted,
+                "kind": "main",
+            })
+            targets.append("宫格")
+            grid_changed = True
+            current_cell = str(extract_grid_cell_prompt(grafted, angle).get("cell_prompt") or "").strip()
+    prompt_to_store = revised_prompt or (current_cell if grid_changed or not stored_prompt or is_stub_prompt(stored_prompt) else "")
+    if prompt_to_store and prompt_to_store.strip() != stored_prompt and entity_id > 0:
+        writes.append({
+            "entity_id": entity_id,
+            "field": "generation_prompt_cn",
+            "value": prompt_to_store.strip(),
+            "kind": "cell",
+        })
+        writes.append({
+            "entity_id": entity_id,
+            "field": LAST_SUBMITTED_PROMPT_ATTR,
+            "value": prompt_to_store.strip(),
+            "kind": "cell",
+        })
+        targets.append("衍生环境提示词")
+    both_clear = not grid_changed and not image_edit_instruction and not audit_blocked
+    if both_clear and not writes:
+        return {
+            "consistent": True,
+            "kind": "cell",
+            "summary": summary or "这一格和参考图都与开篇可见壁一致。",
+            "writes": [],
+            "updated_targets": [],
+            "image_edit_instruction": None,
+        }
+    return {
+        "consistent": both_clear,
+        "kind": "cell",
+        "summary": summary or "已按开篇可见壁改正宫格或参考图。",
+        "writes": writes,
+        "updated_targets": targets,
+        "image_edit_instruction": image_edit_instruction,
+    }
+
+
 def plan_consistency_writes(
     entity: Any,
     main_entity: Optional[Any],
@@ -683,6 +839,8 @@ def plan_consistency_writes(
     that derived asset's prompt and does not write the main environment.
     """
     kind = classify_checked_prompt(entity, checked_prompt)
+    if kind == "cell":
+        return _plan_cell_consistency_writes(entity, main_entity, payload)
     summary = str(payload.get("summary") or "").strip()
     image_edit_instruction = seal_cell_edit_instruction(payload.get("image_edit_instruction"))
     main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "") if main_entity is not None else ""
@@ -862,6 +1020,63 @@ def remote_vision_image_link(url: str) -> str:
     return raw
 
 
+def _build_cell_consistency_messages(
+    *,
+    image_url: str,
+    entity: Any,
+    main_entity: Optional[Any],
+    note: str = "",
+) -> List[Dict[str, Any]]:
+    angle = derived_view_angle(entity)
+    opening = main_environment_opening_text(main_entity)
+    main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "").strip() if main_entity is not None else ""
+    cell = ""
+    if angle is not None and main_prompt:
+        cell = str(extract_grid_cell_prompt(main_prompt, angle).get("cell_prompt") or "").strip()
+    faces = visible_opening_faces(opening, angle)
+    stored = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
+    system_prompt = (
+        "你是衍生环境一致性校对。这次只核对本角度的一张已经裁出的单格参考图。\n"
+        "注入只有两部分：开篇里这一角看得见的五壁（正面、左侧面、右侧面、中部、上），以及这一格的四宫格正文。"
+        "镜头后面的那一壁没有注入，不要用它。\n"
+        "做两件核对，两件都要有结论：\n"
+        "1. 四宫格这一格的正文，与这五壁的个数、朝向、位置是否一致。不符就改这一格正文。\n"
+        "2. 参考图是否同时符合这一格正文和这五壁。不符就写改这一张图的指令。\n"
+        "两件可以同时不符。宫格要改就给 revised_cell。图片要改就给 image_edit_instruction。两件都要改就两个都给。\n"
+        "revised_prompt 是写进这个衍生环境、之后用来生图的提示词。"
+        "宫格改了，就用改后的这一格；宫格没改而衍生提示词还空，就用当前这一格正文。"
+        "不要写切割，不要写另外三格，不要写只切割。\n"
+        "开篇五壁不改。另外三格不改。revised_main_prompt 必须为 null。\n"
+        "image_edit_instruction 只改这一张单格图。不写米，不写东南西北，不写另外三格，不写不要重画整张四宫。\n"
+        "两件都相符时 consistent 为 true，revised_cell、revised_prompt、image_edit_instruction 都为 null。\n"
+        "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
+        '{"consistent": true或false, "summary": "一两句中文", "revised_cell": null或这一格全文, "revised_prompt": null或衍生环境提示词, "revised_main_prompt": null, "image_edit_instruction": null或改图指令}'
+    )
+    parts = [
+        f"检查对象=衍生环境单格。主体={getattr(entity, 'name', '')}。角度={angle if angle is not None else '未知'}。",
+        "开篇可见五壁：",
+        faces or "（没能按角度从开篇抽出可见五壁）",
+        f"对应宫格={angle if angle is not None else ''}度格：",
+        cell or "（主环境提示词里没有这一格）",
+        "当前衍生环境提示词：",
+        stored or "（空。检查后用这一格正文填上，供之后生图使用。）",
+    ]
+    extra = str(note or "").strip()
+    if extra:
+        parts.append("用户补充，这次要特别处理：")
+        parts.append(extra)
+    return [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "\n".join(parts)},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        },
+    ]
+
+
 def build_consistency_messages(
     *,
     image_url: str,
@@ -871,6 +1086,13 @@ def build_consistency_messages(
     kind: str,
     note: str = "",
 ) -> List[Dict[str, Any]]:
+    if kind == "cell":
+        return _build_cell_consistency_messages(
+            image_url=image_url,
+            entity=entity,
+            main_entity=main_entity,
+            note=note,
+        )
     system_prompt = (
         "你是环境资产一致性校对。主环境开篇在【四向拼图】之前，是权威。"
         "按开篇核对四个宫格正文，以及图片里同一格的主体个数、朝向、位置。\n"

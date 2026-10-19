@@ -132,33 +132,39 @@ def test_main_revision_rejects_dropped_grid():
         raise AssertionError("dropped grid should be rejected")
 
 
-def test_crop_updates_main_prompt_only():
+def test_cell_check_rewrites_one_grid_and_fills_derived_prompt():
     derived = Dummy(
         id=9,
         name="90度厨房",
-        prompt=CROP_PROMPT,
+        prompt="",
         attrs={"derived_kind": "first_cut", "main_environment": "厨房", "view_angle_from_main": 90},
     )
     main = Dummy(id=3, name="厨房", prompt=MAIN_PROMPT)
-    assert classify_checked_prompt(derived, CROP_PROMPT) == "crop"
+    assert classify_checked_prompt(derived, "") == "cell"
     plan = plan_consistency_writes(
         derived,
         main,
-        CROP_PROMPT,
+        "",
         {
             "consistent": False,
-            "summary": "望东格和开篇竖边不一致",
-            "revised_prompt": "这里变成了场景描写，不能写入切割提示词。",
-            "revised_main_prompt": REVISED_MAIN,
+            "summary": "望东格和开篇不一致，参考图长边也反了",
+            "revised_cell": "[90度格-右上·东]\n台贴在画面侧面。长边从靠近镜头铺到远离镜头。",
+            "revised_prompt": "台贴在画面侧面。长边从靠近镜头铺到远离镜头。",
+            "image_edit_instruction": "改这一张图里的台。现在长边横在画面里。改成只见短头，长边从靠近镜头伸向远离镜头。",
         },
     )
-    assert all(item["entity_id"] == 3 for item in plan["writes"])
-    assert not any(item["field"] == "last_submitted_image_prompt" for item in plan["writes"])
-    assert not any(item["field"] == "generation_prompt_cn" and item["entity_id"] == 9 for item in plan["writes"])
-    assert derived.generation_prompt_cn == CROP_PROMPT
-    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
-    assert written.startswith(MAIN_PROMPT.split("【四向拼图】", 1)[0])
-    assert plan["updated_targets"] == ["四向拼图"]
+    main_write = next(item["value"] for item in plan["writes"] if item["entity_id"] == 3)
+    assert "台贴在画面侧面" in main_write
+    assert "台在画面前方" in main_write
+    assert "[270度格-右下·西]" in main_write
+    derived_write = next(
+        item["value"] for item in plan["writes"]
+        if item["entity_id"] == 9 and item["field"] == "generation_prompt_cn"
+    )
+    assert derived_write == "台贴在画面侧面。长边从靠近镜头铺到远离镜头。"
+    assert "不要重画整张四宫" not in plan["image_edit_instruction"]
+    assert plan["updated_targets"] == ["宫格", "衍生环境提示词"]
+    assert plan["consistent"] is False
 
 
 def test_consistency_prompt_checks_count_facing_and_position():
@@ -207,28 +213,48 @@ def test_consistency_prompt_checks_count_facing_and_position():
 
 
 def test_derived_consistency_message_includes_opening_and_cell():
-    opening = "【六面一次】\n占地=2.4×0.9米。竖边=东西走向。\n【北壁】\n别名=窗。"
+    opening = (
+        "【六面一次】\n上=天花。\n"
+        "【北壁】\n别名=窗。\n"
+        "【东壁】\n别名=门。\n"
+        "【南壁】\n别名=柜。\n"
+        "【西壁】\n别名=镜。\n"
+        "【中区】\n桌。\n"
+    )
     main = Dummy(
         id=3,
         name="厨房",
-        prompt="【定位】\n厨房。\n" + MAIN_PROMPT.split("【六面一次】", 1)[1],
+        prompt=MAIN_PROMPT,
         description=opening,
         attrs={"main_environment_opening": opening},
     )
-    derived = Dummy(id=9, name="90度厨房", prompt=CROP_PROMPT, attrs={"view_angle_from_main": 90})
+    derived = Dummy(
+        id=9,
+        name="90度厨房",
+        prompt="",
+        attrs={"derived_kind": "first_cut", "view_angle_from_main": 90},
+    )
     messages = build_consistency_messages(
         image_url="http://example.test/crop.png",
         entity=derived,
         main_entity=main,
-        checked_prompt=CROP_PROMPT,
-        kind="crop",
+        checked_prompt="",
+        kind="cell",
     )
     user = messages[1]["content"][0]["text"]
-    assert "开篇：" in user
-    assert "【北壁】" in user
+    assert "开篇可见五壁" in user
+    assert "正面（东壁）" in user
+    assert "别名=门。" in user
+    assert "左侧面（北壁）" in user
     assert "别名=窗。" in user
+    assert "右侧面（南壁）" in user
+    assert "中部（中区）" in user
+    assert "上：上=天花。" in user
+    assert "别名=镜。" not in user
+    assert "主环境完整提示词" not in user
     assert "对应宫格=90度格：" in user
     assert "台在画面侧面。" in user
+    assert "两件核对" in messages[0]["content"]
 
 
 def test_piece_count_ledger_blocks_a_consistent_verdict():
@@ -498,11 +524,11 @@ def test_marked_opening_error_still_rejects_dropped_grid():
         raise AssertionError("dropped grid should be rejected")
 
 
-def test_crop_marked_opening_error_keeps_opening_fix():
+def test_cell_check_does_not_rewrite_the_opening():
     derived = Dummy(
         id=9,
         name="90度厨房",
-        prompt=CROP_PROMPT,
+        prompt="",
         attrs={"derived_kind": "first_cut", "main_environment": "厨房", "view_angle_from_main": 90},
     )
     main = Dummy(id=3, name="厨房", prompt=MAIN_PROMPT)
@@ -510,18 +536,18 @@ def test_crop_marked_opening_error_keeps_opening_fix():
     plan = plan_consistency_writes(
         derived,
         main,
-        CROP_PROMPT,
+        "",
         {
-            "consistent": False,
+            "consistent": True,
             "summary": "开篇有误：竖边和两端相反",
             "revised_prompt": None,
             "revised_main_prompt": rewritten,
         },
     )
-    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
-    assert written.startswith("【六面一次】")
-    assert "竖边=南北走向。" in written
-    assert all(item["entity_id"] == 3 for item in plan["writes"])
+    assert not any(item["entity_id"] == 3 for item in plan["writes"])
+    filled = next(item["value"] for item in plan["writes"] if item["entity_id"] == 9 and item["field"] == "generation_prompt_cn")
+    assert "台在画面侧面" in filled
+    assert "竖边=南北走向" not in filled
 
 
 def test_regen_updates_derived_prompt_only():

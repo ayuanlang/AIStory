@@ -118,24 +118,10 @@ def test_first_cut_json_matches_environment_design_template():
             "axis_crossing": "PlannedReverse",
         }
     )
-    prompt = item["generation_prompt_cn"]
-    assert "所属主环境=客栈大堂" in prompt
-    assert "angle_key=客栈大堂|180" in prompt
-    assert QUAD_DEGREE_CONTRACT in prompt
-    assert "截取宫格=左下180度" in prompt
-    assert "左下180度格" in prompt
-    assert "机位=望向=正南" in prompt
-    assert "远锚=该向后景最远可见主体" in prompt
-    assert "禁止重写桌椅朝向" in prompt
-    assert "禁以画外主体定位" in prompt
-    assert "只切割，不要改画" in prompt
-    assert prompt.startswith("参考图是一张2×2四宫格")
-    assert "左半边和下半边" in prompt
-    assert "从上往下取纵向50%到100%" in prompt
-    assert "左上、右上、右下" in prompt
-    assert "Crop only the bottom-left quadrant" in prompt
-    assert prompt.index("只保留") < prompt.index("远锚=")
-    assert prompt.rindex("三格不在画面里") > prompt.index("远锚=")
+    assert item["generation_prompt_cn"] == ""
+    assert item["custom_attributes"]["view_angle_from_main"] == 180
+    assert item["custom_attributes"]["grid_token"] == "左下180度"
+    assert "截取宫格=左下180度格" in item["dependency_strategy"]["logic"]
     assert item["visual_dependencies"] == ["ENV:[客栈大堂]"]
     assert item["description_cn"] == ""
     assert item["dependency_strategy"]["type"] == "Type A"
@@ -187,10 +173,8 @@ def test_resolve_grid_follows_existing_main_env_prompt():
         {"name": "180度客栈大堂", "main": "客栈大堂", "angle": 180, "kind": "第一刀"},
         main_prompt="四宫度数=左上0度｜右上90度｜右下180度｜左下270度。[180度格-右下·南]",
     )
-    legacy_prompt = legacy_item["generation_prompt_cn"]
-    assert "右半边和下半边" in legacy_prompt
-    assert "Crop only the bottom-right quadrant" in legacy_prompt
-    assert "左上、右上、左下" in legacy_prompt
+    assert legacy_item["generation_prompt_cn"] == ""
+    assert legacy_item["custom_attributes"]["grid_token"] == "右下180度"
     existing = (
         "【四向拼图】四宫度数=左上90度｜右上0度｜右下270度｜左下180度。"
         "[90度格-左上] [0度格-右上] [270度格-右下] [180度格-左下]"
@@ -203,8 +187,7 @@ def test_resolve_grid_follows_existing_main_env_prompt():
         {"name": "180度客栈大堂", "main": "客栈大堂", "angle": 180, "kind": "第一刀"},
         main_prompt=existing,
     )
-    assert "截取宫格=左下180度" in item["generation_prompt_cn"]
-    assert "左下180度格" in item["generation_prompt_cn"]
+    assert item["generation_prompt_cn"] == ""
     assert item["custom_attributes"]["grid_token"] == "左下180度"
 
 
@@ -397,12 +380,9 @@ def test_build_item_persists_frame_anchors():
     assert "大门" not in item["anchor_description"]
     assert "画左=" not in item["anchor_description"]
     assert "画外=" not in item["anchor_description"]
-    assert "只切割，不要改画" in item["generation_prompt_cn"]
-    assert "机位=望向=正北" in item["generation_prompt_cn"]
-    assert "远锚=柜台" in item["generation_prompt_cn"]
-    assert "禁止重写桌椅朝向、左右对调、扇区换边" in item["generation_prompt_cn"]
-    assert "远锚=大门" not in item["generation_prompt_cn"]
-    assert "背景=柜台" not in item["generation_prompt_cn"]
+    assert item["generation_prompt_cn"] == ""
+    assert "机位=望向=正北" in item["dependency_strategy"]["logic"]
+    assert "远锚=柜台" in item["dependency_strategy"]["logic"]
 
 
 def test_first_cut_anchor_description_empty_slots():
@@ -568,9 +548,7 @@ def test_sample_ingest_writes_frame_and_reference_anchors():
     assert "楼梯口" not in zero
     assert "账房窗" not in zero
     assert "参照物=" not in zero
-    zero_prompt = by_name["0度客栈大堂"]["generation_prompt_cn"]
-    assert "所属主环境=客栈大堂" in zero_prompt
-    assert zero_prompt.startswith("参考图是一张2×2四宫格")
+    assert by_name["0度客栈大堂"]["generation_prompt_cn"] == ""
 
 
 def test_chosen_reference_subjects_cover_explicit_env_anchors():
@@ -695,7 +673,9 @@ def test_group_json_by_main_environment():
     assert '"environments"' in inn["json"]
     assert "0度客栈大堂" in inn["json"]
     assert "180度客栈大堂" in inn["json"]
-    assert inn["payload"]["environments"][0]["generation_prompt_cn"]
+    inn_prompts = {row["name"]: row["generation_prompt_cn"] for row in inn["payload"]["environments"]}
+    assert inn_prompts["0度客栈大堂"] == ""
+    assert "以已切割的同角衍生" in inn_prompts["0度客栈大堂_沙尘"]
     assert mains["马车内舱"]["count"] == 1
 
 
@@ -1155,8 +1135,7 @@ def test_special_note_injected_into_generation_prompt():
     by_name = {item["name"]: item for item in items}
     assert by_name["0度客栈大堂_仰天"]["special_note"].startswith("仰天")
     regular = build_derived_environment_item(by_name["0度客栈大堂"])
-    assert "特别表述=" not in regular["generation_prompt_cn"]
-    assert "生成提示=按主环境四向拼图截取0度宫格" in regular["generation_prompt_cn"]
+    assert regular["generation_prompt_cn"] == ""
     assert regular["custom_attributes"]["derived_kind"] == "first_cut"
     look_up = build_derived_environment_item(by_name["0度客栈大堂_仰天"])
     assert "机位=望向=正北" in look_up["generation_prompt_cn"]
@@ -1212,7 +1191,8 @@ def test_coverage_suffix_merges_into_degree_main_name():
     )
     assert item["name"] == "180度客栈大堂"
     assert item["visual_dependencies"] == ["ENV:[客栈大堂]"]
-    assert "左下180度格" in item["generation_prompt_cn"]
+    assert item["generation_prompt_cn"] == ""
+    assert item["custom_attributes"]["grid_cell"] == "左下180度格"
     assert "已切割的同角衍生" not in item["generation_prompt_cn"]
 
 

@@ -7602,7 +7602,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
         const attrs = parseEntityCustomAttributes(entity);
         const prompt = String(attrs.last_submitted_image_prompt || entity?.generation_prompt_cn || '').trim();
-        if (!prompt) {
+        if (!prompt && !isGridCropDerivedEntity(entity)) {
             showSubjectNotification(t('没有可对照的生成提示词。', 'There is no generation prompt to compare.'), 'warning');
             return;
         }
@@ -7661,11 +7661,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 : { ok: false, errorCode: plan?.errorCode };
         }
         const prompt = String(entity?.generation_prompt_cn || '').trim();
-        if (!prompt) {
-            const message = t('没有可对照的生成提示词。', 'There is no generation prompt to compare.');
-            if (!waitForImage) showSubjectNotification(message, 'warning');
-            return waitForImage ? { skippedPrompt: true } : { ok: false };
-        }
         const mainUrl = String(plan.mainEntity?.image_url || '').trim();
         if (!waitForImage) setGridRegenPreparing(true);
         try {
