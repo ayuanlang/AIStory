@@ -2116,6 +2116,89 @@ def strip_placeholder_env_blocks(scene_text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", stripped).strip()
 
 
+_FRAMING_HEADER_NAMES = (
+    "本场服化道",
+    "场景衔接",
+    "声画综合",
+    "本场时地",
+    "本场风格",
+    "闪回分档",
+    "场号配对",
+    "多线编排",
+    "叙事综合",
+    "场景综合",
+    "艺术衔拍",
+    "Beat增改确认",
+    "Beat切分确认",
+    "卖点综合",
+    "情绪峰谷综合",
+    "道具身份",
+    "本场姿势",
+    "本场主体确认",
+    "本场角色",
+    "本场道具",
+    "本场道具身份",
+)
+_FRAMING_DROP_HEADERS = {
+    "本场服化道",
+    "场景衔接",
+    "声画综合",
+    "本场时地",
+    "本场风格",
+    "闪回分档",
+    "场号配对",
+    "多线编排",
+    "叙事综合",
+    "场景综合",
+    "艺术衔拍",
+    "Beat增改确认",
+    "Beat切分确认",
+}
+_FRAMING_HEADER_RE = re.compile(
+    r"【(" + "|".join(sorted(_FRAMING_HEADER_NAMES, key=len, reverse=True)) + r")】"
+)
+_FRAMING_STRUCT_RE = re.compile(
+    r"\[(?:BEAT_|SCENE_|ENV_|SPECIAL_|SCENES_)",
+    re.IGNORECASE,
+)
+
+
+def strip_framing_unused_headers(scene_text: str) -> str:
+    """Drop scene-header blocks framing does not read. Beat text stays whole."""
+    source = str(scene_text or "")
+    split_at = None
+    for token in ("[BEAT_STREAM_START]", "[BEAT_START:"):
+        idx = source.find(token)
+        if idx >= 0 and (split_at is None or idx < split_at):
+            split_at = idx
+    if split_at is None:
+        header, tail = source, ""
+    else:
+        header, tail = source[:split_at], source[split_at:]
+    marks = [
+        (match.start(), match.group(1))
+        for match in _FRAMING_HEADER_RE.finditer(header)
+    ]
+    marks.extend((match.start(), "") for match in _FRAMING_STRUCT_RE.finditer(header))
+    marks.sort(key=lambda item: item[0])
+    kept: List[str] = []
+    cursor = 0
+    index = 0
+    while index < len(marks):
+        start, name = marks[index]
+        if name in _FRAMING_DROP_HEADERS:
+            next_start = marks[index + 1][0] if index + 1 < len(marks) else len(header)
+            if cursor < start:
+                kept.append(header[cursor:start])
+            cursor = next_start
+        index += 1
+    kept.append(header[cursor:])
+    cleaned = re.sub(r"\n{3,}", "\n\n", "".join(kept)).strip()
+    if tail:
+        return f"{cleaned}\n{tail.lstrip()}" if cleaned else tail.lstrip()
+    return cleaned
+
+
 def _wrap_single_scene_input(
     scene_block: str,
     comprehensive_info: str,
@@ -3680,12 +3763,14 @@ async def _run_derived_framing_then_staging(
         )
         return current_block
 
-    framing_block = strip_placeholder_env_blocks(
-        splice_environment_and_enhance_scene(
-            scene_id,
-            env_scene,
-            enhance_block,
-            special,
+    framing_block = strip_framing_unused_headers(
+        strip_placeholder_env_blocks(
+            splice_environment_and_enhance_scene(
+                scene_id,
+                env_scene,
+                enhance_block,
+                special,
+            )
         )
     )
     episode_env_blocks = {

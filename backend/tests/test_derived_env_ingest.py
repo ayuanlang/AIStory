@@ -1466,3 +1466,70 @@ def test_framing_input_drops_placeholder_env_block():
     assert "【主环境】承天总裁办" in cleaned
     assert "【主环境】────" not in cleaned
     assert "【本场时地】季节=夏" in cleaned
+
+
+def test_framing_input_drops_unused_scene_headers():
+    from app.services.scene_subskill_pipeline_runner import strip_framing_unused_headers
+
+    text = (
+        "[SCENE_ENV_IDENT_START:EP00_SC02]\n"
+        "[ENV] 名称=承天总裁办｜时地=季节=夏｜风格=模式=近未来科技\n"
+        "[SCENE_ENV_IDENT_END:EP00_SC02]\n"
+        "【本场时地】季节=夏｜时段=中午\n"
+        "【本场风格】模式=近未来科技\n"
+        "【场景衔接】上场=火海｜切法转入=艺术覆写\n"
+        "【闪回分档】无｜依据=无｜新增主环境=无\n"
+        "【场号配对】通过｜START=END逐字\n"
+        "【多线编排】所属线=A｜交叉=N/A\n"
+        "[SCENE_CAST_START:EP00_SC02]\n"
+        "【本场角色】在场=CHAR:[@陆承安]\n"
+        "【本场道具身份】PROP:[战术磁吸手提箱]=手持\n"
+        "[SCENE_CAST_END:EP00_SC02]\n"
+        "【本场服化道】 CHAR:[@陆承安]｜入场=深灰战术风衣\n"
+        "【本场姿势】 CHAR:[@陆承安]｜开场=坐\n"
+        "【本场主体确认】 CHAR:[@陆承安]｜归类=角色\n"
+        "【场景综合】目的=推进剧情\n"
+        "【卖点综合】卖点=精彩对白｜承接=对白断句@中点@B12\n"
+        "【情绪峰谷综合】形态=压抑蓄力｜峰值放大=白昼强光@B11\n"
+        "【叙事综合】功能=揭示\n"
+        "【声画综合】乐器=大提琴｜起=CHAR:[@顾清辞]@B1\n"
+        "【道具身份】抄=PROP:[战术磁吸手提箱]=手持｜规划=无载具｜落地=手持@B11\n"
+        "【Beat增改确认】最终Beat数=16\n"
+        "【卖点综合】落地=道具特写@B1,B11｜表情特写@B12\n"
+        "【声画综合】落地=配乐起@B1｜落@B16\n"
+        "【艺术衔拍】处数=2｜手法=光色浸染\n"
+        "[BEAT_STREAM_START]\n"
+        "[BEAT_START:1]\n"
+        "顾清辞身着素白学者大褂。【配乐】（低弦）<探针轻响>\n"
+        "[BEAT_END:1]\n"
+    )
+    cleaned = strip_framing_unused_headers(text)
+    assert "【本场姿势】" in cleaned
+    assert "开场=坐" in cleaned
+    assert "【本场主体确认】" in cleaned
+    assert "【本场角色】" in cleaned
+    assert "【本场道具身份】" in cleaned
+    assert "【卖点综合】卖点=精彩对白" in cleaned
+    assert "【卖点综合】落地=道具特写@B1,B11" in cleaned
+    assert "【情绪峰谷综合】" in cleaned
+    assert "规划=无载具" in cleaned
+    assert "时地=季节=夏" in cleaned
+    assert "素白学者大褂" in cleaned
+    assert "【配乐】" in cleaned
+    for heading in (
+        "【本场时地】",
+        "【本场风格】",
+        "【场景衔接】",
+        "【闪回分档】",
+        "【场号配对】",
+        "【多线编排】",
+        "【本场服化道】",
+        "深灰战术风衣",
+        "【场景综合】",
+        "【叙事综合】",
+        "【声画综合】",
+        "大提琴",
+        "【Beat增改确认】",
+        "【艺术衔拍】",
+    ):
+        assert heading not in cleaned, heading
