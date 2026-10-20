@@ -1449,3 +1449,20 @@ def test_collapse_keeps_bullets_when_extract_missing():
         "- `0度客栈大堂`：所属主环境=客栈大堂｜活动适配=柜台后\n"
     )
     assert collapse_duplicate_derived_environment_sections(text) == text
+
+
+def test_framing_input_drops_placeholder_env_block():
+    from app.services.scene_subskill_pipeline_runner import strip_placeholder_env_blocks
+
+    text = (
+        "[ENV_BLOCK_START]\n"
+        "【主环境】承天总裁办｜环境族=普通\n"
+        "固定实体=案台\n"
+        "[ENV_BLOCK_END]\n"
+        "[ENV_BLOCK_START] 【主环境】──── [ENV_BLOCK_END]\n"
+        "【本场时地】季节=夏\n"
+    )
+    cleaned = strip_placeholder_env_blocks(text)
+    assert "【主环境】承天总裁办" in cleaned
+    assert "【主环境】────" not in cleaned
+    assert "【本场时地】季节=夏" in cleaned

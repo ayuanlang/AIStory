@@ -2060,7 +2060,7 @@ def _subskill_aspect_ratio_injection(
     strategy = _classify_aspect_strategy(ratio)
     return wrap_injection_section(
         "项目画幅",
-        f"Aspect Ratio: {ratio}\n策略={strategy}\n景别侧重=见现场编排 §4.5.2",
+        f"Aspect Ratio: {ratio}\n策略={strategy}",
     )
 
 
@@ -2079,6 +2079,41 @@ def _subskill_visual_backfill_injection(
         script_text
     )
     return build_project_visual_backfill_readonly_injection(obj)
+
+
+def _framing_only_tail(project_tail: str) -> str:
+    """Framing reads aspect ratio. Style, music and plot already sit in the scene."""
+    match = re.search(
+        r"\[项目画幅开始\].*?\[项目画幅结束\]",
+        str(project_tail or ""),
+        flags=re.DOTALL,
+    )
+    return match.group(0).strip() if match else ""
+
+
+_PLACEHOLDER_ENV_BLOCK_RE = re.compile(
+    r"`?\[ENV_BLOCK_START(?:\:[^\]]+)?\]`?"
+    r"(?P<body>.*?)"
+    r"`?\[ENV_BLOCK_END(?:\:[^\]]+)?\]`?",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def strip_placeholder_env_blocks(scene_text: str) -> str:
+    """Drop an ENV block whose 【主环境】 line is only a section rule."""
+
+    def _keep(match: re.Match) -> str:
+        body = str(match.group("body") or "")
+        header = re.search(r"【主环境】[ \t]*([^\n]*)", body)
+        if not header:
+            return match.group(0)
+        name = _clean_staging_env_name(header.group(1))
+        if name:
+            return match.group(0)
+        return ""
+
+    stripped = _PLACEHOLDER_ENV_BLOCK_RE.sub(_keep, str(scene_text or ""))
+    return re.sub(r"\n{3,}", "\n\n", stripped).strip()
 
 
 def _wrap_single_scene_input(
@@ -3645,11 +3680,13 @@ async def _run_derived_framing_then_staging(
         )
         return current_block
 
-    framing_block = splice_environment_and_enhance_scene(
-        scene_id,
-        env_scene,
-        enhance_block,
-        special,
+    framing_block = strip_placeholder_env_blocks(
+        splice_environment_and_enhance_scene(
+            scene_id,
+            env_scene,
+            enhance_block,
+            special,
+        )
     )
     episode_env_blocks = {
         name: strip_prior_derived_environment_sections(
@@ -3662,12 +3699,20 @@ async def _run_derived_framing_then_staging(
         ident_items,
         env_catalog,
         episode_env_blocks=episode_env_blocks,
+        already_present_in=framing_block,
+    )
+    framing_token_brief = build_scene_entity_token_brief(
+        env_script,
+        scene_id,
+        framing_block,
+        reused_character_names=reused_character_names,
+        for_framing=True,
     )
     framing_input = _wrap_single_scene_input(
         framing_block,
-        comprehensive_info,
-        project_tail,
-        entity_token_brief,
+        "" if "【场景综合】" in framing_block else comprehensive_info,
+        _framing_only_tail(project_tail),
+        framing_token_brief,
     )
     if main_env_block:
         framing_input = f"{main_env_block}\n\n{framing_input}"

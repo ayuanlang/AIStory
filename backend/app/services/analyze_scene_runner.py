@@ -314,10 +314,16 @@ async def execute_analyze_scene(
                 "and avoid 'DemonSlayerCaptain', 'Demon_Slayer_Captain', 'demon-slayer-captain', or 'HarborOffice_Front_Mid_Night'."
             )
 
-        # Inject authoritative character canon (if provided via episode_id)
+        # Inject authoritative character canon (if provided via episode_id).
+        # 现场编排不写外形，也不消费定妆正文。
         try:
             ep_id = getattr(request, "episode_id", None)
-            if ep_id:
+            _canon_prompt = str(getattr(request, "prompt_file", "") or "").lower()
+            _canon_function = str(getattr(request, "function_name", "") or "").lower()
+            _skip_canon_for_framing = (
+                "derived_framing" in _canon_prompt or "derived_framing" in _canon_function
+            )
+            if ep_id and not _skip_canon_for_framing:
                 episode = (
                     db.query(Episode)
                     .filter(Episode.id == ep_id, _active_episode_clause())
@@ -585,6 +591,8 @@ async def execute_analyze_scene(
                 effective_scene_analysis_mode,
                 getattr(request, "prompt_file", None),
             )
+        elif is_derived_framing_stage:
+            user_content = str(request.text or "").strip()
         elif persisted_subject_index_for_prompt:
             index_for_prompt = persisted_subject_index_for_prompt
             saved_subject_index_block = (
@@ -902,7 +910,7 @@ async def execute_analyze_scene(
             )
 
         
-        if request.project_metadata:
+        if request.project_metadata and not is_derived_framing_stage:
             # Frontend Stage 1/2.1 may already bake [项目信息…] into request text
             # (skipMetadata=true). Do not prepend a second copy from DB auto-fill.
             user_content_has_project_info = (
@@ -1034,7 +1042,7 @@ async def execute_analyze_scene(
             except Exception as kb_exc:
                 logger.warning("[analyze_scene] KB RAG injection skipped: %s", kb_exc)
 
-        if (is_script_optimization_stage or is_derived_framing_stage) and getattr(request, "project_id", None):
+        if is_script_optimization_stage and getattr(request, "project_id", None):
             try:
                 from app.api.routers.entities_pkg.analyze import _entity_analysis_is_main_environment
                 
@@ -1224,7 +1232,12 @@ async def execute_analyze_scene(
                     len(reuse_subject_assets),
                     effective_scene_analysis_mode,
                 )
-        if (not is_scene_beats_stage) and isinstance(reuse_subject_assets, list) and len(reuse_subject_assets) > 0:
+        if (
+            (not is_scene_beats_stage)
+            and (not is_derived_framing_stage)
+            and isinstance(reuse_subject_assets, list)
+            and len(reuse_subject_assets) > 0
+        ):
             # Stage 2.1 frontend may already embed [可复用Subject资产…] in user text.
             if "[可复用Subject资产开始]" in str(user_content or ""):
                 logger.info(

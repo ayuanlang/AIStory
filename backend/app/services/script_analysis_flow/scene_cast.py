@@ -359,7 +359,7 @@ def _character_marked_reused(
 
 
 _MAIN_ENV_HEADER_NAME_PATTERN = re.compile(
-    r"(?m)^[ \t]*【主环境】[ \t]*([^｜\|\r\n]+)"
+    r"(?m)^[ \t]*【主环境】[ \t]*(.+)$"
 )
 _ENV_NAMEPLATE_META_TAIL = re.compile(
     r"(?:[·・\s/／]+(?:日|夜|晨|昏|昼|晚|内|外|室内|室外|春|夏|秋|冬|晴|雨|雪|阴))+$"
@@ -429,7 +429,21 @@ def _env_nameplate_bare_name(raw: str) -> str:
     name = _ENV_NAMEPLATE_META_TAIL.sub("", name).strip(" ·・")
     if name in {"无", "空", "none", "n/a"}:
         return ""
+    if re.fullmatch(r"[─—－\-_=*\s.。·]+", name):
+        return ""
     return name
+
+
+def _nameplate_header_name(raw: str) -> str:
+    """First real name on a 【主环境】 line. A rule of dashes is not a name."""
+    for segment in re.split(r"[｜|]", str(raw or "")):
+        piece = segment.strip()
+        if not piece or "=" in piece or "＝" in piece or ":" in piece or "：" in piece:
+            continue
+        bare = _env_nameplate_bare_name(piece)
+        if bare:
+            return bare
+    return ""
 
 
 def collect_scene_env_nameplate_names(
@@ -482,7 +496,9 @@ def collect_scene_env_nameplate_names(
                 continue
             allow(bare)
         for match in _MAIN_ENV_HEADER_NAME_PATTERN.finditer(body):
-            allow(match.group(1))
+            header_name = _nameplate_header_name(match.group(1))
+            if header_name:
+                allow(header_name)
     return names
 
 
@@ -508,6 +524,7 @@ def build_scene_entity_token_brief(
     scene_id: str,
     scene_text: str = "",
     reused_character_names: Optional[Iterable[str]] = None,
+    for_framing: bool = False,
 ) -> str:
     """Whitelist for drama-onward CHAR/PROP standard expression."""
     script = str(full_script or "")
@@ -523,10 +540,30 @@ def build_scene_entity_token_brief(
     for name in cast_names.get("props") or []:
         if name not in prop_names:
             prop_names.append(name)
+    if for_framing:
+        scene_chars = list(cast_names.get("characters") or [])
+        scene_props = list(cast_names.get("props") or [])
+        if not scene_chars and not scene_props:
+            present = str(scene_text or "")
+            scene_chars = [name for name in char_names if name and name in present]
+            scene_props = [name for name in prop_names if name and name in present]
+        char_names = scene_chars
+        prop_names = scene_props
+        cast = ""
     if not char_names and not prop_names and not cast:
         return ""
     char_line = "，".join(char_names) if char_names else "无"
     prop_line = "，".join(prop_names) if prop_names else "无"
+    if for_framing:
+        preface = (
+            "本场叙述只使用下列已注册名，写成 `CHAR:[@原样]` / `PROP:[原样]`。"
+            "不写声线、名牌、外形。衍生环境确认前不写 `ENV:`。"
+            "名单外保持自然语言，禁止另起未列出名。"
+        )
+        return wrap_injection_section(
+            "本场角色道具白名单",
+            f"{preface}\n\nCHAR: {char_line}\nPROP: {prop_line}",
+        )
     preface = (
         "本场资产标准表达白名单。文戏起叙述层命中下列完整名必须写成 "
         "`CHAR:[@原样]` / `PROP:[原样]`；只换称呼串，不改句。"

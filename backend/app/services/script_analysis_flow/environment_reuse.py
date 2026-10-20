@@ -973,15 +973,29 @@ def framing_reused_main_environment_prose(
     return "\n\n".join(candidates)
 
 
+def _prose_already_in_scene(prose: str, scene_text: str) -> bool:
+    body = re.sub(r"\s+", "", str(prose or ""))
+    scene = re.sub(r"\s+", "", str(scene_text or ""))
+    if len(body) < 24 or not scene:
+        return False
+    return body in scene
+
+
 def build_reused_main_environment_injection(
     items: Sequence[Dict[str, Any]],
     catalog: Sequence[Dict[str, Any]],
     *,
     episode_env_blocks: Optional[Dict[str, str]] = None,
+    already_present_in: str = "",
 ) -> str:
-    """Inject every IDENT main environment for framing, including new flashback blocks."""
+    """Inject every IDENT main environment for framing, including new flashback blocks.
+
+    A block whose正文 is already inside the spliced scene is omitted. Framing
+    still reads that 【主环境】 once, from the scene itself.
+    """
     sections: List[str] = []
     seen: set = set()
+    present = str(already_present_in or "")
     for item in items or []:
         name = _clean_env_name(item.get("name"))
         key = normalize_environment_name(name)
@@ -996,6 +1010,10 @@ def build_reused_main_environment_injection(
         if not prose:
             evidence = str(item.get("evidence") or "").strip()
             prose = evidence or "本场 IDENT 已列此主环境"
+        if _prose_already_in_scene(prose, present):
+            continue
+        if prose.strip() == "本场 IDENT 已列此主环境" and name in present:
+            continue
         kind = "复用" if item.get("reuse") else "新建"
         sections.append(f"所属主环境={name}｜{kind}\n{prose}")
     if not sections:

@@ -277,6 +277,12 @@ def test_scene_env_ident_parse_and_reuse_decision():
     assert "[复用衍生环境开始]" not in main_injection
     assert "0度林知夏卧室" not in main_injection
     assert "view_angle" not in main_injection
+    duplicated = build_reused_main_environment_injection(
+        bedroom_items,
+        bedroom_catalog,
+        already_present_in=main_injection,
+    )
+    assert duplicated == ""
     assert "已声明衍生名" not in main_injection
 
     flashback_items = [

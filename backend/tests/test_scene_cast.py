@@ -420,3 +420,32 @@ def test_reused_character_does_not_get_nameplate():
     assert "CHAR:[@林岳]" in tag_section
     assert "字幕=待落" not in tag_section
     assert tag_section.count("字幕=无") >= 2
+
+
+def test_framing_brief_keeps_names_only():
+    brief = build_scene_entity_token_brief(_script(), "EP01_SC01", for_framing=True)
+    assert "CHAR: 沈青，林岳，围观百姓" in brief
+    assert "PROP: 银打火机" in brief
+    assert "对白声线" not in brief
+    assert "本场角色标签" not in brief
+    assert "本场环境名牌" not in brief
+    assert "voice_identity" not in brief
+    assert "林岳_礼服版" not in brief
+    assert "[SCENE_CAST_START" not in brief
+
+
+def test_dash_rule_is_not_an_environment_nameplate():
+    from app.services.script_analysis_flow.scene_cast import collect_scene_env_nameplate_names
+
+    body = """
+[SCENE_ENV_IDENT_START:EP00_SC02]
+[ENV] 名称=承天总裁办｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文
+[SCENE_ENV_IDENT_END:EP00_SC02]
+[ENV_BLOCK_START]
+【主环境】承天总裁办｜环境族=普通
+[ENV_BLOCK_END]
+[ENV_BLOCK_START]
+【主环境】────
+[ENV_BLOCK_END]
+"""
+    assert collect_scene_env_nameplate_names(body, "EP00_SC02", body) == ["承天总裁办"]
