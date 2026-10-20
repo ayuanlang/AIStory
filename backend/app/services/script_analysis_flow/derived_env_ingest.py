@@ -705,6 +705,81 @@ def _feature_with_position(name: str, positions: Dict[str, str]) -> str:
     return f"{name}（{label}）"
 
 
+_VISIBLE_FACE_LABELS = {"正面", "左侧面", "右侧面"}
+_HIDDEN_FACE_LABEL = "机位后不可见"
+_FACE_LABEL_PATTERN = re.compile(
+    r"^(.+?)（(正面|左侧面|右侧面|机位后不可见)）$"
+)
+
+
+def _names_match_subject(name: str, other: str) -> bool:
+    left = _clean(name)
+    right = _clean(other)
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+    return len(shorter) >= 2 and shorter in longer
+
+
+def _offscreen_subject_names(
+    offscreen: Any,
+    forbidden: Optional[Set[str]] = None,
+) -> List[str]:
+    names = _brief_feature_names(offscreen, forbidden)
+    whole = _strip_offscreen_mark(offscreen)
+    if (
+        whole
+        and whole.lower() not in _EMPTY_FIELD_MARKERS
+        and "=" not in whole
+        and whole not in names
+    ):
+        names.append(whole)
+    return names
+
+
+def _feature_is_hidden(
+    name: str,
+    positions: Dict[str, str],
+    offscreen_names: Sequence[str],
+) -> bool:
+    """画外、机位后不是可见面。已落在正面或左右侧面的名字留下。"""
+    label = positions.get(name) or ""
+    if label in _VISIBLE_FACE_LABELS:
+        return False
+    if label == _HIDDEN_FACE_LABEL:
+        return True
+    return any(_names_match_subject(name, other) for other in offscreen_names)
+
+
+def drop_invisible_anchor_features(text: str, *, offscreen: str = "") -> str:
+    """简要特征只留可见面。画外和标成机位后不可见的主体整条删掉。"""
+    raw = _clean(text)
+    if not raw:
+        return ""
+    prefix = "简要特征=" if raw.startswith("简要特征=") else ""
+    body = raw[len(prefix):] if prefix else raw
+    hidden = _offscreen_subject_names(offscreen)
+    kept: List[str] = []
+    for part in re.split(r"[,，、]", body):
+        piece = _clean(part)
+        if not piece:
+            continue
+        match = _FACE_LABEL_PATTERN.fullmatch(piece)
+        name = _clean(match.group(1)) if match else piece
+        label = match.group(2) if match else ""
+        if label == _HIDDEN_FACE_LABEL:
+            continue
+        if any(_names_match_subject(name, other) for other in hidden):
+            continue
+        kept.append(piece)
+    if not kept:
+        return ""
+    joined = "，".join(kept)
+    return f"{prefix}{joined}" if prefix else joined
+
+
 _BEAT_BLOCK_PATTERN = re.compile(
     r"\[BEAT_START:[^\]]*\](.*?)\[BEAT_END:[^\]]*\]",
     re.DOTALL,
@@ -831,7 +906,7 @@ def format_derived_anchor_description(
     hang_visible: bool = False,
     chosen_references: Optional[Sequence[str]] = None,
 ) -> str:
-    """特征锚点：选用的环境参考主体，每条只写名称和所在面；没有时才退回正面。"""
+    """特征锚点：只写本角看得见的面。画外、机位后不写入。没有选用主体时才退回正面。"""
     del references, world_anchor, hang_anchor, hang_visible
     features: List[str] = []
     seen: Set[str] = set()
@@ -851,7 +926,15 @@ def format_derived_anchor_description(
         offscreen=offscreen,
         forbidden=forbidden,
     )
-    return "简要特征=" + "，".join(_feature_with_position(name, positions) for name in features)
+    offscreen_names = _offscreen_subject_names(offscreen, forbidden)
+    visible = [
+        name
+        for name in features
+        if not _feature_is_hidden(name, positions, offscreen_names)
+    ]
+    if not visible:
+        return ""
+    return "简要特征=" + "，".join(_feature_with_position(name, positions) for name in visible)
 
 
 def _parse_field_line(raw: str) -> Dict[str, str]:

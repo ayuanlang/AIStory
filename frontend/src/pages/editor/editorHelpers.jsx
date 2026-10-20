@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Loader2, Video, RefreshCw } from 'lucide-react';
 import { BASE_URL, ASSET_BASE_URL } from '../../config';
 import { createEntity, regenerateScene, batchSupplementMissingEntities } from '../../services/api';
@@ -403,6 +403,42 @@ export const normalizeSubjectKey = normalizeSubjectKeyForDeps;
 export const normalizeImportSubjectKey = normalizeSubjectKeyForDeps;
 export const IMG_PLACEHOLDER_SRC = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
+const mediaUrlsMatch = (left, right) => {
+    const a = String(left || '').trim();
+    const b = String(right || '').trim();
+    if (!a || !b || a === IMG_PLACEHOLDER_SRC || b === IMG_PLACEHOLDER_SRC) return false;
+    if (a === b) return true;
+    try {
+        const aUrl = new URL(a, window.location.href);
+        const bUrl = new URL(b, window.location.href);
+        if (aUrl.href === bUrl.href) return true;
+        // Signed CDN links keep the same object path and only rotate the query.
+        return aUrl.origin === bUrl.origin && aUrl.pathname === bUrl.pathname;
+    } catch {
+        return false;
+    }
+};
+
+const isDecodedImageNode = (node, expectedSrc) => {
+    if (!node || !node.complete || node.naturalWidth <= 0) return false;
+    const shown = node.currentSrc || node.src || '';
+    return mediaUrlsMatch(shown, expectedSrc);
+};
+
+const videoElementMatchesSrc = (node, expectedSrc) => {
+    if (!expectedSrc) return true;
+    const shown = node?.currentSrc || node?.src || '';
+    if (shown && mediaUrlsMatch(shown, expectedSrc)) return true;
+    const assigned = node?.getAttribute?.('src') || '';
+    return Boolean(assigned) && mediaUrlsMatch(assigned, expectedSrc);
+};
+
+// preload=metadata often stops at HAVE_METADATA and paints the poster, without a later canplay.
+const videoHasPlaybackStart = (node, expectedSrc) => {
+    if (!node || node.readyState < 1) return false;
+    return videoElementMatchesSrc(node, expectedSrc);
+};
+
 export const parseVisualDependencies = (value) => {
     let candidates = [];
 
@@ -473,6 +509,10 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
     const retryAttemptRef = useRef(0);
     const retryTimerRef = useRef(null);
     const retryStartedAtRef = useRef(0);
+    const imgNodeRef = useRef(null);
+    const isLoadedRef = useRef(isWarmMediaUrl(rawSrc));
+    const userOnLoadRef = useRef(userOnLoad);
+    userOnLoadRef.current = userOnLoad;
 
     const retryDelayList = Array.isArray(retryDelays) && retryDelays.length > 0
         ? retryDelays.map((value) => Math.max(250, Number(value) || 0)).filter(Boolean)
@@ -498,7 +538,9 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
             clearBrokenMediaUrl(rawSrc);
         }
         setFailed(!rawSrc || (isBrokenMediaUrl(rawSrc) && !retryOnError));
-        setIsLoaded(isWarmMediaUrl(rawSrc));
+        const warmed = isWarmMediaUrl(rawSrc);
+        isLoadedRef.current = warmed;
+        setIsLoaded(warmed);
         setUseProxy(false);
         if (isWarmMediaUrl(rawSrc) || retryOnError) {
             setShouldLoad(true);
@@ -552,6 +594,7 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
             retryStartedAtRef.current = 0;
             setRetryToken((value) => value + 1);
             setFailed(false);
+            isLoadedRef.current = false;
             setIsLoaded(false);
             setUseProxy(false);
             setShouldLoad(eagerLoad || Boolean(rawSrc));
@@ -559,6 +602,26 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
     }, [eagerLoad, rawSrc]);
 
     const resolvedSrc = failed ? '' : getMediaUrlWithFallback(rawSrc, useProxy);
+    const expectedSrc = shouldLoad ? resolvedSrc : '';
+
+    const acceptDecodedImage = (node) => {
+        if (!isDecodedImageNode(node, expectedSrc)) return false;
+        if (isLoadedRef.current) return true;
+        retryAttemptRef.current = 0;
+        rememberWarmMediaUrl(rawSrc);
+        isLoadedRef.current = true;
+        setIsLoaded(true);
+        if (typeof userOnLoadRef.current === 'function') userOnLoadRef.current();
+        return true;
+    };
+
+    useLayoutEffect(() => {
+        if (acceptDecodedImage(imgNodeRef.current)) return undefined;
+        const frame = requestAnimationFrame(() => {
+            acceptDecodedImage(imgNodeRef.current);
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [rawSrc, shouldLoad, useProxy, retryToken, expectedSrc]);
     const thumbSrc = getThumbUrl(rawSrc);
     if (!resolvedSrc) return fallback || null;
 
@@ -566,32 +629,29 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
         <div ref={containerRef} className={`relative z-0 isolate flex items-center justify-center overflow-hidden bg-[#151515] ${className ? className.replace('object-cover', '').replace('object-contain', '').replace('max-w-full', 'w-full').replace('max-h-full', 'h-full') : ''}`}>
             {!isLoaded && !failed && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-                    <Loader2 className="w-5 h-5 animate-spin text-white/40 drop-shadow-md" />
+                    <Loader2 className="w-5 h-5 animate-spin text-white/40 transition-none" />
                 </div>
             )}
             {!isLoaded && !failed && shouldLoad && thumbSrc && (
                 <img
                     src={thumbSrc}
                     alt={`${alt} thumbnail`}
-                    className={`absolute inset-0 w-full h-full blur-[8px] scale-110 object-cover opacity-60 z-0 transition-opacity duration-300`}
+                    className="absolute inset-0 w-full h-full object-cover opacity-60 z-0"
                 />
             )}
             <img
+                ref={imgNodeRef}
                 key={`${rawSrc}:${useProxy ? 'proxy' : 'direct'}:${retryToken}`}
                 src={shouldLoad ? resolvedSrc : IMG_PLACEHOLDER_SRC}
                 alt={alt}
-                className={`absolute inset-0 w-full h-full transition-all duration-700 z-10 ${(className || '').includes('object-contain') ? 'object-contain' : 'object-cover'} ${
-                    isLoaded ? 'opacity-100 blur-0 scale-100 bg-transparent' : 'opacity-0 blur-[10px] scale-110 bg-transparent'
+                className={`absolute inset-0 w-full h-full z-10 transition-opacity duration-300 ${(className || '').includes('object-contain') ? 'object-contain' : 'object-cover'} ${
+                    isLoaded ? 'opacity-100' : 'opacity-0'
                 }`}
                 loading={imgProps.loading || 'lazy'}
                 decoding={imgProps.decoding || 'async'}
                 fetchpriority={imgProps.fetchPriority || 'low'}
                 onLoad={(e) => {
-                    if (e.target.src === IMG_PLACEHOLDER_SRC) return;
-                    retryAttemptRef.current = 0;
-                    rememberWarmMediaUrl(rawSrc);
-                    setIsLoaded(true);
-                    if (typeof userOnLoad === 'function') userOnLoad();
+                    acceptDecodedImage(e.currentTarget);
                 }}
                 onError={() => {
                     if (!shouldLoad) {
@@ -629,6 +689,7 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                         if (hasBaselineAttemptsLeft) {
                             retryAttemptRef.current += 1;
                             setShouldLoad(false);
+                            isLoadedRef.current = false;
                             setIsLoaded(false);
                             retryTimerRef.current = setTimeout(() => {
                                 retryTimerRef.current = null;
@@ -1859,14 +1920,42 @@ export const LazyHoverVideo = ({
     const [posterFailed, setPosterFailed] = useState(() => !poster || isBrokenMediaUrl(poster));
     const [isVideoLoaded, setIsVideoLoaded] = useState(() => isWarmMediaUrl(src));
     const [videoUseProxy, setVideoUseProxy] = useState(false);
+    const isVideoLoadedRef = useRef(isWarmMediaUrl(src));
+
+    const playbackSrc = shouldLoad && !videoFailed ? getMediaUrlWithFallback(src, videoUseProxy) : '';
+
+    const acceptDecodedVideo = () => {
+        if (!videoHasPlaybackStart(videoRef.current, playbackSrc)) return false;
+        if (!isVideoLoadedRef.current) {
+            isVideoLoadedRef.current = true;
+            setIsVideoLoaded(true);
+            if (src) rememberWarmMediaUrl(src);
+            if (poster) rememberWarmMediaUrl(poster);
+        }
+        return true;
+    };
+
+    useLayoutEffect(() => {
+        if (acceptDecodedVideo()) return undefined;
+        const frame = requestAnimationFrame(() => {
+            acceptDecodedVideo();
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [playbackSrc, src, poster]);
 
     useEffect(() => {
         setVideoFailed(!src || isBrokenMediaUrl(src));
         setVideoUseProxy(false);
-        if (isWarmMediaUrl(src)) {
+        const directSrc = getMediaUrlWithFallback(src, false);
+        if (isWarmMediaUrl(src) || videoHasPlaybackStart(videoRef.current, directSrc)) {
             setShouldLoad(true);
+            isVideoLoadedRef.current = true;
             setIsVideoLoaded(true);
+            if (src) rememberWarmMediaUrl(src);
+            return;
         }
+        isVideoLoadedRef.current = false;
+        setIsVideoLoaded(false);
     }, [src]);
 
     useEffect(() => {
@@ -1878,6 +1967,7 @@ export const LazyHoverVideo = ({
             setVideoFailed(false);
             setPosterFailed(false);
             setVideoUseProxy(false);
+            isVideoLoadedRef.current = false;
             setIsVideoLoaded(false);
             setShouldLoad(Boolean(src));
         });
@@ -1939,25 +2029,30 @@ export const LazyHoverVideo = ({
         >
             {!isVideoLoaded && !videoFailed && !poster && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
-                    <Loader2 className="w-5 h-5 animate-spin text-white/20" />
+                    <Loader2 className="w-5 h-5 animate-spin text-white/20 transition-none" />
                 </div>
             )}
             
             {!posterFailed && poster && (
-                <div className={`absolute inset-0 z-0 transition-opacity duration-700 ${isVideoLoaded ? 'opacity-0 delay-300' : 'opacity-100'}`}>
+                <div className={`absolute inset-0 z-0 transition-opacity duration-300 ${isVideoLoaded ? 'opacity-0' : 'opacity-100'}`}>
                     <SafeImage src={poster} className="absolute inset-0 w-full h-full object-cover" />
                 </div>
             )}
 
             <video
+                {...videoProps}
                 ref={videoRef}
-                src={shouldLoad && !videoFailed ? getMediaUrlWithFallback(src, videoUseProxy) : undefined}
+                src={playbackSrc || undefined}
                 preload={shouldLoad ? preload : 'none'}
-                className={`z-10 relative transition-all duration-700 ${mediaClassName} ${isVideoLoaded ? 'opacity-100 blur-0 scale-100 bg-transparent' : 'opacity-0 blur-[10px] scale-105 bg-[#151515]'}`}
+                className={`z-10 relative transition-opacity duration-300 ${mediaClassName} ${isVideoLoaded ? 'opacity-100' : 'opacity-0'}`}
+                onLoadedMetadata={() => {
+                    acceptDecodedVideo();
+                }}
                 onLoadedData={() => {
-                    setIsVideoLoaded(true);
-                    rememberWarmMediaUrl(src);
-                    if (poster) rememberWarmMediaUrl(poster);
+                    acceptDecodedVideo();
+                }}
+                onCanPlay={() => {
+                    acceptDecodedVideo();
                 }}
                 onError={() => {
                     if (!videoUseProxy && canFallbackToAssetProxy(src)) {
@@ -1971,7 +2066,6 @@ export const LazyHoverVideo = ({
                         setPosterFailed(true);
                     }
                 }}
-                {...videoProps}
             />
         </div>
     );
@@ -2129,6 +2223,39 @@ export const ManagedVideoPlayer = ({
     const [videoUseProxy, setVideoUseProxy] = useState(false);
     const [posterUseProxy, setPosterUseProxy] = useState(false);
     const [reloadToken, setReloadToken] = useState(0);
+    const videoNodeRef = useRef(null);
+    const hasFrameRef = useRef(false);
+    const [hasFrame, setHasFrame] = useState(false);
+    const playbackSrc = src && !videoFailed && !suspend ? getMediaUrlWithFallback(src, videoUseProxy) : '';
+
+    const syncPresentedFrame = (ready) => {
+        hasFrameRef.current = ready;
+        setHasFrame(ready);
+        setLoadState(ready ? 'ready' : 'loading');
+        if (ready && src) rememberWarmMediaUrl(src);
+    };
+
+    const markFrameReady = () => {
+        if (!videoHasPlaybackStart(videoNodeRef.current, playbackSrc)) return false;
+        syncPresentedFrame(true);
+        return true;
+    };
+
+    const noteStillLoading = (nextState) => {
+        if (hasFrameRef.current || videoHasPlaybackStart(videoNodeRef.current, playbackSrc)) {
+            syncPresentedFrame(true);
+            return;
+        }
+        setLoadState(nextState);
+    };
+
+    useLayoutEffect(() => {
+        if (markFrameReady()) return undefined;
+        const frame = requestAnimationFrame(() => {
+            markFrameReady();
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [playbackSrc, reloadToken, src]);
 
     useEffect(() => {
         setVideoFailed(!src || isBrokenMediaUrl(src));
@@ -2142,11 +2269,18 @@ export const ManagedVideoPlayer = ({
 
     useEffect(() => {
         if (!src || suspend || videoFailed) {
+            syncPresentedFrame(false);
             setLoadState('idle');
             return;
         }
-        setLoadState('loading');
-    }, [src, suspend, videoFailed]);
+        const expected = getMediaUrlWithFallback(src, videoUseProxy);
+        if (videoHasPlaybackStart(videoNodeRef.current, expected)) {
+            syncPresentedFrame(true);
+            return;
+        }
+        if (hasFrameRef.current) return;
+        syncPresentedFrame(false);
+    }, [src, suspend, videoFailed, videoUseProxy, reloadToken]);
 
     useEffect(() => {
         return subscribeMediaReload(() => {
@@ -2154,6 +2288,8 @@ export const ManagedVideoPlayer = ({
             setPosterFailed(false);
             setVideoUseProxy(false);
             setPosterUseProxy(false);
+            hasFrameRef.current = false;
+            setHasFrame(false);
             setReloadToken((value) => value + 1);
             if (src && !suspend) {
                 setLoadState('loading');
@@ -2182,8 +2318,9 @@ export const ManagedVideoPlayer = ({
         <div className={centeredWrapperClassName} onClick={onClick}>
             {!suspend ? (
                 <video
+                    ref={videoNodeRef}
                     key={`${src}:${reloadToken}`}
-                    src={getMediaUrlWithFallback(src, videoUseProxy)}
+                    src={playbackSrc}
                     poster={!posterFailed && poster ? getMediaUrlWithFallback(poster, posterUseProxy) : undefined}
                     className={centeredMediaClassName}
                     controls={controls}
@@ -2192,15 +2329,16 @@ export const ManagedVideoPlayer = ({
                     loop={loop}
                     playsInline={playsInline}
                     preload={preload}
-                    onLoadStart={() => setLoadState('loading')}
-                    onLoadedData={() => setLoadState('ready')}
-                    onCanPlay={() => setLoadState('ready')}
-                    onPlaying={() => setLoadState('ready')}
-                    onWaiting={() => setLoadState('buffering')}
-                    onStalled={() => setLoadState('buffering')}
-                    onSeeking={() => setLoadState('buffering')}
-                    onSeeked={() => setLoadState('ready')}
-                    onSuspend={() => setLoadState((prev) => (prev === 'loading' ? 'ready' : prev))}
+                    onLoadStart={() => noteStillLoading('loading')}
+                    onLoadedMetadata={() => { markFrameReady(); }}
+                    onLoadedData={() => { markFrameReady(); }}
+                    onCanPlay={() => { markFrameReady(); }}
+                    onPlaying={() => { markFrameReady(); }}
+                    onWaiting={() => noteStillLoading('buffering')}
+                    onStalled={() => noteStillLoading('buffering')}
+                    onSeeking={() => noteStillLoading('buffering')}
+                    onSeeked={() => { markFrameReady(); }}
+                    onSuspend={() => { markFrameReady(); }}
                     onError={() => {
                         if (!videoUseProxy && canFallbackToAssetProxy(src)) {
                             setVideoUseProxy(true);
@@ -2231,9 +2369,9 @@ export const ManagedVideoPlayer = ({
                 </div>
             )}
 
-            {isBusy && !suspend && !hideBusyOverlay && (
+            {isBusy && !hasFrame && !suspend && !hideBusyOverlay && (
                 <div className="absolute inset-0 z-10 bg-black/55 flex items-center justify-center flex-col gap-2 pointer-events-none">
-                    <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                    <Loader2 className="w-6 h-6 animate-spin text-primary transition-none" />
                     <span className="text-xs text-white/80">{busyText}</span>
                 </div>
             )}

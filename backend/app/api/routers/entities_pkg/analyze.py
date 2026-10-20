@@ -89,6 +89,28 @@ def _entity_analysis_category(entity_type: Any) -> str:
     return "character"
 
 
+def _derivative_visible_face_anchor(entity: Any, text: Optional[str]) -> Optional[str]:
+    """衍生环境描点只留本角可见面。画外主体，如 180 度图里的北向落地窗，整条删掉。"""
+    if _entity_analysis_is_main_environment(entity):
+        return text
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        drop_invisible_anchor_features,
+    )
+
+    attrs = getattr(entity, "custom_attributes", None)
+    if isinstance(attrs, str):
+        try:
+            attrs = json.loads(attrs)
+        except Exception:
+            attrs = {}
+    if not isinstance(attrs, dict):
+        attrs = {}
+    return drop_invisible_anchor_features(
+        str(text or ""),
+        offscreen=str(attrs.get("offscreen") or ""),
+    )
+
+
 def _entity_analysis_is_main_environment(entity: Any) -> bool:
     """Detect Stage-3 main/baseline environment (四向拼图 / 2x2), vs derivative ENV."""
     attrs = getattr(entity, "custom_attributes", None)
@@ -215,7 +237,7 @@ def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
         common
         + "衍生环境 generation_prompt_cn 格式（强制，截取放大；第一刀只切割，不写几何/楼底）：\n"
         "- §A（仅 logic）：所属主环境= + 四宫度数=左上0度｜右上90度｜左下180度｜右下270度 + 截取宫格（左上0度/右上90度/左下180度/右下270度，与 N 同核）；禁写开篇拓扑/楼底。主环境资产已存在时，用正则匹配其 `四宫度数=` 后按该行度数裁切对应宫格。\n"
-        "- anchor_description（强制）：不另选。照抄程序已从现场编排写入的 `简要特征=`。那是本场选用该衍生时点名的环境参考主体，每条只写名称和所在位置：正面、左侧面、右侧面、机位后不可见。须全部保留。没有这串时才写该角正面最多 3 个简要主体名，并标（正面）。禁止整体环境锚点、禁止挂靠锚点、禁止背景=/画左=/画右=/画外=。\n"
+        "- anchor_description（强制）：不另选。照抄程序已从现场编排写入的 `简要特征=`，只留本角看得见的面。每条只写名称和所在可见面，闭集=正面|左侧面|右侧面。画外、对向壁、机位后面的主体整条删掉，禁止写成（机位后不可见）再留下。180度望南时北壁在镜头后面，北向落地窗、北向全景窗不进简要特征，即使这间房有这面窗、旧描点写过它。按这张图实际看得见的那一面核，图里没有的面不补。没有这串时才写该角正面最多 3 个简要主体名，并标（正面）。禁止整体环境锚点、禁止挂靠锚点、禁止背景=/画左=/画右=/画外=。\n"
         "- §B 第一刀：开头先写几何裁切，再写索引。参考图是一张2×2四宫格，正中一条横线和一条竖线分成四格。只保留该格，并写明半幅：左上=左半且上半（横向0%到50%、纵向0%到50%），右上=右半且上半（横向50%到100%、纵向0%到50%），左下=左半且下半（横向0%到50%、纵向50%到100%），右下=右半且下半（横向50%到100%、纵向50%到100%）。另外三格整块删除，成稿不得再看见这三格。留下的一格铺满16:9，四边贴满。格内原样放大，禁止重画。紧跟英文：Crop only the {top-left|top-right|bottom-left|bottom-right} quadrant. Discard the other three quadrants completely. Scale that single quadrant to fill the entire 16:9 frame edge to edge. Do not redraw. 然后才写所属主环境={名}。angle_key={名}|{N}。四宫度数=左上0度｜右上90度｜左下180度｜右下270度。截取宫格={左上0度|右上90度|左下180度|右下270度}。机位=望向={正北|正东|正南|正西}｜远锚={该向后景最远可见主体}｜禁以画外主体定位。禁止重写桌椅朝向、左右对调、扇区换边。远锚和焦距只用来核对这一格，禁止按这些名字重画，禁止把四格留在同一张图里。只切割，不要改画。成稿是单张镜头，不得留下横线、竖线、宫格边框、格标、角标、十字拼缝。\n"
         "- §B 衍生主环境：衍生主环境={名}。被依赖主环境={被依赖主环境名}。参考图是该主环境已经生成的四格拼图。在这张四格拼图上，对同一主体的相关内容四格一起改。状态Delta={状态Delta}。未写入状态Delta的实体保持参考图原样。不要拆成单格，不要另造房间。visual_dependencies 必须且仅能 [\"ENV:[被依赖主环境名]\"]。\n"
         "- 依赖图（最高；对应必须准确）：第一刀视角衍生 visual_dependencies 必须且仅能 [\"ENV:[所属主环境名]\"]。由状态合成的角度行只切割衍生主环境，必须且仅能 [\"ENV:[衍生主环境名]\"]。禁止按角度各自叠加状态。禁止 CHAR/PROP/海报/他主。对应参考图未就绪不得当无参考文生。\n"
@@ -326,7 +348,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
     anchor_placeholder = (
         "3-5 English anchor phrases"
         if is_main_env
-        else "简要特征=主体名（正面|左侧面|右侧面|机位后不可见）"
+        else "简要特征=主体名（正面|左侧面|右侧面）"
     )
     deps_rule = (
         "visual_dependencies must be [] and type=BaselineDefinition, unless this is a floor-split style-dependent main environment: then type=StyleReference and visual_dependencies=[\"ENV:[风格父主环境名]\"] (another main ENV only; still write a full independent four-direction prompt)."
@@ -940,7 +962,10 @@ async def _execute_analyze_entity_image(
         if "negative_prompt_en" in updated_info and hasattr(entity, "negative_prompt_en"):
             entity.negative_prompt_en = updated_info["negative_prompt_en"]
         if "anchor_description" in updated_info:
-            entity.anchor_description = coerce_anchor_description(updated_info["anchor_description"])
+            anchor = coerce_anchor_description(updated_info["anchor_description"])
+            if analysis_category == "environment":
+                anchor = _derivative_visible_face_anchor(entity, anchor)
+            entity.anchor_description = anchor
         
         if "visual_dependencies" in updated_info and isinstance(updated_info["visual_dependencies"], list):
             incoming_deps = updated_info["visual_dependencies"]
@@ -1206,7 +1231,10 @@ def apply_entity_analysis(
     elif "description_cn" in updated_info:
         entity.description = desc_cn
     if "anchor_description" in updated_info:
-        entity.anchor_description = coerce_anchor_description(updated_info["anchor_description"])
+        anchor = coerce_anchor_description(updated_info["anchor_description"])
+        if str(getattr(entity, "type", "") or "").strip().lower() == "environment":
+            anchor = _derivative_visible_face_anchor(entity, anchor)
+        entity.anchor_description = anchor
     
     if "visual_dependencies" in updated_info and isinstance(updated_info["visual_dependencies"], list): 
             entity.visual_dependencies = updated_info["visual_dependencies"]

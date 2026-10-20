@@ -590,12 +590,51 @@ def test_chosen_reference_subjects_cover_explicit_env_anchors():
     reverse = build_derived_environment_item(by_name["180度客栈大堂"])
     assert zero["anchor_description"] == (
         "简要特征=八仙桌，客栈大门（正面），雕花窗格（右侧面），"
-        "贴墙木楼梯（左侧面），红木柜台（机位后不可见）"
+        "贴墙木楼梯（左侧面）"
     )
+    assert "红木柜台" not in zero["anchor_description"]
+    assert "机位后不可见" not in zero["anchor_description"]
     assert "掌柜" not in zero["anchor_description"]
     assert reverse["anchor_description"] == "简要特征=红木柜台（正面）"
     assert "八仙桌" not in reverse["anchor_description"]
     assert zero["custom_attributes"]["chosen_references"] == "八仙桌、客栈大门、雕花窗格、贴墙木楼梯、红木柜台"
+
+
+def test_180_anchor_description_keeps_visible_faces_only():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        drop_invisible_anchor_features,
+        format_derived_anchor_description,
+    )
+
+    described = format_derived_anchor_description(
+        background="南向双开防爆大门",
+        frame_left="东壁屏风",
+        frame_right="西壁书柜",
+        offscreen="北向全景防弹落地窗",
+        chosen_references=[
+            "黑色大理石行政案台",
+            "真皮高背椅",
+            "大理石茶几",
+            "南向双开防爆大门",
+            "北向全景防弹落地窗",
+        ],
+    )
+    assert described == (
+        "简要特征=黑色大理石行政案台，真皮高背椅，大理石茶几，南向双开防爆大门（正面）"
+    )
+    assert "落地窗" not in described
+    rewritten = (
+        "简要特征=黑色大理石行政案台，真皮高背椅，大理石茶几，"
+        "南向双开防爆大门，北向全景防弹落地窗"
+    )
+    assert drop_invisible_anchor_features(
+        rewritten,
+        offscreen="北向全景防弹落地窗",
+    ) == "简要特征=黑色大理石行政案台，真皮高背椅，大理石茶几，南向双开防爆大门"
+    assert drop_invisible_anchor_features(
+        "简要特征=红木柜台（正面），客栈大门（机位后不可见）",
+        offscreen="客栈大门",
+    ) == "简要特征=红木柜台（正面）"
 
 
 def test_derived_env_anchors_drop_character_and_prop_content():
