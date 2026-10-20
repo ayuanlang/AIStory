@@ -3427,6 +3427,315 @@ def _clean_subskill_llm_config(raw: Any) -> Optional[Dict[str, Any]]:
     return cleaned
 
 
+_BEAT_CONTINUATION_PROMPTS = frozenset(
+    {DRAMA_PROMPT, COMBAT_PROMPT, FRAMING_PROMPT, STAGING_PROMPT}
+)
+_BEAT_CONTINUATION_TAIL = 3
+_BEAT_CONTINUATION_ROUNDS = 3
+_BEAT_STREAM_END_TOKEN = "[BEAT_STREAM_END]"
+_SCENE_END_RE = re.compile(r"`?\[SCENE_END(?::[^\]]+)?\]`?", re.IGNORECASE)
+_SCENES_BLOCK_END_RE = re.compile(r"`?\[SCENES_BLOCK_END\]`?", re.IGNORECASE)
+
+
+def _beat_content_complete(body: str, prompt_file: str) -> bool:
+    text = str(body or "")
+    if prompt_file == FRAMING_PROMPT:
+        return _beat_has_framing_lock(text)
+    if prompt_file == STAGING_PROMPT:
+        return "【建置】" in text and "【入戏】" in text
+    return True
+
+
+def _ordered_beat_pieces(text: str, prompt_file: str) -> List[Tuple[str, str, bool]]:
+    """Each beat as (id, raw span with markers, complete). Later holes stay in order."""
+    source = str(text or "")
+    starts = list(_BEAT_START_RE.finditer(source))
+    pieces: List[Tuple[str, str, bool]] = []
+    for idx, start_match in enumerate(starts):
+        beat_id = str(start_match.group(1) or idx + 1).strip() or str(idx + 1)
+        next_start = starts[idx + 1].start() if idx + 1 < len(starts) else len(source)
+        end_match = _BEAT_END_RE.search(source, start_match.end())
+        closed = bool(end_match and end_match.start() <= next_start)
+        if closed:
+            raw = source[start_match.start() : end_match.end()].strip()
+            body = source[start_match.end() : end_match.start()]
+        else:
+            raw = source[start_match.start() : next_start].strip()
+            body = source[start_match.end() : next_start]
+        pieces.append((beat_id, raw, closed and _beat_content_complete(body, prompt_file)))
+    return pieces
+
+
+def _complete_beat_prefix(pieces: List[Tuple[str, str, bool]]) -> List[Tuple[str, str]]:
+    kept: List[Tuple[str, str]] = []
+    for beat_id, raw, complete in pieces:
+        if not complete:
+            break
+        kept.append((beat_id, raw))
+    return kept
+
+
+def _resume_beat_id(pieces: List[Tuple[str, str, bool]]) -> str:
+    for beat_id, _raw, complete in pieces:
+        if not complete:
+            return beat_id
+    if not pieces:
+        return "1"
+    last = _normalize_beat_id(pieces[-1][0])
+    if last.isdigit():
+        return str(int(last) + 1)
+    return "下一拍"
+
+
+def _continuation_closers(text: str, prompt_file: str) -> str:
+    source = str(text or "")
+    chunks: List[str] = []
+    for pattern in (_BEAT_STREAM_END_RE, _SCENE_END_RE, _SCENES_BLOCK_END_RE):
+        match = None
+        for found in pattern.finditer(source):
+            match = found
+        if match:
+            chunks.append(match.group(0))
+    marker = _SUBSKILL_COMPLETION_MARKERS.get(prompt_file) or ""
+    if marker and _completion_marker_pattern(marker).search(source):
+        chunks.append(marker)
+    seen = set()
+    ordered: List[str] = []
+    for chunk in chunks:
+        key = chunk.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+    return "\n".join(ordered)
+
+
+def merge_beat_continuation(base: str, continuation: str, prompt_file: str) -> str:
+    """Keep the finished beat prefix and append new beats from the continuation."""
+    source = str(base or "").replace("\r\n", "\n")
+    starts = list(_BEAT_START_RE.finditer(source))
+    if not starts:
+        return source.strip()
+    kept = _complete_beat_prefix(_ordered_beat_pieces(source, prompt_file))
+    if not kept:
+        return source.strip()
+    header = source[: starts[0].start()].rstrip()
+    kept_ids = {_normalize_beat_id(beat_id) for beat_id, _raw in kept}
+    added: List[str] = []
+    for beat_id, raw, complete in _ordered_beat_pieces(continuation, prompt_file):
+        norm = _normalize_beat_id(beat_id)
+        if norm in kept_ids:
+            continue
+        if not complete:
+            break
+        added.append(raw)
+        kept_ids.add(norm)
+    body = "\n".join(raw for _beat_id, raw in kept)
+    if added:
+        body = body + "\n" + "\n".join(added)
+    merged = f"{header}\n{body}" if header else body
+    closers = _continuation_closers(continuation, prompt_file)
+    if "[BEAT_STREAM_START]" in header and _BEAT_STREAM_END_TOKEN not in closers:
+        closers = f"{_BEAT_STREAM_END_TOKEN}\n{closers}".strip()
+    if closers:
+        merged = f"{merged.rstrip()}\n{closers}"
+    return merged.strip()
+
+
+def beat_continuation_progressed(before: str, after: str, prompt_file: str) -> bool:
+    if str(after or "").strip() == str(before or "").strip():
+        return False
+    before_pieces = _ordered_beat_pieces(before, prompt_file)
+    after_pieces = _ordered_beat_pieces(after, prompt_file)
+    before_count = len(_complete_beat_prefix(before_pieces))
+    after_count = len(_complete_beat_prefix(after_pieces))
+    if after_count > before_count:
+        return True
+    return (not _subskill_marker_present(before, prompt_file)) and _subskill_marker_present(
+        after, prompt_file
+    )
+
+
+def build_beat_continuation_input(
+    scene_input: str,
+    kept: List[Tuple[str, str]],
+    resume_beat_id: str,
+    prompt_file: str,
+    *,
+    beats_already_closed: bool,
+) -> str:
+    label = _subskill_action_label(prompt_file)
+    marker = _SUBSKILL_COMPLETION_MARKERS[prompt_file]
+    tail = kept[-_BEAT_CONTINUATION_TAIL:]
+    shown = "\n\n".join(raw for _beat_id, raw in tail)
+    if beats_already_closed:
+        task = (
+            f"已完成的 Beat 都已写完，不要再写新拍。"
+            f"只补上结束标签 {marker}。"
+        )
+    else:
+        task = (
+            f"从 Beat {resume_beat_id} 接着写，不要重复下面这几拍，也不要改写已经完成的拍。"
+            f"按原格式只返回后续 Beat，每拍用 [BEAT_START:n] 到 [BEAT_END:n]。"
+            f"本场写完后补上结束标签 {marker}。"
+        )
+    return (
+        f"{str(scene_input or '').rstrip()}\n\n"
+        f"【续写】\n"
+        f"上一次{label}没有写完。下面是已完成的最后 {len(tail)} 个 Beat。\n"
+        f"{task}\n"
+        f"只返回续写，不要重写场头。\n\n"
+        f"{shown}"
+    )
+
+
+def _beat_output_finished(
+    text: str,
+    prompt_file: str,
+    scene_id: str,
+    fallback_special: str,
+    previous_block: str,
+) -> bool:
+    if not _subskill_marker_present(text, prompt_file):
+        return False
+    stripped = _strip_subskill_completion_marker(text, prompt_file)
+    from app.services.script_analysis_flow_runner import scoped_node_body_usable
+
+    if not scoped_node_body_usable(stripped):
+        return False
+    pieces = _ordered_beat_pieces(stripped, prompt_file)
+    if pieces and len(_complete_beat_prefix(pieces)) != len(pieces):
+        return False
+    if prompt_file == FRAMING_PROMPT:
+        extracted = _try_extract_subskill_scene_block(
+            stripped,
+            scene_id,
+            fallback_special,
+            previous_block=previous_block,
+        )
+        return bool(_coerce_ready_framing_block(extracted, stripped, scene_id))
+    if prompt_file == STAGING_PROMPT:
+        return "【建置】" in stripped and "【入戏】" in stripped
+    return True
+
+
+def _staging_beats_ready(text: str) -> bool:
+    source = str(text or "")
+    if "【建置】" not in source or "【入戏】" not in source:
+        return False
+    pieces = _ordered_beat_pieces(source, STAGING_PROMPT)
+    if not pieces:
+        return True
+    return len(_complete_beat_prefix(pieces)) == len(pieces)
+
+
+async def _resume_incomplete_beats(
+    *,
+    task_db: Session,
+    current_user: User,
+    base_payload: Dict[str, Any],
+    prompt_file: str,
+    scene_input: str,
+    scene_id: str,
+    text: str,
+    system_api_id: Any,
+    node_advanced_spec: str,
+    fallback_special: str,
+    previous_block: str,
+) -> str:
+    """Continue a truncated beat stream from its last three finished beats."""
+    from app.api.routers.prompts.analyze_scene import analyze_scene  # noqa: WPS433
+
+    current = str(text or "").strip()
+    if prompt_file not in _BEAT_CONTINUATION_PROMPTS or not current:
+        return current
+    if _beat_output_finished(current, prompt_file, scene_id, fallback_special, previous_block):
+        return current
+    if not _complete_beat_prefix(_ordered_beat_pieces(current, prompt_file)):
+        return current
+    for round_index in range(1, _BEAT_CONTINUATION_ROUNDS + 1):
+        if _beat_output_finished(current, prompt_file, scene_id, fallback_special, previous_block):
+            return current
+        pieces = _ordered_beat_pieces(current, prompt_file)
+        kept = _complete_beat_prefix(pieces)
+        if not kept:
+            return current
+        resume_id = _resume_beat_id(pieces)
+        closed = len(kept) == len(pieces)
+        continuation_input = build_beat_continuation_input(
+            scene_input,
+            kept,
+            resume_id,
+            prompt_file,
+            beats_already_closed=closed,
+        )
+        logger.info(
+            "[scene_subskill_pipeline] beat continuation scene=%s prompt=%s round=%s resume_beat=%s kept=%s",
+            scene_id,
+            prompt_file,
+            round_index,
+            resume_id,
+            len(kept),
+        )
+        project_id = int(base_payload.get("project_id") or 0)
+        episode_id = int(base_payload.get("episode_id") or 0)
+        if project_id > 0 and episode_id > 0:
+            upsert_pipeline_node_status(
+                task_db,
+                project_id=project_id,
+                episode_id=episode_id,
+                script_id=f"episode:{episode_id}",
+                node_name="scene_subskill_pipeline",
+                status="running",
+                progress_percent=15.0,
+                runtime_meta={
+                    "business_event": "retry",
+                    "business_reason": f"{_subskill_action_label(prompt_file)}按 Beat 续写",
+                    "scene_id": scene_id,
+                },
+            )
+            task_db.commit()
+        request = _build_subskill_request(
+            base_payload,
+            prompt_file=prompt_file,
+            scene_input=continuation_input,
+            scene_id=scene_id,
+            system_api_id=system_api_id,
+            node_advanced_spec=node_advanced_spec,
+        )
+        try:
+            result = await analyze_scene(
+                request,
+                current_user=current_user,
+                db=task_db,
+                async_mode="0",
+            )
+        except Exception as call_exc:
+            logger.warning(
+                "[scene_subskill_pipeline] beat continuation failed scene=%s prompt=%s round=%s err=%s",
+                scene_id,
+                prompt_file,
+                round_index,
+                call_exc,
+            )
+            return current
+        continued = strip_project_visual_backfill_sections(
+            _extract_analysis_text_from_result(result)
+        ).strip()
+        continued = strip_injection_section(continued, "项目视觉回填")
+        merged = merge_beat_continuation(current, continued, prompt_file)
+        if not beat_continuation_progressed(current, merged, prompt_file):
+            logger.info(
+                "[scene_subskill_pipeline] beat continuation made no progress scene=%s prompt=%s round=%s",
+                scene_id,
+                prompt_file,
+                round_index,
+            )
+            return current
+        current = merged
+    return current
+
+
 def _build_subskill_request(
     base_payload: Dict[str, Any],
     *,
@@ -3581,6 +3890,19 @@ async def _call_scene_subskill(
             _extract_analysis_text_from_result(result)
         ).strip()
         text = strip_injection_section(text, "项目视觉回填")
+        text = await _resume_incomplete_beats(
+            task_db=task_db,
+            current_user=current_user,
+            base_payload=base_payload,
+            prompt_file=prompt_file,
+            scene_input=scene_input,
+            scene_id=scene_id,
+            text=text,
+            system_api_id=api_id or base_payload.get("system_api_id"),
+            node_advanced_spec=node_advanced_spec,
+            fallback_special=fallback_special,
+            previous_block=previous_block,
+        )
         from app.services.script_analysis_flow_runner import scoped_node_body_usable
 
         stripped = _strip_subskill_completion_marker(text, prompt_file) if text else ""
@@ -3601,6 +3923,9 @@ async def _call_scene_subskill(
             ready = _coerce_ready_framing_block(extracted, candidate, scene_id) if candidate else ""
             if ready and body_usable:
                 return ready
+        elif prompt_file == STAGING_PROMPT:
+            if extracted and body_usable and _staging_beats_ready(candidate):
+                return extracted
         elif extracted and body_usable:
             return extracted
         if not text:
