@@ -3,10 +3,14 @@ import logging
 import re as _re
 import threading
 import time as _time
+import traceback
+from collections import Counter
 
 from sqlalchemy import create_engine, event
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import QueuePool
 from app.core.config import settings
 
 _logger = logging.getLogger(__name__)
@@ -34,6 +38,53 @@ DB_POOL_CAPACITY_EFFECTIVE = DB_POOL_SIZE_EFFECTIVE + DB_MAX_OVERFLOW_EFFECTIVE
 # (e.g. startup advisory locks that must survive pool invalidation).
 _connect_raw_postgres_impl = None
 
+_pool_holders_lock = threading.Lock()
+_pool_holders: dict[int, str] = {}
+_pool_timeout_log_at = 0.0
+
+
+def _checkout_caller_label() -> str:
+    """First application frame that asked the pool for a connection."""
+    stack = traceback.extract_stack(limit=28)
+    for frame in reversed(stack[:-2]):
+        path = str(frame.filename or "").replace("\\", "/")
+        if "/site-packages/" in path or path.endswith("/app/db/session.py"):
+            continue
+        marker = "/backend/"
+        idx = path.find(marker)
+        short = path[idx + 1:] if idx >= 0 else path
+        return f"{short}:{frame.lineno}:{frame.name}"
+    return "unknown"
+
+
+def _log_pool_holders(reason: str) -> None:
+    with _pool_holders_lock:
+        holders = list(_pool_holders.values())
+    counts = Counter(holders)
+    top = ", ".join(f"{label} x{count}" for label, count in counts.most_common(12))
+    _logger.error(
+        "DB pool %s | holders=%s unique=%s top=%s",
+        reason,
+        len(holders),
+        len(counts),
+        top or "-",
+    )
+
+
+class _DiagnosingQueuePool(QueuePool):
+    """Log who still holds connections when a checkout times out."""
+
+    def _do_get(self):
+        global _pool_timeout_log_at
+        try:
+            return super()._do_get()
+        except SATimeoutError:
+            now = _time.time()
+            if now - _pool_timeout_log_at >= 5:
+                _pool_timeout_log_at = now
+                _log_pool_holders("checkout_timeout")
+            raise
+
 engine_kwargs = {
     "connect_args": {"check_same_thread": False, "timeout": 30} if is_sqlite else {},
 }
@@ -47,6 +98,10 @@ if not is_sqlite:
             "keepalives_idle": 30,
             "keepalives_interval": 10,
             "keepalives_count": 5,
+            # Bound TCP connect. The creator runs while an overflow slot is
+            # already reserved; an unbounded connect pins that slot and the
+            # next checkout raises QueuePool timeout (size+overflow reached).
+            "connect_timeout": 5,
         })
     engine_kwargs.update({
         "pool_pre_ping": settings.DB_POOL_PRE_PING,
@@ -93,8 +148,21 @@ if not is_sqlite:
                 _logger.info("Auto-derived %d external DB URL candidates from internal host %s",
                              len(_ext_fallbacks), _host)
 
-        _MAX_CONNECT_RETRIES = 6
-        _CONNECT_RETRY_DELAYS = [1, 2, 3, 4, 5]  # total ~15s
+        _MAX_CONNECT_RETRIES = 2
+        _CONNECT_RETRY_DELAYS = [0.4]
+
+        def _is_dns_connect_error(exc: BaseException) -> bool:
+            text = str(exc or "").lower()
+            return any(
+                needle in text
+                for needle in (
+                    "could not translate host",
+                    "name or service not known",
+                    "nodename nor servname",
+                    "temporary failure in name resolution",
+                    "getaddrinfo failed",
+                )
+            )
 
         def _connect_with_retry():
             last_err = None
@@ -103,26 +171,35 @@ if not is_sqlite:
                     return _psycopg2.connect(_raw_dsn, **_connect_args)
                 except _psycopg2.OperationalError as exc:
                     last_err = exc
-                    if _attempt < _MAX_CONNECT_RETRIES - 1:
+                    if _attempt < _MAX_CONNECT_RETRIES - 1 and _is_dns_connect_error(exc):
                         delay = _CONNECT_RETRY_DELAYS[_attempt]
                         _logger.warning(
-                            "DB connect attempt %d/%d failed: %s — retrying in %ds",
+                            "DB connect attempt %d/%d failed: %s — retrying in %ss",
                             _attempt + 1, _MAX_CONNECT_RETRIES, exc, delay,
                         )
                         _time.sleep(delay)
+                        continue
+                    break
 
-            # All internal retries exhausted — try external URL(s) as fallback
-            for _ext_url in _ext_fallbacks:
-                try:
-                    _logger.warning("Internal DB DNS failed %d times, trying external URL fallback",
-                                    _MAX_CONNECT_RETRIES)
-                    return _psycopg2.connect(_ext_url, **_connect_args)
-                except _psycopg2.OperationalError:
-                    continue
+            # External URL only for internal DNS failure. Other errors (too many
+            # connections, refused, timeout) must release the overflow slot now.
+            if last_err is not None and _is_dns_connect_error(last_err):
+                for _ext_url in _ext_fallbacks:
+                    try:
+                        _logger.warning(
+                            "Internal DB DNS failed, trying external URL fallback",
+                        )
+                        return _psycopg2.connect(_ext_url, **_connect_args)
+                    except _psycopg2.OperationalError as exc:
+                        last_err = exc
+                        if not _is_dns_connect_error(exc):
+                            break
+                        continue
             raise last_err
 
         _connect_raw_postgres_impl = _connect_with_retry
         engine_kwargs["creator"] = _connect_with_retry
+        engine_kwargs["poolclass"] = _DiagnosingQueuePool
         # connect_args already baked into the creator; remove to avoid confusion
         engine_kwargs.pop("connect_args", None)
 
@@ -218,6 +295,9 @@ def _on_pool_checkout(dbapi_con, con_record, con_proxy):
         return
 
     now = _time.time()
+    caller = _checkout_caller_label()
+    with _pool_holders_lock:
+        _pool_holders[id(con_record)] = caller
     with _pool_stats_lock:
         _pool_checked_out += 1
         checked_out = _pool_checked_out
@@ -230,15 +310,19 @@ def _on_pool_checkout(dbapi_con, con_record, con_proxy):
             pool_status = engine.pool.status()
         except Exception:
             pool_status = None
+        with _pool_holders_lock:
+            holder_counts = Counter(_pool_holders.values())
+        top = ", ".join(f"{label} x{count}" for label, count in holder_counts.most_common(8))
         _logger.warning(
             "DB pool near capacity | checked_out=%s threshold=%s size=%s overflow=%s capacity=%s pool_status=%s "
-            "| tip=hold sessions only for SQL; release before LLM/OSS/network waits",
+            "| holders=%s | tip=hold sessions only for SQL; release before LLM/OSS/network waits",
             checked_out,
             high_watermark,
             _effective_pool_size,
             _effective_max_overflow,
             DB_POOL_CAPACITY_EFFECTIVE,
             pool_status,
+            top or "-",
         )
 
 
@@ -248,6 +332,8 @@ def _on_pool_checkin(dbapi_con, con_record):
     if is_sqlite:
         return
 
+    with _pool_holders_lock:
+        _pool_holders.pop(id(con_record), None)
     with _pool_stats_lock:
         _pool_checked_out = max(0, _pool_checked_out - 1)
 SessionLocal = sessionmaker(
