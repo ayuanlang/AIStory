@@ -28,6 +28,7 @@ import {
     isGridCropDerivedEntity,
     assetCardIntro,
     isMainEnvironmentEntity,
+    promptForDerivedGeneration,
     derivedCellReference,
     derivedDependencyImageUrl,
     isStateDerivedEntity,
@@ -6861,7 +6862,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const draftPrompt = String(promptDrafts?.cn || '').trim();
         const promptToUse = imageEditOnly
             ? String(customPrompt || '').trim()
-            : (customPrompt || String(draftPrompt || selectedLangPrompt || '').trim());
+            : promptForDerivedGeneration(
+                activeEntity,
+                customPrompt || String(draftPrompt || selectedLangPrompt || '').trim()
+            );
         if (!promptToUse) return;
 
         const entityNameMap = buildEntityNameMap(allEntities);
@@ -8465,8 +8469,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 const preferredImageSize = getEpisodePreferredImageSize(epInfo);
                 const regenPlan = regenReadiness.state === 'ready' ? regenReadiness.plan : null;
                 let promptEntity = entity;
-                let basePrompt = getEntityPromptByLang(entity, resolvedPromptSubmitLang)
-                    || entity.description
+                let basePrompt = promptForDerivedGeneration(
+                    entity,
+                    getEntityPromptByLang(entity, resolvedPromptSubmitLang)
+                ) || entity.description
                     || `A ${entity.type} named ${entity.name}.`;
                 if (regenPlan) {
                     const regenEntityId = String(entity?.id || '').trim();

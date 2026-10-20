@@ -598,6 +598,21 @@ def test_cell_check_does_not_rewrite_the_opening():
     filled = next(item["value"] for item in plan["writes"] if item["entity_id"] == 9 and item["field"] == "generation_prompt_cn")
     assert "台在画面侧面" in filled
     assert "竖边=南北走向" not in filled
+    pending = Dummy(
+        id=9,
+        name="90度厨房",
+        prompt="待生成",
+        attrs={"derived_kind": "first_cut", "main_environment": "厨房", "view_angle_from_main": 90},
+    )
+    pending_plan = plan_consistency_writes(
+        pending,
+        main,
+        "待生成",
+        {"consistent": True, "summary": "这一格和参考图都与开篇可见壁一致。", "revised_prompt": None},
+    )
+    pending_filled = next(item["value"] for item in pending_plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert pending_filled != "待生成"
+    assert "台在画面侧面" in pending_filled
 
 
 def test_regen_updates_derived_prompt_only():

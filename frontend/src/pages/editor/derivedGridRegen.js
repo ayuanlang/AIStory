@@ -67,6 +67,15 @@ export function isDerivedMainEnvironmentEntity(entity) {
     return String(readAttrs(entity).derived_kind || '').trim() === 'derived_main';
 }
 
+export const PENDING_DERIVED_PROMPT = '待生成';
+
+export function promptForDerivedGeneration(entity, prompt) {
+    const text = String(prompt || '').trim();
+    if (text) return text;
+    if (!isEnvironmentEntity(entity) || isMainEnvironmentEntity(entity)) return text;
+    return PENDING_DERIVED_PROMPT;
+}
+
 export function isMainEnvironmentEntity(entity) {
     if (!entity || entity.is_deleted) return false;
     if (!isEnvironmentEntity(entity)) return false;

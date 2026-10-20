@@ -1780,6 +1780,27 @@ def describe_scene_subskill_batch_failure(result: Any) -> Dict[str, str]:
     }
 
 
+def scene_failure_current_step(
+    *,
+    marked_step: str = "",
+    called: Optional[List[str]] = None,
+    asset_gate: bool = False,
+) -> str:
+    """Pin a failed scene to the step that was running.
+
+    ``called`` only grows after a step succeeds. A 场景现场编排 failure used
+    to inherit the previous entry, usually 武戏增强, and the matrix painted
+    that cell red.
+    """
+    if asset_gate:
+        return "wait_env_asset"
+    marked = str(marked_step or "").strip()
+    if marked:
+        return marked
+    items = [str(item).strip() for item in (called or []) if str(item or "").strip()]
+    return items[-1] if items else ""
+
+
 def _scene_subskill_failure_reason(exc: Exception) -> str:
     detail = getattr(exc, "detail", None)
     text = str(detail if detail is not None else exc or "")
@@ -4552,9 +4573,32 @@ async def run_scene_subskill_pipeline(
                 called_now = locals().get("called") if isinstance(locals().get("called"), list) else []
                 scene_block_now = str(locals().get("current_block") or task.get("scene_block") or "")
                 asset_gate = "STAGING_ENVIRONMENT_ASSET_" in error_text.upper()
-                # Last called step is often 场景现场编排. A quad wait must not be
-                # recorded on that step: scene analysis only depends on 主环境.
-                current_step = "wait_env_asset" if asset_gate else str(called_now[-1] if called_now else "")
+                # ``called`` lists steps that already finished. The cell that
+                # was running is the current_step written before the LLM call.
+                marked_step = ""
+                if project_id > 0 and node_episode_id > 0:
+                    existing_node = (
+                        task_db.query(ScriptProgressPipelineNode)
+                        .filter(
+                            ScriptProgressPipelineNode.project_id == project_id,
+                            ScriptProgressPipelineNode.episode_id == node_episode_id,
+                            ScriptProgressPipelineNode.node_name == "scene_subskill_scene",
+                            ScriptProgressPipelineNode.scene_id == scene_id,
+                        )
+                        .first()
+                    )
+                    existing_meta = (
+                        existing_node.runtime_meta
+                        if existing_node is not None
+                        and isinstance(getattr(existing_node, "runtime_meta", None), dict)
+                        else {}
+                    )
+                    marked_step = str(existing_meta.get("current_step") or "").strip()
+                current_step = scene_failure_current_step(
+                    marked_step=marked_step,
+                    called=called_now,
+                    asset_gate=asset_gate,
+                )
                 if project_id > 0 and node_episode_id > 0 and is_environment_asset_wait_error(exc):
                     upsert_pipeline_node_status(
                         task_db,

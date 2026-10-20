@@ -11,6 +11,7 @@ from app.services.scene_subskill_pipeline_runner import (
     persisted_subskill_step_usable,
     resolve_scene_subskill_resume,
     resolve_subskill_start_group,
+    scene_failure_current_step,
     scene_subskill_rerun_cleanup_plan,
     scene_subskill_rerun_downstream_steps,
     seed_scene_block_for_start,
@@ -598,6 +599,22 @@ def test_merge_scene_blocks_keeps_other_scenes_and_tail():
     assert "Project Visual Backfill" in merged
     assert merged.count("[SCENE_START:EP01_SC01]") == 1
     assert merged.count("[SCENE_START:EP01_SC02]") == 1
+
+
+def test_framing_failure_stays_on_framing_not_the_last_finished_step():
+    assert scene_failure_current_step(
+        marked_step="derived_framing",
+        called=["drama", "combat"],
+    ) == "derived_framing"
+    assert scene_failure_current_step(
+        marked_step="",
+        called=["drama", "combat"],
+    ) == "combat"
+    assert scene_failure_current_step(
+        marked_step="derived_framing",
+        called=["drama", "combat"],
+        asset_gate=True,
+    ) == "wait_env_asset"
 
 
 def test_classify_aspect_strategy_portrait_and_landscape():

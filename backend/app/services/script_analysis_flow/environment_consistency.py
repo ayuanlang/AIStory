@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.models.all_models import Entity
 from app.services.script_analysis_flow.derived_env_ingest import (
     MAIN_ENVIRONMENT_OPENING_ATTR,
+    PENDING_DERIVED_PROMPT,
     SOURCE_FLAG,
     environment_opening_to_keep,
     extract_grid_cell_prompt,
@@ -80,6 +81,10 @@ def is_main_environment_entity(entity: Any) -> bool:
 def is_stub_prompt(text: str) -> bool:
     raw = str(text or "")
     return any(marker in raw for marker in STUB_MARKERS)
+
+
+def is_pending_derived_prompt(text: str) -> bool:
+    return str(text or "").strip() == PENDING_DERIVED_PROMPT
 
 
 def resolve_checked_prompt(entity: Any, override: Optional[str] = None) -> str:
@@ -865,7 +870,8 @@ def _plan_cell_consistency_writes(
                 targets.append("宫格")
                 grid_changed = True
                 current_cell = str(extract_grid_cell_prompt(grafted, angle).get("cell_prompt") or "").strip()
-    prompt_to_store = revised_prompt or (current_cell if grid_changed or not stored_prompt or is_stub_prompt(stored_prompt) else "")
+    prompt_blank = not stored_prompt or is_pending_derived_prompt(stored_prompt) or is_stub_prompt(stored_prompt)
+    prompt_to_store = revised_prompt or (current_cell if grid_changed or prompt_blank else "")
     if prompt_to_store and prompt_to_store.strip() != stored_prompt and entity_id > 0:
         writes.append({
             "entity_id": entity_id,
@@ -1164,6 +1170,7 @@ def _build_derived_main_consistency_messages(
         "注入只有两部分：被依赖主环境的完整提示词，以及这份衍生Delta。用这两部分一起核对。\n"
         "四格必须对同一主体的相关内容一起改。某一格改了、另一格同一主体还是原样，就不一致。\n"
         "未写入 Delta 的实体保持被依赖主环境的样子。不要把 Delta 写回被依赖主环境。revised_main_prompt 必须为 null。\n"
+        "Delta 写明是一个洞时，只改这一处，不要画成整间崩塌。写明整体崩碎时，点名的主体一起碎，不要只留一条缝。\n"
         "图片要改就写 image_edit_instruction，同一主体在每一格里都改到它在该格出现的那一面。不要写成只改一格，不要写不要重画整张四宫。\n"
         "衍生主环境自己的提示词需要改 Delta 表述时，把改后的全文写进 revised_prompt。提示词不用改则为 null。\n"
         "四格都符合被依赖主环境和 Delta 时，consistent 为 true，revised_prompt 和 image_edit_instruction 都为 null。\n"
@@ -1217,6 +1224,8 @@ def _build_cell_consistency_messages(
     wall_source = depended_entity if from_derived_main else main_entity
     faces, cell = _cell_wall_and_grid(wall_source, angle)
     stored = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
+    if is_pending_derived_prompt(stored):
+        stored = ""
     delta = ""
     if from_derived_main:
         delta = str(attrs_of(main_entity).get("state_delta") or attrs_of(entity).get("state_delta") or "").strip()

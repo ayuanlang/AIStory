@@ -126,6 +126,9 @@ DERIVED_MAIN_PROMPT = (
     "参考图是「{source}」已经生成的四格拼图，左上0度、右上90度、左下180度、右下270度。"
     "在这张四格拼图上，对同一主体的相关内容四格一起改。每一格只改该格里已经出现的那一面，四格仍是同一处空间。"
     "状态Delta={delta}。"
+    "按状态Delta写明的范围改。范围是一个洞：只在点名的那一具上开这一处，其余墙、梁、天花、地面和家具保持参考图原样。"
+    "范围是整体崩碎：点名的那些具一起碎或塌，没点名的保持原样。"
+    "不要把一个洞画成整间崩塌，也不要把整体崩碎画成只裂一条缝。原文破损句只用来对准这一处的样子。"
     "未写入状态Delta的实体保持参考图原样。不要拆成单格，不要另造房间。"
 )
 FIRST_CUT_NEGATIVE = (
@@ -135,6 +138,7 @@ FIRST_CUT_NEGATIVE = (
     "panel borders, quadrant labels, split-screen divider, "
     "uncropped 2x2, all four quadrants visible, contact sheet, four views in one frame"
 )
+PENDING_DERIVED_PROMPT = "待生成"
 STATE_CUT_NEGATIVE = (
     "people, person, human, dutch angle, recropped four-panel, wrong camera angle, mirrored room, "
     "four-panel grid lines, 2x2 collage seams, panel borders, quadrant labels, split-screen divider"
@@ -1303,7 +1307,7 @@ def build_derived_environment_item(
         suffix = _state_suffix(name, main) or "状态"
         derived_main_name = f"{main}_{suffix}"
         source_main_name = main
-        prompt = ""
+        prompt = PENDING_DERIVED_PROMPT
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
             f"所属主环境={derived_main_name}。被依赖主环境={main}。angle_key={derived_main_name}|{angle}。"
@@ -1340,7 +1344,7 @@ def build_derived_environment_item(
         atmosphere = f"Special {special_kind or 'plate'} from {grid}"
         visual_params = f"{lens}/Derived/Special/{special_kind or angle}"
     else:
-        prompt = ""
+        prompt = PENDING_DERIVED_PROMPT
         logic = (
             f"spatial_axis={spatial_axis}；lens_profile={lens}；axis_crossing={axis_crossing}。"
             f"所属主环境={main}。{quad_line}。截取宫格={grid}。{camera}触发={trigger}。"
@@ -1350,7 +1354,14 @@ def build_derived_environment_item(
         atmosphere = f"{'Master' if angle == 0 else 'Angle'} empty plate crop"
         visual_params = f"{lens}/Derived/{angle}"
     gen_hint = _clean(item.get("gen_prompt") or item.get("生成提示"))
-    if (not is_state) and prompt and gen_hint and gen_hint.lower() not in _EMPTY_FIELD_MARKERS and gen_hint not in prompt:
+    if (
+        (not is_state)
+        and prompt
+        and prompt != PENDING_DERIVED_PROMPT
+        and gen_hint
+        and gen_hint.lower() not in _EMPTY_FIELD_MARKERS
+        and gen_hint not in prompt
+    ):
         prompt = f"{prompt}生成提示={gen_hint}。"
     if special_kind == "变形":
         negative = negative.replace("dutch angle, tilted horizon, ", "").replace("dutch angle, ", "")

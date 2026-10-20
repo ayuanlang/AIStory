@@ -118,7 +118,7 @@ def test_first_cut_json_matches_environment_design_template():
             "axis_crossing": "PlannedReverse",
         }
     )
-    assert item["generation_prompt_cn"] == ""
+    assert item["generation_prompt_cn"] == "待生成"
     assert item["custom_attributes"]["view_angle_from_main"] == 180
     assert item["custom_attributes"]["grid_token"] == "左下180度"
     assert "截取宫格=左下180度格" in item["dependency_strategy"]["logic"]
@@ -173,7 +173,7 @@ def test_resolve_grid_follows_existing_main_env_prompt():
         {"name": "180度客栈大堂", "main": "客栈大堂", "angle": 180, "kind": "第一刀"},
         main_prompt="四宫度数=左上0度｜右上90度｜右下180度｜左下270度。[180度格-右下·南]",
     )
-    assert legacy_item["generation_prompt_cn"] == ""
+    assert legacy_item["generation_prompt_cn"] == "待生成"
     assert legacy_item["custom_attributes"]["grid_token"] == "右下180度"
     existing = (
         "【四向拼图】四宫度数=左上90度｜右上0度｜右下270度｜左下180度。"
@@ -187,7 +187,7 @@ def test_resolve_grid_follows_existing_main_env_prompt():
         {"name": "180度客栈大堂", "main": "客栈大堂", "angle": 180, "kind": "第一刀"},
         main_prompt=existing,
     )
-    assert item["generation_prompt_cn"] == ""
+    assert item["generation_prompt_cn"] == "待生成"
     assert item["custom_attributes"]["grid_token"] == "左下180度"
 
 
@@ -380,7 +380,7 @@ def test_build_item_persists_frame_anchors():
     assert "大门" not in item["anchor_description"]
     assert "画左=" not in item["anchor_description"]
     assert "画外=" not in item["anchor_description"]
-    assert item["generation_prompt_cn"] == ""
+    assert item["generation_prompt_cn"] == "待生成"
     assert "机位=望向=正北" in item["dependency_strategy"]["logic"]
     assert "远锚=柜台" in item["dependency_strategy"]["logic"]
 
@@ -548,7 +548,7 @@ def test_sample_ingest_writes_frame_and_reference_anchors():
     assert "楼梯口" not in zero
     assert "账房窗" not in zero
     assert "参照物=" not in zero
-    assert by_name["0度客栈大堂"]["generation_prompt_cn"] == ""
+    assert by_name["0度客栈大堂"]["generation_prompt_cn"] == "待生成"
 
 
 def test_chosen_reference_subjects_cover_explicit_env_anchors():
@@ -652,7 +652,7 @@ def test_state_cut_json_hangs_same_angle_parent():
             "state_delta": "地面沙尘加厚",
         }
     )
-    assert item["generation_prompt_cn"] == ""
+    assert item["generation_prompt_cn"] == "待生成"
     assert item["visual_dependencies"] == ["ENV:[客栈大堂_沙尘]"]
     attrs = item["custom_attributes"]
     assert attrs["derived_kind"] == "first_cut"
@@ -679,8 +679,8 @@ def test_group_json_by_main_environment():
     assert "0度客栈大堂" in inn["json"]
     assert "180度客栈大堂" in inn["json"]
     inn_rows = {row["name"]: row for row in inn["payload"]["environments"]}
-    assert inn_rows["0度客栈大堂"]["generation_prompt_cn"] == ""
-    assert inn_rows["0度客栈大堂_沙尘"]["generation_prompt_cn"] == ""
+    assert inn_rows["0度客栈大堂"]["generation_prompt_cn"] == "待生成"
+    assert inn_rows["0度客栈大堂_沙尘"]["generation_prompt_cn"] == "待生成"
     assert inn_rows["0度客栈大堂_沙尘"]["visual_dependencies"] == ["ENV:[客栈大堂_沙尘]"]
     derived_main = inn_rows["客栈大堂_沙尘"]
     assert derived_main["custom_attributes"]["derived_kind"] == "derived_main"
@@ -688,6 +688,7 @@ def test_group_json_by_main_environment():
     assert "被依赖主环境=客栈大堂" in derived_main["generation_prompt_cn"]
     assert "状态Delta=地面沙尘加厚" in derived_main["generation_prompt_cn"]
     assert "四格一起改" in derived_main["generation_prompt_cn"]
+    assert "不要把一个洞画成整间崩塌" in derived_main["generation_prompt_cn"]
     assert mains["马车内舱"]["count"] == 1
 
 
@@ -1147,7 +1148,7 @@ def test_special_note_injected_into_generation_prompt():
     by_name = {item["name"]: item for item in items}
     assert by_name["0度客栈大堂_仰天"]["special_note"].startswith("仰天")
     regular = build_derived_environment_item(by_name["0度客栈大堂"])
-    assert regular["generation_prompt_cn"] == ""
+    assert regular["generation_prompt_cn"] == "待生成"
     assert regular["custom_attributes"]["derived_kind"] == "first_cut"
     look_up = build_derived_environment_item(by_name["0度客栈大堂_仰天"])
     assert "机位=望向=正北" in look_up["generation_prompt_cn"]
@@ -1203,7 +1204,7 @@ def test_coverage_suffix_merges_into_degree_main_name():
     )
     assert item["name"] == "180度客栈大堂"
     assert item["visual_dependencies"] == ["ENV:[客栈大堂]"]
-    assert item["generation_prompt_cn"] == ""
+    assert item["generation_prompt_cn"] == "待生成"
     assert item["custom_attributes"]["grid_cell"] == "左下180度格"
     assert "已切割的同角衍生" not in item["generation_prompt_cn"]
 

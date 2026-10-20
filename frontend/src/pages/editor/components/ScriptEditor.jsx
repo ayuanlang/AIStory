@@ -37686,6 +37686,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 staging: ['staging', 'wait_env_asset'],
                             }[group] || [];
                             const doneAfter = { drama: 1, combat: 2, framing: 4, staging: 5 }[group] || 0;
+                            const failureBlob = [
+                                meta.business_reason,
+                                node?.last_error_message,
+                                node?.last_error_code,
+                            ].join('\n');
+                            const markerGroup = /\[DERIVED_FRAMING_OUTPUT_END\]/.test(failureBlob)
+                                ? 'framing'
+                                : /\[STAGING_ENV_OUTPUT_END\]|STAGING_OUTPUT_INCOMPLETE/.test(failureBlob)
+                                    ? 'staging'
+                                    : /\[(?:COMBAT_SUBSKILL_OUTPUT_END|VFX_SUBSKILL_OUTPUT_END|XIAN_ATTACK_OUTPUT_END)\]/.test(failureBlob)
+                                        ? 'combat'
+                                        : /\[DRAMA_STANDARDIZATION_OUTPUT_END\]/.test(failureBlob)
+                                            ? 'drama'
+                                            : '';
+                            const markerRank = { drama: 1, combat: 2, framing: 4, staging: 5 }[markerGroup] || 0;
                             // A live earlier step must not keep later groups on 已完成 via leftover
                             // called_subskills / persisted text (建置仍显示完成，而文戏还在跑).
                             // Rank 0 (reset to running before current_step lands) still counts.
@@ -37693,6 +37708,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 ? (['running', 'queued'].includes(status) && rank <= doneAfter)
                                 : (['running', 'queued'].includes(status) && rank > 0 && rank <= doneAfter);
                             const groupCompleted = (!liveBeforeGroup && (calledReady || persistReady)) || rank > doneAfter;
+                            if (failed && markerGroup) {
+                                if (group === markerGroup) {
+                                    return {
+                                        ready: false,
+                                        active: false,
+                                        failed: true,
+                                        detail: String(meta.business_reason || node?.last_error_message || '').trim(),
+                                        errorCode: String(node?.last_error_code || '').trim(),
+                                        errorMessage: String(node?.last_error_message || '').trim(),
+                                        businessReason: String(meta.business_reason || '').trim(),
+                                        status,
+                                    };
+                                }
+                                if (doneAfter < markerRank) {
+                                    return { ready: true, active: false, failed: false, detail: '' };
+                                }
+                                return waiting;
+                            }
                             if (failed && groupActiveStep.includes(step)) {
                                 return {
                                     ready: false,
