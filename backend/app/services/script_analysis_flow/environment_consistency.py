@@ -20,9 +20,9 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     MAIN_ENVIRONMENT_OPENING_ATTR,
     PENDING_DERIVED_PROMPT,
     SOURCE_FLAG,
+    PANEL_TITLE_PATTERN,
     environment_opening_to_keep,
     extract_grid_cell_prompt,
-    main_environment_quad_prompt_ready,
     quad_cells_prompt_ready,
     strip_main_environment_draft_wrapper,
 )
@@ -669,39 +669,151 @@ def _stored_opening(text: str) -> str:
     return strip_main_environment_draft_wrapper(opening)
 
 
+_CELL_ORDER = (0, 90, 180, 270)
+_CANON_CELL_PREFIX = {
+    0: "[0度格-左上",
+    90: "[90度格-右上",
+    180: "[180度格-左下",
+    270: "[270度格-右下",
+}
+_GRID_TITLE_VARIANT = re.compile(
+    r"[\[［【]\s*(0|90|180|270)\s*度格\s*[-－—–·•．.、 \t]\s*(左上|右上|右下|左下)[\]］】]?"
+)
+_OPENING_HINTS = ("【定位】", "【主体外形】", "【六面一次】", "【北壁】", "【构图】", "占地=", "竖边=")
+_INNER_FENCE = re.compile(
+    r"^```(?:json|markdown|text|md)?\s*\n(.*)\n```\s*$",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _unwrap_revised_prompt(text: str) -> str:
+    raw = strip_main_environment_draft_wrapper(text)
+    fenced = _INNER_FENCE.match(raw)
+    if fenced:
+        raw = fenced.group(1).strip()
+    return raw
+
+
+def _normalize_grid_titles(text: str) -> str:
+    """Fold fullwidth brackets and dot separators into the stored cell-title prefix."""
+
+    def repl(match: re.Match) -> str:
+        return f"[{match.group(1)}度格-{match.group(2)}"
+
+    return _GRID_TITLE_VARIANT.sub(repl, str(text or ""))
+
+
+def _canonicalize_cell_title(angle: int, cell: str) -> str:
+    prefix = _CANON_CELL_PREFIX[int(angle)]
+    body = str(cell or "").strip()
+    if body.startswith(prefix):
+        return body
+    return re.sub(
+        r"^\[(?:0|90|180|270)度格-(?:左上|右上|右下|左下)",
+        prefix,
+        body,
+        count=1,
+    )
+
+
+def _indexed_cells(text: str) -> Dict[int, str]:
+    body = _normalize_grid_titles(text)
+    matches = list(PANEL_TITLE_PATTERN.finditer(body))
+    found: Dict[int, str] = {}
+    for index, match in enumerate(matches):
+        angle = int(match.group("angle"))
+        if angle in found:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+        found[angle] = _canonicalize_cell_title(angle, body[match.start():end])
+    return found
+
+
+def _quad_preamble(text: str) -> str:
+    body = _normalize_grid_titles(text)
+    quad_at = body.find(QUAD_MARK)
+    if quad_at < 0:
+        return ""
+    rest = body[quad_at + len(QUAD_MARK):]
+    match = PANEL_TITLE_PATTERN.search(rest)
+    if not match:
+        return ""
+    return rest[:match.start()].strip()
+
+
+def _revised_opening_usable(opening: str) -> bool:
+    text = str(opening or "").strip()
+    return len(text) >= 8 and any(hint in text for hint in _OPENING_HINTS)
+
+
+def complete_revised_quad(original: str, revised: str, *, keep_revised_opening: bool) -> str:
+    """Fill a partial grid rewrite from the stored prompt.
+
+    A checker may omit the opening, the 【四向拼图】 heading, or any cell it did
+    not change, and may write the cell title with fullwidth brackets. Cells it
+    did return stay. Missing cells and a missing opening come back from the
+    stored prompt. A rewrite that names no cell is still rejected.
+    """
+    source = _unwrap_revised_prompt(original)
+    target = _normalize_grid_titles(_unwrap_revised_prompt(revised))
+    revised_cells = _indexed_cells(target)
+    if not revised_cells:
+        raise ConsistencyApplyError("改写结果缺少四个宫格标题。")
+    source_cells = _indexed_cells(source)
+    source_opening = _stored_opening(source)
+    if QUAD_MARK in target:
+        revised_opening = _stored_opening(target)
+    else:
+        first = PANEL_TITLE_PATTERN.search(target)
+        revised_opening = strip_main_environment_draft_wrapper(
+            target[:first.start()] if first else ""
+        )
+    if keep_revised_opening and _revised_opening_usable(revised_opening):
+        opening = revised_opening
+    else:
+        opening = source_opening
+    preamble = _quad_preamble(target) or _quad_preamble(source)
+    quad_parts = [QUAD_MARK]
+    if preamble:
+        quad_parts.append(preamble)
+    for angle in _CELL_ORDER:
+        cell = revised_cells.get(angle) or source_cells.get(angle) or ""
+        if cell:
+            quad_parts.append(cell.strip())
+    chunks = [part for part in (opening.strip(), "\n".join(quad_parts).strip()) if part]
+    return "\n".join(chunks).strip()
+
+
 def graft_quad_onto_opening(original: str, revised: str) -> str:
     """Keep a stored opening when the asset still has one, and take only the rewritten grids.
 
     The asset Chinese prompt is the four cells. An older row may still have the
     opening in front; that opening stays. A cells-only row is replaced with the cells.
+    Unchanged cells omitted from the rewrite are copied back from the stored prompt.
     """
     opening = _stored_opening(original)
-    _revised_opening, revised_quad = split_opening_and_quad(revised)
-    revised_quad = strip_main_environment_draft_wrapper(revised_quad)
     if QUAD_MARK not in str(original or ""):
         raise ConsistencyApplyError("主环境提示词没有可保留的开篇。")
-    if not revised_quad.strip():
-        raise ConsistencyApplyError("改写结果缺少【四向拼图】，不能改开篇。")
-    if not opening.strip():
-        return revised_quad
-    grafted = f"{opening.rstrip()}\n{revised_quad.lstrip()}"
+    grafted = complete_revised_quad(original, revised, keep_revised_opening=False)
     problem = _prompt_keeps_world_lock(original, grafted)
     if problem:
         raise ConsistencyApplyError(problem)
     kept, _quad = split_opening_and_quad(grafted)
-    if kept.strip() != opening.strip():
+    if opening.strip() and kept.strip() != opening.strip():
         raise ConsistencyApplyError("开篇被改动了。")
     return grafted
 
 
 def accept_revised_main_prompt(original: str, revised: str) -> str:
-    """Keep an opening correction the checker explicitly marked as 开篇有误."""
+    """Keep an opening correction the checker explicitly marked as 开篇有误.
+
+    A correction that never actually includes an opening falls back to the
+    stored opening. Omitted cells are copied back from the stored prompt.
+    """
     source = str(original or "")
-    target = str(revised or "").strip()
     if QUAD_MARK not in source:
         raise ConsistencyApplyError("主环境提示词没有可保留的开篇。")
-    if QUAD_MARK not in target:
-        raise ConsistencyApplyError("改写结果缺少【四向拼图】，不能改开篇。")
+    target = complete_revised_quad(source, revised, keep_revised_opening=True)
     problem = _prompt_keeps_world_lock(source, target)
     if problem:
         raise ConsistencyApplyError(problem)
@@ -714,10 +826,11 @@ def _prompt_keeps_world_lock(original: str, revised: str) -> Optional[str]:
     if len(target) < max(80, int(len(source) * 0.45)):
         return "改写结果过短，没有保留原提示词。"
     source_opening = _stored_opening(source)
-    if source_opening.strip():
-        if not main_environment_quad_prompt_ready(target):
-            return "改写结果缺少开篇或四个宫格标题。"
-    elif not quad_cells_prompt_ready(target):
+    missing_opening = bool(source_opening.strip()) and not _stored_opening(target).strip()
+    missing_cells = not quad_cells_prompt_ready(target)
+    if missing_opening:
+        return "改写结果缺少开篇或四个宫格标题。"
+    if missing_cells:
         return "改写结果缺少四个宫格标题。"
     for key in ("占地=", "竖边="):
         if key in source and key not in target:
@@ -807,11 +920,15 @@ def replace_grid_cell(main_prompt: str, angle: int, revised_cell: str) -> str:
     new = str(revised_cell or "").strip()
     if not new:
         raise ConsistencyApplyError("没有返回改写后的宫格。")
+    new = _canonicalize_cell_title(int(angle), _normalize_grid_titles(new))
     title = old.splitlines()[0].strip()
+    first = new.splitlines()[0].strip() if new else ""
+    canon = _CANON_CELL_PREFIX.get(int(angle), "")
     if title not in new:
-        if new.startswith("["):
+        if first.startswith("[") and not (canon and first.startswith(canon)):
             raise ConsistencyApplyError("改写的宫格标题和这一格对不上。")
-        new = f"{title}\n{new}".strip()
+        if not first.startswith("["):
+            new = f"{title}\n{new}".strip()
     if old not in str(main_prompt or ""):
         raise ConsistencyApplyError("主环境提示词里对不上这一格原文。")
     updated = str(main_prompt or "").replace(old, new, 1)
@@ -849,12 +966,21 @@ def _plan_cell_consistency_writes(
         elif main_entity is None or main_id <= 0 or angle is None:
             raise ConsistencyApplyError("找不到这一格所属的主环境，无法改正宫格。")
         else:
-            grafted = replace_grid_cell(main_prompt, angle, revised_cell)
-            piece_issues = audit_piece_count_reconciliation(grafted)
-            street_issues = audit_street_end_phrases(grafted)
-            wall_issues = audit_wall_corner_span(grafted)
-            front_issues = audit_front_double(grafted)
-            issues = piece_issues + street_issues + wall_issues + front_issues
+            try:
+                grafted = replace_grid_cell(main_prompt, angle, revised_cell)
+            except ConsistencyApplyError:
+                if not image_edit_instruction:
+                    raise
+                revised_cell = None
+                grafted = ""
+            if revised_cell:
+                piece_issues = audit_piece_count_reconciliation(grafted)
+                street_issues = audit_street_end_phrases(grafted)
+                wall_issues = audit_wall_corner_span(grafted)
+                front_issues = audit_front_double(grafted)
+                issues = piece_issues + street_issues + wall_issues + front_issues
+            else:
+                issues = []
             if issues:
                 prefix = PIECE_COUNT_PREFIX if piece_issues else "宫格改写未通过"
                 summary = audit_blocked_summary(summary, issues, prefix)
@@ -981,7 +1107,12 @@ def plan_consistency_writes(
     revised = _blank_to_none(payload.get("revised_prompt"))
     revised_main = _blank_to_none(payload.get("revised_main_prompt"))
     revised_quad = revised_main or revised or ""
-    audit_target = revised_quad if ("件数核销" in revised_quad or "件数=" in revised_quad) else source_quad
+    normalized_quad = _normalize_grid_titles(revised_quad)
+    audit_target = (
+        normalized_quad
+        if ("件数核销" in normalized_quad or "件数=" in normalized_quad)
+        else source_quad
+    )
     piece_issues = audit_piece_count_reconciliation(audit_target)
     street_issues = audit_street_end_phrases(audit_target)
     wall_issues = audit_wall_corner_span(audit_target)
@@ -1017,15 +1148,27 @@ def plan_consistency_writes(
 
     writes: List[Dict[str, Any]] = []
     targets: List[str] = []
+    prompt_skipped = False
     entity_id = int(getattr(entity, "id", 0) or 0)
     main_id = int(getattr(main_entity, "id", 0) or 0) if main_entity is not None else 0
+
+    def _skip_prompt_write() -> None:
+        nonlocal prompt_skipped
+        prompt_skipped = True
+
     def _add_grids(source_prompt: str, revised_text: str, remember_submitted: bool) -> None:
         if main_entity is None or main_id <= 0:
             raise ConsistencyApplyError("找不到所属主环境，无法按开篇改正宫格。")
-        if opening_error_claimed(summary):
-            grafted = accept_revised_main_prompt(source_prompt, revised_text)
-        else:
-            grafted = graft_quad_onto_opening(source_prompt, revised_text)
+        try:
+            if opening_error_claimed(summary):
+                grafted = accept_revised_main_prompt(source_prompt, revised_text)
+            else:
+                grafted = graft_quad_onto_opening(source_prompt, revised_text)
+        except ConsistencyApplyError:
+            if image_edit_instruction:
+                _skip_prompt_write()
+                return
+            raise
         if grafted.strip() == source_prompt.strip():
             return
         writes.append({
@@ -1046,33 +1189,57 @@ def plan_consistency_writes(
 
     if kind == "main":
         if not revised:
-            raise ConsistencyApplyError("宫格和开篇不一致，但没有返回改写后的四向拼图。")
-        _add_grids(main_prompt or checked_prompt, revised, True)
+            if image_edit_instruction:
+                _skip_prompt_write()
+            else:
+                raise ConsistencyApplyError("宫格和开篇不一致，但没有返回改写后的四向拼图。")
+        else:
+            _add_grids(main_prompt or checked_prompt, revised, True)
     elif kind == "crop":
         if not revised_main:
-            raise ConsistencyApplyError("切割图对应的宫格和开篇不一致，但没有返回改写后的四向拼图。")
-        _add_grids(main_prompt, revised_main, False)
+            if image_edit_instruction:
+                _skip_prompt_write()
+            else:
+                raise ConsistencyApplyError("切割图对应的宫格和开篇不一致，但没有返回改写后的四向拼图。")
+        else:
+            _add_grids(main_prompt, revised_main, False)
     else:
         field_name = "grid_regen_prompt" if kind == "regen" else "generation_prompt_cn"
         label = "重生修正提示词" if kind == "regen" else "衍生环境提示词"
         if not revised or revised.strip() == str(checked_prompt or "").strip():
-            raise ConsistencyApplyError("衍生环境和开篇不一致，但没有返回改写后的衍生提示词。")
-        if field_name == "generation_prompt_cn" and is_stub_prompt(getattr(entity, "generation_prompt_cn", "")):
-            raise ConsistencyApplyError("切割提示词不能改成场景描写。")
-        writes.append({
-            "entity_id": entity_id,
-            "field": field_name,
-            "value": revised,
-            "kind": kind,
-        })
-        writes.append({
-            "entity_id": entity_id,
-            "field": LAST_SUBMITTED_PROMPT_ATTR,
-            "value": revised,
-            "kind": kind,
-        })
-        targets.append(label)
+            if image_edit_instruction:
+                _skip_prompt_write()
+            else:
+                raise ConsistencyApplyError("衍生环境和开篇不一致，但没有返回改写后的衍生提示词。")
+        elif field_name == "generation_prompt_cn" and is_stub_prompt(getattr(entity, "generation_prompt_cn", "")):
+            if image_edit_instruction:
+                _skip_prompt_write()
+            else:
+                raise ConsistencyApplyError("切割提示词不能改成场景描写。")
+        else:
+            writes.append({
+                "entity_id": entity_id,
+                "field": field_name,
+                "value": revised,
+                "kind": kind,
+            })
+            writes.append({
+                "entity_id": entity_id,
+                "field": LAST_SUBMITTED_PROMPT_ATTR,
+                "value": revised,
+                "kind": kind,
+            })
+            targets.append(label)
 
+    if prompt_skipped and image_edit_instruction and not writes:
+        return {
+            "consistent": False,
+            "kind": kind,
+            "summary": summary or "提示词未改，已返回改图指令。",
+            "writes": [],
+            "updated_targets": [],
+            "image_edit_instruction": image_edit_instruction,
+        }
     if not writes:
         return {
             "consistent": True,
@@ -1372,13 +1539,18 @@ def build_consistency_messages(
         "竖边是东西走向而两端写成北端和南端；主体编号表的件数和正文点名的件数不同；椅面朝向和在桌侧相反。"
         "图片或宫格和开篇不同，保持开篇，改宫格或衍生。"
         "开篇内部矛盾时，consistent 为 false，summary 以「开篇有误：」开头。"
-        "主环境图把含改正开篇的完整提示词写进 revised_prompt；切割图写进 revised_main_prompt。"
-        "开篇里只改正互相矛盾的那几句，并改正受影响的宫格。"
-        "summary 不以「开篇有误：」开头时，改过的开篇会被丢掉，只采用【四向拼图】。\n"
-        "四向拼图必须保留四个宫格标题：[0度格-左上、[90度格-右上、[180度格-左下、[270度格-右下。\n"
+        "主环境图把改过的宫格写进 revised_prompt；切割图写进 revised_main_prompt。"
+        "开篇有误时，再把改正后的开篇写在格子前面。开篇里只改正互相矛盾的那几句。"
+        "summary 不以「开篇有误：」开头时，不要重抄开篇，改过的开篇会被丢掉。\n"
+        "四向拼图标题写成 [0度格-左上、[90度格-右上、[180度格-左下、[270度格-右下。"
+        "没改的格子可以不写，程序从当前提示词补回。"
+        "写成【0度格-左上】或［0度格·左上］也可以。"
+        "漏写【四向拼图】四个字时，程序会补在第一格前面。"
+        "开篇或四个宫格标题仍然写不全时，revised_prompt 与 revised_main_prompt 置 null。"
+        "这时只要 image_edit_instruction 写清要改的格子即可。\n"
         "桌、案、凳、椅、沙发、床、榻的宫格句只写长边落到哪条画面轴，禁止写几成、一半、占房间、一半宽。\n"
         "含「只切割」或「不要重切宫格」的提示词不要改成场景描写。这类图若宫格和开篇不符，"
-        "只在 revised_main_prompt 里给出改后的完整主环境提示词，revised_prompt 必须为 null。\n"
+        "只在 revised_main_prompt 里给出改过的宫格，没改的格子可以不写，revised_prompt 必须为 null。\n"
         "状态衍生上的临时变化，例如沙尘、天气、破损，留在衍生正文里，不要写回主环境。\n"
         "重生修正或衍生描写和开篇不符时，只改这份衍生提示词，revised_main_prompt 必须为 null。\n"
         "一致时 revised_prompt 和 revised_main_prompt 都必须为 null。\n"
@@ -1398,7 +1570,7 @@ def build_consistency_messages(
         "没有「用户补充」就只按开篇。"
         "补充不能新造开篇没有的主体，也不能改掉已锁的东南西北、占地、竖边。\n"
         "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
-        '{"consistent": true或false, "summary": "一两句中文", "revised_prompt": null或完整提示词, "revised_main_prompt": null或完整主环境提示词, "image_edit_instruction": null或改图指令}'
+        '{"consistent": true或false, "summary": "一两句中文", "revised_prompt": null或改过的提示词, "revised_main_prompt": null或改过的主环境提示词, "image_edit_instruction": null或改图指令}'
     )
     parts = [
         f"检查对象={kind}。主体={getattr(entity, 'name', '')}。",
@@ -1426,8 +1598,8 @@ def build_consistency_messages(
             parts.append(
                 "这次生成用的是切割提示词。不要改写切割提示词。"
                 "只对照上面的开篇和对应宫格，核对该角度图片的主体个数、件数核销、朝向、位置。"
-                "和开篇不符时，把完整主环境提示词写进 revised_main_prompt，只改【四向拼图】。"
-                "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_main_prompt 里改正开篇。"
+                "和开篇不符时，把改过的宫格写进 revised_main_prompt。没改的格子可以不写。"
+                "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_main_prompt 里把改正后的开篇写在格子前面。"
             )
         else:
             parts.append(
@@ -1438,8 +1610,8 @@ def build_consistency_messages(
     else:
         parts.append(
             "这是主环境四宫格图。按左上0度、右上90度、左下180度、右下270度，逐格核对正文和图片的主体个数、件数核销、朝向、位置。"
-            "和开篇不符时，把完整主环境提示词写进 revised_prompt，只改【四向拼图】，revised_main_prompt 置 null。"
-            "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_prompt 里改正开篇。"
+            "和开篇不符时，把改过的宫格写进 revised_prompt。没改的格子可以不写。不要重抄开篇。revised_main_prompt 置 null。"
+            "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_prompt 里把改正后的开篇写在格子前面。"
         )
     extra = str(note or "").strip()
     if extra:

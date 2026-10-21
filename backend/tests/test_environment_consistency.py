@@ -116,20 +116,112 @@ def test_main_revision_keeps_opening_when_model_rewrites_it():
     assert entity.generation_prompt_cn == written
 
 
-def test_main_revision_rejects_dropped_grid():
+def test_main_revision_restores_dropped_grid():
     entity = Dummy(id=7, prompt=MAIN_PROMPT)
     broken = REVISED_MAIN.replace("[270度格-右下·西]\n台在另一侧。长边从靠近镜头铺到远离镜头。\n", "")
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {"consistent": False, "summary": "缺格", "revised_prompt": broken},
+    )
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert "台贴在画面前方。" in written
+    assert "[270度格-右下·西]" in written
+    assert "台在另一侧。" in written
+    assert "竖边=东西走向。" in written
+
+
+def test_broken_grid_rewrite_keeps_image_edit_instruction():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
+    instruction = "改0度格的台。现在不在画面前方。改成贴在画面前方。只改这一格里点名的这一处。"
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {
+            "consistent": False,
+            "summary": "0度格图片里的台不在画面前方。",
+            "revised_prompt": "【六面一次】\n占地=2.4×0.9米。竖边=东西走向。\n没有格子。",
+            "image_edit_instruction": instruction,
+        },
+    )
+    assert plan["writes"] == []
+    assert plan["consistent"] is False
+    assert plan["image_edit_instruction"].startswith("改0度格的台")
+    picture_only = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {
+            "consistent": False,
+            "summary": "图片里的台不在画面前方。",
+            "revised_prompt": None,
+            "image_edit_instruction": instruction,
+        },
+    )
+    assert picture_only["writes"] == []
+    assert picture_only["image_edit_instruction"].startswith("改0度格的台")
+
+
+def test_main_revision_rejects_rewrite_without_grids():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
     try:
         plan_consistency_writes(
             entity,
             entity,
             MAIN_PROMPT,
-            {"consistent": False, "summary": "缺格", "revised_prompt": broken},
+            {
+                "consistent": False,
+                "summary": "缺格",
+                "revised_prompt": "【六面一次】\n占地=2.4×0.9米。竖边=东西走向。\n没有格子。",
+            },
         )
     except ConsistencyApplyError as exc:
         assert "宫格" in str(exc)
     else:
-        raise AssertionError("dropped grid should be rejected")
+        raise AssertionError("rewrite without grids should be rejected")
+
+
+def test_main_revision_accepts_partial_cells_and_title_variants():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
+    partial = (
+        "【0度格-左上·北】\n"
+        "台贴在画面前方。长边从画面左铺到画面右。\n"
+        "［90度格·右上·东］\n"
+        "台在画面侧面。长边从靠近镜头铺到远离镜头。\n"
+    )
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {"consistent": False, "summary": "只改了两格", "revised_prompt": partial},
+    )
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert written.startswith("【六面一次】")
+    assert "【四向拼图】" in written
+    assert "[0度格-左上" in written
+    assert "[90度格-右上" in written
+    assert "[180度格-左下·南]" in written
+    assert "[270度格-右下·西]" in written
+    assert "台贴在画面前方。" in written
+    assert "竖边=东西走向。" in written
+
+
+def test_opening_without_six_face_heading_can_still_update_grids():
+    prompt = MAIN_PROMPT.replace("【六面一次】", "【定位】", 1)
+    entity = Dummy(id=7, prompt=prompt)
+    revised = prompt.replace("台在画面前方。", "台贴在画面前方。")
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        prompt,
+        {"consistent": False, "summary": "前方位置不对", "revised_prompt": revised},
+    )
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert written.startswith("【定位】")
+    assert "台贴在画面前方。" in written
+    assert "[270度格-右下" in written
 
 
 def test_cell_check_rewrites_one_grid_and_fills_derived_prompt():
@@ -189,6 +281,7 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "朝向" in system
     assert "位置" in system
     assert "开篇有误：" in system
+    assert "没改的格子可以不写" in system
     assert "左上是0度格望北" in system
     assert "image_edit_instruction" in system
     assert "改图指令" in system
@@ -197,6 +290,7 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "用户补充" in system
     user = messages[1]["content"][0]["text"]
     assert "主体个数、件数核销、朝向、位置" in user
+    assert "没改的格子可以不写" in user
     assert "用户补充，这次要特别处理" not in user
     noted = build_consistency_messages(
         image_url="http://example.test/grid.png",
@@ -556,11 +650,45 @@ def test_marked_opening_error_keeps_opening_fix():
     assert "[270度格-右下" in written
 
 
-def test_marked_opening_error_still_rejects_dropped_grid():
+def test_marked_opening_error_restores_dropped_grid():
     entity = Dummy(id=7, prompt=MAIN_PROMPT)
     rewritten = MAIN_PROMPT.replace("竖边=东西走向。", "竖边=南北走向。").replace(
         "[270度格-右下·西]\n台在另一侧。长边从靠近镜头铺到远离镜头。\n", ""
     )
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {"consistent": False, "summary": "开篇有误：竖边和两端相反", "revised_prompt": rewritten},
+    )
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert "竖边=南北走向。" in written
+    assert "[270度格-右下·西]" in written
+    assert "台在另一侧。" in written
+
+
+def test_opening_error_without_an_opening_keeps_the_stored_one():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
+    rewritten = (
+        "改了前方。\n"
+        "[0度格-左上·北]\n"
+        "台贴在画面前方。长边从画面左铺到画面右。\n"
+    )
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {"consistent": False, "summary": "开篇有误：竖边和两端相反", "revised_prompt": rewritten},
+    )
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert "竖边=东西走向。" in written
+    assert "台贴在画面前方。" in written
+    assert "[180度格-左下·南]" in written
+
+
+def test_opening_fix_still_rejects_dropped_span_key():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
+    rewritten = MAIN_PROMPT.replace("竖边=东西走向。\n", "")
     try:
         plan_consistency_writes(
             entity,
@@ -569,9 +697,9 @@ def test_marked_opening_error_still_rejects_dropped_grid():
             {"consistent": False, "summary": "开篇有误：竖边和两端相反", "revised_prompt": rewritten},
         )
     except ConsistencyApplyError as exc:
-        assert "宫格" in str(exc)
+        assert "竖边" in str(exc)
     else:
-        raise AssertionError("dropped grid should be rejected")
+        raise AssertionError("dropped 竖边 should be rejected")
 
 
 def test_cell_check_does_not_rewrite_the_opening():
