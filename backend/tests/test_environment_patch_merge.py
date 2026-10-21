@@ -405,6 +405,63 @@ def test_reuse_lock_instruction_is_whole_episode():
     assert "0度客栈大堂" in detailed
 
 
+def test_env_ident_recovers_without_matching_end_marker():
+    from app.services.script_analysis_flow.environment_reuse import (
+        extract_scene_env_ident_block,
+        parse_scene_env_ident_items,
+    )
+
+    missing_end = """[SCENE_ENV_IDENT_START:EP00_SC01]
+[ENV] 名称=摩天楼群天际线｜环境族=宿主｜占用面型=无｜复用=是｜来源=项目库｜匹配主环境=摩天楼群｜依据=原文：“天际线”
+定位=宿主天际，广，冷
+目标=本场空镜须=楼群天际｜服务=无｜可见落点=楼顶
+情绪表达=主情绪=压迫｜空镜表达=天际｜光色倾向=冷｜构图倾向=纵深压迫
+[ENV_BLOCK_START]
+【主环境】摩天楼群天际线｜环境族=宿主
+[ENV_BLOCK_END]
+"""
+    ident = extract_scene_env_ident_block(missing_end, "EP00_SC01")
+    items = parse_scene_env_ident_items(missing_end, "EP00_SC01")
+    assert "[SCENE_ENV_IDENT_END:EP00_SC01]" in ident
+    assert "【主环境】" not in ident
+    assert items[0]["name"] == "摩天楼群天际线"
+    assert items[0]["reuse"] is True
+    assert "定位=宿主天际" in ident
+
+    mismatched_end = """[SCENE_ENV_IDENT_START:EP00_SC01]
+[ENV] 名称=摩天楼群天际线｜复用=是｜来源=项目库｜匹配主环境=摩天楼群｜依据=原文：“天际”
+定位=楼群天际
+[SCENE_ENV_IDENT_END:EPxx_SCyy]
+"""
+    mismatched = extract_scene_env_ident_block(mismatched_end, "EP00_SC01")
+    mismatched_items = parse_scene_env_ident_items(mismatched_end, "EP00_SC01")
+    assert "[SCENE_ENV_IDENT_END:EP00_SC01]" in mismatched
+    assert "EPxx_SCyy" not in mismatched
+    assert mismatched_items[0]["name"] == "摩天楼群天际线"
+
+    spaced = """[SCENE_ENV_IDENT_START: EP00_SC01]
+[ENV] 名称=摩天楼群天际线｜复用=否｜来源=新建｜匹配主环境=无｜依据=无
+定位=楼群天际
+[SCENE_ENV_IDENT_END: EP00_SC01]
+"""
+    assert parse_scene_env_ident_items(spaced, "EP00_SC01")[0]["reuse"] is False
+
+    two_scenes = """[SCENE_ENV_IDENT_START:EP00_SC01]
+[ENV] 名称=天际线｜复用=否｜来源=新建｜匹配主环境=无｜依据=无
+定位=天际
+[ENV_BLOCK_START]
+【主环境】天际线
+[ENV_BLOCK_END]
+[SCENE_ENV_IDENT_START:EP00_SC02]
+[ENV] 名称=驾驶舱｜复用=否｜来源=新建｜匹配主环境=无｜依据=无
+定位=舱
+[SCENE_ENV_IDENT_END:EP00_SC02]
+"""
+    assert [item["name"] for item in parse_scene_env_ident_items(two_scenes, "EP00_SC01")] == ["天际线"]
+    assert [item["name"] for item in parse_scene_env_ident_items(two_scenes, "EP00_SC02")] == ["驾驶舱"]
+    assert "驾驶舱" not in extract_scene_env_ident_block(two_scenes, "EP00_SC01")
+
+
 def test_selected_global_environment_injection_marks_none_and_details():
     from app.services.script_analysis_flow.environment_reuse import (
         format_selected_global_environment_injection,

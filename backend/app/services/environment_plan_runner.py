@@ -212,6 +212,15 @@ async def run_environment_plan(
         ident = extract_scene_env_ident_block(body, scene_id)
         items = parse_scene_env_ident_items(body, scene_id)
         if not ident or not items:
+            logger.error(
+                "[environment_plan] ident missing scene=%s ident=%s items=%s start=%s end=%s head=%r",
+                scene_id,
+                bool(ident),
+                len(items),
+                "[SCENE_ENV_IDENT_START" in body.upper(),
+                "[SCENE_ENV_IDENT_END" in body.upper(),
+                body[:240],
+            )
             raise HTTPException(status_code=422, detail=f"ENVIRONMENT_PLAN_ENV_IDENT_MISSING:{scene_id}")
         ident = rewrite_reused_ident_positioning(
             ident,

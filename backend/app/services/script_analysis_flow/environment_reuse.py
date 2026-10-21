@@ -118,18 +118,62 @@ def script_has_environment_plan_payload(script_text: str) -> bool:
     )
 
 
+_IDENT_START_RE = re.compile(
+    r"`?\[SCENE_ENV_IDENT_START[:：]\s*([^\s\]`]+)\s*\]`?",
+    re.IGNORECASE,
+)
+_IDENT_END_RE = re.compile(
+    r"`?\[SCENE_ENV_IDENT_END(?:[:：]\s*([^\s\]`]+))?\s*\]`?",
+    re.IGNORECASE,
+)
+_IDENT_REGION_STOP_RE = re.compile(
+    r"\[ENV_BLOCK_START|\[ENV_SCENE_PATCH_END|\[ENVIRONMENT_PLAN_OUTPUT_END\]|\[SCENE_ENV_IDENT_START[:：]",
+    re.IGNORECASE,
+)
+
+
+def _scene_env_ident_regions(text: str) -> List[Tuple[str, str, str]]:
+    """Return (scene_id, inner, normalized block) for each IDENT start that has an [ENV] line.
+
+    A missing end marker, or an end marker whose id does not match the start,
+    still closes the region at the first end marker or the next structural boundary.
+    The returned block always carries a same-id end marker.
+    """
+    source = str(text or "")
+    regions: List[Tuple[str, str, str]] = []
+    for start in _IDENT_START_RE.finditer(source):
+        scene_id = str(start.group(1) or "").strip()
+        if not scene_id:
+            continue
+        rest = source[start.end():]
+        end_at: Optional[int] = None
+        for end in _IDENT_END_RE.finditer(rest):
+            end_at = end.start()
+            break
+        stop = _IDENT_REGION_STOP_RE.search(rest)
+        cuts = [pos for pos in (end_at, stop.start() if stop else None) if pos is not None]
+        cut = min(cuts) if cuts else len(rest)
+        inner = rest[:cut].strip()
+        if not ENV_ITEM_PATTERN.search(inner):
+            continue
+        block = "\n".join(
+            (
+                f"[SCENE_ENV_IDENT_START:{scene_id}]",
+                inner,
+                f"[SCENE_ENV_IDENT_END:{scene_id}]",
+            )
+        )
+        regions.append((scene_id, inner, block))
+    return regions
+
+
 def extract_scene_env_ident_block(text: str, scene_id: str = "") -> str:
     """Return the first matching [SCENE_ENV_IDENT_*] block, or empty."""
-    source = str(text or "")
     sid = str(scene_id or "").strip().lower()
-    for match in SCENE_ENV_IDENT_PATTERN.finditer(source):
-        start_id = str(match.group(1) or "").strip()
-        end_id = str(match.group(3) or "").strip()
-        if start_id and end_id and start_id.lower() != end_id.lower():
-            continue
+    for start_id, _inner, block in _scene_env_ident_regions(text):
         if sid and start_id.lower() != sid:
             continue
-        return str(match.group(0) or "").strip()
+        return block
     return ""
 
 
@@ -138,17 +182,13 @@ def parse_scene_env_ident_items(text: str, scene_id: str = "") -> List[Dict[str,
     source = str(text or "")
     items: List[Dict[str, Any]] = []
     seen: set = set()
-    blocks = list(SCENE_ENV_IDENT_PATTERN.finditer(source))
+    regions = _scene_env_ident_regions(source)
     search_bodies: List[Tuple[str, str]] = []
-    if blocks:
-        for match in blocks:
-            start_id = str(match.group(1) or "").strip()
-            end_id = str(match.group(3) or "").strip()
-            if scene_id and start_id and start_id.lower() != str(scene_id).lower():
+    if regions:
+        for start_id, inner, _block in regions:
+            if scene_id and start_id.lower() != str(scene_id).lower():
                 continue
-            if start_id and end_id and start_id.lower() != end_id.lower():
-                continue
-            search_bodies.append((start_id or scene_id, str(match.group(2) or "")))
+            search_bodies.append((start_id or scene_id, inner))
     elif scene_id or ENV_ITEM_PATTERN.search(source):
         search_bodies.append((scene_id, source))
 
