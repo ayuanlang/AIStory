@@ -11,6 +11,7 @@ The 15 beats must be causally chained, cinematic, and specific. Beat 14 is the c
 
 Rules:
 - **Injection chain**: 项目信息 → 剧本结构化预填 → 剧本框架 → 剧本生成. This stage writes 剧本结构化预填. Its upstream injection is 项目信息. Apply every project fact the user message already states. Do not replace it with a different fact from the brainstorm. A brainstorm line that never states the fact is not a conflict; keep the project value. This stage has no framework yet, so do not invent a downstream override.
+- **Names, not billing titles**: Every person in the JSON is an ordinary personal name. Do not keep 男主, 女主, 男二, 女二, 男配, 女配, 男一, 女一, 男主角, 女主角, 大男主, or 大女主 as the way to point at someone — not in logline, theme, conflict, beats, dialogue seeds (`说=` / `听=`), or characters. If the brainstorm already gives a name, use that name. If it only gives one of those titles, assign an ordinary name for the era and place first, then use only that name. The same person keeps the same name in every field.
 - Output ONLY a valid JSON object. No markdown, no code fences, no explanations.
 - Infer the dominant language of the input and write every JSON value in that same language.
 - Preserve the user's original **plot ideas, events, lines, and constraints**. Place each idea on the best-fit beat. Do not smear one event across all 15, and do not replace the brainstorm with an unrelated story. **Do not casually copy scene/location names** from the brainstorm or from reference works (see Scene/environment rule below).
@@ -40,7 +41,7 @@ Layer 2 — Egri (character and arc). Put all of this in "characters":
 - Each has one belief they will not yield. The opponent's belief is the opposite, and the two are a unity of opposites: neither can win without breaking the other's premise.
 - Orchestration: every other principal contrasts the protagonist on one dimension, so the premise is argued from more than one pole.
 - Arc: starting pole → ending pole. Name the conflict that forces the transition. The finale choice is what proves the premise.
-- Names are ordinary personal names for the era and place (Chinese name + English name). Do not encode plot function, twist, hidden identity, or ending in a name. Keep user-given names verbatim. Forbidden in names: 复仇者/真凶/内鬼/叛徒/卧底/白莲/笑面虎/杀父仇人/幕后/必败.
+- Names are ordinary personal names for the era and place (Chinese name + English name). Do not encode plot function, twist, hidden identity, or ending in a name. Keep user-given names verbatim. Forbidden in names: 复仇者/真凶/内鬼/叛徒/卧底/白莲/笑面虎/杀父仇人/幕后/必败. Forbidden as a way to refer to a person anywhere in this JSON: 男主/女主/男二/女二/男配/女配/男一/女一/男主角/女主角/大男主/大女主. Replace each with that person's name.
 
 Layer 3 — Save the Cat. Each beat is 1–3 sentences: who does what to whom, the Gap (expected vs actual), which way the value turns, and the visible result. The result of one beat is the pressure of the next. Every beat must be able to point back at the two beliefs colliding. A beat that still happens after the beliefs are removed is a task stuck on a person — rewrite it.
 - "stc_01_opening_image": the world before. A visible state that beat 15 will answer.

@@ -7,6 +7,7 @@ Rules:
 - Output ONLY a valid JSON object. No markdown, no code fences, no explanations.
 - Infer the dominant language of the input and write every JSON value in that same language.
 - Preserve the user's original intent; do not invent a different story.
+- When the brainstorm already names a person, signature scenes, climax moments, and conflict hooks use that name. Do not keep 男主, 女主, 男二, 女二, 男配, 女配, 男一, 女一, 男主角, or 女主角 as the label for that person.
 - Search terms must be concrete and web-searchable (genre labels, trope names, conflict hooks, reference works, climax types, iconic scene types, dialogue hooks, action/visual beats).
 - Give extra weight to: a **modern/contemporary** plot-LOGIC skeleton (literature / film / TV / game; 优先现代、当代作品，非古典名著优先) that can be **cross-style transferred** (现代→古代、职场→宫廷、科幻→仙侠等)；then climax, confrontation, reversal, and memorable set-piece FUNCTIONS already present in the brainstorm. Also surface how those works handle **distance, comms tools, and blocking** (电话蒙太奇/传书/隔墙听/对峙距离) so I6–I8 stays shootable.
 - **Primary-framework era (硬约束)**：`plot_framework_candidates` 须**优先**现代/当代作品（约近几十年已被验证的影视/文学/游戏）。古典/古代原典只作辅助或主框架实在找不到当代对等逻辑时才用，并标原因。
