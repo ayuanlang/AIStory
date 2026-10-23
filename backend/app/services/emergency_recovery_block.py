@@ -35,9 +35,9 @@ _PENDING_FIELD_RE = re.compile(r"紧急待核销\s*=")
 _LOGLINE_RE = re.compile(r"^#剧情一句话(?:与交接)?\s*[：:]", re.MULTILINE)
 _HOOK_RE = re.compile(r"^#结尾钩子\s*[：:]", re.MULTILINE)
 _SCENE_RE = re.compile(r"^#当前场景\s*[=＝：:]", re.MULTILINE)
-_ENV_RE = re.compile(r"^#当前主环境\s*[=＝：:]", re.MULTILINE)
+_ENV_RE = re.compile(r"^#(?:当前地点|当前主环境)\s*[=＝：:]", re.MULTILINE)
 _COMBINED_SCENE_ENV_RE = re.compile(
-    r"^#当前场景\s*[=＝：:].*(?:主环境|当前主环境)\s*[=＝：:]",
+    r"^#当前场景\s*[=＝：:].*(?:地点|主环境|当前主环境)\s*[=＝：:]",
     re.MULTILINE,
 )
 _OPENING_RE = re.compile(r"^#下集开局\s*[=＝：:]", re.MULTILINE)
@@ -45,7 +45,7 @@ _OPENING_MODE_RE = re.compile(
     r"^#下集开局\s*[=＝：:]\s*(开新场景|复场续完|N/?A|末集收束)",
     re.MULTILINE | re.IGNORECASE,
 )
-_REUSE_ENV_RE = re.compile(r"复用主环境\s*[=＝：:]\s*\S+")
+_REUSE_ENV_RE = re.compile(r"复用(?:地点|主环境)\s*[=＝：:]\s*\S+")
 
 
 def _keyed_line_has_substance(body: str, pattern: "re.Pattern[str]") -> bool:
@@ -139,19 +139,20 @@ def build_previous_episode_handoff_prompt_block(
         f"- Source: Episode {prev_n} → writing Episode {cur_n}.\n",
         "- Read and use BOTH structured blocks below (when present):\n",
         "  1) Previous EMERGENCY_RECOVERY_BLOCK = THIS episode's opening handoff container. "
-        "It includes `#剧情一句话与交接`, `#结尾钩子`, `#当前场景`, `#当前主环境`, `#下集开局`, plus PENDING `#项` "
+        "It includes `#剧情一句话与交接`, `#结尾钩子`, `#当前场景`, `#当前地点`, `#下集开局`, plus PENDING `#项` "
         "THIS episode must resolve in opening/early scenes (待本集紧急核销). "
+        "Older blocks may still label that place `#当前主环境` / `复用主环境=`; copy the name into this episode's `地点=` / `#当前地点` / `复用地点=`, and do not write 主环境 into this episode. "
         "Opening scene rule (Hard Constraint): `#下集开局` defaults to `开新场景` — "
         "first Scene MUST be a NEW scene (new EPxx_SCyy; prefer a new space/cut), not a silent continuation of the previous Scene. "
         "ONLY if `#下集开局=复场续完` may the first Scene stay in the same space, and then "
-        "`主环境=` MUST reuse `#当前主环境` / `复用主环境=` character-for-character (`复用=复场续完`). "
+        "`地点=` MUST reuse `#当前地点` (or the older `#当前主环境` / `复用主环境=` / `复用地点=`) character-for-character (`复用=复场续完`). "
         "Prove `#项` resolution in 类型执行摘要「上集紧急回收核销块」 "
         "with `兑现=scene_id@Beat` + `状态=已兑现`. Do NOT treat `#项` as 'already solved'.\n",
         "  2) Previous BRIDGE_BLOCK (optional; newer drafts omit it from the script page): "
         "if present, continue/contrast trope motifs; do NOT treat its `回收=` as emergency-recovery.\n",
         "- Then: (a) write resolved proof in 类型执行摘要; "
         "(b) write THIS episode's footer EMERGENCY_RECOVERY_BLOCK = 剧情一句话与交接 + 结尾钩子 + "
-        "当前场景/主环境 + `#下集开局=开新场景|复场续完` + NEW pending `#项` for the NEXT episode "
+        "当前场景/地点 + `#下集开局=开新场景|复场续完` + NEW pending `#项` for the NEXT episode "
         "(`状态=待下集核销`). Prefer `开新场景`. Do not write BRIDGE_BLOCK into the official script page.\n",
     ]
     if missing:
@@ -330,8 +331,8 @@ def format_emergency_recovery_reject_message(
     issue_text = ", ".join(str(x) for x in (issues or [])) or "unknown"
     return (
         f"EMERGENCY_RECOVERY_BLOCK rejected for episode {int(episode_number)}: {issue_text}. "
-        "Footer block must include #剧情一句话与交接, #结尾钩子, #当前场景, #当前主环境, "
-        "#下集开局=开新场景|复场续完 (复场续完须锁 复用主环境=), "
+        "Footer block must include #剧情一句话与交接, #结尾钩子, #当前场景, #当前地点, "
+        "#下集开局=开新场景|复场续完 (复场续完须锁 复用地点=), "
         "and pending items for the NEXT episode "
         "([EMERGENCY_RECOVERY_BLOCK_START]…END, 适用=有下集|末集无下集, "
         "状态=待下集核销 or #项:无紧急待核销). "
