@@ -176,20 +176,28 @@ def test_framework_drops_prefill_repeats_and_keeps_episode_placement():
         "#高概念: 林一要留证，人事要她交牌。",
         "#Opening: 晨会上林一把总裁卡套放进自己的工位。电梯对位是这一拍多出来的落点。",
         "世界背景: WB01｜工牌开门认的是权限不是人。",
+        "专业领域: 领域=法律｜触因=林一要留证，人事要她交牌。｜规程=越权留下审计｜错法=当场删掉｜覆盖=EP01",
         "[EPISODE_BLOCK_START:EP01]",
         "- **摘要**：因为误拿总裁卡套，所以看见解雇信。林一要留证，人事要她交牌。",
         "- **救猫咪拍**：拍=Opening｜收完=是",
+        "- **专业**：领域=法律｜动作=审计留在屏上｜对白=二十四小时内把卡交上来",
         "[EPISODE_BLOCK_END:EP01]",
     ])
     deduped = dedupe_framework_against_prefill(framework, source)
-    assert "林一要留证，人事要她交牌。" not in deduped.split("[EPISODE_BLOCK_START")[0]
+    preamble = deduped.split("[EPISODE_BLOCK_START")[0]
+    assert "#高概念" not in preamble
+    assert "专业领域: 领域=法律｜触因=林一要留证，人事要她交牌。" in preamble
     assert "电梯对位是这一拍多出来的落点" in deduped
     assert "世界背景" in deduped
+    assert "专业领域: 领域=法律" in deduped
+    assert "越权留下审计" in deduped
+    assert "审计留在屏上" in deduped
     assert "拍=Opening" in deduped
     assert "因为误拿总裁卡套" in deduped
     block = build_framework_prompt_block(framework, source)
     assert "两份都要落实" in block
     assert "以预填的逻辑和内容为准" in block
+    assert "本集专业行" in block
     assert "Global Story DNA" not in block
     episode = build_structured_prefill_prompt_block(source, trailer=False)
     assert "以预填为准" in episode
