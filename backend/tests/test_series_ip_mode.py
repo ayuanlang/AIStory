@@ -24,6 +24,10 @@ def test_episode_coverage_block_names_every_episode_and_dedups_character_bios():
     assert "全剧钩子" in block
     assert "人物小传只在 §8 Characters 写一次" in block
     assert "场景和道具只写注册名和一句基本功能" in block
+    assert "不用打斗地这类事件名" in block
+    assert "下一集的入就是上一集的出" in block
+    assert "双线或蒙太奇可以切场" in block
+    assert "角色弧光和冲突" in block
     assert "不写用户原文保留区" in block
     assert "不写逐字落实映射" in block
     assert "不写故事环" in block
