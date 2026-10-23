@@ -358,6 +358,7 @@ def build_environment_asset_design_brief(adapted_script: str) -> str:
         "禁止重做场景勘探；禁止另起同义主环境名；"
         "environments[].name 必须与 IDENT [ENV] 名称= / name 逐字符完全一致；"
         "定位/目标/情绪表达原样写入开篇。"
+        "定位里的气质=原样用于四壁和上下的材质、纹样、颜色、收边，不另判格调。"
         "严格遵守【主环境】对表演区/活动空间的空间要求：四面只深化规划已列围合；"
         "规划已有的床、窗、桌留在原位，动线中间不加障碍，不另起未列主体。"
         "不要等待逐场分析。Subject Index 若仍含 environment 行只作旧稿兼容，不得压过本块。"
