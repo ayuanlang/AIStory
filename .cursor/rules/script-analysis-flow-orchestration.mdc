@@ -14,7 +14,7 @@ alwaysApply: false
 
 Stage 1 先执行 `scene_split`（全局统筹），然后**两条主线同时开始**：
 
-1. `environment_plan`（环境规划）：执行前注入项目原有主环境（未删除）。LLM 据全局统筹做场景勘探，识别明示与隐藏的主环境需求（闪回、环境实质改写、舱内外、甲板等体外占用等），只返回按 `scene_id` 包裹的逐场**主环境**补丁；可复用则锁名，并按资产开篇重写本场【主环境】，禁止只写继承。衍生环境不在此节点。载具先由全局统筹两问锁死：外观整体？内部剧情？仅外→只抽 PROP 并挂非自身内部的宿主；仅内→只立占用 ENV；两者都有或三层交付→双出。现场编排逐 Beat 评估：内部剧情切占用 ENV；作道具（含三层内外交互）沿用大世界 ENV，允许人相对整车 PROP 入戏。
+1. `environment_plan`（环境规划）：执行前注入项目原有主环境（未删除）。LLM 据全局统筹做场景勘探，识别明示与隐藏的主环境需求（闪回、环境实质改写、舱内外、甲板等体外占用、交战双方各占的阵地、远程通讯两端、双线并行各自的主空间；这三类似不得收成同一块），只返回按 `scene_id` 包裹的逐场**主环境**补丁；可复用则锁名，并按资产开篇重写本场【主环境】，禁止只写继承。衍生环境不在此节点。载具先由全局统筹两问锁死：外观整体？内部剧情？仅外→只抽 PROP 并挂非自身内部的宿主；仅内→只立占用 ENV；两者都有或三层交付→双出。现场编排逐 Beat 评估：内部剧情切占用 ENV；作道具（含三层内外交互）沿用大世界 ENV，允许人相对整车 PROP 入戏。
 2. `scene_subskill_pipeline`：Scene 之间并发，单 Scene 内先执行 drama（文戏增强：场级评估 + 特效宽松评估）→ 程序提取 `SPECIAL_SCENE_ANALYSIS` → combat?（武戏增强；VFX 或 XIAN 任一行命中即调用一次，通读全部输入）。**场景现场编排必须等本轮 `environment_plan` 节点成功**，再按场注入主环境，然后 derived_framing → staging。分场旧稿或上轮 adaptation 里的环境块不得提前开闸。建置 LLM **禁止**在该场现场编排 LLM 成功（含【Beat主体定位】【取景锁定】与 `[DERIVED_ENV…]` 提取标签）之前发出。
 
 `scene_split` 完成后立即并行：`asset_design_character`（只消费 `[CHAR_EXTRACT]`）、`asset_design_prop`（只消费 `[PROP_EXTRACT]`）、`environment_plan`、`scene_subskill_pipeline`。`environment_plan` 只读 CHAR/PROP 提取做衔接，**禁止**再输出 `[PROP_EXTRACT]`；完成后立即启动 `asset_design_environment`（**只设计主环境**，封面读程序「封面海报简报」，不等待逐场分析）。该场 `derived_framing` 成功后立即程序提取衍生环境并写入资产库提示词（第一刀只切割；`_仰天`等特别行须写入 `所属主环境=`/`angle_key=`/对应宫格作空间基准，并整句注入现场编排 `特别表述=` 作为变化，禁止只切割），不等待建置或其它场次。该场 `staging` 成功后程序从建置稿直接写入工作区场景表。`assets_extraction` 与 `scene_markdown` 已退役，禁止再走 LLM。
