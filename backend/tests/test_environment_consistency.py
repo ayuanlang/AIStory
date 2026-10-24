@@ -148,7 +148,7 @@ def test_broken_grid_rewrite_keeps_image_edit_instruction():
     )
     assert plan["writes"] == []
     assert plan["consistent"] is False
-    assert plan["image_edit_instruction"].startswith("改0度格的台")
+    assert plan["image_edit_instruction"].startswith("改左上格的台")
     picture_only = plan_consistency_writes(
         entity,
         entity,
@@ -161,7 +161,7 @@ def test_broken_grid_rewrite_keeps_image_edit_instruction():
         },
     )
     assert picture_only["writes"] == []
-    assert picture_only["image_edit_instruction"].startswith("改0度格的台")
+    assert picture_only["image_edit_instruction"].startswith("改左上格的台")
 
 
 def test_main_revision_rejects_rewrite_without_grids():
@@ -283,6 +283,7 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "开篇有误：" in system
     assert "没改的格子可以不写" in system
     assert "左上是0度格望北" in system
+    assert "左上格、左下格、右上格、右下格" in system
     assert "image_edit_instruction" in system
     assert "改图指令" in system
     assert "只改这一格里点名的这一处" in system
@@ -291,6 +292,7 @@ def test_consistency_prompt_checks_count_facing_and_position():
     user = messages[1]["content"][0]["text"]
     assert "主体个数、件数核销、朝向、位置" in user
     assert "没改的格子可以不写" in user
+    assert "按左上格、左下格、右上格、右下格描述要改的宫格" in user
     assert "用户补充，这次要特别处理" not in user
     noted = build_consistency_messages(
         image_url="http://example.test/grid.png",
@@ -599,7 +601,7 @@ def test_image_edit_instruction_survives_when_prompts_stay():
     )
     assert plan["consistent"] is True
     assert plan["writes"] == []
-    assert plan["image_edit_instruction"].startswith("把左上0度格的台改到画面前方")
+    assert plan["image_edit_instruction"].startswith("把左上格的台改到画面前方")
     assert "只改这一格里点名的这一处" in plan["image_edit_instruction"]
     assert "不要重画整张四宫" in plan["image_edit_instruction"]
     sealed = seal_cell_edit_instruction("改90度格的沙发，只见靠背。再改180度格的正面墙。")
@@ -608,6 +610,36 @@ def test_image_edit_instruction_survives_when_prompts_stay():
     assert "不要改180度格" not in sealed
     assert "只改90度格、180度格里点名的这几处" in sealed
     assert seal_cell_edit_instruction("  ") is None
+
+
+def test_quad_edit_describes_cells_left_column_then_right():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
+    instruction = (
+        "改270度格的椅。现在只见坐垫朝向镜头。改成椅面朝向远离镜头。"
+        "再改90度格的台。现在长边横在画面里。改成只见短头。"
+        "改0度格的门。现在开在侧面。改成开在正面。"
+        "再改180度格的墙。现在是另一面墙。改成这一格该有的那面墙。"
+    )
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {
+            "consistent": True,
+            "summary": "四格图片和开篇不一致。",
+            "revised_prompt": None,
+            "image_edit_instruction": instruction,
+        },
+    )
+    text = plan["image_edit_instruction"]
+    assert text.find("改左上格的门") < text.find("改左下格的墙")
+    assert text.find("改左下格的墙") < text.find("改右上格的台")
+    assert text.find("改右上格的台") < text.find("改右下格的椅")
+    assert text.find("现在开在侧面") < text.find("改左下格的墙")
+    assert text.find("现在是另一面墙") < text.find("改右上格的台")
+    assert text.find("现在长边横在画面里") < text.find("改右下格的椅")
+    assert "只改左上格、左下格、右上格、右下格里点名的这几处" in text
+    assert "不要重画整张四宫" in text
 
 
 def test_consistency_check_passes_public_image_link():
@@ -834,6 +866,7 @@ def test_derived_main_consistency_injects_source_prompt_and_delta():
     assert "衍生Delta" in user_text
     assert "幕墙破口" in user_text
     assert "一起改" in messages[0]["content"]
+    assert "左上格、左下格、右上格、右下格" in messages[0]["content"]
     plan = plan_consistency_writes(
         derived_main,
         source,
@@ -850,3 +883,18 @@ def test_derived_main_consistency_injects_source_prompt_and_delta():
     assert "一起改" in plan["image_edit_instruction"]
     assert "不要只改一格" in plan["image_edit_instruction"]
     assert source.generation_prompt_cn == MAIN_PROMPT
+    ordered = plan_consistency_writes(
+        derived_main,
+        source,
+        derived_main.generation_prompt_cn,
+        {
+            "consistent": False,
+            "summary": "两格都要补破口",
+            "revised_prompt": None,
+            "image_edit_instruction": "改右下格的幕墙裂开。改左上格的幕墙裂开。",
+        },
+    )
+    edited = ordered["image_edit_instruction"]
+    assert edited.find("改左上格的幕墙") < edited.find("改右下格的幕墙")
+    assert "一起改" in edited
+    assert "不要只改一格" in edited

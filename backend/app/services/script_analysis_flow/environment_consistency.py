@@ -327,6 +327,21 @@ OPENING_ERROR_PREFIX = "开篇有误"
 PIECE_COUNT_PREFIX = "件数核销未通过"
 _CELL_HEAD = re.compile(r"\[(0|90|180|270)度格")
 _EDIT_CELL = re.compile(r"(0|90|180|270)度格")
+_QUAD_POS_ORDER = ("左上", "左下", "右上", "右下")
+_ANGLE_POS = {"0": "左上", "90": "右上", "180": "左下", "270": "右下"}
+_CELL_TOKEN = re.compile(
+    r"(?P<pos>左上|右上|左下|右下)\s*(?P<angle>0|90|180|270)\s*度格"
+    r"|(?P<angle_only>0|90|180|270)\s*度格"
+    r"|(?P<pos_only>左上|右上|左下|右下)格"
+)
+_NEXT_CELL = re.compile(
+    r"[，,]+\s*((?:再|然后|接着)?改(?=左上|左下|右上|右下))"
+)
+_LEADING_LINK = re.compile(r"^(?:再|然后|接着)")
+_INLINE_LOCK = re.compile(
+    r"[，,]?\s*只改这一格里点名的这一处。?"
+    r"|[，,]?\s*只改[^。]*?里点名的这几处。?"
+)
 _CELL_EDIT_LOCK = (
     "只改这一格里点名的这一处。"
     "另外三格、格线、角标、没有点名的主体、光色和构图都保持原图不动。"
@@ -838,15 +853,125 @@ def _prompt_keeps_world_lock(original: str, revised: str) -> Optional[str]:
     return None
 
 
-def seal_cell_edit_instruction(text: Optional[str]) -> Optional[str]:
-    """Keep one cell edit and pin the rest of the quad to the current image.
+def _token_pos(match: re.Match) -> str:
+    if match.group("pos"):
+        return match.group("pos")
+    if match.group("angle_only"):
+        return _ANGLE_POS[match.group("angle_only")]
+    return str(match.group("pos_only") or "")
 
-    Several cells in one instruction make the image model redraw the whole grid.
-    The first named cell stays. The lock sentence is added once.
+
+def _positions_in(text: str) -> List[str]:
+    found: List[str] = []
+    for match in _CELL_TOKEN.finditer(text or ""):
+        pos = _token_pos(match)
+        if pos and pos not in found:
+            found.append(pos)
+    return found
+
+
+def _ensure_period(sentence: str) -> str:
+    sentence = str(sentence or "").strip()
+    if not sentence:
+        return ""
+    if sentence[-1] not in "。！？":
+        sentence += "。"
+    return sentence
+
+
+def _pure_lock_sentence(sentence: str) -> bool:
+    if re.search(r"改(?:左上|左下|右上|右下)格的", sentence):
+        return False
+    return (
+        "保持原图不动" in sentence
+        or "不要重画整张四宫" in sentence
+        or "只改这一格" in sentence
+        or ("只改" in sentence and "里点名" in sentence)
+    )
+
+
+def order_quad_edit_clauses(text: str) -> str:
+    """Name cells as 左上格、左下格、右上格、右下格 and describe them in that order."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    normalized = _CELL_TOKEN.sub(lambda match: _token_pos(match) + "格", raw)
+    normalized = _NEXT_CELL.sub(r"。\1", normalized)
+    body: List[str] = []
+    for part in re.split(r"(?<=。)", normalized):
+        sentence = _INLINE_LOCK.sub("", part).strip()
+        sentence = _ensure_period(sentence)
+        if not sentence or _pure_lock_sentence(sentence):
+            continue
+        body.append(sentence)
+    chunks: List[tuple] = []
+    current_pos: Optional[str] = None
+    current: List[str] = []
+
+    def flush() -> None:
+        nonlocal current_pos, current
+        if current:
+            chunks.append((current_pos, current))
+        current_pos = None
+        current = []
+
+    for sentence in body:
+        positions = _positions_in(sentence)
+        if len(positions) == 1 and positions[0] != current_pos:
+            flush()
+            current_pos = positions[0]
+            current = [_ensure_period(_LEADING_LINK.sub("", sentence).lstrip("，, "))]
+            continue
+        if not current:
+            current_pos = positions[0] if len(positions) == 1 else None
+        current.append(sentence)
+    flush()
+
+    preamble: List[str] = []
+    buckets = {pos: [] for pos in _QUAD_POS_ORDER}
+    trailing: List[str] = []
+    seen_pos = False
+    for pos, sentences in chunks:
+        if pos in buckets:
+            seen_pos = True
+            buckets[pos].extend(sentences)
+        elif not seen_pos:
+            preamble.extend(sentences)
+        else:
+            trailing.extend(sentences)
+    ordered: List[str] = []
+    for pos in _QUAD_POS_ORDER:
+        ordered.extend(buckets[pos])
+    return "".join(preamble + ordered + trailing).strip()
+
+
+def seal_cell_edit_instruction(text: Optional[str], *, quad_positions: bool = False) -> Optional[str]:
+    """Pin the rest of the quad to the current image.
+
+    A four-grid edit names cells as 左上格、左下格、右上格、右下格, in that order.
+    A single cropped frame keeps the degree names the checker wrote.
     """
     raw = str(text or "").strip()
     if not raw:
         return None
+    if quad_positions:
+        raw = order_quad_edit_clauses(raw)
+        if not raw:
+            return None
+        ordered = [pos for pos in _QUAD_POS_ORDER if pos in _positions_in(raw)]
+        if not raw.endswith("。"):
+            raw += "。"
+        if len(ordered) > 1:
+            named = "、".join(f"{pos}格" for pos in ordered)
+            raw += (
+                f"只改{named}里点名的这几处。"
+                "其余格子、格线、角标、没有点名的主体、光色和构图都保持原图不动。"
+                "不要重画整张四宫。"
+            )
+            return raw
+        if "只改这一格里点名的这一处" not in raw:
+            raw += _CELL_EDIT_LOCK
+        return raw
     angles: List[str] = []
     for match in _EDIT_CELL.finditer(raw):
         angle = match.group(1)
@@ -1036,6 +1161,8 @@ def _plan_derived_main_consistency_writes(entity: Any, payload: Dict[str, Any]) 
     """Derived main: keep the source main, and only revise this four-grid's own prompt or image."""
     summary = str(payload.get("summary") or "").strip()
     image_edit_instruction = _blank_to_none(payload.get("image_edit_instruction"))
+    if image_edit_instruction:
+        image_edit_instruction = order_quad_edit_clauses(image_edit_instruction) or None
     if image_edit_instruction and "四格一起改" not in image_edit_instruction:
         image_edit_instruction = (
             f"{image_edit_instruction.rstrip('。')}。"
@@ -1101,7 +1228,10 @@ def plan_consistency_writes(
     if kind == "derived_main":
         return _plan_derived_main_consistency_writes(entity, payload)
     summary = str(payload.get("summary") or "").strip()
-    image_edit_instruction = seal_cell_edit_instruction(payload.get("image_edit_instruction"))
+    image_edit_instruction = seal_cell_edit_instruction(
+        payload.get("image_edit_instruction"),
+        quad_positions=(kind == "main"),
+    )
     main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "") if main_entity is not None else ""
     source_quad = main_prompt or checked_prompt
     revised = _blank_to_none(payload.get("revised_prompt"))
@@ -1339,6 +1469,7 @@ def _build_derived_main_consistency_messages(
         "未写入 Delta 的实体保持被依赖主环境的样子。不要把 Delta 写回被依赖主环境。revised_main_prompt 必须为 null。\n"
         "Delta 写明是一个洞时，只改这一处，不要画成整间崩塌。写明整体崩碎时，点名的主体一起碎，不要只留一条缝。\n"
         "图片要改就写 image_edit_instruction，同一主体在每一格里都改到它在该格出现的那一面。不要写成只改一格，不要写不要重画整张四宫。\n"
+        "要改的宫格按左上格、左下格、右上格、右下格的顺序写。左上格是0度格，左下格是180度格，右上格是90度格，右下格是270度格。每一格单独成句。\n"
         "衍生主环境自己的提示词需要改 Delta 表述时，把改后的全文写进 revised_prompt。提示词不用改则为 null。\n"
         "四格都符合被依赖主环境和 Delta 时，consistent 为 true，revised_prompt 和 image_edit_instruction 都为 null。\n"
         "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
@@ -1559,10 +1690,15 @@ def build_consistency_messages(
         "改图指令和 summary 说的是同一批画面错误。summary 点了哪一格的哪一件，指令里就改那一格的那一件。"
         "两格都错就两格都写，不能只留最严重的一格。"
         "image_edit_instruction 只写给改图模型，不重写环境提示词，不写米，不写东南西北。"
-        "句式：改{0|90|180|270}度格的{主体名}。现在{只见坐垫朝向镜头|长边横在画面里|正面是另一面墙}。"
+        "单张角度图的句式：改{0|90|180|270}度格的{主体名}。现在{只见坐垫朝向镜头|长边横在画面里|正面是另一面墙}。"
         "改成{只见靠背，坐垫朝向远离镜头|只见短头，长边从靠近镜头伸向远离镜头|正面是这一格该有的那面墙}。"
+        "四宫格图要改的宫格按左上格、左下格、右上格、右下格这个顺序写。"
+        "左上格是0度格，左下格是180度格，右上格是90度格，右下格是270度格。"
+        "四宫格句式：改{左上|左下|右上|右下}格的{主体名}。现在{只见坐垫朝向镜头|长边横在画面里|正面是另一面墙}。"
+        "改成{只见靠背，坐垫朝向远离镜头|只见短头，长边从靠近镜头伸向远离镜头|正面是这一格该有的那面墙}。"
+        "多格要改时，每一格单独成句，顺序固定为左上格、左下格、右上格、右下格。没改的格子不写。"
         "只改一格时，句尾是：只改这一格里点名的这一处。另外三格、格线、角标、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。"
-        "改了多格时，句尾列出这些格，其余格子保持原图不动。不要重画整张四宫。"
+        "改了多格时，句尾按左上格、左下格、右上格、右下格列出这些格，其余格子保持原图不动。不要重画整张四宫。"
         "图片已经相符、又没有用户补充点名的画面差异时，image_edit_instruction 必须为 null。\n"
         "用户补充：用户消息里出现「用户补充」时，那是这次额外要改或要提示的点。"
         "先按开篇完成核对，再处理补充里点名的画面和句子。"
@@ -1614,6 +1750,7 @@ def build_consistency_messages(
             "这是主环境四宫格图。按左上0度、右上90度、左下180度、右下270度，逐格核对正文和图片的主体个数、件数核销、朝向、位置。"
             "和开篇不符时，把改过的宫格写进 revised_prompt。没改的格子可以不写。不要重抄开篇。revised_main_prompt 置 null。"
             "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_prompt 里把改正后的开篇写在格子前面。"
+            "核对完成后，image_edit_instruction 按左上格、左下格、右上格、右下格描述要改的宫格。"
         )
     extra = str(note or "").strip()
     if extra:
