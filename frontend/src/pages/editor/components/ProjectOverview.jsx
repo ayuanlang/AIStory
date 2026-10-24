@@ -30,6 +30,7 @@ import {
     EGRI_CONCEPT_FIELDS,
     EGRI_STEPS,
     applyStructuredPrefill,
+    episodeOutlineProgress,
 } from '../storyPrefill';
 
 import { 
@@ -1849,8 +1850,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             setGlobalStoryInput(prev => applyStructuredPrefill(prev, structured, emotionDriven));
             setStoryGenFocusStep('structure_prefill');
             alert(emotionDriven
-                ? t('已按埃格里《编剧的艺术》预填。请核对：前提能否被终局证明，双方信念是否锁死，八阶是否一阶比一阶更贵，社会或人性是否让选择变贵。这一档不使用救猫咪十五拍。', 'Prefilled with Egri. Check the premise, the locked beliefs, the eight rising steps, and the social or human cost. This format does not use the Save the Cat beats.')
-                : t('已按救猫咪 15 节拍预填。请核对：主控思想是否是「价值+因为」，人物是否有前提、三维和弧光，15 拍是否一拍压一拍，主框架是否现代/当代且辅助至少 5 部，AI优势应用是否挂在具体拍上并沿用项目季节。', 'Prefilled on the Save the Cat 15 beats. Check: controlling idea is value-plus-because, characters have premise, dimensions, and an arc, the 15 beats chain, the primary is modern/contemporary with at least 5 auxiliaries, and the AI-advantage notes name beats and keep the project season.'));
+                ? t('剧本框架已写成。请核对：同一事实只落一处，前提能否被终局证明，八阶是否盖住全部事件。这里不写分集。', 'The script framework is written. Check that each fact lives once, the premise can be proved, and the eight steps cover every event. Episode outlines are not written here.')
+                : t('剧本框架已写成。请核对：同一事实只落一处，15 拍是否盖住全部事件，主框架是否现代或当代。这里不写分集。', 'The script framework is written. Check that each fact lives once, the 15 beats cover every event, and the primary work is modern or contemporary. Episode outlines are not written here.'));
         } catch (e) {
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
@@ -1860,7 +1861,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         }
     };
 
-    const handleGenerateGlobalStory = async () => {
+    const handleGenerateGlobalStory = async (resume = false) => {
+        const resumeOutlines = resume === true;
         if (globalStoryGenerationInFlightRef.current || isGeneratingGlobalStory) return;
         globalStoryGenerationInFlightRef.current = true;
         setIsGeneratingGlobalStory(true);
@@ -1868,6 +1870,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             const payload = {
                 mode: 'global',
                 generator_kind: 'story',
+                resume_episode_outlines: resumeOutlines,
                 episodes_count: Number(globalStoryInput.episodes_count || 0),
                 episode_duration_minutes: Number(globalStoryInput.episode_duration_minutes) > 0
                     ? Number(globalStoryInput.episode_duration_minutes)
@@ -1910,11 +1913,13 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 setInfo(merged);
             }
             setStoryGenFocusStep('global_framework');
-            alert('Global story framework generated and saved to Overview.');
+            alert(resumeOutlines
+                ? t('已从断点补全分集大纲，已完成的集没有重写。', 'Episode outlines continued from the break. Finished episodes were kept.')
+                : t('分集大纲已生成并保存。请核对每一集是否盖住剧本框架，上下集是否接上，以及本集经典基本点。', 'Episode outlines are saved. Check that every episode covers the framework, joins the previous episode, and names its classic base point.'));
         } catch (e) {
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
-            alert(`Failed to generate global story:\n${readable}`);
+            alert(`${t('分集大纲生成失败', 'Failed to generate episode outlines')}:\n${readable}`);
         } finally {
             setIsGeneratingGlobalStory(false);
             globalStoryGenerationInFlightRef.current = false;
@@ -2574,8 +2579,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
     const STORY_GEN_STEP_LABELS = {
         wild_ideas: { zh: '输入天马行空想法', en: 'Wild Ideas' },
-        structure_prefill: { zh: '结构化预填', en: 'Structure & Prefill' },
-        global_framework: { zh: '全局框架生成', en: 'Global Framework' },
+        structure_prefill: { zh: '剧本框架', en: 'Script Framework' },
+        global_framework: { zh: '分集大纲', en: 'Episode Outlines' },
         episode_scripts: { zh: '分集生成', en: 'Episode Generation' },
     };
     const getStoryGenStepLabel = (key) => {
@@ -2587,6 +2592,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         ? Boolean(String(globalStoryInput?.egri_premise || globalStoryInput?.logline || '').trim())
         : Boolean(String(globalStoryInput?.logline || '').trim());
     const globalFrameworkReady = Boolean(String(info?.story_dna_global_md || '').trim());
+    const outlineProgress = episodeOutlineProgress(info?.story_dna_global_md, globalStoryInput?.episodes_count);
     const episodeScriptsGeneratedCount = Number(episodeScriptsProgress?.generated || 0);
     const episodeScriptsReady = !episodeScriptsRunning
         && (episodeScriptsGeneratedCount > 0
@@ -3712,7 +3718,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                                     className={primaryChipClass}
                                                                 >
                                                                     <Wand2 className="w-3 h-3" />
-                                                                    {t('结构化预填', 'Structure')}
+                                                                    {t('剧本框架', 'Framework')}
                                                                 </button>
                                                             ) : (
                                                                 <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
@@ -3727,9 +3733,19 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                                     <button type="button" onClick={() => scrollToStoryGenStep('global_framework')} className={stepBtnClass}>
                                                                         {t('编辑', 'Edit')}
                                                                     </button>
+                                                                    {!seriesIpMode && outlineProgress.canResume && (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => handleGenerateGlobalStory(true)}
+                                                                            disabled={isGeneratingGlobalStory}
+                                                                            className={stepBtnClass}
+                                                                        >
+                                                                            {t('断点', 'Resume')}
+                                                                        </button>
+                                                                    )}
                                                                     <button
                                                                         type="button"
-                                                                        onClick={handleGenerateGlobalStory}
+                                                                        onClick={() => handleGenerateGlobalStory(false)}
                                                                         disabled={isGeneratingGlobalStory}
                                                                         className={stepBtnClass}
                                                                     >
@@ -3739,12 +3755,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                             ) : structurePrefillReady ? (
                                                                 <button
                                                                     type="button"
-                                                                    onClick={handleGenerateGlobalStory}
+                                                                    onClick={() => handleGenerateGlobalStory(false)}
                                                                     disabled={isGeneratingGlobalStory}
                                                                     className={primaryChipClass}
                                                                 >
                                                                     <Sparkles className="w-3 h-3" />
-                                                                    {t('生成框架', 'Generate')}
+                                                                    {seriesIpMode ? t('全剧信息', 'Series Bible') : t('分集大纲', 'Outlines')}
                                                                 </button>
                                                             ) : (
                                                                 <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
@@ -3778,7 +3794,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                                             onClick={handleGenerateEpisodeScripts}
                                                                             disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
                                                                             className={primaryChipClass}
-                                                                            title={t('从全局框架 + 项目角色设定生成分集剧本', 'Generate episode scripts from Global Framework + Character Canon')}
+                                                                            title={t('从分集大纲和剧本框架生成分集剧本', 'Generate episode scripts from the outlines and the script framework')}
                                                                         >
                                                                             <Wand2 className="w-3 h-3" />
                                                                             {t('全量生成', 'Gen All')}
@@ -3884,7 +3900,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             />
                             <div className="sm:col-span-2 text-xs text-muted-foreground mb-1">
                                 {emotionDrivenMode
-                                    ? t('情绪驱动类用于社会、人性。结构化预填和剧本框架各用独立技能：按埃格里《编剧的艺术》，用角色冲突和解决推动剧情，不走救猫咪十五拍。', 'Emotion-Driven is for society and human nature. Structure and framework each use their own skill: Egri, driven by character conflict and resolution, not the Save the Cat beats.')
+                                    ? t('情绪驱动类用于社会、人性。剧本框架写全局，主旨、主体、冲突和弧光全剧一套。分集大纲忠实落地，并只锁每一集的经典基本点。按埃格里《编剧的艺术》，不走救猫咪十五拍。', 'Emotion-Driven is for society and human nature. The script framework is global: one premise, subject, conflict, and arc. Episode outlines follow it and lock only each episode\'s classic base point. Egri, not Save the Cat.')
                                     : seriesIpMode
                                     ? t('系列剧（IP模式）只生成全剧信息：世界观、主要角色 IP、基本故事线索。不预写各集剧情。每一集另填基本剧情、冲突和亮点，并自动带上此前各集摘要。', 'Series IP keeps a series bible only: world, lead character IP, and story threads. Episode plots are not prewritten. Each episode adds its plot, conflict, and highlights, plus summaries of earlier episodes.')
                                     : t('大模型将根据【产品规格】严格套用不同的工业化叙事节奏与起承转合结构，并针对【受众定位】极化核心看点与张力。', 'The AI will apply distinct rhythmic and structural pacing based on the chosen Product Format and polarize constraints based on target audience.')}
@@ -3905,7 +3921,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         </label>
                                     </div>
                                     <div className="text-[11px] text-muted-foreground/80 mt-1">
-                                        {t('先把脑海中的画面、台词、怪念头倒在这里；完成后进入步骤 2 结构化预填。', 'Pour raw scenes, lines, and quirky ideas here; then go to Step 2 Structure & Prefill.')}
+                                        {t('先把脑海中的画面、台词、怪念头倒在这里；完成后进入步骤 2 剧本框架。', 'Pour raw scenes, lines, and quirky ideas here; then go to Step 2, the script framework.')}
                                     </div>
                                 </div>
                             </div>
@@ -3934,15 +3950,15 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     <div className="flex items-center gap-2">
                                         <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${structurePrefillReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>2</span>
                                         <div className="text-sm font-semibold text-white">{emotionDrivenMode
-                                            ? t('结构化预填（埃格里 · 前提 · 上升冲突八阶）', 'Structure & Prefill (Egri · Premise · Eight Rising Steps)')
-                                            : t('结构化预填（核心建置 · 人物弧光 · 救猫咪15拍）', 'Structure & Prefill (Concept · Character · 15 Beats)')}</div>
+                                            ? t('剧本框架（埃格里 · 前提 · 上升冲突八阶）', 'Script Framework (Egri · Premise · Eight Rising Steps)')
+                                            : t('剧本框架（核心建置 · 人物弧光 · 救猫咪15拍）', 'Script Framework (Concept · Character · 15 Beats)')}</div>
                                     </div>
                                     <div className="text-xs text-muted-foreground mt-1">
                                         {emotionDrivenMode
-                                            ? t('点「结构化预填」按埃格里《编剧的艺术》生成独立预填：前提、统一的对立面、社会与人性，情节按攻击点到结局八阶上升。不生成救猫咪十五拍。', 'Structure & Prefill uses Egri: premise, unity of opposites, society and human nature, and eight rising steps from attack to conclusion. It does not build the Save the Cat beats.')
+                                            ? t('剧本框架只写全局。同一事实只落一处，合起来盖住全部事件。按埃格里写前提、统一的对立面、社会与人性和八阶。不写分集，不走救猫咪。', 'The script framework is global only. Each fact lives once, and together they cover every event. Egri: premise, unity of opposites, society, human nature, and eight steps. No episode outlines, and no Save the Cat.')
                                             : seriesIpMode
-                                            ? t('IP 模式的预填只锁全剧：世界观、角色 IP、故事线索，以及经典作品对整体剧本的机制参考。15 拍可以只写全剧走向，不要写成各集场表。', 'IP prefill locks the series only: world, character IP, story threads, and classic works as a mechanism reference for the whole script. The 15 beats, if used, stay series direction and are not episode scenes.')
-                                            : t('点「结构化预填」生成三层：三幕与麦基做核心建置，编剧的艺术做人设和弧光，情节按救猫咪 15 节拍往下接。主骨架仍优先现代/当代，并至少配 5 部辅助。地点拿不准可以不写。', 'Structure & Prefill builds three layers: three-act and McKee for the concept, Egri for character and arc, and the Save the Cat 15 beats for the plot. The primary spine stays modern/contemporary, with at least 5 auxiliaries. Omit a location if you are unsure.')}
+                                            ? t('剧本框架只锁全剧：世界观、角色 IP、故事线索，以及经典作品的整体逻辑。15 拍可以只写全剧走向。不写各集大纲。', 'The script framework locks the series only: world, character IP, story threads, and the overall logic of classic works. The 15 beats, if used, stay series direction. No episode outlines.')
+                                            : t('剧本框架只写全局。同一事实只落一处。三幕与麦基做核心建置，编剧的艺术做人设和弧光，情节按救猫咪 15 节拍盖住全部事件。不写分集。', 'The script framework is global only. Each fact lives once. Three-act and McKee for the concept, Egri for character and arc, and the Save the Cat 15 beats covering every event. No episode outlines.')}
                                     </div>
                                 </div>
                                 <button
@@ -3956,7 +3972,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 >
                                     {isStructuringCreativeInput
                                         ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('结构化中...', 'Structuring...')}</>
-                                        : <><Wand2 className="w-3.5 h-3.5" /> {t('结构化预填', 'Structure & Prefill')}</>}
+                                        : <><Wand2 className="w-3.5 h-3.5" /> {t('生成剧本框架', 'Write Framework')}</>}
                                 </button>
                             </div>
                             {emotionDrivenMode && (
@@ -4100,8 +4116,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{emotionDrivenMode ? t('经典借鉴', 'Classic Borrowing') : t('I10 经典作品框架', 'I10 Classic Works Framework')}</label>
                                 <div className="text-[11px] text-muted-foreground/80 mb-0.5">
                                     {emotionDrivenMode
-                                        ? t('主框架优先选现代、当代作品，机制是用人物冲突证明一句社会或人性的前提，并写明落在哪几阶。辅助至少 5 部，维度分开：对立面、过渡、社会层、对白、关系、代价。', 'Primary: a modern work whose engine is character conflict proving a social or human premise, and name which steps it lands on. At least 5 auxiliaries: opposition, transition, society, dialogue, relationship, cost.')
-                                        : t('主框架优先选现代、当代作品的剧情逻辑，并写明落在哪几拍。除主框架外至少再列 5 部辅助，各贡献不同维度，用来拆开主框架。古典原典只可作辅助。写作品名、机制与转译。', 'Primary spine: prefer modern/contemporary plot logic, and name which beats it lands on. Besides the primary, list at least 5 auxiliaries, each a different dimension, so the 15 beats are not a remake. Pre-modern classics are auxiliaries only. Name works, mechanisms, and the transfer.')}
+                                        ? t('这里只写整体逻辑。可以参考原作剧情，必须符合本剧背景和主题，按本剧因果融合，不能硬拼。主框架优先选现代、当代作品，并写明落在哪几阶。辅助至少 5 部。分集对白和桥段留给剧本生成再选。', 'Overall logic only. Referenced plot is allowed when it fits this story\'s background and theme and is fused in. Do not hard-splice. Prefer a modern primary and name the steps. At least 5 auxiliaries. Episode dialogue and set pieces are chosen again at script generation.')
+                                        : t('这里只写整体逻辑。可以参考原作剧情，必须符合本剧背景和主题，按本剧因果融合，不能硬拼。主框架优先选现代、当代作品，并写明落在哪几拍。辅助至少 5 部。分集对白和桥段留给剧本生成再选。', 'Overall logic only. Referenced plot is allowed when it fits this story\'s background and theme and is fused in. Do not hard-splice. Prefer a modern primary and name the beats. At least 5 auxiliaries. Episode dialogue and set pieces are chosen again at script generation.')}
                                 </div>
                                 <div className="text-[11px] text-primary/70 mb-1.5 italic">
                                     {t('例：主框架：《消失的爱人》— 证据战与身份反转；转译→宫斗密折/朝堂对质。辅助≥5：《肖申克的救赎》取证；《喜剧之王》身份反差；《无间道》双面身份；《寄生虫》阶层空间；《致命ID》封闭空间置换。各写机制+转译，禁五部复述主框架。', 'e.g. Spine: Gone Girl — evidence war + identity reversal; transfer → palace memorial / court confrontation. Aux≥5: Shawshank (covert proof); King of Comedy (status reversal); Infernal Affairs (double identity); Parasite (class space); Identity (closed-room swap). Each a different mechanism + transfer; do not retell the primary five times.')}
@@ -4237,19 +4253,32 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             <div className="flex items-center justify-between gap-3">
                                 <div className="flex items-center gap-2">
                                     <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${globalFrameworkReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>3</span>
-                                    <label className="text-xs text-muted-foreground uppercase font-bold block">{seriesIpMode ? t('已生成全剧信息（Markdown）', 'Generated Series Bible (Markdown)') : emotionDrivenMode ? t('已生成情绪驱动框架（Markdown）', 'Generated Emotion-Driven Framework (Markdown)') : t('已生成全局框架（Markdown）', 'Generated Global Framework (Markdown)')}</label>
+                                    <label className="text-xs text-muted-foreground uppercase font-bold block">{seriesIpMode ? t('已生成全剧信息（Markdown）', 'Generated Series Bible (Markdown)') : t('分集大纲（Markdown）', 'Episode Outlines (Markdown)')}</label>
                                 </div>
                                 <div className="flex items-center gap-2">
+                                    {!seriesIpMode && outlineProgress.canResume && (
+                                        <button
+                                            type="button"
+                                            onClick={() => handleGenerateGlobalStory(true)}
+                                            disabled={isGeneratingGlobalStory || !structurePrefillReady}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isGeneratingGlobalStory || !structurePrefillReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                            title={t(`从第 ${String(outlineProgress.missing[0]).padStart(2, '0')} 集接着写，已完成的集保留`, `Continue from episode ${String(outlineProgress.missing[0]).padStart(2, '0')} and keep finished episodes`)}
+                                        >
+                                            {t('从断点继续', 'Resume')}
+                                        </button>
+                                    )}
                                     <button
                                         type="button"
-                                        onClick={handleGenerateGlobalStory}
+                                        onClick={() => handleGenerateGlobalStory(false)}
                                         disabled={isGeneratingGlobalStory || !structurePrefillReady}
                                         className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isGeneratingGlobalStory || !structurePrefillReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
-                                        title={t('生成国际化爆款故事框架并保存到项目总览', 'Generate an international-blockbuster story framework and store it in project Overview')}
+                                        title={seriesIpMode
+                                            ? t('生成全剧信息并保存', 'Generate the series bible and save it')
+                                            : t('按剧本框架确认每一集：覆盖、上下集连续，并只锁一处经典基本点', 'Confirm each episode against the script framework: coverage, continuity, and one classic base point')}
                                     >
                                         {isGeneratingGlobalStory
                                             ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('生成中...', 'Generating...')}</>
-                                            : <><Sparkles className="w-3.5 h-3.5" /> {globalFrameworkReady ? t('重新生成', 'Regenerate') : (seriesIpMode ? t('生成全剧信息', 'Generate Series Bible') : emotionDrivenMode ? t('生成情绪驱动框架', 'Generate Emotion-Driven Framework') : t('生成全局框架', 'Generate Framework'))}</>}
+                                            : <><Sparkles className="w-3.5 h-3.5" /> {globalFrameworkReady ? t('重新生成', 'Regenerate') : (seriesIpMode ? t('生成全剧信息', 'Generate Series Bible') : t('生成分集大纲', 'Generate Outlines'))}</>}
                                     </button>
                                     <div className="flex items-center gap-1 bg-black/20 border border-white/10 rounded-md p-1">
                                         <button
@@ -4289,13 +4318,15 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     value={info.story_dna_global_md || ''}
                                     onFocus={() => setStoryGenFocusStep('global_framework')}
                                     onChange={(e) => updateField('story_dna_global_md', e.target.value)}
-                                    placeholder={t('（生成后，全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, the global framework will appear here. You can edit it and Save Changes.)')}
+                                    placeholder={seriesIpMode
+                                        ? t('（生成后，全剧信息会显示在这里。你可以编辑后保存修改。）', '(After generation, the series bible will appear here. You can edit it and Save Changes.)')
+                                        : t('（生成后，分集大纲会显示在这里。你可以编辑后保存修改。缺的集可以用「从断点继续」。）', '(After generation, the episode outlines will appear here. You can edit them and Save Changes. Use Resume for the missing episodes.)')}
                                 />
                             ) : (
                                 <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 min-h-[12rem] overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1">
                                     {(info.story_dna_global_md || '').trim()
                                         ? <ReactMarkdown>{info.story_dna_global_md}</ReactMarkdown>
-                                        : <div className="text-sm text-muted-foreground">{t('（生成后，全局框架会显示在这里。）', '(After generation, the global framework will appear here.)')}</div>
+                                        : <div className="text-sm text-muted-foreground">{seriesIpMode ? t('（生成后，全剧信息会显示在这里。）', '(After generation, the series bible will appear here.)') : t('（生成后，分集大纲会显示在这里。）', '(After generation, the episode outlines will appear here.)')}</div>
                                     }
                                 </div>
                             )}
@@ -4314,7 +4345,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         <div className="text-[11px] text-muted-foreground mt-0.5">
                                             {seriesIpMode
                                                 ? t('按集写。填写这一集的基本剧情、冲突和亮点；此前各集摘要会自动作为下一集的输入。不预写全部分集。', 'Write one episode at a time. Give this episode’s plot, conflict, and highlights. Summaries of earlier episodes are fed into the next one. Episode frameworks are not prewritten.')
-                                                : t('基于全局框架与角色设定批量/单集生成正片。预告片每次新写一条，不覆盖已有预告；可指定侧重点，以及从哪一集到哪一集，留空则从头到尾。', 'Batch or single-episode scripts from the global framework. Each trailer is a new piece. Set a focus and an episode range, or leave the range blank to cover the whole series.')}
+                                                : t('基于剧本框架和分集大纲批量或单集生成正片。先落地大纲的经典基本点，可以再加借鉴点，综合实现这一集。预告片每次新写一条，不覆盖已有预告；可指定侧重点，以及从哪一集到哪一集，留空则从头到尾。', 'Batch or single-episode scripts from the script framework and the episode outlines. Land the classic base point first, then add more borrowings and synthesize them. Each trailer is a new piece. Set a focus and an episode range, or leave the range blank to cover the whole series.')}
                                         </div>
                                     </div>
                                 </div>

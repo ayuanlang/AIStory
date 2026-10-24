@@ -65,7 +65,7 @@ def compose_series_ip_episode_brief(
     if highlights_text:
         parts.append(f"重要亮点：{highlights_text}")
     if reference_text:
-        parts.append(f"对标参考（学机制，不搬剧情；可对标整体剧本）：{reference_text}")
+        parts.append(f"对标参考（可参考剧情；须符合本集背景和主题，按本集因果融合，不能硬拼）：{reference_text}")
     structured = "\n".join(parts).strip()
     loose = str(guidance or "").strip()
     if structured and loose:
@@ -94,7 +94,7 @@ def build_series_ip_episode_prompt_block(*, brief: str, prior_summaries_block: s
         "本集没有预先写好的分集剧情框架。Global Story DNA 若没有本集的 EP 情节块，禁止到 §9 里找场表，"
         "也禁止把全剧节拍拆成其他集或替未写的集编情节。\n"
         "本集要演的内容只来自下面的「本集指定」。全剧只继承世界观、主要角色 IP、基本故事线索、人物信念与身份，不得改人设、不得改世界规则。\n"
-        "对标经典只学机制与可拍逻辑，服务本集指定和全剧线索；禁止把参考作品的剧情搬进来当本集大纲。\n"
+        "框架的经典借鉴只提供整体逻辑。本集指定里的对标是基本点，必须先落地；没有对标就先定一处经典基本点。可以再加借鉴点，与基本点综合起来实现本集指定。可以参考剧情，必须符合本集指定、全剧背景和主题，按本集因果融合。禁止整段搬来当本集大纲，禁止硬拼。\n"
         "此前各集摘要是已发生事实。必须承接，不得改写，不得让已退场的人无声明回来。摘要里没有的集，视为还没发生。\n"
         "故事环由本集指定现推：用本集冲突走一步或相邻两步，并让人物做出一次被迫的选择。不要为了走完八步把后面几集的事提前演完。\n"
         "卖点以本集「重要亮点」为准；未写的轴可以无，但写了的亮点必须在对白或动作里被看见。\n"

@@ -38,6 +38,7 @@ class CharacterCanonCategoriesRequest(BaseModel):
 
 class StoryGeneratorRequest(BaseModel):
     mode: str  # 'global' | 'episode'
+    resume_episode_outlines: Optional[bool] = False
     generator_kind: Optional[str] = None  # promo | story
     episodes_count: Optional[int] = None
     episode_duration_minutes: Optional[int] = 1

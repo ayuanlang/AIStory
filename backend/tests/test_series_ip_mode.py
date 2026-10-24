@@ -51,7 +51,7 @@ def test_compose_brief_keeps_plot_conflict_and_reference():
         conflict="自保对上留证",
         highlights="电梯镜面金句",
         reference="《消失的爱人》的证据战",
-        guidance="基本剧情：林一拒交工牌\n要体现的冲突：自保对上留证\n重要亮点：电梯镜面金句\n对标参考（学机制，不搬剧情；可对标整体剧本）：《消失的爱人》的证据战",
+        guidance="基本剧情：林一拒交工牌\n要体现的冲突：自保对上留证\n重要亮点：电梯镜面金句\n对标参考（可参考剧情；须符合本集背景和主题，按本集因果融合，不能硬拼）：《消失的爱人》的证据战",
     )
     assert "林一拒交工牌" in brief
     assert "自保对上留证" in brief

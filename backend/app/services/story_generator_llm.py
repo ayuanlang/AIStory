@@ -557,6 +557,7 @@ def build_classic_framework_fill_prompts(
         "辅助1：《作品》— 贡献维度=…；机制：…；可拍逻辑：…；转译：…；落拍：…。 "
         "Continue through 辅助5 or more. "
         "Write the value in the same language as the story fields. "
+        "This is overall logic for the framework. Referenced plot is allowed when it fits this story's background and theme and is fused into this plot. Do not hard-splice. Do not lock episode dialogue or set pieces. "
         "Do not copy the source work's era, costumes, or locations."
     )
     if _context_is_emotion_driven(project_context):

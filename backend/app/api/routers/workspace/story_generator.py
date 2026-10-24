@@ -149,10 +149,23 @@ async def generate_project_story_dna_global(
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
+
+    resume_md = None
+    if getattr(req, "resume_episode_outlines", False) and generator_kind != "promo" and not series_ip:
+        from app.services.story_episode_coverage import (  # noqa: E402
+            complete_episode_blocks,
+            drop_incomplete_episode_tail,
+            missing_episode_numbers,
+        )
+
+        candidate = drop_incomplete_episode_tail(str(gi_existing.get("story_dna_global_md") or ""))
+        if complete_episode_blocks(candidate) and missing_episode_numbers(candidate, int(episodes_count)):
+            resume_md = candidate
+
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
-    if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+    if resume_md is None and billing_service.is_token_pricing(db, "llm_chat", provider, model):
         est = billing_service.estimate_reserve_tokens_from_messages(
             [
                 {"role": "system", "content": sys_prompt},
@@ -174,16 +187,30 @@ async def generate_project_story_dna_global(
                 "total_tokens": est.get("total_tokens", 0),
             },
         )
-    else:
+    elif resume_md is None:
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
     _release_db_connection(db, "generate_project_story_dna_global_llm_call")
 
     fill_usage: dict = {}
     try:
-        # Story DNA: do not strict-retry on H1/marker shape — recover markers on persist instead.
-        # Truncation is kept so missing episodes can be filled instead of discarded.
-        generated_payload = await generate_markdown_with_retry(
+        if resume_md is not None:
+            from app.services.story_episode_coverage import (  # noqa: E402
+                ensure_story_episode_blocks,
+                merge_usage,
+            )
+
+            generated_md, fill_usage = await ensure_story_episode_blocks(
+                resume_md,
+                episodes_count=int(episodes_count),
+                llm_config=llm_config,
+                user_id=user_id,
+                fill_system=emotion_driven_episode_fill_system() if emotion_driven else None,
+            )
+            generated_payload = {"content": generated_md, "usage": fill_usage}
+            fill_usage = merge_usage({}, fill_usage)
+        else:
+            generated_payload = await generate_markdown_with_retry(
             user_prompt=user_prompt,
             sys_prompt=sys_prompt,
             llm_config=llm_config,
@@ -194,7 +221,7 @@ async def generate_project_story_dna_global(
             continue_on_incomplete=is_global_story_framework_prompt(prompt_filename),
         )
         generated_md = str((generated_payload or {}).get("content") or "").strip()
-        if generated_md and not series_ip:
+        if resume_md is None and generated_md and not series_ip:
             from app.services.story_episode_coverage import (  # noqa: E402
                 ensure_story_episode_blocks,
                 merge_usage,
@@ -818,7 +845,7 @@ async def structure_project_creative_input_to_story_fields(
             "八阶是攻击点、反攻、锁死、编排、过渡、危机、证明、结局。禁止输出救猫咪十五拍，禁止改成三幕节拍表。"
             "story_circle 必填：你、需要、出发、寻找、找到、付出、返回、改变，每一步落在某一阶上，不另起情节。"
             "theme 与 egri_premise 同句，core_conflict 与 egri_unity 同句，background 与 egri_social 同句，characters 与 egri_dimensions 同句。"
-            "classic_framework 是经典借鉴，与 ai_vfx_strategy、story_circle 一起必填。主框架是用人物冲突证明社会或人性前提的现代或当代作品，辅助至少 5 部，落阶只用 01 到 08。只学机制，不搬参考剧情。"
+            "classic_framework 是经典借鉴，与 ai_vfx_strategy、story_circle 一起必填。主框架是用人物冲突证明社会或人性前提的现代或当代作品，辅助至少 5 部，落阶只用 01 到 08。只写整体逻辑。可以参考原作剧情，必须符合本剧背景和主题，按本剧因果融合，不能硬拼。不锁每一集的基本点。分集大纲才定一处经典基本点。"
             "优势行写阶=，不写救猫咪拍名。地点拿不准就不写。沿用【项目季节 — 必须应用】。\n"
         )
     else:
@@ -833,6 +860,8 @@ async def structure_project_creative_input_to_story_fields(
             "Forbidden: omitting the key, \"\", 无, 暂无, N/A, 待定, 推断, or a genre label with no titled work. "
             "I10 must name one primary MODERN/CONTEMPORARY work (literature / film / TV / game; prefer recent decades) as the PLOT-LOGIC framework, "
             "plus AT LEAST 5 auxiliaries (older classics OK only as auxiliaries; each a different dimension) so the 15 beats are not a remake of the primary. "
+            "This I10 is overall logic for the framework, not the episode's dialogue or set pieces. "
+            "Referenced plot is allowed when it fits this story's background and theme and is fused into this plot. Do not hard-splice. "
             "Cross-style transfer is required: keep causal/beat/set-piece logic, "
             "transcode genre/skin (e.g. modern workplace engine → ancient palace drama). Do not default a pre-modern classic as the primary spine. "
             "For each work write reusable logic (core plot, set pieces, VFX function, action, dialogue, "
@@ -849,7 +878,7 @@ async def structure_project_creative_input_to_story_fields(
     if (not emotion_driven) and _is_series_ip_script_mode(script_mode):
         user_prompt += (
             "\n\n【系列剧 IP 模式】这次预填只服务全剧圣经，不服务逐集大纲。"
-            "把笔墨放在世界观、主要角色 IP、基本故事线索，以及 I10 对整体剧本的机制参考。"
+            "把笔墨放在世界观、主要角色 IP、基本故事线索，以及 I10 对整体剧本的逻辑借鉴。可以参考原作剧情，必须符合本剧背景和主题并融合，不能硬拼。不锁分集对白和桥段。"
             "救猫咪 15 拍若写，只作为全剧走向，每拍一句方向，禁止写成某一集的场表或分集情节。"
             "不要输出 EP01–EPN。\n"
         )

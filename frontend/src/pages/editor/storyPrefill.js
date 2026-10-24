@@ -425,8 +425,37 @@ export function composeSeriesIpEpisodeGuidance(input) {
     if (plot) lines.push(`基本剧情：${plot}`);
     if (conflict) lines.push(`要体现的冲突：${conflict}`);
     if (highlights) lines.push(`重要亮点：${highlights}`);
-    if (reference) lines.push(`对标参考（学机制，不搬剧情；可对标整体剧本）：${reference}`);
+    if (reference) lines.push(`对标参考（可参考剧情；须符合本集背景和主题，按本集因果融合，不能硬拼）：${reference}`);
     return lines.join('\n');
+}
+
+export function episodeOutlineProgress(markdown, episodesCount) {
+    const text = String(markdown || '');
+    const closed = new Set();
+    const endRe = /\[\s*EPISODE_BLOCK_END\s*:\s*EP(\d+)\s*\]/gi;
+    let match = endRe.exec(text);
+    while (match) {
+        closed.add(Number(match[1]));
+        match = endRe.exec(text);
+    }
+    const complete = new Set();
+    const startRe = /\[\s*EPISODE_BLOCK_START\s*:\s*EP(\d+)\s*\]/gi;
+    match = startRe.exec(text);
+    while (match) {
+        const number = Number(match[1]);
+        if (closed.has(number)) complete.add(number);
+        match = startRe.exec(text);
+    }
+    const planned = Number(episodesCount) || 0;
+    const missing = [];
+    for (let number = 1; number <= planned; number += 1) {
+        if (!complete.has(number)) missing.push(number);
+    }
+    return {
+        completeCount: complete.size,
+        missing,
+        canResume: complete.size > 0 && missing.length > 0,
+    };
 }
 
 export function storyPrefillPayloadFields(input) {
