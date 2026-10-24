@@ -8,6 +8,7 @@ from typing import Any, Iterable, Optional
 from app.services.story_generator_llm import (
     _PREFILL_TEXT_KEYS,
     _field_text,
+    format_outline_registry_block,
     format_story_creative_input_block,
     structured_prefill_has_text,
 )
@@ -83,7 +84,7 @@ def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
             "AI优势应用与劣势回避和大纲本集 AI 行点名了本集的特效时，正文写出那一层形状、规模或季节介质；回避项保持改写。"
             "另外必须单独写「本集AI优势应用与劣势回避」：继承行登记上游已经点给本集的条目，本集分析只看本集场面再写一次，两段都要在 Beat 里演出来，不能只抄上游。\n\n"
         )
-    return f"{rules}{body}\n\n"
+    return f"{rules}{body}\n\n{format_outline_registry_block(source)}\n\n"
 
 
 _SENTENCE_SPLIT = re.compile(r"([。！？；])")

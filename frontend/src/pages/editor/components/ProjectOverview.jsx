@@ -372,6 +372,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
     const [isStructuringCreativeInput, setIsStructuringCreativeInput] = useState(false);
+    const [isStoppingStructure, setIsStoppingStructure] = useState(false);
+    const [isStoppingOutline, setIsStoppingOutline] = useState(false);
+    const structureTaskIdRef = useRef('');
+    const outlineTaskIdRef = useRef('');
+    const structureStopRequestedRef = useRef(false);
+    const outlineStopRequestedRef = useRef(false);
     const [isFetchingMarketResearch, setIsFetchingMarketResearch] = useState(false);
     const [trendingDramasReport, setTrendingDramasReport] = useState(null);
     const [industryAnalysisReport, setIndustryAnalysisReport] = useState(null);
@@ -1839,6 +1845,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         if (isStructuringCreativeInput || isGeneratingGlobalStory) return;
 
         setIsStructuringCreativeInput(true);
+        structureTaskIdRef.current = '';
+        structureStopRequestedRef.current = false;
         try {
             const structured = await structureProjectCreativeInput(id, buildScriptAnalysisApiPayload({
                 creative_text: creativeText,
@@ -1847,7 +1855,16 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 type: info.type,
                 language: info.language,
                 season_occurrence: info.season_occurrence,
-            }));
+            }), {
+                onTaskCreated: (taskId) => {
+                    structureTaskIdRef.current = String(taskId || '');
+                    if (structureStopRequestedRef.current && structureTaskIdRef.current) {
+                        stopAsyncTask(structureTaskIdRef.current).catch((err) => {
+                            console.warn('[Script Framework] force stop failed:', err);
+                        });
+                    }
+                },
+            });
             const emotionDriven = isEmotionDrivenScriptMode(globalStoryInput.script_mode);
             storyInputEpochRef.current += 1;
             setGlobalStoryInput(prev => applyStructuredPrefill(prev, structured, emotionDriven));
@@ -1856,11 +1873,35 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 ? t('剧本框架已写成。请核对：同一事实只落一处，前提能否被终局证明，八阶是否盖住全部事件。这里不写分集。', 'The script framework is written. Check that each fact lives once, the premise can be proved, and the eight steps cover every event. Episode outlines are not written here.')
                 : t('剧本框架已写成。请核对：同一事实只落一处，15 拍是否盖住全部事件，主框架是否现代或当代。这里不写分集。', 'The script framework is written. Check that each fact lives once, the 15 beats cover every event, and the primary work is modern or contemporary. Episode outlines are not written here.'));
         } catch (e) {
+            if (e?.isCanceled || structureStopRequestedRef.current) {
+                addLog?.(t('已强制停止剧本框架生成', 'Script framework generation was force-stopped'), 'warning');
+                return;
+            }
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
             alert(`${t('结构化失败', 'Structuring failed')}:\n${readable}`);
         } finally {
+            structureStopRequestedRef.current = false;
+            structureTaskIdRef.current = '';
+            setIsStoppingStructure(false);
             setIsStructuringCreativeInput(false);
+        }
+    };
+
+    const handleStopStructure = async () => {
+        if (!isStructuringCreativeInput || isStoppingStructure) return;
+        structureStopRequestedRef.current = true;
+        setIsStoppingStructure(true);
+        const taskId = structureTaskIdRef.current;
+        if (!taskId) return;
+        try {
+            await stopAsyncTask(taskId);
+        } catch (e) {
+            console.error(e);
+            const detail = e?.response?.data?.detail || e?.message || String(e);
+            addLog?.(t(`停止剧本框架失败：${detail}`, `Failed to stop script framework: ${detail}`), 'error');
+            structureStopRequestedRef.current = false;
+            setIsStoppingStructure(false);
         }
     };
 
@@ -1869,6 +1910,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         if (globalStoryGenerationInFlightRef.current || isGeneratingGlobalStory) return;
         globalStoryGenerationInFlightRef.current = true;
         setIsGeneratingGlobalStory(true);
+        outlineTaskIdRef.current = '';
+        outlineStopRequestedRef.current = false;
         try {
             const payload = {
                 mode: 'global',
@@ -1890,7 +1933,16 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 season_occurrence: info.season_occurrence,
                 ...storyPrefillPayloadFields(globalStoryInput),
             };
-            const updated = await generateProjectStoryGlobal(id, buildScriptAnalysisApiPayload(payload));
+            const updated = await generateProjectStoryGlobal(id, buildScriptAnalysisApiPayload(payload), {
+                onTaskCreated: (taskId) => {
+                    outlineTaskIdRef.current = String(taskId || '');
+                    if (outlineStopRequestedRef.current && outlineTaskIdRef.current) {
+                        stopAsyncTask(outlineTaskIdRef.current).catch((err) => {
+                            console.warn('[Episode Outlines] force stop failed:', err);
+                        });
+                    }
+                },
+            });
             setProject(updated);
             if (updated?.global_info) {
                 const merged = {
@@ -1920,12 +1972,36 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 ? t('已从断点补全分集大纲，已完成的集没有重写。', 'Episode outlines continued from the break. Finished episodes were kept.')
                 : t('分集大纲已生成并保存。请核对每一集是否盖住剧本框架，上下集是否接上，以及本集经典基本点。', 'Episode outlines are saved. Check that every episode covers the framework, joins the previous episode, and names its classic base point.'));
         } catch (e) {
+            if (e?.isCanceled || outlineStopRequestedRef.current) {
+                addLog?.(t('已强制停止分集大纲生成', 'Episode outline generation was force-stopped'), 'warning');
+                return;
+            }
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
             alert(`${t('分集大纲生成失败', 'Failed to generate episode outlines')}:\n${readable}`);
         } finally {
+            outlineStopRequestedRef.current = false;
+            outlineTaskIdRef.current = '';
+            setIsStoppingOutline(false);
             setIsGeneratingGlobalStory(false);
             globalStoryGenerationInFlightRef.current = false;
+        }
+    };
+
+    const handleStopOutline = async () => {
+        if (!isGeneratingGlobalStory || isStoppingOutline) return;
+        outlineStopRequestedRef.current = true;
+        setIsStoppingOutline(true);
+        const taskId = outlineTaskIdRef.current;
+        if (!taskId) return;
+        try {
+            await stopAsyncTask(taskId);
+        } catch (e) {
+            console.error(e);
+            const detail = e?.response?.data?.detail || e?.message || String(e);
+            addLog?.(t(`停止分集大纲失败：${detail}`, `Failed to stop episode outlines: ${detail}`), 'error');
+            outlineStopRequestedRef.current = false;
+            setIsStoppingOutline(false);
         }
     };
 
@@ -3697,7 +3773,19 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                         )
                                                     )}
                                                     {step.key === 'structure_prefill' && (
-                                                        structurePrefillActive ? renderProcessingLabel() : (
+                                                        structurePrefillActive ? (
+                                                            <div className="flex flex-col items-center gap-1">
+                                                                {renderProcessingLabel()}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={handleStopStructure}
+                                                                    disabled={isStoppingStructure}
+                                                                    className="text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 disabled:opacity-50"
+                                                                >
+                                                                    {isStoppingStructure ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
+                                                                </button>
+                                                            </div>
+                                                        ) : (
                                                             structurePrefillReady ? (
                                                                 <div className="flex items-center gap-1 flex-wrap justify-center">
                                                                     <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
@@ -3729,7 +3817,19 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                         )
                                                     )}
                                                     {step.key === 'global_framework' && (
-                                                        globalFrameworkActive ? renderProcessingLabel() : (
+                                                        globalFrameworkActive ? (
+                                                            <div className="flex flex-col items-center gap-1">
+                                                                {renderProcessingLabel()}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={handleStopOutline}
+                                                                    disabled={isStoppingOutline}
+                                                                    className="text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 disabled:opacity-50"
+                                                                >
+                                                                    {isStoppingOutline ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
+                                                                </button>
+                                                            </div>
+                                                        ) : (
                                                             globalFrameworkReady ? (
                                                                 <div className="flex items-center gap-1 flex-wrap justify-center">
                                                                     <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
@@ -3964,11 +4064,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                             : t('剧本框架只写全局。同一事实只落一处。三幕与麦基做核心建置，编剧的艺术做人设和弧光，情节按救猫咪 15 节拍盖住全部事件。不写分集。', 'The script framework is global only. Each fact lives once. Three-act and McKee for the concept, Egri for character and arc, and the Save the Cat 15 beats covering every event. No episode outlines.')}
                                     </div>
                                 </div>
+                                <div className="flex items-center gap-2 shrink-0">
                                 <button
                                     type="button"
                                     onClick={handleStructureCreativeInput}
                                     disabled={isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady}
-                                    className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
+                                    className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
                                     title={emotionDrivenMode
                                         ? t('按埃格里《编剧的艺术》的上升冲突，从天马行空直接预填', 'Prefill from wild ideas using Egri\'s rising conflict')
                                         : t('按三幕与麦基、编剧的艺术、救猫咪 15 拍，从天马行空直接预填', 'Prefill from wild ideas using three-act and McKee, Egri, and the Save the Cat 15 beats')}
@@ -3977,6 +4078,20 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('结构化中...', 'Structuring...')}</>
                                         : <><Wand2 className="w-3.5 h-3.5" /> {t('生成剧本框架', 'Write Framework')}</>}
                                 </button>
+                                {isStructuringCreativeInput && (
+                                    <button
+                                        type="button"
+                                        onClick={handleStopStructure}
+                                        disabled={isStoppingStructure}
+                                        className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${isStoppingStructure ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                                        title={t('强制停止当前剧本框架生成', 'Force stop the current script framework generation')}
+                                    >
+                                        {isStoppingStructure
+                                            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('停止中...', 'Stopping...')}</>
+                                            : <><X className="w-3.5 h-3.5" /> {t('强制停止', 'Force Stop')}</>}
+                                    </button>
+                                )}
+                                </div>
                             </div>
                             {emotionDrivenMode && (
                                 <>
@@ -4304,6 +4419,19 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                             ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('生成中...', 'Generating...')}</>
                                             : <><Sparkles className="w-3.5 h-3.5" /> {globalFrameworkReady ? t('重新生成', 'Regenerate') : (seriesIpMode ? t('生成全剧信息', 'Generate Series Bible') : t('生成分集大纲', 'Generate Outlines'))}</>}
                                     </button>
+                                    {isGeneratingGlobalStory && (
+                                        <button
+                                            type="button"
+                                            onClick={handleStopOutline}
+                                            disabled={isStoppingOutline}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 ${isStoppingOutline ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                                            title={t('强制停止当前分集大纲生成', 'Force stop the current episode outline generation')}
+                                        >
+                                            {isStoppingOutline
+                                                ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('停止中...', 'Stopping...')}</>
+                                                : <><X className="w-3.5 h-3.5" /> {t('强制停止', 'Force Stop')}</>}
+                                        </button>
+                                    )}
                                     <div className="flex items-center gap-1 bg-black/20 border border-white/10 rounded-md p-1">
                                         <button
                                             type="button"

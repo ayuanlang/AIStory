@@ -206,6 +206,10 @@ LLM_DEBUG_LOG_MAX_CHARS = max(512, int(os.getenv("LLM_DEBUG_LOG_MAX_CHARS", "180
 class AmbiguousLLMTransportError(Exception):
     pass
 
+
+class ImmediateLLMFallbackError(Exception):
+    """Upstream refused the call now. Switch providers instead of waiting out the read timeout."""
+
 _BASE64_PATTERN = re.compile(r'(data:[\w/+.-]+;base64,)[A-Za-z0-9+/=]{64,}')
 
 def _strip_base64_from_log(obj):
@@ -539,6 +543,79 @@ class LLMService:
             return any(marker in text for marker in ssl_proxy_markers)
 
         return False
+
+    _IMMEDIATE_FALLBACK_MARKERS = (
+        "model load is too high",
+        "rix_api_error",
+        "please try again later",
+        "try again later",
+        "overloaded",
+        "model is busy",
+        "server is busy",
+        "at capacity",
+        "resource_exhausted",
+        "resource exhausted",
+        "too many requests",
+        "rate limit",
+        "负载过高",
+        "稍后再试",
+        "系统繁忙",
+    )
+
+    def _is_immediate_provider_fallback_error(self, error: Any, *, status_code: Any = None) -> bool:
+        """Provider already refused this call. Do not burn the read timeout on the same model."""
+        try:
+            status = int(status_code)
+        except Exception:
+            status = 0
+        if status in {429, 502, 503}:
+            return True
+        text = self._flatten_transport_error_text(error).lower()
+        if not text:
+            return False
+        if re.search(r"\bapi error (429|502|503)\b", text):
+            return True
+        return any(marker in text for marker in self._IMMEDIATE_FALLBACK_MARKERS)
+
+    def _result_requests_immediate_fallback(self, result: Any, content: str = "") -> bool:
+        """True only for an upstream failure, not for story text that happens to contain the phrase."""
+        if isinstance(result, dict) and result.get("_immediate_fallback"):
+            return True
+        texts: List[str] = []
+        if str(content or "").startswith("Error:"):
+            texts.append(str(content))
+        if isinstance(result, dict):
+            stream_error = str(result.get("stream_error") or "").strip()
+            if stream_error:
+                texts.append(stream_error)
+            raw = str(result.get("content") or "")
+            if raw.startswith("Error:") and raw not in texts:
+                texts.append(raw)
+        if not texts:
+            return False
+        return self._is_immediate_provider_fallback_error("\n".join(texts))
+
+    def _immediate_fallback_payload(self, error: Any, *, request_id: Any = None) -> Dict[str, Any]:
+        text = str(error or "").strip() or "upstream unavailable"
+        content = text if text.startswith("Error:") else f"Error: {text}"
+        return {
+            "raw_content": "",
+            "content": content,
+            "usage": {},
+            "finish_reason": "error",
+            "request_id": request_id,
+            "stream_error": text,
+            "_immediate_fallback": True,
+        }
+
+    @staticmethod
+    def _abandon_open_stream(response: Any) -> None:
+        """Stop the stream context from draining a refused body until the read timeout."""
+        try:
+            response.is_closed = True
+            response.is_stream_consumed = True
+        except Exception:
+            pass
 
     def _is_runtime_shutdown_text(self, text: Any) -> bool:
         stable = str(text or "").strip().lower()
@@ -2023,7 +2100,9 @@ class LLMService:
             status = 0
 
         reason = "上游接口返回异常。"
-        if status == 400:
+        if self._is_immediate_provider_fallback_error(body, status_code=status):
+            reason = "供应商当前模型负载过高或暂时无法接单，应立即切换备用供应商，不要等待本次读超时。"
+        elif status == 400:
             reason = "请求参数不符合供应商要求，供应商拒绝处理。"
         elif status == 401:
             reason = "供应商鉴权失败，通常是 API Key 无效、缺失或已失效。"
@@ -2563,7 +2642,23 @@ class LLMService:
                 }
             except AmbiguousLLMTransportError:
                 raise
+            except ImmediateLLMFallbackError as e:
+                logger.warning(
+                    "[llm] provider unavailable, return for immediate fallback | provider=%s model=%s err=%s",
+                    provider,
+                    model,
+                    str(e)[:300],
+                )
+                return self._immediate_fallback_payload(self._vendor_failed_message(provider, e), request_id=extra_config.get("request_id"))
             except Exception as e:
+                if self._is_immediate_provider_fallback_error(e):
+                    logger.warning(
+                        "[llm] provider unavailable, return for immediate fallback | provider=%s model=%s err=%s",
+                        provider,
+                        model,
+                        str(e)[:300],
+                    )
+                    return self._immediate_fallback_payload(self._vendor_failed_message(provider, e), request_id=extra_config.get("request_id"))
                 if str(provider or "").strip().lower() in {"kie", "n1n"} and self._is_ambiguous_submit_transport_error(e):
                     self._raise_ambiguous_submit_error(provider, model, e, base_url)
                 logger.error(f"LLM Raw Completion failed: {e}")
@@ -2836,11 +2931,27 @@ class LLMService:
                         if chunk.get("finish_reason"):
                             finish_reason = chunk["finish_reason"]
 
-            except AmbiguousLLMTransportError:
-                raise
+            except ImmediateLLMFallbackError as _collect_exc:
+                logger.warning(
+                    "[_collect_openai_compatible_text_response] provider unavailable; skip timeout and fallback | err=%s",
+                    _collect_exc,
+                )
+                return self._immediate_fallback_payload(
+                    _collect_exc,
+                    request_id=extra_config.get("request_id"),
+                )
             except Exception as _collect_exc:
                 if is_llm_timeout_error(_collect_exc):
                     raise
+                if self._is_immediate_provider_fallback_error(_collect_exc):
+                    logger.warning(
+                        "[_collect_openai_compatible_text_response] provider unavailable; skip timeout and fallback | err=%s",
+                        _collect_exc,
+                    )
+                    return self._immediate_fallback_payload(
+                        _collect_exc,
+                        request_id=extra_config.get("request_id"),
+                    )
                 logger.warning(
                     "[_collect_openai_compatible_text_response] request failed; partial content parts=%d err=%s",
                     parts_count, _collect_exc,
@@ -2886,7 +2997,17 @@ class LLMService:
         content = str(aggregated.get("content") or "")
         usage = aggregated.get("usage") or {}
         finish_reason = aggregated.get("finish_reason") or "stop"
-        
+        if aggregated.get("_immediate_fallback"):
+            return {
+                "reply": content,
+                "plan": [],
+                "usage": usage,
+                "finish_reason": "error",
+                "request_id": (extra_config or {}).get("request_id"),
+                "stream_error": aggregated.get("stream_error") or content,
+                "_immediate_fallback": True,
+            }
+
         logger.info("[_call_openai_compatible] extracted content length=%d snippet=%s", len(content or ""), (content or "")[:200])
         logger.info("[_call_openai_compatible] sanitized content length=%d snippet=%s", len(content or ""), (content or "")[:200])
         
@@ -3067,18 +3188,26 @@ class LLMService:
                      "finish_reason": finish_reason,
                      "request_id": response.get("request_id"),
                      "stream_error": response.get("stream_error"),
+                     "_immediate_fallback": bool(response.get("_immediate_fallback")),
                  }
 
             except Exception as e:
                  logger.error(f"Generate Content Error: {e}")
                  provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
+                 message = self._vendor_failed_message(provider, e)
                  self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                      "provider": provider,
                      "model": model,
                      "error": str(e),
-                     "human_summary": self._vendor_failed_message(provider, e)
+                     "human_summary": message
                  })
-                 return {"content": f"Error: {self._vendor_failed_message(provider, e)}", "usage": {}, "finish_reason": None}
+                 return {
+                     "content": f"Error: {message}",
+                     "usage": {},
+                     "finish_reason": "error" if self._is_immediate_provider_fallback_error(e) else None,
+                     "stream_error": str(e),
+                     "_immediate_fallback": self._is_immediate_provider_fallback_error(e),
+                 }
 
     async def _raw_llm_request(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> str:
         data = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
@@ -3444,7 +3573,10 @@ class LLMService:
                 "resolved_setting_id": resolved_setting_id,
             })
             raw_reason = f"API Error {response.status_code} [provider={provider}, model={model}, endpoint={url}, setting_id={resolved_setting_id}, source={resolved_source}]: {response.text}"
-            raise Exception(self._vendor_failed_message(provider, raw_reason))
+            wrapped = self._vendor_failed_message(provider, raw_reason)
+            if self._is_immediate_provider_fallback_error(wrapped, status_code=response.status_code):
+                raise ImmediateLLMFallbackError(wrapped)
+            raise Exception(wrapped)
 
         try:
             data = response.json()
@@ -3834,10 +3966,15 @@ class LLMService:
             async with httpx.AsyncClient(timeout=timeout, http2=True) as client:
                 async with client.stream("POST", url, json=payload, headers=headers) as response:
                     if response.status_code != 200:
-                        error_body = await response.aread()
-                        error_text = error_body.decode("utf-8", errors="replace")[:500]
+                        try:
+                            error_body = await asyncio.wait_for(response.aread(), timeout=8.0)
+                        except Exception:
+                            error_body = b""
+                            self._abandon_open_stream(response)
+                        error_text = error_body.decode("utf-8", errors="replace")[:500] if error_body else ""
+                        status_code = int(response.status_code or 0)
                         provider_lower = str(provider or "").strip().lower()
-                        if provider_lower in {"n1n", "kie"} and int(response.status_code or 0) == 524:
+                        if provider_lower in {"n1n", "kie"} and status_code == 524:
                             self._raise_ambiguous_submit_error(
                                 provider,
                                 payload.get("model") or model,
@@ -3863,12 +4000,17 @@ class LLMService:
                             "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
                             "stream": True,
                         })
-                        raise Exception(
-                            self._vendor_failed_message(
-                                provider,
-                                f"API Error {response.status_code}: {error_text}",
-                            )
+                        unread_refusal = (not error_body) and status_code in {400, 429, 502, 503}
+                        if unread_refusal:
+                            error_text = "upstream refused before a readable body"
+                        wrapped = self._vendor_failed_message(
+                            provider,
+                            f"API Error {response.status_code}: {error_text}",
                         )
+                        if unread_refusal or self._is_immediate_provider_fallback_error(wrapped, status_code=status_code):
+                            self._abandon_open_stream(response)
+                            raise ImmediateLLMFallbackError(wrapped)
+                        raise Exception(wrapped)
 
                     content_type = response.headers.get("content-type", "").lower()
                     logger.info(
@@ -3897,6 +4039,20 @@ class LLMService:
                             full_json = _json.loads(body_bytes)
                         except Exception:
                             full_json = {}
+                        error_obj = full_json.get("error") if isinstance(full_json, dict) else None
+                        if error_obj:
+                            if isinstance(error_obj, str):
+                                error_text = error_obj
+                            else:
+                                try:
+                                    error_text = json.dumps(error_obj, ensure_ascii=False)
+                                except Exception:
+                                    error_text = str(error_obj)
+                            if self._is_immediate_provider_fallback_error(error_text):
+                                self._abandon_open_stream(response)
+                                raise ImmediateLLMFallbackError(
+                                    self._vendor_failed_message(provider, f"API Error: {error_text[:500]}")
+                                )
                         text = self._extract_text_from_response(full_json) if full_json else ""
                         if not text:
                             text = body_text.strip()
@@ -3942,6 +4098,21 @@ class LLMService:
                                 chunk = json.loads(data_str)
                             except json.JSONDecodeError:
                                 return [], False, False
+
+                            error_obj = chunk.get("error") if isinstance(chunk, dict) else None
+                            if error_obj:
+                                if isinstance(error_obj, str):
+                                    error_text = error_obj
+                                else:
+                                    try:
+                                        error_text = json.dumps(error_obj, ensure_ascii=False)
+                                    except Exception:
+                                        error_text = str(error_obj)
+                                if self._is_immediate_provider_fallback_error(error_text):
+                                    self._abandon_open_stream(response)
+                                    raise ImmediateLLMFallbackError(
+                                        self._vendor_failed_message(provider, f"API Error: {error_text[:500]}")
+                                    )
 
                             # Capture usage if the provider includes it in a chunk
                             # (with stream_options.include_usage, final chunk often has usage + empty choices)
@@ -4150,7 +4321,11 @@ class LLMService:
             })
             # Fall through to yield buffered content + done below (finish_reason="incomplete")
             finish_reason = "incomplete"
+        except ImmediateLLMFallbackError:
+            raise
         except Exception as exc:
+            if self._is_immediate_provider_fallback_error(exc):
+                raise ImmediateLLMFallbackError(str(exc)) from exc
             human_summary = self._build_human_readable_transport_error_summary(
                 provider=provider,
                 model=payload.get("model") or model,
@@ -4496,8 +4671,24 @@ class LLMService:
                         attempt, active_retry_attempts, config.get("provider"), config.get("model"),
                     )
                     return _aborted_existing_payload(config)
-                result = await self.generate_content(user_prompt, system_prompt, config, image_urls, video_urls)
+                try:
+                    result = await self.generate_content(user_prompt, system_prompt, config, image_urls, video_urls)
+                except Exception as exc:
+                    if not self._is_immediate_provider_fallback_error(exc):
+                        raise
+                    result = self._immediate_fallback_payload(exc)
                 content = str(result.get("content") or "")
+                if self._result_requests_immediate_fallback(result, content):
+                    if not content.startswith("Error:"):
+                        detail = str(result.get("stream_error") or content or "upstream unavailable")
+                        content = detail if str(detail).startswith("Error:") else f"Error: {detail}"
+                    last_err = content
+                    last_failure_kind = "upstream"
+                    logger.warning(
+                        "[llm_fallback] active attempt %d/%d upstream unavailable, skip remaining retries and enter fallback | provider=%s model=%s err=%s",
+                        attempt, active_retry_attempts, config.get("provider"), config.get("model"), content[:800],
+                    )
+                    break
                 validation_failed_this_attempt = False
                 if not content.startswith("Error:") and not _is_empty_success(result):
                     validation_ok, validation_error = _validate_response(result, config)
@@ -4624,8 +4815,27 @@ class LLMService:
         with self._llm_log_trace(active_cfg_obj):
             # ── active config attempts ──
             for attempt in range(1, active_retry_attempts + 1):
-                result = await self.chat_completion(messages, config)
+                try:
+                    result = await self.chat_completion(messages, config)
+                except Exception as exc:
+                    if not self._is_immediate_provider_fallback_error(exc):
+                        raise
+                    result = self._immediate_fallback_payload(exc)
                 content = str(result.get("content") or "")
+                if self._result_requests_immediate_fallback(result, content):
+                    if not content.startswith("Error:"):
+                        detail = str(result.get("stream_error") or content or "upstream unavailable")
+                        content = detail if str(detail).startswith("Error:") else f"Error: {detail}"
+                        result = dict(result)
+                        result["content"] = content
+                        result["finish_reason"] = "error"
+                        result["_immediate_fallback"] = True
+                    last_result = result
+                    logger.warning(
+                        "[llm_fallback_chat] active attempt %d/%d upstream unavailable, skip remaining retries and enter fallback | provider=%s model=%s err=%s",
+                        attempt, active_retry_attempts, config.get("provider"), config.get("model"), content[:800],
+                    )
+                    break
                 if not _is_empty_or_error(result):
                     result = await self._auto_continue_chat_completion_on_length(messages, config, result)
                     return self._attach_routing_metadata(result, config)

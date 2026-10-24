@@ -1223,14 +1223,14 @@ export const importProjectBackup = async (payload) => {
     return response.data;
 }
 
-export const generateProjectStoryGlobal = async (projectId, payload) => {
+export const generateProjectStoryGlobal = async (projectId, payload, config = {}) => {
     const fnName = 'script_analysis';
     const sysReq = {
         ...payload,
         function_name: fnName,
         system_api_id: resolveScriptAnalysisSystemApiId(fnName, payload?.system_api_id),
     };
-    return await asyncLLMPost(`/projects/${projectId}/story_generator/global`, sysReq);
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/global`, sysReq, config);
 }
 
 const withScriptAnalysisApiPayload = (payload = {}) => {
@@ -1246,8 +1246,8 @@ export const analyzeProjectNovel = async (projectId, payload) => {
     return await asyncLLMPost(`/projects/${projectId}/story_generator/analyze_novel`, withScriptAnalysisApiPayload(payload));
 }
 
-export const structureProjectCreativeInput = async (projectId, payload) => {
-    return await asyncLLMPost(`/projects/${projectId}/story_generator/structure_creative_input`, withScriptAnalysisApiPayload(payload));
+export const structureProjectCreativeInput = async (projectId, payload, config = {}) => {
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/structure_creative_input`, withScriptAnalysisApiPayload(payload), config);
 }
 
 export const fetchTrendingAiShortDramas = async (projectId, payload = {}) => {

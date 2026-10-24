@@ -113,6 +113,8 @@ async def generate_project_story_dna_global(
 
     outline_source = prefill_source_for_outline(req, gi_existing)
     registry_block = format_outline_registry_block(outline_source)
+    if generator_kind != "promo":
+        sys_prompt = f"{sys_prompt.rstrip()}\n\n{registry_block}\n"
     series_ip_global_block = build_series_ip_global_prompt_block() if series_ip else ""
     if series_ip:
         episode_coverage_block = ""
@@ -258,6 +260,14 @@ async def generate_project_story_dna_global(
         if reservation_tx:
             billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
         raise
+    from app.services.task_manager import abort_if_current_task_canceled  # noqa: E402
+
+    try:
+        abort_if_current_task_canceled()
+    except RuntimeError:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), "已强制停止")
+        raise
     usage = (generated_payload or {}).get("usage") if isinstance(generated_payload, dict) else {}
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
@@ -330,7 +340,7 @@ async def generate_project_story_dna_global(
     if reservation_tx:
         billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), settle_details)
     else:
-        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, settle_details)
+        billing_service.deduct_credits(db, user_id, "llm_chat", provider, model, settle_details)
 
     # Persist both output and the inputs that produced it.
     # This ensures a successful generation is durable across refresh even
@@ -339,6 +349,15 @@ async def generate_project_story_dna_global(
         story_input = req.model_dump()
     except AttributeError:
         story_input = req.dict()
+    from app.services.story_generator_llm import keep_saved_registry_fields  # noqa: E402
+
+    fresh_project = db.query(Project).filter(Project.id == int(project_id)).first()
+    if fresh_project is not None:
+        project = fresh_project
+    story_input = keep_saved_registry_fields(
+        story_input,
+        (project.global_info or {}).get("story_generator_global_input"),
+    )
     story_input["mode"] = "global"
     generator_kind = _normalize_generator_kind(story_input.get("generator_kind") or req.generator_kind) or "story"
     story_input["generator_kind"] = generator_kind
@@ -396,6 +415,10 @@ def save_project_story_generator_global_input(
         story_input = req.model_dump()
     except AttributeError:
         story_input = req.dict()
+    from app.services.story_generator_llm import keep_saved_registry_fields  # noqa: E402
+
+    saved_story_input = (project.global_info or {}).get("story_generator_global_input")
+    story_input = keep_saved_registry_fields(story_input, saved_story_input)
     story_input["mode"] = "global"
     generator_kind = _normalize_generator_kind(story_input.get("generator_kind") or req.generator_kind) or "story"
     story_input["generator_kind"] = generator_kind
@@ -843,6 +866,7 @@ async def structure_project_creative_input_to_story_fields(
 
     gi_existing = dict(project.global_info or {})
     user_id = int(current_user.id)
+    user_name = str(getattr(current_user, "username", None) or "")
     project_global_info = gi_existing
     project_title_str = str(project.title or "")
     project_type = (getattr(req, "type", None) or gi_existing.get("type") or "").strip()
@@ -960,7 +984,7 @@ async def structure_project_creative_input_to_story_fields(
         user_prompt=user_prompt,
         billing_item="structure_creative_input",
         llm_context="structure_creative_input",
-        user_name=getattr(current_user, "username", None),
+        user_name=user_name,
         project_id=project_id,
     )
 
@@ -971,7 +995,7 @@ async def structure_project_creative_input_to_story_fields(
         system_api_id=getattr(req, "system_api_id", None),
         context="structure_creative_input",
         project_global_info=project_global_info,
-        user_name=getattr(current_user, "username", None),
+        user_name=user_name,
         project_id=project_id,
     )
     data = await _normalize_llm_json_object_with_repair(
@@ -1003,7 +1027,7 @@ async def structure_project_creative_input_to_story_fields(
         creative_text=creative_text,
         project_context=project_context,
         llm_config=structure_llm_config,
-        user_name=getattr(current_user, "username", None),
+        user_name=user_name,
         project_id=project_id,
     )
     normalized = await ensure_ai_vfx_strategy_filled(
@@ -1015,7 +1039,7 @@ async def structure_project_creative_input_to_story_fields(
         creative_text=creative_text,
         project_context=project_context,
         llm_config=structure_llm_config,
-        user_name=getattr(current_user, "username", None),
+        user_name=user_name,
         project_id=project_id,
     )
     normalized = await ensure_registry_fields_filled(
@@ -1027,7 +1051,7 @@ async def structure_project_creative_input_to_story_fields(
         creative_text=creative_text,
         project_context=project_context,
         llm_config=structure_llm_config,
-        user_name=getattr(current_user, "username", None),
+        user_name=user_name,
         project_id=project_id,
     )
     normalized["prefill_meta"] = {
@@ -1040,6 +1064,12 @@ async def structure_project_creative_input_to_story_fields(
             "source_stats": {},
         },
     }
+    from app.services.task_manager import abort_if_current_task_canceled  # noqa: E402
+
+    abort_if_current_task_canceled()
+    fresh_project = db.query(Project).filter(Project.id == int(project_id)).first()
+    if fresh_project is not None:
+        project = fresh_project
     _persist_structure_prefill(db, project, normalized, creative_text)
     return normalized
 

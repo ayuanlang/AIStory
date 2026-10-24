@@ -879,6 +879,8 @@ async def generate_episode_story_dna(
 
     outline_source = prefill_source_for_outline(req, project.global_info or {})
     registry_block = format_outline_registry_block(outline_source)
+    if mode == "global" and prompt_filename != "promo_generator_global.txt":
+        sys_prompt = f"{sys_prompt.rstrip()}\n\n{registry_block}\n"
     user_prompt_body += f"\n{registry_block}\n"
     from app.services.script_mode_helpers import (  # noqa: E402
         emotion_driven_episode_fill_system,
@@ -1044,6 +1046,12 @@ async def generate_episode_story_dna(
         story_input = req.model_dump()
     except AttributeError:
         story_input = req.dict()
+    from app.services.story_generator_llm import keep_saved_registry_fields  # noqa: E402
+
+    story_input = keep_saved_registry_fields(
+        story_input,
+        (project.global_info or {}).get("story_generator_global_input"),
+    )
     story_input["mode"] = mode
     story_input["generator_kind"] = _normalize_generator_kind(story_input.get("generator_kind") or req.generator_kind) or "story"
     story_input["generator_kind"] = _normalize_generator_kind(story_input.get("generator_kind") or req.generator_kind) or "story"
@@ -1105,6 +1113,12 @@ def save_episode_story_generator_input(
         story_input = req.model_dump()
     except AttributeError:
         story_input = req.dict()
+    from app.services.story_generator_llm import keep_saved_registry_fields  # noqa: E402
+
+    story_input = keep_saved_registry_fields(
+        story_input,
+        (project.global_info or {}).get("story_generator_global_input"),
+    )
     story_input["mode"] = mode
 
     now_iso = now_bj_iso()

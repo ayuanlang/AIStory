@@ -401,6 +401,12 @@ def task_record_cancel_is_set(rec: Any) -> bool:
     return str(getattr(rec, "status", "") or "").strip().lower() == "canceled"
 
 
+def abort_if_current_task_canceled() -> None:
+    """Stop a cooperative async job before the next model call or before saving."""
+    if is_current_task_cancel_requested():
+        raise RuntimeError("已强制停止")
+
+
 def is_current_task_cancel_requested() -> bool:
     """True when the task running on this worker thread was canceled.
 

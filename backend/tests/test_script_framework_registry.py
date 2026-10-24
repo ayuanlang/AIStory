@@ -91,6 +91,17 @@ def test_fill_context_uses_the_neighbors_not_the_last_episode():
     assert "第十集标题" in context
 
 
+def test_blank_save_keeps_the_five_framework_fields():
+    from app.services.story_generator_llm import keep_saved_registry_fields
+
+    kept = keep_saved_registry_fields(
+        {"plot_background": None, "logline": "新的一句话"},
+        {"plot_background": "剧情背景: PB01｜还在｜手段=对话｜禁提前=结局", "logline": "旧的一句话"},
+    )
+    assert kept["plot_background"].startswith("剧情背景: PB01")
+    assert kept["logline"] == "新的一句话"
+
+
 def test_outline_user_prompt_injects_the_five_fields():
     from app.services.story_episode_coverage import _fill_user_prompt
     from app.services.story_generator_llm import (
@@ -119,6 +130,7 @@ def test_outline_user_prompt_injects_the_five_fields():
     assert "领域=战术穿梭机低空机动驾驶" in block
     assert "总裁办公室 (Executive Office)" in block
     fill = _fill_user_prompt("已完成集", [2], 8, registry_block=block)
+    assert "分集规划输入" in block
     assert "剧本框架五栏" in fill
     assert "总裁办公室 (Executive Office)" in fill
     assert "这次只补：EP02" in fill
@@ -144,6 +156,8 @@ def test_existing_english_text_is_kept_and_prompts_require_the_fields():
         "places_and_props",
     ]
 
+    architect = _resolve_prompt_text("master_story_architect.md")
+    assert "剧本框架五栏 — 分集规划输入" in architect
     structure = _resolve_prompt_text("story_generator_structure_creative_input.txt")
     emotion = _resolve_prompt_text("emotion_driven_structure_prefill.txt")
     assert "These five keys are mandatory" in structure

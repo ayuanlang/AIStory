@@ -226,7 +226,10 @@ async def ensure_story_episode_blocks(
         return current, added_usage
 
     stalls = 0
+    from app.services.task_manager import abort_if_current_task_canceled
+
     for _round in range(max_rounds):
+        abort_if_current_task_canceled()
         if not missing:
             break
         batch = missing[: max(1, int(batch_size))]
