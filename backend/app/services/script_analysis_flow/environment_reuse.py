@@ -760,7 +760,7 @@ def synthesize_reused_env_block(
             "【活动空间】",
             source,
             "────【未落环境实体清单】────",
-            f"- 无｜依据={basis}｜开场在场｜归属主环境={main_name}｜全局性道具=否",
+            f"- 无｜依据={basis}｜归属主环境={main_name}",
             "[ENV_BLOCK_END]",
         ]
     )
