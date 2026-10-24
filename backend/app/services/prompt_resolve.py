@@ -17,6 +17,8 @@ _PROMPT_SKILL_ALIAS = {
     "story_generator_episode.txt": "skill:story_generation/story_generator_episode.txt",
     "story_generator_analyze_novel.txt": "skill:story_generation/story_generator_analyze_novel.txt",
     "story_generator_structure_creative_input.txt": "skill:story_generation/story_generator_structure_creative_input.txt",
+    "emotion_driven_structure_prefill.txt": "skill:emotion_driven_structure/structure_prefill.txt",
+    "emotion_driven_story_framework.md": "skill:emotion_driven_framework/story_framework.md",
     "story_generator_structure_extract_key_elements.txt": "skill:story_generation/story_generator_structure_extract_key_elements.txt",
     "story_generator_trending_ai_short_dramas.txt": "skill:story_generation/story_generator_trending_ai_short_dramas.txt",
     "story_generator_industry_analysis_ai_short_dramas.txt": "skill:story_generation/story_generator_industry_analysis_ai_short_dramas.txt",

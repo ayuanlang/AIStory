@@ -177,6 +177,8 @@ def _normalize_script_mode_key(script_mode: Any) -> str:
         return "feature_film"
     if "action feature" in raw or "动作片" in raw:
         return "action_feature"
+    if "情绪驱动" in raw or "emotion-driven" in raw or "emotion driven" in raw:
+        return "emotion_driven"
     if "romance" in raw or "emotional" in raw or "爱情情感" in raw:
         return "romance_emotional"
     if "mystery" in raw or "thriller" in raw or "悬疑惊悚" in raw:
@@ -265,6 +267,16 @@ _MANDATORY_WRITING_LOGIC_BY_SCRIPT_MODE: Dict[str, str] = {
     "general_series": (
         "- 铺垫、升级、反转、情感释放、后续价值之间保持平衡。"
     ),
+    "emotion_driven": (
+        "- 这是情绪驱动类。重点是社会与人性，不是类型奇观。\n"
+        "- 结构只按埃格里《编剧的艺术》：前提、三维、统一的对立面、编排、攻击点，然后一阶比一阶更贵，直到危机、带代价的证明和结局。\n"
+        "- 剧情由角色冲突的发生和解决推动。抽掉双方不肯让的信念之后，事件仍能当任务发生，这一步就不合格。\n"
+        "- 社会层是制度、阶层、舆论。人性层是怕、愧、执念、责任。至少一层必须让这一次选择变贵。只写心情、不发生冲突、不做出选择，不合格。\n"
+        "- 本集只演框架已锁的冲突阶，并用该集已锁的故事环步来排。环步必须落在这一阶里。禁止改走救猫咪十五拍，禁止用故事环代替冲突阶。\n"
+        "- 经典借鉴只学机制：对白、关系、代价和站位可以转译，不把参考剧情搬进本集。\n"
+        "- 对白承担冲突：下一句必须顶住、让步，或把代价说出来。情绪写在表情和微动作上，用来让这场冲突被看见。\n"
+        "- 解决必须是可见选择，并回指前提。不能用外部事故替人物做完选择。奇观不代替这场解决。"
+    ),
     "series_ip": (
         "- 这是系列剧（IP模式）。全剧只提供世界观、主要角色 IP、基本故事线索；没有预先写好的分集剧情框架。\n"
         "- 本集只演用户指定的基本剧情、要体现的冲突和重要亮点。对标经典是整体剧本的机制参考，不把参考剧情搬进本集。\n"
@@ -272,6 +284,29 @@ _MANDATORY_WRITING_LOGIC_BY_SCRIPT_MODE: Dict[str, str] = {
         "- 正片之外必须写出本集摘要，供下一集读取。"
     ),
 }
+
+
+EMOTION_DRIVEN_STRUCTURE_PROMPT = "emotion_driven_structure_prefill.txt"
+EMOTION_DRIVEN_FRAMEWORK_PROMPT = "emotion_driven_story_framework.md"
+GLOBAL_STORY_FRAMEWORK_PROMPTS = frozenset({
+    "master_story_architect.md",
+    EMOTION_DRIVEN_FRAMEWORK_PROMPT,
+})
+
+
+def is_emotion_driven_script_mode(script_mode: Any) -> bool:
+    return _normalize_script_mode_key(script_mode) == "emotion_driven"
+
+
+def resolve_global_story_framework_prompt(script_mode: Any) -> str:
+    if is_emotion_driven_script_mode(script_mode):
+        return EMOTION_DRIVEN_FRAMEWORK_PROMPT
+    return "master_story_architect.md"
+
+
+def is_global_story_framework_prompt(prompt_filename: Any) -> bool:
+    name = str(prompt_filename or "").strip().replace("\\", "/").split("/")[-1]
+    return name in GLOBAL_STORY_FRAMEWORK_PROMPTS
 
 
 def _build_mandatory_writing_logic(script_mode: Any) -> str:
@@ -307,6 +342,50 @@ def build_story_episode_coverage_block(episodes_count: Any) -> str:
         "全剧钩子和其他台账只写角色名与事件，不重贴身份、能力、声线、信念、外形。"
         "场景和道具只写注册名和一句基本功能；环境注册名是实际地方，如办公室、山谷，不用打斗地这类事件名。陈设、外形、布局留给分集剧本和环境规划。\n"
         f"收束前点名：[EPISODE_BLOCK_START] 的个数 = {n}。少一块就补上再收束。\n"
+    )
+
+
+def build_emotion_driven_episode_coverage_block(episodes_count: Any) -> str:
+    """Per-episode gate for the Egri framework. Does not ask for Save the Cat beats."""
+    try:
+        n = int(episodes_count)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    end = f"EP{n:02d}"
+    return (
+        "【分集完整 — 情绪驱动类，最高，紧挨集数】\n"
+        f"Episodes Count = {n}。§9 逐集输出 EP01–{end}，共 {n} 块；"
+        "每集一对 [EPISODE_BLOCK_START:EPxx] / [EPISODE_BLOCK_END:EPxx]，集号连续。\n"
+        "这一档的骨架是埃格里《编剧的艺术》的上升冲突，不是救猫咪。\n"
+        "每一集只有十行：标题、摘要、交接、时间、冲突阶、故事环、在场名、AI、专业、驱动。"
+        "冲突阶确认本集在完成哪一阶，写阶名和收完。阶名只许：攻击点、反攻、锁死、编排、过渡、危机、证明、结局。"
+        "故事环确认本集在走哪一步，写环、落阶和人物改了。步名只许：你、需要、出发、寻找、找到、付出、返回、改变。落阶必须等于本集冲突阶。"
+        "禁止写成救猫咪拍，禁止写成 Opening、Midpoint、Finale。\n"
+        "时间行写明本集范围，并确认季节、昼夜、气候。"
+        "AI 行写落到本集这些阶上的优势和回避，没有则写优势=无｜回避=无。"
+        "专业行写本集碰到的领域，以及这一下的专业动作和专业对白；没碰到写领域=无｜动作=无｜对白=无。"
+        "驱动行的最大项是这一阶的角色弧光和这场冲突；情绪只写这一下怎么被看见。\n"
+        "下一集的入就是上一集的出：同一个人、同一处、同一件还在做的事。摘要从这态接着写。要换地方，先写离开和到达。\n"
+        "故事环单独成行，不并进冲突阶，也不另写一件事。不写场表、卖点。不把冲突阶写成节拍表。\n"
+        "§1 的经典借鉴必须留下主框架和至少 5 部辅助的作品名。缩短篇幅时不得删。\n"
+        "篇幅只缩短思考和 §0–§8。§8 的世界背景行、剧情背景行和专业领域行缩短时不得删。\n"
+        f"收束前点名：[EPISODE_BLOCK_START] 的个数 = {n}。少一块就补上再收束。\n"
+    )
+
+
+def emotion_driven_episode_fill_system() -> str:
+    return (
+        "你在补全情绪驱动类全局故事框架里缺掉的集。只输出本次点名的集。\n"
+        "骨架是埃格里《编剧的艺术》的上升冲突，不是救猫咪。\n"
+        "每一集一对独占行 [EPISODE_BLOCK_START:EPxx] 与 [EPISODE_BLOCK_END:EPxx]，集号用两位。\n"
+        "每集只有十行：标题、摘要（因为/所以/但是）、交接（入/出/钩子）、时间（含季节、昼夜、气候）、"
+        "冲突阶（阶名和收完）、故事环（环、落阶、人物改了）、在场名、AI、专业、驱动。\n"
+        "阶名只许攻击点、反攻、锁死、编排、过渡、危机、证明、结局。"
+        "环步只许你、需要、出发、寻找、找到、付出、返回、改变，落阶等于本集冲突阶。\n"
+        "禁止写成救猫咪拍或 Opening、Midpoint、Finale。不写卖点、场表。驱动的最大项是弧光和冲突。\n"
+        "补上的集，入必须接上已有上一集的出。不写思考过程，不重写 §0–§8。\n"
     )
 
 

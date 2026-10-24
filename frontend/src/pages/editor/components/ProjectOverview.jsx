@@ -19,14 +19,17 @@ import {
 import { PROJECT_ASPECT_RATIO_OPTIONS } from '../projectOptionConfig';
 import {
     SAVE_THE_CAT_ACTS,
-    STORY_PREFILL_KEYS,
     emptyStoryPrefillFields,
     migrateLegacyPlotToBeats,
-    rollupSaveTheCat,
     storyPrefillPayloadFields,
     SERIES_IP_SCRIPT_MODE,
     isSeriesIpScriptMode,
     composeSeriesIpEpisodeGuidance,
+    EMOTION_DRIVEN_SCRIPT_MODE,
+    isEmotionDrivenScriptMode,
+    EGRI_CONCEPT_FIELDS,
+    EGRI_STEPS,
+    applyStructuredPrefill,
 } from '../storyPrefill';
 
 import { 
@@ -1842,15 +1845,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 language: info.language,
                 season_occurrence: info.season_occurrence,
             }));
-            setGlobalStoryInput(prev => {
-                const next = { ...prev, wild_creative_notes: prev.wild_creative_notes };
-                STORY_PREFILL_KEYS.forEach((key) => {
-                    next[key] = String(structured?.[key] ?? '').trim();
-                });
-                return { ...next, ...rollupSaveTheCat(next) };
-            });
+            const emotionDriven = isEmotionDrivenScriptMode(globalStoryInput.script_mode);
+            setGlobalStoryInput(prev => applyStructuredPrefill(prev, structured, emotionDriven));
             setStoryGenFocusStep('structure_prefill');
-            alert(t('已按救猫咪 15 节拍预填。请核对：主控思想是否是「价值+因为」，人物是否有前提、三维和弧光，15 拍是否一拍压一拍，主框架是否现代/当代且辅助至少 5 部，AI优势应用是否挂在具体拍上并沿用项目季节。', 'Prefilled on the Save the Cat 15 beats. Check: controlling idea is value-plus-because, characters have premise, dimensions, and an arc, the 15 beats chain, the primary is modern/contemporary with at least 5 auxiliaries, and the AI-advantage notes name beats and keep the project season.'));
+            alert(emotionDriven
+                ? t('已按埃格里《编剧的艺术》预填。请核对：前提能否被终局证明，双方信念是否锁死，八阶是否一阶比一阶更贵，社会或人性是否让选择变贵。这一档不使用救猫咪十五拍。', 'Prefilled with Egri. Check the premise, the locked beliefs, the eight rising steps, and the social or human cost. This format does not use the Save the Cat beats.')
+                : t('已按救猫咪 15 节拍预填。请核对：主控思想是否是「价值+因为」，人物是否有前提、三维和弧光，15 拍是否一拍压一拍，主框架是否现代/当代且辅助至少 5 部，AI优势应用是否挂在具体拍上并沿用项目季节。', 'Prefilled on the Save the Cat 15 beats. Check: controlling idea is value-plus-because, characters have premise, dimensions, and an arc, the 15 beats chain, the primary is modern/contemporary with at least 5 auxiliaries, and the AI-advantage notes name beats and keep the project season.'));
         } catch (e) {
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
@@ -2545,6 +2545,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     }, [episodeResultRows, isGeneratorMode]);
 
     const seriesIpMode = isSeriesIpScriptMode(globalStoryInput.script_mode);
+    const emotionDrivenMode = isEmotionDrivenScriptMode(globalStoryInput.script_mode);
     const priorEpisodeSummaries = useMemo(() => {
         if (!seriesIpMode) return [];
         const rows = [];
@@ -2582,7 +2583,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         return row ? t(row.zh, row.en) : key;
     };
     const wildIdeasReady = Boolean(String(globalStoryInput?.wild_creative_notes || '').trim());
-    const structurePrefillReady = Boolean(String(globalStoryInput?.logline || '').trim());
+    const structurePrefillReady = emotionDrivenMode
+        ? Boolean(String(globalStoryInput?.egri_premise || globalStoryInput?.logline || '').trim())
+        : Boolean(String(globalStoryInput?.logline || '').trim());
     const globalFrameworkReady = Boolean(String(info?.story_dna_global_md || '').trim());
     const episodeScriptsGeneratedCount = Number(episodeScriptsProgress?.generated || 0);
     const episodeScriptsReady = !episodeScriptsRunning
@@ -3864,6 +3867,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     '短剧快节奏 / Short Drama',
                                     '电影 / Feature Film',
                                     '通用连续剧 / General Series',
+                                    EMOTION_DRIVEN_SCRIPT_MODE,
                                     SERIES_IP_SCRIPT_MODE,
                                 ]}
                             />
@@ -3879,7 +3883,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 ]}
                             />
                             <div className="sm:col-span-2 text-xs text-muted-foreground mb-1">
-                                {seriesIpMode
+                                {emotionDrivenMode
+                                    ? t('情绪驱动类用于社会、人性。结构化预填和剧本框架各用独立技能：按埃格里《编剧的艺术》，用角色冲突和解决推动剧情，不走救猫咪十五拍。', 'Emotion-Driven is for society and human nature. Structure and framework each use their own skill: Egri, driven by character conflict and resolution, not the Save the Cat beats.')
+                                    : seriesIpMode
                                     ? t('系列剧（IP模式）只生成全剧信息：世界观、主要角色 IP、基本故事线索。不预写各集剧情。每一集另填基本剧情、冲突和亮点，并自动带上此前各集摘要。', 'Series IP keeps a series bible only: world, lead character IP, and story threads. Episode plots are not prewritten. Each episode adds its plot, conflict, and highlights, plus summaries of earlier episodes.')
                                     : t('大模型将根据【产品规格】严格套用不同的工业化叙事节奏与起承转合结构，并针对【受众定位】极化核心看点与张力。', 'The AI will apply distinct rhythmic and structural pacing based on the chosen Product Format and polarize constraints based on target audience.')}
                             </div>
@@ -3927,10 +3933,14 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 <div>
                                     <div className="flex items-center gap-2">
                                         <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${structurePrefillReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>2</span>
-                                        <div className="text-sm font-semibold text-white">{t('结构化预填（核心建置 · 人物弧光 · 救猫咪15拍）', 'Structure & Prefill (Concept · Character · 15 Beats)')}</div>
+                                        <div className="text-sm font-semibold text-white">{emotionDrivenMode
+                                            ? t('结构化预填（埃格里 · 前提 · 上升冲突八阶）', 'Structure & Prefill (Egri · Premise · Eight Rising Steps)')
+                                            : t('结构化预填（核心建置 · 人物弧光 · 救猫咪15拍）', 'Structure & Prefill (Concept · Character · 15 Beats)')}</div>
                                     </div>
                                     <div className="text-xs text-muted-foreground mt-1">
-                                        {seriesIpMode
+                                        {emotionDrivenMode
+                                            ? t('点「结构化预填」按埃格里《编剧的艺术》生成独立预填：前提、统一的对立面、社会与人性，情节按攻击点到结局八阶上升。不生成救猫咪十五拍。', 'Structure & Prefill uses Egri: premise, unity of opposites, society and human nature, and eight rising steps from attack to conclusion. It does not build the Save the Cat beats.')
+                                            : seriesIpMode
                                             ? t('IP 模式的预填只锁全剧：世界观、角色 IP、故事线索，以及经典作品对整体剧本的机制参考。15 拍可以只写全剧走向，不要写成各集场表。', 'IP prefill locks the series only: world, character IP, story threads, and classic works as a mechanism reference for the whole script. The 15 beats, if used, stay series direction and are not episode scenes.')
                                             : t('点「结构化预填」生成三层：三幕与麦基做核心建置，编剧的艺术做人设和弧光，情节按救猫咪 15 节拍往下接。主骨架仍优先现代/当代，并至少配 5 部辅助。地点拿不准可以不写。', 'Structure & Prefill builds three layers: three-act and McKee for the concept, Egri for character and arc, and the Save the Cat 15 beats for the plot. The primary spine stays modern/contemporary, with at least 5 auxiliaries. Omit a location if you are unsure.')}
                                     </div>
@@ -3940,14 +3950,74 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     onClick={handleStructureCreativeInput}
                                     disabled={isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady}
                                     className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory || !wildIdeasReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
-                                    title={t('按三幕与麦基、编剧的艺术、救猫咪 15 拍，从天马行空直接预填', 'Prefill from wild ideas using three-act and McKee, Egri, and the Save the Cat 15 beats')}
+                                    title={emotionDrivenMode
+                                        ? t('按埃格里《编剧的艺术》的上升冲突，从天马行空直接预填', 'Prefill from wild ideas using Egri\'s rising conflict')
+                                        : t('按三幕与麦基、编剧的艺术、救猫咪 15 拍，从天马行空直接预填', 'Prefill from wild ideas using three-act and McKee, Egri, and the Save the Cat 15 beats')}
                                 >
                                     {isStructuringCreativeInput
                                         ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('结构化中...', 'Structuring...')}</>
                                         : <><Wand2 className="w-3.5 h-3.5" /> {t('结构化预填', 'Structure & Prefill')}</>}
                                 </button>
                             </div>
-                            {[
+                            {emotionDrivenMode && (
+                                <>
+                                    {EGRI_CONCEPT_FIELDS.map((field) => (
+                                        <div key={field.id}>
+                                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t(field.labelZh, field.labelEn)}</label>
+                                            <div className="text-[11px] text-muted-foreground/80 mb-1">{t(field.hintZh, field.hintEn)}</div>
+                                            <textarea
+                                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                                rows={field.rows}
+                                                placeholder={t(field.hintZh, field.hintEn)}
+                                                value={globalStoryInput[field.id] || ''}
+                                                onFocus={() => setStoryGenFocusStep('structure_prefill')}
+                                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
+                                            />
+                                        </div>
+                                    ))}
+                                    <div className="space-y-3">
+                                        <div>
+                                            <div className="text-xs font-bold text-white">{t('上升冲突八阶', 'Eight Rising Steps')}</div>
+                                            <div className="text-[11px] text-muted-foreground/80 mt-0.5">
+                                                {t('情节只按这八阶上升。每一阶写谁的信念撞上谁，社会或人性怎样把这一撞变贵。上一阶的结果是下一阶的压力。证明是带代价的选择。不写救猫咪拍名。', 'The plot rises through these eight steps only. Each step is a belief hitting another, made costly by society or human nature. One step\'s result is the next step\'s pressure. The proof is a choice with a cost. Do not use Save the Cat beat names.')}
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            {EGRI_STEPS.map((step) => (
+                                                <div key={step.id}>
+                                                    <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">
+                                                        {step.no} {t(step.zh, step.en)}
+                                                    </label>
+                                                    <div className="text-[11px] text-muted-foreground/80 mb-1">{t(step.hintZh, step.hintEn)}</div>
+                                                    <textarea
+                                                        className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                                        rows={3}
+                                                        placeholder={t(step.hintZh, step.hintEn)}
+                                                        value={globalStoryInput[step.id] || ''}
+                                                        onFocus={() => setStoryGenFocusStep('structure_prefill')}
+                                                        onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [step.id]: e.target.value }))}
+                                                    />
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('故事环', 'Story Circle')}</label>
+                                        <div className="text-[11px] text-muted-foreground/80 mb-1">
+                                            {t('分集按这八步排：你、需要、出发、寻找、找到、付出、返回、改变。每一步写它落在哪一阶，以及谁的信念撞上谁。你落在攻击点，改变落在证明或结局。这不是第二套情节。', 'Episodes run these eight steps: you, need, go, search, find, take, return, change. Each step names its rising step and whose belief hits whose. You lands on the attack. Change lands on the proof or the conclusion. This is not a second plot.')}
+                                        </div>
+                                        <textarea
+                                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                            rows={6}
+                                            placeholder={t('你@攻击点：…\n需要@攻击点：…\n改变@结局：…', 'You @ attack: …\nNeed @ attack: …\nChange @ conclusion: …')}
+                                            value={globalStoryInput.story_circle || ''}
+                                            onFocus={() => setStoryGenFocusStep('structure_prefill')}
+                                            onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, story_circle: e.target.value }))}
+                                        />
+                                    </div>
+                                </>
+                            )}
+                            {!emotionDrivenMode && ([
                                 {
                                     id: 'logline',
                                     label: t('高概念 · 欲望脊柱', 'High Concept · Desire Spine'),
@@ -4025,11 +4095,13 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
                                     />
                                 </div>
-                            ))}
+                            )))}
                             <div>
-                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('I10 经典作品框架', 'I10 Classic Works Framework')}</label>
+                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{emotionDrivenMode ? t('经典借鉴', 'Classic Borrowing') : t('I10 经典作品框架', 'I10 Classic Works Framework')}</label>
                                 <div className="text-[11px] text-muted-foreground/80 mb-0.5">
-                                    {t('主框架优先选现代、当代作品的剧情逻辑，并写明落在哪几拍。除主框架外至少再列 5 部辅助，各贡献不同维度，用来拆开主框架。古典原典只可作辅助。写作品名、机制与转译。', 'Primary spine: prefer modern/contemporary plot logic, and name which beats it lands on. Besides the primary, list at least 5 auxiliaries, each a different dimension, so the 15 beats are not a remake. Pre-modern classics are auxiliaries only. Name works, mechanisms, and the transfer.')}
+                                    {emotionDrivenMode
+                                        ? t('主框架优先选现代、当代作品，机制是用人物冲突证明一句社会或人性的前提，并写明落在哪几阶。辅助至少 5 部，维度分开：对立面、过渡、社会层、对白、关系、代价。', 'Primary: a modern work whose engine is character conflict proving a social or human premise, and name which steps it lands on. At least 5 auxiliaries: opposition, transition, society, dialogue, relationship, cost.')
+                                        : t('主框架优先选现代、当代作品的剧情逻辑，并写明落在哪几拍。除主框架外至少再列 5 部辅助，各贡献不同维度，用来拆开主框架。古典原典只可作辅助。写作品名、机制与转译。', 'Primary spine: prefer modern/contemporary plot logic, and name which beats it lands on. Besides the primary, list at least 5 auxiliaries, each a different dimension, so the 15 beats are not a remake. Pre-modern classics are auxiliaries only. Name works, mechanisms, and the transfer.')}
                                 </div>
                                 <div className="text-[11px] text-primary/70 mb-1.5 italic">
                                     {t('例：主框架：《消失的爱人》— 证据战与身份反转；转译→宫斗密折/朝堂对质。辅助≥5：《肖申克的救赎》取证；《喜剧之王》身份反差；《无间道》双面身份；《寄生虫》阶层空间；《致命ID》封闭空间置换。各写机制+转译，禁五部复述主框架。', 'e.g. Spine: Gone Girl — evidence war + identity reversal; transfer → palace memorial / court confrontation. Aux≥5: Shawshank (covert proof); King of Comedy (status reversal); Infernal Affairs (double identity); Parasite (class space); Identity (closed-room swap). Each a different mechanism + transfer; do not retell the primary five times.')}
@@ -4043,6 +4115,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     placeholder={t('例：主框架：《消失的爱人》— 剧情逻辑：…；转译→…。辅助≥5：《肖申克的救赎》…；《无间道》…；《寄生虫》…；…', 'e.g. Spine: Gone Girl — plot logic: …; transfer → …. Aux≥5: Shawshank …; Infernal Affairs …; Parasite …; …')}
                                 />
                             </div>
+                            {!emotionDrivenMode && (
                             <div className="space-y-3">
                                 <div>
                                     <div className="text-xs font-bold text-white">{t('救猫咪 15 节拍', 'Save the Cat · 15 Beats')}</div>
@@ -4076,6 +4149,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     </div>
                                 ))}
                             </div>
+                            )}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 {[
                                     {
@@ -4117,10 +4191,14 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             <div>
                                 <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('AI优势应用与劣势回避', 'AI Advantage and Avoidance')}</label>
                                 <div className="text-[11px] text-muted-foreground/80 mb-0.5">
-                                    {t('评估怎样用 AI 特效把这一部的画面做强：优势挂到具体节拍，写出变成什么、铺多满、季节介质怎么加强。劣势只改写袖藏、精细指法和多人贴身缠斗，连招保留。', 'How AI effects strengthen this story: advantages name a beat, the shape, the scale, and the season medium. Avoidance rewrites sleeve-hides, fingertip business, and multi-person grappling. Combos stay.')}
+                                    {emotionDrivenMode
+                                        ? t('评估怎样用 AI 特效把这一部的画面做强：优势挂到攻击点、危机或证明，写出变成什么、铺多满、季节介质怎么加强。劣势只改写袖藏、精细指法和多人贴身缠斗，连招保留。奇观不代替冲突的解决。', 'How AI effects strengthen this story: advantages name the attack, crisis, or proof, plus the shape, the scale, and the season medium. Avoidance rewrites sleeve-hides, fingertip business, and multi-person grappling. Combos stay. Spectacle does not replace the resolution.')
+                                        : t('评估怎样用 AI 特效把这一部的画面做强：优势挂到具体节拍，写出变成什么、铺多满、季节介质怎么加强。劣势只改写袖藏、精细指法和多人贴身缠斗，连招保留。', 'How AI effects strengthen this story: advantages name a beat, the shape, the scale, and the season medium. Avoidance rewrites sleeve-hides, fingertip business, and multi-person grappling. Combos stay.')}
                                 </div>
                                 <div className="text-[11px] text-primary/70 mb-1.5 italic">
-                                    {t('例：拍=14｜特效=满幅异象｜画面增量=雨幕从楼面铺到街口｜服务=当众公开。劣势回避=本脑洞无高风险互动。', 'e.g. Beat 14 | full-frame weather | rain from the facade to the street | serves the public reveal. Avoidance: none in this brainstorm.')}
+                                    {emotionDrivenMode
+                                        ? t('例：阶=01｜特效=满幅异象｜画面增量=雨幕从楼面铺到街口｜服务=攻击点。劣势回避=本脑洞无高风险互动。', 'e.g. Step 01 | full-frame weather | rain from the facade to the street | serves the point of attack. Avoidance: none in this brainstorm.')
+                                        : t('例：拍=14｜特效=满幅异象｜画面增量=雨幕从楼面铺到街口｜服务=当众公开。劣势回避=本脑洞无高风险互动。', 'e.g. Beat 14 | full-frame weather | rain from the facade to the street | serves the public reveal. Avoidance: none in this brainstorm.')}
                                 </div>
                                 <textarea
                                     className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
@@ -4128,7 +4206,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     value={globalStoryInput.ai_vfx_strategy || ''}
                                     onFocus={() => setStoryGenFocusStep('structure_prefill')}
                                     onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, ai_vfx_strategy: e.target.value }))}
-                                    placeholder={t('拍=…｜特效=…｜画面增量=…｜服务=…', 'Beat=… | effect=… | what the picture gains=… | serves=…')}
+                                    placeholder={emotionDrivenMode
+                                        ? t('阶=…｜特效=…｜画面增量=…｜服务=…', 'Step=… | effect=… | what the picture gains=… | serves=…')
+                                        : t('拍=…｜特效=…｜画面增量=…｜服务=…', 'Beat=… | effect=… | what the picture gains=… | serves=…')}
                                 />
                             </div>
                             <div>
@@ -4157,7 +4237,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             <div className="flex items-center justify-between gap-3">
                                 <div className="flex items-center gap-2">
                                     <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${globalFrameworkReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>3</span>
-                                    <label className="text-xs text-muted-foreground uppercase font-bold block">{seriesIpMode ? t('已生成全剧信息（Markdown）', 'Generated Series Bible (Markdown)') : t('已生成全局框架（Markdown）', 'Generated Global Framework (Markdown)')}</label>
+                                    <label className="text-xs text-muted-foreground uppercase font-bold block">{seriesIpMode ? t('已生成全剧信息（Markdown）', 'Generated Series Bible (Markdown)') : emotionDrivenMode ? t('已生成情绪驱动框架（Markdown）', 'Generated Emotion-Driven Framework (Markdown)') : t('已生成全局框架（Markdown）', 'Generated Global Framework (Markdown)')}</label>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <button
@@ -4169,7 +4249,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     >
                                         {isGeneratingGlobalStory
                                             ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('生成中...', 'Generating...')}</>
-                                            : <><Sparkles className="w-3.5 h-3.5" /> {globalFrameworkReady ? t('重新生成', 'Regenerate') : (seriesIpMode ? t('生成全剧信息', 'Generate Series Bible') : t('生成全局框架', 'Generate Framework'))}</>}
+                                            : <><Sparkles className="w-3.5 h-3.5" /> {globalFrameworkReady ? t('重新生成', 'Regenerate') : (seriesIpMode ? t('生成全剧信息', 'Generate Series Bible') : emotionDrivenMode ? t('生成情绪驱动框架', 'Generate Emotion-Driven Framework') : t('生成全局框架', 'Generate Framework'))}</>}
                                     </button>
                                     <div className="flex items-center gap-1 bg-black/20 border border-white/10 rounded-md p-1">
                                         <button

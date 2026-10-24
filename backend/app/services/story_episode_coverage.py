@@ -159,6 +159,7 @@ async def ensure_story_episode_blocks(
     user_id: Optional[int] = None,
     batch_size: int = 4,
     max_rounds: int = 8,
+    fill_system: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """Append any missing EP01–EPN blocks. Raises if they are still missing after the fill rounds."""
     current = str(markdown or "")
@@ -182,7 +183,7 @@ async def ensure_story_episode_blocks(
         context = framework_context_for_fill(current)
         response = await llm_service.generate_content_with_fallback(
             _fill_user_prompt(context, batch, planned),
-            _FILL_SYSTEM,
+            fill_system or _FILL_SYSTEM,
             llm_config or {},
             image_urls=None,
             video_urls=None,

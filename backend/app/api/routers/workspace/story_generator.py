@@ -51,10 +51,13 @@ async def generate_project_story_dna_global(
     global_style = (req.Global_Style or gi_existing.get("Global_Style") or gi_existing.get("global_style") or "").strip()
     generator_kind = _normalize_generator_kind(req.generator_kind) or "story"
 
+    from app.services.script_mode_helpers import resolve_global_story_framework_prompt  # noqa: E402
+
+    script_mode_for_framework = (getattr(req, "script_mode", None) or "").strip()
     if generator_kind == "promo":
         prompt_filename = "promo_generator_global.txt"
     else:
-        prompt_filename = "master_story_architect.md"
+        prompt_filename = resolve_global_story_framework_prompt(script_mode_for_framework)
 
     try:
         sys_prompt = _resolve_prompt_text(prompt_filename)
@@ -88,16 +91,28 @@ async def generate_project_story_dna_global(
     )
 
     from app.services.project_season import format_project_season_prompt  # noqa: E402
-    from app.services.script_mode_helpers import build_story_episode_coverage_block  # noqa: E402
+    from app.services.script_mode_helpers import (  # noqa: E402
+        build_emotion_driven_episode_coverage_block,
+        build_story_episode_coverage_block,
+        emotion_driven_episode_fill_system,
+        is_emotion_driven_script_mode,
+        is_global_story_framework_prompt,
+    )
     from app.services.series_ip_mode import (  # noqa: E402
         build_series_ip_global_prompt_block,
         is_series_ip_script_mode,
     )
 
-    script_mode_for_ip = (getattr(req, "script_mode", None) or "").strip()
+    script_mode_for_ip = script_mode_for_framework
     series_ip = is_series_ip_script_mode(script_mode_for_ip)
+    emotion_driven = is_emotion_driven_script_mode(script_mode_for_ip)
     series_ip_global_block = build_series_ip_global_prompt_block() if series_ip else ""
-    episode_coverage_block = "" if series_ip else build_story_episode_coverage_block(episodes_count)
+    if series_ip:
+        episode_coverage_block = ""
+    elif emotion_driven:
+        episode_coverage_block = build_emotion_driven_episode_coverage_block(episodes_count)
+    else:
+        episode_coverage_block = build_story_episode_coverage_block(episodes_count)
     user_prompt = (
         f"{series_ip_global_block}"
         + wrap_story_dna_input_block(
@@ -176,6 +191,7 @@ async def generate_project_story_dna_global(
             require_h1=False,
             return_meta=True,
             keep_truncated=not series_ip,
+            continue_on_incomplete=is_global_story_framework_prompt(prompt_filename),
         )
         generated_md = str((generated_payload or {}).get("content") or "").strip()
         if generated_md and not series_ip:
@@ -189,6 +205,7 @@ async def generate_project_story_dna_global(
                 episodes_count=int(episodes_count),
                 llm_config=llm_config,
                 user_id=user_id,
+                fill_system=emotion_driven_episode_fill_system() if emotion_driven else None,
             )
             fill_usage = merge_usage({}, fill_usage)
     except Exception as e:
@@ -706,6 +723,8 @@ class StructureCreativeInputRequest(BaseModel):
 from app.services.story_generator_llm import (  # noqa: E402,F401
     _loads_json5_if_available,
     _CREATIVE_INPUT_STRUCTURE_KEYS,
+    _SAVE_THE_CAT_BEAT_KEYS,
+    EMOTION_DRIVEN_STRUCTURE_KEYS,
     apply_ai_vfx_from_llm,
     apply_classic_framework_from_llm,
     ensure_ai_vfx_strategy_filled,
@@ -765,13 +784,24 @@ async def structure_project_creative_input_to_story_fields(
         f"{format_project_season_prompt(getattr(req, 'season_occurrence', None), gi_existing)}\n"
     )
 
+    from app.services.script_mode_helpers import (  # noqa: E402
+        EMOTION_DRIVEN_STRUCTURE_PROMPT,
+        is_emotion_driven_script_mode,
+    )
+
+    emotion_driven = is_emotion_driven_script_mode(script_mode)
+    structure_prompt_name = (
+        EMOTION_DRIVEN_STRUCTURE_PROMPT
+        if emotion_driven
+        else "story_generator_structure_creative_input.txt"
+    )
     try:
-        sys_prompt_template = _resolve_prompt_text("story_generator_structure_creative_input.txt")
+        sys_prompt_template = _resolve_prompt_text(structure_prompt_name)
     except FileNotFoundError:
-        logger.error("Structure creative input prompt not found: story_generator_structure_creative_input.txt")
+        logger.error("Structure creative input prompt not found: %s", structure_prompt_name)
         raise HTTPException(
             status_code=404,
-            detail="Prompt file 'story_generator_structure_creative_input.txt' not found.",
+            detail=f"Prompt file '{structure_prompt_name}' not found.",
         )
 
     try:
@@ -779,31 +809,44 @@ async def structure_project_creative_input_to_story_fields(
     except Exception:
         sys_prompt = f"{sys_prompt_template}\n\n{creative_text}"
 
-    user_prompt = (
-        f"{project_context}\n"
-        f"Wild Creative Brainstorm:\n{creative_text}\n\n"
-        "Build the prefill in three layers. Concept (logline, controlling idea, antagonism, three-act value arc, world) comes from the three-act shape and McKee's Story. "
-        "Characters and the arc come from Egri's Art of Dramatic Writing: premise, three dimensions, unity of opposites, orchestration, transition. "
-        "Plot is the Save the Cat 15-beat sheet, causally chained, not five loose buckets. "
-        "Do not wait for or assume web-search evidence. "
-        "I10 / classic_framework is mandatory and must be non-empty. "
-        "Forbidden: omitting the key, \"\", 无, 暂无, N/A, 待定, 推断, or a genre label with no titled work. "
-        "I10 must name one primary MODERN/CONTEMPORARY work (literature / film / TV / game; prefer recent decades) as the PLOT-LOGIC framework, "
-        "plus AT LEAST 5 auxiliaries (older classics OK only as auxiliaries; each a different dimension) so the 15 beats are not a remake of the primary. "
-        "Cross-style transfer is required: keep causal/beat/set-piece logic, "
-        "transcode genre/skin (e.g. modern workplace engine → ancient palace drama). Do not default a pre-modern classic as the primary spine. "
-        "For each work write reusable logic (core plot, set pieces, VFX function, action, dialogue, "
-        "and how distance/comms/blocking actually work on screen) and 转译. "
-        "Beats 01-15 must be physically shootable: no long-distance conversation without a comms tool or same-space staging. "
-        "Do NOT casually copy scene/environment names from the brainstorm or from reference works. "
-        "Name a location only if the plot hard-needs that space, it matches character status/access (prisons/monitor rooms/vaults are restricted), and arrival is logical; otherwise omit place and write the event only — later nodes will plan environments. "
-        "Put the must-have climax inside beat 14, and rhyme beat 15 with beat 01. "
-        "Apply 【项目季节 — 必须应用】 to the world and to every beat that does not state a time jump. "
-        "ai_vfx_strategy is mandatory: at least two advantage lines tied to beats, plus avoidance rewrites or 劣势回避=本脑洞无高风险互动."
-    )
+    if emotion_driven:
+        user_prompt = (
+            f"{project_context}\n"
+            f"Wild Creative Brainstorm:\n{creative_text}\n\n"
+            "这是情绪驱动类。只按埃格里《编剧的艺术》写结构化预填。"
+            "剧情靠角色冲突和解决推动，重点是社会与人性。"
+            "八阶是攻击点、反攻、锁死、编排、过渡、危机、证明、结局。禁止输出救猫咪十五拍，禁止改成三幕节拍表。"
+            "story_circle 必填：你、需要、出发、寻找、找到、付出、返回、改变，每一步落在某一阶上，不另起情节。"
+            "theme 与 egri_premise 同句，core_conflict 与 egri_unity 同句，background 与 egri_social 同句，characters 与 egri_dimensions 同句。"
+            "classic_framework 是经典借鉴，与 ai_vfx_strategy、story_circle 一起必填。主框架是用人物冲突证明社会或人性前提的现代或当代作品，辅助至少 5 部，落阶只用 01 到 08。只学机制，不搬参考剧情。"
+            "优势行写阶=，不写救猫咪拍名。地点拿不准就不写。沿用【项目季节 — 必须应用】。\n"
+        )
+    else:
+        user_prompt = (
+            f"{project_context}\n"
+            f"Wild Creative Brainstorm:\n{creative_text}\n\n"
+            "Build the prefill in three layers. Concept (logline, controlling idea, antagonism, three-act value arc, world) comes from the three-act shape and McKee's Story. "
+            "Characters and the arc come from Egri's Art of Dramatic Writing: premise, three dimensions, unity of opposites, orchestration, transition. "
+            "Plot is the Save the Cat 15-beat sheet, causally chained, not five loose buckets. "
+            "Do not wait for or assume web-search evidence. "
+            "I10 / classic_framework is mandatory and must be non-empty. "
+            "Forbidden: omitting the key, \"\", 无, 暂无, N/A, 待定, 推断, or a genre label with no titled work. "
+            "I10 must name one primary MODERN/CONTEMPORARY work (literature / film / TV / game; prefer recent decades) as the PLOT-LOGIC framework, "
+            "plus AT LEAST 5 auxiliaries (older classics OK only as auxiliaries; each a different dimension) so the 15 beats are not a remake of the primary. "
+            "Cross-style transfer is required: keep causal/beat/set-piece logic, "
+            "transcode genre/skin (e.g. modern workplace engine → ancient palace drama). Do not default a pre-modern classic as the primary spine. "
+            "For each work write reusable logic (core plot, set pieces, VFX function, action, dialogue, "
+            "and how distance/comms/blocking actually work on screen) and 转译. "
+            "Beats 01-15 must be physically shootable: no long-distance conversation without a comms tool or same-space staging. "
+            "Do NOT casually copy scene/environment names from the brainstorm or from reference works. "
+            "Name a location only if the plot hard-needs that space, it matches character status/access (prisons/monitor rooms/vaults are restricted), and arrival is logical; otherwise omit place and write the event only — later nodes will plan environments. "
+            "Put the must-have climax inside beat 14, and rhyme beat 15 with beat 01. "
+            "Apply 【项目季节 — 必须应用】 to the world and to every beat that does not state a time jump. "
+            "ai_vfx_strategy is mandatory: at least two advantage lines tied to beats, plus avoidance rewrites or 劣势回避=本脑洞无高风险互动."
+        )
     from app.services.series_ip_mode import is_series_ip_script_mode as _is_series_ip_script_mode
 
-    if _is_series_ip_script_mode(script_mode):
+    if (not emotion_driven) and _is_series_ip_script_mode(script_mode):
         user_prompt += (
             "\n\n【系列剧 IP 模式】这次预填只服务全剧圣经，不服务逐集大纲。"
             "把笔墨放在世界观、主要角色 IP、基本故事线索，以及 I10 对整体剧本的机制参考。"
@@ -834,10 +877,20 @@ async def structure_project_creative_input_to_story_fields(
         context="structure_creative_input",
         llm_config=structure_llm_config,
     )
-    normalized = _normalize_story_field_map(data, _CREATIVE_INPUT_STRUCTURE_KEYS)
+    structure_keys = EMOTION_DRIVEN_STRUCTURE_KEYS if emotion_driven else _CREATIVE_INPUT_STRUCTURE_KEYS
+    normalized = _normalize_story_field_map(data, structure_keys)
     apply_classic_framework_from_llm(normalized, data)
     apply_ai_vfx_from_llm(normalized, data)
-    normalized.update(rollup_save_the_cat(normalized))
+    if emotion_driven:
+        for beat_key in _SAVE_THE_CAT_BEAT_KEYS:
+            normalized[beat_key] = ""
+        normalized["setup"] = ""
+        normalized["development"] = ""
+        normalized["turning_points"] = ""
+        normalized["climax"] = ""
+        normalized["resolution"] = ""
+    else:
+        normalized.update(rollup_save_the_cat(normalized))
     normalized = await ensure_classic_framework_filled(
         db=db,
         user_id=user_id,
@@ -859,7 +912,7 @@ async def structure_project_creative_input_to_story_fields(
         llm_config=structure_llm_config,
     )
     normalized["prefill_meta"] = {
-        "pipeline": "structure_fill",
+        "pipeline": "emotion_driven_structure" if emotion_driven else "structure_fill",
         "key_elements": {},
         "search_meta": {
             "query_count": 0,

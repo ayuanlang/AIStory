@@ -60,6 +60,42 @@ SAVE_THE_CAT_BEATS = [
 
 _SAVE_THE_CAT_BEAT_KEYS = [row[0] for row in SAVE_THE_CAT_BEATS]
 
+# Egri rising-conflict spine for the emotion-driven product format.
+EGRI_CONCEPT_KEYS = [
+    "egri_premise",
+    "egri_pivotal",
+    "egri_unity",
+    "egri_dimensions",
+    "egri_social",
+    "egri_transition",
+]
+EGRI_STEP_KEYS = [
+    ("egri_01_attack", "01", "攻击点"),
+    ("egri_02_counter", "02", "反攻"),
+    ("egri_03_lock", "03", "锁死"),
+    ("egri_04_orchestrate", "04", "编排"),
+    ("egri_05_transition", "05", "过渡"),
+    ("egri_06_crisis", "06", "危机"),
+    ("egri_07_proof", "07", "证明"),
+    ("egri_08_conclusion", "08", "结局"),
+]
+_EGRI_ONLY_KEYS = EGRI_CONCEPT_KEYS + [row[0] for row in EGRI_STEP_KEYS]
+EMOTION_DRIVEN_STRUCTURE_KEYS = [
+    "logline",
+    "theme",
+    "core_conflict",
+    "three_act",
+    "background",
+    "characters",
+    *_EGRI_ONLY_KEYS,
+    "story_circle",
+    "suspense",
+    "foreshadowing",
+    "classic_framework",
+    "ai_vfx_strategy",
+    "extra_notes",
+]
+
 _LEGACY_BEAT_GROUPS = {
     "setup": _SAVE_THE_CAT_BEAT_KEYS[0:5],
     "development": _SAVE_THE_CAT_BEAT_KEYS[5:8],
@@ -121,6 +157,7 @@ _PREFILL_TEXT_KEYS = (
     "suspense",
     "foreshadowing",
     "extra_notes",
+    "story_circle",
     "classic_framework",
     "ai_vfx_strategy",
     "wild_creative_notes",
@@ -129,15 +166,61 @@ _PREFILL_TEXT_KEYS = (
     "turning_points",
     "climax",
     "resolution",
-) + tuple(row[0] for row in SAVE_THE_CAT_BEATS)
+) + tuple(row[0] for row in SAVE_THE_CAT_BEATS) + tuple(_EGRI_ONLY_KEYS)
 
 
 def structured_prefill_has_text(source: Any) -> bool:
     return any(_field_text(source, key) for key in _PREFILL_TEXT_KEYS)
 
 
+def _source_uses_egri(source: Any) -> bool:
+    from app.services.script_mode_helpers import is_emotion_driven_script_mode
+
+    if is_emotion_driven_script_mode(_field_text(source, "script_mode")):
+        return True
+    if _field_text(source, "script_mode"):
+        return False
+    return any(_field_text(source, key) for key, _num, _zh in EGRI_STEP_KEYS)
+
+
+def format_egri_creative_input_block(source: Any) -> str:
+    """Emotion-driven prefill. The spine is Egri's rising conflict, not Save the Cat."""
+    lines = [
+        "[情绪驱动预填 — 埃格里《编剧的艺术》]",
+        "本预填不是救猫咪，也不是麦基的节拍表。全剧情节只按下面八阶上升。分集用故事环，环步落在某一阶上。",
+        f"一句话: {_field_text(source, 'logline')}",
+        f"前提: {_field_text(source, 'egri_premise') or _field_text(source, 'theme')}",
+        f"关键人物与攻击点: {_field_text(source, 'egri_pivotal')}",
+        f"统一的对立面: {_field_text(source, 'egri_unity') or _field_text(source, 'core_conflict')}",
+        f"三维与编排: {_field_text(source, 'egri_dimensions') or _field_text(source, 'characters')}",
+        f"社会与人性: {_field_text(source, 'egri_social') or _field_text(source, 'background')}",
+        f"过渡: {_field_text(source, 'egri_transition')}",
+        f"三句落点（攻击点／上升／证明，不是三幕节拍）: {_field_text(source, 'three_act')}",
+        "",
+        "[上升冲突八阶]",
+    ]
+    for key, num, zh in EGRI_STEP_KEYS:
+        lines.append(f"阶{num} {zh}: {_field_text(source, key)}")
+    lines.extend([
+        "",
+        "[故事环]",
+        f"{_field_text(source, 'story_circle')}",
+        "",
+        f"悬念: {_field_text(source, 'suspense')}",
+        f"伏笔与必留: {_field_text(source, 'foreshadowing')}",
+        "[经典借鉴]",
+        f"{_field_text(source, 'classic_framework')}",
+        f"AI优势应用与劣势回避: {_field_text(source, 'ai_vfx_strategy')}",
+        f"自由补充: {_field_text(source, 'extra_notes')}",
+        f"天马行空原文: {_field_text(source, 'wild_creative_notes')}",
+    ])
+    return "\n".join(lines)
+
+
 def format_story_creative_input_block(source: Any) -> str:
-    """Creative-input block for the global architect. Beats win; old buckets are the fallback."""
+    """Creative-input block for the global architect. Emotion-driven uses Egri; otherwise beats win."""
+    if _source_uses_egri(source):
+        return format_egri_creative_input_block(source)
     lines = [
         "[Creative Input — 核心建置（三幕式 + 麦基《故事》）]",
         f"I1 高概念 / 欲望脊柱: {_field_text(source, 'logline')}",
@@ -437,7 +520,19 @@ def _classic_framework_story_context(normalized: Dict[str, str]) -> str:
         text = _field_text(normalized, key)
         if text:
             lines.append(f"节拍{num} {zh} / {en}｜幕={act}: {text}")
+    for key, num, zh in EGRI_STEP_KEYS:
+        text = _field_text(normalized, key)
+        if text:
+            lines.append(f"阶{num} {zh}: {text}")
+    premise = _field_text(normalized, "egri_premise")
+    if premise and premise not in "\n".join(lines):
+        lines.append(f"前提: {premise}")
     return "\n".join(lines)
+
+
+def _context_is_emotion_driven(project_context: str) -> bool:
+    raw = str(project_context or "").lower()
+    return "情绪驱动" in project_context or "emotion-driven" in raw or "emotion driven" in raw
 
 
 def build_classic_framework_fill_prompts(
@@ -464,6 +559,13 @@ def build_classic_framework_fill_prompts(
         "Write the value in the same language as the story fields. "
         "Do not copy the source work's era, costumes, or locations."
     )
+    if _context_is_emotion_driven(project_context):
+        system += (
+            " This story is emotion-driven and follows Egri, not Save the Cat. "
+            "The primary work must prove a premise about society or human nature through character conflict. "
+            "Auxiliary dimensions are 对立面|过渡|社会层|对白|关系|代价. "
+            "Write 落阶 using 01-08 only. Do not use Opening, Midpoint, Finale, or other Save the Cat beat names."
+        )
     user = (
         "The structured prefill left I10 classic_framework empty. Fill it now. "
         "It must match this story's causal logic. Do not start a different plot.\n\n"
@@ -627,6 +729,12 @@ def build_ai_vfx_fill_prompts(
         "Continuous attacks are not avoidance items. If none of these risks exist, write 劣势回避=本脑洞无高风险互动. "
         "Do not write wires, doubles, or green screen."
     )
+    if _context_is_emotion_driven(project_context):
+        system += (
+            " This story is emotion-driven. Write 阶=01|06|07, not 拍=. "
+            "01 is 攻击点, 02 反攻, 03 锁死, 04 编排, 05 过渡, 06 危机, 07 证明, 08 结局. "
+            "Do not name Save the Cat beats."
+        )
     user = (
         "The structured prefill left ai_vfx_strategy empty. Fill it now for this same story.\n\n"
         f"{project_context}\n"

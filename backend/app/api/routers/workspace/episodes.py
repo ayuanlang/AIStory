@@ -832,10 +832,17 @@ async def generate_episode_story_dna(
         if not req.episodes_count or int(req.episodes_count) <= 0:
             raise HTTPException(status_code=400, detail="episodes_count is required for global mode")
         generator_kind = _normalize_generator_kind(req.generator_kind) or "story"
+        from app.services.script_mode_helpers import resolve_global_story_framework_prompt  # noqa: E402
+
+        script_mode_for_framework = str(
+            getattr(req, "script_mode", None)
+            or (project.global_info or {}).get("script_mode")
+            or ""
+        ).strip()
         if generator_kind == "promo":
             prompt_filename = "promo_generator_global.txt"
         else:
-            prompt_filename = "master_story_architect.md"
+            prompt_filename = resolve_global_story_framework_prompt(script_mode_for_framework)
     else:
         if not req.episode_number or int(req.episode_number) <= 0:
             raise HTTPException(status_code=400, detail="episode_number is required for episode mode")
@@ -865,9 +872,19 @@ async def generate_episode_story_dna(
         f"Suspense: {req.suspense or ''}\n"
         f"Extra Notes: {req.extra_notes or ''}\n"
     )
+    from app.services.script_mode_helpers import (  # noqa: E402
+        emotion_driven_episode_fill_system,
+        is_global_story_framework_prompt,
+    )
+
     fill_story_episodes = False
-    if mode == "global" and prompt_filename == "master_story_architect.md":
-        from app.services.script_mode_helpers import build_story_episode_coverage_block  # noqa: E402
+    emotion_driven_framework = False
+    if mode == "global" and is_global_story_framework_prompt(prompt_filename):
+        from app.services.script_mode_helpers import (  # noqa: E402
+            build_emotion_driven_episode_coverage_block,
+            build_story_episode_coverage_block,
+            is_emotion_driven_script_mode,
+        )
         from app.services.series_ip_mode import is_series_ip_script_mode  # noqa: E402
 
         script_mode_for_ip = str(
@@ -875,8 +892,11 @@ async def generate_episode_story_dna(
             or (project.global_info or {}).get("script_mode")
             or ""
         ).strip()
+        emotion_driven_framework = is_emotion_driven_script_mode(script_mode_for_ip)
         fill_story_episodes = not is_series_ip_script_mode(script_mode_for_ip)
-        if fill_story_episodes:
+        if fill_story_episodes and emotion_driven_framework:
+            user_prompt_body += build_emotion_driven_episode_coverage_block(req.episodes_count)
+        elif fill_story_episodes:
             user_prompt_body += build_story_episode_coverage_block(req.episodes_count)
         user_prompt_body += (
             "\nTruncatable markers (hard): wrap Part 1 in [STORY_DNA_THINKING_START]…[STORY_DNA_THINKING_END]; "
@@ -930,10 +950,13 @@ async def generate_episode_story_dna(
             user_prompt=user_prompt,
             sys_prompt=sys_prompt,
             llm_config=llm_config,
-            strict_markdown=False if (mode == "global" and prompt_filename == "master_story_architect.md") else (req.strict_markdown is not False),
-            require_h1=False if (mode == "global" and prompt_filename == "master_story_architect.md") else True,
+            strict_markdown=False if (mode == "global" and is_global_story_framework_prompt(prompt_filename)) else (req.strict_markdown is not False),
+            require_h1=False if (mode == "global" and is_global_story_framework_prompt(prompt_filename)) else True,
             return_meta=True,
             keep_truncated=fill_story_episodes,
+            continue_on_incomplete=(
+                mode == "global" and is_global_story_framework_prompt(prompt_filename)
+            ),
         )
         generated_md = str((generated_payload or {}).get("content") or "").strip()
         if generated_md and fill_story_episodes:
@@ -947,6 +970,7 @@ async def generate_episode_story_dna(
                 episodes_count=int(req.episodes_count or 0),
                 llm_config=llm_config,
                 user_id=int(current_user.id),
+                fill_system=emotion_driven_episode_fill_system() if emotion_driven_framework else None,
             )
             fill_usage = merge_usage({}, fill_usage)
     except Exception as e:
@@ -956,7 +980,7 @@ async def generate_episode_story_dna(
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
 
-    if mode == "global" and prompt_filename == "master_story_architect.md":
+    if mode == "global" and is_global_story_framework_prompt(prompt_filename):
         dna_view = extract_story_dna_output_for_validation(generated_md)
         generated_md = normalize_story_dna_markdown_for_persist(generated_md)
         logger.info(

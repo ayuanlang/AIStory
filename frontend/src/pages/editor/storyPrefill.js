@@ -153,6 +153,146 @@ export const SAVE_THE_CAT_ACTS = [
 
 export const SAVE_THE_CAT_BEATS = SAVE_THE_CAT_ACTS.flatMap((act) => act.beats);
 
+/** Emotion-driven prefill: Egri's Art of Dramatic Writing. Independent of the 15 beats. */
+export const EMOTION_DRIVEN_SCRIPT_MODE = '情绪驱动类 / Emotion-Driven';
+
+export function isEmotionDrivenScriptMode(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    return raw.includes('情绪驱动') || raw.includes('emotion-driven') || raw.includes('emotion driven');
+}
+
+export const EGRI_CONCEPT_FIELDS = [
+    {
+        id: 'logline',
+        labelZh: '一句话',
+        labelEn: 'One Sentence',
+        hintZh: '谁被什么冲突逼到必须选，选错会失去什么。这是故事，不是前提公式，也不是节拍表。',
+        hintEn: 'Who is forced to choose, by what conflict, and what they lose if they choose wrong. The story, not the premise formula.',
+        rows: 2,
+    },
+    {
+        id: 'egri_premise',
+        labelZh: '前提',
+        labelEn: 'Premise',
+        hintZh: '埃格里：这种性格，经过这场冲突，会证明什么结局。终局的选择必须能证明这句。',
+        hintEn: 'Egri: this trait, through this conflict, proves this ending. The final choice must prove the sentence.',
+        rows: 2,
+    },
+    {
+        id: 'egri_pivotal',
+        labelZh: '关键人物与攻击点',
+        labelEn: 'Pivotal Character · Point of Attack',
+        hintZh: '谁逼出变化。故事从哪一刀已经在进行的冲突切入，不从平静日常铺起。',
+        hintEn: 'Who forces the change, and which already-moving conflict the story cuts into.',
+        rows: 3,
+    },
+    {
+        id: 'egri_unity',
+        labelZh: '统一的对立面',
+        labelEn: 'Unity of Opposites',
+        hintZh: '双方各一句不肯让的信念。谁赢，都要拆掉对方的前提。中途退出等于放弃自己的前提。',
+        hintEn: 'Each side has one belief they will not yield. Winning breaks the other premise. Leaving means giving up your own.',
+        rows: 3,
+    },
+    {
+        id: 'egri_dimensions',
+        labelZh: '三维与编排',
+        labelEn: 'Three Dimensions · Orchestration',
+        hintZh: '生理只在它改变选择时写。社会是阶层、制度和群体里的位置。心理是那句信念。其他人每人只对照主角的一极。',
+        hintEn: 'Physiology only if it changes a choice. Sociology is place in class and institution. Psychology is the belief. Each other person contrasts one pole.',
+        rows: 5,
+    },
+    {
+        id: 'egri_social',
+        labelZh: '社会与人性',
+        labelEn: 'Society · Human Nature',
+        hintZh: '制度、阶层、舆论，或怕、愧、执念、责任，怎样把这一次选择变贵。抽掉这一层，代价变轻，就不合格。',
+        hintEn: 'How institution, class, opinion, or fear, guilt, fixation, and duty make the choice costly. If removing the layer cheapens it, it is not landed.',
+        rows: 3,
+    },
+    {
+        id: 'egri_transition',
+        labelZh: '过渡',
+        labelEn: 'Transition',
+        hintZh: '从哪一极走到哪一极。中间是哪一次冲突把旧信念逼裂。证明落在哪一阶。',
+        hintEn: 'From which pole to which pole, which collision cracks the old belief, and which step proves it.',
+        rows: 3,
+    },
+];
+
+export const EGRI_STEPS = [
+    {
+        id: 'egri_01_attack',
+        no: '01',
+        zh: '攻击点',
+        en: 'Point of Attack',
+        hintZh: '冲突已经在进行。旧办法从这一刀起不可用。',
+        hintEn: 'The conflict is already moving. The old method stops working from this cut.',
+    },
+    {
+        id: 'egri_02_counter',
+        no: '02',
+        zh: '反攻',
+        en: 'Counterattack',
+        hintZh: '对立面用相反信念顶回来。代价比上一刀更贵。',
+        hintEn: 'The opposite belief hits back, and the cost is higher than the last cut.',
+    },
+    {
+        id: 'egri_03_lock',
+        no: '03',
+        zh: '锁死',
+        en: 'Lock',
+        hintZh: '谁退出，谁就放弃自己的前提。两边都不能走。',
+        hintEn: 'Leaving means abandoning your premise. Neither side can walk away.',
+    },
+    {
+        id: 'egri_04_orchestrate',
+        no: '04',
+        zh: '编排',
+        en: 'Orchestration',
+        hintZh: '另一个人从另一极把前提再辩一次，逼主角选边。',
+        hintEn: 'Another person argues the premise from another pole and forces a side.',
+    },
+    {
+        id: 'egri_05_transition',
+        no: '05',
+        zh: '过渡',
+        en: 'Transition',
+        hintZh: '旧信念裂开，新信念还没站稳。',
+        hintEn: 'The old belief cracks. The new one has not taken hold.',
+    },
+    {
+        id: 'egri_06_crisis',
+        no: '06',
+        zh: '危机',
+        en: 'Crisis',
+        hintZh: '两个都贵的选项。必须让出一个前提。',
+        hintEn: 'Both options are costly. One premise has to be given up.',
+    },
+    {
+        id: 'egri_07_proof',
+        no: '07',
+        zh: '证明',
+        en: 'Proof',
+        hintZh: '带代价的选择证明前提。这是高潮。',
+        hintEn: 'A choice with a cost proves the premise. This is the climax.',
+    },
+    {
+        id: 'egri_08_conclusion',
+        no: '08',
+        zh: '结局',
+        en: 'Conclusion',
+        hintZh: '新平衡。人已经不是攻击点上的那个人。',
+        hintEn: 'The new balance. The person is no longer who they were at the attack.',
+    },
+];
+
+export const EGRI_ONLY_KEYS = [
+    ...EGRI_CONCEPT_FIELDS.map((field) => field.id).filter((id) => id !== 'logline'),
+    ...EGRI_STEPS.map((step) => step.id),
+    'story_circle',
+];
+
 const BEAT_IDS = SAVE_THE_CAT_BEATS.map((beat) => beat.id);
 
 const ACT1_IDS = ['stc_01_opening_image', 'stc_02_theme_stated', 'stc_03_setup', 'stc_04_catalyst', 'stc_05_debate'];
@@ -179,6 +319,9 @@ export const STORY_PREFILL_KEYS = [
 export function emptyStoryPrefillFields() {
     const fields = {};
     STORY_PREFILL_KEYS.forEach((key) => {
+        fields[key] = '';
+    });
+    EGRI_ONLY_KEYS.forEach((key) => {
         fields[key] = '';
     });
     fields.setup = '';
@@ -243,6 +386,35 @@ export function isSeriesIpScriptMode(value) {
     return raw.includes('ip模式') || raw.includes('series ip') || raw.includes('ip mode');
 }
 
+export function applyStructuredPrefill(prev, structured, emotionDriven) {
+    const next = { ...(prev || {}), wild_creative_notes: prev?.wild_creative_notes };
+    if (emotionDriven) {
+        const keys = [
+            ...STORY_PREFILL_KEYS.filter((key) => !key.startsWith('stc_')),
+            ...EGRI_ONLY_KEYS,
+        ];
+        keys.forEach((key) => {
+            next[key] = String(structured?.[key] ?? '').trim();
+        });
+        SAVE_THE_CAT_BEATS.forEach((beat) => {
+            next[beat.id] = '';
+        });
+        next.setup = '';
+        next.development = '';
+        next.turning_points = '';
+        next.climax = '';
+        next.resolution = '';
+        return next;
+    }
+    STORY_PREFILL_KEYS.forEach((key) => {
+        next[key] = String(structured?.[key] ?? '').trim();
+    });
+    EGRI_ONLY_KEYS.forEach((key) => {
+        next[key] = '';
+    });
+    return { ...next, ...rollupSaveTheCat(next) };
+}
+
 export function composeSeriesIpEpisodeGuidance(input) {
     const src = input || {};
     const plot = String(src.ip_episode_plot || '').trim();
@@ -261,6 +433,9 @@ export function storyPrefillPayloadFields(input) {
     const src = input || {};
     const fields = {};
     STORY_PREFILL_KEYS.forEach((key) => {
+        fields[key] = String(src[key] ?? '');
+    });
+    EGRI_ONLY_KEYS.forEach((key) => {
         fields[key] = String(src[key] ?? '');
     });
     return {

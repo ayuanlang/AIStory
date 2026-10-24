@@ -13,6 +13,28 @@
             ]
         },
         {
+            "id": "emotion_driven_structure",
+            "title": "Emotion-Driven Structure (情绪驱动结构化预填)",
+            "type": "story",
+            "prompts": [
+                "skills/emotion_driven_structure/structure_prefill.txt"
+            ],
+            "legacy_refs": [
+                "skills/emotion_driven_structure/structure_prefill.txt"
+            ]
+        },
+        {
+            "id": "emotion_driven_framework",
+            "title": "Emotion-Driven Framework (情绪驱动剧本框架)",
+            "type": "story",
+            "prompts": [
+                "skills/emotion_driven_framework/story_framework.md"
+            ],
+            "legacy_refs": [
+                "skills/emotion_driven_framework/story_framework.md"
+            ]
+        },
+        {
             "id": "script_episode_generation",
             "title": "Script Episode Generation (剧本分集生成)",
             "type": "script",

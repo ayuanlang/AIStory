@@ -21,6 +21,129 @@ from app.services.model_invocation_billing import _extract_llm_routing_metadata
 
 logger = logging.getLogger("api_logger")
 
+_STORY_DNA_OUTPUT_END_RE = re.compile(r"\[\s*STORY_DNA_OUTPUT_END\s*\]", re.IGNORECASE)
+
+
+def framework_has_output_end(text: str) -> bool:
+    return bool(_STORY_DNA_OUTPUT_END_RE.search(str(text or "")))
+
+
+def framework_needs_continuation(text: str) -> bool:
+    """Keep writing until the formal block closes with [STORY_DNA_OUTPUT_END]."""
+    body = str(text or "")
+    return bool(body.strip()) and not framework_has_output_end(body)
+
+
+def framework_continuation_segments(llm_config: Optional[Dict[str, Any]]) -> int:
+    """How many calls, including the first, may be used to finish an incomplete framework."""
+    cfg = llm_config or {}
+    nested = cfg.get("config") if isinstance(cfg.get("config"), dict) else {}
+    raw = nested.get("continuation_max_segments", cfg.get("continuation_max_segments", 4))
+    try:
+        requested = int(raw)
+    except (TypeError, ValueError):
+        requested = 4
+    return min(20, max(1, requested))
+
+
+def build_framework_continuation_user_prompt(user_prompt: str, existing: str) -> str:
+    """Append the draft already written and ask the model to continue from its end."""
+    return (
+        f"{str(user_prompt or '').rstrip()}\n\n"
+        "[续写]\n"
+        "上一次全局框架没有写完。下面是已经写好的全文。\n"
+        "从这段文字的最后一个字接着往下写，把还没写完的部分补上。\n"
+        "不要重写已有内容，不要重复已有内容，只返回续写部分。标志、章节和格式与已有内容相同。\n"
+        "正式正文要以独占行 [STORY_DNA_OUTPUT_END] 收束；这一行还没出现就继续写到它出现。\n\n"
+        "已有内容：\n"
+        f"{str(existing or '').rstrip()}\n"
+    )
+
+
+def _prefix_suffix_overlap(existing: str, incoming: str, limit: int = 8000) -> int:
+    """Length of the longest prefix of incoming that is a suffix of existing."""
+    if not existing or not incoming:
+        return 0
+    tail = existing[-limit:]
+    head = incoming[:limit]
+    if head.startswith(tail):
+        return len(tail)
+    needle = head + "\0" + tail
+    borders = [0] * len(needle)
+    for index in range(1, len(needle)):
+        length = borders[index - 1]
+        while length > 0 and needle[index] != needle[length]:
+            length = borders[length - 1]
+        if needle[index] == needle[length]:
+            length += 1
+        borders[index] = length
+    overlap = borders[-1]
+    if overlap > len(head):
+        return 0
+    return overlap
+
+
+def merge_framework_continuation(existing: str, incoming: str) -> str:
+    """Join a continuation onto the draft, dropping text the model repeated."""
+    prior = str(existing or "")
+    extra = str(incoming or "")
+    if not extra.strip():
+        return prior
+    if not prior.strip():
+        return extra.strip()
+    prior_core = prior.rstrip()
+    extra_core = extra.lstrip()
+    if extra_core.startswith(prior_core):
+        return extra_core
+    overlap = _prefix_suffix_overlap(prior_core, extra_core)
+    rest = extra_core[overlap:]
+    if not rest:
+        return prior_core
+    if overlap:
+        return prior_core + rest
+    return prior_core + "\n" + rest
+
+
+def _merge_generation_usage(base: Optional[Dict[str, Any]], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def _pair(usage: Optional[Dict[str, Any]]) -> Tuple[int, int]:
+        if not isinstance(usage, dict):
+            return 0, 0
+        prompt = usage.get("prompt_tokens")
+        if prompt is None:
+            prompt = usage.get("input_tokens") or 0
+        completion = usage.get("completion_tokens")
+        if completion is None:
+            completion = usage.get("output_tokens") or 0
+        try:
+            return int(prompt or 0), int(completion or 0)
+        except (TypeError, ValueError):
+            return 0, 0
+
+    prompt, completion = _pair(base)
+    extra_prompt, extra_completion = _pair(extra)
+    prompt += extra_prompt
+    completion += extra_completion
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "input_tokens": prompt,
+        "output_tokens": completion,
+        "total_tokens": prompt + completion,
+    }
+
+
+def _merge_generation_meta(base: Optional[Dict[str, Any]], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    merged = dict(base or {})
+    incoming = dict(extra or {})
+    merged["usage"] = _merge_generation_usage(merged.get("usage"), incoming.get("usage"))
+    if incoming.get("finish_reason") is not None:
+        merged["finish_reason"] = incoming.get("finish_reason")
+    if incoming.get("routing_metadata"):
+        merged["routing_metadata"] = incoming.get("routing_metadata")
+    if incoming.get("tag"):
+        merged["tag"] = incoming.get("tag")
+    return merged
+
 def _extract_md_section(md: str, start_header_regex: str) -> Tuple[str, str]:
     """Return (section_text, remainder) where section_text starts at the first header matching regex.
 
@@ -148,6 +271,7 @@ async def generate_markdown_with_retry(
     require_h1: bool = True,
     return_meta: bool = False,
     keep_truncated: bool = False,
+    continue_on_incomplete: bool = False,
 ) -> Any:
     def _is_prohibited_marker(text: str) -> bool:
         if not text:
@@ -279,9 +403,60 @@ async def generate_markdown_with_retry(
         if "please configure your llm api key" in lowered or "no llm configuration" in lowered:
             raise RuntimeError("No valid LLM API key configured in active settings")
 
+    if (
+        continue_on_incomplete
+        and content_1
+        and not _looks_like_error_text(content_1)
+        and framework_needs_continuation(content_1)
+    ):
+        accumulated = content_1
+        merged_meta = dict(meta_1)
+        segment_limit = framework_continuation_segments(llm_config)
+        for seg_idx in range(2, segment_limit + 1):
+            continuation_prompt = build_framework_continuation_user_prompt(user_prompt, accumulated)
+            raw_next, content_next, meta_next = await _call_once(
+                f"incomplete_continue_{seg_idx}",
+                continuation_prompt,
+                sys_prompt,
+            )
+            if _is_prohibited_marker(raw_next) or _is_prohibited_marker(content_next):
+                logger.error(
+                    "[generate_markdown_with_retry] provider returned PROHIBITED_CONTENT on incomplete continuation seg=%s",
+                    seg_idx,
+                )
+                raise RuntimeError("LLM content blocked by provider (PROHIBITED_CONTENT)")
+            if not content_next or _looks_like_error_text(content_next):
+                logger.warning(
+                    "[generate_markdown_with_retry] incomplete continuation produced no usable text seg=%s/%s",
+                    seg_idx,
+                    segment_limit,
+                )
+                break
+            updated = merge_framework_continuation(accumulated, content_next)
+            if updated.strip() == accumulated.strip():
+                logger.warning(
+                    "[generate_markdown_with_retry] incomplete continuation repeated existing text seg=%s/%s",
+                    seg_idx,
+                    segment_limit,
+                )
+                break
+            accumulated = updated
+            merged_meta = _merge_generation_meta(merged_meta, meta_next)
+            logger.warning(
+                "[generate_markdown_with_retry] incomplete framework continued seg=%s/%s finish=%s merged_chars=%s",
+                seg_idx,
+                segment_limit,
+                meta_next.get("finish_reason"),
+                len(accumulated),
+            )
+            if not framework_needs_continuation(accumulated):
+                break
+        content_1 = accumulated
+        meta_1 = merged_meta
+
     if not strict_markdown:
         if _is_truncated(meta_1):
-            if keep_truncated and content_1 and not _looks_like_error_text(content_1):
+            if content_1 and not _looks_like_error_text(content_1) and (keep_truncated or continue_on_incomplete):
                 logger.warning(
                     "[generate_markdown_with_retry] keeping truncated output for continuation clean_len=%s",
                     len(content_1),
