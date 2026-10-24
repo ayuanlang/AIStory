@@ -72,6 +72,8 @@ Append each seed to that beat, after the event sentences: `对话种子=对白|�
 
 Global registry. These facts used to be rewritten as markdown §0–§8. They live only in this JSON. Similar facts share one field. Do not assign them to EP01–EPN; the episode outline does that.
 
+These five keys are mandatory on every response, the same as classic_framework. Never omit the key. Never output "" for them. If length is tight, shorten the beats. Do not drop them. The JSON key must be the English name below. A Chinese heading inside another field does not count.
+
 - "plot_background": `剧情背景: PBxx｜句子｜手段=对话|动作｜禁提前=…`. The public situation, the relationship history, and why this cannot wait. Not the world rule, and not the ending.
 - "story_lines": at least two lines that change the same conflict, `线A=…｜线B=…`, or `线数=1｜豁免依据=单一封闭空间`. Not a scene list, and not a second plot.
 - "time_nodes": at least `开篇｜式=绝对|相对｜季节=｜昼夜=｜气候=｜说明`. A rebirth, crossing, or return gets its own node. No episode ranges.

@@ -33,7 +33,7 @@
 - `characters` 与 `egri_dimensions` 同句
 独立成稿以 `egri_` 键为准。
 
-脑洞很薄时，按用户已经有的事件保守补一条上升冲突。只有发明它就会另起一个故事时才允许 `""`。`story_circle`、`classic_framework` 和 `ai_vfx_strategy` 永远不许空。
+脑洞很薄时，按用户已经有的事件保守补一条上升冲突。只有发明它就会另起一个故事时才允许 `""`。`story_circle`、`classic_framework`、`ai_vfx_strategy`、`plot_background`、`story_lines`、`time_nodes`、`professional_domains`、`places_and_props` 永远不许空。这五键就是剧本框架上的剧情背景、故事线、时间节点、专业领域、场景与道具。篇幅不够就缩短八阶，不许漏键。键名必须是英文。写在别的字段里的中文标题不算交卷。专业领域在情节不靠规程时写 `领域=无｜依据=本剧选择不依赖行业规程`，这不算空。
 
 必须输出的键：
 `logline`，`theme`，`core_conflict`，`three_act`，`background`，`characters`，

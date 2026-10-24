@@ -3981,6 +3981,8 @@ async def analyze_and_persist_promo_asset(
         system_api_id=getattr(req, "system_api_id", None),
         context="analyze_promo_asset",
         project_global_info=project_info or extra_info,
+        user_name=getattr(user_snap, "username", None),
+        project_id=project_id,
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
@@ -4095,6 +4097,7 @@ async def analyze_and_persist_catalog_asset(
         system_api_id=getattr(req, "system_api_id", None),
         context="analyze_promo_catalog_asset",
         project_global_info={},
+        user_name=getattr(user_snap, "username", None),
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
@@ -4230,6 +4233,8 @@ async def generate_promo_planner_scheme(
         system_api_id=getattr(req, "system_api_id", None),
         context="generate_promo_planner",
         project_global_info=project_info or extra_info,
+        user_name=getattr(user_snap, "username", None),
+        project_id=project_id,
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
@@ -4954,6 +4959,8 @@ async def generate_promo_script(
         system_api_id=getattr(req, "system_api_id", None),
         context="generate_promo_script",
         project_global_info=project_info or extra_info,
+        user_name=getattr(user_snap, "username", None),
+        project_id=project_id,
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")

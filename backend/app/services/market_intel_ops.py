@@ -189,6 +189,8 @@ async def _run_ai_short_drama_market_llm(
         system_api_id=system_api_id,
         context=llm_context,
         project_global_info=project.global_info,
+        user_name=getattr(current_user, "username", None),
+        project_id=getattr(project, "id", None),
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")

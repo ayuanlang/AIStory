@@ -306,6 +306,31 @@ def _resolve_script_analysis_dropdown_llm_config(
     return config, selected_dropdown_id, dropdown_fallback_ids, dropdown_order_ids
 
 
+# Product names shown in the LLM log Action column. Explicit action_name still wins.
+_STORY_GENERATOR_ACTION_BY_CONTEXT = {
+    "structure_creative_input": "剧本框架",
+    "structure_creative_input_classic_framework": "剧本框架",
+    "structure_creative_input_ai_vfx": "剧本框架",
+    "structure_creative_input_registry": "剧本框架",
+    "generate_project_story_dna_global": "分集大纲",
+    "analyze_project_novel": "小说转剧本",
+    "analyze_promo_asset": "宣传片素材解析",
+    "analyze_promo_catalog_asset": "宣传片素材解析",
+    "generate_promo_planner": "商业宣传片策划",
+    "generate_promo_script": "生成宣传片成片脚本",
+    "industry_analysis_ai_short_dramas": "行业分析",
+    "trending_ai_short_dramas": "热门榜单",
+    "kb_ingest": "知识库抽取",
+}
+
+
+def _story_generator_action_label(context: Any = None, action_name: Any = None) -> str:
+    explicit = str(action_name or "").strip()
+    if explicit:
+        return explicit
+    return _STORY_GENERATOR_ACTION_BY_CONTEXT.get(str(context or "").strip(), "")
+
+
 def _resolve_story_generator_script_analysis_llm_config(
     db: Session,
     user_id: int,
@@ -337,7 +362,7 @@ def _resolve_story_generator_script_analysis_llm_config(
         user_id=user_id,
         user_name=user_name,
         project_id=project_id,
-        action_name=action_name,
+        action_name=_story_generator_action_label(context, action_name),
     )
     # Story/script generation (incl. post-search episode writing) never submits images.
     return sanitize_script_generation_llm_config_text_only(llm_config)

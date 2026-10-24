@@ -615,6 +615,8 @@ async def ensure_classic_framework_filled(
     project_context: str,
     llm_config: Optional[Dict[str, Any]] = None,
     max_attempts: int = 2,
+    user_name: Optional[str] = None,
+    project_id: Optional[int] = None,
 ) -> Dict[str, str]:
     """When structured prefill omits I10, call the LLM again until that field is filled."""
     if not classic_framework_needs_fill(normalized.get("classic_framework", "")):
@@ -637,6 +639,8 @@ async def ensure_classic_framework_filled(
             user_prompt=user,
             billing_item="structure_creative_input_classic_framework",
             llm_context="structure_creative_input_classic_framework",
+            user_name=user_name,
+            project_id=project_id,
         )
         data = await _normalize_llm_json_object_with_repair(
             raw,
@@ -783,6 +787,8 @@ async def ensure_ai_vfx_strategy_filled(
     project_context: str,
     llm_config: Optional[Dict[str, Any]] = None,
     max_attempts: int = 2,
+    user_name: Optional[str] = None,
+    project_id: Optional[int] = None,
 ) -> Dict[str, str]:
     """When structured prefill omits the AI-advantage field, call the LLM again to fill it."""
     if not ai_vfx_needs_fill(normalized.get("ai_vfx_strategy", "")):
@@ -805,6 +811,8 @@ async def ensure_ai_vfx_strategy_filled(
             user_prompt=user,
             billing_item="structure_creative_input_ai_vfx",
             llm_context="structure_creative_input_ai_vfx",
+            user_name=user_name,
+            project_id=project_id,
         )
         data = await _normalize_llm_json_object_with_repair(
             raw,
@@ -823,6 +831,357 @@ async def ensure_ai_vfx_strategy_filled(
         logger.warning(
             "[structure_creative_input] ai_vfx_strategy still empty after fill attempt %s",
             attempt,
+        )
+    return normalized
+
+
+# These five live on the script-framework form. Models often emit the Chinese labels.
+_REGISTRY_KEYS = (
+    "plot_background",
+    "story_lines",
+    "time_nodes",
+    "professional_domains",
+    "places_and_props",
+)
+
+_REGISTRY_ALIASES = {
+    "plot_background": ("plot_background", "剧情背景", "plot background", "Plot Background"),
+    "story_lines": ("story_lines", "故事线", "story lines", "Story Lines"),
+    "time_nodes": ("time_nodes", "时间节点", "time nodes", "Time Nodes"),
+    "professional_domains": ("professional_domains", "专业领域", "crafts", "Crafts"),
+    "places_and_props": (
+        "places_and_props",
+        "场景与道具",
+        "places and props",
+        "Places & Props",
+        "places_props",
+    ),
+}
+
+_REGISTRY_LABELS = {
+    "plot_background": "剧情背景",
+    "story_lines": "故事线",
+    "time_nodes": "时间节点",
+    "professional_domains": "专业领域",
+    "places_and_props": "场景与道具",
+}
+
+_REGISTRY_HEADING_TO_KEY = {label: key for key, label in _REGISTRY_LABELS.items()}
+
+_REGISTRY_HEADING_RE = re.compile(
+    r"(?:^|\n)\s*(?:[#*]{0,3}\s*)?(剧情背景|故事线|时间节点|专业领域|场景与道具)\s*[:：]\s*"
+)
+
+
+def _registry_blank(text: str) -> bool:
+    compact = _classic_framework_compact(text)
+    if not compact:
+        return True
+    lowered = compact.lower()
+    if lowered in _CLASSIC_FRAMEWORK_PLACEHOLDERS:
+        return True
+    return bool(_CLASSIC_FRAMEWORK_PLACEHOLDER_RE.fullmatch(lowered))
+
+
+def _flatten_generic(val: Any) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, list):
+        return "\n".join(part for part in (_flatten_generic(item) for item in val) if part)
+    if isinstance(val, dict):
+        lines = []
+        for key, item in val.items():
+            piece = _flatten_generic(item)
+            if piece:
+                lines.append(f"{key}={piece}")
+        return "\n".join(lines)
+    return str(val).strip()
+
+
+def _format_place_item(item: Any) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if not isinstance(item, dict):
+        return _flatten_generic(item)
+    name = ""
+    for key in ("名", "name", "空间", "地点", "道具", "place"):
+        candidate = str(item.get(key) or "").strip()
+        if candidate:
+            name = candidate
+            break
+    english = str(item.get("EN") or item.get("en") or item.get("英文") or "").strip()
+    label = f"{name} ({english})" if name and english else name
+    function = str(item.get("功能") or item.get("function") or "").strip()
+    access = str(item.get("准入") or "").strip()
+    kind = str(item.get("类型") or item.get("kind") or "").strip()
+    named_place = any(str(item.get(key) or "").strip() for key in ("名", "name", "空间", "地点", "place"))
+    is_prop = (
+        kind == "道具"
+        or "道具" in kind
+        or bool(str(item.get("道具名") or "").strip())
+        or (bool(str(item.get("道具") or "").strip()) and not named_place)
+    )
+    if is_prop:
+        prop_name = str(item.get("道具") or item.get("道具名") or name).strip()
+        return "｜".join(part for part in ("道具", prop_name, f"功能={function}" if function else "") if part)
+    parts = [label]
+    if function:
+        parts.append(f"功能={function}")
+    if access:
+        parts.append(f"准入={access}")
+    line = "｜".join(part for part in parts if part)
+    return line or _flatten_generic(item)
+
+
+def _flatten_registry_value(key: str, val: Any) -> str:
+    if isinstance(val, list):
+        if key == "places_and_props":
+            return "\n".join(part for part in (_format_place_item(item) for item in val) if part)
+        return "\n".join(part for part in (_flatten_registry_value(key, item) for item in val) if part)
+    if not isinstance(val, dict):
+        return _flatten_generic(val)
+    if key == "plot_background":
+        sentence = str(val.get("句子") or "").strip()
+        if not sentence:
+            bits = [
+                str(val.get(part) or "").strip()
+                for part in ("公开处境", "关系前史", "此刻为何非做不可", "此刻")
+            ]
+            sentence = "。".join(bit for bit in bits if bit)
+        if sentence:
+            means = str(val.get("手段") or "对话").strip() or "对话"
+            ban = str(val.get("禁提前") or "结局").strip() or "结局"
+            ident = str(val.get("id") or val.get("编号") or "PB01").strip() or "PB01"
+            return f"剧情背景: {ident}｜{sentence}｜手段={means}｜禁提前={ban}"
+    if key == "story_lines":
+        count = str(val.get("线数") or "").strip()
+        if count == "1":
+            reason = str(val.get("豁免依据") or "单一封闭空间").strip() or "单一封闭空间"
+            return f"线数=1｜豁免依据={reason}"
+        parts = []
+        for line_key in ("线A", "线B", "线C", "线D"):
+            piece = str(val.get(line_key) or "").strip()
+            if piece:
+                parts.append(f"{line_key}={piece}")
+        if parts:
+            return "｜".join(parts)
+    if key == "time_nodes":
+        season = str(val.get("季节") or "").strip()
+        if season or val.get("昼夜") or val.get("气候"):
+            node = str(val.get("节点") or val.get("名") or "开篇").strip() or "开篇"
+            return (
+                f"{node}｜式={str(val.get('式') or '相对').strip() or '相对'}"
+                f"｜季节={season}｜昼夜={str(val.get('昼夜') or '').strip()}"
+                f"｜气候={str(val.get('气候') or '').strip()}"
+                f"｜说明={str(val.get('说明') or '').strip()}"
+            )
+    if key == "professional_domains":
+        domain = str(val.get("领域") if val.get("领域") is not None else "").strip()
+        procedure = str(val.get("规程") or "").strip()
+        trigger = str(val.get("触因") or "").strip()
+        wrong = str(val.get("错法") or "").strip()
+        if domain in ("", "无") and not procedure and not trigger and not wrong:
+            reason = str(val.get("依据") or "本剧选择不依赖行业规程").strip() or "本剧选择不依赖行业规程"
+            return f"领域=无｜依据={reason}"
+        if domain or procedure or trigger or wrong:
+            return f"领域={domain}｜触因={trigger}｜规程={procedure}｜错法={wrong}"
+    if key == "places_and_props":
+        return _format_place_item(val)
+    return _flatten_generic(val)
+
+
+def _split_headed_text(text: str) -> Dict[str, str]:
+    matches = list(_REGISTRY_HEADING_RE.finditer(str(text or "")))
+    if not matches:
+        return {}
+    found: Dict[str, str] = {}
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        key = _REGISTRY_HEADING_TO_KEY[match.group(1)]
+        body = str(text[start:end] or "").strip()
+        if body and key not in found:
+            found[key] = body
+    return found
+
+
+def _registry_sources(data: Any) -> List[Dict[str, Any]]:
+    sources: List[Dict[str, Any]] = []
+    if not isinstance(data, dict):
+        return sources
+    sources.append(data)
+    for key, val in data.items():
+        name = str(key)
+        if isinstance(val, dict) and any(hint in name for hint in ("全局", "登记", "registry", "Registry")):
+            sources.append(val)
+    return sources
+
+
+def _salvage_registry_key(data: Any, key: str) -> str:
+    aliases = {alias.lower() for alias in _REGISTRY_ALIASES[key]}
+    for source in _registry_sources(data):
+        for alias in _REGISTRY_ALIASES[key]:
+            if alias in source:
+                text = _flatten_registry_value(key, source.get(alias))
+                if not _registry_blank(text):
+                    return text
+        for raw_key, val in source.items():
+            if str(raw_key).strip().lower() in aliases:
+                text = _flatten_registry_value(key, val)
+                if not _registry_blank(text):
+                    return text
+    if isinstance(data, dict):
+        for val in data.values():
+            if not isinstance(val, str):
+                continue
+            text = _split_headed_text(val).get(key, "")
+            if not _registry_blank(text):
+                return text
+    return ""
+
+
+def _is_stringified_structure(text: str) -> bool:
+    raw = str(text or "").strip()
+    return (raw.startswith("{") and raw.endswith("}")) or (raw.startswith("[") and raw.endswith("]"))
+
+
+def apply_registry_fields_from_llm(normalized: Dict[str, str], data: Any) -> Dict[str, str]:
+    """Copy 剧情背景、故事线、时间节点、专业领域、场景与道具 onto the English form keys."""
+    for key in _REGISTRY_KEYS:
+        current = _field_text(normalized, key)
+        if not _registry_blank(current) and not _is_stringified_structure(current):
+            continue
+        salvaged = _salvage_registry_key(data, key)
+        if not _registry_blank(salvaged):
+            normalized[key] = salvaged
+    return normalized
+
+
+def registry_fields_needing_fill(normalized: Dict[str, str]) -> List[str]:
+    return [key for key in _REGISTRY_KEYS if _registry_blank(_field_text(normalized, key))]
+
+
+def build_registry_fill_prompts(
+    normalized: Dict[str, str],
+    missing: List[str],
+    *,
+    creative_text: str,
+    project_context: str,
+) -> tuple[str, str]:
+    labels = "、".join(_REGISTRY_LABELS[key] for key in missing)
+    key_list = ", ".join(missing)
+    system = (
+        "You complete missing script-framework fields. "
+        f"Output ONLY a JSON object whose keys are exactly: {key_list}. "
+        "The first character must be '{' and the last character must be '}'. "
+        "No markdown fences, no explanation. Every value is a non-empty string "
+        "in the same language as the story fields. Do not invent a second plot. "
+        "plot_background: `剧情背景: PB01｜句子｜手段=对话|动作｜禁提前=…`. "
+        "The sentence is the public situation, the relationship history, and why this cannot wait. "
+        "Not the world rule, and not the ending. "
+        "story_lines: at least `线A=…｜线B=…` changing the same conflict, "
+        "or `线数=1｜豁免依据=单一封闭空间` only when the whole story is one closed space. Not a scene list. "
+        "time_nodes: at least `开篇｜式=绝对|相对｜季节=春|夏|秋|冬｜昼夜=日|夜｜气候=晴|阴|雨|雪|雾|风|霾｜说明`. "
+        "A rebirth or return gets its own node. No episode ranges. "
+        "professional_domains: `领域=｜触因=｜规程=｜错法=` for a procedure the plot actually needs, "
+        "or exactly `领域=无｜依据=本剧选择不依赖行业规程`. No per-episode action. "
+        "places_and_props: only spaces and objects the plot fails without. "
+        "A space name is a place a person can stand in, such as 办公室、大堂、街道. "
+        "One line each: `名 (EN)｜功能=｜准入=开放|受限` or `道具｜名｜功能=`. "
+        "The function is a separate sentence. No furnishings or materials. "
+        "Register every distinct place; one story may need several."
+    )
+    if _context_is_emotion_driven(project_context):
+        system += " This story is emotion-driven. Do not add Save the Cat beat names."
+    user = (
+        f"The script framework left these fields empty: {labels}. Fill only these keys: {key_list}. "
+        "Keep the same story.\n\n"
+        f"{project_context}\n"
+        f"Wild Creative Brainstorm:\n{creative_text}\n\n"
+        "Structured fields already accepted:\n"
+        f"{_classic_framework_story_context(normalized)}"
+    )
+    return system, user
+
+
+async def ensure_registry_fields_filled(
+    *,
+    db: Session,
+    user_id: int,
+    project_global_info: Optional[Dict[str, Any]],
+    req: Any,
+    normalized: Dict[str, str],
+    creative_text: str,
+    project_context: str,
+    llm_config: Optional[Dict[str, Any]] = None,
+    max_attempts: int = 2,
+    user_name: Optional[str] = None,
+    project_id: Optional[int] = None,
+) -> Dict[str, str]:
+    """When the script framework omits the five registry fields, fill them before returning."""
+    missing = registry_fields_needing_fill(normalized)
+    if not missing:
+        return normalized
+
+    logger.warning(
+        "[structure_creative_input] registry fields empty: %s",
+        ",".join(missing),
+    )
+    attempts = max(1, int(max_attempts))
+    for attempt in range(1, attempts + 1):
+        missing = registry_fields_needing_fill(normalized)
+        if not missing:
+            return normalized
+        system, user = build_registry_fill_prompts(
+            normalized,
+            missing,
+            creative_text=creative_text,
+            project_context=project_context,
+        )
+        raw = await _run_structure_llm_call(
+            db=db,
+            user_id=user_id,
+            project_global_info=project_global_info,
+            req=req,
+            sys_prompt=system,
+            user_prompt=user,
+            billing_item="structure_creative_input_registry",
+            llm_context="structure_creative_input_registry",
+            user_name=user_name,
+            project_id=project_id,
+        )
+        data = await _normalize_llm_json_object_with_repair(
+            raw,
+            context="structure_creative_input_registry",
+            llm_config=llm_config,
+        )
+        before = dict(normalized)
+        apply_registry_fields_from_llm(normalized, data)
+        filled_now = [
+            key for key in missing
+            if _registry_blank(_field_text(before, key)) and not _registry_blank(_field_text(normalized, key))
+        ]
+        if filled_now:
+            logger.info(
+                "[structure_creative_input] registry filled on attempt %s: %s",
+                attempt,
+                ",".join(filled_now),
+            )
+        else:
+            logger.warning(
+                "[structure_creative_input] registry still empty after fill attempt %s: %s",
+                attempt,
+                ",".join(missing),
+            )
+
+    still = registry_fields_needing_fill(normalized)
+    if still:
+        labels = "、".join(_REGISTRY_LABELS[key] for key in still)
+        raise HTTPException(
+            status_code=500,
+            detail=f"剧本框架未回填：{labels}",
         )
     return normalized
 
@@ -850,6 +1209,8 @@ async def _run_structure_llm_call(
     user_prompt: str,
     billing_item: str,
     llm_context: str,
+    user_name: Optional[str] = None,
+    project_id: Optional[int] = None,
 ) -> str:
     function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
     system_api_id = getattr(req, "system_api_id", None) if req else None
@@ -860,6 +1221,8 @@ async def _run_structure_llm_call(
         system_api_id=system_api_id,
         context=llm_context,
         project_global_info=project_global_info,
+        user_name=user_name,
+        project_id=project_id,
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")

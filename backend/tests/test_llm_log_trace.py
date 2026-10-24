@@ -1,4 +1,5 @@
 from app.services.llm_service import LLMService, _copy_llm_log_trace_fields
+from app.services.script_analysis_llm_config import _story_generator_action_label
 
 
 def test_copy_llm_log_trace_fields_preserves_action_on_fallback():
@@ -42,3 +43,12 @@ def test_llm_log_trace_keeps_parent_action_when_child_omits_it():
             seen.update(_llm_log_trace_ctx.get() or {})
     assert seen["__resolved_action"] == "环境规划"
     assert seen["__resolved_setting_id"] == 12
+
+
+def test_story_generator_action_label_fills_framework_and_outlines():
+    assert _story_generator_action_label("structure_creative_input") == "剧本框架"
+    assert _story_generator_action_label("structure_creative_input_classic_framework") == "剧本框架"
+    assert _story_generator_action_label("generate_project_story_dna_global") == "分集大纲"
+    assert _story_generator_action_label("generate_project_story_dna_global", "全剧信息") == "全剧信息"
+    assert _story_generator_action_label("industry_analysis_ai_short_dramas") == "行业分析"
+    assert _story_generator_action_label("unknown_context") == ""

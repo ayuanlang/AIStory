@@ -273,6 +273,7 @@ async def _run_extract_llm(
                 system_api_id=system_api_id,
                 context="kb_ingest",
                 project_global_info=None,
+                user_name=getattr(current_user, "username", None),
             )
         except Exception as exc:
             logger.warning("KB ingest system_api_id resolve failed: %s", exc)
