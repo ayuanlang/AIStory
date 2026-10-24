@@ -40,7 +40,7 @@ def test_emotion_driven_writing_logic_and_coverage_use_egri_steps():
     assert "故事环确认本集在走哪一步" in block
     assert "基本点只写一处经典、一个落点" in block
     assert "不写流行，不写第二处" in block
-    assert "经典借鉴必须留下主框架" in block
+    assert "经典借鉴留在剧本框架" in block
     assert "不写故事环" not in block
     assert build_emotion_driven_episode_coverage_block(0) == ""
 

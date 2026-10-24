@@ -21,10 +21,8 @@ def test_episode_coverage_block_names_every_episode_and_dedups_character_bios():
     assert "EP01–EP24" in block
     assert "共 24 块" in block
     assert "[EPISODE_BLOCK_START] 的个数 = 24" in block
-    assert "全剧钩子" in block
-    assert "人物小传只在 §8 Characters 写一次" in block
-    assert "场景和道具只写注册名和一句基本功能" in block
-    assert "不用打斗地这类事件名" in block
+    assert "不输出 §0–§8" in block
+    assert "也不另起人物小传" in block
     assert "下一集的入就是上一集的出" in block
     assert "双线或蒙太奇可以切场" in block
     assert "角色弧光和冲突" in block
@@ -32,7 +30,7 @@ def test_episode_coverage_block_names_every_episode_and_dedups_character_bios():
     assert "不写逐字落实映射" in block
     assert "不写故事环" in block
     assert "专业行写本集碰到的领域" in block
-    assert "专业领域行缩短时不得删" in block
+    assert "专业领域、场景与道具、钩子已经在剧本框架" in block
     assert build_story_episode_coverage_block(0) == ""
     assert build_story_episode_coverage_block("nope") == ""
 

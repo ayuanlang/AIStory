@@ -60,6 +60,11 @@ class StoryGeneratorRequest(BaseModel):
     three_act: Optional[str] = None
     characters: Optional[str] = None
     background: Optional[str] = None
+    plot_background: Optional[str] = None
+    story_lines: Optional[str] = None
+    time_nodes: Optional[str] = None
+    professional_domains: Optional[str] = None
+    places_and_props: Optional[str] = None
     stc_01_opening_image: Optional[str] = None
     stc_02_theme_stated: Optional[str] = None
     stc_03_setup: Optional[str] = None

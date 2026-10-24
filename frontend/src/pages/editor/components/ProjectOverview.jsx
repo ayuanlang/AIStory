@@ -4079,8 +4079,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 },
                                 {
                                     id: 'background',
-                                    label: t('故事世界 · 压力场', 'Story World · Pressure'),
-                                    hint: t('迫使人物做选择的时代、制度、礼法和能力边界。不是地点清单。', 'The era, institution, custom, and limits of ability that force the choice. Not a list of locations.'),
+                                    label: t('世界背景', 'World Background'),
+                                    hint: t('这一栏就是世界背景，不另写一篇。写缺了就看不懂开篇选择的规则、制度或能力边界。不是地点清单，也不写终局。', 'This field is the world background, not a second essay. The rule, institution, or limit without which the opening choice cannot be understood. Not a location list, and not the ending.'),
                                     example: t(
                                         '例：2026 跨国律所。职级决定能进哪扇门。审计 24 小时留痕。越权本身就会触发约谈。',
                                         'e.g. A 2026 megafirm. Rank decides which door opens. Audit logs last 24 hours. Overreach itself triggers a hearing.'
@@ -4112,6 +4112,27 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     />
                                 </div>
                             )))}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {[
+                                    { id: 'plot_background', label: t('剧情背景', 'Plot Background'), hint: t('公开处境、关系前史、此刻为何非做不可。不是世界规则，也不是结局。', 'The public situation, the history, and why this cannot wait. Not the world rule, and not the ending.'), rows: 3 },
+                                    { id: 'story_lines', label: t('故事线', 'Story Lines'), hint: t('至少两条改写同一冲突的线。单一封闭空间才写线数=1。不是场表。', 'At least two lines that change the same conflict. Write a single line only for one closed space. Not a scene list.'), rows: 2 },
+                                    { id: 'time_nodes', label: t('时间节点', 'Time Nodes'), hint: t('至少写开篇的季节、昼夜、气候。重生或回归另起节点。不写各集范围。', 'At least the opening season, day or night, and weather. A rebirth or return gets its own node. No episode ranges.'), rows: 2 },
+                                    { id: 'professional_domains', label: t('专业领域', 'Crafts'), hint: t('情节真靠哪套规程，就写触因、做法和错法。没有就写领域=无。不写各集动作。', 'Name the craft the plot actually needs, with the trigger, the right step, and the amateur mistake. Otherwise write none. No per-episode action.'), rows: 3 },
+                                    { id: 'places_and_props', label: t('场景与道具', 'Places & Props'), hint: t('只登记情节离了就做不成的空间和物件，各写一句功能。不写陈设和材质。', 'Only spaces and objects the plot fails without, each with one function. No furnishings or materials.'), rows: 3 },
+                                ].map((field) => (
+                                    <div key={field.id}>
+                                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{field.label}</label>
+                                        <div className="text-[11px] text-muted-foreground/80 mb-1">{field.hint}</div>
+                                        <textarea
+                                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                            rows={field.rows}
+                                            value={globalStoryInput[field.id] || ''}
+                                            onFocus={() => setStoryGenFocusStep('structure_prefill')}
+                                            onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
+                                        />
+                                    </div>
+                                ))}
+                            </div>
                             <div>
                                 <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{emotionDrivenMode ? t('经典借鉴', 'Classic Borrowing') : t('I10 经典作品框架', 'I10 Classic Works Framework')}</label>
                                 <div className="text-[11px] text-muted-foreground/80 mb-0.5">

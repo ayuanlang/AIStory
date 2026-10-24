@@ -33,7 +33,7 @@ Layer 1 — three-act + McKee (concept, not the beat sheet):
 - "theme": McKee's controlling idea = story value + cause. Write it as "value charge, because …". The ending must be able to prove this sentence. Not a two-word slogan.
 - "core_conflict": principle of antagonism (the opposition is stronger), negation of the negation (the worst charge of the value, not merely its absence), the Gap (expected result vs actual result), the stakes, and the crisis as an irreversible dilemma. Name both horns of the dilemma.
 - "three_act": three short sentences only. Act I: what balance the catalyst breaks, irreversibly. Act II: how progressive complications turn the value, and whether the midpoint is a false victory or a false defeat. Act III: which crisis choice the climax acts out, and what new balance remains. No scene list.
-- "background": the world as a pressure field — era, institution, law, custom, and the limits of ability — that forces the choice. Not a location catalogue.
+- "background": this field IS 世界背景, the only place for the rule the opening choice cannot be understood without. Start with `世界背景: WBxx｜句子｜手段=对话|动作｜禁提前=…`. The sentence carries era, institution, law, custom, or the limit of ability. Do not add a second essay, a location catalogue, or a Lore row that repeats the sentence. Do not put the public situation here; that is plot_background.
 
 Layer 2 — Egri (character and arc). Put all of this in "characters":
 - Premise: a character trait, through this conflict, proves an ending. Same charge as the controlling idea, argued from the person rather than from the value.
@@ -41,7 +41,8 @@ Layer 2 — Egri (character and arc). Put all of this in "characters":
 - Protagonist and opponent, each in three dimensions: physiology, sociology, psychology. Specific, not "kind" or "strong". Physiology only if it changes a choice.
 - Each has one belief they will not yield. The opponent's belief is the opposite, and the two are a unity of opposites: neither can win without breaking the other's premise.
 - Orchestration: every other principal contrasts the protagonist on one dimension, so the premise is argued from more than one pole.
-- Arc: starting pole → ending pole. Name the conflict that forces the transition. The finale choice is what proves the premise.
+- Arc: starting pole → ending pole. Name the conflict that forces the transition. The finale choice is what proves the premise. Do not paste the theme sentence again; the premise is theme.
+- Then one line per person, and no second character bible: `名(EN)｜身份=观众可见层｜社会=｜信念=不可让的那一句｜声线=｜弧光=旧极→新极｜隐藏反派=否|是｜可见层=｜真身份=｜揭露=后段`. A hidden villain does not expose themselves on arrival. End with one line `#反低智剧=禁项｜允许误判`.
 - Names are ordinary personal names for the era and place (Chinese name + English name). Do not encode plot function, twist, hidden identity, or ending in a name. Keep user-given names verbatim. Forbidden in names: 复仇者/真凶/内鬼/叛徒/卧底/白莲/笑面虎/杀父仇人/幕后/必败. Forbidden as a way to refer to a person anywhere in this JSON: 男主/女主/男二/女二/男配/女配/男一/女一/男主角/女主角/大男主/大女主. Replace each with that person's name.
 
 Layer 3 — Save the Cat. Each beat is 1–3 sentences: who does what to whom, the Gap (expected vs actual), which way the value turns, and the visible result. The result of one beat is the pressure of the next. Every beat must be able to point back at the two beliefs colliding. A beat that still happens after the beliefs are removed is a task stuck on a person — rewrite it.
@@ -69,9 +70,17 @@ Dialogue seeds, including 自白, are required on the beats that carry these fiv
 - 人物前提弧光: the old pole, spoken early, and the new pole, spoken when the arc turns. The inner turn the person in the room should not hear is 自白.
 Append each seed to that beat, after the event sentences: `对话种子=对白|自白｜针对=主控思想|对抗鸿沟危机|价值弧|压力场|人物前提弧光｜说=谁｜听=谁|无｜句=「…」`. 自白 uses `听=无`. The line is spoken to the air or to oneself, not to the person in the room. One beat may carry more than one seed. A beat with none of these duties does not invent a seed. If the listener should not hear the line, the channel is 自白. The quote is the one exception to "do not duplicate": the same `句` is not also pasted into theme, core_conflict, three_act, background, or characters.
 
+Global registry. These facts used to be rewritten as markdown §0–§8. They live only in this JSON. Similar facts share one field. Do not assign them to EP01–EPN; the episode outline does that.
+
+- "plot_background": `剧情背景: PBxx｜句子｜手段=对话|动作｜禁提前=…`. The public situation, the relationship history, and why this cannot wait. Not the world rule, and not the ending.
+- "story_lines": at least two lines that change the same conflict, `线A=…｜线B=…`, or `线数=1｜豁免依据=单一封闭空间`. Not a scene list, and not a second plot.
+- "time_nodes": at least `开篇｜式=绝对|相对｜季节=｜昼夜=｜气候=｜说明`. A rebirth, crossing, or return gets its own node. No episode ranges.
+- "professional_domains": `领域=｜触因=｜规程=｜错法=` for each craft the plot actually needs, or one line `领域=无｜依据=本剧选择不依赖行业规程`. No fake statute numbers, and no per-episode action.
+- "places_and_props": only a space or object the plot fails without. `名(EN)｜功能=｜准入=开放|受限` or `道具｜名｜功能=`. No furnishings, materials, or layout. Forbidden names: 打斗地, 对峙处, 决战场.
+- "suspense": the questions the audience chases, plus at most one author-only secret `密｜作者层｜禁提前`. They complement the dilemma. Do not repeat the secret inside background or an early beat.
+- "foreshadowing": hooks and Chekhov live here, not in a second table. One line each: `枪ID｜物｜首埋拍｜开火拍｜服务`. A gun shown early must be able to fire on a later beat. No episode numbers.
+
 Also:
-- "suspense": the questions the audience chases. They complement the dilemma; they do not replace it.
-- "foreshadowing": lines, objects, and payoffs that must survive. A gun shown early must be able to fire on a later beat.
 - "classic_framework": see I10 below.
 - "ai_vfx_strategy": required and never "". The JSON key must be exactly ai_vfx_strategy. This is the assessment 「AI优势应用与劣势回避」, not a second plot. Evaluate how AI visual effects make THIS story's pictures stronger, and which actions to rewrite so the picture still reads.
   Advantage: at least two lines, each tied to a beat number. Format: `拍=01|04|14｜特效=具象化形|环境奇观|满幅异象|天气与季节介质|垂直空域|集体动势|物件特写｜画面增量=the shape, scale, light, or season the audience newly sees｜服务=the choice or hook of that beat`. Write what the effect becomes, how wide it reads, and what remains. Forbidden: 能量爆发, 金光一闪, and glow with no body.

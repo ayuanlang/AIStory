@@ -195,12 +195,12 @@ def test_framework_drops_prefill_repeats_and_keeps_episode_placement():
     assert "拍=Opening" in deduped
     assert "因为误拿总裁卡套" in deduped
     block = build_framework_prompt_block(framework, source)
-    assert "两份都要落实" in block
-    assert "以预填的逻辑和内容为准" in block
+    assert "剧本框架和这份分集大纲都要落实" in block
+    assert "全局事实以剧本框架为准" in block
     assert "本集专业行" in block
     assert "Global Story DNA" not in block
     episode = build_structured_prefill_prompt_block(source, trailer=False)
-    assert "以预填为准" in episode
+    assert "以剧本框架为准" in episode
     assert "以框架为准" not in episode
 
 
