@@ -391,7 +391,68 @@ export function isSeriesIpScriptMode(value) {
     return raw.includes('ip模式') || raw.includes('series ip') || raw.includes('ip mode');
 }
 
+const REGISTRY_FIELD_ALIASES = {
+    plot_background: ['plot_background', '剧情背景'],
+    story_lines: ['story_lines', '故事线'],
+    time_nodes: ['time_nodes', '时间节点'],
+    professional_domains: ['professional_domains', '专业领域'],
+    places_and_props: ['places_and_props', '场景与道具'],
+};
+
+function registryText(value) {
+    if (value == null) return '';
+    if (typeof value === 'string') return value.trim();
+    if (Array.isArray(value)) return value.map(registryText).filter(Boolean).join('\n');
+    if (typeof value === 'object') {
+        const lines = Object.entries(value)
+            .map(([key, item]) => {
+                const text = registryText(item);
+                return text ? `${key}=${text}` : '';
+            })
+            .filter(Boolean);
+        return lines.join('｜');
+    }
+    return String(value).trim();
+}
+
+/** Pull the five framework fields out of a task result, including Chinese keys and one nested object. */
+export function liftStructuredPrefill(payload) {
+    let data = payload;
+    if (typeof data === 'string') {
+        const text = data.trim();
+        if (!text) return {};
+        try {
+            data = JSON.parse(text);
+        } catch {
+            return {};
+        }
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return {};
+    let source = data;
+    for (const key of ['result', 'data', 'fields', 'structured', '全局登记']) {
+        const child = data[key];
+        if (!child || typeof child !== 'object' || Array.isArray(child)) continue;
+        if (child.logline || child.plot_background || child['剧情背景'] || child.places_and_props || child['场景与道具']) {
+            source = { ...data, ...child };
+            break;
+        }
+    }
+    const next = { ...source };
+    Object.entries(REGISTRY_FIELD_ALIASES).forEach(([english, aliases]) => {
+        if (registryText(next[english])) return;
+        for (const alias of aliases) {
+            const text = registryText(next[alias]);
+            if (text) {
+                next[english] = text;
+                break;
+            }
+        }
+    });
+    return next;
+}
+
 export function applyStructuredPrefill(prev, structured, emotionDriven) {
+    structured = liftStructuredPrefill(structured);
     const next = { ...(prev || {}), wild_creative_notes: prev?.wild_creative_notes };
     if (emotionDriven) {
         const keys = [

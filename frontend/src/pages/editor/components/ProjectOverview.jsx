@@ -408,6 +408,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const episodeScriptsStatusTimerRef = useRef(null);
     const globalStoryAutosaveTimerRef = useRef(null);
     const skipNextGlobalStoryAutosaveRef = useRef(true);
+    const storyInputEpochRef = useRef(0);
     const promoAutosaveTimerRef = useRef(null);
     const skipNextPromoAutosaveRef = useRef(true);
     const generatorResultAutosaveTimerRef = useRef(null);
@@ -1008,6 +1009,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         const cachedInitialProject = initialProject && String(initialProject.id) === String(id) ? initialProject : null;
 
         const load = async () => {
+            const epochAtStart = storyInputEpochRef.current;
             try {
                 const data = cachedInitialProject || await fetchProject(id);
                 setProject(data);
@@ -1072,7 +1074,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                      setInfo(merged);
 
                      // Restore Story Generator draft inputs (if previously saved)
-                     if (merged.story_generator_global_input && typeof merged.story_generator_global_input === 'object') {
+                     if (merged.story_generator_global_input && typeof merged.story_generator_global_input === 'object' && storyInputEpochRef.current === epochAtStart) {
                          setGlobalStoryInput(prev => migrateLegacyPlotToBeats({
                              ...prev,
                              ...merged.story_generator_global_input,
@@ -1847,6 +1849,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 season_occurrence: info.season_occurrence,
             }));
             const emotionDriven = isEmotionDrivenScriptMode(globalStoryInput.script_mode);
+            storyInputEpochRef.current += 1;
             setGlobalStoryInput(prev => applyStructuredPrefill(prev, structured, emotionDriven));
             setStoryGenFocusStep('structure_prefill');
             alert(emotionDriven

@@ -22,7 +22,8 @@ _FILL_SYSTEM = (
     "不写故事环、卖点、金句、场表、选场逻辑、多线表、戏份。不写 §0–§8。救猫咪拍行只写拍名和收完。AI 行不写成场表或长文。专业行不写成百科。领域名只用剧本框架专业领域里已经登记的；框架没有这张表时，本集写领域=无｜动作=无｜对白=无。\n"
     "不写思考过程，不写用户原文保留区，不写逐字落实映射，不回抄用户原文，不重写剧本框架，不写 Episode Coverage Audit。\n"
     "人物、场景、道具只用已有名字和已有功能。环境名逐字对应剧本框架场景与道具里的空间名，一集可以写多处。没登记的才标补。不用打斗地这类事件名。\n"
-    "补上的集，入必须接上已有上一集的出：同一个人、同一处、同一件还在做的事。摘要从这态接着写。没有上一集，入写开场看见的那一态。双线或蒙太奇切场必须在交接写明切=双线或切=蒙太奇，以及切到哪一条、哪些地方。\n"
+    "补上的集，入必须接上给出的上一集的出：同一个人、同一处、同一件还在做的事。给出了下一集时，出必须交给那一集的入。没有给出的邻集，不要用全文最后一集来接。摘要从这态接着写。没有上一集，入写开场看见的那一态。双线或蒙太奇切场必须在交接写明切=双线或切=蒙太奇，以及切到哪一条、哪些地方。\n"
+    "项目季节是开篇。本次要补的集如果剧情时间已经走到下一季，季节按春夏秋冬顺着变，并写跨季=是。换季后这一集的室外景致和人物衣着厚薄跟着这一季，不留在开篇那一季。\n"
 )
 
 
@@ -95,10 +96,33 @@ def splice_episode_blocks(base: str, addition: str) -> str:
     return stripped.rstrip() + "\n\n" + chunk + "\n"
 
 
-def framework_context_for_fill(markdown: str, *, limit: int = 12000) -> str:
+def _neighbor_numbers(blocks: Dict[int, str], batch: List[int]) -> Tuple[Optional[int], Optional[int], List[int]]:
+    """The episode before the batch, the episode after it, and completed episodes sitting inside the span."""
+    wanted = sorted({int(number) for number in batch if int(number) > 0})
+    if not wanted:
+        return None, None, []
+    first, last = wanted[0], wanted[-1]
+    have = set(blocks)
+    prev = first - 1 if first > 1 and (first - 1) in have else None
+    nxt = last + 1 if (last + 1) in have else None
+    inside = [number for number in range(first + 1, last) if number in have and number not in set(wanted)]
+    return prev, nxt, inside
+
+
+def framework_context_for_fill(
+    markdown: str,
+    batch: Optional[List[int]] = None,
+    *,
+    limit: int = 12000,
+) -> str:
+    """Context for a fill call. Full text is only the episodes beside the ones being written."""
     output = extract_story_dna_delimited_block(markdown, "OUTPUT") or str(markdown or "")
     section9 = re.search(r"(?im)^##\s*9\)", output)
-    head = output[: section9.start()] if section9 else output
+    if section9:
+        head = output[: section9.start()]
+    else:
+        first_block = _START_RE.search(output)
+        head = output[: first_block.start()] if first_block else output
     blocks = complete_episode_blocks(output)
     titles: List[str] = []
     for number in sorted(blocks):
@@ -107,13 +131,29 @@ def framework_context_for_fill(markdown: str, *, limit: int = 12000) -> str:
             if stripped and "EPISODE_BLOCK_" not in stripped:
                 titles.append(stripped[:180])
                 break
-    last = blocks[max(blocks)] if blocks else ""
-    text = head.strip()[:6000]
+    parts: List[str] = []
+    if head.strip():
+        parts.append(head.strip()[:2000])
     if titles:
-        text += "\n\n已完成集:\n" + "\n".join(titles)
-    if last:
-        text += "\n\n紧邻上一集:\n" + last
-    return text[:limit]
+        parts.append("已完成集（只留标题）:\n" + "\n".join(titles))
+    wanted = [int(number) for number in (batch or []) if int(number) > 0]
+    if not wanted:
+        return "\n\n".join(parts)[:limit]
+    first, last = min(wanted), max(wanted)
+    prev, nxt, inside = _neighbor_numbers(blocks, wanted)
+    if first <= 1:
+        parts.append("上一集：没有。这次从开篇补起。")
+    elif prev is not None:
+        parts.append(f"上一集 EP{prev:02d}（紧挨本次要补的集，入接这一集的出）:\n{blocks[prev]}")
+    else:
+        parts.append(f"上一集 EP{first - 1:02d} 还没有写成。不要用更后面已经写完的集冒充上一集。")
+    for number in inside:
+        parts.append(f"夹在本次要补的集中间、已经写完的 EP{number:02d}:\n{blocks[number]}")
+    if nxt is not None:
+        parts.append(f"下一集 EP{nxt:02d}（紧挨本次要补的集，出交给这一集的入）:\n{blocks[nxt]}")
+    else:
+        parts.append(f"下一集 EP{last + 1:02d} 还没有写成。不要用已经写完的最后一集冒充下一集。")
+    return "\n\n".join(parts)[:limit]
 
 
 def _usage_pair(usage: Any) -> Tuple[int, int]:
@@ -142,11 +182,20 @@ def merge_usage(base: Optional[Dict[str, Any]], extra: Optional[Dict[str, Any]])
     }
 
 
-def _fill_user_prompt(context: str, batch: List[int], planned: int) -> str:
+def _fill_user_prompt(
+    context: str,
+    batch: List[int],
+    planned: int,
+    registry_block: str = "",
+) -> str:
     labels = ", ".join(f"EP{number:02d}" for number in batch)
+    head = str(registry_block or "").strip()
+    prefix = f"{head}\n\n" if head else ""
     return (
+        f"{prefix}"
         f"计划集数 = {planned}。这次只补：{labels}。\n"
-        "每集单独成块，含本集冲突、转折、Continuity 和集末钩子。不要用总述代替。\n\n"
+        "每集单独成块，含本集冲突、转折、Continuity 和集末钩子。不要用总述代替。\n"
+        "时间、在场名、专业、故事线切场沿用上面的剧本框架五栏，不另起一套。\n\n"
         f"{context}"
     )
 
@@ -160,6 +209,7 @@ async def ensure_story_episode_blocks(
     batch_size: int = 4,
     max_rounds: int = 8,
     fill_system: Optional[str] = None,
+    registry_block: str = "",
 ) -> Tuple[str, Dict[str, Any]]:
     """Append any missing EP01–EPN blocks. Raises if they are still missing after the fill rounds."""
     current = str(markdown or "")
@@ -180,9 +230,9 @@ async def ensure_story_episode_blocks(
         if not missing:
             break
         batch = missing[: max(1, int(batch_size))]
-        context = framework_context_for_fill(current)
+        context = framework_context_for_fill(current, batch)
         response = await llm_service.generate_content_with_fallback(
-            _fill_user_prompt(context, batch, planned),
+            _fill_user_prompt(context, batch, planned, registry_block),
             fill_system or _FILL_SYSTEM,
             llm_config or {},
             image_urls=None,

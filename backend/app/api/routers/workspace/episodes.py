@@ -872,6 +872,14 @@ async def generate_episode_story_dna(
         f"Suspense: {req.suspense or ''}\n"
         f"Extra Notes: {req.extra_notes or ''}\n"
     )
+    from app.services.story_generator_llm import (  # noqa: E402
+        format_outline_registry_block,
+        prefill_source_for_outline,
+    )
+
+    outline_source = prefill_source_for_outline(req, project.global_info or {})
+    registry_block = format_outline_registry_block(outline_source)
+    user_prompt_body += f"\n{registry_block}\n"
     from app.services.script_mode_helpers import (  # noqa: E402
         emotion_driven_episode_fill_system,
         is_global_story_framework_prompt,
@@ -971,6 +979,7 @@ async def generate_episode_story_dna(
                 llm_config=llm_config,
                 user_id=int(current_user.id),
                 fill_system=emotion_driven_episode_fill_system() if emotion_driven_framework else None,
+                registry_block=registry_block,
             )
             fill_usage = merge_usage({}, fill_usage)
     except Exception as e:

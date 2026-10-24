@@ -106,6 +106,13 @@ async def generate_project_story_dna_global(
     script_mode_for_ip = script_mode_for_framework
     series_ip = is_series_ip_script_mode(script_mode_for_ip)
     emotion_driven = is_emotion_driven_script_mode(script_mode_for_ip)
+    from app.services.story_generator_llm import (  # noqa: E402
+        format_outline_registry_block,
+        prefill_source_for_outline,
+    )
+
+    outline_source = prefill_source_for_outline(req, gi_existing)
+    registry_block = format_outline_registry_block(outline_source)
     series_ip_global_block = build_series_ip_global_prompt_block() if series_ip else ""
     if series_ip:
         episode_coverage_block = ""
@@ -135,7 +142,8 @@ async def generate_project_story_dna_global(
         f"Script Mode: {(getattr(req, 'script_mode', None) or '').strip()}\n"
         f"Target Audience: {(getattr(req, 'target_audience', None) or '').strip()}\n"
         f"\n"
-        f"{format_story_creative_input_block(req)}\n"
+        f"{format_story_creative_input_block(outline_source)}\n"
+        f"\n{registry_block}\n"
         )
     )
 
@@ -215,6 +223,7 @@ async def generate_project_story_dna_global(
                 llm_config=llm_config,
                 user_id=user_id,
                 fill_system=emotion_driven_episode_fill_system() if emotion_driven else None,
+                registry_block=registry_block,
             )
             generated_payload = {"content": generated_md, "usage": fill_usage}
             fill_usage = merge_usage({}, fill_usage)
@@ -242,6 +251,7 @@ async def generate_project_story_dna_global(
                 llm_config=llm_config,
                 user_id=user_id,
                 fill_system=emotion_driven_episode_fill_system() if emotion_driven else None,
+                registry_block=registry_block,
             )
             fill_usage = merge_usage({}, fill_usage)
     except Exception as e:
@@ -778,6 +788,35 @@ from app.services.story_generator_llm import (  # noqa: E402,F401
     _prepare_episode_script_reference_block,
 )
 
+def _persist_structure_prefill(db, project, normalized, creative_text: str) -> None:
+    """Keep the script framework on the project so the outline prompt can read it."""
+    try:
+        gi = dict(project.global_info or {})
+        existing = gi.get("story_generator_global_input")
+        story_input = dict(existing) if isinstance(existing, dict) else {}
+        for key, val in (normalized or {}).items():
+            if key == "prefill_meta" or not isinstance(val, str):
+                continue
+            text = val.strip()
+            if text:
+                story_input[key] = text
+        notes = str(creative_text or "").strip()
+        if notes:
+            story_input["wild_creative_notes"] = notes
+        story_input["mode"] = story_input.get("mode") or "global"
+        story_input["generator_kind"] = story_input.get("generator_kind") or "story"
+        gi["story_generator_global_input"] = story_input
+        project.global_info = gi
+        db.add(project)
+        db.commit()
+    except Exception as exc:
+        logger.warning("[structure_creative_input] persist prefill failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
 @router.post("/projects/{project_id}/story_generator/structure_creative_input", response_model=Dict[str, Any])
 async def structure_project_creative_input_to_story_fields(
     project_id: int,
@@ -1001,6 +1040,7 @@ async def structure_project_creative_input_to_story_fields(
             "source_stats": {},
         },
     }
+    _persist_structure_prefill(db, project, normalized, creative_text)
     return normalized
 
 

@@ -70,6 +70,60 @@ def test_headed_blob_and_nested_registry_are_split_back():
     assert nested["story_lines"] == "线数=1｜豁免依据=单一封闭空间"
 
 
+def test_fill_context_uses_the_neighbors_not_the_last_episode():
+    from app.services.story_episode_coverage import framework_context_for_fill
+
+    def block(number: int, title: str, body: str) -> str:
+        tag = f"EP{number:02d}"
+        return f"[EPISODE_BLOCK_START:{tag}]\n{title}\n{body}\n[EPISODE_BLOCK_END:{tag}]"
+
+    markdown = "\n\n".join([
+        block(2, "第二集标题", "上一集全文MARKER"),
+        block(4, "第四集标题", "夹在中间MARKER"),
+        block(6, "第六集标题", "下一集全文MARKER"),
+        block(10, "第十集标题", "最后一集全文MARKER"),
+    ])
+    context = framework_context_for_fill(markdown, [3, 5])
+    assert "上一集全文MARKER" in context
+    assert "下一集全文MARKER" in context
+    assert "夹在中间MARKER" in context
+    assert "最后一集全文MARKER" not in context
+    assert "第十集标题" in context
+
+
+def test_outline_user_prompt_injects_the_five_fields():
+    from app.services.story_episode_coverage import _fill_user_prompt
+    from app.services.story_generator_llm import (
+        format_outline_registry_block,
+        prefill_source_for_outline,
+    )
+
+    req = type("Req", (), {"story_lines": "线A=新的一线｜线B=新的二线"})()
+    source = prefill_source_for_outline(
+        req,
+        {
+            "story_generator_global_input": {
+                "plot_background": "剧情背景: PB01｜公开处境已经锁好｜手段=对话｜禁提前=结局",
+                "story_lines": "线A=旧｜线B=旧",
+                "time_nodes": "开篇｜式=相对｜季节=夏｜昼夜=夜｜气候=暴雨雷电｜说明=首日",
+                "professional_domains": "领域=战术穿梭机低空机动驾驶｜触因=围堵｜规程=侧倾｜错法=直飞",
+                "places_and_props": "总裁办公室 (Executive Office)｜功能=部署｜准入=受限",
+            }
+        },
+    )
+    block = format_outline_registry_block(source)
+    assert "剧情背景: PB01｜公开处境已经锁好" in block
+    assert "线A=新的一线" in block
+    assert "线A=旧" not in block
+    assert "季节=夏" in block
+    assert "领域=战术穿梭机低空机动驾驶" in block
+    assert "总裁办公室 (Executive Office)" in block
+    fill = _fill_user_prompt("已完成集", [2], 8, registry_block=block)
+    assert "剧本框架五栏" in fill
+    assert "总裁办公室 (Executive Office)" in fill
+    assert "这次只补：EP02" in fill
+
+
 def test_existing_english_text_is_kept_and_prompts_require_the_fields():
     kept = apply_registry_fields_from_llm(
         {"plot_background": "剧情背景: PB01｜已经写好｜手段=对话｜禁提前=结局"},

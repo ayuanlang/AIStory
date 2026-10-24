@@ -14,8 +14,10 @@ def test_locked_bilingual_season_overrides_saved_project():
     assert info["season"] == "秋"
     block = format_project_season_prompt("夏 / Summer", {"season_occurrence": "冬 / Winter"})
     assert "档=已锁" in block
-    assert "季=夏" in block
+    assert "开篇季=夏" in block
     assert "季=冬" not in block
+    assert "室外景致" in block
+    assert "衣着" in block
 
 
 def test_year_and_open_seasons():

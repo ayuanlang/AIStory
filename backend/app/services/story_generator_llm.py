@@ -238,6 +238,33 @@ def format_egri_creative_input_block(source: Any) -> str:
     return "\n".join(lines)
 
 
+def prefill_source_for_outline(req: Any, global_info: Any) -> Dict[str, str]:
+    """Outline prompts read the request first, then the saved script framework."""
+    saved: Dict[str, Any] = {}
+    if isinstance(global_info, dict):
+        story = global_info.get("story_generator_global_input")
+        if isinstance(story, dict):
+            saved = story
+    out: Dict[str, str] = {}
+    for key in _PREFILL_TEXT_KEYS:
+        out[key] = _field_text(req, key) or _field_text(saved, key)
+    out["script_mode"] = _field_text(req, "script_mode") or _field_text(saved, "script_mode")
+    return out
+
+
+def format_outline_registry_block(source: Any) -> str:
+    """Five locked framework columns. Episode outlines consume them and do not rewrite them."""
+    return "\n".join([
+        "[剧本框架五栏 — 分集大纲沿用]",
+        "这五栏已经在剧本框架锁好。时间行用时间节点。在场名的环境逐字用场景与道具里的空间名，一集可以写多处。专业行的领域只用专业领域里登记的名字。切场的线用故事线。剧情背景只在开篇演成看得见的事，不把全文再贴成旁白。",
+        f"剧情背景: {_field_text(source, 'plot_background')}",
+        f"故事线: {_field_text(source, 'story_lines')}",
+        f"时间节点: {_field_text(source, 'time_nodes')}",
+        f"专业领域: {_field_text(source, 'professional_domains')}",
+        f"场景与道具: {_field_text(source, 'places_and_props')}",
+    ])
+
+
 def format_story_creative_input_block(source: Any) -> str:
     """Creative-input block for the global architect. Emotion-driven uses Egri; otherwise beats win."""
     if _source_uses_egri(source):
