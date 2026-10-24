@@ -15,10 +15,10 @@ Rules:
 - **Names, not billing titles**: Every person in the JSON is an ordinary personal name. Do not keep 男主, 女主, 男二, 女二, 男配, 女配, 男一, 女一, 男主角, 女主角, 大男主, or 大女主 as the way to point at someone — not in logline, theme, conflict, beats, dialogue seeds (`说=` / `听=`), or characters. If the brainstorm already gives a name, use that name. If it only gives one of those titles, assign an ordinary name for the era and place first, then use only that name. The same person keeps the same name in every field.
 - Output ONLY a valid JSON object. No markdown, no code fences, no explanations.
 - Infer the dominant language of the input and write every JSON value in that same language.
-- Preserve the user's original **plot ideas, events, lines, and constraints**. Place each idea on the best-fit beat. Do not smear one event across all 15, and do not replace the brainstorm with an unrelated story. **Do not casually copy scene/location names** from the brainstorm or from reference works (see Scene/environment rule below).
+- Preserve the user's original **plot ideas, events, lines, and constraints**. Place each idea on the best-fit beat. Do not smear one event across all 15, and do not replace the brainstorm with an unrelated story. Do not copy a reference set into a beat just to make a picture. Spaces the plot fails without are still returned in `places_and_props`.
 - **Project season**: 【项目季节 — 必须应用】 is 项目信息, the upstream of this prefill. `档=已锁` means the world and every beat use `季=` unless that beat itself states a time jump. A season named only in the brainstorm does not override `季=`. `档=全年` may change season only when the beat states how much time passed. `档=未锁` keeps a season the brainstorm already named; otherwise pick one season and stay with it. Show the season in light, weather, foliage, snow, heat, or clothing weight when the beat is outdoors or the season would be visible. Do not change the event to show off the season. Do not use the season to rewrite day into night.
 - Do not duplicate the same sentence across keys. `three_act` states the value turn of each act. Each beat states the event. The beat does not repeat the act sentence.
-- If the brainstorm is thin, infer a conservative chain that still serves the user's events. Use "" only when a slot is truly unknowable and inventing it would start a new plot. **"classic_framework" is never one of those slots.**
+- If the brainstorm is thin, infer a conservative chain that still serves the user's events. Use "" only when a slot is truly unknowable and inventing it would start a new plot. **"classic_framework", "plot_background", "story_lines", "time_nodes", "professional_domains", and "places_and_props" are never those slots.** A response that omits any of these keys is invalid.
 - **"classic_framework" is mandatory on every response.** Never omit the key. Never output "", 无, 暂无, N/A, 待定, 推断, 空, or a genre label with no work title. If length is tight, shorten the beats. Do not drop I10.
 - Also fill the legacy rollup keys by joining the beats, so older readers stay in sync:
   - "setup" = beats 01–05
@@ -102,10 +102,20 @@ I10 ("classic_framework") is required on every response, including a thin brains
 Hard constraints on the beats (and on foreshadowing when it carries plot):
 - **AI-unfriendly plot vehicles**: beats that carry the inciting event, escalation, turn, climax, payoff, a key proof, or an escape/assassination must NOT depend on hiding or fetching from a sleeve, the bosom, a waist, an inner pocket, a boot, a sock, or a hairpin, or on fingertip passes of secret notes. Use a visible carrier: an object already on the table, something taken from the hand, a visible case/tray/bag, a public showing, a spoken or OS confirmation, or a cabinet already in frame. Keep the user's names, lines, and plot function; change only the delivery. Atmosphere-only versions of these gestures are deleted, not written.
 - **Shootable physical/comms logic**: how information crosses distance, how a person arrives, how a line is heard, how close a confrontation is. Forbidden: two people in different places talking as if they share a room, with no phone, radio, letter, messenger, or an already-stated supernatural channel; grabbing someone who was never shown approaching. Write 信息通道=`当面同场|通讯|信使/传书|已设定超能传音`. I10 must note how each referenced work makes distance and blocking work on screen.
-- **Scene/environment**: do not copy a place name from the brainstorm or from a reference just to make a picture. Name a location only when the plot fails without that space, the people present are allowed in, and the arrival is logical. The name is a place a person can stand in; the use stays in `功能=`. Restricted rooms (monitor, prison, vault, executive office) need a duty, an escort, a summons, a token, or an intrusion with a cost. Otherwise write the event, the line, the action, and the stake, and leave the room for a later node.
+- **Scene/environment**: beats stay on the event. The spaces and objects the plot fails without are returned in this same JSON, under `places_and_props`. Do not omit that key, and do not leave the list for a later node. A space name is a place a person can stand in; the use stays in `功能=`. Restricted rooms (monitor, prison, vault, executive office) need a duty, an escort, a summons, a token, or an intrusion with a cost. Do not invent a place only to make a picture, and do not copy a reference work's set.
 - **Hidden villain**: a character who is not a public antagonist must not expose themselves by behavior or dialogue on arrival. The larger the villain, the later the first crack. Early beats show subordinates, proxies, and consequences. The person themselves becomes suspect only after the hero finds a contradiction. A public opponent from the opening is exempt. Forbidden early: the hidden villain's own cruel line, their own dirty hands, a read that settles the secret at a glance.
 
 Keep concept fields and each beat concise. "characters", beat 14, "classic_framework", and any beat that carries a dialogue seed may run longer.
+
+The object you return must contain these keys. Each value is a non-empty string. If the answer is getting long, shorten the beats, then still emit the keys. Missing a key is an invalid response:
+
+"plot_background": "剧情背景: PB01｜公开处境。关系前史。此刻为何非做不可。｜手段=对话｜禁提前=结局"
+"story_lines": "线A=这一条怎么改写同一冲突｜线B=另一条怎么改写同一冲突"
+"time_nodes": "开篇｜式=相对｜季节=秋｜昼夜=日｜气候=阴｜说明=开篇这一段"
+"professional_domains": "领域=无｜依据=本剧选择不依赖行业规程"
+"places_and_props": "办公室 (Office)｜功能=这场戏在这里完成什么｜准入=开放"
+
+Replace the sample with this story. Key names stay exactly as written. Several places are several lines inside `places_and_props`. A craft the plot needs replaces `领域=无` with `领域=｜触因=｜规程=｜错法=`. One closed space for the whole story may use `线数=1｜豁免依据=单一封闭空间` instead of 线A and 线B.
 
 Input:
 {creative_text}

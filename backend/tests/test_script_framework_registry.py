@@ -93,5 +93,8 @@ def test_existing_english_text_is_kept_and_prompts_require_the_fields():
     structure = _resolve_prompt_text("story_generator_structure_creative_input.txt")
     emotion = _resolve_prompt_text("emotion_driven_structure_prefill.txt")
     assert "These five keys are mandatory" in structure
-    assert "plot_background" in emotion
+    assert "leave the room for a later node" not in structure
+    assert "The object you return must contain these keys" in structure
+    assert "少一个键，这次回答无效" in emotion
+    assert "地点拿不准就不写" not in emotion
     assert "永远不许空" in emotion

@@ -857,14 +857,15 @@ async def structure_project_creative_input_to_story_fields(
             "story_circle 必填：你、需要、出发、寻找、找到、付出、返回、改变，每一步落在某一阶上，不另起情节。"
             "theme 与 egri_premise 同句，core_conflict 与 egri_unity 同句，background 与 egri_social 同句，characters 与 egri_dimensions 同句。"
             "classic_framework 是经典借鉴，与 ai_vfx_strategy、story_circle 一起必填。主框架是用人物冲突证明社会或人性前提的现代或当代作品，辅助至少 5 部，落阶只用 01 到 08。只写整体逻辑。可以参考原作剧情，必须符合本剧背景和主题，按本剧因果融合，不能硬拼。不锁每一集的基本点。分集大纲才定一处经典基本点。"
-            "优势行写阶=，不写救猫咪拍名。地点拿不准就不写。沿用【项目季节 — 必须应用】。"
+            "优势行写阶=，不写救猫咪拍名。某一阶拿不准房间，就不要写进那一阶。沿用【项目季节 — 必须应用】。"
             "plot_background、story_lines、time_nodes、professional_domains、places_and_props 五键必填，禁止空字符串。"
             "篇幅不够就缩短八阶，不许漏这五键。键名用英文。"
             "剧情背景写公开处境、关系前史、此刻为何非做不可。"
             "故事线至少两条改写同一冲突；只有整剧是单一封闭空间才写线数=1。"
             "时间节点至少写开篇的季节、昼夜、气候。"
             "专业领域写触因、做法和错法；情节不靠规程就写领域=无。"
-            "场景与道具只登记离了就做不成的空间和物件。空间名是能站进去的地方，功能另写一句。一处一个名字，可以登记多处。不写陈设和材质。\n"
+            "场景与道具只登记离了就做不成的空间和物件。空间名是能站进去的地方，功能另写一句。一处一个名字，可以登记多处。不写陈设和材质。"
+            "这次返回的 JSON 必须包含 plot_background、story_lines、time_nodes、professional_domains、places_and_props。少一个键就是无效回答，不要留到后一阶段。\n"
         )
     else:
         user_prompt = (
@@ -885,8 +886,9 @@ async def structure_project_creative_input_to_story_fields(
             "For each work write reusable logic (core plot, set pieces, VFX function, action, dialogue, "
             "and how distance/comms/blocking actually work on screen) and 转译. "
             "Beats 01-15 must be physically shootable: no long-distance conversation without a comms tool or same-space staging. "
-            "Do NOT casually copy scene/environment names from the brainstorm or from reference works. "
-            "Name a location only if the plot hard-needs that space, it matches character status/access (prisons/monitor rooms/vaults are restricted), and arrival is logical; otherwise omit place and write the event only — later nodes will plan environments. "
+            "Do not copy a reference set into a beat just to make a picture. "
+            "Beats stay on the event. places_and_props must still be in the JSON you return, with every place the plot fails without. "
+            "Do not omit that key for a later node. Restricted rooms need a duty, an escort, a summons, a token, or an intrusion with a cost. "
             "Put the must-have climax inside beat 14, and rhyme beat 15 with beat 01. "
             "Apply 【项目季节 — 必须应用】 to the world and to every beat that does not state a time jump. "
             "ai_vfx_strategy is mandatory: at least two advantage lines tied to beats, plus avoidance rewrites or 劣势回避=本脑洞无高风险互动. "
@@ -897,7 +899,9 @@ async def structure_project_creative_input_to_story_fields(
             "time_nodes names at least the opening season, day or night, and weather. "
             "professional_domains names the trigger, the right step, and the amateur mistake, or 领域=无. "
             "places_and_props registers only spaces and objects the plot fails without. "
-            "A space name is a place you can stand in; write the function separately. Register each distinct place. No furnishings or materials."
+            "A space name is a place you can stand in; write the function separately. Register each distinct place. No furnishings or materials. "
+            "The JSON you return must contain plot_background, story_lines, time_nodes, professional_domains, and places_and_props. "
+            "A response missing any of these keys is invalid. Do not leave them for a later stage."
         )
     from app.services.series_ip_mode import is_series_ip_script_mode as _is_series_ip_script_mode
 
