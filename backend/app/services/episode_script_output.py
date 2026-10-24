@@ -87,7 +87,7 @@ _PAGE_KEEP_HEADING = (
 _LEDGER_STOP = (
     r"全局角色|本集场景环境名清单|身份定位|核心重点|核心内容纲要|本集卖点|"
     r"场景列表|剧情连贯自检|分集开局规划|写后核销|娱乐化段子|"
-    r"核心卖点（制作指导）|AI 视频研判"
+    r"核心卖点（制作指导）|AI 视频研判|预告片框架规划落点"
 )
 _LEDGER_HEADING_RE = re.compile(
     rf"(?ms)^(?P<head>(?:#{{1,6}}\s*|[-*]\s*\*{{0,2}})本集实体定位台账\b[^\n]*)\n"
@@ -98,8 +98,27 @@ _LEDGER_HEADING_RE = re.compile(
 _PAGE_DROP_HEADING = (
     r"-?1\)\s*类型执行摘要|类型执行摘要|剧情连贯自检|娱乐化段子|桥段凝聚汇总|"
     r"分集开局规划|写后核销总表|框架核销清单|大纲逐字分析台账|"
-    r"核心卖点（制作指导）|AI 视频研判"
+    r"核心卖点（制作指导）|AI 视频研判|预告片框架规划落点|"
+    r"全局角色·道具特性状态表|全局角色特性状态表|全局道具特性状态表"
 )
+_ENTITY_ROW_RE = re.compile(
+    r"(?<![A-Za-z])(?P<kind>CHAR|PROP|ENV)\|(?P<name>[^|\n]+)(?:\||$)"
+)
+_TRAIT_HEAD_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*|[-*]\s*\*{0,2})全局(?:角色[·・]道具特性状态表|角色特性状态表|道具特性状态表)\b"
+)
+_TRAIT_ROW_RE = re.compile(r"(?<![A-Za-z])(?:CHAR|PROP)特质\|")
+_LEDGER_HEAD_LINE_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*|[-*]\s*\*{0,2})本集实体定位台账\b"
+)
+_CATEGORY_ONLY_RE = re.compile(
+    r"^\s*[-*]\s*\*{0,2}(?P<cat>角色|道具|环境)\*{0,2}\s*[：:]\s*$"
+)
+_HARD_BREAK_RE = re.compile(
+    r"^(?:#{1,6}\s+\S|\[(?:SCENES_BLOCK_|SCENE_|ENV_BLOCK_|BEAT_|EMERGENCY_RECOVERY_|EPISODE_SCRIPT_))"
+)
+_APPLIED_LINE_RE = re.compile(r"Applied Entities\s*全覆盖")
+_PLACEHOLDER_NAMES = {"名(en)", "名（en）", "名(english)", "名"}
 
 _BRIDGE_BLOCK_RE = re.compile(
     r"(?:━{6,}\s*)?\[\s*BRIDGE_BLOCK_START\s*\][\s\S]*?\[\s*BRIDGE_BLOCK_END\s*\](?:\s*━{6,})?",
@@ -143,6 +162,114 @@ def extract_entity_position_ledger(text: str) -> str:
     if not body:
         return ""
     return f"## 本集实体定位台账\n{body}".strip()
+
+
+def _entity_row_key(kind: str, name: str) -> str:
+    compact = re.sub(r"\s+", "", str(name or "")).casefold()
+    return f"{kind}|{compact}"
+
+
+def _is_placeholder_entity(name: str) -> bool:
+    return re.sub(r"\s+", "", str(name or "")).casefold() in _PLACEHOLDER_NAMES
+
+
+def _is_hard_break(line: str) -> bool:
+    return bool(_HARD_BREAK_RE.match(line.strip()))
+
+
+def dedupe_entity_position_ledger(page: str) -> str:
+    """Keep one ledger on the script page, and one row per character, prop, and place.
+
+    Thinking also asks for the same ledger plus a trait table. Models often paste
+    both into OUTPUT, so the same prop shows up as ``PROP|`` and again as ``PROP特质|``.
+    """
+    source = str(page or "")
+    has_ledger = "本集实体定位台账" in source
+    has_trait_table = bool(_TRAIT_HEAD_RE.search(source))
+    if not source.strip() or (not has_ledger and not has_trait_table):
+        return source.strip()
+
+    real_kinds: set[str] = set()
+    for line in source.splitlines():
+        if _TRAIT_ROW_RE.search(line):
+            continue
+        for match in _ENTITY_ROW_RE.finditer(line):
+            if not _is_placeholder_entity(match.group("name")):
+                real_kinds.add(match.group("kind"))
+
+    seen_ledger_head = False
+    seen_keys: set[str] = set()
+    seen_applied = False
+    seen_category: set[str] = set()
+    in_trait = False
+    skip_extra_ledger = False
+    in_ledger = False
+    kept: list[str] = []
+
+    for line in source.splitlines():
+        if skip_extra_ledger:
+            if _is_hard_break(line) and not _LEDGER_HEAD_LINE_RE.match(line):
+                skip_extra_ledger = False
+            else:
+                continue
+
+        if in_trait:
+            real_entity = _ENTITY_ROW_RE.search(line) and not _TRAIT_ROW_RE.search(line)
+            if _is_hard_break(line) or _LEDGER_HEAD_LINE_RE.match(line) or real_entity:
+                in_trait = False
+            else:
+                continue
+
+        if _TRAIT_HEAD_RE.match(line):
+            in_trait = True
+            continue
+        if _TRAIT_ROW_RE.search(line):
+            continue
+
+        if _LEDGER_HEAD_LINE_RE.match(line):
+            if seen_ledger_head:
+                # Still inside the first ledger: merge later rows so a real prop
+                # written only in the second copy is kept. After scenes, drop the copy.
+                if in_ledger:
+                    continue
+                skip_extra_ledger = True
+                continue
+            seen_ledger_head = True
+            in_ledger = True
+            kept.append("## 本集实体定位台账")
+            continue
+
+        if _is_hard_break(line):
+            in_ledger = False
+
+        if in_ledger:
+            if _APPLIED_LINE_RE.search(line):
+                if seen_applied:
+                    continue
+                seen_applied = True
+                kept.append(line)
+                continue
+            category = _CATEGORY_ONLY_RE.match(line)
+            if category:
+                label = category.group("cat")
+                if label in seen_category:
+                    continue
+                seen_category.add(label)
+                kept.append(line)
+                continue
+            match = _ENTITY_ROW_RE.search(line)
+            if match and not _TRAIT_ROW_RE.search(line):
+                kind = match.group("kind")
+                if _is_placeholder_entity(match.group("name")) and kind in real_kinds:
+                    continue
+                key = _entity_row_key(kind, match.group("name"))
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+
+        kept.append(line)
+
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
 
 
 def inject_entity_position_ledger(official: str, source: str) -> str:
@@ -202,13 +329,15 @@ def extract_official_episode_script(text: str) -> str:
     if marked.get("found") and str(marked.get("content") or "").strip():
         cleaned = _strip_legacy_analysis_sections(str(marked.get("content") or ""))
         cleaned = trim_episode_script_for_page(cleaned)
-        return inject_entity_position_ledger(cleaned, source) or cleaned
+        cleaned = inject_entity_position_ledger(cleaned, source) or cleaned
+        return dedupe_entity_position_ledger(cleaned) or cleaned
 
     cleaned = strip_episode_script_thinking_blocks(source)
     cleaned = _strip_legacy_analysis_sections(cleaned)
     cleaned = trim_episode_script_for_page(cleaned)
     cleaned = inject_entity_position_ledger(cleaned, source) or cleaned
-    return cleaned.strip() or source.strip()
+    cleaned = dedupe_entity_position_ledger(cleaned)
+    return cleaned.strip() or dedupe_entity_position_ledger(source).strip()
 
 
 def is_acceptable_episode_script_markdown(text: str) -> bool:

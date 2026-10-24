@@ -54,6 +54,10 @@ def test_prompt_locks_range_and_focus():
     assert "不把范围外的高光" in block
     assert "侧重点不写进标题" in block
     assert "不超过 8 字" in block
+    assert "## 预告片框架规划落点" in block
+    assert "I3 主控危机" in block
+    assert "落点=Beat n" in block
+    assert "AllIsLost" in block
 
 
 def test_prompt_without_focus_stays_balanced():

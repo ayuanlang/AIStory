@@ -183,6 +183,65 @@ def test_extract_official_keeps_existing_ledger_without_duplicate():
     assert "CHAR|林一 (Lin Yi)" in official
 
 
+def test_extract_official_collapses_repeated_ledger_and_props():
+    duplicated = (
+        "[EPISODE_SCRIPT_OUTPUT_START]\n"
+        "# 1-工牌错位\n"
+        "## 核心重点\n"
+        "- **卖点**：身份错位\n"
+        "## 本集实体定位台账\n"
+        "- **道具**：逐条 `PROP|名(EN)|#功能=大纲那一句|用法落点|核销`\n"
+        "- **道具**：\n"
+        "  - PROP|工牌 (Badge)|#功能=身份凭证|用法落点=EP01_SC01|核销\n"
+        "  - PROP|工牌(Badge)|#跨集价值=身份凭证|开场态=错位|结束态=仍握|核销\n"
+        "- **角色**：\n"
+        "  - CHAR|林一 (Lin Yi)|#身份=审计员|落点=EP01_SC01|核销\n"
+        "## 本集实体定位台账\n"
+        "- **道具**：\n"
+        "  - PROP|工牌 (Badge)|#功能=身份凭证|用法落点=EP01_SC01|核销\n"
+        "## 全局道具特性状态表\n"
+        "- **道具**：\n"
+        "  - PROP特质|工牌 (Badge)|#特性=权限纹|核销\n"
+        "## 场景列表\n"
+        "[SCENES_BLOCK_START]\nscene\n[SCENES_BLOCK_END]\n"
+        "[EPISODE_SCRIPT_OUTPUT_END]\n"
+    )
+    official = extract_official_episode_script(duplicated)
+    assert official.count("本集实体定位台账") == 1
+    assert official.count("PROP|工牌") == 1
+    assert official.count("CHAR|林一") == 1
+    assert "PROP特质|" not in official
+    assert "全局道具特性状态表" not in official
+    assert "名(EN)" not in official
+    assert official.index("本集实体定位台账") < official.index("## 场景列表")
+    assert "[SCENES_BLOCK_START]" in official
+
+
+def test_extract_official_drops_trailer_framework_plan():
+    leaked = (
+        "[EPISODE_SCRIPT_THINKING_START]\n"
+        "## 预告片框架规划落点\n"
+        "项=I3主控危机｜规划=审计倒计时｜落点=Beat 12\n"
+        "[EPISODE_SCRIPT_THINKING_END]\n"
+        "[EPISODE_SCRIPT_OUTPUT_START]\n"
+        "# 预告-工牌\n"
+        "## 核心重点\n"
+        "- **卖点**：身份错位\n"
+        "## 预告片框架规划落点\n"
+        "项=I1高概念｜规划=误刷看见解雇信｜落点=Beat 2\n"
+        "拍=FunGames｜范围内=是｜规划=电梯对质｜落点=Beat 6\n"
+        "## 场景列表\n"
+        "[SCENES_BLOCK_START]\nscene\n[SCENES_BLOCK_END]\n"
+        "[EPISODE_SCRIPT_OUTPUT_END]\n"
+    )
+    official = extract_official_episode_script(leaked)
+    assert "预告片框架规划落点" not in official
+    assert "主控危机" not in official
+    assert "I1高概念" not in official
+    assert "[SCENES_BLOCK_START]" in official
+    assert official.startswith("# 预告-工牌")
+
+
 def test_heading_parse_reads_inside_output_markers():
     full = (
         "[EPISODE_SCRIPT_THINKING_START]\n摘要\n[EPISODE_SCRIPT_THINKING_END]\n"
