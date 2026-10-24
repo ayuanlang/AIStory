@@ -36,7 +36,7 @@ def build_episode_generation_guidance_prompt_block(guidance: Optional[str]) -> s
 def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
     """Inject the structured prefill as a required source for episode and trailer writing.
 
-    A blank prefill yields an empty string. Trailer length is the 5000 字 scale. 核心建置,
+    A blank prefill yields an empty string. Trailer length is the 8000 字 scale. 核心建置,
     人物弧光, and the foundational worldview ride inside 建置, 娱乐时间, and 反派逼近.
     """
     if not structured_prefill_has_text(source):
@@ -52,7 +52,7 @@ def build_structured_prefill_prompt_block(source: Any, *, trailer: bool) -> str:
             "【剧本框架 — 预告片重要依据】\n"
             "注入链是项目信息 → 剧本框架 → 分集大纲 → 剧本生成。预告落实这份剧本框架。概念、思想、对抗、人物弧光、节拍事件、对白种子、世界背景和剧情背景以剧本框架为准。分集大纲只提供某一段落在哪一集、时间和在场名。大纲把同一件事写成另一套时，改回剧本框架。预告必须把核心建置、人物弧光和基础世界观演进已有短拍，让没看过正片的观众读得出来。\n"
             "核心建置＝概念=I1 高概念、思想=I2 主控思想、对抗=I3、I3b 三幕价值弧、I4 故事世界。人物弧光＝I5。基础世界观＝世界背景＋剧情背景，并含 I4。\n"
-            "节奏与篇幅：按 5000 字写，不超过 5000 字。高光短拍 10–20 拍。不另开说明拍，不口播。不得为了少于 10 拍把多人多空间写回一句，也不得拆过 20 拍。末拍停在大危机和大转折已经落到画面上的那一下，这一拍之后的胜负、揭秘和收束不写。每一拍都选中或创作一句高光对白和一下高光动作，同一个人写在同一拍；只有对白或只有动作的拍不合格。动作写到哪一只手、哪一件物、哪一处可见变化，不写通报、下令、安排。新写的对白是口语短句，不写因此、然而、我必须让你知道。跑、追、飞、掠、行驶的主体仍写从哪到哪、跨距和用时，速度由这两数读出；这段路落在宿主，不落在驾驶舱。\n"
+            "节奏与篇幅：按 8000 字写，不超过 8000 字。高光短拍 16–32 拍。不另开说明拍，不口播。不得为了少于 16 拍把多人多空间写回一句，也不得拆过 32 拍。末拍停在大危机和大转折已经落到画面上的那一下，这一拍之后的胜负、揭秘和收束不写。每一拍都选中或创作一句高光对白和一下高光动作，同一个人写在同一拍；只有对白或只有动作的拍不合格。动作写到哪一只手、哪一件物、哪一处可见变化，不写通报、下令、安排。新写的对白是口语短句，不写因此、然而、我必须让你知道。跑、追、飞、掠、行驶的主体仍写从哪到哪、跨距和用时，速度由这两数读出；这段路落在宿主，不落在驾驶舱。\n"
             "概念=I1：同一拍里一句高光对白加一下高光动作，点出谁要什么、谁在挡、失败失去什么。"
             "思想=I2：同一拍里一句高光对白加一下高光动作，点出价值加原因，不宣布成主题。"
             "对抗=I3：落在娱乐时间，并在反派逼近顶一下，两句相反的原则当场相撞。"
@@ -538,7 +538,7 @@ def build_trailer_generation_prompt_block(
         "I3b plays only the value direction of the acts inside the locked range, and does not show who wins. "
         "I4 and 世界背景 land in 建置 as the rule without which this choice cannot be understood. "
         "A dialogue seed on a sampled beat, aimed at the controlling idea, the gap and crisis, the value arc, the pressure field, or the character premise and arc, is spoken in those words, with the speaker's micro-action and expression, and the listener's when the line is spoken to someone. A 自白 writes the speaker only. "
-        "Do not announce the theme. Do not add a lecture beat. Write at the 5000 字 scale, and do not exceed 5000 字. Do not play prefill beats 11–15.\n"
+        "Do not announce the theme. Do not add a lecture beat. Write at the 8000 字 scale, and do not exceed 8000 字. Do not play prefill beats 11–15.\n"
         "思考稿先写规划落点: inside `[EPISODE_SCRIPT_THINKING_START]`, before the type summary, "
         "write `## 预告片框架规划落点`. Read the script framework and list what was planned, why this trailer uses it, "
         "and which Beat it lands on. 核心建置 covers I1 高概念, I2 主控思想, I3 对抗, I3 主控危机, I3b, I4 故事世界, "
@@ -549,7 +549,7 @@ def build_trailer_generation_prompt_block(
         "主控危机 lands on the last beat, where the big crisis is already visible and the result stays unplayed. "
         "Beats inside the range that are Opening through Debate, FunGames, or BadGuysCloseIn must name a Beat. "
         "Do not write the body until every selected row has a Beat. This section stays in THINKING and does not enter OUTPUT.\n"
-        "Length: 5000 字. Short beats stay within 10–20. Each beat has one highlight line and one highlight action. Do not compress different people or spaces back into one beat to stay under 10, and do not split past 20.\n"
+        "Length: 8000 字. Short beats stay within 16–32. Each beat has one highlight line and one highlight action. Do not compress different people or spaces back into one beat to stay under 16, and do not split past 32.\n"
         "A running, chasing, flying, or driving subject still states where it starts, where it ends, how far, and how long. Speed is that distance over that time. The span belongs to the host space (street, road, sea, sky, building gap, or airway), not the cabin.\n"
         "The first non-empty OUTPUT line MUST be: # 预告-{short title}\n"
         "短题不超过 8 字，从这段预告的剧情起名。不把侧重点、取材范围、本集生成指导或其他指导原句写进短题。\n"

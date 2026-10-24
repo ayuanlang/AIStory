@@ -151,8 +151,8 @@ def test_prefill_is_required_input_and_trailer_keeps_length():
     assert "人物弧光" in trailer
     assert "世界背景" in trailer
     assert "林一要留证" in trailer
-    assert "5000 字" in trailer
-    assert "10–20" in trailer
+    assert "8000 字" in trailer
+    assert "16–32" in trailer
     assert "跨距" in trailer
     assert "11–15" in trailer
     assert "原句入短拍" in trailer
@@ -163,8 +163,8 @@ def test_prefill_is_required_input_and_trailer_keeps_length():
     assert "概念 (I1)" in block
     assert "人物弧光" in block
     assert "世界背景" in block
-    assert "5000 字" in block
-    assert "10–20" in block
+    assert "8000 字" in block
+    assert "16–32" in block
     assert "host space" in block
     assert "speaker's micro-action" in block
 
