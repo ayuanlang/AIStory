@@ -4244,6 +4244,7 @@ async def _run_scene_storyboard_step(
     scene_id: str,
     staging_text: str,
     scene_order: int,
+    guidance_text: str = "",
 ) -> int:
     """Generate and import this scene's shots. Completion is shot rows, same as other steps' 落库."""
     from app.api.routers.workspace.shot_ai_generation import AIShotGenRequest
@@ -4268,6 +4269,7 @@ async def _run_scene_storyboard_step(
             scene_id=scene_id,
             staging_text=staging_text,
             scene_order=int(scene_order or 0) or None,
+            name_source_text=guidance_text,
         )
         task_db.commit()
     scene = _find_active_scene_by_scene_no(
@@ -4778,6 +4780,11 @@ async def run_scene_subskill_pipeline(
                             or ""
                         ),
                         scene_order=int(task.get("scene_order") or 0),
+                        guidance_text=str(
+                            persist_steps.get("framing")
+                            or persist_steps.get("drama")
+                            or ""
+                        ),
                     )
                     called.append("storyboard")
                     upsert_pipeline_node_status(

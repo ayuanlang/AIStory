@@ -635,6 +635,48 @@ def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
     return _build_project_prompt_context(project.global_info)
 
 
+_COLOR_PLAN_LINE = re.compile(r"色光规划\s*=\s*([^\r\n]+)")
+
+
+def _scene_environment_color_plan_block(
+    environment_entities: List[Any],
+    main_names: List[str],
+) -> str:
+    """Pull only each used main environment's 色光规划 line for shot color."""
+    by_key: Dict[str, Any] = {}
+    for ent in environment_entities or []:
+        for alias in (getattr(ent, "name", None), getattr(ent, "name_en", None)):
+            key = subject_compare_key(str(alias or ""))
+            if key:
+                by_key[key] = ent
+    lines: List[str] = []
+    seen: set = set()
+    for main_name in main_names:
+        cleaned = str(main_name or "").strip()
+        key = subject_compare_key(cleaned)
+        if not cleaned or not key or key in seen:
+            continue
+        seen.add(key)
+        ent = by_key.get(key)
+        if ent is None:
+            continue
+        match = _COLOR_PLAN_LINE.search(str(getattr(ent, "generation_prompt_cn", None) or ""))
+        if not match:
+            continue
+        plan = match.group(1).strip().rstrip("。")
+        if not plan:
+            continue
+        lines.append(f"ENV:[{cleaned}]｜色光规划={plan}")
+    if not lines:
+        return ""
+    return (
+        "【本场环境色光】\n"
+        "只抽主环境成稿里的色光规划一行。不注入该环境其余提示词、四壁或四宫格。\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+
+
 def _build_scene_subject_image_prompts_cn_section(
     project_entities: List[Any],
     subject_match_keys: set,
@@ -772,17 +814,25 @@ def _build_scene_subject_image_prompts_cn_section(
         )
         return ""
 
+    color_block = _scene_environment_color_plan_block(
+        environment_entities,
+        list(main_by_name.values()),
+    )
+
     body = (
         "# Scene Subject Image Prompts (CN)\n"
         "本场只注入用到的衍生环境信息。不注入主环境整份 generation_prompt_cn，"
         "不注入开篇世界锁，不注入四宫格。\n"
         "【衍生环境信息】只供脑内核对这一角的所属主环境、背景、画面左、画面右、画外、可见与不可见。"
         "禁止把这些字段扩写成环境导游，禁止把未注入的主环境四壁或光句补进本段。\n"
+        "【本场环境色光】只在主环境成稿里已经写了 `色光规划=` 时出现，并且只抽这一行。"
+        "色温、光比、柔硬跟本拍所属主环境这一行的主冷暖和光质。\n"
         "Video 只点名本场衍生环境名。角色与道具落位照建置抄。\n"
         "Do NOT expect CHAR/PROP prompts or the main-environment plate here. "
         "Entity naming authority remains Scene Subject Index. "
         "Do not replace the used derivative with its main ENV name in shot output.\n\n"
         f"{derived_info_block}\n"
+        f"{color_block}"
     )
     logger.info(
         "[_build_shot_prompts] injected scene ENV image prompts scene_id=%s keys=%s rows=%s",

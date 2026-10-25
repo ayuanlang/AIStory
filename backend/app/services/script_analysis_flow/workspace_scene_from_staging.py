@@ -53,6 +53,8 @@ _ACTION_HEAD_RE = re.compile(
     r"(?:^|\n)[ \t]*(?:─{2,}|-{2,})?[ \t]*【[ \t]*入戏[ \t]*】[ \t]*(?:─{2,}|-{2,})?[ \t]*",
     re.IGNORECASE,
 )
+_GUIDANCE_LINE_RE = re.compile(r"【\s*改编指导\s*】[^\n\r]*")
+_STC_IN_BLOCK_RE = re.compile(r"救猫咪拍\s*=\s*([^｜|\s：:\n\r]+)")
 
 
 def _clean(value: object) -> str:
@@ -145,7 +147,38 @@ def _format_env_list(names_csv: str) -> str:
     return _join_unique([f"ENV:[{name}]" for name in names])
 
 
-def _keep_setup_and_action(block: str, beat_id: str) -> str:
+def _beat_blocks(text: str) -> Dict[str, str]:
+    joined = str(text or "")
+    starts = list(_BEAT_START_RE.finditer(joined))
+    blocks: Dict[str, str] = {}
+    for idx, start_match in enumerate(starts):
+        beat_id = str(start_match.group(1) or idx + 1).strip() or str(idx + 1)
+        next_start = starts[idx + 1].start() if idx + 1 < len(starts) else len(joined)
+        end_match = _BEAT_END_RE.search(joined, start_match.end())
+        if end_match and end_match.start() <= next_start:
+            blocks[beat_id] = joined[start_match.start(): end_match.end()]
+        else:
+            blocks[beat_id] = joined[start_match.start(): next_start]
+    return blocks
+
+
+def _guidance_line(block: str) -> str:
+    match = _GUIDANCE_LINE_RE.search(str(block or ""))
+    if not match:
+        return ""
+    line = re.sub(r"\s+", " ", match.group(0)).strip()
+    if "救猫咪拍" in line:
+        return line
+    stc = _STC_IN_BLOCK_RE.search(str(block or ""))
+    if not stc:
+        return line
+    name = stc.group(1).strip()
+    if not name:
+        return line
+    return line.replace("【改编指导】", f"【改编指导】救猫咪拍={name}｜", 1)
+
+
+def _keep_setup_and_action(block: str, beat_id: str, guidance: str = "") -> str:
     from app.services.script_analysis_flow import strip_beat_transition_notes_from_script
 
     text = strip_beat_transition_notes_from_script(block)
@@ -164,13 +197,16 @@ def _keep_setup_and_action(block: str, beat_id: str) -> str:
     if not setup_m and not action_m:
         return ""
     begin = setup_m.start() if setup_m else action_m.start()
-    visual_body = body[begin:].strip()
+    visual_body = _GUIDANCE_LINE_RE.sub("", body[begin:]).strip()
     if not visual_body:
         return ""
+    guidance_line = _guidance_line(block) or _clean(guidance)
+    if guidance_line:
+        visual_body = f"{guidance_line}\n{visual_body}"
     return f"{header}\n{visual_body}\n{footer}".strip()
 
 
-def extract_staging_visual_beats(scene_text: str) -> str:
+def extract_staging_visual_beats(scene_text: str, guidance_source: str = "") -> str:
     """Keep only per-beat 【建置】+【入戏】 for scene stats and storyboard."""
     from app.services.script_analysis_flow import (
         extract_beat_blocks_from_scene_text,
@@ -183,8 +219,10 @@ def extract_staging_visual_beats(scene_text: str) -> str:
     if not joined.strip():
         return ""
     starts = list(_BEAT_START_RE.finditer(joined))
+    guidance_by_beat = _beat_blocks(guidance_source)
     if not starts:
-        return _keep_setup_and_action(joined, "1")
+        fallback = _guidance_line(guidance_source)
+        return _keep_setup_and_action(joined, "1", fallback)
     visuals: List[str] = []
     for idx, start_match in enumerate(starts):
         beat_id = str(start_match.group(1) or idx + 1).strip() or str(idx + 1)
@@ -194,7 +232,8 @@ def extract_staging_visual_beats(scene_text: str) -> str:
             block = joined[start_match.start(): end_match.end()]
         else:
             block = joined[start_match.start(): next_start]
-        visual = _keep_setup_and_action(block, beat_id)
+        fallback = _guidance_line(guidance_by_beat.get(beat_id, ""))
+        visual = _keep_setup_and_action(block, beat_id, fallback)
         if visual:
             visuals.append(visual)
     return "\n\n".join(visuals).strip()
@@ -202,6 +241,7 @@ def extract_staging_visual_beats(scene_text: str) -> str:
 
 def _beat_excerpt(beats_text: str, limit: int = 80) -> str:
     cleaned = re.sub(r"`?\[BEAT_(?:START|END)(?::[^\]]+)?\]`?", "", str(beats_text or ""))
+    cleaned = _GUIDANCE_LINE_RE.sub("", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return ""
@@ -225,7 +265,7 @@ def build_workspace_scene_payload_from_staging(
     scene_name = extract_scene_name_value_from_scene_text(source)
     if not scene_name:
         scene_name = extract_scene_name_value_from_scene_text(name_source_text)
-    beats = extract_staging_visual_beats(source)
+    beats = extract_staging_visual_beats(source, guidance_source=name_source_text)
     derived_envs = extract_derived_environment_names_from_scene_text(source)
     char_names = collect_character_tokens(scene_id_text, source)
     prop_names = collect_prop_tokens(scene_id_text, source)

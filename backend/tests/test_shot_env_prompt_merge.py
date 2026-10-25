@@ -163,3 +163,37 @@ def test_does_not_paste_main_grid_cells():
     assert "开篇斜阳从画面左、远离镜头、低打来。" not in text
     assert "【六面一次】" not in text
     assert "ENV:[180度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=180" in text
+
+
+def test_injects_only_the_color_plan_line_from_the_main_prompt():
+    main = _env(
+        id=50,
+        name="客栈大堂",
+        generation_prompt_cn=(
+            "【光学说明】主光=斜阳\n"
+            "色光规划=本块对标片=英雄｜主冷暖=暖调主导｜光质=低斜阳｜主色=沙金\n"
+            "【四向拼图】[0度格-左上·北] 开篇斜射金光"
+        ),
+    )
+    other = _env(
+        id=51,
+        name="后巷",
+        generation_prompt_cn="色光规划=本块对标片=七宗罪｜主冷暖=冷调主导｜光质=街灯",
+    )
+    derived = _env(
+        id=52,
+        name="0度客栈大堂",
+        visual_dependencies=["ENV:[客栈大堂]"],
+        custom_attributes={"main_environment": "客栈大堂", "background": "柜台"},
+    )
+    text = _build_scene_subject_image_prompts_cn_section(
+        [main, other, derived],
+        _keys("0度客栈大堂"),
+        scene_id=23,
+    )
+    assert "【本场环境色光】" in text
+    assert "ENV:[客栈大堂]｜色光规划=本块对标片=英雄｜主冷暖=暖调主导｜光质=低斜阳｜主色=沙金" in text
+    assert "七宗罪" not in text
+    assert "【光学说明】" not in text
+    assert "[0度格-左上·北]" not in text
+    assert "开篇斜射金光" not in text
