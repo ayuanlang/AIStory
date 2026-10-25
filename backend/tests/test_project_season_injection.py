@@ -16,8 +16,7 @@ def test_locked_bilingual_season_overrides_saved_project():
     assert "档=已锁" in block
     assert "开篇季=夏" in block
     assert "季=冬" not in block
-    assert "室外景致" in block
-    assert "衣着" in block
+    assert "不写景致、衣着" in block
 
 
 def test_year_and_open_seasons():
