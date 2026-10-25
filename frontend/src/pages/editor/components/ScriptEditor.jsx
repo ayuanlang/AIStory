@@ -3991,6 +3991,8 @@ const ANALYSIS_STAGE_LABELS = {
     assets_gen_prop: { zh: '道具生成', en: 'Prop Gen' },
     assets_gen_environment: { zh: '环境生成', en: 'Environment Gen' },
     assets_gen_derived: { zh: '生成衍生环境', en: 'Derived Environment Gen' },
+    reextract_character: { zh: '重新抽取角色', en: 'Re-extract Characters' },
+    reextract_prop: { zh: '重新抽取道具', en: 'Re-extract Props' },
     storyboard: { zh: '分镜生成', en: 'Storyboard Generation' },
 };
 
@@ -4305,8 +4307,13 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
     return text;
 };
 
+const isReextractAnalysisPhase = (phase) => (
+    String(phase || '').trim().toLowerCase().startsWith('reextract_')
+);
+
 const normalizeAnalysisLivePhase = (phase) => {
     const key = String(phase || '').trim().toLowerCase();
+    if (isReextractAnalysisPhase(key)) return key;
     // Supervisor / readiness repair: keep concurrent fan-out highlight on scene+assets,
     // and map storyboard-only repair to the storyboard step.
     if (key === 'supplement') return 'assets_gen';
@@ -4360,6 +4367,7 @@ const formatSupervisorGapLabels = (probe = {}, tFn = (zh) => zh) => {
 const canTrustStageArtifactDuringLiveRun = (phase, stepKey, { isLive = false } = {}) => {
     if (!isLive) return true;
     const rawPhase = String(phase || '').trim().toLowerCase();
+    if (isReextractAnalysisPhase(rawPhase)) return true;
     if (['failed', 'warning', 'idle', 'completed'].includes(rawPhase)) return true;
     if (rawPhase === 'parallel_prepare') return false;
     // Leftover Subject Index must not look ready while this-run extraction
@@ -4378,6 +4386,7 @@ const canTrustStageArtifactDuringLiveRun = (phase, stepKey, { isLive = false } =
 const isAnalysisLiveStepActive = (phase, stepKey, { isLive = false, stepReady = false } = {}) => {
     if (!isLive) return false;
     const rawPhase = String(phase || '').trim().toLowerCase();
+    if (isReextractAnalysisPhase(rawPhase)) return false;
     if (['failed', 'warning', 'completed', 'idle'].includes(rawPhase)) return false;
     if (rawPhase === 'parallel_prepare') {
         return stepKey === 'script_opt';
@@ -30840,12 +30849,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const startedAt = Date.now();
         const marker = target === 'character' ? '[REEXTRACT:CHAR]' : '[REEXTRACT:PROP]';
+        beginAnalysisTimer(startedAt);
         setReextractingAssetList(target);
         analysisRunInFlightRef.current = true;
         latestIsAnalyzingRef.current = true;
         setIsAnalyzing(true);
         setAnalysisFlowStatus({
-            phase: 'running',
+            phase: target === 'character' ? 'reextract_character' : 'reextract_prop',
             message: t(`正在重新抽取${labelZh}…`, `Re-extracting the ${labelEn}...`),
         });
         try {
@@ -36451,7 +36461,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             >
                                 {analysisProgressDisplay.isLive ? (
                                     <>
-                                        <Loader2 className="w-4 h-4 animate-spin" /> {t('分析中...', 'Analyzing...')}
+                                        <Loader2 className="w-4 h-4 animate-spin" /> {reextractingAssetList === 'prop'
+                                            ? t('抽取道具中...', 'Extracting props...')
+                                            : reextractingAssetList === 'character'
+                                                ? t('抽取角色中...', 'Extracting characters...')
+                                                : t('分析中...', 'Analyzing...')}
                                     </>
                                 ) : (
                                     <>
@@ -36472,7 +36486,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             >
                                 {analysisProgressDisplay.isLive ? (
                                     <>
-                                        <Loader2 className="w-4 h-4 animate-spin" /> {t('分析中...', 'Analyzing...')}
+                                        <Loader2 className="w-4 h-4 animate-spin" /> {reextractingAssetList === 'prop'
+                                            ? t('抽取道具中...', 'Extracting props...')
+                                            : reextractingAssetList === 'character'
+                                                ? t('抽取角色中...', 'Extracting characters...')
+                                                : t('分析中...', 'Analyzing...')}
                                     </>
                                 ) : (
                                     <>
@@ -36517,6 +36535,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </span>
                         </div>
                     </div>
+                    {reextractingAssetList ? (
+                        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-purple-400/35 bg-purple-500/15 px-3 py-2 text-xs text-purple-100">
+                            <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+                            <span className="font-semibold">
+                                {reextractingAssetList === 'prop'
+                                    ? t('正在重新抽取道具列表', 'Re-extracting the prop list')
+                                    : t('正在重新抽取角色列表', 'Re-extracting the character list')}
+                            </span>
+                            <span className="tabular-nums text-purple-100/70">
+                                {t('耗时', 'Elapsed')} {formatDurationMs(analysisHeartbeatElapsedMs)}
+                            </span>
+                        </div>
+                    ) : null}
                     {(() => {
                         try {
                         const ignoreLeftoverStoryboard = Boolean(
@@ -36921,7 +36952,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 )
                             );
                             const canImportCategory = Boolean(canImportAssets && !state.active);
-                            const statusLabel = state.active
+                            const reextractingThis = reextractingAssetList === spec.key;
+                            const showActive = Boolean(state.active || reextractingThis);
+                            const statusLabel = reextractingThis
+                                ? t('抽取中', 'Extracting')
+                                : state.active
                                 ? t('处理中', 'Processing')
                                 : state.failed
                                     ? t('未完成', 'Incomplete')
@@ -36948,10 +36983,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             return (
                                 <div className="flex flex-col items-center gap-2 relative">
                                     <div
-                                        role={state.failed ? 'button' : undefined}
-                                        tabIndex={state.failed ? 0 : undefined}
-                                        onClick={state.failed ? inspectAssetFailure : undefined}
-                                        onKeyDown={state.failed
+                                        role={state.failed && !reextractingThis ? 'button' : undefined}
+                                        tabIndex={state.failed && !reextractingThis ? 0 : undefined}
+                                        onClick={state.failed && !reextractingThis ? inspectAssetFailure : undefined}
+                                        onKeyDown={state.failed && !reextractingThis
                                             ? (event) => {
                                                 if (event.key === 'Enter' || event.key === ' ') {
                                                     event.preventDefault();
@@ -36959,11 +36994,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 }
                                             }
                                             : undefined}
-                                        title={state.failed
+                                        title={reextractingThis
+                                            ? t('正在按原剧本补充抽取', 'Supplementing this list from the original script')
+                                            : state.failed
                                             ? t('点击查看失败原因、处理建议，并可开 AI 诊断', 'Click to view the failure reason, next steps, and AI Diagnosis')
                                             : undefined}
                                         className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
-                                        state.active
+                                        showActive
                                             ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
                                             : state.failed
                                                 ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)] cursor-pointer hover:ring-2 hover:ring-red-300/70'
@@ -36971,7 +37008,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
                                                     : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'
                                     }`}>
-                                        {state.active
+                                        {showActive
                                             ? <Loader2 className="w-4 h-4 animate-spin" />
                                             : state.failed
                                                 ? <X className="w-4 h-4" />
@@ -36981,27 +37018,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </div>
                                     <div className="flex flex-col items-center gap-1 text-center">
                                         <span
-                                            role={state.failed ? 'button' : undefined}
-                                            tabIndex={state.failed ? 0 : undefined}
-                                            onClick={state.failed ? inspectAssetFailure : undefined}
+                                            role={state.failed && !reextractingThis ? 'button' : undefined}
+                                            tabIndex={state.failed && !reextractingThis ? 0 : undefined}
+                                            onClick={state.failed && !reextractingThis ? inspectAssetFailure : undefined}
                                             className={`text-[10px] ${
-                                                state.failed
+                                                reextractingThis || state.active
+                                                    ? 'text-purple-300'
+                                                    : state.failed
                                                     ? 'text-red-300 cursor-pointer hover:underline'
                                                     : state.ready
                                                         ? 'text-emerald-400/80'
-                                                        : state.active
-                                                            ? 'text-purple-300'
-                                                            : 'text-white/30'
+                                                        : 'text-white/30'
                                             }`}
-                                            title={state.failed
+                                            title={reextractingThis
+                                                ? t('正在按原剧本补充抽取', 'Supplementing this list from the original script')
+                                                : state.failed
                                                 ? t('点击查看失败原因', 'Click to view the failure reason')
                                                 : (state.detail || '')}
                                         >
                                             {statusLabel}
                                         </span>
-                                        {state.failed ? renderFailedReasonPreview(state) : null}
+                                        {state.failed && !reextractingThis ? renderFailedReasonPreview(state) : null}
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
-                                            {state.failed ? renderFailedReasonButton(inspectAssetFailure) : null}
+                                            {state.failed && !reextractingThis ? renderFailedReasonButton(inspectAssetFailure) : null}
                                             {renderImportButton('assets', canImportCategory)}
                                             {renderNodeSpecButton(spec.nodeName, getAnalysisStageLabel(spec.stepKey, t))}
                                             {(spec.key === 'character' || spec.key === 'prop') ? (
@@ -38433,7 +38472,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                         ? t('分析失败', 'Analysis failed')
                                                         : progressPhase === 'warning'
                                                             ? t('分析完成（有提示）', 'Analysis finished with notices')
-                                                            : analysisLive
+                                                            : reextractingAssetList === 'prop'
+                                                                ? t('正在重新抽取道具列表', 'Re-extracting the prop list')
+                                                                : reextractingAssetList === 'character'
+                                                                    ? t('正在重新抽取角色列表', 'Re-extracting the character list')
+                                                                    : analysisLive
                                                                 ? t('剧本分析进行中', 'Script analysis in progress')
                                                                 : ''}
                                             </span>
