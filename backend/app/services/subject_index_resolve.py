@@ -422,6 +422,7 @@ def build_project_visual_backfill_readonly_injection(backfill_obj: Any) -> str:
         "borrowed_films",
         "color_palette",
         "color_spectrum",
+        "nameplate_style",
         "music_recommendation",
         "comprehensive_plot",
         "comprehensive_assets",

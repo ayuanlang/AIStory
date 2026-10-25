@@ -389,6 +389,59 @@ def test_reused_environment_and_return_visit_have_no_nameplate():
     assert collect_scene_env_nameplate_names(script, "EP01_SC03", script) == []
 
 
+def test_global_nameplate_style_unifies_every_scene():
+    script = _script().replace(
+        "[SCENES_BLOCK_END]",
+        """[SCENE_START:EP01_SC02]
+[SCENE_CAST_START:EP01_SC02]
+【本场角色】在场=CHAR:[@沈青]，CHAR:[@林岳_礼服版]｜待入画=无｜群演=无
+【本场道具】在场=无｜待入画=无
+[SCENE_CAST_END:EP01_SC02]
+[SCENE_END:EP01_SC02]
+[SCENES_BLOCK_END]
+{
+  "project_visual_backfill": {
+    "Global_Style": "视觉基调=古典/古装｜气质=精致",
+    "nameplate_style": "字体=楷｜样式=牌匾｜字色=朱红｜字级=中｜依据=古典/古装"
+  }
+}
+[SCENE_ENV_IDENT_START:EP01_SC01]
+[ENV] 名称=龙门风月客栈｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文
+[SCENE_ENV_IDENT_END:EP01_SC01]
+[SCENE_ENV_IDENT_START:EP01_SC02]
+[ENV] 名称=清河城茶摊｜复用=否｜来源=新建｜匹配主环境=无｜依据=原文
+[SCENE_ENV_IDENT_END:EP01_SC02]
+""",
+    )
+    plate = "字体=楷｜字色=朱红｜样式=牌匾"
+    first = build_scene_entity_token_brief(script, "EP01_SC01")
+    second = build_scene_entity_token_brief(script, "EP01_SC02")
+    assert "【名牌展现】字体=楷｜样式=牌匾｜字色=朱红｜字级=中" in first
+    assert "【名牌展现】字体=楷｜样式=牌匾｜字色=朱红｜字级=中" in second
+    assert (
+        "CHAR:[@沈青]｜标签=江湖侠客｜标签_en=Jianghu Knight｜"
+        "标签字体=楷｜标签样式=牌匾｜标签字色=朱红｜"
+    ) in first
+    assert (
+        "CHAR:[@林岳]｜标签=客栈掌柜｜标签_en=Innkeeper｜"
+        "标签字体=楷｜标签样式=牌匾｜标签字色=朱红｜"
+    ) in first
+    assert "CHAR:[@围观百姓]｜标签=无｜标签_en=无｜标签字体=无｜标签字色=无｜" in first
+    assert "标签样式=牌匾" not in first.split("CHAR:[@围观百姓]")[1].split("\n", 1)[0]
+    assert f"ENV:[龙门风月客栈]｜字样=【龙门风月客栈】｜时间=无｜标签=无｜落位=顶部中央｜{plate}" in first
+    assert "魏碑" not in first
+    assert "鎏金" not in first
+    assert (
+        "CHAR:[@沈青]｜标签=江湖侠客｜标签_en=Jianghu Knight｜"
+        "标签字体=楷｜标签样式=牌匾｜标签字色=朱红｜裸名=沈青｜裸名_en=Shen Qing｜字幕=已过"
+    ) in second
+    assert (
+        "CHAR:[@林岳_礼服版]｜标签=客栈掌柜｜标签_en=Innkeeper｜"
+        "标签字体=楷｜标签样式=牌匾｜标签字色=朱红｜"
+    ) in second
+    assert f"ENV:[清河城茶摊]｜字样=【清河城茶摊】｜时间=无｜标签=无｜落位=顶部中央｜{plate}" in second
+
+
 def test_reused_character_does_not_get_nameplate():
     script = """[SCENES_BLOCK_START]
 [SCENE_START:EP02_SC01]

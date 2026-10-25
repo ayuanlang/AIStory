@@ -6,6 +6,7 @@ import re
 from typing import Dict, Iterable, List, Optional, Set
 
 from app.core.prompt_injection import wrap_injection_section
+from app.services.subject_index_resolve import extract_project_visual_backfill_object
 from app.services.script_analysis_flow.character_asset_brief import (
     CHAR_ITEM_PATTERN,
     _character_name_key,
@@ -335,6 +336,42 @@ def _character_label_style(record_text: str, field_name: str, base_text: str = "
     return "待补"
 
 
+_NAMEPLATE_STYLE_KEYS = ("字体", "样式", "字色", "字级")
+
+
+def _parse_nameplate_style_text(raw: str) -> Dict[str, str]:
+    text = _clean(raw)
+    if not text or text == "无":
+        return {}
+    found: Dict[str, str] = {}
+    for key in _NAMEPLATE_STYLE_KEYS:
+        match = re.search(rf"{key}\s*[=＝:：]\s*([^｜|\n]+)", text)
+        if not match:
+            continue
+        value = _clean(match.group(1))
+        if value and value not in {"无", "待补"}:
+            found[key] = value
+    if "字体" not in found or "字色" not in found:
+        return {}
+    found.setdefault("样式", "无衬细字")
+    found.setdefault("字级", "中")
+    return found
+
+
+def _project_nameplate_style(script: str) -> Dict[str, str]:
+    """One presentation locked in project_visual_backfill.nameplate_style."""
+    obj = extract_project_visual_backfill_object(script) or {}
+    raw = obj.get("nameplate_style") or obj.get("名牌展现") or ""
+    if isinstance(raw, dict):
+        parts = []
+        for key in _NAMEPLATE_STYLE_KEYS:
+            value = _clean(raw.get(key))
+            if value:
+                parts.append(f"{key}={value}")
+        raw = "｜".join(parts)
+    return _parse_nameplate_style_text(str(raw or ""))
+
+
 def _same_scene_id(left: str, right: str) -> bool:
     return bool(left) and bool(right) and _clean(left).lower() == _clean(right).lower()
 
@@ -573,10 +610,11 @@ def build_scene_entity_token_brief(
         "禁把声线标签写入台词。"
         "建置须读【本场角色标签】：只有字幕=待落的本集新角色，且本拍时机合适时，"
         "按项目语言选一侧字样，紧跟该人【入戏】主动作写 "
-        "画面打出物理文字标签：【{裸名}】{标签}】｜字体={标签字体}｜字色={标签字色}。"
+        "画面打出物理文字标签：【{裸名}】{标签}】｜字体={标签字体}｜样式={标签样式}｜字色={标签字色}。"
         "一人一句，禁把多名牌攒到建置段末或入戏一起写。"
         "此为片内图形名牌（物理文字），不是对白硬字幕；禁写成画幅底部白字黑边。"
-        "剧本或提取块已写的字样/字体/字色原样服从，禁改写。"
+        "有【名牌展现】时，角色名牌与环境名牌的字体、样式、字色逐字抄这一套，禁止按场、按人另选。"
+        "没有【名牌展现】时，剧本或提取块已写的字样/字体/样式/字色原样服从，禁改写。"
         "中文项目用 裸名+标签；英文项目用 裸名_en+标签_en；禁中英并列、禁用错语种上屏。"
         "标签优先抄 CHAR|#身份 的客观身份（阶层/职业/职衔/物种，如千金/第一家族继承人/智能AI宠物猫）；"
         "只上客观信息，禁透露剧情：处境词须剥（落魄千金→千金），弧光/表里里/未揭真身份不进。"
@@ -584,10 +622,10 @@ def build_scene_entity_token_brief(
         "女主/反派等定位当无。"
         "蒙面/易容/面具/面罩等见不到真脸：字幕必须=无，连裸名也不打，禁为蒙面态补名牌。"
         "名牌条件=须真脸 则等该人真脸正面/¾可读后再挂；全场未见真脸则不写、不标缺口。"
-        "字体/字色为无或待补则跟 Global_Style 补一书体+具名色。"
+        "没有【名牌展现】且字体/样式/字色为无或待补时，才跟 Global_Style 补一套书体、样式和具名色，本场角色与环境共用，禁止按人换色。"
         "字幕=已过|无、复用角色（上集或项目库已有）禁止打角色名牌。"
         "环境名牌只打本集新建主环境，且该主名在本集第一次进入时打一次："
-        "只写 画面打出物理文字标签：【{主环境注册名}】｜落位=顶部中央｜字体=…｜字色=…；"
+        "只写 画面打出物理文字标签：【{主环境注册名}】｜落位=顶部中央｜字体=…｜样式=…｜字色=…；"
         "原文有明确时间（早上9点、重生第一天）则【注册名】{时间}】，时间可空。"
         "禁止套成【名】日】【名】外】【名】夜·内】【名】日·外】；"
         "第二段只许明确时刻/故事日，禁日/夜/晨/昏/内/外/季节/气候，禁自拟三年前。"
@@ -596,8 +634,8 @@ def build_scene_entity_token_brief(
         "未列入【本场环境名牌】的主环境禁止打。同主切角/仅状态衍生不打。"
         "挂入戏起笔（新环境落定后、角色主动作前）；不算动作；禁挂建置、禁画幅底部。"
         "名牌出字默认模型直出：画面打出句末写 名牌出字=模型直出。"
-        "名牌出字=后期烧录时不写画面打出，角色改写 名牌字样=「裸名｜标签」｜落位=人物下方｜字体=｜字色=｜字级=中｜名牌出字=后期烧录；"
-        "环境改写 名牌字样=「注册名」或「注册名｜时间」｜落位=顶部中央｜字体=｜字色=｜字级=中｜名牌出字=后期烧录。"
+        "名牌出字=后期烧录时不写画面打出，角色改写 名牌字样=「裸名｜标签」｜落位=人物下方｜字体=｜样式=｜字色=｜字级=中｜名牌出字=后期烧录；"
+        "环境改写 名牌字样=「注册名」或「注册名｜时间」｜落位=顶部中央｜字体=｜样式=｜字色=｜字级=中｜名牌出字=后期烧录。"
         "名牌行禁止写 烧录=libass、手写=禁、文案=。"
     )
     body = (
@@ -607,6 +645,15 @@ def build_scene_entity_token_brief(
     )
     if cast:
         body = f"{body}\n\n{cast}"
+    presentation = _project_nameplate_style(script)
+    if presentation:
+        body = (
+            f"{body}\n\n【名牌展现】"
+            f"字体={presentation['字体']}｜样式={presentation['样式']}｜"
+            f"字色={presentation['字色']}｜字级={presentation['字级']}\n"
+            "角色名牌与环境名牌各场只抄这一套。落位仍是角色在人物下方、环境在顶部中央。"
+            "禁止按场、按人另选书体、样式或字色。"
+        )
     scene_char_names = set(cast_names.get("characters") or [])
     voice_rows = []
     tag_rows = []
@@ -627,6 +674,9 @@ def build_scene_entity_token_brief(
         tag_en = _character_tag_en(text, base_text)
         font = _character_label_style(text, "标签字体", base_text)
         color = _character_label_style(text, "标签字色", base_text)
+        style = _character_label_style(text, "标签样式", base_text)
+        if style == "待补":
+            style = ""
         plot_role = _header_field(text, "番位")
         display_name = _subtitle_display_name(name, text)
         display_name_en = _subtitle_display_name_en(name, text, records)
@@ -636,6 +686,7 @@ def build_scene_entity_token_brief(
             subtitle = "无"
             font = "无"
             color = "无"
+            style = ""
         elif nameplate_mode == "无":
             subtitle = "无"
         elif _is_outfit_variant(name, text, all_record_names):
@@ -652,9 +703,14 @@ def build_scene_entity_token_brief(
                 subtitle = "待落"
             if nameplate_mode == "揭面后":
                 face_gate = "｜名牌条件=须真脸"
+        if presentation and font != "无":
+            font = presentation["字体"]
+            color = presentation["字色"]
+            style = presentation["样式"]
+        style_part = f"｜标签样式={style}" if style else ""
         tag_rows.append(
             f"CHAR:[@{name}]｜标签={tag}｜标签_en={tag_en}｜"
-            f"标签字体={font}｜标签字色={color}｜"
+            f"标签字体={font}{style_part}｜标签字色={color}｜"
             f"裸名={display_name}｜裸名_en={display_name_en}｜字幕={subtitle}"
             f"{face_gate}"
         )
@@ -664,24 +720,33 @@ def build_scene_entity_token_brief(
         body = f"{body}\n\n【本场角色标签】\n" + "\n".join(tag_rows)
     env_font = "待补"
     env_color = "待补"
-    for rec in records:
-        if rec.get("name") not in scene_char_names:
-            continue
-        text = rec.get("text") or ""
-        base_name = extract_char_field(text, "基名") or (
-            (rec.get("name") or "").split("_", 1)[0]
-            if "_" in (rec.get("name") or "")
-            else ""
-        )
-        base_text = _record_by_name(records, base_name).get("text") or ""
-        font = _character_label_style(text, "标签字体", base_text)
-        color = _character_label_style(text, "标签字色", base_text)
-        if font and font not in {"无", "待补"}:
-            env_font = font
-        if color and color not in {"无", "待补"}:
-            env_color = color
-        if env_font != "待补" and env_color != "待补":
-            break
+    env_style = ""
+    if presentation:
+        env_font = presentation["字体"]
+        env_color = presentation["字色"]
+        env_style = presentation["样式"]
+    else:
+        for rec in records:
+            if rec.get("name") not in scene_char_names:
+                continue
+            text = rec.get("text") or ""
+            base_name = extract_char_field(text, "基名") or (
+                (rec.get("name") or "").split("_", 1)[0]
+                if "_" in (rec.get("name") or "")
+                else ""
+            )
+            base_text = _record_by_name(records, base_name).get("text") or ""
+            font = _character_label_style(text, "标签字体", base_text)
+            color = _character_label_style(text, "标签字色", base_text)
+            plate_style = _character_label_style(text, "标签样式", base_text)
+            if font and font not in {"无", "待补"}:
+                env_font = font
+            if color and color not in {"无", "待补"}:
+                env_color = color
+            if not env_style and plate_style not in {"", "无", "待补"}:
+                env_style = plate_style
+            if env_font != "待补" and env_color != "待补":
+                break
     env_rows = []
     env_time = _env_nameplate_time_label(
         _scene_body_for_nameplate(script, scene_id, scene_text or "")
@@ -692,6 +757,7 @@ def build_scene_entity_token_brief(
         env_rows.append(
             f"ENV:[{env_name}]｜字样=【{env_name}】｜时间={env_time}｜标签={env_time}｜"
             f"落位=顶部中央｜字体={env_font}｜字色={env_color}"
+            + (f"｜样式={env_style}" if env_style else "")
         )
     if env_rows:
         body = (
