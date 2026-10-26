@@ -194,7 +194,7 @@ def test_resolve_grsai_poll_request_h3_rewrites_draw_result_endpoint():
     assert spec["params"] == {"id": "12-abc"}
 
 
-def test_resolve_grsai_poll_request_sora_keeps_post_draw_result():
+def test_resolve_grsai_poll_request_sora_uses_h3_get_result():
     from app.services.media_service import MediaGenerationService
 
     service = MediaGenerationService()
@@ -204,9 +204,26 @@ def test_resolve_grsai_poll_request_sora_keeps_post_draw_result():
         model="sora-2",
     )
     assert spec == {
+        "url": "https://grsai.dakka.com.cn/v1/api/result",
+        "method": "GET",
+        "params": {"id": "sora-task-1"},
+    }
+
+
+def test_resolve_grsai_poll_request_image_keeps_post_draw_result():
+    from app.services.media_service import MediaGenerationService
+
+    service = MediaGenerationService()
+    spec = service._resolve_grsai_poll_request(
+        task_id="img-task-1",
+        query_endpoint="https://grsai.dakka.com.cn/v1/draw/result",
+        model="nano-banana-pro",
+        kind="image",
+    )
+    assert spec == {
         "url": "https://grsai.dakka.com.cn/v1/draw/result",
         "method": "POST",
-        "json": {"id": "sora-task-1"},
+        "json": {"id": "img-task-1"},
     }
 
 
@@ -305,7 +322,7 @@ def test_resolve_poll_credentials_grsai_h3_rewrites_draw_result(monkeypatch):
     assert query_endpoint == "https://grsai.dakka.com.cn/v1/api/result"
 
 
-def test_resolve_poll_credentials_grsai_sora_defaults_to_draw_result(monkeypatch):
+def test_resolve_poll_credentials_grsai_sora_defaults_to_api_result(monkeypatch):
     monkeypatch.setattr(
         "app.services.generation_runtime.timeout_poll_recovery.SessionLocal",
         lambda: _FakeDB(),
@@ -313,6 +330,6 @@ def test_resolve_poll_credentials_grsai_sora_defaults_to_draw_result(monkeypatch
     from app.services.generation_runtime.timeout_poll_recovery import _resolve_poll_credentials
 
     _api_key, query_endpoint, _provider, _base_url = _resolve_poll_credentials(
-        {"billing_context": {"provider": "grsai", "model": "sora-2"}}
+        {"kind": "video", "billing_context": {"provider": "grsai", "model": "sora-2"}}
     )
-    assert query_endpoint == "https://grsai.dakka.com.cn/v1/draw/result"
+    assert query_endpoint == "https://grsai.dakka.com.cn/v1/api/result"

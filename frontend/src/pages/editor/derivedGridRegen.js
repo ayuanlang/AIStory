@@ -544,6 +544,40 @@ function pushQuadFailureName(names, name) {
  * exist, so another prompt call cannot write them. truncated means the sentence
  * itself said some names were omitted.
  */
+const QUAD_CELL_MARKERS = ['【四向拼图】', '[0度格-左上', '[90度格-右上', '[180度格-左下', '[270度格-右下'];
+
+export function foldEnvironmentName(value) {
+    return String(value || '')
+        .trim()
+        .split(/[｜|]/)[0]
+        .replace(/[\s_*`'\"“”‘’]+/g, '')
+        .toLowerCase();
+}
+
+export function quadCellsPromptReady(prompt) {
+    const text = String(prompt || '');
+    return QUAD_CELL_MARKERS.every((marker) => text.includes(marker));
+}
+
+/**
+ * Requested drafts whose returned prompt is not a finished four-grid.
+ * One request and one ready prompt cover each other even if the model renamed it.
+ */
+export function quadNamesMissingFromResult(parsed, names) {
+    const requested = (Array.isArray(names) ? names : [])
+        .map((name) => String(name || '').trim())
+        .filter(Boolean);
+    const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
+    const ready = returned.filter((row) => quadCellsPromptReady(row?.generation_prompt_cn));
+    if (requested.length === 1 && ready.length === 1) return [];
+    return requested.filter((name) => !ready.some((row) => {
+        const returnedName = String(row?.name || '').trim();
+        if (!returnedName) return false;
+        if (returnedName === name || returnedName.toLowerCase() === name.toLowerCase()) return true;
+        return foldEnvironmentName(returnedName) === foldEnvironmentName(name);
+    }));
+}
+
 export function quadFailureEnvironmentNames(detail) {
     const text = String(detail || '');
     const names = [];

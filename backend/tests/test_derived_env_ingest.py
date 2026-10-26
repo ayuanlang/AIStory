@@ -7,6 +7,8 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     format_camera_switch_line,
     parse_derived_env_extract_items,
     extract_grid_cell_prompt,
+    align_returned_quad_rows,
+    apply_main_environment_quad_prompts,
     compose_stored_quad_prompt,
     environment_opening_to_keep,
     extract_named_design_openings,
@@ -355,6 +357,84 @@ def test_quad_batch_requires_every_requested_draft():
         {"name": "摩天大楼玻璃幕墙外空域", "generation_prompt_cn": opening + cells},
     ]
     assert missing_requested_quad_drafts(source, incomplete) == ["寰宇集团总裁办公室"]
+
+
+def test_single_quad_return_binds_when_the_model_renames_it():
+    opening = "【定位】\n后厨。\n【六面一次】\n北壁=封闭面。\n"
+    cells = (
+        "【四向拼图】\n"
+        "[0度格-左上·北]\n"
+        "[90度格-右上·东]\n"
+        "[180度格-左下·南]\n"
+        "[270度格-右下·西]\n"
+    )
+    source = f"【主环境设计稿】客栈大堂\n{opening}\n【/主环境设计稿】"
+    renamed = [{"name": "0度客栈大堂", "generation_prompt_cn": cells}]
+    assert missing_requested_quad_drafts(source, renamed) == []
+    aligned = align_returned_quad_rows(source, renamed)
+    assert [row["name"] for row in aligned] == ["客栈大堂"]
+    spaced = [{"name": "客栈 大堂｜室内", "generation_prompt_cn": cells}]
+    assert missing_requested_quad_drafts(source, spaced) == []
+    batch = (
+        f"【主环境设计稿】客栈大堂\n{opening}\n【/主环境设计稿】\n"
+        f"【主环境设计稿】天台\n{opening}\n【/主环境设计稿】"
+    )
+    assert missing_requested_quad_drafts(batch, renamed) == ["客栈大堂", "天台"]
+
+
+class _QuadEntity:
+    def __init__(self, name, prompt="旧稿"):
+        self.name = name
+        self.name_en = ""
+        self.generation_prompt_cn = prompt
+        self.description = ""
+        self.custom_attributes = {}
+
+
+class _QuadQuery:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def all(self):
+        return list(self._rows)
+
+
+class _QuadDb:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def query(self, *_args, **_kwargs):
+        return _QuadQuery(self._rows)
+
+
+def test_single_quad_apply_writes_the_folded_library_row():
+    cells = (
+        "【四向拼图】\n"
+        "[0度格-左上·北]\n"
+        "[90度格-右上·东]\n"
+        "[180度格-左下·南]\n"
+        "[270度格-右下·西]\n"
+    )
+    opening = "【定位】\n后厨。\n【六面一次】\n北壁=封闭面。\n"
+    entity = _QuadEntity("客栈 大堂｜室内")
+    other = _QuadEntity("天台", "另一处")
+    applied = apply_main_environment_quad_prompts(
+        _QuadDb([entity, other]),
+        project_id=1,
+        episode_id=7,
+        rows=[{"name": "客栈大堂", "generation_prompt_cn": cells}],
+        openings={"客栈大堂": opening},
+    )
+    assert applied["updated"] == ["客栈 大堂｜室内"]
+    assert applied["missing"] == []
+    assert "【四向拼图】" in entity.generation_prompt_cn
+    assert "[270度格-右下·西]" in entity.generation_prompt_cn
+    assert "后厨" in entity.generation_prompt_cn
+    assert entity.description.startswith("【定位】")
+    assert other.generation_prompt_cn == "另一处"
 
 
 def test_build_item_persists_frame_anchors():

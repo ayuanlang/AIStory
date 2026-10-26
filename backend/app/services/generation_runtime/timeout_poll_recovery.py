@@ -182,18 +182,14 @@ def _resolve_poll_credentials(job: Dict[str, Any]) -> Tuple[str, str, str, str]:
     if ("ark" in provider_l or "seedance" in provider_l) and not query_endpoint:
         query_endpoint = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
     if "grsai" in provider_l:
-        model_l = model.lower().replace("_", "-")
-        is_h3 = model_l == "minimax-h3" or model_l.startswith("minimax-h3/")
+        from app.services.media_service import media_service as _grsai_media
+
+        job_kind = str(job.get("kind") or "").strip().lower()
         root = (base_url or "https://grsai.dakka.com.cn").rstrip("/")
         if root.lower().endswith("/v1"):
             root = root[:-3].rstrip("/")
-        endpoint_l = query_endpoint.lower()
-        if is_h3 and (
-            not query_endpoint
-            or "recordinfo" in endpoint_l
-            or "record-info" in endpoint_l
-            or "/draw/result" in endpoint_l
-        ):
+        use_generate_route = _grsai_media._is_grsai_video_generate_route(query_endpoint, model, job_kind)
+        if use_generate_route and "/api/result" not in query_endpoint.lower():
             query_endpoint = f"{root}/v1/api/result"
         elif not query_endpoint:
             query_endpoint = f"{root}/v1/draw/result"

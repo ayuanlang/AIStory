@@ -2236,8 +2236,6 @@ def init_system_api_settings(db):
     grsai_base_url = "https://grsai.dakka.com.cn/v1"
     grsai_nano_banana_endpoint = "https://grsai.dakka.com.cn/v1/draw/nano-banana"
     grsai_gpt_image_endpoint = "https://grsai.dakka.com.cn/v1/draw/completions"
-    grsai_sora2_endpoint = "https://grsai.dakka.com.cn/v1/video/sora-video"
-    grsai_veo_endpoint = "https://grsai.dakka.com.cn/v1/video/veo"
     grsai_minimax_h3_endpoint = "https://grsai.dakka.com.cn/v1/api/generate"
     grsai_minimax_h3_result_endpoint = "https://grsai.dakka.com.cn/v1/api/result"
     grsai_provider = "grsai"
@@ -2337,11 +2335,11 @@ def init_system_api_settings(db):
             or "sora 2" in row_name
             or "sora_video" in row_model
             or "sora-video" in row_model
+            or "veo" in row_name
+            or "veo" in row_model
+            or "minimax-h3" in row_name
+            or "minimax-h3" in row_model
         ):
-            expected_endpoint = grsai_sora2_endpoint
-        elif row_category == "video" and ("veo" in row_name or "veo" in row_model):
-            expected_endpoint = grsai_veo_endpoint
-        elif row_category == "video" and ("minimax-h3" in row_name or "minimax-h3" in row_model):
             expected_endpoint = grsai_minimax_h3_endpoint
 
         if expected_endpoint and cfg.get("endpoint") != expected_endpoint:
@@ -2421,19 +2419,9 @@ def init_system_api_settings(db):
                 "oss-id": "69c890a3a0a438550965e9ff",
                 "oss-path": "file/images/{yyyymm}/{user_id}",
             }
-        elif item["category"] == "Video" and "sora-2" in item["name"]:
-            config_payload = {
-                "endpoint": grsai_sora2_endpoint,
-                "oss-id": "69c890a3a0a438550965e9ff",
-                "oss-path": "file/videos/{yyyymm}/{user_id}",
-            }
-        elif item["category"] == "Video" and "veo" in item["name"]:
-            config_payload = {
-                "endpoint": grsai_veo_endpoint,
-                "oss-id": "69c890a3a0a438550965e9ff",
-                "oss-path": "file/videos/{yyyymm}/{user_id}",
-            }
-        elif item["category"] == "Video" and "minimax-h3" in item["name"]:
+        elif item["category"] == "Video" and (
+            "sora-2" in item["name"] or "veo" in item["name"] or "minimax-h3" in item["name"]
+        ):
             config_payload = {
                 "endpoint": grsai_minimax_h3_endpoint,
                 "query_endpoint": grsai_minimax_h3_result_endpoint,

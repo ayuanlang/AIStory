@@ -2471,7 +2471,8 @@
       "model": "sora-2",
       "modality": null,
       "config": {
-        "endpoint": "https://grsai.dakka.com.cn/v1/video/sora-video",
+        "endpoint": "https://grsai.dakka.com.cn/v1/api/generate",
+        "query_endpoint": "https://grsai.dakka.com.cn/v1/api/result",
         "deprecated": true,
         "is_deprecated": true,
         "disable_api": true,
@@ -2489,6 +2490,8 @@
       "model": "veo3.1-fast",
       "modality": null,
       "config": {
+        "endpoint": "https://grsai.dakka.com.cn/v1/api/generate",
+        "query_endpoint": "https://grsai.dakka.com.cn/v1/api/result",
         "webHook": "",
         "deprecated": true,
         "is_deprecated": true,
@@ -2517,7 +2520,8 @@
       "model": "veo3.1-fast-1080p",
       "modality": null,
       "config": {
-        "endpoint": "https://grsai.dakka.com.cn/v1/video/veo",
+        "endpoint": "https://grsai.dakka.com.cn/v1/api/generate",
+        "query_endpoint": "https://grsai.dakka.com.cn/v1/api/result",
         "deprecated": true,
         "is_deprecated": true,
         "disable_api": true,
@@ -2535,7 +2539,8 @@
       "model": "veo3.1-fast-4k",
       "modality": null,
       "config": {
-        "endpoint": "https://grsai.dakka.com.cn/v1/video/veo",
+        "endpoint": "https://grsai.dakka.com.cn/v1/api/generate",
+        "query_endpoint": "https://grsai.dakka.com.cn/v1/api/result",
         "deprecated": true,
         "is_deprecated": true,
         "disable_api": true,
@@ -2553,7 +2558,8 @@
       "model": "veo3.1-pro",
       "modality": null,
       "config": {
-        "endpoint": "https://grsai.dakka.com.cn/v1/video/veo",
+        "endpoint": "https://grsai.dakka.com.cn/v1/api/generate",
+        "query_endpoint": "https://grsai.dakka.com.cn/v1/api/result",
         "deprecated": true,
         "is_deprecated": true,
         "disable_api": true,
@@ -2571,7 +2577,8 @@
       "model": "veo3.1-pro-1080p",
       "modality": null,
       "config": {
-        "endpoint": "https://grsai.dakka.com.cn/v1/video/veo",
+        "endpoint": "https://grsai.dakka.com.cn/v1/api/generate",
+        "query_endpoint": "https://grsai.dakka.com.cn/v1/api/result",
         "deprecated": true,
         "is_deprecated": true,
         "disable_api": true,
@@ -2589,7 +2596,8 @@
       "model": "veo3.1-pro-4k",
       "modality": null,
       "config": {
-        "endpoint": "https://grsai.dakka.com.cn/v1/video/veo",
+        "endpoint": "https://grsai.dakka.com.cn/v1/api/generate",
+        "query_endpoint": "https://grsai.dakka.com.cn/v1/api/result",
         "deprecated": true,
         "is_deprecated": true,
         "disable_api": true,

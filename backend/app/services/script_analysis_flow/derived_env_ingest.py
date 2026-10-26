@@ -2158,21 +2158,71 @@ def list_main_environment_draft_names(source_text: str) -> List[str]:
     return names
 
 
+def _environment_name_fold(value: Any) -> str:
+    from app.services.script_analysis_flow.environment_reuse import normalize_environment_name
+
+    return normalize_environment_name(value)
+
+
+def align_returned_quad_rows(
+    source_text: str,
+    rows: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Ready four-grid rows, named as the requested design drafts.
+
+    A batch still needs each draft's own name, ignoring spaces and a fullwidth bar.
+    One requested draft and one ready prompt are the same environment: the model
+    may rename it, add a bar suffix, or prefix a degree, and the prompt still
+    belongs on that one library row.
+    """
+    requested = list_main_environment_draft_names(source_text)
+    ready: List[Dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        name = _clean(row.get("name"))
+        if not name or not quad_cells_prompt_ready(row.get("generation_prompt_cn")):
+            continue
+        ready.append(row)
+    if not requested:
+        return [
+            row for row in ready
+            if not DEGREE_NAME_PATTERN.match(_clean(row.get("name")))
+        ]
+
+    by_fold: Dict[str, Dict[str, Any]] = {}
+    for row in ready:
+        name = _clean(row.get("name"))
+        if DEGREE_NAME_PATTERN.match(name):
+            continue
+        fold = _environment_name_fold(name)
+        if fold and fold not in by_fold:
+            by_fold[fold] = row
+
+    aligned: List[Dict[str, Any]] = []
+    for name in requested:
+        row = by_fold.get(_environment_name_fold(name))
+        if row is None:
+            continue
+        copied = dict(row)
+        copied["name"] = name
+        aligned.append(copied)
+    if len(requested) == 1 and len(ready) == 1 and not aligned:
+        copied = dict(ready[0])
+        copied["name"] = requested[0]
+        aligned.append(copied)
+    return aligned
+
+
 def missing_requested_quad_drafts(
     source_text: str,
     rows: Sequence[Dict[str, Any]],
 ) -> List[str]:
     """Drafts in the request whose four-grid prompt is absent from this result."""
-    ready_keys: Set[str] = set()
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
-        name = _clean(row.get("name"))
-        if name and quad_cells_prompt_ready(row.get("generation_prompt_cn")):
-            ready_keys.add(name.lower())
+    covered = {_clean(row.get("name")) for row in align_returned_quad_rows(source_text, rows)}
     return [
         name for name in list_main_environment_draft_names(source_text)
-        if name.lower() not in ready_keys
+        if name not in covered
     ]
 
 
@@ -2243,6 +2293,52 @@ def format_main_environment_quad_apply_failure(
     return "".join(parts)
 
 
+def _opening_for_quad_name(openings: Optional[Dict[str, str]], name: str) -> str:
+    if not isinstance(openings, dict):
+        return ""
+    direct = str(openings.get(_clean(name).lower()) or "").strip()
+    if direct:
+        return direct
+    wanted = _environment_name_fold(name)
+    if not wanted:
+        return ""
+    for key, value in openings.items():
+        body = str(value or "").strip()
+        if body and _environment_name_fold(key) == wanted:
+            return body
+    return ""
+
+
+def _match_quad_environment_entity(entities: Sequence[Any], name: str) -> Any:
+    """Library main environment for this draft.
+
+    Exact spelling wins. Otherwise one row whose name folds the same way as
+    staging (spaces and a fullwidth bar) is the same place. Two folded hits
+    stay unmatched so a batch cannot guess.
+    """
+    wanted_exact = _clean(name).lower()
+    wanted_fold = _environment_name_fold(name)
+    exact: List[Any] = []
+    folded: List[Any] = []
+    for entity in entities or []:
+        labels = [
+            _clean(getattr(entity, "name", "")),
+            _clean(getattr(entity, "name_en", "")),
+        ]
+        if any(DEGREE_NAME_PATTERN.match(label) for label in labels if label):
+            continue
+        if wanted_exact and any(label.lower() == wanted_exact for label in labels if label):
+            exact.append(entity)
+            continue
+        if wanted_fold and any(_environment_name_fold(label) == wanted_fold for label in labels if label):
+            folded.append(entity)
+    if exact:
+        return exact[0]
+    if len(folded) == 1:
+        return folded[0]
+    return None
+
+
 def apply_main_environment_quad_prompts(
     db: Session,
     *,
@@ -2255,37 +2351,36 @@ def apply_main_environment_quad_prompts(
     updated: List[str] = []
     missing: List[str] = []
     skipped: List[str] = []
+    candidates = (
+        db.query(Entity)
+        .filter(
+            Entity.project_id == int(project_id),
+            Entity.episode_id == int(episode_id),
+            _active_entity_clause(),
+            func.lower(func.trim(func.coalesce(Entity.type, ""))) == "environment",
+        )
+        .all()
+    )
+    claimed: Set[int] = set()
     for row in rows or []:
         if not isinstance(row, dict):
             continue
         name = _clean(row.get("name"))
-        prompt = _clean(row.get("generation_prompt_cn"))
+        prompt = str(row.get("generation_prompt_cn") or "").strip()
         if not name:
             continue
         if DEGREE_NAME_PATTERN.match(name) or not quad_cells_prompt_ready(prompt):
             skipped.append(name or "")
             continue
-        name_expr = func.lower(func.trim(func.coalesce(Entity.name, "")))
-        name_en_expr = func.lower(func.trim(func.coalesce(Entity.name_en, "")))
-        wanted = name.lower()
-        existing = (
-            db.query(Entity)
-            .filter(
-                Entity.project_id == int(project_id),
-                Entity.episode_id == int(episode_id),
-                _active_entity_clause(),
-                func.lower(func.trim(func.coalesce(Entity.type, ""))) == "environment",
-                or_(name_expr == wanted, name_en_expr == wanted),
-            )
-            .first()
+        existing = _match_quad_environment_entity(
+            [entity for entity in candidates if id(entity) not in claimed],
+            name,
         )
         if existing is None:
             missing.append(name)
             continue
         attrs = dict(existing.custom_attributes) if isinstance(existing.custom_attributes, dict) else {}
-        named_opening = ""
-        if isinstance(openings, dict):
-            named_opening = str(openings.get(name.lower()) or "")
+        named_opening = _opening_for_quad_name(openings, name)
         stored = compose_stored_quad_prompt(existing.generation_prompt_cn, prompt, named_opening)
         if not quad_cells_prompt_ready(stored):
             skipped.append(name)
@@ -2300,7 +2395,8 @@ def apply_main_environment_quad_prompts(
             existing.custom_attributes = attrs
             existing.description = opening
         existing.generation_prompt_cn = stored
-        updated.append(name)
+        claimed.add(id(existing))
+        updated.append(str(getattr(existing, "name", "") or "").strip() or name)
     return {"updated": updated, "missing": missing, "skipped": skipped}
 
 

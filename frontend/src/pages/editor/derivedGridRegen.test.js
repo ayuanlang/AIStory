@@ -8,6 +8,7 @@ import {
     mainQuadCellAddresses,
     planDerivedGridCell,
     quadFailureEnvironmentNames,
+    quadNamesMissingFromResult,
     readQuadCellImages,
     singleCellEditInstruction,
 } from './derivedGridRegen.js';
@@ -163,6 +164,21 @@ describe('saved quad cells', () => {
         assert.deepEqual(libraryMiss.unmatched, ['地下军械库']);
         assert.deepEqual(quadFailureEnvironmentNames('四宫格未写回：结果里没有可写回的主环境。').names, []);
         assert.deepEqual(quadFailureEnvironmentNames('四宫格未一次写满：客栈大堂、天台。').names, ['客栈大堂', '天台']);
+    });
+
+    it('treats one ready four-grid as the one requested environment', () => {
+        const cells = [
+            '【四向拼图】',
+            '[0度格-左上·北]',
+            '[90度格-右上·东]',
+            '[180度格-左下·南]',
+            '[270度格-右下·西]',
+        ].join('\n');
+        const parsed = { environments: [{ name: '0度客栈大堂', generation_prompt_cn: cells }] };
+        assert.deepEqual(quadNamesMissingFromResult(parsed, ['客栈大堂']), []);
+        assert.deepEqual(quadNamesMissingFromResult(parsed, ['客栈大堂', '天台']), ['客栈大堂', '天台']);
+        const spaced = { environments: [{ name: '客栈 大堂｜室内', generation_prompt_cn: cells }] };
+        assert.deepEqual(quadNamesMissingFromResult(spaced, ['客栈大堂', '天台']), ['天台']);
     });
 
     it('drops shared grid-cell filenames so another project image is not reused', () => {

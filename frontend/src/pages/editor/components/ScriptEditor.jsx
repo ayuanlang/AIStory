@@ -14,7 +14,7 @@ import { BookOpen, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users,
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
-import { mainEnvironmentOpeningDraft, quadFailureEnvironmentNames } from '../derivedGridRegen';
+import { mainEnvironmentOpeningDraft, quadFailureEnvironmentNames, quadNamesMissingFromResult } from '../derivedGridRegen';
 import {
     getEpisodeAnalysisRun,
     releaseEpisodeAnalysisRun,
@@ -20741,13 +20741,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         : String(item.generation_prompt_cn || '').trim();
                     return `【主环境设计稿】${name}\n${body}\n【/主环境设计稿】`;
                 }).join('\n\n');
-                const quadNamesMissing = (parsed, names) => {
-                    const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
-                    return names.filter((name) => !returned.some((row) => (
-                        String(row?.name || '').trim() === name
-                        && mainEnvironmentPromptHasQuad(row?.generation_prompt_cn)
-                    )));
-                };
+                const quadNamesMissing = (parsed, names) => quadNamesMissingFromResult(parsed, names);
                 const submitQuad = async (items, traceSuffix) => {
                     throwIfAnalysisStopped();
                     const res = await runScriptAnalysisFlowAnalyzeNode(
@@ -33473,13 +33467,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const body = String(item.opening || item.prompt || '').trim();
                 return `【主环境设计稿】${name}\n${body}\n【/主环境设计稿】`;
             }).join('\n\n');
-            const quadNamesMissing = (parsed, names) => {
-                const returned = Array.isArray(parsed?.environments) ? parsed.environments : [];
-                return names.filter((name) => !returned.some((row) => (
-                    String(row?.name || '').trim() === name
-                    && mainEnvironmentPromptHasQuad(row?.generation_prompt_cn)
-                )));
-            };
+            const quadNamesMissing = (parsed, names) => quadNamesMissingFromResult(parsed, names);
             let readyCount = 0;
             const submitQuad = async (items, traceSuffix) => {
                 throwIfAnalysisStopped();

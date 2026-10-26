@@ -1042,9 +1042,11 @@ async def execute_scene_analysis_flow_node(
         if node_key == "asset_design_environment_quad" and node_project_id > 0 and node_episode_id > 0:
             from app.services.script_analysis_flow.derived_env_ingest import (  # noqa: WPS433
                 DEGREE_NAME_PATTERN,
+                align_returned_quad_rows,
                 apply_main_environment_quad_prompts,
                 extract_named_design_openings,
                 format_main_environment_quad_apply_failure,
+                list_main_environment_draft_names,
                 missing_requested_quad_drafts,
                 quad_cells_prompt_ready,
             )
@@ -1060,14 +1062,20 @@ async def execute_scene_analysis_flow_node(
                 if isinstance(row, dict) and str(row.get("name") or "").strip()
                 and not DEGREE_NAME_PATTERN.match(str(row.get("name") or "").strip())
             ]
-            ready_rows = [
+            source_text = str(raw_payload.get("text") or "")
+            openings = extract_named_design_openings(source_text)
+            requested_names = list_main_environment_draft_names(source_text)
+            aligned_rows = align_returned_quad_rows(source_text, rows or [])
+            ready_rows = aligned_rows if requested_names else [
                 row for row in named_rows
                 if quad_cells_prompt_ready(row.get("generation_prompt_cn"))
             ]
-            source_text = str(raw_payload.get("text") or "")
-            openings = extract_named_design_openings(source_text)
-            missing_requested = missing_requested_quad_drafts(source_text, named_rows)
-            complete = bool(named_rows) and len(ready_rows) == len(named_rows) and not missing_requested
+            missing_requested = missing_requested_quad_drafts(source_text, rows or [])
+            complete = (
+                len(aligned_rows) == len(requested_names)
+                if requested_names
+                else bool(named_rows) and len(ready_rows) == len(named_rows) and not missing_requested
+            )
             # Keep prompts that already have every cell. The failure still names
             # the gaps, and the caller reruns only those environments.
             applied = (
@@ -1085,7 +1093,11 @@ async def execute_scene_analysis_flow_node(
                 not complete
                 or len(applied.get("updated") or []) != len(ready_rows)
             ):
-                failure_message = format_main_environment_quad_apply_failure(named_rows, applied)
+                report_rows = named_rows or ready_rows or [
+                    row for row in (rows or [])
+                    if isinstance(row, dict) and str(row.get("name") or "").strip()
+                ]
+                failure_message = format_main_environment_quad_apply_failure(report_rows, applied)
                 if missing_requested:
                     shown = missing_requested[:8]
                     tail = f"等{len(missing_requested)}条" if len(missing_requested) > len(shown) else ""

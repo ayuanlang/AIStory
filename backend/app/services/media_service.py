@@ -2773,6 +2773,7 @@ class MediaGenerationService:
                 headers=headers,
                 query_endpoint=endpoint,
                 model=model,
+                kind="video" if self._is_grsai_video_generate_route(endpoint, model) else None,
             )
             raw_payload = queried.get("raw") if isinstance(queried.get("raw"), dict) else {}
             usage = _normalize_provider_task_usage(_extract_provider_task_usage(raw_payload))
@@ -3548,6 +3549,7 @@ class MediaGenerationService:
                     query_endpoint=endpoint,
                     base_url=base,
                     model=model,
+                    kind=kind_l,
                 )
                 if queried.get("error") and not isinstance(queried.get("raw"), dict):
                     return {"error": queried.get("error")}
@@ -8913,6 +8915,29 @@ class MediaGenerationService:
             or text.rstrip("/").endswith("/api/result")
         )
 
+    def _is_grsai_video_generate_route(self, endpoint: Any = None, model: Any = None, kind: Any = None) -> bool:
+        """Grsai video defaults to the minimax-h3 route: POST /v1/api/generate, GET /v1/api/result."""
+        if str(kind or "").strip().lower() == "video":
+            return True
+        text = str(endpoint or "").strip().lower()
+        if "/api/result" in text or "/api/generate" in text or "/v1/video/" in text:
+            return True
+        if self._is_grsai_minimax_h3_model(model):
+            return True
+        model_l = str(model or "").strip().lower().replace("_", "-")
+        if not model_l:
+            return False
+        if (
+            model_l.startswith("sora-image")
+            or "create-character" in model_l
+            or "upload-character" in model_l
+        ):
+            return False
+        return any(
+            token in model_l
+            for token in ("veo", "sora-2", "sora-video", "kling", "runway", "luma", "hailuo", "minimax", "cogvideo")
+        )
+
     def _resolve_grsai_poll_request(
         self,
         *,
@@ -8920,15 +8945,16 @@ class MediaGenerationService:
         query_endpoint: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
+        kind: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Build the exact HTTP request used by live grsai polling.
 
-        MiniMax H3: GET /v1/api/result?id=...
-        Sora / Veo / image: POST /v1/draw/result {"id": ...}
+        Video (same route as minimax-h3): GET /v1/api/result?id=...
+        Image: POST /v1/draw/result {"id": ...}
         """
         stable_task_id = str(task_id or "").strip()
         endpoint = str(query_endpoint or "").strip()
-        is_h3 = self._is_grsai_minimax_h3_query(endpoint, model)
+        is_h3 = self._is_grsai_video_generate_route(endpoint, model, kind)
         root = self._grsai_api_root(endpoint, base_url)
         if is_h3:
             if endpoint and "/api/result" in endpoint.lower() and "record" not in endpoint.lower():
@@ -8957,12 +8983,14 @@ class MediaGenerationService:
         query_endpoint: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
+        kind: Optional[str] = None,
     ) -> Dict[str, Any]:
         spec = self._resolve_grsai_poll_request(
             task_id=task_id,
             query_endpoint=query_endpoint,
             base_url=base_url,
             model=model,
+            kind=kind,
         )
         method = str(spec.get("method") or "POST").upper()
         url = str(spec.get("url") or "").strip()
@@ -9132,6 +9160,7 @@ class MediaGenerationService:
         self,
         *,
         prompt: str,
+        model: Any = None,
         aspect_ratio: Any = None,
         resolution: Any = None,
         duration: Any = None,
@@ -9150,8 +9179,9 @@ class MediaGenerationService:
         reply = str(reply_type or "async").strip().lower()
         if reply not in {"json", "stream", "async"}:
             reply = "async"
+        final_model = str(model or "minimax-h3").strip() or "minimax-h3"
         payload: Dict[str, Any] = {
-            "model": "minimax-h3",
+            "model": final_model,
             "prompt": str(prompt or ""),
             "aspectRatio": self._map_grsai_minimax_h3_aspect_ratio(aspect_ratio),
             "resolution": mapped_resolution,
@@ -9443,234 +9473,26 @@ class MediaGenerationService:
                 callback_url=callback_url,
             )
 
-        # Video
+        # Video. Every Grsai video model uses the minimax-h3 route:
+        # POST /v1/api/generate, then GET /v1/api/result.
         elif gen_type == "video":
-            model_lower = (model or "").lower()
-            if self._is_grsai_minimax_h3_model(model):
-                return await self._handle_grsai_minimax_h3_video(
-                    prompt=prompt,
-                    config=config,
-                    api_key=api_key,
-                    model=model,
-                    ref_image=ref_image,
-                    last_frame_url=last_frame_url,
-                    duration=duration,
-                    aspect_ratio=aspect_ratio,
-                    tool_conf=tool_conf,
-                    base_url=base_url,
-                    raw_endpoint=raw_endpoint,
-                    trace_id=trace_id,
-                    callback_ticket=callback_ticket,
-                    callback_url=callback_url,
-                )
-            is_veo = "veo" in model_lower
-            
-            # Check if user provided a specific full endpoint (Prefer Map -> Then generic config)
-            endpoint_map = tool_conf.get("endpointMap", {})
-            mapped_endpoint = endpoint_map.get(model)
-            resolved_endpoint = (mapped_endpoint or raw_endpoint or "").strip()
-            
-            if resolved_endpoint and ("/video/" in resolved_endpoint or resolved_endpoint.endswith("/veo")):
-                endpoint = resolved_endpoint.rstrip("/")
-            else:
-                 # Auto-construct from base URL
-                 endpoint_suffix = "sora-video" # default
-                 if is_veo:
-                     endpoint_suffix = "veo"
-                 elif "kling" in model_lower or "banana" in model_lower:
-                     endpoint_suffix = "kling"
-                 elif "runway" in model_lower:
-                     endpoint_suffix = "runway"
-                 elif "luma" in model_lower:
-                     endpoint_suffix = "luma"
-                 elif ("hailuo" in model_lower or "minimax" in model_lower) and not self._is_grsai_minimax_h3_model(model_lower):
-                     endpoint_suffix = "hailuo"
-                 elif "cogvideo" in model_lower:
-                     endpoint_suffix = "cogvideox"
-                     
-                 # Use base_url which was sanitized at start of method (removing trailing /v1)
-                 # Correct Grsai logic: base_url usually ends with host e.g. https://grsai.dakka.com.cn
-                 # The correct paths are /v1/video/veo, /v1/video/sora-video, etc.
-                 
-                 # Strip any trailing logic to be safe
-                 clean_base = base_url.split("/v1")[0].rstrip("/")
-                 
-                 # Force https if missing (common config error)
-                 if not clean_base.startswith("http"):
-                     clean_base = f"https://{clean_base}"
-                     
-                 endpoint = f"{clean_base}/v1/video/{endpoint_suffix}"
-            
-            # Recalculate result endpoint based on the FINAL submission endpoint
-            # Logic: If endpoint is .../v1/video/veo, we want to go up to .../v1/draw/result
-            # The pattern is fairly standard for this provider: base + /v1/draw/result
-            
-            # Attempt to extract base from final endpoint
-            result_base = base_url
-            if "/v1/" in endpoint:
-                result_base = endpoint.split("/v1/")[0]
-            
-            result_url = f"{result_base}/v1/draw/result"
-            _debug_log(f"[Grsai] Computed Result Poll URL: {result_url}")
-
-            final_model = model or ("veo3.1-fast" if is_veo else "sora-2")
-            
-            # Common payload elements
-            payload = {"model": final_model, "prompt": prompt, "shutProgress": True}
-            
-            if is_veo:
-                # Veo spec: strict aspectRatio (only 16:9 or 9:16 supported), urls param empty if unused, webHook needs to be URL format
-                # Enforce supported aspect ratios for the API parameter
-                api_ar = "16:9"
-                if aspect_ratio == "9:16": 
-                    api_ar = "9:16"
-                payload["aspectRatio"] = api_ar
-                # API requires integer for duration
-                payload["duration"] = int(duration) if duration else 5
-                
-                # payload["urls"] = [] # API Spec: urls cannot be used with firstFrameUrl/lastFrameUrl. We prioritize firstFrameUrl.
-                # prompt truncation moved to end
-            else:
-                # Sora/Others
-                callback_payload_value = callback_url if callback_url and callback_url != "-1" else "-1"
-                payload["webHook"] = callback_payload_value
-                payload["webhook"] = callback_payload_value
-                # API requires integer for duration
-                payload["duration"] = int(duration) if duration else 5
-                video_is_draft = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
-                if aspect_ratio:
-                    # Default map for common ratios if API expects WxH
-                    map_size = {
-                        "16:9": "854x480" if video_is_draft else "1280x720",
-                        "9:16": "480x854" if video_is_draft else "720x1280",
-                        "1:1": "480x480" if video_is_draft else "720x720",
-                        "4:3": "640x480" if video_is_draft else "960x720",
-                        "2.35:1": "1128x480" if video_is_draft else "1692x720"
-                    }
-                    if aspect_ratio in map_size:
-                        payload["size"] = map_size[aspect_ratio]
-                    else:
-                        payload["aspect_ratio"] = aspect_ratio
-                elif not is_veo:
-                    payload["size"] = "854x480" if video_is_draft else "1280x720"
-
-            base_metadata = {
-                "provider": "grsai",
-                "model": final_model,
-                "prompt": prompt,
-                "query_endpoint": result_url,
-            }
-            
-            # Grsai expects URLs or Base64
-            # is_veo check moved up
-            
-            if ref_image:
-                if is_veo:
-                    # Explicitly process for Veo requirements
-                    payload["firstFrameUrl"] = await self._process_veo_image_async(ref_image, aspect_ratio or "16:9")
-                else:
-                    val = await self._resolve_ref_for_api_async(ref_image, force_data_uri_for_local=True)
-                    if val: payload["url"] = val
-            elif is_veo:
-                # Veo: firstFrameUrl is Optional. 
-                # But if we have lastFrameUrl, we MUST have firstFrameUrl.
-                # If we have neither, we can omit both.
-                # Logic: Only force black frame if we have lastFrameUrl but no firstFrameUrl.
-                if last_frame_url:
-                     _debug_log("[Grsai] Auto-generating Black Start Frame for Veo (Required by Last Frame)...")
-                     try:
-                        # Generate black image
-                        img = Image.new('RGB', (1024, 576), (0, 0, 0))
-                        buf = io.BytesIO()
-                        img.save(buf, format='PNG')
-                        b64_str = base64.b64encode(buf.getvalue()).decode('utf-8')
-                        payload["firstFrameUrl"] = f"data:image/png;base64,{b64_str}"
-                     except Exception as e:
-                        _debug_log(f"[Grsai] Failed to gen black frame: {e}", "warning") 
-            
-            if last_frame_url:
-                if is_veo:
-                    payload["lastFrameUrl"] = await self._process_veo_image_async(last_frame_url, aspect_ratio or "16:9")
-                else:
-                    val = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True)
-                    if val: payload["end_reference_image"] = val
-
-            # Veo Clean Prompt Logic
-            if is_veo and prompt:
-                 # Remove markdown and brackets to avoid API parsing errors
-                 clean_prompt = re.sub(r'[\*\[\]\{\}]', '', prompt)
-                 # Enforce length limit
-                 payload["prompt"] = clean_prompt[:1200]
-
-            # Ensure we don't send None
-            if is_veo:
-                 # Validation: If we have firstFrameUrl/lastFrameUrl, Remove urls key completely
-                 if "firstFrameUrl" in payload or "lastFrameUrl" in payload:
-                      if "urls" in payload: del payload["urls"]
-                 else:
-                      # If no frames, we could use urls, but we don't support it in this logic path yet.
-                      # Ensure no empty firstFrameUrl keys exist
-                      pass
-
-                 # Remove lastFrameUrl/firstFrameUrl if empty string
-                 if "lastFrameUrl" in payload and not payload["lastFrameUrl"]:
-                     del payload["lastFrameUrl"]
-                 if "firstFrameUrl" in payload and not payload["firstFrameUrl"]:
-                     del payload["firstFrameUrl"]
-
-                 payload["webHook"] = callback_url if callback_url and callback_url != "-1" else "-1"
-
-            # Debug log (sanitized)
-            debug_p = _strip_base64_from_log(payload)
-
-            _debug_log(f"[Grsai] Video Payload: {_format_payload_for_log(debug_p)}")
-            if is_veo:
-                _debug_log(f"[Grsai][Veo] Submit Duration={payload.get('duration')} Model={final_model} Aspect={payload.get('aspectRatio')}")
-            logger.info(
-                "[GrsaiTrace][%s] video submit prepared | endpoint=%s result_url=%s is_veo=%s payload_keys=%s",
-                trace_id,
-                endpoint,
-                result_url,
-                is_veo,
-                sorted(list(payload.keys())),
-            )
-            
-            # Double check payload validity before sending
-            video_task_id_callback = tool_conf.get("_grsai_task_id_callback")
-            if not callable(video_task_id_callback):
-                video_task_id_callback = tool_conf.get("_provider_task_id_callback")
-            if not callable(video_task_id_callback):
-                video_task_id_callback = None
-            grsai_extra_headers = self._build_grsai_direct_oss_headers(tool_conf, asset_kind="video")
-            if grsai_extra_headers:
-                base_metadata["provider_direct_oss_url"] = True
-                base_metadata["grsai_oss_id"] = grsai_extra_headers.get("oss-id")
-                base_metadata["grsai_oss_path"] = grsai_extra_headers.get("oss-path")
-            logger.info(
-                "[GrsaiTrace][%s] video submit headers | content_type=application/json auth_bearer=%s has_oss_id=%s has_oss_path=%s oss_id=%s oss_path=%s",
-                trace_id,
-                bool(api_key),
-                bool(str(grsai_extra_headers.get("oss-id") or "").strip()),
-                bool(str(grsai_extra_headers.get("oss-path") or "").strip()),
-                str(grsai_extra_headers.get("oss-id") or "").strip(),
-                str(grsai_extra_headers.get("oss-path") or "").strip(),
-            )
-            return await self._submit_and_poll_grsai(
-                endpoint,
-                payload,
-                api_key,
-                result_url,
-                is_video=True,
-                extra_metadata=base_metadata,
+            return await self._handle_grsai_minimax_h3_video(
+                prompt=prompt,
+                config=config,
+                api_key=api_key,
+                model=model,
+                ref_image=ref_image,
+                last_frame_url=last_frame_url,
+                duration=duration,
+                aspect_ratio=aspect_ratio,
+                tool_conf=tool_conf,
+                base_url=base_url,
+                raw_endpoint=raw_endpoint,
                 trace_id=trace_id,
-                task_id_callback=video_task_id_callback,
-                extra_headers=grsai_extra_headers,
-                pure_callback_mode=pure_callback_mode,
-                callback_enabled=callback_enabled,
                 callback_ticket=callback_ticket,
                 callback_url=callback_url,
             )
-    
+
     async def _handle_grsai_minimax_h3_video(
         self,
         *,
@@ -9742,6 +9564,7 @@ class MediaGenerationService:
         is_draft = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
         payload = self._build_grsai_minimax_h3_payload(
             prompt=prompt,
+            model=model,
             aspect_ratio=aspect_ratio or tool_conf.get("aspect_ratio") or tool_conf.get("aspectRatio"),
             resolution=tool_conf.get("resolution") or tool_conf.get("video_resolution"),
             duration=duration if duration is not None else tool_conf.get("duration"),
@@ -9777,8 +9600,9 @@ class MediaGenerationService:
             base_metadata["grsai_oss_id"] = grsai_extra_headers.get("oss-id")
             base_metadata["grsai_oss_path"] = grsai_extra_headers.get("oss-path")
         logger.info(
-            "[GrsaiTrace][%s] minimax-h3 submit prepared | endpoint=%s result_url=%s duration=%s resolution=%s aspect=%s images=%s audios=%s has_oss_id=%s has_oss_path=%s oss_path=%s",
+            "[GrsaiTrace][%s] video generate submit | model=%s endpoint=%s result_url=%s duration=%s resolution=%s aspect=%s images=%s audios=%s has_oss_id=%s has_oss_path=%s oss_path=%s",
             trace_id,
+            payload.get("model"),
             endpoint,
             result_url,
             payload.get("duration"),
