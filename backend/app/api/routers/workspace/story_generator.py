@@ -927,7 +927,7 @@ async def structure_project_creative_input_to_story_fields(
             "故事线至少两条改写同一冲突；只有整剧是单一封闭空间才写线数=1。"
             "时间节点至少写开篇的季节、昼夜、气候。"
             "专业领域写触因、做法和错法；情节不靠规程就写领域=无。"
-            "场景与道具只登记离了就做不成的空间和物件。空间名是能站进去的地方，功能另写一句。一处一个名字，可以登记多处。不写陈设和材质。"
+            "场景与道具只登记离了就做不成的空间和物件。空间名是能站进去的地方，功能另写一句。一处一个名字，可以登记多处。同一处不堆主体。一处装不下就另登记一个地方。主体复用和换地方由分集大纲规划。不写陈设和材质。"
             "这次返回的 JSON 必须包含 plot_background、story_lines、time_nodes、professional_domains、places_and_props。少一个键就是无效回答，不要留到后一阶段。\n"
         )
     else:
@@ -962,7 +962,7 @@ async def structure_project_creative_input_to_story_fields(
             "time_nodes names at least the opening season, day or night, and weather. "
             "professional_domains names the trigger, the right step, and the amateur mistake, or 领域=无. "
             "places_and_props registers only spaces and objects the plot fails without. "
-            "A space name is a place you can stand in; write the function separately. Register each distinct place. No furnishings or materials. "
+            "A space name is a place you can stand in; write the function separately. Register each distinct place. Do not stack extra subjects into one place; if it cannot hold the next beat, register another place. Reuse and switching places are planned in the episode outline. No furnishings or materials. "
             "The JSON you return must contain plot_background, story_lines, time_nodes, professional_domains, and places_and_props. "
             "A response missing any of these keys is invalid. Do not leave them for a later stage."
         )

@@ -256,7 +256,7 @@ def format_outline_registry_block(source: Any) -> str:
     """Five locked framework columns. §9 分集规划 reads these lines and does not invent another set."""
     return "\n".join([
         "[剧本框架五栏 — 分集规划输入]",
-        "这五栏是写 §9 分集规划的输入，原文已经在剧本框架锁好。时间行的节点、季节、昼夜、气候用时间节点。在场名的环境逐字用场景与道具里的空间名，一集可以写多处。专业行的领域只用专业领域里登记的名字。切场的线用故事线。EP01 摘要把剧情背景演成一件看得见的事，不把全文再贴成旁白。五栏有字时，不得另起一套空间、领域或时间节点。",
+        "这五栏是写 §9 分集规划的输入，原文已经在剧本框架锁好。时间行的节点、季节、昼夜、气候用时间节点。每一集用空间行写明涉及的地方，至少一处，可以多处，不并成一个名字。名字逐字用场景与道具里的空间名。场景以简单为第一优先：四壁每壁只有封闭面再加一具贴墙、嵌入或悬挂的主体，中部只有一个主体加必须的配套和必要的最少配饰。每一处写主体、负载和复用。首现只锁这个上限。之后先用这些主体，新功能能落在已有主体上就写落在，已有桌面能做全息控制就不另起立式控制台。做不到或超负载就另起一处并标补，不往旧处加主体。非封闭环境的远景不写入主体。专业行的领域只用专业领域里登记的名字。切场的线用故事线。EP01 摘要把剧情背景演成一件看得见的事，不把全文再贴成旁白。五栏有字时，不得另起一套领域或时间节点。空间名先用场景与道具里已有的；只有这一集离了就做不成，或这一处主体超负载，才另起一处并标补。",
         f"剧情背景: {_field_text(source, 'plot_background')}",
         f"故事线: {_field_text(source, 'story_lines')}",
         f"时间节点: {_field_text(source, 'time_nodes')}",
@@ -1140,6 +1140,8 @@ def build_registry_fill_prompts(
         "A space name is a place a person can stand in, such as 办公室、大堂、街道. "
         "One line each: `名 (EN)｜功能=｜准入=开放|受限` or `道具｜名｜功能=`. "
         "The function is a separate sentence. No furnishings or materials. "
+        "Do not stack extra subjects into one place. If it cannot hold the next beat, register another place. "
+        "Reuse and switching places are planned in the episode outline. "
         "Register every distinct place; one story may need several."
     )
     if _context_is_emotion_driven(project_context):
