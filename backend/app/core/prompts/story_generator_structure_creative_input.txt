@@ -47,7 +47,12 @@ Layer 2 — Egri (character and arc). Put all of this in "characters":
 - Names are ordinary personal names for the era and place (Chinese name + English name). Do not encode plot function, twist, hidden identity, or ending in a name. Keep user-given names verbatim. Forbidden in names: 复仇者/真凶/内鬼/叛徒/卧底/白莲/笑面虎/杀父仇人/幕后/必败. Forbidden as a way to refer to a person anywhere in this JSON: 男主/女主/男二/女二/男配/女配/男一/女一/男主角/女主角/大男主/大女主. Replace each with that person's name.
 
 Layer 3 — Save the Cat. Each beat is 1–3 sentences: who does what to whom, the Gap (expected vs actual), which way the value turns, and the visible result. The result of one beat is the pressure of the next. Every beat must be able to point back at the two beliefs colliding. A beat that still happens after the beliefs are removed is a task stuck on a person — rewrite it.
-- "stc_01_opening_image": the world before. A visible state that beat 15 will answer.
+- "stc_01_opening_image": the world before, and the audience's first picture. Beat 15 rhymes with this picture. **吸睛原则（最高）**: this beat is invalid as a quiet morning, a walk in, a meeting that only introduces names, or a paragraph of world rules. It must be one grab, written `吸睛=宏观|两难`. Pick one. Keep the user's opening event; raise its first picture into that grab. Do not replace the plot with a borrowed scene.
+  - `吸睛=宏观`: the scale is the information. One picture holds a mass, a height, a distance, or a number a room cannot hold. A person this story already has is inside that scale, and the scale presses the belief they will not yield. Name who, and what the scale does to them. Do not list furnishings, materials, or light color.
+  - `吸睛=两难`: both horns are already in the picture, both are costly, and the shock is the moment the choice or the reveal lands. Name both horns. A mood, a secret the audience is only told, or a choice that can still wait, is not this beat.
+  After the event sentences write `吸睛=宏观|两难｜联想=…｜可见=…`. `联想=` is one or two scene-rule words from the lexicon, transcoded into this story's era, names, and stakes. Do not paste a source work's names, places, costumes, or lines into the beat.
+  场面规则联想词（只借规则）: 宏观=`舰队压境|城下集结|兽群机群漫过|天穹裂开|轨道坠落|云端落到街面|城毁漫过街区|万人仪式中断|跨城追逐|废墟里还有人在走|深海压上舰桥`. 两难=`手已经按在开关上|救一个就要放弃另一个|枪口对着自己人|当众揭穿还站在礼上|门只能开一扇|规则被下一秒推翻|救的人举刀|倒计时两边都有人|第一分钟失去同伴|苏醒看见世界已经毁|公开处刑停在落刀前`.
+  案例只作规则来源，不写入本拍。宏观借「规模压人」：《指环王》黑门集结，《星际穿越》的尺度坠落，《阿凡达》从高处落到地面，《独立日》巨物压城；游戏《地平线 零之曙光》机群漫过原野，《赛博朋克 2077》城市场面压人，《塞尔达传说 旷野之息》醒来看见废墟城堡。两难借「两角已经在场」：《黑暗骑士》两船不能两全，《饥饿游戏》抽签当场，《鱿鱼游戏》规则当场打脸；游戏《对马岛之鬼》海滩上必须选，《只狼》第一战即死局，《最后生还者》第一分钟失去同伴，《死亡搁浅》送葬即失去。
 - "stc_02_theme_stated": someone states or enacts the controlling idea. The hero does not accept it yet.
 - "stc_03_setup": flaw, desire, stakes, and ordinary relationships, before the catalyst.
 - "stc_04_catalyst": the balance-breaking event. After it, the old life is unavailable.
@@ -61,7 +66,7 @@ Layer 3 — Save the Cat. Each beat is 1–3 sentences: who does what to whom, t
 - "stc_12_dark_night": the bottom. The hero faces the Need. The old belief cannot hold.
 - "stc_13_break_into_three": a new method, synthesized from the A story and the B story.
 - "stc_14_finale": the last fight under the new belief. The crisis choice lands here and proves the controlling idea. This is the must-have iconic beat: key line and physical action.
-- "stc_15_final_image": the new equilibrium, rhymed with beat 01, so the arc is visible.
+- "stc_15_final_image": the new equilibrium, rhymed with beat 01's picture, so the arc is visible. `吸睛=宏观` answers that same scale. `吸睛=两难` shows which horn was taken and what it cost. Do not answer with an unrelated quiet room.
 
 Dialogue seeds, including 自白, are required on the beats that carry these five ideas. The concept fields stay the idea. The speakable line lives on the beat. Each of the five has at least one seed. At least one seed among them is 自白.
 - 主控思想: the beat where someone states the value-plus-because, and the beat that proves it. Normally 02 and 14.
