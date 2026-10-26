@@ -119,6 +119,78 @@ one
     assert units[0].scene_text == "one"
 
 
+def test_fullwidth_and_spaced_scene_markers_parse():
+    script = """
+【SCENES_BLOCK_START】
+【SCENE_START：EP01_SC01】
+客栈里。
+[ SCENE_END : EP01_SC01 ]
+【SCENES_BLOCK_END】
+"""
+    units = parse_scene_units_from_markers(script)
+    assert [unit.scene_id for unit in units] == ["EP01_SC01"]
+    assert units[0].scene_text == "客栈里。"
+
+
+def test_bare_marker_lines_parse():
+    script = """
+SCENES_BLOCK_START
+SCENE_START:EP01_SC02
+门外。
+SCENE_END:EP01_SC02
+SCENES_BLOCK_END
+"""
+    units = parse_scene_units_from_markers(script)
+    assert [unit.scene_id for unit in units] == ["EP01_SC02"]
+    assert units[0].scene_text == "门外。"
+
+
+def test_content_markers_alone_become_scene_pairs():
+    script = """
+[SCENE_CONTENT_START:EP01_SC03]
+廊下。
+[SCENE_CONTENT_END:EP01_SC03]
+"""
+    units = parse_scene_units_from_markers(script)
+    assert [unit.scene_id for unit in units] == ["EP01_SC03"]
+    assert units[0].scene_text == "廊下。"
+
+
+def test_escaped_scene_markers_parse():
+    script = r"""
+\[SCENES_BLOCK_START\]
+\[SCENE_START:EP01_SC04\]
+舱内。
+\[SCENE_END:EP01_SC04\]
+\[SCENES_BLOCK_END\]
+"""
+    units = parse_scene_units_from_markers(script)
+    assert [unit.scene_id for unit in units] == ["EP01_SC04"]
+    assert units[0].scene_text == "舱内。"
+
+
+def test_environment_plan_rejects_script_without_scene_markers():
+    from fastapi import HTTPException
+
+    from app.services.environment_plan_runner import resolve_environment_plan_scene_text
+
+    try:
+        resolve_environment_plan_scene_text(None, episode_id=0, payload_text="第一场\n两人对坐。")
+    except HTTPException as exc:
+        assert exc.status_code == 422
+        assert exc.detail == "ENVIRONMENT_PLAN_SCENE_MARKERS_MISSING"
+    else:
+        raise AssertionError("expected ENVIRONMENT_PLAN_SCENE_MARKERS_MISSING")
+
+
+def test_environment_plan_keeps_text_that_already_has_markers():
+    from app.services.environment_plan_runner import resolve_environment_plan_scene_text
+
+    script = "[SCENE_START:EP01_SC01]\n厅内。\n[SCENE_END:EP01_SC01]"
+    resolved = resolve_environment_plan_scene_text(None, episode_id=0, payload_text=script)
+    assert resolved == script
+
+
 def test_missing_outer_wrappers_are_recovered_when_scene_pairs_exist():
     script = """
 [SCENE_START:EP01_SC02]

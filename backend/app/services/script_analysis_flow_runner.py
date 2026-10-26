@@ -34,6 +34,7 @@ from app.services.scene_subskill_pipeline_runner import (
 )
 from app.services.script_analysis_flow import (
     STAGE_SCENE_MARKDOWN,
+    SceneMarkerParseError,
     coerce_target_scene_ids_for_orchestration,
     get_script_analysis_flow_registry,
     import_analyze_scene_stage_result,
@@ -801,7 +802,13 @@ async def execute_scene_analysis_flow_node(
                             else True
                         )
                     )
-                    if backfill_ok and promo_ok:
+                    markers_ok = True
+                    if node_key == "scene_split" and not list_reextract:
+                        try:
+                            markers_ok = bool(parse_scene_units_from_markers(result_text))
+                        except SceneMarkerParseError:
+                            markers_ok = False
+                    if backfill_ok and promo_ok and markers_ok:
                         if attempt > 1:
                             logger.info(
                                 "[剧本分析流程] 节点 %s 整段重跑后通过完整性校验 | attempt=%s switched_api=%s",
@@ -810,11 +817,15 @@ async def execute_scene_analysis_flow_node(
                                 switched,
                             )
                         break
-                    incomplete_reason = (
-                        "商业宣传片拆成多场"
-                        if backfill_ok and not promo_ok
-                        else "缺少 Project Visual Backfill（输出不完整）"
-                    )
+                    if backfill_ok and not promo_ok:
+                        incomplete_reason = "商业宣传片拆成多场"
+                        incomplete_code = "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING"
+                    elif backfill_ok and promo_ok and not markers_ok:
+                        incomplete_reason = "缺少场次标记（输出不完整）"
+                        incomplete_code = "SCENE_MARKER_BLOCK_MISSING"
+                    else:
+                        incomplete_reason = "缺少 Project Visual Backfill（输出不完整）"
+                        incomplete_code = "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING"
                     logger.warning(
                         "[剧本分析流程] 节点 %s %s | attempt=%s/%s switched_api=%s",
                         node_key,
@@ -826,7 +837,7 @@ async def execute_scene_analysis_flow_node(
                     if attempt >= max_attempts:
                         raise HTTPException(
                             status_code=422,
-                            detail="SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING",
+                            detail=incomplete_code,
                         )
                     upsert_pipeline_node_status(
                         db,
@@ -837,8 +848,8 @@ async def execute_scene_analysis_flow_node(
                         status="running",
                         progress_percent=15.0,
                         retry_count=attempt,
-                        runtime_meta={"business_event": "retry", "business_reason": "全局统筹结果不完整"},
-                        error_code="SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING",
+                        runtime_meta={"business_event": "retry", "business_reason": incomplete_reason},
+                        error_code=incomplete_code,
                         error_message=(
                             "incomplete Stage 1 output, switching API and rerunning"
                             if switched or (attempt + 1) == max_attempts
@@ -920,6 +931,12 @@ async def execute_scene_analysis_flow_node(
                     error_message = error_text or str(exc)
                 elif "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING" in error_text:
                     error_code = "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING"
+                    error_message = error_text or str(exc)
+                elif "ENVIRONMENT_PLAN_SCENE_MARKERS_MISSING" in error_text:
+                    error_code = "ENVIRONMENT_PLAN_SCENE_MARKERS_MISSING"
+                    error_message = error_text or str(exc)
+                elif "SCENE_MARKER_BLOCK_MISSING" in error_text:
+                    error_code = "SCENE_MARKER_BLOCK_MISSING"
                     error_message = error_text or str(exc)
                 elif "PROMPT_LEAK_DETECTED" in error_text:
                     error_code = "PROMPT_LEAK_DETECTED"

@@ -647,16 +647,96 @@ def normalize_node_status(value: Optional[str], default: str = "queued") -> str:
     return fallback if fallback in NODE_STATUS_VALUES else "queued"
 
 
+_ZERO_WIDTH_CHARS = "\u200b\u200c\u200d\ufeff\u2060"
+_LOOSE_SCENE_MARKER_RE = re.compile(
+    r"\\?[\[［【]\s*"
+    r"(SCENES_BLOCK_(?:START|END)|SCENE_(?:CONTENT_)?(?:START|END))"
+    r"(?:\s*[:：﹕]\s*([^\s\]］】\\]+))?"
+    r"\s*\\?[\]］】]",
+    re.IGNORECASE,
+)
+_BARE_SCENE_MARKER_LINE_RE = re.compile(
+    r"(?m)^[ \t>*#-]*"
+    r"(SCENES_BLOCK_(?:START|END)|SCENE_(?:CONTENT_)?(?:START|END))"
+    r"(?:[:：﹕][ \t]*([A-Za-z0-9_-]+))?"
+    r"[ \t]*$"
+)
+
+
+def _canonical_scene_marker(name: str, scene_id: str = "") -> str:
+    token = str(name or "").strip().upper()
+    ident = str(scene_id or "").strip()
+    if ident:
+        return f"[{token}:{ident}]"
+    return f"[{token}]"
+
+
+def _rewrite_loose_scene_markers(text: str) -> str:
+    """Accept fullwidth brackets, fullwidth colons, inner spaces, and escaped brackets."""
+
+    def repl(match: re.Match) -> str:
+        return _canonical_scene_marker(match.group(1), match.group(2) or "")
+
+    return _LOOSE_SCENE_MARKER_RE.sub(repl, text)
+
+
+def _wrap_bare_scene_marker_lines(text: str) -> str:
+    """Wrap marker words that sit alone on a line when bracketed scene pairs are absent."""
+    if SCENE_START_PATTERN.search(text) and SCENE_END_PATTERN.search(text):
+        return text
+
+    def repl(match: re.Match) -> str:
+        return _canonical_scene_marker(match.group(1), match.group(2) or "")
+
+    return _BARE_SCENE_MARKER_LINE_RE.sub(repl, text)
+
+
+def _promote_content_only_scene_pairs(text: str) -> str:
+    """SCENE_CONTENT pairs are scene boundaries when SCENE_START/END were omitted."""
+    if SCENE_START_PATTERN.search(text) and SCENE_END_PATTERN.search(text):
+        return text
+    if not re.search(r"\[SCENE_CONTENT_START:[^\]]+\]", text, flags=re.IGNORECASE):
+        return text
+    if not re.search(r"\[SCENE_CONTENT_END:[^\]]+\]", text, flags=re.IGNORECASE):
+        return text
+
+    def start_repl(match: re.Match) -> str:
+        scene_id = str(match.group(1) or "").strip()
+        return f"[SCENE_START:{scene_id}]\n[SCENE_CONTENT_START:{scene_id}]"
+
+    def end_repl(match: re.Match) -> str:
+        scene_id = str(match.group(1) or "").strip()
+        return f"[SCENE_CONTENT_END:{scene_id}]\n[SCENE_END:{scene_id}]"
+
+    text = re.sub(
+        r"\[SCENE_CONTENT_START:([^\]]+)\]",
+        start_repl,
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(
+        r"\[SCENE_CONTENT_END:([^\]]+)\]",
+        end_repl,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
 def _normalize_scene_marker_script_text(script_text: str) -> str:
     text = str(script_text or "").replace("\r\n", "\n")
     if not text.strip():
         return ""
+    for ch in _ZERO_WIDTH_CHARS:
+        text = text.replace(ch, "")
+    text = _rewrite_loose_scene_markers(text)
+    text = _wrap_bare_scene_marker_lines(text)
     text = re.sub(
         r"`+(\[(?:SCENES?_BLOCK_(?:START|END)|SCENE_(?:CONTENT_)?(?:START|END)(?::[^\]]+)?)])`+",
         r"\1",
         text,
         flags=re.IGNORECASE,
     )
+    text = _promote_content_only_scene_pairs(text)
     text = SCENE_CONTENT_MARKER_LINE_PATTERN.sub("", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     has_scene_pairs = bool(SCENE_START_PATTERN.search(text) and SCENE_END_PATTERN.search(text))

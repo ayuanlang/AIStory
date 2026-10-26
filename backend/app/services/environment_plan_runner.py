@@ -2,7 +2,9 @@
 """Whole-episode environment planning: scout shooting envs, then splice reuse/new skeletons."""
 from __future__ import annotations
 
+import json
 import logging
+import re
 from typing import Any, Dict, List, Tuple
 
 from fastapi import HTTPException
@@ -12,6 +14,7 @@ from app.models.all_models import User
 from app.schemas.agent import AnalyzeSceneRequest
 from app.services.scene_markdown_orchestration import _extract_analysis_text_from_result
 from app.services.script_analysis_flow import (
+    SceneMarkerParseError,
     parse_scene_units_from_markers,
     upsert_pipeline_node_status,
 )
@@ -35,8 +38,106 @@ from app.services.script_analysis_flow.environment_reuse import (
 )
 
 _ENVIRONMENT_COMPLETION_MARKER = "[ENVIRONMENT_PLAN_OUTPUT_END]"
+_MARKER_MISS_CODES = {
+    "SCENE_MARKER_BLOCK_MISSING",
+    "SCENE_MARKER_EMPTY_BLOCK",
+    "SCENE_MARKER_NO_SCENES",
+}
 
 logger = logging.getLogger("api_logger")
+
+
+def _marker_diag(text: str) -> str:
+    sample = str(text or "")
+    head = sample[:80].replace("\n", " ")
+    return (
+        f"chars={len(sample)} "
+        f"block_start={bool(re.search(r'SCENES_BLOCK_START', sample, re.IGNORECASE))} "
+        f"scene_start={bool(re.search(r'SCENE_START', sample, re.IGNORECASE))} "
+        f"scene_end={bool(re.search(r'SCENE_END', sample, re.IGNORECASE))} "
+        f"content_start={bool(re.search(r'SCENE_CONTENT_START', sample, re.IGNORECASE))} "
+        f"head={head!r}"
+    )
+
+
+def _parse_scene_units_or_none(text: str):
+    try:
+        units = parse_scene_units_from_markers(text)
+    except SceneMarkerParseError as exc:
+        return None, exc
+    return units, None
+
+
+def _saved_scene_split_candidates(db: Session, episode_id: int) -> List[str]:
+    if int(episode_id or 0) <= 0 or db is None:
+        return []
+    from app.models.all_models import Episode
+    from app.services.soft_delete import _active_episode_clause
+
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == int(episode_id), _active_episode_clause())
+        .populate_existing()
+        .first()
+    )
+    if episode is None:
+        return []
+    found: List[str] = []
+    raw_outputs = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
+    if raw_outputs:
+        try:
+            payload = json.loads(raw_outputs)
+            outputs = (((payload.get("stages") or {}).get("stage1") or {}).get("outputs") or {})
+            for key in ("scene_split", "raw_text", "adapted_script"):
+                slot = outputs.get(key)
+                if isinstance(slot, dict):
+                    found.append(str(slot.get("content") or ""))
+                elif isinstance(slot, str):
+                    found.append(slot)
+        except Exception:
+            logger.warning(
+                "[environment_plan] stage outputs unreadable episode_id=%s",
+                episode_id,
+            )
+    found.append(str(getattr(episode, "ai_scene_analysis_result", "") or ""))
+    found.append(str(getattr(episode, "ai_scene_analysis_adaptation", "") or ""))
+    return found
+
+
+def resolve_environment_plan_scene_text(
+    db: Session,
+    *,
+    episode_id: int,
+    payload_text: str,
+) -> str:
+    """Use the request text when it has scene markers; otherwise the saved scene_split."""
+    payload = str(payload_text or "").strip()
+    units, exc = _parse_scene_units_or_none(payload)
+    if units:
+        return payload
+    if exc is not None and exc.code not in _MARKER_MISS_CODES:
+        raise HTTPException(status_code=422, detail=f"{exc.code}:{exc}") from exc
+    seen = {payload}
+    for index, candidate in enumerate(_saved_scene_split_candidates(db, int(episode_id or 0))):
+        body = str(candidate or "").strip()
+        if not body or body in seen:
+            continue
+        seen.add(body)
+        saved_units, _saved_exc = _parse_scene_units_or_none(body)
+        if saved_units:
+            logger.warning(
+                "[environment_plan] request text has no scene markers; using saved scene_split candidate=%s chars=%s episode_id=%s",
+                index,
+                len(body),
+                episode_id,
+            )
+            return body
+    logger.error(
+        "[environment_plan] scene markers missing episode_id=%s %s",
+        episode_id,
+        _marker_diag(payload),
+    )
+    raise HTTPException(status_code=422, detail="ENVIRONMENT_PLAN_SCENE_MARKERS_MISSING")
 
 
 def _patch_body_from_wrapped(patch_text: str, scene_id: str) -> str:
@@ -159,7 +260,11 @@ async def run_environment_plan(
     node_project_id: int,
     node_episode_id: int,
 ) -> Tuple[str, Dict[str, Any]]:
-    scene_split_text = str(raw_payload.get("text") or "").strip()
+    scene_split_text = resolve_environment_plan_scene_text(
+        db,
+        episode_id=int(node_episode_id or 0),
+        payload_text=str(raw_payload.get("text") or ""),
+    )
     units = parse_scene_units_from_markers(scene_split_text)
     if not units:
         raise HTTPException(status_code=422, detail="ENVIRONMENT_PLAN_NO_SCENES")

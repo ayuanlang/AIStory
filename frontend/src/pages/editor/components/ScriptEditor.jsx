@@ -1786,8 +1786,51 @@ const stripBlockLevelMarkersFromSceneText = (text) => (
         .trim()
 );
 
+const canonicalizeLooseSceneMarkers = (scriptText) => {
+    let normalized = String(scriptText || '').replace(/[\u200b\u200c\u200d\ufeff\u2060]/g, '');
+    normalized = normalized.replace(
+        /\\?[\[［【]\s*(SCENES_BLOCK_(?:START|END)|SCENE_(?:CONTENT_)?(?:START|END))(?:\s*[:：﹕]\s*([^\s\]］】\\]+))?\s*\\?[\]］】]/gi,
+        (_all, name, ident) => {
+            const token = String(name || '').toUpperCase();
+            const id = String(ident || '').trim();
+            return id ? `[${token}:${id}]` : `[${token}]`;
+        }
+    );
+    const hasPairs = /\[SCENE_START:[^\s\]]+\]/i.test(normalized)
+        && /\[SCENE_END:[^\s\]]+\]/i.test(normalized);
+    if (hasPairs) return normalized;
+    normalized = normalized.replace(
+        /^[ \t>*#-]*((?:SCENES_BLOCK_(?:START|END)|SCENE_(?:CONTENT_)?(?:START|END)))(?:[:：﹕][ \t]*([A-Za-z0-9_-]+))?[ \t]*$/gim,
+        (_all, name, ident) => {
+            const token = String(name || '').toUpperCase();
+            const id = String(ident || '').trim();
+            return id ? `[${token}:${id}]` : `[${token}]`;
+        }
+    );
+    if (
+        /\[SCENE_START:[^\s\]]+\]/i.test(normalized)
+        && /\[SCENE_END:[^\s\]]+\]/i.test(normalized)
+    ) {
+        return normalized;
+    }
+    if (
+        /\[SCENE_CONTENT_START:[^\]]+\]/i.test(normalized)
+        && /\[SCENE_CONTENT_END:[^\]]+\]/i.test(normalized)
+    ) {
+        normalized = normalized.replace(
+            /\[SCENE_CONTENT_START:([^\]]+)\]/gi,
+            (_all, id) => `[SCENE_START:${String(id).trim()}]\n[SCENE_CONTENT_START:${String(id).trim()}]`
+        );
+        normalized = normalized.replace(
+            /\[SCENE_CONTENT_END:([^\]]+)\]/gi,
+            (_all, id) => `[SCENE_CONTENT_END:${String(id).trim()}]\n[SCENE_END:${String(id).trim()}]`
+        );
+    }
+    return normalized;
+};
+
 const normalizeSceneMarkerScriptText = (scriptText) => {
-    const text = String(scriptText || '').replace(/\r\n/g, '\n');
+    const text = canonicalizeLooseSceneMarkers(String(scriptText || '').replace(/\r\n/g, '\n'));
     if (!text.trim()) return '';
     let normalized = text.replace(
         /`+(\[(?:SCENES?_BLOCK_(?:START|END)|SCENE_(?:CONTENT_)?(?:START|END)(?::[^\]]+)?)])`+/gi,
