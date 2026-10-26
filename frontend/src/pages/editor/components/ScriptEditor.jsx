@@ -14,7 +14,7 @@ import { BookOpen, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users,
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
-import { mainEnvironmentOpeningDraft, quadFailureEnvironmentNames, quadNamesMissingFromResult } from '../derivedGridRegen';
+import { derivedMainRegenHint, mainEnvironmentOpeningDraft, quadFailureEnvironmentNames, quadNamesMissingFromResult } from '../derivedGridRegen';
 import {
     getEpisodeAnalysisRun,
     releaseEpisodeAnalysisRun,
@@ -20692,6 +20692,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 options?.rerunSubject?.fields,
             );
             const runEnvironmentQuadConversion = async (environments, traceId, quadOptions = {}) => {
+                if (String(options?.derivedMainSource || '').trim()) {
+                    onLog?.(
+                        `[Stage 3 Asset Design] 衍生主环境只保留状态Delta，不转四宫格：${String(options?.rerunSubject?.name || '').trim()}`,
+                        'info'
+                    );
+                    return true;
+                }
                 const force = Boolean(quadOptions?.force);
                 const onlyNames = Array.isArray(quadOptions?.onlyNames) ? quadOptions.onlyNames : [];
                 let mains = (Array.isArray(environments) ? environments : []).filter((item) => (
@@ -21212,6 +21219,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             single_entity_type: pData.key === 'characters'
                                                 ? 'character'
                                                 : (pData.key === 'props' ? 'prop' : 'environment'),
+                                            ...(String(options?.derivedMainSource || '').trim()
+                                                ? {
+                                                    derived_main_source: String(options.derivedMainSource).trim(),
+                                                    derived_main_delta: String(options.derivedMainDelta || '').trim(),
+                                                }
+                                                : {}),
                                         }
                                         : {}),
                                 },
@@ -25409,6 +25422,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             continue;
                         }
                         if (typeKey === 'environment_main' && isDerivedEnvironmentAsset(entity)) continue;
+                        if (typeKey === 'environment_main' && derivedMainRegenHint(entity, rows)) continue;
                         if (typeKey === 'environment_derived' && !isDerivedEnvironmentAsset(entity)) continue;
                         if (!entityPayloadMatchesPurgeNames(entity, scopedNames)) continue;
                         await deleteEntity(entityId);
@@ -33070,6 +33084,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 options?.rerunSubject?.fields,
             );
             const singleEnvName = String(options?.rerunSubject?.name || '').trim();
+            const derivedMainHint = singleEnvName
+                ? derivedMainRegenHint(
+                    (episodeOwnedEntities || []).find((entity) => {
+                        const name = String(entity?.name || '').trim().split(/[｜|]/)[0].trim();
+                        const requested = singleEnvName.split(/[｜|]/)[0].trim();
+                        return name && name === requested;
+                    }),
+                    episodeOwnedEntities,
+                )
+                : null;
             const envScope = String(options.envScope || '').trim().toLowerCase()
                 || (singleEnvName
                     ? (isDerivedEnvironmentName(singleEnvName) ? 'derived' : 'main')
@@ -33118,6 +33142,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     explicitSubjectIndexText: scopedSubjectIndexText || '',
                     skipExistingAssets: options.skipExistingAssets === true,
                     overwriteExistingSubjects: options.overwriteExistingSubjects !== false,
+                    ...(derivedMainHint
+                        ? {
+                            derivedMainSource: derivedMainHint.source,
+                            derivedMainDelta: derivedMainHint.delta,
+                        }
+                        : {}),
                 }
             );
             

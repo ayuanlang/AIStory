@@ -42,7 +42,8 @@ from app.services.shot_markdown import (
     sanitize_shots_markdown_table_text,
 )
 from app.services.script_analysis_flow.derived_env_ingest import (
-    build_derived_env_info_injection_from_entities,
+    DEGREE_NAME_PATTERN,
+    extract_grid_cell_prompt,
 )
 from app.services.soft_delete import _active_episode_clause, _active_entity_clause, _active_scene_clause
 
@@ -677,16 +678,82 @@ def _scene_environment_color_plan_block(
     )
 
 
+def _coerce_quad_angle(raw: Any) -> Optional[int]:
+    if raw is None or raw == "":
+        return None
+    try:
+        angle = int(float(raw))
+    except (TypeError, ValueError):
+        return None
+    if angle in {0, 90, 180, 270}:
+        return angle
+    return None
+
+
+def _derived_view_angle(ent: Any) -> Optional[int]:
+    attrs = getattr(ent, "custom_attributes", None)
+    if not isinstance(attrs, dict):
+        attrs = {}
+    for raw in (attrs.get("view_angle_from_main"), attrs.get("angle")):
+        angle = _coerce_quad_angle(raw)
+        if angle is not None:
+            return angle
+    name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
+    match = DEGREE_NAME_PATTERN.match(name)
+    if match:
+        return _coerce_quad_angle(match.group(1))
+    return None
+
+
+def _quad_cell_from_main_prompt(prompt: str, angle: Optional[int]) -> str:
+    if angle is None:
+        return ""
+    return str(extract_grid_cell_prompt(prompt, angle).get("cell_prompt") or "").strip()
+
+
+def _shot_derived_env_cell_block(rows: List[Dict[str, Any]]) -> str:
+    """One block per used derivative: the matching cell of its main quad, not its own prompt."""
+    chunks: List[str] = []
+    seen: set = set()
+    for row in rows:
+        name = str(row.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+        main = str(row.get("main") or "").strip()
+        cell = str(row.get("cell") or "").strip()
+        if not main and not cell:
+            continue
+        seen.add(name)
+        parts = [f"ENV:[{name}]"]
+        if main:
+            parts.append(f"所属主环境=ENV:[{main}]")
+        angle = row.get("angle")
+        if angle is not None:
+            parts.append(f"view_angle_from_main={angle}")
+        chunk = "｜".join(parts)
+        if cell:
+            chunk = f"{chunk}\n{cell}"
+        chunks.append(chunk)
+    if not chunks:
+        return ""
+    return (
+        "【衍生环境信息】\n"
+        "每一条正文是所属主环境【四向拼图】里与这一度对应的那一格，"
+        "例如 90 度对应 [90度格-右上·东]。不是该衍生环境自己的提示词。\n"
+        + "\n\n".join(chunks)
+    )
+
+
 def _build_scene_subject_image_prompts_cn_section(
     project_entities: List[Any],
     subject_match_keys: set,
     *,
     scene_id: Optional[int] = None,
 ) -> str:
-    """Inject only this scene's derived-environment info.
+    """Inject each used derivative as the matching cell of its main 【四向拼图】.
 
-    Do not inject the main ENV generation_prompt_cn, its opening world lock,
-    or its four-panel grid. CHAR/PROP image prompts stay excluded.
+    Do not inject the derivative's own generation_prompt_cn, the rest of the
+    main prompt, or the other three cells. CHAR/PROP image prompts stay excluded.
     """
     if not subject_match_keys:
         return ""
@@ -781,7 +848,59 @@ def _build_scene_subject_image_prompts_cn_section(
             return True
         return resolved_main is not None and resolved_main is not ent
 
+    def _named_environment(raw_name: str) -> Optional[Any]:
+        keys = subject_compare_key_variants(raw_name)
+        if not keys:
+            return None
+        for possible in environment_entities:
+            if keys.intersection(_entity_name_keys(possible)):
+                return possible
+        return None
+
+    def _environment_label(ent: Any) -> str:
+        return str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
+
+    def _quad_owner_and_cell(ent: Any, resolved_main: Optional[Any]) -> Tuple[str, str]:
+        """Slice this angle from a main 【四向拼图】. Never read the derivative prompt."""
+        angle = _derived_view_angle(ent)
+        attrs = getattr(ent, "custom_attributes", None)
+        if not isinstance(attrs, dict):
+            attrs = {}
+        owners: List[Any] = []
+        seen_ids: set = set()
+
+        def _add(candidate: Optional[Any]) -> None:
+            if candidate is None or candidate is ent:
+                return
+            ident = id(candidate)
+            if ident in seen_ids:
+                return
+            if DEGREE_NAME_PATTERN.match(_environment_label(candidate)):
+                return
+            seen_ids.add(ident)
+            owners.append(candidate)
+
+        _add(resolved_main)
+        for key in ("source_main_environment", "main_environment", "所属主环境"):
+            _add(_named_environment(str(attrs.get(key) or "")))
+        for owner in owners:
+            cell = _quad_cell_from_main_prompt(
+                str(getattr(owner, "generation_prompt_cn", None) or ""),
+                angle,
+            )
+            if cell:
+                return _environment_label(owner), cell
+        fallback = ""
+        if resolved_main is not None and resolved_main is not ent:
+            fallback = _environment_label(resolved_main)
+        if not fallback:
+            fallback = str(
+                attrs.get("main_environment") or attrs.get("所属主环境") or ""
+            ).strip()
+        return fallback, ""
+
     derived_ents: List[Any] = []
+    derived_rows: List[Dict[str, Any]] = []
     main_by_name: Dict[str, str] = {}
     seen_refs: set = set()
     for ent in matched_entities:
@@ -795,17 +914,18 @@ def _build_scene_subject_image_prompts_cn_section(
         resolved_main = _find_main_environment(ent)
         if not _is_scene_derived(ent, resolved_main):
             continue
-        main_name = ""
-        if resolved_main is not None and resolved_main is not ent:
-            main_name = str(
-                getattr(resolved_main, "name", None) or getattr(resolved_main, "name_en", None) or ""
-            ).strip()
+        owner_name, cell = _quad_owner_and_cell(ent, resolved_main)
         derived_ents.append(ent)
-        main_by_name[used_env_name] = main_name
-    derived_info_block = build_derived_env_info_injection_from_entities(
-        derived_ents,
-        main_by_name=main_by_name,
-    )
+        derived_rows.append(
+            {
+                "name": used_env_name,
+                "main": owner_name,
+                "angle": _derived_view_angle(ent),
+                "cell": cell,
+            }
+        )
+        main_by_name[used_env_name] = owner_name
+    derived_info_block = _shot_derived_env_cell_block(derived_rows)
     if not derived_info_block:
         logger.info(
             "[_build_shot_prompts] no scene derived-env info matched scene_id=%s keys=%s",
@@ -821,10 +941,12 @@ def _build_scene_subject_image_prompts_cn_section(
 
     body = (
         "# Scene Subject Image Prompts (CN)\n"
-        "本场只注入用到的衍生环境信息。不注入主环境整份 generation_prompt_cn，"
-        "不注入开篇世界锁，不注入四宫格。\n"
-        "【衍生环境信息】只供脑内核对这一角的所属主环境、背景、画面左、画面右、画外、可见与不可见。"
-        "禁止把这些字段扩写成环境导游，禁止把未注入的主环境四壁或光句补进本段。\n"
+        "本场只注入用到的衍生环境信息。每一条正文是所属主环境【四向拼图】里与这一度对应的那一格，"
+        "例如 90 度对应 [90度格-右上·东]。\n"
+        "不是该衍生环境自己的 generation_prompt_cn。"
+        "不注入主环境整份 generation_prompt_cn，不注入开篇世界锁，不注入另外三格。\n"
+        "【衍生环境信息】只供脑内核对这一角的正面、左侧面、右侧面、中部。"
+        "禁止把这一格扩写成环境导游，禁止把未注入的另外三格、开篇四壁或光句补进本段。\n"
         "【本场环境色光】只在主环境成稿里已经写了 `色光规划=` 时出现，并且只抽这一行。"
         "色温、光比、柔硬跟本拍所属主环境这一行的主冷暖和光质。\n"
         "Video 只点名本场衍生环境名。角色与道具落位照建置抄。\n"

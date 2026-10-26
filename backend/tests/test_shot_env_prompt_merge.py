@@ -71,14 +71,9 @@ def test_injects_only_derived_env_info_for_scene_views():
     assert "窄巷夜灯" not in text
     assert "【主环境整份 generation_prompt_cn" not in text
     assert "同一主环境族" not in text
-    assert (
-        "ENV:[0度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0｜"
-        "背景=柜台｜画左=楼梯口｜画右=账房窗"
-    ) in text
-    assert (
-        "ENV:[180度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=180｜"
-        "背景=正门｜画左=账房窗｜画右=楼梯口"
-    ) in text
+    assert "背景=柜台" not in text
+    assert "ENV:[0度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=0" in text
+    assert "ENV:[180度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=180" in text
     assert "ENV:[0度后巷]｜所属主环境=ENV:[后巷]" in text
 
 
@@ -131,12 +126,12 @@ def test_empty_main_prompt_still_injects_derived_info():
         scene_id=21,
     )
     assert "ENV:[0度客栈大堂]｜所属主环境=ENV:[客栈大堂]" in text
-    assert "背景=柜台" in text
+    assert "背景=柜台" not in text
     assert "只切割宫格" not in text
     assert "【主环境整份 generation_prompt_cn" not in text
 
 
-def test_does_not_paste_main_grid_cells():
+def test_injects_only_the_matching_quad_cell():
     main = _env(
         id=40,
         name="客栈大堂",
@@ -151,6 +146,7 @@ def test_does_not_paste_main_grid_cells():
         id=41,
         name="180度客栈大堂",
         visual_dependencies=["ENV:[客栈大堂]"],
+        generation_prompt_cn="只保留左下180度格，另外三格整块删除。",
         custom_attributes={"main_environment": "客栈大堂", "view_angle_from_main": 180},
     )
     text = _build_scene_subject_image_prompts_cn_section(
@@ -158,10 +154,12 @@ def test_does_not_paste_main_grid_cells():
         _keys("180度客栈大堂"),
         scene_id=22,
     )
+    assert "[180度格-左下·南]" in text
+    assert "开篇斜阳从画面左、远离镜头、低打来。" in text
     assert "[0度格-左上·北]" not in text
-    assert "[180度格-左下·南]" not in text
-    assert "开篇斜阳从画面左、远离镜头、低打来。" not in text
+    assert "开篇斜射金光从画面右、靠近镜头、低打来。" not in text
     assert "【六面一次】" not in text
+    assert "只保留左下180度格" not in text
     assert "ENV:[180度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=180" in text
 
 
@@ -195,5 +193,84 @@ def test_injects_only_the_color_plan_line_from_the_main_prompt():
     assert "ENV:[客栈大堂]｜色光规划=本块对标片=英雄｜主冷暖=暖调主导｜光质=低斜阳｜主色=沙金" in text
     assert "七宗罪" not in text
     assert "【光学说明】" not in text
+    assert "[0度格-左上·北]" in text
+    assert "开篇斜射金光" in text
+
+
+def test_ninety_degree_view_uses_the_east_cell_only():
+    main = _env(
+        id=60,
+        name="客栈大堂",
+        generation_prompt_cn=(
+            "【四向拼图】\n"
+            "[0度格-左上·北]\n正面：大门。\n"
+            "[90度格-右上·东]\n正面：东窗。左侧面：柜台。\n"
+            "[180度格-左下·南]\n正面：南门。\n"
+            "[270度格-右下·西]\n正面：西柜。\n"
+        ),
+    )
+    derived = _env(
+        id=61,
+        name="90度客栈大堂",
+        visual_dependencies=["ENV:[客栈大堂]"],
+        generation_prompt_cn="待生成",
+        custom_attributes={"main_environment": "客栈大堂", "view_angle_from_main": 90},
+    )
+    text = _build_scene_subject_image_prompts_cn_section(
+        [main, derived],
+        _keys("90度客栈大堂"),
+        scene_id=24,
+    )
+    assert "[90度格-右上·东]" in text
+    assert "正面：东窗。左侧面：柜台。" in text
     assert "[0度格-左上·北]" not in text
-    assert "开篇斜射金光" not in text
+    assert "正面：大门" not in text
+    assert "[180度格-左下·南]" not in text
+    assert "[270度格-右下·西]" not in text
+    assert "待生成" not in text
+    assert "ENV:[90度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=90" in text
+
+
+def test_state_derivative_falls_back_to_the_source_main_cell():
+    source = _env(
+        id=70,
+        name="客栈大堂",
+        generation_prompt_cn=(
+            "【四向拼图】\n"
+            "[0度格-左上·北]\n正面：大门。\n"
+            "[90度格-右上·东]\n正面：东窗。\n"
+            "[180度格-左下·南]\n正面：南门。\n"
+            "[270度格-右下·西]\n正面：西柜。\n"
+        ),
+    )
+    derived_main = _env(
+        id=71,
+        name="客栈大堂_破洞",
+        generation_prompt_cn="衍生主环境=客栈大堂_破洞。状态Delta=北墙一个洞。",
+        custom_attributes={
+            "derived_kind": "derived_main",
+            "source_main_environment": "客栈大堂",
+        },
+    )
+    derived = _env(
+        id=72,
+        name="90度客栈大堂_破洞",
+        visual_dependencies=["ENV:[客栈大堂_破洞]"],
+        generation_prompt_cn="待生成",
+        custom_attributes={
+            "main_environment": "客栈大堂_破洞",
+            "source_main_environment": "客栈大堂",
+            "view_angle_from_main": 90,
+        },
+    )
+    text = _build_scene_subject_image_prompts_cn_section(
+        [source, derived_main, derived],
+        _keys("90度客栈大堂_破洞"),
+        scene_id=25,
+    )
+    assert "[90度格-右上·东]" in text
+    assert "正面：东窗。" in text
+    assert "所属主环境=ENV:[客栈大堂]" in text
+    assert "状态Delta=北墙一个洞" not in text
+    assert "待生成" not in text
+    assert "[0度格-左上·北]" not in text

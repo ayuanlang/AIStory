@@ -650,8 +650,8 @@ async def execute_analyze_scene(
         if is_environment_asset_design:
             if raw_single_entity_name or single_entity_name:
                 from app.services.script_analysis_flow.derived_env_ingest import (
-                    derived_main_design_subjects,
-                    match_derived_main_entity,
+                    collect_framing_texts_for_episode,
+                    resolve_derived_main_design_payload,
                 )
 
                 derived_rows = []
@@ -665,16 +665,31 @@ async def execute_analyze_scene(
                         )
                         .all()
                     )
-                derived_entity = match_derived_main_entity(
+                framing_texts = []
+                if request_episode is not None:
+                    try:
+                        framing_texts = [
+                            str(row.get("text") or "")
+                            for row in collect_framing_texts_for_episode(db, request_episode)
+                        ]
+                    except Exception as framing_err:
+                        logger.warning(
+                            "[analyze_scene] derived main framing lookup failed episode_id=%s err=%s",
+                            getattr(request, "episode_id", None),
+                            framing_err,
+                        )
+                derived_main_design_payload = resolve_derived_main_design_payload(
                     derived_rows,
                     [raw_single_entity_name, single_entity_name],
-                )
-                derived_main_design_payload = (
-                    derived_main_design_subjects(derived_entity) if derived_entity is not None else None
+                    framing_texts=framing_texts,
+                    hinted_source=str(_single_features.get("derived_main_source") or ""),
+                    hinted_delta=str(_single_features.get("derived_main_delta") or ""),
                 )
                 if derived_main_design_payload:
                     skip_derived_main_design_llm = True
-                    single_entity_name = str(getattr(derived_entity, "name", "") or "").strip()
+                    single_entity_name = str(
+                        ((derived_main_design_payload.get("environments") or [{}])[0] or {}).get("name") or ""
+                    ).strip()
                     environment_design_name_source = ""
                     user_content = json.dumps(derived_main_design_payload, ensure_ascii=False)
                     logger.info(

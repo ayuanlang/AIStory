@@ -8,6 +8,7 @@ import {
     mainQuadCellAddresses,
     planDerivedGridCell,
     quadFailureEnvironmentNames,
+    derivedMainRegenHint,
     omitsProjectStyleInjection,
     quadNamesMissingFromResult,
     readQuadCellImages,
@@ -202,6 +203,29 @@ describe('saved quad cells', () => {
         assert.deepEqual(readQuadCellImages(entity, 'https://cdn.example/main.jpg'), {
             右上: 'https://cdn.example/grid-cell-tr-unique.jpg',
         });
+    });
+});
+
+describe('derived main regen hint', () => {
+    it('recovers the source four-grid dependency after the design prompt was copied', () => {
+        const source = { type: 'environment', name: '客栈大堂', generation_prompt_cn: '【四向拼图】' };
+        const wiped = { type: 'environment', name: '客栈大堂_破损', generation_prompt_cn: '【四向拼图】整间照抄' };
+        const child = {
+            type: 'environment',
+            name: '0度客栈大堂_破损',
+            custom_attributes: {
+                derived_from_state: true,
+                derived_main_environment: '客栈大堂_破损',
+                source_main_environment: '客栈大堂',
+                state_delta: '南壁破了一个洞',
+            },
+        };
+        assert.deepEqual(derivedMainRegenHint(wiped, [source, wiped, child]), {
+            name: '客栈大堂_破损',
+            source: '客栈大堂',
+            delta: '南壁破了一个洞',
+        });
+        assert.equal(derivedMainRegenHint(source, [source, wiped, child]), null);
     });
 });
 

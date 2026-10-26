@@ -1543,19 +1543,182 @@ def match_derived_main_entity(entities: Sequence[Any], names: Sequence[str]) -> 
     return None
 
 
-def derived_main_design_subjects(entity: Any) -> Optional[Dict[str, Any]]:
+_DERIVED_MAIN_FIELD_RE = {
+    "delta": re.compile(r"状态Delta\s*[=＝:：]\s*(?P<value>[^。\n]+)"),
+    "source": re.compile(r"被依赖主环境\s*[=＝:：]\s*(?P<value>[^。\n]+)"),
+    "name": re.compile(r"衍生主环境\s*[=＝:：]\s*(?P<value>[^。\n]+)"),
+}
+
+
+def _labeled_derived_main_field(kind: str, text: str) -> str:
+    match = _DERIVED_MAIN_FIELD_RE[kind].search(str(text or ""))
+    if not match:
+        return ""
+    value = _clean(match.group("value"))
+    if value.lower() in _EMPTY_FIELD_MARKERS:
+        return ""
+    return value
+
+
+def _entity_logic_text(entity: Any) -> str:
+    raw = getattr(entity, "dependency_strategy", None)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    if isinstance(raw, dict):
+        return str(raw.get("logic") or "")
+    return ""
+
+
+def _environment_rows(entities: Sequence[Any]) -> List[Any]:
+    rows = []
+    for entity in entities or []:
+        kind = str(getattr(entity, "type", "") or "").strip().lower()
+        if kind in {"environment", "env"} or "environment" in kind or "环境" in kind:
+            rows.append(entity)
+    return rows
+
+
+def _join_unique_deltas(values: Sequence[Any]) -> str:
+    found: List[str] = []
+    for raw in values:
+        text = _clean(raw)
+        if not text or text.lower() in _EMPTY_FIELD_MARKERS or text in found:
+            continue
+        found.append(text)
+    return "；".join(found)
+
+
+def _source_from_derived_name(name: str, main_names: Sequence[str]) -> str:
+    text = _clean(name)
+    best = ""
+    for raw in main_names:
+        main_name = _clean(raw)
+        if not main_name or main_name == text:
+            continue
+        if text.startswith(f"{main_name}_") and len(text) > len(main_name) + 1 and len(main_name) > len(best):
+            best = main_name
+    return best
+
+
+def _reusable_main_names(entities: Sequence[Any]) -> List[str]:
+    names: List[str] = []
+    for entity in _environment_rows(entities):
+        if entity_is_derived_main(entity):
+            continue
+        for label in (getattr(entity, "name", ""), getattr(entity, "name_en", "")):
+            text = _clean(label)
+            if not text or DEGREE_NAME_PATTERN.match(text) or text in names:
+                continue
+            names.append(text)
+    return names
+
+
+def _candidate_environment_names(names: Sequence[str]) -> List[str]:
+    found: List[str] = []
+    for raw in names or []:
+        text = _clean(raw)
+        if not text:
+            continue
+        head = text.split("｜")[0].split("|")[0].strip()
+        for item in (text, head):
+            if item and not DEGREE_NAME_PATTERN.match(item) and item not in found:
+                found.append(item)
+    return found
+
+
+def _entity_named(entities: Sequence[Any], name: str) -> Any:
+    wanted = set(_name_match_keys(name))
+    if not wanted:
+        return None
+    hits = []
+    for entity in _environment_rows(entities):
+        keys = set(_name_match_keys(getattr(entity, "name", "")))
+        keys.update(_name_match_keys(getattr(entity, "name_en", "")))
+        if keys & wanted:
+            hits.append(entity)
+    if len(hits) == 1:
+        return hits[0]
+    return None
+
+
+def derived_main_state_from_framing(texts: Sequence[str], derived_name: str) -> Tuple[str, str]:
+    """Source main and joined 状态Delta for `{主环境}_{状态}` from framing extract."""
+    wanted = _clean(derived_name).lower()
+    if not wanted:
+        return "", ""
+    sources: List[str] = []
+    deltas: List[str] = []
+    for text in texts or []:
+        for item in parse_derived_env_extract_items(str(text or "")):
+            if not _is_state_row(item):
+                continue
+            main = _clean(item.get("main") or item.get("所属主环境")) or _main_from_name(_clean(item.get("name")))
+            suffix = _state_suffix(_clean(item.get("name")), main) or "状态"
+            if f"{main}_{suffix}".lower() != wanted:
+                continue
+            if main and main not in sources:
+                sources.append(main)
+            delta = _clean(item.get("state_delta") or item.get("状态Delta"))
+            if delta and delta.lower() not in _EMPTY_FIELD_MARKERS and delta not in deltas:
+                deltas.append(delta)
+    source = sources[0] if len(sources) == 1 else ""
+    return source, "；".join(deltas)
+
+
+def _state_from_angle_children(entities: Sequence[Any], derived_name: str) -> Tuple[str, str]:
+    wanted = _clean(derived_name)
+    if not wanted:
+        return "", ""
+    sources: List[str] = []
+    deltas: List[str] = []
+    for entity in _environment_rows(entities):
+        attrs = _entity_custom_attributes(entity)
+        if _clean(attrs.get("derived_main_environment")) != wanted:
+            continue
+        child_name = _clean(getattr(entity, "name", ""))
+        if not DEGREE_NAME_PATTERN.match(child_name) and not attrs.get("derived_from_state"):
+            continue
+        source = _clean(attrs.get("source_main_environment")) or _labeled_derived_main_field(
+            "source",
+            _entity_logic_text(entity),
+        )
+        if source and source not in sources:
+            sources.append(source)
+        delta = _clean(attrs.get("state_delta")) or _labeled_derived_main_field("delta", _entity_logic_text(entity))
+        if delta and delta not in deltas:
+            deltas.append(delta)
+    source = sources[0] if len(sources) == 1 else ""
+    return source, "；".join(deltas)
+
+
+def derived_main_design_subjects(
+    entity: Any = None,
+    *,
+    name: str = "",
+    source: str = "",
+    delta: str = "",
+) -> Optional[Dict[str, Any]]:
     """Design payload for one derived main: delta prompt only, derived name kept.
 
     The depended-on main's full prompt is not copied here. That copy belongs to
-    the consistency check.
+    the consistency check. visual_dependencies points at the source main, whose
+    image is the four-grid.
     """
-    attrs = _entity_custom_attributes(entity)
-    name = _clean(getattr(entity, "name", ""))
-    source = _clean(attrs.get("source_main_environment") or attrs.get("main_environment"))
-    delta = _clean(attrs.get("state_delta")) or "无"
-    if not name or not source:
+    attrs = _entity_custom_attributes(entity) if entity is not None else {}
+    clean_name = _clean(name) or _clean(getattr(entity, "name", "") if entity is not None else "")
+    clean_source = _clean(source) or _clean(attrs.get("source_main_environment"))
+    main_env = _clean(attrs.get("main_environment"))
+    if not clean_source and main_env and main_env != clean_name:
+        clean_source = main_env
+    if clean_source == clean_name:
+        clean_source = ""
+    clean_delta = _clean(delta) or _clean(attrs.get("state_delta")) or "无"
+    if not clean_name or not clean_source:
         return None
-    item = build_derived_main_environment_item(name=name, source=source, delta=delta)
+    item = build_derived_main_environment_item(name=clean_name, source=clean_source, delta=clean_delta)
     merged = dict(attrs)
     merged.update(item.get("custom_attributes") or {})
     item["custom_attributes"] = merged
@@ -1566,6 +1729,90 @@ def derived_main_design_subjects(entity: Any) -> Optional[Dict[str, Any]]:
         "covers": [],
         "posters": [],
     }
+
+
+def resolve_derived_main_design_payload(
+    entities: Sequence[Any],
+    names: Sequence[str],
+    *,
+    framing_texts: Sequence[str] = (),
+    hinted_source: str = "",
+    hinted_delta: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Delta-only design for one derived main, even after a previous run copied the source.
+
+    A real main environment name is not rewritten. Confirmation is the derived-main
+    mark, a framing state row, an angle child of that derived main, an explicit
+    hint, or the name `{已有主环境}_{状态}`.
+    """
+    candidates = _candidate_environment_names(names)
+    if not candidates:
+        return None
+    mains = _reusable_main_names(entities)
+    hint_source = _clean(hinted_source)
+    hint_delta = _clean(hinted_delta)
+    marked = match_derived_main_entity(entities, candidates)
+    chosen = ""
+    source = ""
+    delta = ""
+    if marked is not None:
+        chosen = _clean(getattr(marked, "name", ""))
+        attrs = _entity_custom_attributes(marked)
+        prompt = str(getattr(marked, "generation_prompt_cn", "") or "")
+        logic = _entity_logic_text(marked)
+        source = (
+            hint_source
+            or _clean(attrs.get("source_main_environment"))
+            or _labeled_derived_main_field("source", prompt)
+            or _labeled_derived_main_field("source", logic)
+        )
+        main_env = _clean(attrs.get("main_environment"))
+        if not source and main_env and main_env != chosen:
+            source = main_env
+        frame_source, frame_delta = derived_main_state_from_framing(framing_texts, chosen)
+        child_source, child_delta = _state_from_angle_children(entities, chosen)
+        source = source or frame_source or child_source or _source_from_derived_name(chosen, mains)
+        delta = _join_unique_deltas([
+            hint_delta,
+            attrs.get("state_delta"),
+            _labeled_derived_main_field("delta", prompt),
+            _labeled_derived_main_field("delta", logic),
+            frame_delta,
+            child_delta,
+        ])
+    if not chosen:
+        for name in candidates:
+            frame_source, frame_delta = derived_main_state_from_framing(framing_texts, name)
+            child_source, child_delta = _state_from_angle_children(entities, name)
+            prefix = _source_from_derived_name(name, mains)
+            hinted = hint_source if hint_source and name.startswith(f"{hint_source}_") else ""
+            same = _entity_named(entities, name)
+            prompt = str(getattr(same, "generation_prompt_cn", "") or "") if same is not None else ""
+            logic = _entity_logic_text(same) if same is not None else ""
+            marked_source = _labeled_derived_main_field("source", prompt) or _labeled_derived_main_field("source", logic)
+            picked = hinted or frame_source or child_source or marked_source or prefix
+            listed_as_main = any(_clean(main).lower() == name.lower() for main in mains)
+            if listed_as_main and not prefix and not (frame_source or child_source or hinted or marked_source):
+                continue
+            if not picked or picked == name:
+                continue
+            chosen = name
+            source = picked
+            delta = _join_unique_deltas([
+                hint_delta,
+                frame_delta,
+                child_delta,
+                _labeled_derived_main_field("delta", prompt),
+                _labeled_derived_main_field("delta", logic),
+                _entity_custom_attributes(same).get("state_delta") if same is not None else "",
+            ])
+            break
+    if not chosen or not source or source == chosen:
+        return None
+    entity = marked if marked is not None and _clean(getattr(marked, "name", "")) == chosen else _entity_named(entities, chosen)
+    if entity is not None and _clean(getattr(entity, "name", "")) == source and source != chosen:
+        entity = None
+    return derived_main_design_subjects(entity, name=chosen, source=source, delta=delta)
 
 
 def build_derived_main_environment_item(
@@ -2455,7 +2702,7 @@ def apply_main_environment_quad_prompts(
             missing.append(name)
             continue
         attrs = dict(existing.custom_attributes) if isinstance(existing.custom_attributes, dict) else {}
-        if str(attrs.get("derived_kind") or "").strip() == "derived_main":
+        if resolve_derived_main_design_payload(candidates, [name]) is not None:
             skipped.append(name)
             continue
         named_opening = _opening_for_quad_name(openings, name)

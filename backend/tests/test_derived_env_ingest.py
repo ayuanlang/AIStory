@@ -452,6 +452,68 @@ def test_derived_main_design_prompt_is_delta_only_and_keeps_its_name():
     assert row["custom_attributes"]["state_delta"] == "南壁破了一个洞"
 
 
+def test_wiped_derived_main_regen_keeps_delta_and_quad_dependency():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        DERIVED_MAIN_PROMPT,
+        resolve_derived_main_design_payload,
+    )
+
+    class _Entity:
+        def __init__(self, name, attrs=None, prompt=""):
+            self.name = name
+            self.name_en = name
+            self.type = "environment"
+            self.generation_prompt_cn = prompt
+            self.custom_attributes = attrs or {}
+            self.dependency_strategy = {}
+            self.visual_dependencies = []
+
+    copied = (
+        "【定位】\n【六面一次】\n【四向拼图】\n"
+        "[0度格-左上\n[90度格-右上\n[180度格-左下\n[270度格-右下\n"
+    )
+    source = _Entity("客栈大堂", {}, copied)
+    wiped = _Entity("客栈大堂_破损", {}, copied)
+    child = _Entity(
+        "0度客栈大堂_破损",
+        {
+            "derived_from_state": True,
+            "derived_kind": "first_cut",
+            "derived_main_environment": "客栈大堂_破损",
+            "source_main_environment": "客栈大堂",
+            "state_delta": "南壁破了一个洞",
+        },
+        "待生成",
+    )
+    payload = resolve_derived_main_design_payload([source, wiped, child], ["客栈大堂_破损"])
+    row = payload["environments"][0]
+    expected = DERIVED_MAIN_PROMPT.format(
+        name="客栈大堂_破损",
+        source="客栈大堂",
+        delta="南壁破了一个洞",
+    )
+    assert row["name"] == "客栈大堂_破损"
+    assert row["generation_prompt_cn"] == expected
+    assert "【四向拼图】" not in row["generation_prompt_cn"]
+    assert row["visual_dependencies"] == ["ENV:[客栈大堂]"]
+    assert row["custom_attributes"]["derived_kind"] == "derived_main"
+    assert resolve_derived_main_design_payload([source, wiped, child], ["客栈大堂"]) is None
+
+    framing = (
+        "[DERIVED_ENV_EXTRACT_START]\n"
+        "[DERIVED_ENV] 名称=0度客栈大堂_破损｜所属主环境=客栈大堂｜view_angle_from_main=0｜"
+        "类型=衍生的衍生｜同角切割父=0度客栈大堂｜状态Delta=南壁破了一个洞\n"
+        "[DERIVED_ENV_EXTRACT_END]\n"
+    )
+    from_frame = resolve_derived_main_design_payload(
+        [source],
+        ["客栈大堂_破损"],
+        framing_texts=[framing],
+    )
+    assert from_frame["environments"][0]["generation_prompt_cn"] == expected
+    assert from_frame["environments"][0]["visual_dependencies"] == ["ENV:[客栈大堂]"]
+
+
 def test_quad_apply_does_not_copy_full_grid_onto_derived_main():
     cells = (
         "【四向拼图】\n"
@@ -477,7 +539,38 @@ def test_quad_apply_does_not_copy_full_grid_onto_derived_main():
     assert applied["updated"] == []
     assert applied["skipped"] == ["客栈大堂_破损"]
     assert entity.generation_prompt_cn == delta
-    assert "【四向拼图】" not in entity.generation_prompt_cn
+
+
+def test_quad_apply_does_not_overwrite_a_wiped_derived_main():
+    cells = (
+        "【四向拼图】\n"
+        "[0度格-左上·北]\n"
+        "[90度格-右上·东]\n"
+        "[180度格-左下·南]\n"
+        "[270度格-右下·西]\n"
+    )
+    source = _QuadEntity("客栈大堂", cells)
+    source.type = "environment"
+    wiped = _QuadEntity("客栈大堂_破损", cells)
+    wiped.type = "environment"
+    child = _QuadEntity("0度客栈大堂_破损", "待生成")
+    child.type = "environment"
+    child.custom_attributes = {
+        "derived_from_state": True,
+        "derived_main_environment": "客栈大堂_破损",
+        "source_main_environment": "客栈大堂",
+        "state_delta": "南壁破了一个洞",
+    }
+    applied = apply_main_environment_quad_prompts(
+        _QuadDb([source, wiped, child]),
+        project_id=1,
+        episode_id=7,
+        rows=[{"name": "客栈大堂_破损", "generation_prompt_cn": cells}],
+        openings={"客栈大堂_破损": "【定位】\n【六面一次】\n全文"},
+    )
+    assert applied["updated"] == []
+    assert applied["skipped"] == ["客栈大堂_破损"]
+    assert wiped.generation_prompt_cn == cells
 
 
 def test_single_quad_apply_writes_the_folded_library_row():

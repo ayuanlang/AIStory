@@ -67,6 +67,82 @@ export function isDerivedMainEnvironmentEntity(entity) {
     return String(readAttrs(entity).derived_kind || '').trim() === 'derived_main';
 }
 
+const headEnvironmentName = (value) => String(value || '').trim().split(/[｜|]/)[0].trim();
+
+const labeledDerivedField = (text, label) => {
+    const match = String(text || '').match(new RegExp(`${label}\\s*[=＝:：]\\s*([^。\\n]+)`));
+    const value = String(match?.[1] || '').trim();
+    if (!value || value === '无') return '';
+    return value;
+};
+
+const strategyLogic = (entity) => {
+    const raw = entity?.dependency_strategy;
+    if (!raw) return '';
+    if (typeof raw === 'string') return raw;
+    return String(raw.logic || '');
+};
+
+/**
+ * Identity for regenerating one derived main.
+ * The design prompt stays the delta, and the source main's four-grid is the dependency.
+ */
+export function derivedMainRegenHint(entity, entities) {
+    if (!entity || !isEnvironmentEntity(entity)) return null;
+    const name = headEnvironmentName(entity.name || entity.name_en);
+    if (!name || isAngledName(name)) return null;
+    const attrs = readAttrs(entity);
+    const labeledText = `${entity.generation_prompt_cn || ''}\n${strategyLogic(entity)}`;
+    let source = String(attrs.source_main_environment || '').trim();
+    const mainEnv = String(attrs.main_environment || '').trim();
+    if (!source && mainEnv && mainEnv !== name) source = mainEnv;
+    if (!source) source = labeledDerivedField(labeledText, '被依赖主环境');
+    let delta = String(attrs.state_delta || '').trim() || labeledDerivedField(labeledText, '状态Delta');
+    if (String(attrs.derived_kind || '').trim() === 'derived_main' && source && source !== name) {
+        return { name, source, delta };
+    }
+    const children = (Array.isArray(entities) ? entities : []).filter((row) => {
+        if (!row || row === entity) return false;
+        const child = readAttrs(row);
+        if (String(child.derived_main_environment || '').trim() !== name) return false;
+        return isAngledName(row.name) || isAngledName(row.name_en) || Boolean(child.derived_from_state);
+    });
+    if (children.length) {
+        const sources = [];
+        const deltas = [];
+        children.forEach((row) => {
+            const child = readAttrs(row);
+            const childSource = String(child.source_main_environment || '').trim();
+            const childDelta = String(child.state_delta || '').trim();
+            if (childSource && !sources.includes(childSource)) sources.push(childSource);
+            if (childDelta && childDelta !== '无' && !deltas.includes(childDelta)) deltas.push(childDelta);
+        });
+        const picked = sources[0] || source;
+        if (picked && picked !== name) {
+            return { name, source: picked, delta: deltas.join('；') || delta };
+        }
+    }
+    const mainNames = (Array.isArray(entities) ? entities : [])
+        .filter((row) => (
+            row
+            && row !== entity
+            && isEnvironmentEntity(row)
+            && !isAngledName(row.name)
+            && !isAngledName(row.name_en)
+            && !isDerivedMainEnvironmentEntity(row)
+        ))
+        .map((row) => headEnvironmentName(row.name || row.name_en))
+        .filter(Boolean)
+        .sort((left, right) => right.length - left.length);
+    const prefix = mainNames.find((main) => name.startsWith(`${main}_`) && name.length > main.length + 1) || '';
+    if (prefix) return { name, source: prefix, delta };
+    const derivedName = labeledDerivedField(labeledText, '衍生主环境');
+    if (source && derivedName && derivedName !== source) {
+        return { name: derivedName, source, delta };
+    }
+    return null;
+}
+
 export const PENDING_DERIVED_PROMPT = '待生成';
 
 export function promptForDerivedGeneration(entity, prompt) {

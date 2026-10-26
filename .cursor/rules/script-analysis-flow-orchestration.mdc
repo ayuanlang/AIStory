@@ -118,9 +118,9 @@ Storyboard 只等待当前 Scene 的工作区导入与 `asset_design_environment
 2. main / restart / resume 路径的并发拓扑必须一致。
 3. `explicitSubjectIndexText` / `parallelWithScenes:true` 不得依赖 Scene 已导入。
 4. 并行分支启动前先置 `environmentAssetDesignPendingRef`，防止早到 Scene 读取陈旧 episode JSON。
-5. 每个 Scene 导入后进入 storyboard queue；必须等本场所属**主环境**已入库且 `generation_prompt_cn` 非空后才能开闸。开闸后分镜提示词不注入该主环境正文，只注入本场用到的【衍生环境信息】。仅有衍生环境提示词、库里残留主环境行、或本轮尚未规划环境，都不得开闸。无环境需求且 ENV auto-start 关闭时才可跳过。等待态=`waiting_env`。
+5. 每个 Scene 导入后进入 storyboard queue；必须等本场所属**主环境**已入库且 `generation_prompt_cn` 非空后才能开闸。开闸后分镜不注入主环境整份正文，也不注入衍生环境自己的提示词。本场【衍生环境信息】只写所属主环境【四向拼图】里与这一度对应的那一格，例如 `[90度格-右上·东]`。仅有衍生环境提示词、库里残留主环境行、或本轮尚未规划环境，都不得开闸。无环境需求且 ENV auto-start 关闭时才可跳过。等待态=`waiting_env`。
 6. character/prop 完成不得打开 ENV gate；流水线末尾只 residual-kick 尚未启动且 ENV gate 已开的 Scene。
-7. Storyboard 注入 `# Scene Subject Image Prompts (CN)` 只含当前 Scene 用到的【衍生环境信息】，不含主环境 `generation_prompt_cn`。Subject Index 可继续列 CHAR/PROP/ENV 供命名。
+7. Storyboard 注入 `# Scene Subject Image Prompts (CN)` 只含当前 Scene 用到的【衍生环境信息】。每一条是所属主环境【四向拼图】里与这一度对应的那一格，例如 `[90度格-右上·东]`，不是该衍生环境自己的 `generation_prompt_cn`，也不含主环境整份提示词和另外三格。Subject Index 可继续列 CHAR/PROP/ENV 供命名。
 8. 手动 force storyboard 仍须验证本场所属主环境已在实体库且 `generation_prompt_cn` 非空；禁止只凭衍生行开闸。
 9. Scene marker parser 与 Stage 1/2.1/2.2 同步：接受成对 `[SCENE_START:EPxx_SCyy]` / `[SCENE_END:EPxx_SCyy]`；`SPECIAL_SCENE_ANALYSIS` 由文戏增强产出并写在 Scene 前，程序在 drama 之后提取；`[VFX]` 或 `[XIAN]` 任一行命中则调用一次武戏增强。场外综合信息由全局统筹总结进 `project_visual_backfill.comprehensive_plot` / `comprehensive_assets`，经项目尾注入各场；若旧稿仍含 `COMPREHENSIVE_INFO` 则继续当作只读全局上下文。`SCENE_ENV_IDENT` 由环境规划产出。CHAR/PROP 提取由全局统筹完成；封面清单不再落 CHAR/ENV/PROP 行。
 10. 注入 Stage 2.1/2.2、写入工作区场景表、以及分镜前，只剥离成对 `────【场记分析】────`…`────【场记分析结束】────`（场级或拍内皆剥；兼容旧稿 `────【Beat切换说明】────`…`────【Beat切换说明结束】────`）；禁止无结束标记的贪婪剥离。拍内场记分析只服务建置连续性，不传递给分镜生成。
@@ -132,7 +132,7 @@ Storyboard 只等待当前 Scene 的工作区导入与 `asset_design_environment
 - Index 外语义：保留 Stage 1 自然语言并在覆盖核销标缺口；禁止自造 `EXTRA:`/`LOCATION:`。
 - CHAR/PROP 换版：先按注入的 `form_continuity` / 【服化道连续性】（根本变化？建新角色/道具？从何场何拍启用），再按 `applicable_scenes` 与可选 `activation_beat` / `activation_evidence/variant_delta` 核销；未达启用点或无根本变化用基础版。
 - ENV：只标现场编排已识别的衍生环境名；不得把环境内部件单切成 ENV。环境资产设计不读 Index environment 行。
-- Storyboard：当前 Scene 的 Subject Index 是命名与衍生白名单真源；ENV CN 仅供光学锚定。
+- Storyboard：当前 Scene 的 Subject Index 是命名与衍生白名单真源。ENV 空间只读所属主环境四向拼图里这一度的那一格；色光仍只读 `色光规划=`。
 
 ## Canonical prompt map
 
