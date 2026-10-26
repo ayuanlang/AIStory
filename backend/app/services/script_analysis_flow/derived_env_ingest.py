@@ -1493,6 +1493,81 @@ def build_derived_environment_item(
     }
 
 
+def _entity_custom_attributes(entity: Any) -> Dict[str, Any]:
+    raw = getattr(entity, "custom_attributes", None)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _name_match_keys(value: Any) -> List[str]:
+    text = _clean(value)
+    if not text:
+        return []
+    keys = [text.lower()]
+    head = text.split("｜")[0].split("|")[0].strip().lower()
+    if head and head not in keys:
+        keys.append(head)
+    return keys
+
+
+def entity_is_derived_main(entity: Any) -> bool:
+    if str(_entity_custom_attributes(entity).get("derived_kind") or "").strip() != "derived_main":
+        return False
+    name = _clean(getattr(entity, "name", ""))
+    if not name or DEGREE_NAME_PATTERN.match(name):
+        return False
+    return True
+
+
+def match_derived_main_entity(entities: Sequence[Any], names: Sequence[str]) -> Any:
+    """Exact library row for this derived main. The source main's name does not match."""
+    wanted: Set[str] = set()
+    for raw in names or []:
+        wanted.update(_name_match_keys(raw))
+    if not wanted:
+        return None
+    hits = []
+    for entity in entities or []:
+        if not entity_is_derived_main(entity):
+            continue
+        keys = set(_name_match_keys(getattr(entity, "name", "")))
+        keys.update(_name_match_keys(getattr(entity, "name_en", "")))
+        if keys & wanted:
+            hits.append(entity)
+    if len(hits) == 1:
+        return hits[0]
+    return None
+
+
+def derived_main_design_subjects(entity: Any) -> Optional[Dict[str, Any]]:
+    """Design payload for one derived main: delta prompt only, derived name kept.
+
+    The depended-on main's full prompt is not copied here. That copy belongs to
+    the consistency check.
+    """
+    attrs = _entity_custom_attributes(entity)
+    name = _clean(getattr(entity, "name", ""))
+    source = _clean(attrs.get("source_main_environment") or attrs.get("main_environment"))
+    delta = _clean(attrs.get("state_delta")) or "无"
+    if not name or not source:
+        return None
+    item = build_derived_main_environment_item(name=name, source=source, delta=delta)
+    merged = dict(attrs)
+    merged.update(item.get("custom_attributes") or {})
+    item["custom_attributes"] = merged
+    return {
+        "characters": [],
+        "props": [],
+        "environments": [item],
+        "covers": [],
+        "posters": [],
+    }
+
+
 def build_derived_main_environment_item(
     *,
     name: str,
@@ -2380,6 +2455,9 @@ def apply_main_environment_quad_prompts(
             missing.append(name)
             continue
         attrs = dict(existing.custom_attributes) if isinstance(existing.custom_attributes, dict) else {}
+        if str(attrs.get("derived_kind") or "").strip() == "derived_main":
+            skipped.append(name)
+            continue
         named_opening = _opening_for_quad_name(openings, name)
         stored = compose_stored_quad_prompt(existing.generation_prompt_cn, prompt, named_opening)
         if not quad_cells_prompt_ready(stored):

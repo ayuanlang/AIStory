@@ -8,9 +8,11 @@ import {
     mainQuadCellAddresses,
     planDerivedGridCell,
     quadFailureEnvironmentNames,
+    omitsProjectStyleInjection,
     quadNamesMissingFromResult,
     readQuadCellImages,
     singleCellEditInstruction,
+    stripProjectStyleInjection,
 } from './derivedGridRegen.js';
 
 describe('saved quad cells', () => {
@@ -200,5 +202,23 @@ describe('saved quad cells', () => {
         assert.deepEqual(readQuadCellImages(entity, 'https://cdn.example/main.jpg'), {
             右上: 'https://cdn.example/grid-cell-tr-unique.jpg',
         });
+    });
+});
+
+describe('derived environment generation prompt', () => {
+    it('drops project style and keeps the main-environment delta', () => {
+        const derived = {
+            type: 'environment',
+            name: '客栈大堂_破损',
+            custom_attributes: { derived_kind: 'derived_main', source_main_environment: '客栈大堂' },
+        };
+        const main = { type: 'environment', name: '客栈大堂', custom_attributes: {} };
+        assert.equal(omitsProjectStyleInjection(derived), true);
+        assert.equal(omitsProjectStyleInjection(main), false);
+        const prompt = '[Global Style](暖调院线写实). 衍生主环境=客栈大堂_破损。被依赖主环境=客栈大堂。状态Delta=南壁破了一个洞。';
+        assert.equal(
+            stripProjectStyleInjection(prompt),
+            '衍生主环境=客栈大堂_破损。被依赖主环境=客栈大堂。状态Delta=南壁破了一个洞。'
+        );
     });
 });

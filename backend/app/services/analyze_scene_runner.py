@@ -455,8 +455,10 @@ async def execute_analyze_scene(
         environment_design_name_source = ""
         _single_features = getattr(request, "scene_analysis_features", None)
         _single_features = _single_features if isinstance(_single_features, dict) else {}
-        single_entity_name = str(_single_features.get("single_entity_name") or "").strip()
-        single_entity_name = single_entity_name.split("｜")[0].split("|")[0].strip()
+        raw_single_entity_name = str(_single_features.get("single_entity_name") or "").strip()
+        single_entity_name = raw_single_entity_name.split("｜")[0].split("|")[0].strip()
+        derived_main_design_payload = None
+        skip_derived_main_design_llm = False
 
 
         persisted_subject_index_for_prompt = ""
@@ -646,78 +648,113 @@ async def execute_analyze_scene(
             user_content = _build_script_to_analyze_block(request_text_for_prompt)
 
         if is_environment_asset_design:
-            request_text = str(getattr(request, "text", "") or "").strip()
-            episode_plan_texts = []
-            if getattr(request, "episode_id", None):
-                try:
-                    _ep_for_brief = (
-                        db.query(Episode)
-                        .filter(Episode.id == request.episode_id, _active_episode_clause())
-                        .first()
-                    )
-                    if _ep_for_brief:
-                        episode_plan_texts.append(
-                            str(getattr(_ep_for_brief, "ai_scene_analysis_adaptation", "") or "")
-                        )
-                        raw_outputs = str(getattr(_ep_for_brief, "ai_stage_outputs", "") or "").strip()
-                        if raw_outputs:
-                            try:
-                                payload = json.loads(raw_outputs)
-                                outputs = ((payload.get("stages") or {}).get("stage1") or {}).get("outputs") or {}
-                                plan_slot = ""
-                                for key in ("environment_plan", "adapted_script", "raw_text"):
-                                    slot = outputs.get(key)
-                                    content = ""
-                                    if isinstance(slot, dict):
-                                        content = str(slot.get("content") or "")
-                                    elif isinstance(slot, str):
-                                        content = slot
-                                    if key == "environment_plan":
-                                        plan_slot = content
-                                    else:
-                                        episode_plan_texts.append(content)
-                                if plan_slot:
-                                    episode_plan_texts.insert(0, plan_slot)
-                            except Exception:
-                                pass
-                        episode_plan_texts.append(
-                            str(getattr(_ep_for_brief, "ai_scene_analysis_result", "") or "")
-                        )
-                except Exception as brief_load_err:
-                    logger.warning(
-                        "[analyze_scene] failed loading adaptation for env design brief: %s",
-                        brief_load_err,
-                    )
-            picked_plan, _picked_brief = pick_environment_plan_source_and_brief(
-                request_text,
-                episode_adaptation_for_scene_beats,
-                *episode_plan_texts,
-            )
-            brief_source = choose_environment_design_source(request_text, picked_plan)
-            if single_entity_name:
-                brief_source = (
-                    slice_one_main_environment(picked_plan, single_entity_name)
-                    or slice_one_main_environment(request_text, single_entity_name)
-                    or slice_one_main_environment(brief_source, single_entity_name)
+            if raw_single_entity_name or single_entity_name:
+                from app.services.script_analysis_flow.derived_env_ingest import (
+                    derived_main_design_subjects,
+                    match_derived_main_entity,
                 )
-            env_brief = build_environment_asset_design_brief(brief_source)
-            environment_design_name_source = brief_source
-            cover_brief = "" if single_entity_name else build_cover_poster_brief(brief_source)
-            user_content = assemble_environment_asset_design_user_content(
-                cover_brief,
-                env_brief,
-            )
-            logger.info(
-                "[analyze_scene] environment asset design user seed episode_id=%s env_brief=%s cover_brief=%s has_main_env=%s script_block=omitted",
-                getattr(request, "episode_id", None),
-                len(env_brief or ""),
-                len(cover_brief or ""),
-                bool(env_brief) and (
-                    "[ENV_BLOCK_START" in env_brief.upper()
-                    or "────【主环境】" in env_brief
-                    or "【主环境】" in env_brief
-                ),
-            )
+
+                derived_rows = []
+                if getattr(request, "project_id", None) and getattr(request, "episode_id", None):
+                    derived_rows = (
+                        db.query(Entity)
+                        .filter(
+                            Entity.project_id == int(request.project_id),
+                            Entity.episode_id == int(request.episode_id),
+                            _active_entity_clause(),
+                        )
+                        .all()
+                    )
+                derived_entity = match_derived_main_entity(
+                    derived_rows,
+                    [raw_single_entity_name, single_entity_name],
+                )
+                derived_main_design_payload = (
+                    derived_main_design_subjects(derived_entity) if derived_entity is not None else None
+                )
+                if derived_main_design_payload:
+                    skip_derived_main_design_llm = True
+                    single_entity_name = str(getattr(derived_entity, "name", "") or "").strip()
+                    environment_design_name_source = ""
+                    user_content = json.dumps(derived_main_design_payload, ensure_ascii=False)
+                    logger.info(
+                        "[analyze_scene] derived main design keeps delta prompt name=%s episode_id=%s",
+                        single_entity_name,
+                        getattr(request, "episode_id", None),
+                    )
+            if not skip_derived_main_design_llm:
+                request_text = str(getattr(request, "text", "") or "").strip()
+                episode_plan_texts = []
+                if getattr(request, "episode_id", None):
+                    try:
+                        _ep_for_brief = (
+                            db.query(Episode)
+                            .filter(Episode.id == request.episode_id, _active_episode_clause())
+                            .first()
+                        )
+                        if _ep_for_brief:
+                            episode_plan_texts.append(
+                                str(getattr(_ep_for_brief, "ai_scene_analysis_adaptation", "") or "")
+                            )
+                            raw_outputs = str(getattr(_ep_for_brief, "ai_stage_outputs", "") or "").strip()
+                            if raw_outputs:
+                                try:
+                                    payload = json.loads(raw_outputs)
+                                    outputs = ((payload.get("stages") or {}).get("stage1") or {}).get("outputs") or {}
+                                    plan_slot = ""
+                                    for key in ("environment_plan", "adapted_script", "raw_text"):
+                                        slot = outputs.get(key)
+                                        content = ""
+                                        if isinstance(slot, dict):
+                                            content = str(slot.get("content") or "")
+                                        elif isinstance(slot, str):
+                                            content = slot
+                                        if key == "environment_plan":
+                                            plan_slot = content
+                                        else:
+                                            episode_plan_texts.append(content)
+                                    if plan_slot:
+                                        episode_plan_texts.insert(0, plan_slot)
+                                except Exception:
+                                    pass
+                            episode_plan_texts.append(
+                                str(getattr(_ep_for_brief, "ai_scene_analysis_result", "") or "")
+                            )
+                    except Exception as brief_load_err:
+                        logger.warning(
+                            "[analyze_scene] failed loading adaptation for env design brief: %s",
+                            brief_load_err,
+                        )
+                picked_plan, _picked_brief = pick_environment_plan_source_and_brief(
+                    request_text,
+                    episode_adaptation_for_scene_beats,
+                    *episode_plan_texts,
+                )
+                brief_source = choose_environment_design_source(request_text, picked_plan)
+                if single_entity_name:
+                    brief_source = (
+                        slice_one_main_environment(picked_plan, single_entity_name)
+                        or slice_one_main_environment(request_text, single_entity_name)
+                        or slice_one_main_environment(brief_source, single_entity_name)
+                    )
+                env_brief = build_environment_asset_design_brief(brief_source)
+                environment_design_name_source = brief_source
+                cover_brief = "" if single_entity_name else build_cover_poster_brief(brief_source)
+                user_content = assemble_environment_asset_design_user_content(
+                    cover_brief,
+                    env_brief,
+                )
+                logger.info(
+                    "[analyze_scene] environment asset design user seed episode_id=%s env_brief=%s cover_brief=%s has_main_env=%s script_block=omitted",
+                    getattr(request, "episode_id", None),
+                    len(env_brief or ""),
+                    len(cover_brief or ""),
+                    bool(env_brief) and (
+                        "[ENV_BLOCK_START" in env_brief.upper()
+                        or "────【主环境】" in env_brief
+                        or "【主环境】" in env_brief
+                    ),
+                )
 
         elif is_prop_asset_design:
             request_text = str(getattr(request, "text", "") or "").strip()
@@ -1328,6 +1365,8 @@ async def execute_analyze_scene(
                 ):
                     prior_prompt_types = set(_PRIOR_ENTITY_DESIGN_TYPES)
 
+            if skip_derived_main_design_llm:
+                prior_prompt_types = set()
             if prior_prompt_types and request_episode_id_for_prior and request_episode_id_for_prior > 0:
                 if is_scoped_asset_design and single_entity_name:
                     if is_prop_asset_design:
@@ -1499,7 +1538,7 @@ async def execute_analyze_scene(
         provider = (config or {}).get("provider")
         model = (config or {}).get("model")
         reservation_tx = None
-        if skip_empty_asset_extract:
+        if skip_empty_asset_extract or skip_derived_main_design_llm:
             pass
         elif billing_service.is_token_pricing(db, "analysis", provider, model):
             est = billing_service.estimate_reserve_tokens_from_messages(messages)
@@ -1813,13 +1852,17 @@ async def execute_analyze_scene(
         # Step 1: LLM call (all stages share the same transport loop).
         # Execute the LLM loop generically for all modes
         try:
-            if skip_empty_asset_extract:
+            if skip_empty_asset_extract or skip_derived_main_design_llm:
                 loop1_res = {
-                    "result_content": "",
+                    "result_content": (
+                        json.dumps(derived_main_design_payload, ensure_ascii=False)
+                        if skip_derived_main_design_llm and derived_main_design_payload
+                        else ""
+                    ),
                     "segments_meta": [],
                     "usage_total": {},
                     "resolved_llm_routing": {},
-                    "finish_reason": "skip_empty_extract",
+                    "finish_reason": "derived_main_delta" if skip_derived_main_design_llm else "skip_empty_extract",
                     "continuation_stopped_by_max_segments": False,
                     "output_char_cap_reached": False,
                     "continuation_reason_counts": {},
@@ -2220,7 +2263,7 @@ async def execute_analyze_scene(
             if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
                 actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
             billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), actual_details)
-        else:
+        elif not skip_derived_main_design_llm:
             details = {"item": "scene_analysis"}
             if usage:
                 details.update(usage)
@@ -2424,6 +2467,9 @@ async def execute_analyze_scene(
                         getattr(request, "episode_id", None),
                         env_name_align_exc,
                     )
+
+            if derived_main_design_payload:
+                subjects_json = derived_main_design_payload
 
             if is_environment_asset_design and not (subjects_json.get("environments") or []):
                 poster_n = len(subjects_json.get("posters") or []) + len(subjects_json.get("covers") or [])

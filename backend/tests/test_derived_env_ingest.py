@@ -410,6 +410,76 @@ class _QuadDb:
         return _QuadQuery(self._rows)
 
 
+def test_derived_main_design_prompt_is_delta_only_and_keeps_its_name():
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        DERIVED_MAIN_PROMPT,
+        derived_main_design_subjects,
+        match_derived_main_entity,
+    )
+
+    class _Entity:
+        def __init__(self, name, attrs, prompt="【四向拼图】整间照抄"):
+            self.name = name
+            self.name_en = name
+            self.generation_prompt_cn = prompt
+            self.custom_attributes = attrs
+
+    source = _Entity("客栈大堂", {}, "【定位】\n【六面一次】\n【四向拼图】全文")
+    derived = _Entity(
+        "客栈大堂_破损",
+        {
+            "derived_kind": "derived_main",
+            "source_main_environment": "客栈大堂",
+            "main_environment": "客栈大堂",
+            "state_delta": "南壁破了一个洞",
+            "source": "programmatic_derived_framing",
+        },
+    )
+    assert match_derived_main_entity([source, derived], ["客栈大堂"]) is None
+    assert match_derived_main_entity([source, derived], ["客栈大堂_破损｜Damaged"]) is derived
+    payload = derived_main_design_subjects(derived)
+    row = payload["environments"][0]
+    assert row["name"] == "客栈大堂_破损"
+    assert row["generation_prompt_cn"] == DERIVED_MAIN_PROMPT.format(
+        name="客栈大堂_破损",
+        source="客栈大堂",
+        delta="南壁破了一个洞",
+    )
+    assert "【四向拼图】" not in row["generation_prompt_cn"]
+    assert "【六面一次】" not in row["generation_prompt_cn"]
+    assert row["visual_dependencies"] == ["ENV:[客栈大堂]"]
+    assert row["custom_attributes"]["derived_kind"] == "derived_main"
+    assert row["custom_attributes"]["state_delta"] == "南壁破了一个洞"
+
+
+def test_quad_apply_does_not_copy_full_grid_onto_derived_main():
+    cells = (
+        "【四向拼图】\n"
+        "[0度格-左上·北]\n"
+        "[90度格-右上·东]\n"
+        "[180度格-左下·南]\n"
+        "[270度格-右下·西]\n"
+    )
+    delta = "衍生主环境=客栈大堂_破损。被依赖主环境=客栈大堂。状态Delta=南壁破了一个洞。"
+    entity = _QuadEntity("客栈大堂_破损", delta)
+    entity.custom_attributes = {
+        "derived_kind": "derived_main",
+        "source_main_environment": "客栈大堂",
+        "state_delta": "南壁破了一个洞",
+    }
+    applied = apply_main_environment_quad_prompts(
+        _QuadDb([entity]),
+        project_id=1,
+        episode_id=7,
+        rows=[{"name": "客栈大堂_破损", "generation_prompt_cn": cells}],
+        openings={"客栈大堂_破损": "【定位】\n【六面一次】\n全文"},
+    )
+    assert applied["updated"] == []
+    assert applied["skipped"] == ["客栈大堂_破损"]
+    assert entity.generation_prompt_cn == delta
+    assert "【四向拼图】" not in entity.generation_prompt_cn
+
+
 def test_single_quad_apply_writes_the_folded_library_row():
     cells = (
         "【四向拼图】\n"

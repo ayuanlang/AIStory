@@ -76,6 +76,20 @@ export function promptForDerivedGeneration(entity, prompt) {
     return PENDING_DERIVED_PROMPT;
 }
 
+/** Derived environments take style from the main-environment asset, not project info. */
+export function omitsProjectStyleInjection(entity) {
+    if (!isEnvironmentEntity(entity)) return false;
+    if (isDerivedMainEnvironmentEntity(entity)) return true;
+    return !isMainEnvironmentEntity(entity);
+}
+
+export function stripProjectStyleInjection(text) {
+    return String(text || '')
+        .replace(/\[Global Style\]\s*(?:\([^)]*\))?\.?\s*/gi, '')
+        .replace(/[\[【]\s*global_style\s*[\]】]\s*(?:\([^)]*\))?\.?\s*/gi, '')
+        .trim();
+}
+
 export function isMainEnvironmentEntity(entity) {
     if (!entity || entity.is_deleted) return false;
     if (!isEnvironmentEntity(entity)) return false;

@@ -1235,6 +1235,20 @@ def test_align_environment_json_names_with_ident_maps_single_synonym():
     assert aligned["environments"][0]["generation_prompt_cn"] == "所属主环境=客栈大堂"
 
 
+def test_align_environment_json_names_keeps_derived_main_suffix():
+    payload = {
+        "environments": [
+            {
+                "name": "客栈大堂_破损",
+                "generation_prompt_cn": "衍生主环境=客栈大堂_破损。被依赖主环境=客栈大堂。状态Delta=南壁破了一个洞。",
+            }
+        ]
+    }
+    aligned = align_environment_json_names_with_ident(payload, _planned_script())
+    assert aligned["environments"][0]["name"] == "客栈大堂_破损"
+    assert "衍生主环境=客栈大堂_破损" in aligned["environments"][0]["generation_prompt_cn"]
+
+
 def test_align_environment_json_names_skips_derived_rows():
     payload = {
         "environments": [

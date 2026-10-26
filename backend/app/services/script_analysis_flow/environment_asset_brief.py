@@ -226,6 +226,15 @@ def _is_derived_environment_name(name: str) -> bool:
     return bool(_DERIVED_ENV_NAME_RE.match(_clean(name)))
 
 
+def _keeps_derived_main_suffix(name: str, ident: str) -> bool:
+    """`办公室_破损` is a derived main of `办公室`, not a misspelling of it."""
+    left = _clean(name)
+    right = _clean(ident)
+    if not left or not right or left == right:
+        return False
+    return left.startswith(f"{right}_")
+
+
 def _rewrite_environment_item_name(item: Dict[str, Any], old_name: str, new_name: str) -> None:
     item["name"] = new_name
     old = _clean(old_name)
@@ -294,7 +303,8 @@ def align_environment_json_names_with_ident(
         unmatched.append(item)
     if len(leftover) == 1 and len(unmatched) == 1:
         old = _clean(unmatched[0].get("name"))
-        _rewrite_environment_item_name(unmatched[0], old, leftover[0])
+        if not _keeps_derived_main_suffix(old, leftover[0]):
+            _rewrite_environment_item_name(unmatched[0], old, leftover[0])
     return subjects_json
 
 

@@ -3081,6 +3081,14 @@ const isMainEnvironmentCompletenessAsset = (entity) => {
     ) {
         return false;
     }
+    const prompt = String(typed.generation_prompt_cn || '');
+    if (
+        prompt.includes('衍生主环境=')
+        && prompt.includes('状态Delta=')
+        && !prompt.includes('【四向拼图】')
+    ) {
+        return false;
+    }
     return !/^type\s*[ab]$/i.test(readEntityDependencyStrategyType(typed));
 };
 

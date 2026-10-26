@@ -28,6 +28,8 @@ import {
     isGridCropDerivedEntity,
     assetCardIntro,
     isMainEnvironmentEntity,
+    omitsProjectStyleInjection,
+    stripProjectStyleInjection,
     promptForDerivedGeneration,
     derivedCellReference,
     derivedDependencyImageUrl,
@@ -2583,6 +2585,25 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return `[Global Style](${globalStyle}). ${rawText}`;
     }, [getResolvedEntityGlobalStyleText]);
 
+    const episodeInfoWithoutProjectStyle = (episodeInfo) => {
+        const source = episodeInfo && typeof episodeInfo === 'object' ? episodeInfo : {};
+        const nested = source.e_global_info && typeof source.e_global_info === 'object'
+            ? source.e_global_info
+            : null;
+        return {
+            ...source,
+            'Global Style': '',
+            Global_Style: '',
+            ...(nested ? {
+                e_global_info: {
+                    ...nested,
+                    'Global Style': '',
+                    Global_Style: '',
+                },
+            } : {}),
+        };
+    };
+
     useEffect(() => {
         const syncPromptSubmitLangPref = () => {
             setPromptSubmitLangPref(getPromptSubmitLanguagePreference());
@@ -2617,7 +2638,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
 
         const epInfo = currentEpisode?.episode_info || {};
-        let processed = processPrompt(rawPrompt, epInfo, allEntities) || '';
+        const derivedEnvironment = omitsProjectStyleInjection(entity);
+        let processed = processPrompt(rawPrompt, derivedEnvironment ? episodeInfoWithoutProjectStyle(epInfo) : epInfo, allEntities) || '';
+        if (derivedEnvironment) return stripProjectStyleInjection(processed);
         const infoSource = epInfo.e_global_info || epInfo;
         const suffixes = [
             infoSource?.type,
@@ -4173,17 +4196,26 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             }
         }
 
-        let finalPrompt = processPrompt(rawPrompt, epInfo, allEntities) || rawPrompt || '';
-        const infoSource = epInfo.e_global_info || epInfo;
-        const suffixes = [
-            infoSource?.type,
-            infoSource?.lighting,
-            infoSource?.tech_params?.visual_standard?.quality,
-        ].filter(Boolean);
-        if (suffixes.length > 0) {
-            finalPrompt = `${finalPrompt}${finalPrompt ? ', ' : ''}${suffixes.join(', ')}`;
+        const derivedEnvironment = omitsProjectStyleInjection(analyzed || entity);
+        let finalPrompt = processPrompt(
+            rawPrompt,
+            derivedEnvironment ? episodeInfoWithoutProjectStyle(epInfo) : epInfo,
+            allEntities
+        ) || rawPrompt || '';
+        if (derivedEnvironment) {
+            finalPrompt = stripProjectStyleInjection(finalPrompt);
+        } else {
+            const infoSource = epInfo.e_global_info || epInfo;
+            const suffixes = [
+                infoSource?.type,
+                infoSource?.lighting,
+                infoSource?.tech_params?.visual_standard?.quality,
+            ].filter(Boolean);
+            if (suffixes.length > 0) {
+                finalPrompt = `${finalPrompt}${finalPrompt ? ', ' : ''}${suffixes.join(', ')}`;
+            }
+            finalPrompt = prependEntityGlobalStyleToPromptHead(finalPrompt, { injectIfMissing: true });
         }
-        finalPrompt = prependEntityGlobalStyleToPromptHead(finalPrompt, { injectIfMissing: true });
 
         const primaryRefUrl = String(analyzed?.image_url || entity?.image_url || '').trim();
         const depUrls = [];
@@ -6929,10 +6961,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         // prompt likely already has suffixes appended from initialization, 
         // but we run processPrompt again in case user added new variables.
         // Use allEntities for resolution
-        const processedPrompt = (qualityRegen || imageEditOnly) ? promptToUse : processPrompt(promptToUse, epInfo, allEntities);
+        const derivedEnvironment = !qualityRegen && !imageEditOnly && omitsProjectStyleInjection(activeEntity);
+        const processedPrompt = (qualityRegen || imageEditOnly)
+            ? promptToUse
+            : processPrompt(promptToUse, derivedEnvironment ? episodeInfoWithoutProjectStyle(epInfo) : epInfo, allEntities);
         const finalPrompt = (qualityRegen || imageEditOnly)
             ? processedPrompt
-            : prependEntityGlobalStyleToPromptHead(processedPrompt, { injectIfMissing: true });
+            : (derivedEnvironment
+                ? stripProjectStyleInjection(processedPrompt)
+                : prependEntityGlobalStyleToPromptHead(processedPrompt, { injectIfMissing: true }));
 
         const preserveStoredPrompt = Boolean(generationOptions?.preserveStoredPrompt);
         if (!generationOptions?.keepPromptDraft && !qualityRegen && !preserveStoredPrompt && !imageEditOnly) {
@@ -8505,10 +8542,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     return { entity, skippedPrompt: true };
                 }
 
-                const styledPrompt = prependEntityGlobalStyleToPromptHead(
-                    String(processPrompt(basePrompt, epInfo, allEntities) || '').trim(),
-                    { injectIfMissing: true }
-                );
+                const derivedEnvironment = omitsProjectStyleInjection(entity);
+                const styledPrompt = derivedEnvironment
+                    ? stripProjectStyleInjection(processPrompt(basePrompt, episodeInfoWithoutProjectStyle(epInfo), allEntities))
+                    : prependEntityGlobalStyleToPromptHead(
+                        String(processPrompt(basePrompt, epInfo, allEntities) || '').trim(),
+                        { injectIfMissing: true }
+                    );
                 const finalPrompt = (!regenPlan && isMainEnvironmentEntity(entity))
                     ? quadImagePrompt(styledPrompt)
                     : styledPrompt;
