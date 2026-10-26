@@ -2677,6 +2677,28 @@ def _main_env_for_staging(env_scene_block: str) -> str:
     return strip_prior_derived_environment_sections(cleaned)
 
 
+def strip_env_block_sections(scene_text: str) -> str:
+    """Drop `[ENV_BLOCK_START]`…`[ENV_BLOCK_END]`. Staging does not read this block."""
+    stripped = _ENV_BLOCK_WITH_COVERAGE_PATTERN.sub("", str(scene_text or ""))
+    stripped = re.sub(
+        r"`?\[ENV_BLOCK_START(?:\:[^\]]+)?\]`?.*?"
+        r"`?\[ENV_BLOCK_END(?:\:[^\]]+)?\]`?",
+        "",
+        stripped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return re.sub(r"\n{3,}", "\n\n", stripped).strip()
+
+
+def compose_staging_scene_text(current_block: str, env_scene: str = "") -> str:
+    """Framing text for 建置与入戏, without the environment-plan `[ENV_BLOCK]`."""
+    scene = strip_env_block_sections(current_block)
+    planned = strip_env_block_sections(_main_env_for_staging(env_scene))
+    if planned and "[SCENE_ENV_IDENT_START" not in scene.upper() and planned not in scene:
+        scene = f"{planned}\n\n{scene}".strip()
+    return scene
+
+
 def strip_prior_derived_environment_sections(scene_text: str) -> str:
     """Drop leftover 现场编排 derived-env tables so this run cannot copy them."""
     stripped = _DERIVED_ENV_EXTRACT_ANY.sub("", str(scene_text or ""))
@@ -2724,15 +2746,7 @@ def strip_prior_derived_environment_sections(scene_text: str) -> str:
 
 def strip_environment_planning_sections(scene_text: str) -> str:
     stripped = SCENE_ENV_IDENT_PATTERN.sub("", str(scene_text or ""))
-    stripped = _ENV_BLOCK_WITH_COVERAGE_PATTERN.sub("", stripped)
-    stripped = re.sub(
-        r"`?\[ENV_BLOCK_START(?:\:[^\]]+)?\]`?.*?"
-        r"`?\[ENV_BLOCK_END(?:\:[^\]]+)?\]`?",
-        "",
-        stripped,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    return strip_prior_derived_environment_sections(stripped)
+    return strip_prior_derived_environment_sections(strip_env_block_sections(stripped))
 
 
 def splice_environment_and_enhance_scene(
@@ -3103,22 +3117,39 @@ def collect_staging_main_environment_names(env_scene: str) -> List[str]:
     return kept
 
 
+def _quad_collage_for_staging(prompt: str) -> str:
+    """The locked four-cell collage. Staging does not receive the opening world lock."""
+    text = str(prompt or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    quad_at = text.find("【四向拼图】")
+    if quad_at < 0:
+        return ""
+    return text[quad_at:].strip()
+
+
 def build_environment_asset_quad_injection(prompts_by_name: Dict[str, str]) -> str:
-    """Wrap each main-env generation_prompt_cn so staging can read one cell per beat."""
+    """Wrap each main-env 【四向拼图】 so staging can read one cell per beat."""
     blocks: List[str] = []
     for name, prompt in prompts_by_name.items():
-        body = str(prompt or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        full = str(prompt or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not environment_asset_quad_ready(full):
+            continue
+        body = _quad_collage_for_staging(full)
         if not environment_asset_quad_ready(body):
             continue
         blocks.append(f"【主环境四宫格】{name}\n{body}\n【/主环境四宫格】")
     if not blocks:
         return ""
     intro = (
-        "以下是环境资产设计已锁定的主环境四宫格（开篇世界锁 + 【四向拼图】）。"
+        "以下是环境资产设计已锁定的主环境【四向拼图】。"
         "每个 Beat 只读本拍当前环境所属主环境里、度数与本拍望向相同的那一格："
         "0度=[0度格-左上·北]，90度=[90度格-右上·东]，180度=[180度格-左下·南]，270度=[270度格-右下·西]。"
-        "角色与道具的开拍定位和本拍走位，按这一格的正面、左侧面、右侧面、中部已写出的环境主体画面位置来转换。"
-        "左侧面对应画面左，右侧面对应画面右，正面对应远离镜头的那一面，中部对应舞台中部。"
+        "每格三面的方向："
+        "0度望北，正面是北，左侧面是西，右侧面是东；"
+        "90度望东，正面是东，左侧面是北，右侧面是南；"
+        "180度望南，正面是南，左侧面是东，右侧面是西；"
+        "270度望西，正面是西，左侧面是南，右侧面是北。"
+        "左侧面在画面左，右侧面在画面右，正面是远离镜头的那一面，中部是舞台中部。"
+        "角色与道具的开拍定位和本拍走位，按这一格这三面和中部已经写出的环境主体画面位置来转换。"
         "落点必须落在这一格已经写好的件旁。禁止改用邻格。禁止把格内环境句子抄进建置或入戏。"
     )
     return wrap_injection_section("环境资产四宫格", intro + "\n\n" + "\n\n".join(blocks))
@@ -4120,10 +4151,7 @@ async def _run_derived_framing_then_staging(
         current_block = assert_derived_framing_ready_for_staging(enhance_block, scene_id)
         if "derived_framing" not in called:
             called.append("derived_framing")
-        staging_scene = current_block
-        main_env = _main_env_for_staging(env_scene)
-        if main_env and "【主环境】" not in current_block:
-            staging_scene = f"{main_env}\n\n{current_block}"
+        staging_scene = compose_staging_scene_text(current_block, env_scene)
         current_input = await _attach_environment_asset_quads(
             _with_derived_env_frame_anchors(
                 _wrap_single_scene_input(
@@ -4238,10 +4266,10 @@ async def _run_derived_framing_then_staging(
             )
         if step_name == "staging":
             current_block = assert_derived_framing_ready_for_staging(current_block, scene_id)
-            staging_scene = current_block
-            main_env = _main_env_for_staging(env_scene or framing_block)
-            if main_env and "【主环境】" not in current_block:
-                staging_scene = f"{main_env}\n\n{current_block}"
+            staging_scene = compose_staging_scene_text(
+                current_block,
+                env_scene or framing_block,
+            )
             current_input = await _attach_environment_asset_quads(
                 _with_derived_env_frame_anchors(
                     _wrap_single_scene_input(

@@ -4,6 +4,7 @@ from app.services.scene_subskill_pipeline_runner import (
     PIPELINE_CONTRACT_VERSION,
     build_environment_asset_quad_injection,
     collect_staging_main_environment_names,
+    compose_staging_scene_text,
     environment_asset_quad_ready,
 )
 from app.services.script_analysis_flow.registry import get_script_analysis_flow_registry
@@ -185,10 +186,47 @@ def test_unmatched_quad_reason_names_both_sides():
     assert "库中有稿但四宫未齐：博弈室" in text
 
 
+def test_staging_scene_drops_env_block_and_keeps_ident():
+    framing = (
+        "[SCENE_START:EP01_SC01]\n"
+        "[ENV_BLOCK_START]\n"
+        "【主环境】客栈大堂\n"
+        "【未落环境实体清单】\n"
+        "- 屏风｜待入画\n"
+        "[ENV_BLOCK_END]\n"
+        "[BEAT_STREAM_START]\n"
+        "人站在桌北。\n"
+        "[BEAT_STREAM_END]\n"
+    )
+    env_scene = (
+        "[SCENE_ENV_IDENT_START:EP01_SC01]\n"
+        "[ENV] 名称=客栈大堂｜复用=否｜来源=新建｜匹配主环境=无｜依据=场头\n"
+        "[SCENE_ENV_IDENT_END:EP01_SC01]\n"
+        "[ENV_BLOCK_START]\n"
+        "【主环境】客栈大堂｜日夜内外=白天·内\n"
+        "[ENV_BLOCK_END]\n"
+    )
+    text = compose_staging_scene_text(framing, env_scene)
+    assert "[ENV_BLOCK_START]" not in text
+    assert "[ENV_BLOCK_END]" not in text
+    assert "【未落环境实体清单】" not in text
+    assert "屏风" not in text
+    assert "[BEAT_STREAM_START]" in text
+    assert "人站在桌北。" in text
+    assert "[SCENE_ENV_IDENT_START:EP01_SC01]" in text
+    assert "名称=客栈大堂" in text
+
+
 def test_injection_keeps_grid_cells_readable():
     wrapped = build_environment_asset_quad_injection({"客栈大堂": _quad()})
     assert "环境资产四宫格开始" in wrapped
     assert "环境资产四宫格结束" in wrapped
+    assert "【四向拼图】" in wrapped
+    assert "【定位】" not in wrapped
+    assert "0度望北，正面是北，左侧面是西，右侧面是东" in wrapped
+    assert "90度望东，正面是东，左侧面是北，右侧面是南" in wrapped
+    assert "180度望南，正面是南，左侧面是东，右侧面是西" in wrapped
+    assert "270度望西，正面是西，左侧面是南，右侧面是北" in wrapped
     assert "[0度格-左上·北]" in wrapped
     assert "[90度格-右上·东]" in wrapped
     assert "[180度格-左下·南]" in wrapped
