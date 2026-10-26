@@ -155,8 +155,34 @@ def test_unmatched_quad_is_not_a_wait():
         detail="STAGING_ENVIRONMENT_ASSET_UNMATCHED:EP01_SC01:博弈室",
     )
     assert is_environment_asset_wait_error(exc) is False
-    assert "等待" not in _scene_subskill_failure_reason(exc)
-    assert "对不上" in _scene_subskill_failure_reason(exc)
+    reason = _scene_subskill_failure_reason(exc)
+    assert "等待" not in reason
+    assert "对不上" in reason
+    assert "博弈室" in reason
+
+
+def test_unmatched_quad_reason_names_both_sides():
+    from app.services.scene_subskill_pipeline_runner import (
+        describe_unmatched_environment_asset_quads,
+    )
+
+    body = _quad("客栈大堂")
+    loaded = {
+        "客栈大堂": body,
+        "Inn Hall": body,
+        "博弈室": "【定位】博弈室\n只有开篇",
+    }
+    text = describe_unmatched_environment_asset_quads(
+        loaded,
+        ["客栈大堂", "博弈室", "总裁办公室"],
+    )
+    assert "客栈大堂" in text
+    assert "已对上：客栈大堂" in text
+    assert "博弈室（同名稿在，四宫未齐）" in text
+    assert "总裁办公室（名字不在已有四宫格里）" in text
+    assert "库中四宫格：客栈大堂" in text
+    assert "Inn Hall" not in text
+    assert "库中有稿但四宫未齐：博弈室" in text
 
 
 def test_injection_keeps_grid_cells_readable():

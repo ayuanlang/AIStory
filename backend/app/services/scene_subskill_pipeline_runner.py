@@ -1801,6 +1801,17 @@ def scene_failure_current_step(
     return items[-1] if items else ""
 
 
+def _staging_asset_unmatched_tail(text: str) -> str:
+    """The comparison after ``CODE:scene_id:``."""
+    marker = "STAGING_ENVIRONMENT_ASSET_UNMATCHED:"
+    idx = text.find(marker)
+    if idx < 0:
+        return ""
+    rest = text[idx + len(marker):].split("\n", 1)[0].strip().strip(")'\"")
+    _sid, sep, detail = rest.partition(":")
+    return detail.strip() if sep else ""
+
+
 def _scene_subskill_failure_reason(exc: Exception) -> str:
     detail = getattr(exc, "detail", None)
     text = str(detail if detail is not None else exc or "")
@@ -1809,7 +1820,9 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
     if "STAGING_ENVIRONMENT_ASSET_FAILED" in text:
         return "环境资产四宫格失败，不能进入建置与入戏"
     if "STAGING_ENVIRONMENT_ASSET_UNMATCHED" in text:
-        return "四宫格已完成，但本场主环境名称对不上已有四宫格，不能进入建置与入戏"
+        base = "四宫格已完成，但本场主环境名称对不上已有四宫格，不能进入建置与入戏"
+        tail = _staging_asset_unmatched_tail(text)
+        return f"{base}：{tail}" if tail else base
     if "STAGING_ENVIRONMENT_ASSET_EMPTY" in text:
         return "环境资产四宫格未齐，不能进入建置与入戏"
     if "STAGING_ENVIRONMENT_ASSET_NAMES_MISSING" in text or "STAGING_ENVIRONMENT_ASSET_MISSING" in text:
@@ -3171,6 +3184,77 @@ def match_ready_environment_asset_quads(
     return ready
 
 
+def _clip_name_list(names: List[str], limit: int = 8) -> str:
+    shown = [str(name).strip() for name in names if str(name or "").strip()]
+    if not shown:
+        return "无"
+    head = shown[:limit]
+    text = "、".join(head)
+    if len(shown) > limit:
+        text += f"等{len(shown)}个"
+    return text
+
+
+def describe_unmatched_environment_asset_quads(
+    loaded: Dict[str, str],
+    main_names: List[str],
+) -> str:
+    """Name the scene mains that missed a stored four-grid, and the grids on file.
+
+    A settled quad node used to fail with only "names do not match". The scene
+    side and the library side both have to be in the log.
+    """
+    from app.services.script_analysis_flow.environment_reuse import normalize_environment_name
+
+    ready = match_ready_environment_asset_quads(loaded, main_names)
+    matched = [name for name in main_names if name in ready]
+    missing = [name for name in main_names if name not in ready]
+    by_norm_key: Dict[str, str] = {}
+    for key in (loaded or {}):
+        norm = normalize_environment_name(key)
+        label = str(key or "").strip()
+        if norm and label and norm not in by_norm_key:
+            by_norm_key[norm] = label
+
+    missing_bits: List[str] = []
+    for name in missing:
+        stored = by_norm_key.get(normalize_environment_name(name)) or ""
+        if stored:
+            same = stored == name
+            registered = "" if same else f"，登记名={stored}"
+            missing_bits.append(f"{name}（同名稿在，四宫未齐{registered}）")
+        else:
+            missing_bits.append(f"{name}（名字不在已有四宫格里）")
+
+    ready_labels: List[str] = []
+    incomplete_labels: List[str] = []
+    seen_ready: set = set()
+    seen_incomplete: set = set()
+    for key, prompt in (loaded or {}).items():
+        label = str(key or "").strip()
+        if not label:
+            continue
+        signature = str(prompt or "")[:240]
+        if environment_asset_quad_ready(prompt):
+            if signature in seen_ready:
+                continue
+            seen_ready.add(signature)
+            ready_labels.append(label)
+        else:
+            if signature in seen_incomplete:
+                continue
+            seen_incomplete.add(signature)
+            incomplete_labels.append(label)
+
+    parts = [f"本场未对上：{'、'.join(missing_bits) or '无'}"]
+    if matched:
+        parts.append(f"已对上：{'、'.join(matched)}")
+    parts.append(f"库中四宫格：{_clip_name_list(ready_labels)}")
+    if incomplete_labels:
+        parts.append(f"库中有稿但四宫未齐：{_clip_name_list(incomplete_labels)}")
+    return "；".join(parts)
+
+
 def environment_asset_quad_job_still_open(status: str) -> bool:
     """True while the four-grid node can still write prompts.
 
@@ -3341,10 +3425,25 @@ async def await_environment_asset_quad_injection(
                 # not appear, so another twenty minutes of 等待环境 cannot help.
                 settled_misses += 1
                 if settled_misses >= _ENV_PLAN_EMPTY_GRACE_POLLS:
-                    missing = [name for name in main_names if name not in ready]
+                    from app.services.script_analysis_flow.derived_env_ingest import (
+                        load_all_main_environment_prompts,
+                    )
+
+                    loaded = load_all_main_environment_prompts(
+                        poll_db,
+                        project_id=int(project_id),
+                        episode_id=int(episode_id),
+                    )
+                    mismatch = describe_unmatched_environment_asset_quads(loaded, main_names)
+                    logger.warning(
+                        "[scene_subskill_pipeline] environment asset quads unmatched scene=%s status=%s %s",
+                        sid,
+                        last_status or "settled",
+                        mismatch,
+                    )
                     raise HTTPException(
                         status_code=422,
-                        detail=f"STAGING_ENVIRONMENT_ASSET_UNMATCHED:{sid}:{','.join(missing)}",
+                        detail=f"STAGING_ENVIRONMENT_ASSET_UNMATCHED:{sid}:{mismatch}",
                     )
             _heartbeat_environment_wait(
                 poll_db,
