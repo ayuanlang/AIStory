@@ -1154,6 +1154,7 @@ def _snapshot_image_job_stats() -> Dict[str, Any]:
 
 # --- mutators (moved from generate router) ---
 def _set_image_job(job_id: str, **fields) -> None:
+    payload_to_persist: Optional[Dict[str, Any]] = None
     with IMAGE_JOB_LOCK:
         _prune_image_jobs_locked()
         current = IMAGE_JOB_STORE.get(job_id, {})
@@ -1203,7 +1204,10 @@ def _set_image_job(job_id: str, **fields) -> None:
             _slim_terminal_job_fields(current)
 
         IMAGE_JOB_STORE[job_id] = current
-        _write_image_job_file(job_id, current)
+        payload_to_persist = copy.deepcopy(current)
+
+    if payload_to_persist is not None:
+        _write_image_job_file(job_id, payload_to_persist)
 
     _clear_generation_job_pool_cache()
 
@@ -1246,16 +1250,20 @@ def _promote_provider_task_ids_into_job_fields(fields: Dict[str, Any], current: 
 
 def _set_video_job(job_id: str, **fields) -> None:
     released_scope = ""
+    payload_to_persist: Optional[Dict[str, Any]] = None
+    # Hydrate from DB outside the lock. Reading job state while holding
+    # VIDEO_JOB_LOCK checks out a pool connection that other holders are waiting on.
     with VIDEO_JOB_LOCK:
         _prune_video_jobs_locked()
+        needs_hydrate = not VIDEO_JOB_STORE.get(job_id)
+    hydrated = _read_video_job_file(job_id) if needs_hydrate else None
+    with VIDEO_JOB_LOCK:
         current = VIDEO_JOB_STORE.get(job_id, {})
         # Overflow prune / multi-worker gaps can leave memory empty while the shared
         # file still has status/shot_id. Hydrate before partial updates so we do not
         # recreate a status=None shell that breaks bind/persist.
-        if not current:
-            file_job = _read_video_job_file(job_id)
-            if isinstance(file_job, dict) and file_job:
-                current = dict(file_job)
+        if not current and isinstance(hydrated, dict) and hydrated:
+            current = dict(hydrated)
         previous_status = str(current.get("status") or "").strip().lower()
         previous_result_url = _extract_job_result_url(current.get("result"))
         if "result" in fields:
@@ -1309,7 +1317,10 @@ def _set_video_job(job_id: str, **fields) -> None:
             _slim_terminal_job_fields(current)
 
         VIDEO_JOB_STORE[job_id] = current
-        _write_video_job_file(job_id, current)
+        payload_to_persist = copy.deepcopy(current)
+
+    if payload_to_persist is not None:
+        _write_video_job_file(job_id, payload_to_persist)
 
     if released_scope:
         try:

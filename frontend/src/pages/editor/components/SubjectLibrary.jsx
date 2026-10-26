@@ -6853,11 +6853,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
     const handleGenerate = async (entityOverride = null, customRefs = null, customPrompt = null, extraProviderOptions = null, generationOptions = null) => {
         const activeEntity = entityOverride || selectedEntity;
-        if (generating || !!(activeEntity?.id && subjectImageJobs[String(activeEntity.id)])) return;
+        const imageEditOnly = Boolean(generationOptions?.imageEditOnly);
+        if (generating || !!(activeEntity?.id && subjectImageJobs[String(activeEntity.id)])) {
+            if (imageEditOnly) {
+                showSubjectNotification(
+                    t('当前图片还在生成，这次改图没有发出。等这张图完成后再检查一次。', 'This image is still generating, so the edit was not sent. Check again after it finishes.'),
+                    'warning'
+                );
+            }
+            return;
+        }
         const targetEntityId = Number(activeEntity?.id || 0);
         if (!Number.isFinite(targetEntityId) || targetEntityId <= 0) return;
         const targetEntityName = String(activeEntity?.name || activeEntity?.name_en || targetEntityId);
-        const imageEditOnly = Boolean(generationOptions?.imageEditOnly);
         const selectedLangPrompt = getEntityPromptByLang(activeEntity, 'cn');
         const draftPrompt = String(promptDrafts?.cn || '').trim();
         const promptToUse = imageEditOnly

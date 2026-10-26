@@ -40,6 +40,15 @@ from app.services.oss_upload_dedup import (
 logger = logging.getLogger(__name__)
 activity_logger = logging.getLogger("functional_activity")
 
+# URL checks during batch video call this on every asset. Cache the pool rows so
+# those checks do not each check out a connection (QueuePool timeout under batch).
+# The load lock collapses a miss burst into one checkout.
+_DB_POOL_CACHE_TTL_SECONDS = 20.0
+_DB_POOL_CACHE_FAIL_TTL_SECONDS = 2.0
+_db_pool_cache_lock = threading.Lock()
+_db_pool_load_lock = threading.Lock()
+_db_pool_cache: Dict[str, Tuple[float, Optional[List[SimpleNamespace]]]] = {}
+
 
 def _visible_info(message: str, *args: Any) -> None:
     logger.info(message, *args)
@@ -679,7 +688,38 @@ class OSSStorageService:
             source="db",
         )
 
+    def _cached_db_pools(self, cache_key: str) -> Optional[List[SimpleNamespace]]:
+        now = time.monotonic()
+        with _db_pool_cache_lock:
+            cached = _db_pool_cache.get(cache_key)
+        if cached is None:
+            return None
+        cached_at, cached_pools = cached
+        ttl = _DB_POOL_CACHE_TTL_SECONDS if cached_pools is not None else _DB_POOL_CACHE_FAIL_TTL_SECONDS
+        if now - cached_at >= ttl:
+            return None
+        return list(cached_pools or [])
+
     def _load_db_pools(self, db=None, *, active_only: bool = True) -> List[SimpleNamespace]:
+        cache_key = "active" if active_only else "all"
+        if db is not None:
+            return list(self._query_db_pools(db, active_only=active_only) or [])
+
+        cached = self._cached_db_pools(cache_key)
+        if cached is not None:
+            return cached
+
+        with _db_pool_load_lock:
+            cached = self._cached_db_pools(cache_key)
+            if cached is not None:
+                return cached
+            pools = self._query_db_pools(None, active_only=active_only)
+            with _db_pool_cache_lock:
+                # None marks a failed load so the next burst does not stampede the pool.
+                _db_pool_cache[cache_key] = (time.monotonic(), pools)
+            return list(pools or [])
+
+    def _query_db_pools(self, db=None, *, active_only: bool = True) -> Optional[List[SimpleNamespace]]:
         owned_session = None
         try:
             session = db
@@ -709,7 +749,7 @@ class OSSStorageService:
             return pools
         except Exception as exc:
             logger.info("OSS db pool load skipped | err=%s", exc)
-            return []
+            return None
         finally:
             if owned_session is not None:
                 owned_session.close()

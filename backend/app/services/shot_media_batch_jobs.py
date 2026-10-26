@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 from app.core.time_utils import now_bj_iso
-from app.db.session import SessionLocal
+from app.db.session import DB_POOL_SIZE_EFFECTIVE, SessionLocal
 from app.models.all_models import Episode, Shot, User
 from app.schemas.generation import GenerationRequest, VideoGenerationRequest
 from app.schemas.user_auth import (
@@ -52,6 +52,11 @@ from app.services.shot_media_batch_status import (
 from app.services.system_api_lookup import get_system_api_setting
 
 logger = logging.getLogger("api_logger")
+
+# Each in-flight video used to keep a pool connection for the whole upstream wait.
+# Even after that release, cap parallelism so shot PUTs and the generation queue
+# still have connections (pool 30+30 was timing out at 30s).
+_BATCH_VIDEO_POOL_CAP = max(2, min(8, int(DB_POOL_SIZE_EFFECTIVE or 8) // 4))
 
 
 def _release_batch_db(db, reason: str = "") -> None:
@@ -593,7 +598,14 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 )] = int(shot.id)
                 return True
 
-            max_workers = max(1, min(batch_max_concurrency, total or 1))
+            max_workers = max(1, min(batch_max_concurrency, _BATCH_VIDEO_POOL_CAP, total or 1))
+            if batch_max_concurrency > max_workers and not bool((request_payload or {}).get("use_prev_video")):
+                logger.info(
+                    "[shot_media_batch] video concurrency capped for db pool | requested=%s capped=%s pool_size=%s",
+                    batch_max_concurrency,
+                    max_workers,
+                    DB_POOL_SIZE_EFFECTIVE,
+                )
             if bool((request_payload or {}).get("use_prev_video")):
                 max_workers = 1
                 logger.info(

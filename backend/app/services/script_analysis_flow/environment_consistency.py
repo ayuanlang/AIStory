@@ -653,16 +653,19 @@ def piece_count_block(summary: str, issues: List[str]) -> str:
     return f"{prefix}。{rest}"
 
 
-def audit_blocked_summary(summary: str, issues: List[str], prefix: str) -> str:
+def audit_blocked_summary(summary: str, issues: List[str], prefix: str, *, edit_image: bool = False) -> str:
     """Text audit failed, so drop the claim that the grid text already matches.
 
-    Picture notes from the model stay as a report. They are not this round's edit.
+    A picture-only instruction still goes out. Without one, picture notes stay as a report.
     """
     rest = _TEXT_CONSISTENT_CLAIM.sub("", str(summary or ""))
     rest = re.sub(r"^[。；\s]+", "", rest).strip()
     rest = re.sub(r"。{2,}", "。", rest).strip("。").strip()
     if rest:
-        rest = f"图片另报，正文未通过，这次不改图。{rest}"
+        if edit_image:
+            rest = f"正文未通过，图片仍按指令修改。{rest}"
+        else:
+            rest = f"图片另报，正文未通过，这次不改图。{rest}"
     return piece_count_block(rest, issues).replace(PIECE_COUNT_PREFIX, prefix, 1)
 
 
@@ -1108,7 +1111,9 @@ def _plan_cell_consistency_writes(
                 issues = []
             if issues:
                 prefix = PIECE_COUNT_PREFIX if piece_issues else "宫格改写未通过"
-                summary = audit_blocked_summary(summary, issues, prefix)
+                summary = audit_blocked_summary(
+                    summary, issues, prefix, edit_image=bool(image_edit_instruction)
+                )
                 revised_cell = None
                 audit_blocked = True
             elif grafted.strip() != main_prompt.strip():
@@ -1260,11 +1265,14 @@ def plan_consistency_writes(
             "consistent": False,
             "kind": kind,
             "summary": audit_blocked_summary(
-                summary, piece_issues + street_issues + wall_issues + front_issues, prefix
+                summary,
+                piece_issues + street_issues + wall_issues + front_issues,
+                prefix,
+                edit_image=bool(image_edit_instruction),
             ),
             "writes": [],
             "updated_targets": [],
-            "image_edit_instruction": None,
+            "image_edit_instruction": image_edit_instruction,
         }
     if payload.get("consistent"):
         return {

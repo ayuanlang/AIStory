@@ -1703,6 +1703,12 @@ async def _run_generate_video(
                     ddi_pre_payload_err,
                 )
 
+        # Resolve anything that touches the session before releasing it.
+        # Argument evaluation runs before the await; a query here would check the
+        # connection back out and hold it for the whole upstream poll.
+        filename_base = _build_generation_filename_base(req, db)
+        user_id_for_upstream = int(getattr(current_user, "id", 0) or 0)
+        user_credits_for_upstream = int(getattr(current_user, "credits", 0) or 0)
         _release_db_connection(db, "generate_video_upstream_call")
 
         result = await media_service.generate_video(
@@ -1716,9 +1722,9 @@ async def _run_generate_video(
             aspect_ratio=aspect_ratio,
             keyframes=req.keyframes,
             provider_options=video_provider_options,
-            user_id=current_user.id,
-            user_credits=(current_user.credits or 0),
-            filename_base=_build_generation_filename_base(req, db),
+            user_id=user_id_for_upstream,
+            user_credits=user_credits_for_upstream,
+            filename_base=filename_base,
             # Localize/bind in this runner (early bind + bg OSS). Sync download here
             # blocks shot bind and races VideoJobPersist on the same OSS key.
             skip_download=True,
@@ -3035,6 +3041,8 @@ async def _run_generate_video_job(
         mark_generation_task_status_external(job_id, status="failed", error=str(e))
         return {"defer_completion": False}
     finally:
+        # Drop the pool connection before the outbound HTTP callback.
+        _release_db_connection(db, "run_video_job")
         with VIDEO_JOB_LOCK:
             snapshot = dict(VIDEO_JOB_STORE.get(job_id) or {})
         if not callback_url:
@@ -3056,5 +3064,4 @@ async def _run_generate_video_job(
 
         with VIDEO_JOB_LOCK:
             VIDEO_JOB_TASKS.pop(job_id, None)
-        _release_db_connection(db, "run_video_job")
         _clear_generation_job_pool_cache()

@@ -487,9 +487,6 @@ async def _run_generate_image(
             },
         )
 
-        # Ensure the current DB transaction/connection is fully released before long upstream call.
-        _release_db_connection(db, "generate_image_upstream_call")
-
         image_provider_options: Dict[str, Any] = {}
         explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
         user_advanced = _read_user_advanced_model_preferences(current_user)
@@ -704,9 +701,10 @@ async def _run_generate_image(
             image_provider_options["_provider_callback_url"] = str(provider_callback_url).strip()
         if (force_pure_callback_mode or _is_pure_callback_mode_enabled()) and provider_callback_ticket and provider_callback_url:
             image_provider_options["_pure_callback_mode"] = True
-        image_provider_options["_request_user_id"] = int(current_user.id)
-        if _build_generation_filename_base(req, db):
-            image_provider_options["_request_filename_base"] = _build_generation_filename_base(req, db)
+        image_provider_options["_request_user_id"] = int(getattr(current_user, "id", 0) or 0)
+        filename_base = _build_generation_filename_base(req, db)
+        if filename_base:
+            image_provider_options["_request_filename_base"] = filename_base
 
         if req.enable_fallback is not None:
             image_provider_options["enableFallback"] = bool(req.enable_fallback)
@@ -809,6 +807,12 @@ async def _run_generate_image(
             "image",
         )
 
+        # Last session use is above. Release before the upstream call so batch
+        # image/preview jobs do not pin a pool connection while polling or downloading.
+        user_id_for_upstream = int(getattr(current_user, "id", 0) or 0)
+        user_credits_for_upstream = int(getattr(current_user, "credits", 0) or 0)
+        _release_db_connection(db, "generate_image_upstream_call")
+
         # Assuming generate_image returns {"url": "...", ...}
         result = await media_service.generate_image(
             prompt=req.prompt, 
@@ -819,9 +823,9 @@ async def _run_generate_image(
             height=height,
             image_size=image_size,
             aspect_ratio=aspect_ratio,
-            user_id=current_user.id,
-            user_credits=(current_user.credits or 0),
-            filename_base=_build_generation_filename_base(req, db),
+            user_id=user_id_for_upstream,
+            user_credits=user_credits_for_upstream,
+            filename_base=filename_base,
             asset_type=req.asset_type,
             provider_options=image_provider_options,
             skip_download=False,
@@ -1618,6 +1622,8 @@ async def _run_generate_image_job(
         mark_generation_task_status_external(job_id, status="failed", error=str(e))
         return {"defer_completion": False}
     finally:
+        # Drop the pool connection before the outbound HTTP callback.
+        _release_db_connection(db, "run_image_job")
         with IMAGE_JOB_LOCK:
             snapshot = dict(IMAGE_JOB_STORE.get(job_id) or {})
         if not callback_url:
@@ -1639,5 +1645,4 @@ async def _run_generate_image_job(
 
         with IMAGE_JOB_LOCK:
             IMAGE_JOB_TASKS.pop(job_id, None)
-        db.close()
 

@@ -577,11 +577,31 @@ def test_front_double_drops_equal_far_ends():
             "image_edit_instruction": "改270度格的驾驶座。现在只见坐垫朝向镜头。改成椅面朝画面右。",
         },
     )
-    assert blocked["image_edit_instruction"] is None
+    assert blocked["image_edit_instruction"].startswith("改右下格的驾驶座")
+    assert "只改这一格里点名的这一处" in blocked["image_edit_instruction"]
     assert "四向正文与开篇一致" not in blocked["summary"]
-    assert "这次不改图" in blocked["summary"]
+    assert "这次不改图" not in blocked["summary"]
+    assert "图片仍按指令修改" in blocked["summary"]
     assert "180度格的客舱座椅" in blocked["summary"]
     assert "左侧面W-001" in blocked["summary"]
+    reported = plan_consistency_writes(
+        entity,
+        entity,
+        quad,
+        {
+            "consistent": True,
+            "summary": "四向正文与开篇一致。右上格图片中高背总裁转椅位置与朝向有误。",
+            "revised_prompt": None,
+            "revised_main_prompt": None,
+            "image_edit_instruction": (
+                "改右上格的高背总裁转椅。现在位于黑曜石大案右侧且椅面朝画面左。"
+                "改成位于黑曜石大案左侧且椅面朝画面右。"
+            ),
+        },
+    )
+    assert reported["image_edit_instruction"].startswith("改右上格的高背总裁转椅")
+    assert "椅面朝画面右" in reported["image_edit_instruction"]
+    assert "这次不改图" not in reported["summary"]
 
 
 def test_image_edit_instruction_survives_when_prompts_stay():
