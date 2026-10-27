@@ -393,17 +393,39 @@ export function normalizeShotTableHeaderKey(header) {
 const SHOT_VIDEO_ANCHOR_RE = /全局动态风格|运镜与动作流|动态连续光影|光线连动弧光|人物面部稳定不变形/;
 const SHOT_LOGIC_ANCHOR_RE = /Beat-Shot映射|节奏需求|镜头逻辑总规划|场结果|光影锚定|摄影综合表达|P段时序链|^节奏:|^光影:|^运镜:|^取景:|^衔接:|^实体:|^P链:/;
 
+const ENTITY_TOKEN_RE = /(?:(?:CHAR|ENV|PROP)\s*:\s*\[[^\]]+\]|\[@[^\]]+\])/g;
+
+export function stripVideoSubmitInjection(text) {
+    let value = String(text || '');
+    if (!value.trim()) return '';
+    value = value.replace(/参考@Image\d+\s*/gi, '');
+    value = value.replace(/(^|[^A-Za-z0-9_])@Image\d+\s*/gi, '$1');
+    const parenRe = new RegExp(`(${ENTITY_TOKEN_RE.source})\\s*\\([^)]*\\)`, 'g');
+    let previous = '';
+    while (previous !== value) {
+        previous = value;
+        value = value.replace(parenRe, '$1');
+    }
+    value = value.replace(
+        /(落幅后背景保持参考图\s*(ENV:\[[^\]]+\]))\s*[，,]\s*不再使用[^。；\n]*/g,
+        '$1，因为这一拍当前环境是 $2'
+    );
+    value = value.replace(/[，,]\s*不再使用[^。；\n]*/g, '');
+    return value.replace(/[ \t]{2,}/g, ' ').replace(/\s+([，。；])/g, '$1').trim();
+}
+
 export function stripShotLogicPrefixFromVideoPrompt(text) {
     const value = String(text || '').trim();
     if (!value) return '';
-    if (SHOT_VIDEO_ANCHOR_RE.test(value.slice(0, 40))) return value;
+    const finish = (prompt) => stripVideoSubmitInjection(prompt);
+    if (SHOT_VIDEO_ANCHOR_RE.test(value.slice(0, 40))) return finish(value);
     const head = value.slice(0, 200);
     const isLogicHead = SHOT_LOGIC_ANCHOR_RE.test(head)
         || ((head.match(/｜/g) || []).length >= 3 && head.includes(':'));
-    if (!isLogicHead) return value;
+    if (!isLogicHead) return finish(value);
     const match = value.match(SHOT_VIDEO_ANCHOR_RE);
     if (!match || match.index == null || match.index <= 0) return '';
-    return value.slice(match.index).trim();
+    return finish(value.slice(match.index));
 }
 
 export function findShotTableColIdx(headers, aliases) {

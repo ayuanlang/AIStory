@@ -262,10 +262,6 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 model=model_name,
                 manual_override=manual_override,
             )
-            tech["video_prompt_cn"] = video_prompt_cn
-            item_db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
-            item_db.commit()
-
         logger.info(
             "[shot_media_batch] entity_refs auto execute | shot_id=%s shot_label=%s video_mode=%s refs=%s manual=%s anchor_injected=%s image_tags=%s",
             shot.id,

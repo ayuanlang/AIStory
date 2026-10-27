@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from app.services.shot_markdown import (
     _clean_shot_video_prompt_cell,
+    strip_video_submit_injection,
     _looks_like_shot_logic_prefix,
     _looks_like_shot_video_prompt,
     _pick_shot_video_prompt_cell,
@@ -154,3 +155,24 @@ def test_parse_env_opening_video_stays_in_video_column():
     assert "镜头逻辑总规划" not in video
     assert "Beat-Shot映射" in logic
     assert "全局动态风格" not in logic
+
+
+def test_page_prompt_drops_submit_only_anchors_and_retired_env():
+    raw = (
+        "(P1 0s–4s) 背景切换到参考图 参考@Image1 ENV:[90度停机坪](简要特征=断裂钢管护栏)，"
+        "落幅后背景保持参考图 参考@Image1 ENV:[90度停机坪](简要特征=断裂钢管护栏)，"
+        "不再使用 参考@Image2 ENV:[270度停机坪](简要特征=断裂钢管护栏，停机坪安全门所在墙体)。"
+        "入画范围只见 参考@Image3 PROP:[重合金刺刃](成人女性前臂线性图｜长≈1.28前臂长)。"
+        "参考@Image4 CHAR:[@严啸](male veteran tactical commander)。"
+    )
+    cleaned = strip_video_submit_injection(raw)
+    assert "参考@Image" not in cleaned
+    assert "简要特征" not in cleaned
+    assert "不再使用" not in cleaned
+    assert "成人女性前臂线性图" not in cleaned
+    assert "male veteran" not in cleaned
+    assert "ENV:[90度停机坪]" in cleaned
+    assert "因为这一拍当前环境是 ENV:[90度停机坪]" in cleaned
+    assert "PROP:[重合金刺刃]" in cleaned
+    assert "CHAR:[@严啸]" in cleaned
+    assert _clean_shot_video_prompt_cell(raw) == cleaned

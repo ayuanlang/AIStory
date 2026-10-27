@@ -13,6 +13,7 @@ import {
     dedupeShotsForDisplay,
     dedupeShotRowsForImport,
     stripShotLogicPrefixFromVideoPrompt,
+    stripVideoSubmitInjection,
 } from '../../../lib/sceneTableParser';
 import {
     buildShotWritePayloadFromRow,
@@ -3951,6 +3952,26 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const next = { ...shot };
         let changed = false;
         let techChanged = false;
+
+        const cleanStoredPrompt = (value) => {
+            const raw = String(value || '');
+            if (!raw.trim()) return raw;
+            return stripVideoSubmitInjection(raw);
+        };
+        for (const field of ['video_content', 'prompt', 'video_content_cn', 'prompt_cn', 'start_frame', 'end_frame']) {
+            const cleanedField = cleanStoredPrompt(next[field]);
+            if (cleanedField !== String(next[field] || '')) {
+                next[field] = cleanedField;
+                changed = true;
+            }
+        }
+        for (const key of ['start_frame_cn', 'end_frame_cn']) {
+            const cleanedKey = cleanStoredPrompt(techObj[key]);
+            if (cleanedKey !== String(techObj[key] || '')) {
+                techObj[key] = cleanedKey;
+                techChanged = true;
+            }
+        }
 
         if (techObj.video_prompt_cn && videoPromptCn !== String(techObj.video_prompt_cn || '').trim()) {
             techObj.video_prompt_cn = videoPromptCn;
@@ -14119,7 +14140,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 <div className="flex justify-between items-center mb-1 mt-2">
     <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('动作 / 运动提示词', 'Action / Motion Prompt')}</div>
     <button 
-        onClick={() => setTunePromptModalConfig({ open: true, targetField: 'video', initialValue: shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''; } catch (e) { return ''; } })() : getShotVideoPromptEn(editingShot) })} 
+        onClick={() => setTunePromptModalConfig({ open: true, targetField: 'video', initialValue: shotPromptDisplayLang === 'cn' ? (() => { try { return stripVideoSubmitInjection(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })() : stripVideoSubmitInjection(getShotVideoPromptEn(editingShot)) })} 
         className="text-[11px] flex items-center gap-1 text-primary hover:text-primary-foreground hover:bg-primary/50 px-2 py-0.5 rounded transition-colors"
     >
         ✨ {t('AI 提示词修改', 'AI Prompt Tuning')}
@@ -14128,7 +14149,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[216px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('动作 / 运动提示词（中文）...', 'Action / Motion Prompt (CN)...') : t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
-                                            value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''; } catch (e) { return ''; } })() : getShotVideoPromptEn(editingShot)}
+                                            value={shotPromptDisplayLang === 'cn' ? (() => { try { return stripVideoSubmitInjection(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })() : stripVideoSubmitInjection(getShotVideoPromptEn(editingShot))}
                                             onChange={(e) => {
                                                 const tech = JSON.parse(editingShot.technical_notes || '{}');
                                                 tech.manual_video_prompt = true;
@@ -14783,8 +14804,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 const startPromptTextEn = String(editingShot.start_frame || '');
                                                 const endPromptTextCn = String(tech.end_frame_cn || '');
                                                 const endPromptTextEn = String(editingShot.end_frame || '');
-                                                const videoPromptTextCn = String(tech.video_prompt_cn || '');
-                                                const videoPromptTextEn = getShotVideoPromptEn(editingShot);
+                                                const videoPromptTextCn = stripVideoSubmitInjection(String(tech.video_prompt_cn || ''));
+                                                const videoPromptTextEn = stripVideoSubmitInjection(getShotVideoPromptEn(editingShot));
                                                 const modalType = assetDetailModal.type;
                                                 const currentMultiPanelPresetOption = getMultiPanelPresetOption(tech.multi_panel_image_preset || multiPanelPresetKey);
                                                 const keyframe = modalType === 'keyframe' ? localKeyframes[assetDetailModal.keyframeIndex] : null;

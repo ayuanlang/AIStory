@@ -199,6 +199,42 @@ def _extract_embedded_shot_video_prompt(text: Any) -> str:
     return re.sub(r"^(?:<br\s*/?>|\||\n)+", "", video, flags=re.IGNORECASE).strip()
 
 
+_ENTITY_TOKEN_RE = re.compile(
+    r"(?:(?:CHAR|ENV|PROP)\s*:\s*\[[^\]]+\]|\[@[^\]]+\])"
+)
+
+
+def strip_video_submit_injection(text: Any) -> str:
+    """Drop submit-only reference tags and anchor parentheses from page prompts.
+
+    ``参考@ImageN`` and the parenthetical anchor after CHAR/ENV/PROP are added
+    when the prompt is sent to the video model. They do not belong in the
+    shot text shown on the page.
+    """
+    value = str(text or "")
+    if not value.strip():
+        return ""
+    value = re.sub(r"参考@Image\d+\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"(?<![A-Za-z0-9_])@Image\d+\s*", "", value, flags=re.IGNORECASE)
+    previous = None
+    while previous != value:
+        previous = value
+        value = re.sub(
+            rf"({_ENTITY_TOKEN_RE.pattern})\s*\([^)]*\)",
+            r"\1",
+            value,
+        )
+    value = re.sub(
+        r"(落幅后背景保持参考图\s*(ENV:\[[^\]]+\]))\s*[，,]\s*不再使用[^。；\n]*",
+        r"\1，因为这一拍当前环境是 \2",
+        value,
+    )
+    value = re.sub(r"[，,]\s*不再使用[^。；\n]*", "", value)
+    value = re.sub(r"[ \t]{2,}", " ", value)
+    value = re.sub(r"\s+([，。；])", r"\1", value)
+    return value.strip()
+
+
 def _clean_shot_video_prompt_cell(text: Any) -> str:
     """Return a video prompt with any leading Shot Logic stripped."""
     value = str(text or "").strip()
@@ -206,11 +242,11 @@ def _clean_shot_video_prompt_cell(text: Any) -> str:
         return ""
     extracted = _extract_embedded_shot_video_prompt(value)
     if extracted:
-        return extracted
+        return strip_video_submit_injection(extracted)
     if _looks_like_shot_logic_prefix(value) and not _starts_like_shot_video_prompt(value):
         return ""
     if _looks_like_shot_video_prompt(value):
-        return value
+        return strip_video_submit_injection(value)
     return ""
 
 
