@@ -176,3 +176,23 @@ def test_page_prompt_drops_submit_only_anchors_and_retired_env():
     assert "PROP:[重合金刺刃]" in cleaned
     assert "CHAR:[@严啸]" in cleaned
     assert _clean_shot_video_prompt_cell(raw) == cleaned
+
+
+def test_page_prompt_drops_quad_direction_badges():
+    raw = (
+        "(P1 0s-4s) 背景切换到参考图 ENV:[90度停机坪]。"
+        "角标=90度·望东。[90度格-右上·东] "
+        "四宫度数=左上0度｜右上90度｜左下180度｜右下270度。"
+        "罗盘标=望东。"
+        "平拍，CU，47° 标准人眼视角。"
+        "本格X线从靠近镜头到远离镜头，正方向在远离镜头。"
+    )
+    cleaned = strip_video_submit_injection(raw)
+    assert "角标" not in cleaned
+    assert "望东" not in cleaned
+    assert "90度格" not in cleaned
+    assert "四宫度数" not in cleaned
+    assert "罗盘标" not in cleaned
+    assert "ENV:[90度停机坪]" in cleaned
+    assert "47°" in cleaned
+    assert "本格X线从靠近镜头到远离镜头" in cleaned

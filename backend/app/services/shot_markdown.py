@@ -230,9 +230,35 @@ def strip_video_submit_injection(text: Any) -> str:
         value,
     )
     value = re.sub(r"[，,]\s*不再使用[^。；\n]*", "", value)
+    value = _strip_quad_direction_badges(value)
     value = re.sub(r"[ \t]{2,}", " ", value)
     value = re.sub(r"\s+([，。；])", r"\1", value)
     return value.strip()
+
+
+_QUAD_DIRECTION_BADGE_RE = re.compile(
+    r"(?:"
+    r"角标\s*=\s*(?:(?:0|90|180|270)\s*度\s*[·•．.]\s*望[北东南西]|[^，。；\n]{0,16})"
+    r"|(?<![A-Za-z0-9_\]])(?:0|90|180|270)\s*度\s*[·•．.]\s*望[北东南西]"
+    r"|\[(?:0|90|180|270)\s*度格-(?:左上|右上|左下|右下)(?:\s*[·•．.]\s*[北东南西])?\]"
+    r"|四宫度数\s*=\s*[^。\n]*"
+    r"|罗盘标(?:\s*=\s*[^，。；\n]*)?"
+    r")"
+)
+
+
+def _strip_quad_direction_badges(text: str) -> str:
+    """Remove 四宫 direction corner labels from a video prompt.
+
+    ``ENV:[90度停机坪]`` and optical ``47°`` / ``84°`` stay. The badges are
+    ``角标=0度·望北`` and the other three bearings, cell titles such as
+    ``[90度格-右上·东]``, ``四宫度数=``, and ``罗盘标``.
+    """
+    value = _QUAD_DIRECTION_BADGE_RE.sub("", str(text or ""))
+    value = re.sub(r"[。]{2,}", "。", value)
+    value = re.sub(r"[，,]{2,}", "，", value)
+    value = re.sub(r"[。]\s*[。]", "。", value)
+    return value
 
 
 def _clean_shot_video_prompt_cell(text: Any) -> str:

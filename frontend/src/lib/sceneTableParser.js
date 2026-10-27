@@ -411,6 +411,11 @@ export function stripVideoSubmitInjection(text) {
         '$1，因为这一拍当前环境是 $2'
     );
     value = value.replace(/[，,]\s*不再使用[^。；\n]*/g, '');
+    value = value.replace(
+        /角标\s*=\s*(?:(?:0|90|180|270)\s*度\s*[·•．.]\s*望[北东南西]|[^，。；\n]{0,16})|(?<![A-Za-z0-9_\]])(?:0|90|180|270)\s*度\s*[·•．.]\s*望[北东南西]|\[(?:0|90|180|270)\s*度格-(?:左上|右上|左下|右下)(?:\s*[·•．.]\s*[北东南西])?\]|四宫度数\s*=\s*[^。\n]*|罗盘标(?:\s*=\s*[^，。；\n]*)?/g,
+        ''
+    );
+    value = value.replace(/[。]{2,}/g, '。').replace(/[，,]{2,}/g, '，').replace(/[。]\s*[。]/g, '。');
     return value.replace(/[ \t]{2,}/g, ' ').replace(/\s+([，。；])/g, '$1').trim();
 }
 

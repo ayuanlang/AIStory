@@ -274,3 +274,37 @@ def test_state_derivative_falls_back_to_the_source_main_cell():
     assert "状态Delta=北墙一个洞" not in text
     assert "待生成" not in text
     assert "[0度格-左上·北]" not in text
+
+
+def test_injected_cell_drops_direction_corner_badge():
+    main = _env(
+        id=80,
+        name="停机坪",
+        generation_prompt_cn=(
+            "【四向拼图】\n"
+            "[0度格-左上·北]\n角标=0度·望北\n正面：大门。\n"
+            "[90度格-右上·东]\n角标=90度·望东\n正面：护栏。\n"
+            "[180度格-左下·南]\n角标=180度·望南\n正面：南门。\n"
+            "[270度格-右下·西]\n角标=270度·望西\n正面：西门。\n"
+        ),
+    )
+    derived = _env(
+        id=81,
+        name="90度停机坪",
+        visual_dependencies=["ENV:[停机坪]"],
+        generation_prompt_cn="待生成",
+        custom_attributes={"main_environment": "停机坪", "view_angle_from_main": 90},
+    )
+    text = _build_scene_subject_image_prompts_cn_section(
+        [main, derived],
+        _keys("90度停机坪"),
+        scene_id=26,
+    )
+    assert "[90度格-右上·东]" in text
+    assert "正面：护栏。" in text
+    assert "角标=" not in text
+    assert "望东" not in text
+    assert "望北" not in text
+    assert "正面：大门" not in text
+    assert "正面：南门" not in text
+    assert "正面：西门" not in text
