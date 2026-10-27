@@ -29,7 +29,7 @@ from app.services.llm_markdown_sanitize import (
     sanitize_subject_index_text,
 )
 from app.services.prompt_resolve import _resolve_prompt_text
-from app.services.scene_no_utils import _scene_no_lookup_keys
+from app.services.scene_no_utils import _scene_no_lookup_keys, canonicalize_progress_scene_marker
 from app.services.scene_subject_helpers import _normalize_subject_entity_type
 from app.services.shot_markdown import (
     _is_provider_moderation_block_response,
@@ -989,6 +989,31 @@ def _build_scene_subject_image_prompts_cn_section(
     return wrap_injection_section("实体中文生图提示词", body)
 
 
+def _authoritative_episode_and_scene_ids(db: Session, scene: Scene) -> Tuple[str, str]:
+    """Episode ID / Scene ID for the shot table. Scene.scene_no is often only \"1\"."""
+    from app.services.script_analysis_flow import resolve_episode_scene_id_prefix
+
+    episode = (
+        db.query(Episode)
+        .filter(Episode.id == getattr(scene, "episode_id", None), _active_episode_clause())
+        .first()
+    )
+    prefix = resolve_episode_scene_id_prefix(episode, fallback_number=1)
+    scene_public_id = canonicalize_progress_scene_marker(
+        getattr(scene, "scene_no", None),
+        episode_prefix=prefix,
+    )
+    episode_public_id = str(prefix or "EP01").strip().upper() or "EP01"
+    embedded = re.fullmatch(
+        r"(EP\d+)_SC\d+[A-Za-z]*",
+        str(scene_public_id or ""),
+        flags=re.IGNORECASE,
+    )
+    if embedded:
+        episode_public_id = embedded.group(1).upper()
+    return episode_public_id, str(scene_public_id or "").strip()
+
+
 def _build_shot_prompts(
     db: Session,
     scene: Scene,
@@ -1374,10 +1399,20 @@ def _build_shot_prompts(
 
     # Environment Context is now a separate field in the table
 
+    episode_public_id, scene_public_id = _authoritative_episode_and_scene_ids(db, scene)
+    logger.info(
+        "[_build_shot_prompts] injected shot ids scene_row=%s episode_id=%s scene_id=%s scene_no=%s",
+        getattr(scene, "id", None),
+        episode_public_id,
+        scene_public_id,
+        getattr(scene, "scene_no", None),
+    )
     core_scene_info_block = wrap_injection_section(
         "Core Scene Info",
         f"""| Field | Value |
 | :--- | :--- |
+| **Episode ID** | {episode_public_id} |
+| **Scene ID** | {scene_public_id} |
 | **Scene No** | {scene.scene_no or ''} |
 | **Scene Name** | {scene.scene_name or ''} |
 | **Environment Anchor** | {scene.environment_name or ''} |
@@ -1400,6 +1435,7 @@ def _build_shot_prompts(
 4. Output exactly one Shot List markdown table. Do not copy prompt example/template rows (e.g. `{{Scene ID}}_SHzz` or a second header).
 5. Scene opening / OT- / 吸睛 must be P segments inside the Shot that covers Beat 1 — never an extra Shot outside Beat-Shot mapping.
 6. Every Beat must appear in some row's `Beat-Shot映射`; do not invent unmapped opening shots.
+7. Episode ID and Scene ID in `# Core Scene Info` are authoritative. Copy Scene ID `{scene_public_id}` onto every row. Shot ID is `{scene_public_id}_SHzz` (zz zero-padded from 01). Do not refuse because Scene No is numeric, and do not invent a different EP/SC from Scene No.
 """
     
     return system_prompt, user_input
