@@ -2778,11 +2778,11 @@ class LLMService:
             return first_result
 
         tail_chars = min(3000, max(400, self._to_positive_int(cfg.get("continuation_tail_chars"), 1600)))
+        from app.services.continuation_prompt import previous_output_notice
+
         continuation_instruction_tpl = (
-            "Continue exactly where you left off, immediately after the suffix below. "
-            "Do NOT repeat any suffix text. "
-            "Return ONLY the continuation in the same format.\n\n"
-            "SUFFIX (do not repeat):\n{suffix}"
+            previous_output_notice()
+            + "\n\n上次输出：\n{suffix}"
         )
 
         first_raw = first_result.get("raw_content")

@@ -3709,13 +3709,16 @@ def build_beat_continuation_input(
             f"按原格式只返回后续 Beat，每拍用 [BEAT_START:n] 到 [BEAT_END:n]。"
             f"本场写完后补上结束标签 {marker}。"
         )
-    return (
-        f"{str(scene_input or '').rstrip()}\n\n"
-        f"【续写】\n"
-        f"上一次{label}没有写完。下面是已完成的最后 {len(tail)} 个 Beat。\n"
-        f"{task}\n"
-        f"只返回续写，不要重写场头。\n\n"
-        f"{shown}"
+    from app.services.continuation_prompt import append_previous_output
+
+    return append_previous_output(
+        scene_input,
+        shown,
+        detail=(
+            f"上一次{label}没有写完。下面是已完成的最后 {len(tail)} 个 Beat。\n"
+            f"{task}\n"
+            "只返回续写，不要重写场头。"
+        ),
     )
 
 

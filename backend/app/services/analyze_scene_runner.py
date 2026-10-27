@@ -1665,19 +1665,15 @@ async def execute_analyze_scene(
         requested_max_segments = max(1, _to_int(cfg_obj.get("continuation_max_segments")) or 12)
         max_segments = min(_ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP, requested_max_segments)
         tail_chars = 1600
+        from app.services.continuation_prompt import previous_output_notice
+
         continuation_instruction_tpl = (
-            "Continue exactly where you left off, immediately after the following suffix. "
-            "Do NOT repeat any of the suffix text. "
-            "Return ONLY the continuation in the same format as before.\n\n"
-            "SUFFIX (do not repeat):\n{suffix}"
+            previous_output_notice()
+            + "\n\n上次输出：\n{suffix}"
         )
         continuation_instruction_incomplete_tpl = (
-            "Your previous response ended before all required sections were completed. "
-            "Continue exactly from the end of the existing response. "
-            "Do NOT rewrite or repeat completed content. "
-            "You MUST complete these missing sections: {missing_sections}. "
-            "Return ONLY the continuation text in the same format.\n\n"
-            "SUFFIX (do not repeat):\n{suffix}"
+            previous_output_notice(detail="还缺这些部分，必须补上：{missing_sections}。")
+            + "\n\n上次输出：\n{suffix}"
         )
 
 

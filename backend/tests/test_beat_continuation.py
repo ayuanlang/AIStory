@@ -99,6 +99,8 @@ def test_continuation_input_uses_only_the_last_three_finished_beats():
     assert "[BEAT_START:5]" in text
     assert "从 Beat 6 接着写" in text
     assert "场头原文" in text
+    assert "不是本次输入" in text
+    assert "上次输出：" in text
 
 
 def test_closed_stream_asks_only_for_the_end_marker():

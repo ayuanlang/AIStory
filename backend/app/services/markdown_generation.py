@@ -15,6 +15,7 @@ from app.services.episode_script_reference_service import (
     extract_story_dna_output_for_validation,
     is_acceptable_story_dna_markdown,
 )
+from app.services.continuation_prompt import append_previous_output
 from app.services.llm_markdown_sanitize import sanitize_llm_markdown_output
 from app.services.llm_service import llm_service
 from app.services.model_invocation_billing import _extract_llm_routing_metadata
@@ -47,16 +48,15 @@ def framework_continuation_segments(llm_config: Optional[Dict[str, Any]]) -> int
 
 
 def build_framework_continuation_user_prompt(user_prompt: str, existing: str) -> str:
-    """Append the draft already written and ask the model to continue from its end."""
-    return (
-        f"{str(user_prompt or '').rstrip()}\n\n"
-        "[续写]\n"
-        "上一次全局框架没有写完。下面是已经写好的全文。\n"
-        "从这段文字的最后一个字接着往下写，把还没写完的部分补上。\n"
-        "不要重写已有内容，不要重复已有内容，只返回续写部分。标志、章节和格式与已有内容相同。\n"
-        "正式正文要以独占行 [STORY_DNA_OUTPUT_END] 收束；这一行还没出现就继续写到它出现。\n\n"
-        "已有内容：\n"
-        f"{str(existing or '').rstrip()}\n"
+    """Append the unfinished framework as previous output, not as new input."""
+    return append_previous_output(
+        user_prompt,
+        existing,
+        detail=(
+            "上一次全局框架没有写完。"
+            "标志、章节和格式与上次输出相同。"
+            "正式正文要以独占行 [STORY_DNA_OUTPUT_END] 收束；这一行还没出现就继续写到它出现。"
+        ),
     )
 
 

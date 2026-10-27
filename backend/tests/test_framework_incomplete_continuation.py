@@ -26,9 +26,10 @@ def test_merge_joins_unrelated_continuation_once():
 def test_continuation_prompt_keeps_original_request_and_existing_draft():
     prompt = build_framework_continuation_user_prompt("Mode: global\nEpisodes Count: 8", "§0 已经写完")
     assert prompt.startswith("Mode: global\nEpisodes Count: 8")
-    assert "已有内容：" in prompt
+    assert "上次输出：" in prompt
+    assert "不是本次输入" in prompt
     assert "§0 已经写完" in prompt
-    assert "只返回续写部分" in prompt
+    assert "只返回续写" in prompt
 
 
 def _patch_calls(monkeypatch, responses):
@@ -77,7 +78,9 @@ def test_incomplete_framework_appends_draft_and_merges(monkeypatch):
     assert len(calls) == 2
     assert "请写全局框架" in calls[1]["user"]
     assert "框架写到第二节" in calls[1]["user"]
-    assert "只返回续写部分" in calls[1]["user"]
+    assert "不是本次输入" in calls[1]["user"]
+    assert "上次输出：" in calls[1]["user"]
+    assert "只返回续写" in calls[1]["user"]
     assert result["content"] == "框架写到第二节之后把结局补完。\n[STORY_DNA_OUTPUT_END]"
     assert result["usage"]["prompt_tokens"] == 40
     assert result["usage"]["completion_tokens"] == 10
