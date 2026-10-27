@@ -454,6 +454,34 @@ def test_center_count_accepts_foot_depth_strike_when_named():
     assert not any("四格中部件数不一致" in item for item in issues)
 
 
+def test_cross_face_joint_is_not_another_subject():
+    quad = """【四向拼图】
+[0度格-左上·北]
+正面：件数=2。远处那一整面是[@铅墙]（N-001）。[@铅门]（N-002）门洞开在[@铅墙]（N-001）上。顶接到[@穹顶]（C-001）。
+左侧面：件数=2。[@钢壁]（E-001）。[@闸门]（E-002）开在[@钢壁]（E-001）上。顶接到[@穹顶]（C-001）。
+右侧面：件数=2。[@护墙]（W-001）。[@配电柜]（W-002）贴在[@护墙]（W-001）的墙皮上。顶接到[@穹顶]（C-001）。
+中部：件数=2。[@地坪]（F-001）。[@中枢台]（M-001）。
+上：件数=1。[@穹顶]（C-001）。梁接到[@铅墙]（N-001）。
+件数核销：正面点名=2开篇=2划出=0｜左侧面点名=2开篇=2划出=0｜右侧面点名=2开篇=2划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=1开篇=1划出=0。
+"""
+    issues = audit_piece_count_reconciliation(quad)
+    assert not any("正文点名" in item or "正文是" in item for item in issues)
+
+
+def test_extra_subject_on_a_face_is_still_reported_once():
+    quad = """【四向拼图】
+[0度格-左上·北]
+正面：件数=2。远处那一整面是[@铅墙]（N-001）。[@铅门]（N-002）。[@警报灯]（C-002）。顶接到[@穹顶]（C-001）。
+上：件数=1。[@穹顶]（C-001）。
+中部：件数=1。[@地坪]（F-001）。
+件数核销：正面点名=2开篇=2划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=1开篇=1划出=0改入=0｜上点名=1开篇=1划出=0。
+"""
+    issues = audit_piece_count_reconciliation(quad)
+    assert issues.count("0度格正面件数=2，正文点名3件。") == 1
+    assert not any("0度格正面点名=" in item for item in issues)
+    assert not any("上件数" in item for item in issues)
+
+
 def test_center_moved_in_requires_a_wall_strike():
     quad = """【四向拼图】
 [0度格-左上·北]

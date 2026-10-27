@@ -365,14 +365,59 @@ def _unique_codes(chunk: str) -> List[str]:
     return seen
 
 
-def _named_codes(chunk: str) -> List[str]:
-    """Codes written as visible subjects. A 镜后 sentence does not count as 点名."""
+_CROSS_FACE_PREFIX = re.compile(
+    r"(?:一端接到|顶接到|底接到|背靠|交接|接到)\s*$"
+)
+
+
+def _visible_face_text(chunk: str) -> str:
     visible = []
     for sentence in re.split(r"。", chunk or ""):
         if "镜后" in sentence or "不入画" in sentence:
             continue
         visible.append(sentence)
-    return _unique_codes("。".join(visible))
+    return "。".join(visible)
+
+
+def _mention_is_cross_face(text: str, start: int, end: int) -> bool:
+    """A code used only to say this piece meets another face's subject."""
+    prefix = text[max(0, start - 6):start]
+    suffix = text[end:end + 4]
+    if _CROSS_FACE_PREFIX.search(prefix):
+        return True
+    return prefix.endswith("和") and suffix.startswith("一样远")
+
+
+def _face_code_roles(chunk: str) -> Dict[str, bool]:
+    """Code -> whether this face introduces it, not only cites another face."""
+    text = _visible_face_text(chunk)
+    roles: Dict[str, bool] = {}
+    for match in _SUBJECT_CODE.finditer(text):
+        code = match.group(1).strip()
+        if not code:
+            continue
+        primary = not _mention_is_cross_face(text, match.start(), match.end())
+        roles[code] = roles.get(code, False) or primary
+    return roles
+
+
+def _owned_codes(
+    roles: Dict[str, bool],
+    primary_owners: Dict[str, List[str]],
+    face: str,
+) -> List[str]:
+    """Subjects of this face. A neighbor or the ceiling cited by 接到 stays on its own face."""
+    owned = []
+    for code, is_primary in roles.items():
+        owners = [name for name in primary_owners.get(code, []) if name != face]
+        if is_primary or not owners:
+            owned.append(code)
+    return owned
+
+
+def _named_codes(chunk: str) -> List[str]:
+    """Codes written as visible subjects. A 镜后 sentence does not count as 点名."""
+    return _unique_codes(_visible_face_text(chunk))
 
 
 def _ledger_names(raw: Optional[str]) -> List[str]:
@@ -383,10 +428,12 @@ def _ledger_names(raw: Optional[str]) -> List[str]:
 
 
 def audit_piece_count_reconciliation(text: str) -> List[str]:
-    """Confirm each cell's 件数核销 against the names actually written in that cell.
+    """Confirm each cell's 件数核销 against the subjects that belong to that face.
 
-    Arithmetic alone does not pass. 划出 greater than zero must name the omitted
-    codes, and a center subject named in any cell stays named in the other cells.
+    A code only cited by 一端接到、顶接到、底接到、背靠 or 和另一具一样远 belongs to
+    the face that introduces it. Arithmetic alone does not pass. 划出 greater than
+    zero must name the omitted codes, and a center subject named in any cell stays
+    named in the other cells.
     """
     raw = str(text or "")
     if "件数核销" not in raw and "件数=" not in raw:
@@ -413,20 +460,32 @@ def audit_piece_count_reconciliation(text: str) -> List[str]:
         faces_blob = body[:ledger_at]
         ledger = body[ledger_at:].split("\n", 1)[0]
         face_marks = list(_FACE_HEAD.finditer(faces_blob))
-        face_codes: Dict[str, List[str]] = {}
+        face_chunks: Dict[str, str] = {}
         for index, mark in enumerate(face_marks):
             end = face_marks[index + 1].start() if index + 1 < len(face_marks) else len(faces_blob)
-            chunk = faces_blob[mark.end():end]
-            name = mark.group(1)
-            codes = _named_codes(chunk)
-            face_codes[name] = codes
+            face_chunks[mark.group(1)] = faces_blob[mark.end():end]
+        face_roles = {name: _face_code_roles(chunk) for name, chunk in face_chunks.items()}
+        primary_owners: Dict[str, List[str]] = {}
+        for name, roles in face_roles.items():
+            for code, is_primary in roles.items():
+                if is_primary and name not in primary_owners.get(code, []):
+                    primary_owners.setdefault(code, []).append(name)
+        face_codes = {
+            name: _owned_codes(roles, primary_owners, name)
+            for name, roles in face_roles.items()
+        }
+        declared_counts: Dict[str, int] = {}
+        for name, chunk in face_chunks.items():
+            codes = face_codes.get(name, [])
             declared = re.match(r"\s*件数=(\d+)", chunk)
-            if declared and int(declared.group(1)) != len(codes):
-                issues.append(
-                    f"{angle}度格{name}件数={declared.group(1)}，正文点名{len(codes)}件。"
-                )
+            if declared:
+                declared_counts[name] = int(declared.group(1))
+                if declared_counts[name] != len(codes):
+                    issues.append(
+                        f"{angle}度格{name}件数={declared.group(1)}，正文点名{len(codes)}件。"
+                    )
             if name == "中部":
-                center_counts[angle] = int(declared.group(1)) if declared else len(codes)
+                center_counts[angle] = declared_counts.get(name, len(codes))
         center_codes[angle] = face_codes.get("中部", [])
         if angle not in center_counts:
             center_counts[angle] = len(center_codes[angle])
@@ -442,7 +501,7 @@ def audit_piece_count_reconciliation(text: str) -> List[str]:
             struck = int(row.group(4))
             moved_in = int(row.group(5) or 0)
             struck_codes = _ledger_names(row.group(6))
-            if named != len(codes):
+            if named != len(codes) and declared_counts.get(face) != named:
                 issues.append(
                     f"{angle}度格{face}点名={named}，正文是{len(codes)}件。"
                 )
@@ -1633,7 +1692,9 @@ def build_consistency_messages(
         "多一件、少一件、同一个名字变成两个身体，都不一致。"
         "开篇写了镜后不入画的，这一格正文不点名，图片里也不出现。\n"
         "件数核销：每一格的正面、左侧面、右侧面、中部、上都要核对。"
-        "件数=和点名=必须等于这一面正文里不同主体的个数。"
+        "件数=和点名=只数本面自己的主体。"
+        "开在、贴在、凹进、悬挂在所点的墙计入本面。"
+        "一端接到、顶接到、底接到、背靠、接到邻壁、和另一具一样远，点到的是另一面的主体，不计入本面，也不算图片里多一件。"
         "点名+划出等于开篇；中部再减去改入。算式对上还不够。"
         "划出大于 0 必须写划出名，逐个列出本面没有的主体，个数等于划出。"
         "只写划出数字、没有划出名，就是不一致。"
