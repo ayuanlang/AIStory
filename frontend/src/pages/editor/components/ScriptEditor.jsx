@@ -31050,9 +31050,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             reportAnalysisPanelNotice(t('缺少该节点的上游输入，无法重跑。', 'This node’s upstream input is missing.'), 'warning');
             return;
         }
+        const continuesToEnvironmentDesign = stableNode === 'environment_plan';
         if (!window.confirm(t(
-            `将仅重跑“${config.labelZh}”，并把其下游节点标记为待重跑。确认继续吗？`,
-            `Only “${config.labelEn}” will be rerun, and downstream nodes will be marked pending. Continue?`
+            continuesToEnvironmentDesign
+                ? '将重跑“环境规划”。完成后自动重跑环境生成，并接着生成衍生环境。角色、道具和分场节点不重跑。确认继续吗？'
+                : `将仅重跑“${config.labelZh}”，并把其下游节点标记为待重跑。确认继续吗？`,
+            continuesToEnvironmentDesign
+                ? 'Environment planning will be rerun. Environment generation and derived-environment generation will start automatically afterward. Character, prop, and per-scene nodes will not rerun. Continue?'
+                : `Only “${config.labelEn}” will be rerun, and downstream nodes will be marked pending. Continue?`
         ))) return;
 
         const startedAt = Date.now();
@@ -31154,19 +31159,81 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setLlmRawResultContent(nodeText);
             setLlmResultContent(normalizeLlmMarkdownTable(nodeText));
             await triggerStageOutputsRefresh();
+            let completionMessage = t(`${config.labelZh}重跑完成。`, `${config.labelEn} rerun completed.`);
+            if (continuesToEnvironmentDesign) {
+                armEnvironmentAssetDesignGate('environment-plan-node-rerun');
+                await clearAnalysisArtifactsFromStage('assets_gen', {
+                    preserveProgressUi: true,
+                    targetEntityTypes: ['environments'],
+                    purgeStoryboard: false,
+                    environmentNamesToPurge: [],
+                    entityNamesToPurge: null,
+                    envScope: 'main',
+                    reason: 'rerun-environment-plan-node-env-clear',
+                    refreshEpisode: true,
+                });
+                setAnalysisFlowStatus({
+                    phase: 'assets_gen',
+                    message: t(
+                        '环境规划已完成，正在重跑环境生成，并接着生成衍生环境…',
+                        'Environment plan finished; regenerating environments, then derived environments...'
+                    ),
+                });
+                const envReport = await runPostImportSceneSubjectPipeline(
+                    null,
+                    nodeText,
+                    {
+                        targetEntityTypes: ['environments'],
+                        extractSourceText: nodeText,
+                        forceAssetDesign: true,
+                        skipExistingAssets: false,
+                        overwriteExistingSubjects: true,
+                        allowWithoutSubjectIndex: true,
+                        parallelWithScenes: true,
+                        isRetryPhase2: true,
+                        envScope: 'main',
+                    }
+                );
+                const reports = Array.isArray(envReport?.subtaskReports) ? envReport.subtaskReports : [];
+                const envOk = reports.some((item) => (
+                    String(item?.key || '').trim() === 'environments'
+                    && String(item?.status || '').trim().toLowerCase() === 'ok'
+                ));
+                if (!envOk) {
+                    const reason = reports
+                        .map((item) => String(item?.error || item?.status || '').trim())
+                        .filter(Boolean)
+                        .join('；');
+                    throw new Error(reason || t(
+                        '环境生成未完成，衍生环境没有继续。',
+                        'Environment generation did not finish, so derived environments did not continue.'
+                    ));
+                }
+                completionMessage = t(
+                    '环境规划已重跑，环境生成与衍生环境已接着完成。',
+                    'Environment planning was rerun, then environment generation and derived environments finished.'
+                );
+            }
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: t(`${config.labelZh}重跑完成。`, `${config.labelEn} rerun completed.`),
+                message: completionMessage,
             });
             setAnalysisUiReport((prev) => ({
                 ...(prev && typeof prev === 'object' ? prev : {}),
                 status: 'completed',
                 startedAt,
                 durationMs: Date.now() - startedAt,
-                message: t(`${config.labelZh}重跑完成。`, `${config.labelEn} rerun completed.`),
+                message: completionMessage,
                 error: '',
             }));
         } catch (error) {
+            if (isTaskCanceledError(error) || analysisStopRequestedRef.current) {
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: t('已中断本次重跑。', 'This rerun was stopped.'),
+                });
+                return;
+            }
             const message = error?.response?.data?.detail || error?.message || String(error);
             setAnalysisFlowStatus({ phase: 'failed', message });
             reportAnalysisPanelNotice(t(`重跑失败：${message}`, `Rerun failed: ${message}`), 'error');
