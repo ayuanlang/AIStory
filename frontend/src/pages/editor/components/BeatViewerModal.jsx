@@ -8,8 +8,9 @@ import {
     findNodeBeat,
     matchWorkspaceScene,
     mergePipelineSceneBlocks,
+    mergeSubskillResultMaps,
     normalizeStoryboardShots,
-    parseSceneSubskillResultsObject,
+    readSubskillResultsContent,
     shotOptionLabel,
     shotsCoveringBeat,
     splitStagingBeat,
@@ -188,21 +189,38 @@ export default function BeatViewerModal({
     onClose,
     uiLang = 'zh',
     resultsRaw = '',
+    persistedResultsRaw = '',
+    episodeId = '',
+    fetchEpisode = null,
     pipelineNodes = [],
     workspaceScenes = [],
     fetchShots = null,
 }) {
     const t = React.useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
+    const [fetchedResultsRaw, setFetchedResultsRaw] = useState('');
     const scenes = useMemo(() => {
-        const stored = parseSceneSubskillResultsObject(resultsRaw);
+        const stored = mergeSubskillResultMaps(
+            mergeSubskillResultMaps(persistedResultsRaw, fetchedResultsRaw),
+            resultsRaw,
+        );
         return buildBeatViewerScenes(mergePipelineSceneBlocks(stored, pipelineNodes));
-    }, [pipelineNodes, resultsRaw]);
+    }, [fetchedResultsRaw, persistedResultsRaw, pipelineNodes, resultsRaw]);
     const [sceneId, setSceneId] = useState('');
     const [beatId, setBeatId] = useState('');
     const [shotKey, setShotKey] = useState('');
     const [traceFromShot, setTraceFromShot] = useState(false);
     const [shots, setShots] = useState([]);
     const [shotsStatus, setShotsStatus] = useState('idle');
+
+    useEffect(() => {
+        if (!open || !episodeId || typeof fetchEpisode !== 'function') return undefined;
+        let cancelled = false;
+        fetchEpisode(episodeId).then((episode) => {
+            if (cancelled) return;
+            setFetchedResultsRaw(readSubskillResultsContent(episode?.ai_stage_outputs || ''));
+        }).catch(() => {});
+        return () => { cancelled = true; };
+    }, [episodeId, fetchEpisode, open]);
 
     useEffect(() => {
         if (!open) return undefined;

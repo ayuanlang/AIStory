@@ -6,6 +6,7 @@ import {
     findNodeBeat,
     matchWorkspaceScene,
     mergePipelineSceneBlocks,
+    mergeSubskillResultMaps,
     normalizeStoryboardShots,
     parseMergedBeatIds,
     parseNodeBeats,
@@ -131,6 +132,7 @@ describe('storyboard beat trace', () => {
         assert.deepEqual(parseMergedBeatIds('Beat-Shot映射:合镜Beat=Beat1+Beat2｜Duration=11'), ['1', '2']);
         assert.deepEqual(parseMergedBeatIds('合镜Beat=Beat 4｜Duration=5<br>节奏:中'), ['4']);
         assert.deepEqual(parseMergedBeatIds('单Beat=B3｜Duration=2'), ['3']);
+        assert.deepEqual(parseMergedBeatIds('合镜=Beat1+Beat2｜Duration=11'), ['1', '2']);
         assert.deepEqual(parseMergedBeatIds('节奏:中｜运镜:MS'), []);
     });
 
@@ -142,6 +144,46 @@ describe('storyboard beat trace', () => {
         assert.deepEqual(shots.map((shot) => shot.shotId), ['EP01_SC01_SH01', 'EP01_SC01_SH02']);
         assert.deepEqual(shotsCoveringBeat(shots, '2').map((shot) => shot.shotId), ['EP01_SC01_SH02']);
         assert.deepEqual(shotsCoveringBeat(shots, '1').map((shot) => shot.shotId), ['EP01_SC01_SH01']);
+    });
+
+    it('shows an unsplit node draft against a beat selected from another node', () => {
+        const scenes = buildBeatViewerScenes({
+            EP01_SC01: {
+                drama: '整段文戏，没有拍标记。',
+                staging: '[BEAT_START:1]\n────【建置】────\n建置正文\n[BEAT_END:1]',
+            },
+        });
+        assert.equal(findNodeBeat(scenes[0].nodes.drama, '1')?.body, '整段文戏，没有拍标记。');
+        assert.match(findNodeBeat(scenes[0].nodes.staging, '1')?.body, /建置正文/);
+    });
+
+    it('keeps earlier node drafts when the live map only has staging', () => {
+        const merged = mergeSubskillResultMaps(
+            JSON.stringify({
+                EP01_SC01: { drama: '文戏', combat: '武戏', framing: '编排', staging: '旧建置' },
+            }),
+            JSON.stringify({ EP01_SC01: { staging: '新建置' } }),
+        );
+        assert.equal(merged.EP01_SC01.drama, '文戏');
+        assert.equal(merged.EP01_SC01.combat, '武戏');
+        assert.equal(merged.EP01_SC01.framing, '编排');
+        assert.equal(merged.EP01_SC01.staging, '新建置');
+        const chained = mergeSubskillResultMaps(merged, JSON.stringify({
+            EP01_SC01: { staging: '再建置' },
+        }));
+        assert.equal(chained.EP01_SC01.drama, '文戏');
+        assert.equal(chained.EP01_SC01.staging, '再建置');
+    });
+
+    it('joins drama stored under a scene-number alias with staging on the canonical id', () => {
+        const scenes = buildBeatViewerScenes({
+            1: { drama: '[BEAT_START:1]\n- Beat 1：\n文戏正文\n[BEAT_END:1]' },
+            EP01_SC01: { staging: '[BEAT_START:1]\n────【建置】────\n建置正文\n[BEAT_END:1]' },
+        });
+        assert.equal(scenes.length, 1);
+        assert.equal(scenes[0].sceneId, 'EP01_SC01');
+        assert.match(scenes[0].nodes.drama.text, /文戏正文/);
+        assert.match(scenes[0].nodes.staging.text, /建置正文/);
     });
 
     it('matches a workspace scene by scene number', () => {

@@ -36401,11 +36401,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 open={beatViewerOpen}
                 onClose={() => setBeatViewerOpen(false)}
                 uiLang={uiLang}
-                resultsRaw={String(
-                    latestStage1NodeOutputsRef.current?.scene_subskill_results
-                    || currentStageOutputs?.stages?.stage1?.outputs?.scene_subskill_results?.content
+                resultsRaw={String(latestStage1NodeOutputsRef.current?.scene_subskill_results || '')}
+                persistedResultsRaw={String(
+                    currentStageOutputs?.stages?.stage1?.outputs?.scene_subskill_results?.content
                     || ''
                 )}
+                episodeId={activeEpisode?.id || ''}
+                fetchEpisode={fetchEpisode}
                 pipelineNodes={diagnosticsPipelineNodes}
                 workspaceScenes={diagnosticsEpisodeScenes}
                 fetchShots={fetchShots}

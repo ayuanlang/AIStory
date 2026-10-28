@@ -181,6 +181,83 @@ export const parseSceneSubskillResultsObject = (raw) => {
     return {};
 };
 
+const sceneKeysMatch = (left, right) => {
+    const leftToken = compactSceneToken(left);
+    const rightToken = compactSceneToken(right);
+    if (!leftToken || !rightToken) return false;
+    if (leftToken === rightToken) return true;
+    if (/sc\d+[a-z]/i.test(String(left || '')) || /sc\d+[a-z]/i.test(String(right || ''))) return false;
+    const leftOrder = sceneOrderToken(left);
+    const rightOrder = sceneOrderToken(right);
+    return leftOrder != null && leftOrder === rightOrder;
+};
+
+const preferSceneId = (left, right) => {
+    const score = (sceneId) => (/_SC\d/i.test(sceneId) ? 2 : 0) + (/^EP/i.test(sceneId) ? 1 : 0);
+    return score(String(right || '')) > score(String(left || '')) ? right : left;
+};
+
+export const coalesceSceneStepMaps = (resultsMap) => {
+    const groups = [];
+    Object.entries(resultsMap && typeof resultsMap === 'object' ? resultsMap : {}).forEach(([sceneId, steps]) => {
+        const id = String(sceneId || '').trim();
+        if (!id || !steps || typeof steps !== 'object' || Array.isArray(steps)) return;
+        const hit = groups.find((group) => sceneKeysMatch(group.sceneId, id));
+        if (!hit) {
+            groups.push({ sceneId: id, steps: { ...steps } });
+            return;
+        }
+        hit.sceneId = preferSceneId(hit.sceneId, id);
+        Object.entries(steps).forEach(([key, value]) => {
+            if (!String(value || '').trim()) return;
+            if (!String(hit.steps[key] || '').trim()) hit.steps[key] = value;
+        });
+    });
+    return Object.fromEntries(groups.map((group) => [group.sceneId, group.steps]));
+};
+
+export const readSubskillResultsContent = (raw) => {
+    const text = String(raw || '').trim();
+    if (!text) return '';
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const nested = parsed?.stages?.stage1?.outputs?.scene_subskill_results?.content;
+            if (typeof nested === 'string') return nested;
+            if (nested && typeof nested === 'object') return JSON.stringify(nested);
+        }
+    } catch (_) {}
+    return text;
+};
+
+const resultsMapText = (raw) => {
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        try {
+            return readSubskillResultsContent(JSON.stringify(raw));
+        } catch (_) {
+            return '';
+        }
+    }
+    return readSubskillResultsContent(raw);
+};
+
+export const mergeSubskillResultMaps = (baseRaw, overlayRaw) => {
+    const base = parseSceneSubskillResultsObject(resultsMapText(baseRaw));
+    const overlay = parseSceneSubskillResultsObject(resultsMapText(overlayRaw));
+    const next = { ...base };
+    Object.entries(overlay).forEach(([sceneId, steps]) => {
+        if (!steps || typeof steps !== 'object' || Array.isArray(steps)) return;
+        const scene = {
+            ...(next[sceneId] && typeof next[sceneId] === 'object' && !Array.isArray(next[sceneId]) ? next[sceneId] : {}),
+        };
+        Object.entries(steps).forEach(([key, value]) => {
+            if (String(value || '').trim()) scene[key] = value;
+        });
+        next[sceneId] = scene;
+    });
+    return next;
+};
+
 export const mergePipelineSceneBlocks = (resultsMap, pipelineNodes) => {
     const next = {};
     Object.entries(resultsMap && typeof resultsMap === 'object' ? resultsMap : {}).forEach(([sceneId, steps]) => {
@@ -209,7 +286,7 @@ export const mergePipelineSceneBlocks = (resultsMap, pipelineNodes) => {
 };
 
 export const buildBeatViewerScenes = (resultsMap) => {
-    const map = resultsMap && typeof resultsMap === 'object' ? resultsMap : {};
+    const map = coalesceSceneStepMaps(resultsMap);
     const scenes = Object.entries(map).map(([sceneId, steps]) => {
         const id = String(sceneId || '').trim();
         const record = steps && typeof steps === 'object' && !Array.isArray(steps) ? steps : {};
@@ -239,13 +316,14 @@ export const buildBeatViewerScenes = (resultsMap) => {
 export const findNodeBeat = (node, beatId) => {
     const id = String(beatId || '').trim();
     if (!id) return null;
-    if (id === WHOLE_NODE_BEAT_ID) {
-        const text = String(node?.text || '').trim();
+    const text = String(node?.text || '').trim();
+    const beats = Array.isArray(node?.beats) ? node.beats : [];
+    if (id === WHOLE_NODE_BEAT_ID || (text && beats.length === 0)) {
         if (!text) return null;
         return { id, title: '整段', body: text };
     }
     const target = normalizeBeatId(id);
-    return (Array.isArray(node?.beats) ? node.beats : []).find((beat) => normalizeBeatId(beat?.id) === target) || null;
+    return beats.find((beat) => normalizeBeatId(beat?.id) === target) || null;
 };
 
 export const beatOptionLabel = (scene, beatId) => {
@@ -291,6 +369,7 @@ export const matchWorkspaceScene = (scenes, sceneId) => {
 export const parseMergedBeatIds = (logicText) => {
     const source = String(logicText || '').replace(/<br\s*\/?>/gi, '\n');
     const match = /合镜\s*Beat\s*=\s*([^\n｜|]+)/i.exec(source)
+        || /合镜\s*=\s*([^\n｜|]+)/i.exec(source)
         || /单\s*Beat\s*=\s*([^\n｜|]+)/i.exec(source);
     if (!match) return [];
     const ids = [];
