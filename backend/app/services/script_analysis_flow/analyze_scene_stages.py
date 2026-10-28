@@ -432,6 +432,32 @@ def scene_id_alias_set(scene_id: Any) -> set[str]:
     return {item for item in aliases if item}
 
 
+def same_scene_result_keys(result_map: Dict[str, Any], scene_id: str) -> List[str]:
+    """Keys in a per-scene map that name this scene, including a bare scene number.
+
+    ``EP01_SC01A`` does not share a key with ``EP01_SC01``. A letter suffix stays
+    its own scene.
+    """
+    sid = str(scene_id or "").strip()
+    if not sid or not isinstance(result_map, dict):
+        return []
+    aliases = scene_id_alias_set(sid)
+    lettered = bool(re.search(r"SC\d+[A-Z]", sid, re.IGNORECASE))
+    matched: List[str] = []
+    for raw in result_map.keys():
+        key = str(raw or "").strip()
+        if not key:
+            continue
+        if key.lower() == sid.lower():
+            matched.append(key)
+            continue
+        if lettered or re.search(r"SC\d+[A-Z]", key, re.IGNORECASE):
+            continue
+        if scene_id_alias_set(key) & aliases:
+            matched.append(key)
+    return matched
+
+
 def prune_subskill_results_map_to_scene_ids(
     result_map: Dict[str, Dict[str, str]],
     keep_scene_ids: Any,
@@ -574,8 +600,26 @@ def persist_scene_subskill_step_result(
         )
         result_map = _parse_subskill_results_content(slot.get("content"))
         scene_map = result_map.get(sid) if isinstance(result_map.get(sid), dict) else {}
+        if not scene_map:
+            for alias in same_scene_result_keys(result_map, sid):
+                alias_map = result_map.get(alias)
+                if isinstance(alias_map, dict) and alias_map:
+                    scene_map = dict(alias_map)
+                    break
+        scene_map = dict(scene_map)
         scene_map[key] = text
         result_map[sid] = scene_map
+        for alias in same_scene_result_keys(result_map, sid):
+            if alias == sid:
+                continue
+            alias_map = result_map.get(alias)
+            if not isinstance(alias_map, dict):
+                continue
+            alias_map.pop(key, None)
+            if alias_map:
+                result_map[alias] = alias_map
+            else:
+                result_map.pop(alias, None)
         outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = {
             **slot,
             "key": SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
@@ -641,20 +685,19 @@ def clear_scene_subskill_step_results(
             else {}
         )
         result_map = _parse_subskill_results_content(slot.get("content"))
-        scene_map = result_map.get(sid) if isinstance(result_map.get(sid), dict) else {}
-        if not scene_map:
-            sid_l = sid.lower()
-            for key, value in result_map.items():
-                if str(key or "").strip().lower() == sid_l and isinstance(value, dict):
-                    sid = str(key)
-                    scene_map = value
-                    break
+        matched_keys = same_scene_result_keys(result_map, sid) or [sid]
         removed = []
-        for key in keys:
-            if str(scene_map.get(key) or "").strip():
-                removed.append(key)
-            scene_map.pop(key, None)
-        result_map[sid] = scene_map
+        for matched in matched_keys:
+            scene_map = result_map.get(matched) if isinstance(result_map.get(matched), dict) else {}
+            scene_map = dict(scene_map)
+            for key in keys:
+                if str(scene_map.get(key) or "").strip() and key not in removed:
+                    removed.append(key)
+                scene_map.pop(key, None)
+            if scene_map:
+                result_map[matched] = scene_map
+            elif matched in result_map:
+                result_map.pop(matched, None)
         outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = {
             **slot,
             "key": SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,

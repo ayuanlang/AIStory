@@ -159,7 +159,7 @@ const StoryboardColumn = ({ shots, status, t }) => {
                             ) : null}
                             {shot.video ? (
                                 <div>
-                                    <div className="mb-1 text-[10px] font-semibold tracking-wide text-white/40">{t('视频内容', 'Video')}</div>
+                                    <div className="mb-1 text-[10px] font-semibold tracking-wide text-white/40">{t('中文视频提示词', 'Chinese video prompt')}</div>
                                     <ReadBlock text={shot.video} />
                                 </div>
                             ) : null}
@@ -198,10 +198,19 @@ export default function BeatViewerModal({
 }) {
     const t = React.useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const [fetchedResultsRaw, setFetchedResultsRaw] = useState('');
+    const pipelineSignature = (Array.isArray(pipelineNodes) ? pipelineNodes : []).map((node) => (
+        [
+            node?.node_name,
+            node?.scene_id,
+            node?.status,
+            node?.runtime_meta?.current_step,
+            String(node?.runtime_meta?.scene_block || '').slice(-32),
+        ].join(':')
+    )).join('|');
     const scenes = useMemo(() => {
         const stored = mergeSubskillResultMaps(
-            mergeSubskillResultMaps(persistedResultsRaw, fetchedResultsRaw),
-            resultsRaw,
+            mergeSubskillResultMaps(persistedResultsRaw, resultsRaw),
+            fetchedResultsRaw,
         );
         return buildBeatViewerScenes(mergePipelineSceneBlocks(stored, pipelineNodes));
     }, [fetchedResultsRaw, persistedResultsRaw, pipelineNodes, resultsRaw]);
@@ -220,7 +229,7 @@ export default function BeatViewerModal({
             setFetchedResultsRaw(readSubskillResultsContent(episode?.ai_stage_outputs || ''));
         }).catch(() => {});
         return () => { cancelled = true; };
-    }, [episodeId, fetchEpisode, open]);
+    }, [episodeId, fetchEpisode, open, pipelineSignature]);
 
     useEffect(() => {
         if (!open) return undefined;

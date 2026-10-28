@@ -144,6 +144,23 @@ describe('storyboard beat trace', () => {
         assert.deepEqual(shots.map((shot) => shot.shotId), ['EP01_SC01_SH01', 'EP01_SC01_SH02']);
         assert.deepEqual(shotsCoveringBeat(shots, '2').map((shot) => shot.shotId), ['EP01_SC01_SH02']);
         assert.deepEqual(shotsCoveringBeat(shots, '1').map((shot) => shot.shotId), ['EP01_SC01_SH01']);
+        assert.equal(shots[0].video, '第一镜');
+    });
+
+    it('reads the Chinese video prompt stored beside shot logic', () => {
+        const shots = normalizeStoryboardShots([
+            {
+                id: 3,
+                shot_id: 'EP01_SC01_SH01',
+                shot_logic_cn: '合镜=Beat1+Beat2｜Duration=11',
+                video_content: '',
+                technical_notes: JSON.stringify({
+                    video_prompt_cn: '(P1 0s–4s) 镜头在扁平青灰巨石上空。<br>福建松溪的山川在破晓中舒展。',
+                }),
+            },
+        ]);
+        assert.equal(shots[0].video, '(P1 0s–4s) 镜头在扁平青灰巨石上空。\n福建松溪的山川在破晓中舒展。');
+        assert.deepEqual(shots[0].beatIds, ['1', '2']);
     });
 
     it('shows an unsplit node draft against a beat selected from another node', () => {
@@ -173,6 +190,33 @@ describe('storyboard beat trace', () => {
         }));
         assert.equal(chained.EP01_SC01.drama, '文戏');
         assert.equal(chained.EP01_SC01.staging, '再建置');
+    });
+
+    it('uses the canonical scene staging when an alias still has the previous draft', () => {
+        const scenes = buildBeatViewerScenes({
+            1: {
+                drama: '[BEAT_START:1]\n- Beat 1：\n文戏正文\n[BEAT_END:1]',
+                staging: '[BEAT_START:1]\n────【建置】────\n旧建置\n[BEAT_END:1]',
+            },
+            EP01_SC01: {
+                staging: '[BEAT_START:1]\n────【建置】────\n新建置\n[BEAT_END:1]',
+            },
+        });
+        assert.equal(scenes.length, 1);
+        assert.equal(scenes[0].sceneId, 'EP01_SC01');
+        assert.match(scenes[0].nodes.drama.text, /文戏正文/);
+        assert.match(scenes[0].nodes.staging.text, /新建置/);
+        assert.doesNotMatch(scenes[0].nodes.staging.text, /旧建置/);
+        const reversed = buildBeatViewerScenes({
+            EP01_SC01: {
+                staging: '[BEAT_START:1]\n────【建置】────\n新建置\n[BEAT_END:1]',
+            },
+            1: {
+                staging: '[BEAT_START:1]\n────【建置】────\n旧建置\n[BEAT_END:1]',
+            },
+        });
+        assert.match(reversed[0].nodes.staging.text, /新建置/);
+        assert.doesNotMatch(reversed[0].nodes.staging.text, /旧建置/);
     });
 
     it('joins drama stored under a scene-number alias with staging on the canonical id', () => {

@@ -2690,9 +2690,23 @@ def strip_env_block_sections(scene_text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", stripped).strip()
 
 
+_PRIOR_STAGING_DRAFT = re.compile(
+    r"(?:\r?\n)?[ \t]*(?:─{2,})?[ \t]*【(?:建置|入戏|场记分析)】[ \t]*(?:─{2,})?[ \t]*"
+    r".*?"
+    r"(?=(?:\r?\n[ \t]*`?\[BEAT_(?:END|START|STREAM_END))|(?:\r?\n[ \t]*`?\[SCENE_END)|$)",
+    re.DOTALL,
+)
+
+
+def strip_prior_staging_draft(scene_text: str) -> str:
+    """Drop a previous 建置/入戏/场记 so a rerun cannot hand that draft back to the model."""
+    stripped = _PRIOR_STAGING_DRAFT.sub("", str(scene_text or ""))
+    return re.sub(r"\n{3,}", "\n\n", stripped).strip()
+
+
 def compose_staging_scene_text(current_block: str, env_scene: str = "") -> str:
     """Framing text for 建置与入戏, without the environment-plan `[ENV_BLOCK]`."""
-    scene = strip_env_block_sections(current_block)
+    scene = strip_prior_staging_draft(strip_env_block_sections(current_block))
     planned = strip_env_block_sections(_main_env_for_staging(env_scene))
     if planned and "[SCENE_ENV_IDENT_START" not in scene.upper() and planned not in scene:
         scene = f"{planned}\n\n{scene}".strip()
@@ -5319,9 +5333,24 @@ async def run_scene_subskill_pipeline(
     aggregate_text = "\n".join(part for part in aggregate_parts if part)
 
     if node_episode_id > 0:
+        # The request session stays open while each scene writes 建置 on its own
+        # session. expire_on_commit is off, so this identity map still holds the
+        # pre-rerun stage outputs. Commit and expire before the final write, or
+        # that write puts the old 建置稿 back over the one just saved.
+        try:
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        expire_all = getattr(db, "expire_all", None)
+        if callable(expire_all):
+            expire_all()
         episode = (
             db.query(Episode)
             .filter(Episode.id == int(node_episode_id), _active_episode_clause())
+            .populate_existing()
             .first()
         )
         if episode is not None:

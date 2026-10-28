@@ -207,10 +207,12 @@ export const coalesceSceneStepMaps = (resultsMap) => {
             groups.push({ sceneId: id, steps: { ...steps } });
             return;
         }
-        hit.sceneId = preferSceneId(hit.sceneId, id);
+        const preferredId = preferSceneId(hit.sceneId, id);
+        const incomingWins = preferredId === id && id !== hit.sceneId;
+        hit.sceneId = preferredId;
         Object.entries(steps).forEach(([key, value]) => {
             if (!String(value || '').trim()) return;
-            if (!String(hit.steps[key] || '').trim()) hit.steps[key] = value;
+            if (incomingWins || !String(hit.steps[key] || '').trim()) hit.steps[key] = value;
         });
     });
     return Object.fromEntries(groups.map((group) => [group.sceneId, group.steps]));
@@ -387,10 +389,44 @@ const shotSortKey = (shotId, index) => {
     return match ? Number(match[1]) : index + 10000;
 };
 
+const readTechnicalNotes = (raw) => {
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+    const text = String(raw || '').trim();
+    if (!text) return {};
+    try {
+        const parsed = JSON.parse(text);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (_) {
+        return {};
+    }
+};
+
+const promptDisplayText = (raw) => String(raw || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .trim();
+
+export const readChineseVideoPrompt = (shot) => {
+    const notes = readTechnicalNotes(shot?.technical_notes);
+    const candidates = [
+        shot?.prompt_preview_cn,
+        notes.video_prompt_cn,
+        shot?.video_prompt_cn,
+        shot?.prompt_cn,
+        shot?.video_content_cn,
+        shot?.video_content,
+        shot?.prompt,
+    ];
+    for (const item of candidates) {
+        const text = promptDisplayText(item);
+        if (text) return text;
+    }
+    return '';
+};
+
 export const normalizeStoryboardShots = (rawShots) => {
     const list = (Array.isArray(rawShots) ? rawShots : []).map((shot, index) => {
         const logic = String(shot?.shot_logic_cn || shot?.logic || '').trim();
-        const video = String(shot?.video_content || shot?.prompt || '').trim();
+        const video = readChineseVideoPrompt(shot);
         const shotId = String(shot?.shot_id || '').trim() || `SH${index + 1}`;
         return {
             key: `${shot?.id || index}:${shotId}`,

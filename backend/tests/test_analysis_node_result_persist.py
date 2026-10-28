@@ -97,6 +97,50 @@ def test_persist_subskill_step_merges_by_scene_and_step():
     assert db.committed
 
 
+def test_staging_rerun_replaces_alias_copy():
+    episode = SimpleNamespace(
+        id=7,
+        ai_stage_outputs=json.dumps(
+            {
+                "version": 1,
+                "stages": {
+                    "stage1": {
+                        "outputs": {
+                            "scene_subskill_results": {
+                                "key": "scene_subskill_results",
+                                "kind": "json",
+                                "content": json.dumps(
+                                    {
+                                        "1": {"staging": "旧建置", "drama": "文戏"},
+                                        "EP01_SC01": {"staging": "旧建置", "drama": "文戏"},
+                                        "EP01_SC01A": {"staging": "另一场旧建置"},
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            }
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+    )
+    persist_scene_subskill_step_result(
+        db=_DummyDb(episode=episode),
+        episode_id=7,
+        scene_id="EP01_SC01",
+        step_key="staging",
+        result_text="新建置：镜头改到门内。",
+    )
+    result_map = json.loads(
+        json.loads(episode.ai_stage_outputs)["stages"]["stage1"]["outputs"]["scene_subskill_results"]["content"]
+    )
+    assert result_map["EP01_SC01"]["staging"] == "新建置：镜头改到门内。"
+    assert result_map["EP01_SC01"]["drama"] == "文戏"
+    assert "staging" not in result_map.get("1", {})
+    assert result_map["EP01_SC01A"]["staging"] == "另一场旧建置"
+
+
 def test_load_subskill_results_accepts_object_content():
     from app.services.script_analysis_flow.analyze_scene_stages import (
         load_scene_subskill_results_map,

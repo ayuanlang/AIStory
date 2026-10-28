@@ -217,6 +217,33 @@ def test_staging_scene_drops_env_block_and_keeps_ident():
     assert "名称=客栈大堂" in text
 
 
+def test_staging_scene_drops_previous_blocking_draft():
+    framing = (
+        "[SCENE_START:EP01_SC01]\n"
+        "[BEAT_START:1]\n"
+        "掌柜拨算盘。\n"
+        "【取景锁定】\n"
+        "当前环境=ENV:[0度茶馆]｜景别=MCU｜构图=三分｜镜头角度=平视\n"
+        "────【建置】────\n"
+        "旧建置：镜头停在柜台外。\n"
+        "────【入戏】────\n"
+        "旧入戏：掌柜没有抬头。\n"
+        "────【场记分析】────\n"
+        "开拍在场角色数=1\n"
+        "────【场记分析结束】────\n"
+        "[BEAT_END:1]\n"
+        "[SCENE_END:EP01_SC01]"
+    )
+    text = compose_staging_scene_text(framing, "")
+    assert "掌柜拨算盘。" in text
+    assert "【取景锁定】" in text
+    assert "旧建置" not in text
+    assert "旧入戏" not in text
+    assert "开拍在场角色数" not in text
+    assert "【建置】" not in text
+    assert "【入戏】" not in text
+
+
 def test_injection_keeps_grid_cells_readable():
     wrapped = build_environment_asset_quad_injection({"客栈大堂": _quad()})
     assert "环境资产四宫格开始" in wrapped
