@@ -24,6 +24,9 @@ from app.services.shot_markdown import (
     _clean_shot_video_prompt_cell,
     _pick_shot_cell,
     _soft_delete_duplicate_active_shots_in_db,
+    extract_merged_beat_ids,
+    format_merged_beat_token,
+    stabilize_shot_logic_merged_beats,
 )
 from app.services.soft_delete import _active_shot_clause
 
@@ -267,7 +270,9 @@ def _import_scene_shot_rows_to_db(
         end_frame_text = _pick_shot_cell(s_data, ["End Frame", "end_frame", "结束帧"], "")
         video_content_text = _pick_shot_cell(s_data, ["Video Content", "video_content", "视频内容"], "")
         associated_entities_text = _pick_shot_cell(s_data, ["Associated Entities", "associated_entities", "关联实体"], "")
-        shot_logic_cn_text = _pick_shot_cell(s_data, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"], "")
+        shot_logic_cn_text = stabilize_shot_logic_merged_beats(
+            _pick_shot_cell(s_data, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"], "")
+        )
         keyframes_text = _pick_shot_cell(s_data, ["Keyframes", "keyframes", "关键帧"], "NO")
         scene_code_text = _pick_shot_cell(s_data, ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号"], scene.scene_no or "")
         shot_id_text = _pick_shot_cell(s_data, ["Shot ID", "shot_id", "镜头ID"], str(idx + 1))
@@ -297,6 +302,9 @@ def _import_scene_shot_rows_to_db(
                 keyframes_cn_text = keyframes_cn_fallback
 
         technical_notes_payload: Dict[str, Any] = {}
+        merged_beat_ids = extract_merged_beat_ids(shot_logic_cn_text)
+        if merged_beat_ids:
+            technical_notes_payload["合镜Beat"] = format_merged_beat_token(merged_beat_ids).split("=", 1)[1]
         if start_frame_cn_text:
             technical_notes_payload["start_frame_cn"] = start_frame_cn_text
         if video_prompt_cn_text:

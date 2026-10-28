@@ -136,7 +136,7 @@ _SHOT_VIDEO_ENV_LEAD_RE = re.compile(
     r"(?:^|(?:<br\s*/?>)|\n)\s*ENV:\[[^\]]+\][。.]?\s*(?:<br\s*/?>\s*)?$"
 )
 _SHOT_LOGIC_ANCHOR_RE = re.compile(
-    r"Beat-Shot映射|节奏需求|^节奏:|内容继承核销|镜头逻辑总规划|场结果|"
+    r"Beat-Shot映射|合镜Beat=|节奏需求|^节奏:|内容继承核销|镜头逻辑总规划|场结果|"
     r"时间预估|建置角色覆盖|可剪辑合镜核销|"
     r"光影锚定|^光影:|^运镜:|^取景:|^衔接:|^实体:|^P链:|ENV:ENV:|"
     r"光影继承|摄影综合表达|运镜递进与组合|运镜选用依据|P段时序链|"
@@ -687,6 +687,135 @@ def _score_shot_markdown_table_block(block_lines: List[str]) -> int:
     return real_ids
 
 
+_BEAT_ID_RE = re.compile(r"Beat\s*(\d+)", re.IGNORECASE)
+_BEAT_LIST_SEGMENT_RE = re.compile(
+    r"^(?:Beat\s*\d+\s*[+＋、,，/]\s*)*Beat\s*\d+$",
+    re.IGNORECASE,
+)
+_MAPPING_FIELD_RE = re.compile(
+    r"(Beat-Shot映射\s*[:：]\s*)(.*?)(?=<br\s*/?>|\n|$)",
+    re.IGNORECASE,
+)
+_MERGED_BEAT_KEYS = {"合镜beat", "合镜", "单beat"}
+_SHOT_LOGIC_CELL_KEYS = {
+    "shotlogiccn",
+    "shotlogic",
+    "镜头逻辑",
+    "镜头逻辑中文",
+    "镜头画面逻辑说明",
+}
+
+
+def _mapping_segment_key(piece: str) -> str:
+    key, _, _value = str(piece or "").partition("=")
+    return re.sub(r"\s+", "", key).lower()
+
+
+def _split_mapping_segments(field: str) -> List[str]:
+    return re.split(r"｜|\|", str(field or ""))
+
+
+def _beat_ids_from_mapping_field(field: str) -> List[int]:
+    """Beat numbers listed in the Beat-Shot映射 field, narrative order."""
+    found: List[int] = []
+    for part in _split_mapping_segments(field):
+        piece = part.strip()
+        if not piece:
+            continue
+        key_norm = _mapping_segment_key(piece)
+        if key_norm not in _MERGED_BEAT_KEYS and not _BEAT_LIST_SEGMENT_RE.fullmatch(piece):
+            continue
+        source = piece.partition("=")[2] if key_norm in _MERGED_BEAT_KEYS else piece
+        for raw in _BEAT_ID_RE.findall(source):
+            num = int(raw)
+            if num not in found:
+                found.append(num)
+    return found
+
+
+def format_merged_beat_token(beat_ids: List[int]) -> str:
+    return "合镜Beat=" + "+".join(f"Beat{num}" for num in beat_ids)
+
+
+def extract_merged_beat_ids(shot_logic: str) -> List[int]:
+    """Read which beats this shot covers from `合镜Beat=`.
+
+    Also accepts older `合镜=` / `单Beat=` spellings inside `Beat-Shot映射`.
+    Later fields such as `场结果:高潮=Beat2` are not part of the list.
+    """
+    text = str(shot_logic or "")
+    match = _MAPPING_FIELD_RE.search(text)
+    if match:
+        return _beat_ids_from_mapping_field(match.group(2))
+    keyed = re.search(r"合镜Beat\s*=\s*([^｜|<\n]+)", text, re.IGNORECASE)
+    if not keyed:
+        return []
+    return _beat_ids_from_mapping_field("合镜Beat=" + keyed.group(1).strip())
+
+
+def stabilize_shot_logic_merged_beats(shot_logic: str) -> str:
+    """Rewrite each Beat-Shot映射 field so the beat list is `合镜Beat=Beat1+Beat2`."""
+    text = str(shot_logic or "")
+    if not text:
+        return text
+    lowered = text.lower()
+    if "Beat-Shot映射" not in text and "合镜beat" not in lowered:
+        return text
+
+    def _rewrite(match: re.Match) -> str:
+        field = match.group(2)
+        beat_ids = _beat_ids_from_mapping_field(field)
+        if not beat_ids:
+            return match.group(0)
+        kept: List[str] = []
+        montage = False
+        for part in _split_mapping_segments(field):
+            piece = part.strip()
+            if not piece:
+                continue
+            key_norm = _mapping_segment_key(piece)
+            if key_norm in _MERGED_BEAT_KEYS or _BEAT_LIST_SEGMENT_RE.fullmatch(piece):
+                if "蒙太奇" in piece:
+                    montage = True
+                continue
+            if "蒙太奇" in piece:
+                montage = True
+            kept.append(piece)
+        if montage and not any(_mapping_segment_key(item) == "链" for item in kept):
+            kept.insert(0, "链=蒙太奇")
+        body = format_merged_beat_token(beat_ids)
+        if kept:
+            body = body + "｜" + "｜".join(kept)
+        return match.group(1) + body
+
+    rewritten, count = _MAPPING_FIELD_RE.subn(_rewrite, text)
+    if count:
+        return rewritten
+    beat_ids = extract_merged_beat_ids(text)
+    if not beat_ids:
+        return text
+    return re.sub(
+        r"合镜Beat\s*=\s*(?:Beat\s*\d+\s*[+＋、,，/]\s*)*Beat\s*\d+",
+        format_merged_beat_token(beat_ids),
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def _shot_logic_cell_key(key: str) -> bool:
+    return re.sub(r"[\s_\-./()（）:：]", "", str(key or "").strip().lower()) in _SHOT_LOGIC_CELL_KEYS
+
+
+def stabilize_merged_beats_in_shot_rows(rows: List[Dict[str, Any]]) -> None:
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        for key in list(row.keys()):
+            if _shot_logic_cell_key(key):
+                row[key] = stabilize_shot_logic_merged_beats(row.get(key))
+
+
 def sanitize_shots_markdown_table_text(text: Any) -> str:
     """Keep one Shot List markdown table from LLM output.
 
@@ -859,6 +988,7 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
             row_cells[-1] = (str(row_cells[-1] or "") + "\n" + stripped).strip()
 
     _flush_row()
+    stabilize_merged_beats_in_shot_rows(rows)
 
     return headers, rows, table_line_count
 

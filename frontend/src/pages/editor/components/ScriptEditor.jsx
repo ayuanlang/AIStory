@@ -4586,6 +4586,7 @@ import MarkdownCell from './MarkdownCell';
 import MarkdownHelpModal from './MarkdownHelpModal';
 import AiDiagnosisModal from './AiDiagnosisModal';
 import FailedNodeInspectModal from './FailedNodeInspectModal';
+import BeatViewerModal from './BeatViewerModal';
 import {
     buildFailedNodeDiagnosisQuery,
     buildFailedNodeDiagnosisSummary,
@@ -5911,6 +5912,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [aiDiagnosisAutoStartQuery, setAiDiagnosisAutoStartQuery] = useState('');
     const [aiDiagnosisFocusKey, setAiDiagnosisFocusKey] = useState('');
     const [failedNodeInspect, setFailedNodeInspect] = useState(null);
+    const [beatViewerOpen, setBeatViewerOpen] = useState(false);
     const [analysisModalMode, setAnalysisModalMode] = useState('stage1');
     const [subjectIndexText, setSubjectIndexText] = useState('');
     const [adaptationText, setAdaptationText] = useState('');
@@ -36395,6 +36397,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 canRerun={Boolean(failedNodeInspect?.canRerun)}
                 rerunBusy={Boolean(analysisProgressDisplay.isLive)}
             />
+            <BeatViewerModal
+                open={beatViewerOpen}
+                onClose={() => setBeatViewerOpen(false)}
+                uiLang={uiLang}
+                resultsRaw={String(
+                    latestStage1NodeOutputsRef.current?.scene_subskill_results
+                    || currentStageOutputs?.stages?.stage1?.outputs?.scene_subskill_results?.content
+                    || ''
+                )}
+                pipelineNodes={diagnosticsPipelineNodes}
+                workspaceScenes={diagnosticsEpisodeScenes}
+                fetchShots={fetchShots}
+            />
             <AiDiagnosisModal
                 open={aiDiagnosisOpen}
                 onClose={() => {
@@ -36452,6 +36467,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         aria-label={t('AI 诊断', 'AI Diagnosis')}
                     >
                         <Stethoscope className="w-4 h-4" />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setBeatViewerOpen(true)}
+                        className="inline-flex items-center gap-2 rounded-xl border border-sky-400/30 bg-sky-500/10 px-3.5 py-2 text-sm font-bold text-sky-100 transition-colors hover:bg-sky-500/20"
+                        title={t('按场景和节拍查看文戏、武戏、现场编排、建置与入戏', 'View one beat across drama, action, floor staging, and blocking')}
+                    >
+                        <Layers className="w-4 h-4" />
+                        {t('节拍查看', 'Beat viewer')}
                     </button>
                     {canStopAnalysisTask && (
                         <button

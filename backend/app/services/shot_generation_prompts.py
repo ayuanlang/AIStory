@@ -40,6 +40,8 @@ from app.services.shot_markdown import (
     format_shot_generation_incomplete_detail,
     parse_shots_markdown_table,
     sanitize_shots_markdown_table_text,
+    stabilize_merged_beats_in_shot_rows,
+    stabilize_shot_logic_merged_beats,
 )
 from app.services.script_analysis_flow.derived_env_ingest import (
     DEGREE_NAME_PATTERN,
@@ -1434,7 +1436,7 @@ def _build_shot_prompts(
 3. For character entry/exit beats, land reactions + locked shot-size change + complementary camera per §二.3B; do not flatten to one enter/exit sentence.
 4. Output exactly one Shot List markdown table. Do not copy prompt example/template rows (e.g. `{{Scene ID}}_SHzz` or a second header).
 5. Scene opening / OT- / 吸睛 must be P segments inside the Shot that covers Beat 1 — never an extra Shot outside Beat-Shot mapping.
-6. Every Beat must appear in some row's `Beat-Shot映射`; do not invent unmapped opening shots.
+6. Every Beat must appear in some row's `Beat-Shot映射`; do not invent unmapped opening shots. The first segment of that field is always `合镜Beat=BeatN` or `合镜Beat=BeatN+BeatM+...` (no spaces, narrative order, same n as upstream `[BEAT_START:n]`). Single-beat shots use the same key. Do not write `单Beat=` or `合镜=蒙太奇链` in place of the beat list. Montage may add `｜链=蒙太奇` after the list.
 7. Episode ID and Scene ID in `# Core Scene Info` are authoritative. Copy Scene ID `{scene_public_id}` onto every row. Shot ID is `{scene_public_id}_SHzz` (zz zero-padded from 01). Do not refuse because Scene No is numeric, and do not invent a different EP/SC from Scene No.
 """
     
@@ -1565,6 +1567,8 @@ def _persist_scene_shot_generation_result(
     Persist LLM shot-generation output to scene staging storage only.
     This method does NOT import into Shot table.
     """
+    markdown_text = stabilize_shot_logic_merged_beats(str(markdown_text or ""))
+    stabilize_merged_beats_in_shot_rows(rows)
     result_wrapper = {
         "timestamp": now_bj_iso(),
         "raw_text": str(raw_text or ""),
