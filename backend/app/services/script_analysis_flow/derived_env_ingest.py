@@ -1330,6 +1330,7 @@ def build_derived_environment_item(
     special_kind, special_note = _infer_special(resolved, name, main)
     suffix = _state_suffix(name, main)
     name_en = f"{angle}deg {main}" + (f" {suffix}" if suffix else "")
+    reference_main = main
     background = _clean(item.get("background") or item.get("背景"))
     frame_left = _clean(item.get("frame_left") or item.get("画左"))
     frame_right = _clean(item.get("frame_right") or item.get("画右"))
@@ -1400,6 +1401,7 @@ def build_derived_environment_item(
         if special_note:
             logic = f"{logic}特别表述={special_note}。"
         deps = [f"ENV:[{derived_main_name}]"]
+        reference_main = derived_main_name
         negative = FIRST_CUT_NEGATIVE
         atmosphere = f"Crop of derived main {derived_main_name}"
         visual_params = f"{lens}/Derived/{angle}"
@@ -1451,7 +1453,7 @@ def build_derived_environment_item(
     return {
         "name": name,
         "name_en": name_en,
-        "base_name_en": main,
+        "base_name_en": reference_main,
         "atmosphere": atmosphere,
         "visual_params": visual_params,
         "description_cn": "",
@@ -1884,7 +1886,12 @@ def group_derived_environment_jsons(
         raw = item or {}
         main_name = _clean(raw.get("main") or raw.get("所属主环境")) or _main_from_name(_clean(raw.get("name")))
         payload = build_derived_environment_item(item, main_prompt=_prompt_for(main_name))
-        main = _clean(payload.get("base_name_en")) or _clean((payload.get("custom_attributes") or {}).get("main_environment"))
+        attrs_for_group = payload.get("custom_attributes") or {}
+        if attrs_for_group.get("derived_from_state"):
+            main = _clean(attrs_for_group.get("source_main_environment"))
+        else:
+            main = ""
+        main = main or _clean(payload.get("base_name_en")) or _clean(attrs_for_group.get("main_environment"))
         if not main or not payload.get("name"):
             continue
         bucket = grouped.setdefault(main, [])

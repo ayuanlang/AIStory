@@ -95,6 +95,43 @@ describe('saved quad cells', () => {
         assert.equal(plan.mainEntity.id, 1);
     });
 
+    it('crops a state angle from the derived main, not the original main', () => {
+        const source = {
+            id: 1,
+            type: 'environment',
+            name: '客栈大堂',
+            image_url: 'https://cdn.example/source.jpg',
+            generation_prompt_cn: '四宫度数=左上0度｜右上90度｜左下180度｜右下270度',
+        };
+        const derivedMain = {
+            id: 2,
+            type: 'environment',
+            name: '客栈大堂_破洞',
+            image_url: 'https://cdn.example/broken.jpg',
+            generation_prompt_cn: '四宫度数=左上0度｜右上90度｜左下180度｜右下270度',
+            custom_attributes: { derived_kind: 'derived_main', source_main_environment: '客栈大堂' },
+        };
+        const angle = {
+            id: 3,
+            type: 'environment',
+            name: '90度客栈大堂_破洞',
+            generation_prompt_cn: '待生成',
+            visual_dependencies: ['ENV:[客栈大堂]'],
+            custom_attributes: {
+                derived_kind: 'first_cut',
+                derived_from_state: true,
+                main_environment: '客栈大堂_破洞',
+                derived_main_environment: '客栈大堂_破洞',
+                source_main_environment: '客栈大堂',
+                view_angle_from_main: 90,
+            },
+        };
+        const plan = planDerivedGridCell(angle, [source, derivedMain, angle]);
+        assert.equal(plan.ok, true);
+        assert.equal(plan.mainEntity.id, 2);
+        assert.equal(plan.position, '右上');
+    });
+
     it('lists saved cell addresses and points a first cut at its cell', () => {
         const main = {
             id: 1,

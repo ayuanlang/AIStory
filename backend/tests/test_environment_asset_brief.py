@@ -640,7 +640,7 @@ def test_multiline_prop_list_replaces_the_old_list_and_keeps_the_scene():
 适用场=EP01_SC01|EP01_SC02
 
 [PROP] 名称=青花老粗陶料罐｜名称_en=Blue and White Coarse Pottery Jar｜基名=None｜全局性道具=否｜挂场ENV=无
-依赖=PROP:[青花老粗陶料罐_碎裂态]｜依赖因=状态互依
+依赖=无｜依赖因=无
 状态=变化前｜状态对=青花老粗陶料罐_碎裂态
 提取理由=状态互依
 适用场=EP01_SC01

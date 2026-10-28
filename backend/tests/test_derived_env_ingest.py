@@ -936,6 +936,7 @@ def test_state_cut_json_hangs_same_angle_parent():
     )
     assert item["generation_prompt_cn"] == "待生成"
     assert item["visual_dependencies"] == ["ENV:[客栈大堂_沙尘]"]
+    assert item["base_name_en"] == "客栈大堂_沙尘"
     attrs = item["custom_attributes"]
     assert attrs["derived_kind"] == "first_cut"
     assert attrs["derived_from_state"] is True

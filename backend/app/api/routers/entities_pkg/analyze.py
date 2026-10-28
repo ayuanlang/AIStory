@@ -353,7 +353,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
     deps_rule = (
         "visual_dependencies must be [] and type=BaselineDefinition, unless this is a floor-split style-dependent main environment: then type=StyleReference and visual_dependencies=[\"ENV:[风格父主环境名]\"] (another main ENV only; still write a full independent four-direction prompt)."
         if is_main_env
-        else "visual_dependencies: first-cut angle derivatives must be [\"ENV:[所属主环境名]\"] (four-panel). Derivatives-of-derivatives must be [\"ENV:[同角已切割衍生名]\"] with the same N as this row. Do not hang a different angle, and do not hang the main four-panel when the same-angle crop already exists."
+        else "visual_dependencies: first-cut angle derivatives must be [\"ENV:[所属主环境名]\"] (four-panel). Angle rows cut from a derived main must be [\"ENV:[衍生主环境名]\"] only. Do not hang the original main, and do not hang the same-angle first cut."
     )
     return f"""
 {format_contract}

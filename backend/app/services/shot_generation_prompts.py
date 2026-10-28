@@ -906,8 +906,48 @@ def _build_scene_subject_image_prompts_cn_section(
             seen_ids.add(ident)
             owners.append(candidate)
 
+        derived_main_name = str(attrs.get("derived_main_environment") or "").strip()
+        source_name = str(attrs.get("source_main_environment") or "").strip()
+        declared_main = str(attrs.get("main_environment") or attrs.get("所属主环境") or "").strip()
+        state_crop = (
+            bool(attrs.get("derived_from_state"))
+            or bool(derived_main_name)
+            or bool(source_name and declared_main and declared_main != source_name)
+        )
+
+        def _names_match(candidate: Optional[Any], raw_name: str) -> bool:
+            if candidate is None or not str(raw_name or "").strip():
+                return False
+            return bool(
+                subject_compare_key_variants(raw_name).intersection(_entity_name_keys(candidate))
+            )
+
+        if state_crop:
+            # Angle crops of a derived main read that derived main's quad.
+            # The original main is only the derived main's own reference.
+            owner = _named_environment(derived_main_name)
+            if owner is None and declared_main and declared_main != source_name:
+                owner = _named_environment(declared_main)
+            if (
+                owner is None
+                and resolved_main is not None
+                and not _names_match(resolved_main, source_name)
+                and not DEGREE_NAME_PATTERN.match(_environment_label(resolved_main))
+            ):
+                owner = resolved_main
+            label = _environment_label(owner) if owner is not None else derived_main_name
+            if not label:
+                label = str(attrs.get("main_environment") or "").strip()
+            cell = ""
+            if owner is not None:
+                cell = _quad_cell_from_main_prompt(
+                    str(getattr(owner, "generation_prompt_cn", None) or ""),
+                    angle,
+                )
+            return label, cell
+
         _add(resolved_main)
-        for key in ("source_main_environment", "main_environment", "所属主环境"):
+        for key in ("main_environment", "所属主环境"):
             _add(_named_environment(str(attrs.get(key) or "")))
         for owner in owners:
             cell = _quad_cell_from_main_prompt(

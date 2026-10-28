@@ -231,7 +231,7 @@ def test_ninety_degree_view_uses_the_east_cell_only():
     assert "ENV:[90度客栈大堂]｜所属主环境=ENV:[客栈大堂]｜view_angle_from_main=90" in text
 
 
-def test_state_derivative_falls_back_to_the_source_main_cell():
+def test_state_derivative_uses_the_derived_main_not_the_source():
     source = _env(
         id=70,
         name="客栈大堂",
@@ -268,11 +268,61 @@ def test_state_derivative_falls_back_to_the_source_main_cell():
         _keys("90度客栈大堂_破洞"),
         scene_id=25,
     )
-    assert "[90度格-右上·东]" in text
-    assert "正面：东窗。" in text
-    assert "所属主环境=ENV:[客栈大堂]" in text
+    assert "ENV:[90度客栈大堂_破洞]｜所属主环境=ENV:[客栈大堂_破洞]｜view_angle_from_main=90" in text
+    assert "所属主环境=ENV:[客栈大堂]" not in text
+    assert "正面：东窗" not in text
+    assert "正面：大门" not in text
     assert "状态Delta=北墙一个洞" not in text
     assert "待生成" not in text
+    assert "[0度格-左上·北]" not in text
+
+
+def test_state_derivative_reads_the_derived_main_cell_even_if_deps_name_the_source():
+    source = _env(
+        id=73,
+        name="客栈大堂",
+        generation_prompt_cn=(
+            "【四向拼图】\n"
+            "[90度格-右上·东]\n正面：完好东窗。\n"
+        ),
+    )
+    derived_main = _env(
+        id=74,
+        name="客栈大堂_破洞",
+        generation_prompt_cn=(
+            "【四向拼图】\n"
+            "[0度格-左上·北]\n正面：破洞北墙。\n"
+            "[90度格-右上·东]\n正面：破洞东窗。\n"
+            "[180度格-左下·南]\n正面：南门。\n"
+            "[270度格-右下·西]\n正面：西柜。\n"
+        ),
+        custom_attributes={
+            "derived_kind": "derived_main",
+            "source_main_environment": "客栈大堂",
+        },
+    )
+    derived = _env(
+        id=75,
+        name="90度客栈大堂_破洞",
+        visual_dependencies=["ENV:[客栈大堂]"],
+        base_name_en="客栈大堂",
+        generation_prompt_cn="待生成",
+        custom_attributes={
+            "derived_from_state": True,
+            "main_environment": "客栈大堂_破洞",
+            "derived_main_environment": "客栈大堂_破洞",
+            "source_main_environment": "客栈大堂",
+            "view_angle_from_main": 90,
+        },
+    )
+    text = _build_scene_subject_image_prompts_cn_section(
+        [source, derived_main, derived],
+        _keys("90度客栈大堂_破洞"),
+        scene_id=27,
+    )
+    assert "所属主环境=ENV:[客栈大堂_破洞]" in text
+    assert "正面：破洞东窗。" in text
+    assert "正面：完好东窗" not in text
     assert "[0度格-左上·北]" not in text
 
 

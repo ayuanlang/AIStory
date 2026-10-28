@@ -477,7 +477,20 @@ const mainNameCandidates = (entity) => {
 };
 
 const findOwningMainEnvironment = (entity, entities) => {
-    const wanted = new Set(mainNameCandidates(entity));
+    const attrs = readAttrs(entity);
+    const derivedMain = normName(attrs.derived_main_environment);
+    const sourceMain = normName(attrs.source_main_environment);
+    const declaredMain = normName(attrs.main_environment || attrs['所属主环境']);
+    const fromDerivedMain = Boolean(attrs.derived_from_state)
+        || Boolean(derivedMain)
+        || Boolean(sourceMain && declaredMain && declaredMain !== sourceMain);
+    let wantedNames = mainNameCandidates(entity);
+    if (fromDerivedMain && (derivedMain || declaredMain)) {
+        wantedNames = [derivedMain || declaredMain];
+    } else if (fromDerivedMain && sourceMain) {
+        wantedNames = wantedNames.filter((name) => name !== sourceMain);
+    }
+    const wanted = new Set(wantedNames);
     if (!wanted.size) return null;
     const matches = (Array.isArray(entities) ? entities : []).filter((candidate) => {
         if (!isMainEnvironmentEntity(candidate)) return false;
