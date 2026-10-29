@@ -8,6 +8,7 @@ import {
     findNodeBeat,
     matchWorkspaceScene,
     mergePipelineSceneBlocks,
+    omitClearedSceneSteps,
     mergeSubskillResultMaps,
     normalizeStoryboardShots,
     readSubskillResultsContent,
@@ -195,6 +196,7 @@ export default function BeatViewerModal({
     pipelineNodes = [],
     workspaceScenes = [],
     fetchShots = null,
+    clearedSceneSteps = null,
 }) {
     const t = React.useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const [fetchedResultsRaw, setFetchedResultsRaw] = useState('');
@@ -212,8 +214,11 @@ export default function BeatViewerModal({
             mergeSubskillResultMaps(persistedResultsRaw, resultsRaw),
             fetchedResultsRaw,
         );
-        return buildBeatViewerScenes(mergePipelineSceneBlocks(stored, pipelineNodes));
-    }, [fetchedResultsRaw, persistedResultsRaw, pipelineNodes, resultsRaw]);
+        return buildBeatViewerScenes(omitClearedSceneSteps(
+            mergePipelineSceneBlocks(stored, pipelineNodes),
+            clearedSceneSteps,
+        ));
+    }, [clearedSceneSteps, fetchedResultsRaw, persistedResultsRaw, pipelineNodes, resultsRaw]);
     const [sceneId, setSceneId] = useState('');
     const [beatId, setBeatId] = useState('');
     const [shotKey, setShotKey] = useState('');

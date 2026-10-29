@@ -4,7 +4,9 @@ from app.services.scene_subskill_pipeline_runner import (
     _pick_aspect_ratio_from_mapping,
     _subskill_aspect_ratio_injection,
     filter_subskill_tasks_by_target_ids,
+    blank_cleared_steps_in_scene_block,
     format_scene_rerun_account,
+    rewrite_script_clearing_scene_steps,
     is_timeout_like_error,
     merge_scene_blocks_into_script,
     payload_has_explicit_subskill_start,
@@ -402,10 +404,51 @@ def test_scene_rerun_account_lists_every_store():
     assert "保留 文戏优化稿" in text
     assert "上游无成稿 武戏增强稿" in text
     assert "上游稿已剔除上轮拍内图：文戏稿" in text
-    assert "整场合成稿：本场段落本轮结束后用新稿替换" in text
+    assert "整场合成稿：本场将重跑的节点已从合成稿和改编稿清掉" in text
     assert "该场分镜 3 条已标删" in text
+    assert "建置正文和分镜成稿已清空" in text
     assert "衍生环境 2 条已标删" in text
     assert "不改：全局统筹、环境规划" in text
+
+
+def test_rewrite_script_clears_only_the_rerun_scene_node_text():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+文戏正文还在
+────【建置】────
+旧镜头
+────【入戏】────
+旧动作
+────【场记分析】────
+旧场记
+[SCENE_END:EP01_SC01]
+[SCENE_START:EP01_SC02]
+另一场
+────【建置】────
+留着
+[SCENE_END:EP01_SC02]
+[SCENE_START:EP01_SC01A]
+后缀场
+────【建置】────
+后缀场建置
+[SCENE_END:EP01_SC01A]
+[SCENES_BLOCK_END]
+"""
+    staging_only = rewrite_script_clearing_scene_steps(script, "EP01_SC01", ["staging"])
+    assert "旧镜头" not in staging_only
+    assert "旧动作" not in staging_only
+    assert "旧场记" not in staging_only
+    assert "文戏正文还在" in staging_only
+    assert "留着" in staging_only
+    assert "后缀场建置" in staging_only
+    drama_cleared = rewrite_script_clearing_scene_steps(script, "1", ["drama", "combat", "framing", "staging"])
+    sc01 = drama_cleared.split("[SCENE_START:EP01_SC01]", 1)[1].split("[SCENE_END:EP01_SC01]", 1)[0]
+    assert "文戏正文还在" not in sc01
+    assert "留着" in drama_cleared
+    assert "旧镜头" not in blank_cleared_steps_in_scene_block(
+        "────【建置】────\n旧镜头\n[SCENE_END:EP01_SC01]",
+        ["staging"],
+    )
 
 
 def test_explicit_rerun_seeds_from_persisted_step_not_aggregate_staging():

@@ -283,10 +283,14 @@ def _soft_delete_workspace_for_scene_rerun(
         return {"scenes": 0, "shots": 0, "workspace_scene_id": 0}
     scene_pk = int(getattr(scene, "id", 0) or 0)
     deleted_shots = _soft_delete_shots(db, scene_id=scene_pk) if scene_pk > 0 else 0
+    scene.core_scene_info = None
+    scene.ai_shots_result = None
     return {
         "scenes": 0,
         "shots": int(deleted_shots or 0),
         "workspace_scene_id": scene_pk,
+        "core_scene_info_cleared": True,
+        "ai_shots_result_cleared": True,
     }
 
 
@@ -324,6 +328,178 @@ def _soft_delete_derived_env_named(
     return int(_soft_delete_entities(db, entity_ids=scoped_ids) or 0)
 
 
+def blank_cleared_steps_in_scene_block(block: str, step_keys: List[str]) -> str:
+    """Remove node text that this rerun will write again. Keep the scene markers."""
+    keys = {str(key or "").strip() for key in (step_keys or []) if str(key or "").strip()}
+    text = str(block or "")
+    if not text or not keys:
+        return text
+    if "drama" in keys:
+        match = re.search(
+            r"(\[SCENE_START:[^\]]+\])([\s\S]*?)(\[SCENE_END:[^\]]+\])",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return ""
+        return f"{text[: match.start()]}{match.group(1)}\n{match.group(3)}{text[match.end() :]}".strip()
+    if "framing" in keys:
+        text = strip_prior_derived_environment_sections(text)
+    if "staging" in keys:
+        text = strip_prior_staging_draft(text)
+    return text
+
+
+def rewrite_script_clearing_scene_steps(script: str, scene_id: str, step_keys: List[str]) -> str:
+    """Drop this scene's rerun node text from a combined script. Other scenes stay."""
+    text = str(script or "").strip()
+    sid = str(scene_id or "").strip()
+    keys = [str(key or "").strip() for key in (step_keys or []) if str(key or "").strip()]
+    if not text or not sid or not keys:
+        return text
+    try:
+        tasks = build_scene_subskill_task_payloads(text)
+    except Exception:
+        return text
+    if not tasks:
+        return text
+    id_map = {
+        str(task.get("scene_id") or "").strip(): task
+        for task in tasks
+        if str(task.get("scene_id") or "").strip()
+    }
+    from app.services.script_analysis_flow.analyze_scene_stages import same_scene_result_keys
+
+    matched = same_scene_result_keys(id_map, sid)
+    if not matched:
+        matched = [
+            key for key in id_map
+            if _task_matches_target_scene({"scene_id": key}, [sid])
+        ]
+    if not matched:
+        return text
+    updates = [
+        {
+            "scene_id": key,
+            "failed": False,
+            "scene_block": blank_cleared_steps_in_scene_block(
+                str(id_map[key].get("scene_block") or ""),
+                keys,
+            ),
+        }
+        for key in matched
+    ]
+    return merge_scene_blocks_into_script(text, updates)
+
+
+def _persist_cleared_scene_script_caches(
+    db: Session,
+    *,
+    episode_id: int,
+    scene_id: str,
+    step_keys: List[str],
+) -> List[str]:
+    """Blank this scene's rerun text in the combined script caches before the model runs."""
+    from app.services.script_analysis_flow.analyze_scene_stages import (
+        _dump_stage_outputs_obj,
+        _ensure_stage_outputs,
+        _get_stage_output_patch_lock,
+        _load_stage_outputs_obj,
+    )
+    from app.services.soft_delete import _active_episode_clause
+
+    eid = int(episode_id or 0)
+    if eid <= 0:
+        return []
+    notes: List[str] = []
+    lock = _get_stage_output_patch_lock(eid)
+    with lock:
+        episode = (
+            db.query(Episode)
+            .filter(Episode.id == eid, _active_episode_clause())
+            .populate_existing()
+            .first()
+        )
+        if episode is None:
+            return []
+        obj = _load_stage_outputs_obj(episode)
+        outputs = _ensure_stage_outputs(obj, "stage1")
+        changed = False
+        for key in ("scene_subskills", "adapted_script"):
+            slot = outputs.get(key) if isinstance(outputs.get(key), dict) else {}
+            content = str(slot.get("content") or "")
+            if not content.strip():
+                continue
+            rewritten = rewrite_script_clearing_scene_steps(content, scene_id, step_keys)
+            if rewritten == content.strip():
+                continue
+            outputs[key] = {
+                **slot,
+                "key": key,
+                "kind": slot.get("kind") or "markdown",
+                "title": slot.get("title") or key,
+                "content": rewritten,
+            }
+            changed = True
+            notes.append(key)
+        adaptation = str(getattr(episode, "ai_scene_analysis_adaptation", "") or "")
+        if adaptation.strip():
+            rewritten_adapt = rewrite_script_clearing_scene_steps(adaptation, scene_id, step_keys)
+            if rewritten_adapt != adaptation.strip():
+                episode.ai_scene_analysis_adaptation = rewritten_adapt
+                changed = True
+                notes.append("adaptation")
+        if changed:
+            _dump_stage_outputs_obj(episode, obj)
+            db.commit()
+    return notes
+
+
+def _blank_alias_pipeline_node_caches(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene_id: str,
+    step_keys: List[str],
+) -> None:
+    """The canonical node is reset separately. Alias scene ids keep the old block unless cleared too."""
+    if int(project_id or 0) <= 0 or int(episode_id or 0) <= 0:
+        return
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.services.script_analysis_flow.analyze_scene_stages import same_scene_result_keys
+
+    rows = (
+        db.query(ScriptProgressPipelineNode)
+        .filter(
+            ScriptProgressPipelineNode.project_id == int(project_id),
+            ScriptProgressPipelineNode.episode_id == int(episode_id),
+            ScriptProgressPipelineNode.node_name.in_(("scene_subskill_scene", "storyboard_generation")),
+        )
+        .all()
+    )
+    grouped: Dict[str, List[Any]] = {}
+    for row in rows:
+        sid = str(getattr(row, "scene_id", "") or "").strip()
+        if sid:
+            grouped.setdefault(sid, []).append(row)
+    wanted = str(scene_id or "").strip()
+    for key in same_scene_result_keys(grouped, wanted):
+        if key.lower() == wanted.lower():
+            continue
+        for row in grouped.get(key) or []:
+            meta = dict(getattr(row, "runtime_meta", None) or {})
+            meta["scene_block"] = ""
+            meta["called_subskills"] = []
+            meta["rerun_cleared"] = True
+            meta["cleared_steps"] = list(step_keys or [])
+            row.runtime_meta = meta
+            flag_modified(row, "runtime_meta")
+            node_name = str(getattr(row, "node_name", "") or "")
+            row.status = "running" if node_name == "scene_subskill_scene" else "queued"
+
+
 def prepare_explicit_scene_subskill_rerun(
     db: Session,
     *,
@@ -344,6 +520,12 @@ def prepare_explicit_scene_subskill_rerun(
 
     cleared = clear_scene_subskill_step_results(
         db=db,
+        episode_id=episode_id,
+        scene_id=sid,
+        step_keys=plan["steps"],
+    )
+    _persist_cleared_scene_script_caches(
+        db,
         episode_id=episode_id,
         scene_id=sid,
         step_keys=plan["steps"],
@@ -398,6 +580,7 @@ def prepare_explicit_scene_subskill_rerun(
             "called_subskills": [],
             "scene_block": "",
             "rerun_cleared": True,
+            "cleared_steps": list(plan["steps"]),
             "rerun_account": account,
         },
     )
@@ -412,7 +595,7 @@ def prepare_explicit_scene_subskill_rerun(
         progress_percent=0.0,
         error_code=None,
         error_message=None,
-        runtime_meta={"business_event": "queued", "rerun_cleared": True},
+        runtime_meta={"business_event": "queued", "rerun_cleared": True, "cleared_steps": ["storyboard"]},
     )
     upsert_pipeline_node_status(
         db,
@@ -424,7 +607,14 @@ def prepare_explicit_scene_subskill_rerun(
         progress_percent=0.0,
         error_code=None,
         error_message=None,
-        runtime_meta={"business_event": "queued", "rerun_cleared": True},
+        runtime_meta={"business_event": "queued", "rerun_cleared": True, "cleared_steps": ["storyboard"]},
+    )
+    _blank_alias_pipeline_node_caches(
+        db,
+        project_id=int(project_id or 0),
+        episode_id=int(episode_id),
+        scene_id=sid,
+        step_keys=plan["steps"],
     )
 
     for line in account:
@@ -479,11 +669,11 @@ def format_scene_rerun_account(
         lines.append(f"过程产出：上游无成稿 { '、'.join(missing) }。")
     if sanitized_outputs:
         lines.append(f"上游稿已剔除上轮拍内图：{'、'.join(sanitized_outputs)}。")
-    lines.append("整场合成稿：本场段落本轮结束后用新稿替换，其他场不动。")
+    lines.append("整场合成稿：本场将重跑的节点已从合成稿和改编稿清掉，本轮结束后写入新稿，其他场不动。")
     if shot_n > 0:
-        lines.append(f"数据库：该场分镜 {shot_n} 条已标删；工作区场景行保留。")
+        lines.append(f"数据库：该场分镜 {shot_n} 条已标删；工作区场景行保留，该场建置正文和分镜成稿已清空。")
     else:
-        lines.append("数据库：该场暂无分镜可标删；工作区场景行保留。")
+        lines.append("数据库：该场暂无分镜可标删；工作区场景行保留，该场建置正文和分镜成稿已清空。")
     if (plan or {}).get("clear_derived_env"):
         if derived_n > 0:
             lines.append(f"数据库：该场由现场编排生成的衍生环境 {derived_n} 条已标删。")

@@ -372,7 +372,11 @@ def test_derived_main_angle_injects_source_walls_cell_and_delta():
     derived_main = Dummy(
         id=8,
         name="天穹顶层办公室_破损",
-        prompt="衍生主环境=天穹顶层办公室_破损。状态Delta=幕墙破口。",
+        prompt=(
+            "衍生主环境=天穹顶层办公室_破损。状态Delta=幕墙破口。\n"
+            "【四向拼图】\n"
+            "[90度格-右上·东]\n正面：破口幕墙。\n"
+        ),
         attrs={"derived_kind": "derived_main", "state_delta": "幕墙破口"},
     )
     angle = Dummy(
@@ -395,7 +399,8 @@ def test_derived_main_angle_injects_source_walls_cell_and_delta():
     assert "别名=门。" in user
     assert "别名=镜。" not in user
     assert "对应宫格=90度格：" in user
-    assert "台在画面侧面。" in user
+    assert "正面：破口幕墙。" in user
+    assert "台在画面侧面。" not in user
     assert "衍生Delta：" in user
     assert "幕墙破口" in user
     assert "被依赖主环境提示词" not in user

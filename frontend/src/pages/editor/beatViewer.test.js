@@ -7,6 +7,7 @@ import {
     matchWorkspaceScene,
     mergePipelineSceneBlocks,
     mergeSubskillResultMaps,
+    omitClearedSceneSteps,
     normalizeStoryboardShots,
     parseMergedBeatIds,
     parseNodeBeats,
@@ -228,6 +229,22 @@ describe('storyboard beat trace', () => {
         assert.equal(scenes[0].sceneId, 'EP01_SC01');
         assert.match(scenes[0].nodes.drama.text, /文戏正文/);
         assert.match(scenes[0].nodes.staging.text, /建置正文/);
+    });
+
+    it('drops cleared node text from every alias until the rerun writes it back', () => {
+        const cleared = omitClearedSceneSteps({
+            1: { drama: '文戏', staging: '旧建置' },
+            EP01_SC01: { drama: '文戏', staging: '旧建置' },
+            EP01_SC01A: { staging: '另一场' },
+        }, { sceneId: 'EP01_SC01', keys: ['staging'] });
+        assert.equal(cleared.EP01_SC01.drama, '文戏');
+        assert.equal(cleared.EP01_SC01.staging, undefined);
+        assert.equal(cleared['1'].staging, undefined);
+        assert.equal(cleared.EP01_SC01A.staging, '另一场');
+        const scenes = buildBeatViewerScenes(cleared);
+        const scene = scenes.find((item) => item.sceneId === 'EP01_SC01');
+        assert.equal(scene.nodes.staging.text, '');
+        assert.match(scene.nodes.drama.text, /文戏/);
     });
 
     it('matches a workspace scene by scene number', () => {

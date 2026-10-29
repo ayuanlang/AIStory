@@ -132,6 +132,53 @@ describe('saved quad cells', () => {
         assert.equal(plan.position, '右上');
     });
 
+    it('uses the derived main cell when the stored dependency still names the original', () => {
+        const cellsOf = (url, cellUrl) => ({
+            source_url: url,
+            cells: { 左上: `${cellUrl}-tl`, 右上: `${cellUrl}-tr`, 左下: `${cellUrl}-bl`, 右下: `${cellUrl}-br` },
+        });
+        const source = {
+            id: 1,
+            type: 'environment',
+            name: '客栈大堂',
+            image_url: 'https://cdn.example/source.jpg',
+            generation_prompt_cn: '四宫度数=左上0度｜右上90度｜左下180度｜右下270度。正面：完好东窗。',
+            custom_attributes: { quad_cell_images: cellsOf('https://cdn.example/source.jpg', 'https://cdn.example/source') },
+        };
+        const derivedMain = {
+            id: 2,
+            type: 'environment',
+            name: '客栈大堂_破洞',
+            image_url: 'https://cdn.example/broken.jpg',
+            generation_prompt_cn: '四宫度数=左上0度｜右上90度｜左下180度｜右下270度。正面：破洞东窗。',
+            custom_attributes: {
+                derived_kind: 'derived_main',
+                source_main_environment: '客栈大堂',
+                quad_cell_images: cellsOf('https://cdn.example/broken.jpg', 'https://cdn.example/broken'),
+            },
+        };
+        const angle = {
+            id: 3,
+            type: 'environment',
+            name: '90度客栈大堂_破洞',
+            generation_prompt_cn: '待生成',
+            visual_dependencies: ['ENV:[客栈大堂]'],
+            custom_attributes: {
+                derived_kind: 'first_cut',
+                main_environment: '客栈大堂',
+                view_angle_from_main: 90,
+            },
+        };
+        const plan = planDerivedGridCell(angle, [source, derivedMain, angle]);
+        assert.equal(plan.ok, true);
+        assert.equal(plan.mainEntity.id, 2);
+        assert.equal(plan.position, '右上');
+        assert.equal(
+            derivedDependencyImageUrl(angle, source, [source, derivedMain, angle]),
+            'https://cdn.example/broken-tr',
+        );
+    });
+
     it('lists saved cell addresses and points a first cut at its cell', () => {
         const main = {
             id: 1,

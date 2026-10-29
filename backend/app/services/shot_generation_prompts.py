@@ -16,6 +16,12 @@ from app.core.entity_token import (
     subject_compare_key_variants,
 )
 from app.core.prompt_injection import wrap_injection_section
+from app.services.script_analysis_flow.shot_locked_extract import (
+    format_shot_locked_injection,
+    load_shot_locked_body,
+    shot_locked_has_guidance,
+    strip_guidance_lines,
+)
 from app.core.prompts.shot_generation_feature_skills import (
     get_shot_generation_feature_catalog,
     render_shot_generation_routed_prompt,
@@ -906,6 +912,22 @@ def _build_scene_subject_image_prompts_cn_section(
             seen_ids.add(ident)
             owners.append(candidate)
 
+        label_name = _environment_label(ent)
+        stripped_name = re.sub(r"^(?:\d+)\s*度\s*", "", label_name).strip()
+        if stripped_name and stripped_name != label_name:
+            exact_owner = _named_environment(stripped_name)
+            if exact_owner is not None and not DEGREE_NAME_PATTERN.match(_environment_label(exact_owner)):
+                return (
+                    _environment_label(exact_owner),
+                    _quad_cell_from_main_prompt(
+                        str(getattr(exact_owner, "generation_prompt_cn", None) or ""),
+                        angle,
+                    ),
+                )
+            suffix = stripped_name.rsplit("_", 1)[-1] if "_" in stripped_name else ""
+            if suffix and suffix not in {"仰天", "变形", "屋顶"}:
+                return stripped_name, ""
+
         derived_main_name = str(attrs.get("derived_main_environment") or "").strip()
         source_name = str(attrs.get("source_main_environment") or "").strip()
         declared_main = str(attrs.get("main_environment") or attrs.get("所属主环境") or "").strip()
@@ -1449,6 +1471,11 @@ def _build_shot_prompts(
         scene_public_id,
         getattr(scene, "scene_no", None),
     )
+    locked_body = load_shot_locked_body(db, int(getattr(scene, "episode_id", 0) or 0), scene_public_id)
+    locked_section = format_shot_locked_injection(locked_body)
+    core_goal_for_shot = core_goal_text
+    if shot_locked_has_guidance(locked_body):
+        core_goal_for_shot = strip_guidance_lines(core_goal_text)
     core_scene_info_block = wrap_injection_section(
         "Core Scene Info",
         f"""| Field | Value |
@@ -1461,11 +1488,12 @@ def _build_shot_prompts(
 | **Environment Context** | {env_narrative or 'N/A'} |
 | **Linked Characters** | {scene.linked_characters or ''} |
 | **Key Props** | {scene.key_props or ''} |
-| **Core Goal** | {core_goal_text} |""",
+| **Core Goal** | {core_goal_for_shot} |""",
     )
 
     user_input = f"""{project_context_section}
 
+{locked_section}
 {core_scene_info_block}
 
 {scene_subject_index_section}

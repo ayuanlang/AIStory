@@ -2021,6 +2021,70 @@ const lookupSceneSubskillSteps = (resultsMap, sceneId, episodePrefix = 'EP01') =
         : {};
 };
 
+const dropMatchingSceneStepKeys = (resultsMap, sceneId, keys, episodePrefix = 'EP01') => {
+    const target = String(sceneId || '').trim();
+    const drop = new Set(
+        (Array.isArray(keys) ? keys : []).map((key) => String(key || '').trim()).filter(Boolean)
+    );
+    const source = resultsMap && typeof resultsMap === 'object' && !Array.isArray(resultsMap) ? resultsMap : {};
+    if (!target || drop.size <= 0) return { ...source };
+    const order = deriveSceneOrderFromSceneId(target);
+    const next = {};
+    Object.entries(source).forEach(([id, steps]) => {
+        if (!steps || typeof steps !== 'object' || Array.isArray(steps)) return;
+        if (!sceneUnitIdsMatch(id, target, order, episodePrefix)) {
+            next[id] = { ...steps };
+            return;
+        }
+        const scene = { ...steps };
+        drop.forEach((key) => { delete scene[key]; });
+        next[id] = scene;
+    });
+    return next;
+};
+
+const stripStagingNodeSections = (text) => String(text || '').replace(
+    /(?:\r?\n)?[ \t]*(?:─{2,})?[ \t]*【(?:建置|入戏|场记分析)】[ \t]*(?:─{2,})?[ \t]*[\s\S]*?(?=(?:\r?\n[ \t]*`?\[BEAT_(?:END|START|STREAM_END))|(?:\r?\n[ \t]*`?\[SCENE_END)|$)/g,
+    ''
+);
+
+const stripFramingNodeSections = (text) => String(text || '')
+    .replace(/(?:^|\n)[ \t]*────【衍生环境】────[\s\S]*?(?=\n[ \t]*(?:────【|\[BEAT_|\[SCENE_))/g, '\n')
+    .replace(/(?:^|\n)[ \t]*【本场衍生环境名】[^\n]*/g, '');
+
+const stripClearedSectionsFromSceneScript = (script, sceneId, keys, episodePrefix = 'EP01') => {
+    const text = String(script || '');
+    const target = String(sceneId || '').trim();
+    const drop = new Set(
+        (Array.isArray(keys) ? keys : []).map((key) => String(key || '').trim()).filter(Boolean)
+    );
+    if (!text.trim() || !target || drop.size <= 0) return text;
+    let units = [];
+    try {
+        units = parseSceneUnitsFromScriptMarkersText(text);
+    } catch (_) {
+        return text;
+    }
+    const order = deriveSceneOrderFromSceneId(target);
+    let next = text;
+    units.forEach((unit) => {
+        if (!sceneUnitIdsMatch(unit.sceneId, target, order, episodePrefix)) return;
+        const startToken = String(unit.markerStartToken || `[SCENE_START:${unit.sceneId}]`);
+        const endToken = String(unit.markerEndToken || `[SCENE_END:${unit.sceneId}]`);
+        const startAt = next.indexOf(startToken);
+        const endAt = startAt >= 0 ? next.indexOf(endToken, startAt + startToken.length) : -1;
+        if (startAt < 0 || endAt < 0) return;
+        let body = next.slice(startAt + startToken.length, endAt);
+        if (drop.has('drama')) body = '\n';
+        else {
+            if (drop.has('framing')) body = stripFramingNodeSections(body);
+            if (drop.has('staging')) body = stripStagingNodeSections(body);
+        }
+        next = `${next.slice(0, startAt + startToken.length)}\n${String(body || '').trim()}\n${next.slice(endAt)}`;
+    });
+    return next;
+};
+
 const resolveSceneSubskillStoredContent = (resultsMap, sceneId, stepKey, episodePrefix = 'EP01') => {
     const keyName = String(stepKey || '').trim();
     if (!keyName) return '';
@@ -2067,16 +2131,28 @@ const resolveCurrentSceneStage1Body = ({
     ).trim();
 };
 
+const episodePrefixFromSceneId = (sceneId) => {
+    const match = String(sceneId || '').match(/^(EP\d+)_/i);
+    return match ? match[1].toUpperCase() : 'EP01';
+};
+
 const mergeSceneSubskillResultsPreferringFresh = (liveRaw, freshRaw) => {
     const liveMap = parseSceneSubskillResultsMap(liveRaw);
     const freshMap = parseSceneSubskillResultsMap(freshRaw);
     const next = { ...liveMap };
     Object.entries(freshMap).forEach(([sceneId, steps]) => {
         if (!steps || typeof steps !== 'object' || Array.isArray(steps)) return;
-        next[sceneId] = {
-            ...(next[sceneId] && typeof next[sceneId] === 'object' ? next[sceneId] : {}),
-            ...steps,
-        };
+        next[sceneId] = { ...steps };
+    });
+    Object.keys(next).forEach((sceneId) => {
+        if (Object.prototype.hasOwnProperty.call(freshMap, sceneId)) return;
+        const canonical = Object.keys(freshMap).find((freshId) => sceneUnitIdsMatch(
+            sceneId,
+            freshId,
+            deriveSceneOrderFromSceneId(freshId),
+            episodePrefixFromSceneId(freshId)
+        ));
+        if (canonical) delete next[sceneId];
     });
     try {
         return JSON.stringify(next);
@@ -2097,9 +2173,23 @@ const mergeStage1NodeOutputsPreferringFresh = (liveOutputs, freshOutputs) => {
     return merged;
 };
 
-const hydrateSceneSubskillResultsFromPipelineNodes = (existingRaw, nodes) => {
+const calledSubskillStepKeys = (called) => {
+    const keys = new Set();
+    (Array.isArray(called) ? called : []).forEach((item) => {
+        const key = SCENE_SUBSKILL_STEP_FROM_PIPELINE[String(item || '').trim()];
+        if (key) keys.add(key);
+    });
+    return keys;
+};
+
+const hydrateSceneSubskillResultsFromPipelineNodes = (existingRaw, nodes, blocked = null) => {
     const map = parseSceneSubskillResultsMap(existingRaw);
     let changed = false;
+    const blockedSceneId = String(blocked?.sceneId || '').trim();
+    const blockedKeys = new Set(
+        (Array.isArray(blocked?.keys) ? blocked.keys : []).map((key) => String(key || '').trim()).filter(Boolean)
+    );
+    const blockedPrefix = String(blocked?.episodePrefix || 'EP01');
     (Array.isArray(nodes) ? nodes : []).forEach((node) => {
         if (String(node?.node_name || '').trim() !== 'scene_subskill_scene') return;
         const sceneId = String(node?.scene_id || '').trim();
@@ -2108,15 +2198,25 @@ const hydrateSceneSubskillResultsFromPipelineNodes = (existingRaw, nodes) => {
         const called = Array.isArray(node?.runtime_meta?.called_subskills)
             ? node.runtime_meta.called_subskills
             : [];
+        const calledKeys = calledSubskillStepKeys(called);
         const stepName = String(
             node?.runtime_meta?.current_step
             || called[called.length - 1]
             || ''
         ).trim();
         const key = SCENE_SUBSKILL_STEP_FROM_PIPELINE[stepName] || 'staging';
+        const rerunCleared = Boolean(node?.runtime_meta?.rerun_cleared);
+        const stepBlocked = Boolean(
+            blockedSceneId
+            && blockedKeys.has(key)
+            && sceneUnitIdsMatch(sceneId, blockedSceneId, deriveSceneOrderFromSceneId(blockedSceneId), blockedPrefix)
+        );
+        if (rerunCleared && !calledKeys.has(key)) return;
+        if (stepBlocked && !calledKeys.has(key)) return;
         const scene = (map[sceneId] && typeof map[sceneId] === 'object' && !Array.isArray(map[sceneId]))
             ? { ...map[sceneId] }
             : {};
+        if (String(scene[key] || '').trim() && !rerunCleared) return;
         if (String(scene[key] || '').trim() === block) return;
         scene[key] = block;
         map[sceneId] = scene;
@@ -4185,12 +4285,12 @@ const describeSceneMatrixRerunAccount = (kind, sceneId, startLabel, tFn) => {
         ));
     }
     lines.push(t(
-        '整场合成稿：本场段落本轮结束后用新稿替换，其他场不动。',
-        'The combined script for this scene is replaced after this run. Other scenes stay.'
+        '整场合成稿：本场将重跑的节点已从合成稿清掉，本轮结束后写入新稿，其他场不动。',
+        'This scene’s rerun nodes are cleared from the combined script now, and the new draft is written when the run finishes. Other scenes stay.'
     ));
     lines.push(t(
-        '数据库：该场分镜标为删除；工作区场景行保留。',
-        'This scene’s storyboards are marked deleted. The workspace scene row stays.'
+        '数据库：该场分镜标为删除；工作区场景行保留，该场建置正文和分镜成稿已清空。',
+        'This scene’s storyboards are marked deleted. The workspace scene row stays, with its blocking text and storyboard draft cleared.'
     ));
     lines.push(clearsDerived
         ? t(
@@ -6839,6 +6939,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     });
     const [isRerunningStoryboard, setIsRerunningStoryboard] = useState(false);
     const [sceneMatrixRerun, setSceneMatrixRerun] = useState(null);
+    const [sceneMatrixClearedSteps, setSceneMatrixClearedSteps] = useState(null);
+    const [pinnedSubskillResults, setPinnedSubskillResults] = useState('');
+    const sceneMatrixClearedStepsRef = useRef(null);
+    const pinnedEpisodeOutputsRef = useRef('');
+    useEffect(() => {
+        const outputs = String(activeEpisode?.ai_stage_outputs || '');
+        if (!pinnedSubskillResults) {
+            pinnedEpisodeOutputsRef.current = outputs;
+            return;
+        }
+        if (sceneMatrixRerun) return;
+        if (pinnedEpisodeOutputsRef.current && pinnedEpisodeOutputsRef.current !== outputs) {
+            setPinnedSubskillResults('');
+        }
+        pinnedEpisodeOutputsRef.current = outputs;
+    }, [activeEpisode?.ai_stage_outputs, pinnedSubskillResults, sceneMatrixRerun]);
     const [diagnosticImportingKind, setDiagnosticImportingKind] = useState('');
     const [stageArtifactEditModal, setStageArtifactEditModal] = useState({
         open: false,
@@ -14394,6 +14510,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         content: text,
                     };
                 });
+                if (pinnedSubskillResults) {
+                    outputs.scene_subskill_results = {
+                        key: 'scene_subskill_results',
+                        kind: 'json',
+                        title: outputs.scene_subskill_results?.title || '逐场优化分步结果',
+                        content: pinnedSubskillResults,
+                    };
+                }
             }
             if (persisted.stages?.stage2?.outputs) {
                 if (liveSubjectIndex) {
@@ -14459,7 +14583,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return { version: 1, stages: {} };
             }
         }
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, diagnosticsPipelineNodes, diagnosticsRefreshNonce, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, parseVisualBackfillGlobalStyle, subjectIndexText]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, diagnosticsPipelineNodes, diagnosticsRefreshNonce, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, parseVisualBackfillGlobalStyle, pinnedSubskillResults, subjectIndexText]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -14970,8 +15094,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const scenes = await fetchScenes(activeEpisode.id);
                 if (!mounted || epoch !== diagnosticsEpochRef.current) return;
                 const rows = Array.isArray(scenes) ? scenes : [];
+                const cleared = sceneMatrixClearedStepsRef.current;
+                const visibleRows = cleared
+                    ? rows.map((scene) => {
+                        const sceneNo = String(scene?.scene_no || scene?.scene_id || '').trim();
+                        if (!sceneUnitIdsMatch(
+                            sceneNo,
+                            cleared.sceneId,
+                            deriveSceneOrderFromSceneId(cleared.sceneId),
+                            cleared.episodePrefix || 'EP01'
+                        )) return scene;
+                        return { ...scene, core_scene_info: '', ai_shots_result: '' };
+                    })
+                    : rows;
                 setDiagnosticsEpisodeSceneCount(rows.length);
-                setDiagnosticsEpisodeScenes(rows);
+                setDiagnosticsEpisodeScenes(visibleRows);
             } catch (_) {
                 if (mounted && epoch === diagnosticsEpochRef.current) {
                     setDiagnosticsEpisodeSceneCount(0);
@@ -15047,7 +15184,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const prevSubskillResults = String(latestStage1NodeOutputsRef.current?.scene_subskill_results || '').trim();
             const hydratedSubskillResults = hydrateSceneSubskillResultsFromPipelineNodes(
                 prevSubskillResults,
-                nodesForHydrate
+                nodesForHydrate,
+                sceneMatrixClearedStepsRef.current
             );
             if (hydratedSubskillResults && hydratedSubskillResults !== prevSubskillResults) {
                 latestStage1NodeOutputsRef.current = {
@@ -32337,41 +32475,84 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || ''
             ).trim();
         }
-        const liveSubskills = String(
-            latestStage1NodeOutputsRef.current?.scene_subskills
-            || adaptedText
-            || ''
-        ).trim();
+        const stepKeysToClear = sceneMatrixDownstreamGroups(stableKind)
+            .filter((group) => group !== 'storyboard');
+        const clearedSceneSteps = {
+            sceneId: targetSceneId,
+            keys: stepKeysToClear,
+            episodePrefix,
+        };
+        sceneMatrixClearedStepsRef.current = clearedSceneSteps;
+        setSceneMatrixClearedSteps(clearedSceneSteps);
+        const liveSubskills = stripClearedSectionsFromSceneScript(
+            String(
+                latestStage1NodeOutputsRef.current?.scene_subskills
+                || adaptedText
+                || ''
+            ).trim(),
+            targetSceneId,
+            stepKeysToClear,
+            episodePrefix
+        );
+        const existingResultsMap = parseSceneSubskillResultsMap(
+            latestStage1NodeOutputsRef.current?.scene_subskill_results
+            || getStageOutputContent('stage1', 'scene_subskill_results')
+        );
+        const nextResultsMap = dropMatchingSceneStepKeys(
+            existingResultsMap,
+            targetSceneId,
+            stepKeysToClear,
+            episodePrefix
+        );
+        const pinnedResults = JSON.stringify(nextResultsMap);
+        setPinnedSubskillResults(pinnedResults);
         latestStage1NodeOutputsRef.current = {
             ...latestStage1NodeOutputsRef.current,
             ...(liveSplit ? { scene_split: liveSplit } : {}),
             ...(liveEnvPlan ? { environment_plan: liveEnvPlan } : {}),
             ...(liveSubskills ? { scene_subskills: liveSubskills } : {}),
+            scene_subskill_results: pinnedResults,
         };
-        const existingResultsMap = parseSceneSubskillResultsMap(
-            latestStage1NodeOutputsRef.current?.scene_subskill_results
-            || getStageOutputContent('stage1', 'scene_subskill_results')
-        );
-        const sceneSteps = {
-            ...(lookupSceneSubskillSteps(existingResultsMap, targetSceneId, episodePrefix) || {}),
-        };
-        const stepKeysToClear = sceneMatrixDownstreamGroups(stableKind)
-            .filter((group) => group !== 'storyboard');
-        stepKeysToClear.forEach((key) => {
-            delete sceneSteps[key];
-        });
-        const nextResultsMap = { ...existingResultsMap };
-        const existingKey = Object.keys(nextResultsMap).find((key) => sceneUnitIdsMatch(
-            key,
+        setAdaptationText((prev) => stripClearedSectionsFromSceneScript(
+            prev,
             targetSceneId,
-            deriveSceneOrderFromSceneId(targetSceneId),
+            stepKeysToClear,
             episodePrefix
-        )) || targetSceneId;
-        nextResultsMap[existingKey] = sceneSteps;
-        latestStage1NodeOutputsRef.current = {
-            ...latestStage1NodeOutputsRef.current,
-            scene_subskill_results: JSON.stringify(nextResultsMap),
-        };
+        ));
+        setDiagnosticsPipelineNodes((prev) => (Array.isArray(prev) ? prev : []).map((node) => {
+            const name = String(node?.node_name || '').trim();
+            if (name !== 'scene_subskill_scene' && name !== 'storyboard_generation') return node;
+            if (!sceneUnitIdsMatch(
+                String(node?.scene_id || '').trim(),
+                targetSceneId,
+                deriveSceneOrderFromSceneId(targetSceneId),
+                episodePrefix
+            )) return node;
+            const meta = node?.runtime_meta && typeof node.runtime_meta === 'object' ? { ...node.runtime_meta } : {};
+            meta.scene_block = '';
+            meta.called_subskills = [];
+            meta.rerun_cleared = true;
+            meta.cleared_steps = name === 'storyboard_generation' ? ['storyboard'] : stepKeysToClear;
+            return {
+                ...node,
+                status: name === 'scene_subskill_scene' ? 'running' : 'queued',
+                runtime_meta: meta,
+            };
+        }));
+        setDiagnosticsEpisodeScenes((prev) => (Array.isArray(prev) ? prev : []).map((scene) => {
+            const sceneNo = String(scene?.scene_no || scene?.scene_id || '').trim();
+            if (!sceneUnitIdsMatch(
+                sceneNo,
+                targetSceneId,
+                deriveSceneOrderFromSceneId(targetSceneId),
+                episodePrefix
+            )) return scene;
+            return {
+                ...scene,
+                core_scene_info: '',
+                ai_shots_result: '',
+            };
+        }));
         onLog?.(
             t(
                 `重跑「${targetSceneId}」已开始：从「${label}」起，先按该场全部信息清理后再跑。`,
@@ -32580,6 +32761,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setAnalysisFlowStatus({ phase: 'failed', message });
             reportAnalysisPanelNotice(t(`重跑失败：${message}`, `Rerun failed: ${message}`), 'error');
         } finally {
+            try {
+                const freshEpisode = await fetchEpisode(activeEpisode.id);
+                const freshNodeOutputs = collectStage1NodeOutputsFromSlotMap(
+                    parseStageOutputsObject(freshEpisode?.ai_stage_outputs || '')?.stages?.stage1?.outputs
+                );
+                sceneMatrixClearedStepsRef.current = null;
+                setSceneMatrixClearedSteps(null);
+                latestStage1NodeOutputsRef.current = mergeStage1NodeOutputsPreferringFresh(
+                    latestStage1NodeOutputsRef.current,
+                    freshNodeOutputs
+                );
+                const freshResults = String(
+                    latestStage1NodeOutputsRef.current?.scene_subskill_results || ''
+                ).trim();
+                if (freshResults) setPinnedSubskillResults(freshResults);
+                setDiagnosticsRefreshNonce((value) => value + 1);
+            } catch (_) {}
             latestIsAnalyzingRef.current = false;
             setIsAnalyzing(false);
             analysisRunInFlightRef.current = false;
@@ -36402,6 +36600,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 onClose={() => setBeatViewerOpen(false)}
                 uiLang={uiLang}
                 resultsRaw={String(latestStage1NodeOutputsRef.current?.scene_subskill_results || '')}
+                clearedSceneSteps={sceneMatrixClearedSteps}
                 persistedResultsRaw={String(
                     currentStageOutputs?.stages?.stage1?.outputs?.scene_subskill_results?.content
                     || ''

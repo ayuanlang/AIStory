@@ -436,11 +436,15 @@ export function derivedCellReference(entity, entities) {
 
 export function derivedDependencyImageUrl(owner, depEntity, entities) {
     const fallback = String(depEntity?.image_url || '').trim();
-    if (!owner || !depEntity || isStateDerivedEntity(owner) || !isGridCropDerivedEntity(owner)) return fallback;
-    if (!isMainEnvironmentEntity(depEntity)) return fallback;
+    if (!owner || isStateDerivedEntity(owner) || !isGridCropDerivedEntity(owner)) return fallback;
     const cell = derivedCellReference(owner, entities);
-    if (!cell?.url || String(cell.mainId) !== String(depEntity.id || '')) return fallback;
-    return cell.url;
+    if (cell?.url) return cell.url;
+    const plan = planDerivedGridCell(owner, entities);
+    const mainUrl = String(plan?.mainEntity?.image_url || '').trim();
+    if (mainUrl && plan.mainEntity && String(plan.mainEntity.id || '') !== String(depEntity?.id || '')) {
+        return mainUrl;
+    }
+    return fallback;
 }
 
 const dependencyNames = (entity) => {
@@ -476,7 +480,52 @@ const mainNameCandidates = (entity) => {
     return names;
 };
 
+const SPECIAL_DEGREE_SUFFIXES = new Set(['仰天', '变形', '屋顶']);
+
+const degreeStrippedName = (entity) => {
+    const raw = headEnvironmentName(entity?.name || '');
+    const stripped = raw.replace(/^(?:\d+|[０-９]+)\s*(?:度|°|º|deg(?:ree)?s?\b)\s*/i, '').trim();
+    if (!stripped || normName(stripped) === normName(raw)) return '';
+    return stripped;
+};
+
+const scoreEnvironmentCandidate = (candidate, episodeId) => {
+    let score = 0;
+    if (episodeId && String(candidate?.episode_id || '').trim() === episodeId) score += 4;
+    if (String(candidate?.generation_prompt_cn || '').trim()) score += 2;
+    if (String(candidate?.image_url || '').trim()) score += 1;
+    return score;
+};
+
+const findEnvironmentByExactName = (name, entities, self) => {
+    const wanted = normName(headEnvironmentName(name));
+    if (!wanted) return null;
+    const matches = (Array.isArray(entities) ? entities : []).filter((candidate) => {
+        if (!candidate || candidate === self || candidate.is_deleted) return false;
+        if (!isEnvironmentEntity(candidate)) return false;
+        if (isAngledName(candidate.name) || isAngledName(candidate.name_en)) return false;
+        return normName(headEnvironmentName(candidate.name)) === wanted
+            || normName(headEnvironmentName(candidate.name_en)) === wanted;
+    });
+    if (!matches.length) return null;
+    if (matches.length === 1) return matches[0];
+    const episodeId = String(self?.episode_id || '').trim();
+    const scored = matches.map((candidate) => ({
+        candidate,
+        score: scoreEnvironmentCandidate(candidate, episodeId),
+    }));
+    scored.sort((left, right) => right.score - left.score);
+    return scored[0]?.candidate || null;
+};
+
 const findOwningMainEnvironment = (entity, entities) => {
+    const stripped = degreeStrippedName(entity);
+    if (stripped) {
+        const exact = findEnvironmentByExactName(stripped, entities, entity);
+        if (exact) return exact;
+        const suffix = stripped.includes('_') ? stripped.slice(stripped.lastIndexOf('_') + 1) : '';
+        if (suffix && !SPECIAL_DEGREE_SUFFIXES.has(suffix)) return null;
+    }
     const attrs = readAttrs(entity);
     const derivedMain = normName(attrs.derived_main_environment);
     const sourceMain = normName(attrs.source_main_environment);
@@ -498,13 +547,10 @@ const findOwningMainEnvironment = (entity, entities) => {
     });
     if (!matches.length) return null;
     const episodeId = String(entity?.episode_id || '').trim();
-    const scored = matches.map((candidate) => {
-        let score = 0;
-        if (episodeId && String(candidate?.episode_id || '').trim() === episodeId) score += 4;
-        if (String(candidate?.generation_prompt_cn || '').trim()) score += 2;
-        if (String(candidate?.image_url || '').trim()) score += 1;
-        return { candidate, score };
-    });
+    const scored = matches.map((candidate) => ({
+        candidate,
+        score: scoreEnvironmentCandidate(candidate, episodeId),
+    }));
     scored.sort((left, right) => right.score - left.score);
     return scored[0]?.candidate || null;
 };

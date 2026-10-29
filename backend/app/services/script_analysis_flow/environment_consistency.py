@@ -189,21 +189,6 @@ def find_owning_main_environment(db: Session, entity: Any) -> Optional[Entity]:
         )
         .all()
     )
-    matches = []
-    for row in rows:
-        if int(getattr(row, "id", 0) or 0) == int(getattr(entity, "id", 0) or 0):
-            continue
-        if not is_main_environment_entity(row):
-            continue
-        row_names = {
-            _clean_name(getattr(row, "name", "")).lower(),
-            _clean_name(getattr(row, "name_en", "")).lower(),
-        }
-        row_names.discard("")
-        if wanted & row_names:
-            matches.append(row)
-    if not matches:
-        return None
     episode_id = getattr(entity, "episode_id", None)
 
     def _score(row: Entity) -> int:
@@ -216,6 +201,47 @@ def find_owning_main_environment(db: Session, entity: Any) -> Optional[Entity]:
             score += 1
         return score
 
+    def _row_names(row: Entity) -> set:
+        names = {
+            _clean_name(getattr(row, "name", "")).lower(),
+            _clean_name(getattr(row, "name_en", "")).lower(),
+        }
+        names.discard("")
+        return names
+
+    def _is_angled_environment(row: Entity) -> bool:
+        name = str(getattr(row, "name", "") or "").strip()
+        name_en = str(getattr(row, "name_en", "") or "").strip()
+        return bool(re.match(r"^\d+\s*度", name) or re.match(r"^\d+\s*度", name_en))
+
+    raw_name = str(getattr(entity, "name", "") or "").strip()
+    stripped = re.sub(r"^(?:\d+)\s*度\s*", "", raw_name).strip()
+    if stripped and stripped != raw_name:
+        exact = [
+            row
+            for row in rows
+            if int(getattr(row, "id", 0) or 0) != int(getattr(entity, "id", 0) or 0)
+            and is_environment_entity(row)
+            and not _is_angled_environment(row)
+            and stripped.lower() in _row_names(row)
+        ]
+        if exact:
+            exact.sort(key=_score, reverse=True)
+            return exact[0]
+        suffix = stripped.rsplit("_", 1)[-1] if "_" in stripped else ""
+        if suffix and suffix not in {"仰天", "变形", "屋顶"}:
+            return None
+
+    matches = []
+    for row in rows:
+        if int(getattr(row, "id", 0) or 0) == int(getattr(entity, "id", 0) or 0):
+            continue
+        if not is_main_environment_entity(row):
+            continue
+        if wanted & _row_names(row):
+            matches.append(row)
+    if not matches:
+        return None
     matches.sort(key=_score, reverse=True)
     return matches[0]
 
@@ -1586,8 +1612,12 @@ def _build_cell_consistency_messages(
 ) -> List[Dict[str, Any]]:
     angle = derived_view_angle(entity)
     from_derived_main = is_derived_main_environment_entity(main_entity)
-    wall_source = depended_entity if from_derived_main else main_entity
-    faces, cell = _cell_wall_and_grid(wall_source, angle)
+    if from_derived_main:
+        face_source = main_entity if main_environment_opening_text(main_entity).strip() else depended_entity
+        faces = _cell_wall_and_grid(face_source, angle)[0]
+        cell = _cell_wall_and_grid(main_entity, angle)[1]
+    else:
+        faces, cell = _cell_wall_and_grid(main_entity, angle)
     stored = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
     if is_pending_derived_prompt(stored):
         stored = ""
@@ -1597,8 +1627,9 @@ def _build_cell_consistency_messages(
     if from_derived_main:
         system_prompt = (
             "你是衍生主环境名下这一角的一致性校对。这次只核对本角度的一张已经裁出的单格参考图。\n"
-            "注入只有三部分：被依赖主环境开篇里这一角看得见的五壁（正面、左侧面、右侧面、中部、上），"
-            "被依赖主环境里这一格的四宫格正文，以及衍生Delta。"
+            "注入只有三部分：这一角看得见的五壁（正面、左侧面、右侧面、中部、上），"
+            "衍生主环境四宫里这一格的正文，以及衍生Delta。"
+            "这一格正文取自衍生主环境，不取被依赖的原来主环境。"
             "镜头后面的那一壁没有注入，不要用它。不要用没注入的其余正文。\n"
             "做两件核对，两件都要有结论：\n"
             "1. 这一格正文与这五壁的个数、朝向、位置是否一致。Delta 不改这一格正文。不符就在 summary 里写明。revised_cell 必须为 null。\n"

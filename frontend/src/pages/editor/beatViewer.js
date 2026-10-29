@@ -260,6 +260,28 @@ export const mergeSubskillResultMaps = (baseRaw, overlayRaw) => {
     return next;
 };
 
+export const omitClearedSceneSteps = (resultsMap, clear) => {
+    const sceneId = String(clear?.sceneId || '').trim();
+    const keys = (Array.isArray(clear?.keys) ? clear.keys : [])
+        .map((key) => String(key || '').trim())
+        .filter(Boolean);
+    const source = resultsMap && typeof resultsMap === 'object' && !Array.isArray(resultsMap) ? resultsMap : {};
+    if (!sceneId || keys.length <= 0) return source;
+    const drop = new Set(keys);
+    const next = {};
+    Object.entries(source).forEach(([id, steps]) => {
+        if (!steps || typeof steps !== 'object' || Array.isArray(steps)) return;
+        if (!sceneKeysMatch(id, sceneId)) {
+            next[id] = { ...steps };
+            return;
+        }
+        const scene = { ...steps };
+        drop.forEach((key) => { delete scene[key]; });
+        next[id] = scene;
+    });
+    return next;
+};
+
 export const mergePipelineSceneBlocks = (resultsMap, pipelineNodes) => {
     const next = {};
     Object.entries(resultsMap && typeof resultsMap === 'object' ? resultsMap : {}).forEach(([sceneId, steps]) => {
