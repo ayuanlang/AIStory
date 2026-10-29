@@ -6941,6 +6941,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [sceneMatrixRerun, setSceneMatrixRerun] = useState(null);
     const [sceneMatrixClearedSteps, setSceneMatrixClearedSteps] = useState(null);
     const [pinnedSubskillResults, setPinnedSubskillResults] = useState('');
+    const [pinnedStage1NodeOutputs, setPinnedStage1NodeOutputs] = useState(null);
+    const pinnedStage1NodeOutputsRef = useRef(null);
     const sceneMatrixClearedStepsRef = useRef(null);
     const pinnedEpisodeOutputsRef = useRef('');
     useEffect(() => {
@@ -6955,6 +6957,42 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         pinnedEpisodeOutputsRef.current = outputs;
     }, [activeEpisode?.ai_stage_outputs, pinnedSubskillResults, sceneMatrixRerun]);
+    useEffect(() => {
+        setPinnedStage1NodeOutputs((prev) => {
+            if (!prev || typeof prev !== 'object') return prev;
+            const next = { ...prev };
+            let changed = false;
+            ['scene_split', 'environment_plan'].forEach((key) => {
+                const pinned = String(next[key] || '').trim();
+                if (!pinned) return;
+                const saved = String(readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, key) || '').trim();
+                if (saved && saved === pinned) {
+                    delete next[key];
+                    changed = true;
+                }
+            });
+            const resolved = Object.keys(next).length ? next : null;
+            pinnedStage1NodeOutputsRef.current = resolved;
+            return changed ? resolved : prev;
+        });
+    }, [activeEpisode?.ai_stage_outputs]);
+    const pinStage1NodeOutput = useCallback((key, text) => {
+        const slotKey = String(key || '').trim();
+        const value = String(text || '').trim();
+        if (!slotKey || !value) return;
+        latestStage1NodeOutputsRef.current = {
+            ...(latestStage1NodeOutputsRef.current || {}),
+            [slotKey]: value,
+        };
+        setPinnedStage1NodeOutputs((prev) => {
+            const next = {
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                [slotKey]: value,
+            };
+            pinnedStage1NodeOutputsRef.current = next;
+            return next;
+        });
+    }, []);
     const [diagnosticImportingKind, setDiagnosticImportingKind] = useState('');
     const [stageArtifactEditModal, setStageArtifactEditModal] = useState({
         open: false,
@@ -14518,6 +14556,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         content: pinnedSubskillResults,
                     };
                 }
+                ['scene_split', 'environment_plan'].forEach((slotKey) => {
+                    const pinned = String(pinnedStage1NodeOutputs?.[slotKey] || '').trim();
+                    if (!pinned) return;
+                    outputs[slotKey] = {
+                        ...(outputs[slotKey] && typeof outputs[slotKey] === 'object' ? outputs[slotKey] : {}),
+                        key: slotKey,
+                        kind: 'markdown',
+                        title: outputs[slotKey]?.title || slotKey,
+                        content: pinned,
+                    };
+                });
             }
             if (persisted.stages?.stage2?.outputs) {
                 if (liveSubjectIndex) {
@@ -14583,7 +14632,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return { version: 1, stages: {} };
             }
         }
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, diagnosticsPipelineNodes, diagnosticsRefreshNonce, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, parseVisualBackfillGlobalStyle, pinnedSubskillResults, subjectIndexText]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, diagnosticsPipelineNodes, diagnosticsRefreshNonce, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, parseVisualBackfillGlobalStyle, pinnedStage1NodeOutputs, pinnedSubskillResults, subjectIndexText]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -15767,6 +15816,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...collectStage1NodeOutputsFromSlotMap(options.stage1NodeOutputs),
                 };
             }
+            const pinnedNodes = pinnedStage1NodeOutputsRef.current;
+            if (pinnedNodes && typeof pinnedNodes === 'object') {
+                mergedNodeOutputs = {
+                    ...mergedNodeOutputs,
+                    ...collectStage1NodeOutputsFromSlotMap(pinnedNodes),
+                };
+            }
             latestStage1NodeOutputsRef.current = mergedNodeOutputs;
             const persistedStageOutputs = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
             const persistedStage1RawText = String(persistedStageOutputs?.stages?.stage1?.outputs?.raw_text?.content || '').trim();
@@ -15857,7 +15913,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         replaceSceneMarkdownByScene: true,
                         replaceSubjectIndex: true,
                         persistedNodeOutputs: freshStage1Outputs,
-                        stage1NodeOutputs: options?.stage1NodeOutputs,
+                        stage1NodeOutputs: mergedNodeOutputs,
                     };
                     Object.assign(updatePayload, {
                         ai_scene_analysis_adaptation: adaptationValue,
@@ -15931,7 +15987,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     replaceSceneMarkdownByScene,
                     replaceSubjectIndex: true,
                     persistedNodeOutputs: freshStage1Outputs,
-                    stage1NodeOutputs: options?.stage1NodeOutputs,
+                    stage1NodeOutputs: mergedNodeOutputs,
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length} subject_index_len=${normalizedSubjectIndexValue.length} adaptation_len=${adaptationValue.length}`, 'info');
@@ -15949,7 +16005,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     replaceSceneMarkdownByScene,
                     replaceSubjectIndex: true,
                     persistedNodeOutputs: freshStage1Outputs,
-                    stage1NodeOutputs: options?.stage1NodeOutputs,
+                    stage1NodeOutputs: mergedNodeOutputs,
                 }), null, 2);
                 onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length}`, 'info');
 
@@ -15976,7 +16032,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     replaceSceneMarkdownByScene: trustLiveDownstreamOnly || hasLiveByScene,
                     replaceSubjectIndex: true,
                     persistedNodeOutputs: freshStage1Outputs,
-                    stage1NodeOutputs: options?.stage1NodeOutputs,
+                    stage1NodeOutputs: mergedNodeOutputs,
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=ai_stage_outputs source=${logSource} bundle_len=${String(updatePayload.ai_stage_outputs || '').length}`, 'info');
@@ -15997,7 +16053,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     replaceSceneMarkdownByScene: trustLiveDownstreamOnly || hasLiveByScene,
                     replaceSubjectIndex: true,
                     persistedNodeOutputs: freshStage1Outputs,
-                    stage1NodeOutputs: options?.stage1NodeOutputs,
+                    stage1NodeOutputs: mergedNodeOutputs,
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=ai_stage_outputs source=${logSource} bundle_len=${String(updatePayload.ai_stage_outputs || '').length}`, 'info');
@@ -16966,6 +17022,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     latestStage1NodeOutputsRef.current,
                     freshNodeOutputs
                 );
+                const pins = pinnedStage1NodeOutputsRef.current;
+                if (pins && typeof pins === 'object') {
+                    latestStage1NodeOutputsRef.current = {
+                        ...latestStage1NodeOutputsRef.current,
+                        ...(String(pins.scene_split || '').trim() ? { scene_split: pins.scene_split } : {}),
+                        ...(String(pins.environment_plan || '').trim() ? { environment_plan: pins.environment_plan } : {}),
+                    };
+                }
             } catch (_) {}
         }
         if (SCENE_SUBSKILL_EDIT_KINDS.has(stableKind)) {
@@ -17027,8 +17091,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (stableKind === 'char_extract' || stableKind === 'prop_extract') {
             const tag = stableKind === 'char_extract' ? 'CHAR' : 'PROP';
             const source = String(
-                currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content
+                pinnedStage1NodeOutputsRef.current?.scene_split
                 || latestStage1NodeOutputsRef.current?.scene_split
+                || currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content
                 || activeEpisode?.ai_scene_analysis_result
                 || adaptationText
                 || ''
@@ -17054,7 +17119,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         if (['scene_split', 'environment_plan', 'scene_subskills'].includes(stableKind)) {
             const content = String(
-                latestStage1NodeOutputsRef.current?.[stableKind]
+                pinnedStage1NodeOutputsRef.current?.[stableKind]
+                || latestStage1NodeOutputsRef.current?.[stableKind]
                 || currentStageOutputs?.stages?.stage1?.outputs?.[stableKind]?.content
                 || (stableKind === 'scene_subskills' ? resolveScriptOptBeatsContent() : '')
                 || ''
@@ -17242,8 +17308,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } else if (kind === 'char_extract' || kind === 'prop_extract') {
                 const tag = kind === 'char_extract' ? 'CHAR' : 'PROP';
                 const base = preferEditorSceneSplitText(
+                    pinnedStage1NodeOutputsRef.current?.scene_split
+                    || latestStage1NodeOutputsRef.current?.scene_split,
                     currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content,
-                    latestStage1NodeOutputsRef.current?.scene_split,
                     activeEpisode?.ai_scene_analysis_result,
                     adaptationText || content
                 );
@@ -31281,19 +31348,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const output = String(extractAnalysisTextFromResult(result) || '').trim();
             if (!output) throw new Error(t('节点未返回内容。', 'The node returned no output.'));
             const nodeSlotKey = stableNode === 'scene_subskill_pipeline' ? 'scene_subskills' : stableNode;
+            const previousSlot = String(
+                latestStage1NodeOutputsRef.current?.[nodeSlotKey]
+                || getStageOutputContent('stage1', nodeSlotKey)
+                || ''
+            ).trim();
             let nodeText = output;
             try {
                 const freshEpisode = await fetchEpisode(activeEpisode.id);
                 const savedNodeText = String(
                     readStage1OutputSlotContent(freshEpisode?.ai_stage_outputs, nodeSlotKey) || ''
                 ).trim();
-                if (savedNodeText) nodeText = savedNodeText;
+                if (savedNodeText && savedNodeText !== previousSlot) nodeText = savedNodeText;
             } catch (_) {}
+            pinStage1NodeOutput(nodeSlotKey, nodeText);
             latestStage1RawTextRef.current = nodeText;
-            latestStage1NodeOutputsRef.current = {
-                ...latestStage1NodeOutputsRef.current,
-                [nodeSlotKey]: nodeText,
-            };
+            await persistLlmResultContent(nodeText, 'ai_scene_analysis_result', {
+                source: `rerun-stage1-${nodeSlotKey}`,
+                stage1RawText: nodeText,
+                stage1NodeOutputs: { [nodeSlotKey]: nodeText },
+            });
             const adapted = String(extractStage1AdaptedScriptBody(nodeText) || nodeText).trim();
             if (adapted) setAdaptationText(adapted);
             setLlmRawResultContent(nodeText);
@@ -31461,11 +31535,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             abortIfPromptInjectionRisk(sceneSplitText);
             assertStage1VisualBackfillJson(sceneSplitText, { logPrefix: t('[美术指导重跑]', '[Art direction rerun]') });
+            pinStage1NodeOutput('scene_split', sceneSplitText);
             latestStage1RawTextRef.current = sceneSplitText;
-            latestStage1NodeOutputsRef.current = {
-                ...latestStage1NodeOutputsRef.current,
-                scene_split: sceneSplitText,
-            };
             const adaptedNow = String(extractStage1AdaptedScriptBody(sceneSplitText) || sceneSplitText).trim();
             if (adaptedNow) setAdaptationText(adaptedNow);
             setLlmRawResultContent(sceneSplitText);
@@ -31534,11 +31605,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 throw new Error(t('整集环境规划未返回内容。', 'Whole-episode environment plan returned no content.'));
             }
             abortIfPromptInjectionRisk(environmentPlanText);
+            pinStage1NodeOutput('environment_plan', environmentPlanText);
             latestStage1RawTextRef.current = environmentPlanText;
-            latestStage1NodeOutputsRef.current = {
-                ...latestStage1NodeOutputsRef.current,
-                environment_plan: environmentPlanText,
-            };
             await persistLlmResultContent(environmentPlanText, 'ai_scene_analysis_result', {
                 source: 'rerun-art-direction-environment-plan',
                 stage1RawText: environmentPlanText,
