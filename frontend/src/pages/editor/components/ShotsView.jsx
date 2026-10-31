@@ -4040,6 +4040,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             'prev_shot_frame_meta',
             'multi_panel_image_url',
             'multi_panel_image_preset',
+            'multi_panel_last_split_source_url',
+            'multi_panel_generated',
             'storyboard_url',
         ];
 
@@ -9483,6 +9485,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 throw new Error('No multi-panel image URL returned');
             }
             techNotes.multi_panel_image_url = finalUrl;
+            techNotes.multi_panel_generated = true;
             techNotes.multi_panel_image_preset = activePresetKey;
             techNotes.multi_panel_request_aspect_ratio = appliedRequestAspectRatio || requestAspectRatio;
             techNotes.multi_panel_request_aspect_candidates = requestAspectCandidates;
@@ -11641,6 +11644,53 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, [SHOT_BATCH_PARALLEL_LIMIT, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotDiptychBatchItem, getShotEndFrameUrl, isPersistentLocalShotBatchStopRequested, onLog, refreshShotAssetsMeta, refreshShots, shots, syncLocalShotBatchRuntime, t]);
 
+    const loadShotsWithGeneratedFrameAssets = useCallback(async (shotList) => {
+        const wanted = new Set((Array.isArray(shotList) ? shotList : []).map((shot) => String(shot?.id || '').trim()).filter(Boolean));
+        const found = new Set();
+        if (wanted.size === 0) return found;
+        const resolvedProjectId = projectId || activeEpisode?.project_id;
+        const episodeId = activeEpisode?.id;
+        if (!resolvedProjectId || !episodeId) return found;
+        const generatedFrameTypes = new Set(['start_frame', 'start', 'end_frame', 'end', 'keyframe', 'shot_image', 'multi_panel']);
+        const pageSize = 200;
+        let skip = 0;
+        try {
+            for (let page = 0; page < 20 && found.size < wanted.size; page += 1) {
+                const data = await fetchAssets({
+                    project_id: resolvedProjectId,
+                    episode_id: episodeId,
+                    type: 'image',
+                    skip,
+                    limit: pageSize,
+                });
+                const rows = Array.isArray(data) ? data : [];
+                rows.forEach((asset) => {
+                    let meta = asset?.meta_info;
+                    if (typeof meta === 'string') {
+                        try { meta = JSON.parse(meta); } catch { meta = {}; }
+                    }
+                    if (!meta || typeof meta !== 'object') meta = {};
+                    const shotId = String(meta.shot_id || asset?.shot_id || '').trim();
+                    if (!shotId || !wanted.has(shotId) || found.has(shotId)) return;
+                    const frameType = String(meta.frame_type || meta.asset_type || '').trim().toLowerCase();
+                    const remark = String(asset?.remark || meta.remark || '').toLowerCase();
+                    if (
+                        generatedFrameTypes.has(frameType)
+                        || remark.includes('multi-panel')
+                        || remark.includes('generated start_frame')
+                    ) {
+                        found.add(shotId);
+                    }
+                });
+                if (rows.length < pageSize) break;
+                skip += rows.length;
+            }
+        } catch (error) {
+            console.warn('Failed to check existing storyboard frame assets:', error);
+        }
+        return found;
+    }, [activeEpisode?.id, activeEpisode?.project_id, projectId]);
+
     const runLocalMultiPanelPreviewBatch = useCallback(async () => {
         const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
         if (orderedShots.length === 0) {
@@ -11648,17 +11698,32 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             return;
         }
 
-        const shotHasGeneratedStoryboardPreview = (shot) => {
-            const tech = parseShotTechnicalNotes(shot?.technical_notes);
-            if (String(tech?.multi_panel_image_url || tech?.storyboard_url || '').trim()) return true;
-            return Boolean(String(shot?.image_url || '').trim());
+        const techHasFrameMedia = (value) => {
+            if (!value) return false;
+            if (typeof value === 'string') return Boolean(value.trim());
+            if (Array.isArray(value)) return value.some((item) => techHasFrameMedia(item));
+            if (typeof value === 'object') {
+                return Object.values(value).some((item) => techHasFrameMedia(item?.url || item?.image_url || item));
+            }
+            return false;
         };
-        const skippedShots = orderedShots.filter(shotHasGeneratedStoryboardPreview);
-        const targetShots = orderedShots.filter((shot) => !shotHasGeneratedStoryboardPreview(shot));
+        const shotHasGeneratedStoryboardPreview = (shot, generatedAssetShotIds) => {
+            const tech = parseShotTechnicalNotes(shot?.technical_notes);
+            if (tech?.multi_panel_generated === true) return true;
+            if (String(tech?.multi_panel_image_url || tech?.storyboard_url || tech?.multi_panel_last_split_source_url || '').trim()) return true;
+            if (String(shot?.image_url || '').trim()) return true;
+            if (String(getShotEndFrameUrl(shot) || '').trim()) return true;
+            if (techHasFrameMedia(tech?.keyframes) || techHasFrameMedia(tech?.keyframe_images)) return true;
+            const stableShotId = String(shot?.id || '').trim();
+            return Boolean(stableShotId && generatedAssetShotIds?.has(stableShotId));
+        };
+        const generatedAssetShotIds = await loadShotsWithGeneratedFrameAssets(orderedShots);
+        const skippedShots = orderedShots.filter((shot) => shotHasGeneratedStoryboardPreview(shot, generatedAssetShotIds));
+        const targetShots = orderedShots.filter((shot) => !shotHasGeneratedStoryboardPreview(shot, generatedAssetShotIds));
         if (targetShots.length === 0) {
             alert(t(
-                `当前 ${orderedShots.length} 个镜头都已有分镜预览或起始帧，已跳过，不会重复生成。`,
-                `All ${orderedShots.length} shots already have a storyboard preview or start frame. They were skipped and will not be generated again.`
+                `当前 ${orderedShots.length} 个镜头都已生成过分镜预览（含裁切未完成的），已跳过，不会重复生成。`,
+                `All ${orderedShots.length} shots already have a generated storyboard preview, including ones whose crop did not finish. They were skipped and will not be generated again.`
             ));
             return;
         }
@@ -11666,8 +11731,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const presetOption = getMultiPanelPresetOption(batchMultiPanelPresetKey);
         const skipNote = skippedShots.length > 0
             ? t(
-                `已有分镜预览或起始帧的 ${skippedShots.length} 个镜头会跳过，不重复生成。`,
-                `${skippedShots.length} shot(s) that already have a storyboard preview or start frame will be skipped.`
+                `已生成过的 ${skippedShots.length} 个镜头会跳过，裁切没成功的也不再重跑。`,
+                `${skippedShots.length} shot(s) that were already generated will be skipped, including ones whose crop did not finish.`
             )
             : '';
         const ok = await confirmUiMessage(
@@ -11714,10 +11779,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         });
         onLog?.(t(
             skippedShots.length > 0
-                ? `开始本地分镜预览批量任务：生成 ${targetShots.length} 个，跳过已生成 ${skippedShots.length} 个。`
+                ? `开始本地分镜预览批量任务：生成 ${targetShots.length} 个，跳过已生成 ${skippedShots.length} 个（含裁切未完成）。`
                 : '开始本地分镜预览批量任务（生成后自动拆分回填）。',
             skippedShots.length > 0
-                ? `Started local storyboard preview batch: generating ${targetShots.length}, skipped ${skippedShots.length} already generated.`
+                ? `Started local storyboard preview batch: generating ${targetShots.length}, skipped ${skippedShots.length} already generated (including unfinished crops).`
                 : 'Started local storyboard preview batch (auto-split after generation).'
         ), 'process');
 
@@ -11873,6 +11938,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         getShotEndFrameUrl,
         isPersistentLocalShotBatchStopRequested,
         loadMultiPanelPresetInstruction,
+        loadShotsWithGeneratedFrameAssets,
         onLog,
         refreshShotAssetsMeta,
         refreshShots,
@@ -12708,7 +12774,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         <button
                                                             onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerateMultiPanelPreview(); }}
                                                             className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
-                                                            title={t('按当前画格预设为尚未生成的镜头生成分镜预览并拆分回填；已有分镜预览或起始帧的镜头会跳过', 'Generate storyboard previews for shots that do not have one yet, using the current panel preset, then split and fill frames. Shots that already have a preview or start frame are skipped')}
+                                                            title={t('按当前画格预设为尚未生成的镜头生成分镜预览并拆分回填；已生成过的镜头会跳过，裁切没成功的也不再重跑', 'Generate storyboard previews for shots that do not have one yet, using the current panel preset, then split and fill frames. Already generated shots are skipped, including ones whose crop did not finish')}
                                                         >
                                                             <Layers className="w-3 h-3 text-muted-foreground"/>
                                                             {t('分镜预览 (批量)', 'Storyboard Preview (Batch)')}
@@ -12779,7 +12845,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 onClick={handleBatchGenerateMultiPanelPreview}
                                 disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
                                 className={`px-3 py-1.5 rounded text-xs flex items-center gap-1 transition-all ${(isBatchGenerating || isShotBatchStarting) ? 'bg-amber-500/20 text-amber-200 cursor-wait' : 'bg-amber-500/10 text-amber-200 hover:bg-amber-500/20'}`}
-                                title={t('为当前列表中尚未生成分镜预览的镜头批量生成，并拆分填入首尾帧与关键帧；已有预览或起始帧的镜头会跳过', 'Batch-generate storyboard previews for listed shots that do not have one yet, then split panels into start/end frames and keyframes. Shots that already have a preview or start frame are skipped')}
+                                title={t('为当前列表中尚未生成分镜预览的镜头批量生成，并拆分填入首尾帧与关键帧；已生成过的镜头会跳过，裁切没成功的也不再重跑', 'Batch-generate storyboard previews for listed shots that do not have one yet, then split panels into start/end frames and keyframes. Already generated shots are skipped, including ones whose crop did not finish')}
                             >
                                 {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Layers className="w-3 h-3"/>}
                                 {t('批量分镜预览', 'Batch Storyboard Preview')}

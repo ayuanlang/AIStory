@@ -3775,6 +3775,8 @@ const COMPACT_TECH_NOTES_SYNC_KEYS = [
     'keyframe_images',
     'multi_panel_image_url',
     'multi_panel_image_preset',
+    'multi_panel_last_split_source_url',
+    'multi_panel_generated',
     'storyboard_url',
     'start_frame_oss_uploaded',
     'end_frame_oss_uploaded',

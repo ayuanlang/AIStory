@@ -29,6 +29,8 @@ _SHOT_LIST_COMPACT_TECH_KEYS = (
     "prev_shot_frame_meta",
     "multi_panel_image_url",
     "multi_panel_image_preset",
+    "multi_panel_last_split_source_url",
+    "multi_panel_generated",
     "storyboard_url",
 )
 def _compact_shot_list_technical_notes(raw_notes: Any) -> Tuple[Optional[str], str, str]:

@@ -439,6 +439,92 @@ def test_piece_count_ledger_blocks_a_consistent_verdict():
     assert any("四格中部件数不一致" in item for item in issues)
 
 
+def _passing_piece_count_quad() -> str:
+    cell = (
+        "中部：件数=2。[@公案]（M-001）。[@主椅]（M-002）。\n"
+        "件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜"
+        "右侧面点名=0开篇=0划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=0开篇=0划出=0。\n"
+    )
+    return (
+        "【四向拼图】\n"
+        "[0度格-左上·北]\n" + cell
+        + "[90度格-右上·东]\n" + cell
+        + "[180度格-左下·南]\n" + cell
+        + "[270度格-右下·西]\n" + cell
+    )
+
+
+def test_piece_count_uses_the_returned_grid_not_the_stored_failure():
+    failing = """【四向拼图】
+[0度格-左上·北]
+中部：件数=2。[@公案]（M-001）。[@主椅]（M-002）。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=0开篇=0划出=0。
+[90度格-右上·东]
+中部：件数=2。[@公案]（M-001）。[@主椅]（M-002）。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=0开篇=0划出=0。
+[180度格-左下·南]
+中部：件数=0。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=0开篇=2划出=2改入=0｜上点名=0开篇=0划出=0。
+[270度格-右下·西]
+中部：件数=2。[@公案]（M-001）。[@主椅]（M-002）。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=0开篇=0划出=0。
+"""
+    passing = _passing_piece_count_quad()
+    assert audit_piece_count_reconciliation(passing) == []
+    entity = Dummy(id=7, prompt=failing)
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        failing,
+        {
+            "consistent": False,
+            "summary": "核销通过",
+            "revised_prompt": passing,
+            "revised_main_prompt": failing,
+        },
+    )
+    assert not plan["summary"].startswith("件数核销未通过")
+    assert plan["summary"] == "核销通过"
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert "中部：件数=0" not in written
+    assert written.count("中部点名=2开篇=2划出=0改入=0") == 4
+
+
+def test_partial_returned_cell_is_merged_before_piece_count_audit():
+    failing = """【四向拼图】
+[0度格-左上·北]
+中部：件数=2。[@公案]（M-001）。[@主椅]（M-002）。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=0开篇=0划出=0。
+[90度格-右上·东]
+中部：件数=2。[@公案]（M-001）。[@主椅]（M-002）。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=0开篇=0划出=0。
+[180度格-左下·南]
+中部：件数=0。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=0开篇=2划出=2改入=0｜上点名=0开篇=0划出=0。
+[270度格-右下·西]
+中部：件数=2。[@公案]（M-001）。[@主椅]（M-002）。
+件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜右侧面点名=0开篇=0划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=0开篇=0划出=0。
+"""
+    fixed_cell = (
+        "[180度格-左下·南]\n"
+        "中部：件数=2。[@公案]（M-001）。[@主椅]（M-002）。\n"
+        "件数核销：正面点名=0开篇=0划出=0｜左侧面点名=0开篇=0划出=0｜"
+        "右侧面点名=0开篇=0划出=0｜中部点名=2开篇=2划出=0改入=0｜上点名=0开篇=0划出=0。\n"
+    )
+    entity = Dummy(id=7, prompt=failing)
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        failing,
+        {"consistent": False, "summary": "180度格已补上", "revised_prompt": fixed_cell},
+    )
+    assert not plan["summary"].startswith("件数核销未通过")
+    written = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert "中部：件数=0" not in written
+    assert "[0度格-左上" in written
+    assert "[270度格-右下" in written
+
+
 def test_center_count_accepts_foot_depth_strike_when_named():
     quad = """【四向拼图】
 [0度格-左上·北]

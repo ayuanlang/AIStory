@@ -1298,6 +1298,50 @@ def _plan_derived_main_consistency_writes(entity: Any, payload: Dict[str, Any]) 
     }
 
 
+def _returned_quad_text(kind: str, revised: Optional[str], revised_main: Optional[str]) -> str:
+    """The four-grid this check would write. A derived prompt is not that grid."""
+    if kind not in {"main", "crop"}:
+        return ""
+    primary = revised_main if kind == "crop" else revised
+    secondary = revised if kind == "crop" else revised_main
+    primary = str(primary or "").strip()
+    if primary:
+        return primary
+    secondary = str(secondary or "").strip()
+    normalized = _normalize_grid_titles(secondary)
+    if _indexed_cells(normalized) or "件数核销" in normalized or "件数=" in normalized:
+        return secondary
+    return ""
+
+
+def _quad_text_to_audit(source: str, incoming: str, summary: str) -> str:
+    """Audit the quad this return leaves, not the previous stored copy.
+
+    Unchanged cells omitted from the return are copied back first. A return
+    that cannot be grafted is audited as itself, so a passing latest grid is
+    not replaced by the previous failure. With no returned grid, the stored
+    prompt is the text under check.
+    """
+    stored = str(source or "")
+    revised = str(incoming or "").strip()
+    if not revised:
+        return stored
+    try:
+        if QUAD_MARK in stored:
+            if opening_error_claimed(summary):
+                return accept_revised_main_prompt(stored, revised)
+            return graft_quad_onto_opening(stored, revised)
+        if _indexed_cells(stored) or _indexed_cells(_normalize_grid_titles(revised)):
+            return complete_revised_quad(
+                stored,
+                revised,
+                keep_revised_opening=opening_error_claimed(summary),
+            )
+    except ConsistencyApplyError:
+        pass
+    return _normalize_grid_titles(revised)
+
+
 def plan_consistency_writes(
     entity: Any,
     main_entity: Optional[Any],
@@ -1326,17 +1370,20 @@ def plan_consistency_writes(
     source_quad = main_prompt or checked_prompt
     revised = _blank_to_none(payload.get("revised_prompt"))
     revised_main = _blank_to_none(payload.get("revised_main_prompt"))
-    revised_quad = revised_main or revised or ""
-    normalized_quad = _normalize_grid_titles(revised_quad)
-    audit_target = (
-        normalized_quad
-        if ("件数核销" in normalized_quad or "件数=" in normalized_quad)
-        else source_quad
-    )
-    piece_issues = audit_piece_count_reconciliation(audit_target)
-    street_issues = audit_street_end_phrases(audit_target)
-    wall_issues = audit_wall_corner_span(audit_target)
-    front_issues = audit_front_double(audit_target)
+    piece_issues: List[str] = []
+    street_issues: List[str] = []
+    wall_issues: List[str] = []
+    front_issues: List[str] = []
+    if kind in {"main", "crop"}:
+        audit_target = _quad_text_to_audit(
+            source_quad,
+            _returned_quad_text(kind, revised, revised_main),
+            summary,
+        )
+        piece_issues = audit_piece_count_reconciliation(audit_target)
+        street_issues = audit_street_end_phrases(audit_target)
+        wall_issues = audit_wall_corner_span(audit_target)
+        front_issues = audit_front_double(audit_target)
     if piece_issues or street_issues or wall_issues or front_issues:
         if piece_issues:
             prefix = PIECE_COUNT_PREFIX
