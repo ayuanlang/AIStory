@@ -406,12 +406,23 @@ def _visible_face_text(chunk: str) -> str:
 
 
 def _mention_is_cross_face(text: str, start: int, end: int) -> bool:
-    """A code used only to say this piece meets another face's subject."""
-    prefix = text[max(0, start - 6):start]
-    suffix = text[end:end + 4]
+    """A code used only to cite another face's subject, not to introduce one here.
+
+    接到 names the piece this one meets. 与…左右对齐 and 与…同一纵深 name the
+    origin already counted on its own face. 在…的面上 and 在…的画面 name the
+    host or the seam reference.
+    """
+    prefix = text[max(0, start - 8):start].rstrip()
+    suffix = text[end:end + 8].lstrip()
     if _CROSS_FACE_PREFIX.search(prefix):
         return True
-    return prefix.endswith("和") and suffix.startswith("一样远")
+    if prefix.endswith("和") and suffix.startswith("一样远"):
+        return True
+    if prefix.endswith(("与", "和", "跟")) and suffix.startswith(("左右对齐", "同一纵深")):
+        return True
+    if prefix.endswith("在") and suffix.startswith(("的面上", "的画面")):
+        return True
+    return False
 
 
 def _face_code_roles(chunk: str) -> Dict[str, bool]:
@@ -456,8 +467,9 @@ def _ledger_names(raw: Optional[str]) -> List[str]:
 def audit_piece_count_reconciliation(text: str) -> List[str]:
     """Confirm each cell's 件数核销 against the subjects that belong to that face.
 
-    A code only cited by 一端接到、顶接到、底接到、背靠 or 和另一具一样远 belongs to
-    the face that introduces it. Arithmetic alone does not pass. 划出 greater than
+    A code only cited by 一端接到、顶接到、底接到、背靠、和另一具一样远、与原点左右对齐、
+    同一纵深、在宿主面上 or 在参照的画面一侧 belongs to the face that introduces it.
+    Arithmetic alone does not pass. 划出 greater than
     zero must name the omitted codes, and a center subject named in any cell stays
     named in the other cells.
     """
