@@ -2,6 +2,8 @@
 """Project cost estimation snapshot helpers."""
 from __future__ import annotations
 
+import logging
+import threading
 from typing import Any, Dict
 
 from fastapi import HTTPException
@@ -16,6 +18,15 @@ from app.services.soft_delete import (
     _active_scene_clause,
     _active_shot_clause,
 )
+
+_logger = logging.getLogger(__name__)
+
+# Coalesce burst shot saves (storyboard preview batch) into one trailing recompute.
+# Running it on the request session held a pool connection while every parallel
+# save re-read the whole project and waited on the same project row lock.
+_COST_RECOMPUTE_DELAY_SECONDS = 2.0
+_cost_recompute_lock = threading.Lock()
+_cost_recompute_state: Dict[int, Dict[str, Any]] = {}
 
 def _compute_project_cost_estimation_snapshot(db: Session, project_id: int) -> Dict[str, Any]:
     project = db.query(Project).filter(Project.id == project_id).first()
@@ -61,5 +72,61 @@ def _recompute_and_persist_project_cost_estimation(db: Session, project_id: int)
     project.global_info = gi
     db.add(project)
     return snapshot
+
+
+def schedule_debounced_project_cost_recompute(project_id: int) -> None:
+    """Recompute project cost shortly after the request has released its connection."""
+    try:
+        pid = int(project_id or 0)
+    except Exception:
+        return
+    if pid <= 0:
+        return
+
+    def _fire() -> None:
+        from app.db.session import SessionLocal
+
+        follow_up = False
+        follow_timer: threading.Timer | None = None
+        db = SessionLocal()
+        try:
+            _recompute_and_persist_project_cost_estimation(db, pid)
+            db.commit()
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            _logger.warning(
+                "debounced project cost recompute failed | project_id=%s err=%s",
+                pid,
+                exc,
+            )
+        finally:
+            db.close()
+        with _cost_recompute_lock:
+            state = _cost_recompute_state.get(pid)
+            if not state:
+                return
+            if state.get("pending"):
+                state["pending"] = False
+                follow_timer = threading.Timer(_COST_RECOMPUTE_DELAY_SECONDS, _fire)
+                follow_timer.daemon = True
+                state["timer"] = follow_timer
+                follow_up = True
+            else:
+                _cost_recompute_state.pop(pid, None)
+        if follow_up and follow_timer is not None:
+            follow_timer.start()
+
+    with _cost_recompute_lock:
+        state = _cost_recompute_state.get(pid)
+        if state is not None and state.get("timer") is not None:
+            state["pending"] = True
+            return
+        timer = threading.Timer(_COST_RECOMPUTE_DELAY_SECONDS, _fire)
+        timer.daemon = True
+        _cost_recompute_state[pid] = {"timer": timer, "pending": False}
+        timer.start()
 
 

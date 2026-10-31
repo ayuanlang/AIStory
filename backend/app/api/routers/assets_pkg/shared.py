@@ -1106,6 +1106,23 @@ def get_assets(
 
         return project_meta_id_int in accessible_project_id_set
 
+    # Storyboard preview refreshes assets per shot. Without a SQL bound, each
+    # refresh loads thousands of rows and keeps one pool connection the whole scan.
+    shot_filter_text = _normalize_filter_text(shot_id)
+    if shot_filter_text.isdigit():
+        meta_text = cast(Asset.meta_info, String)
+        query = query.filter(
+            or_(
+                meta_text.like(f'%"shot_id": {shot_filter_text},%'),
+                meta_text.like(f'%"shot_id": {shot_filter_text}}}%'),
+                meta_text.like(f'%"shot_id": "{shot_filter_text}"%'),
+                meta_text.like(f'%"shot_id":"{shot_filter_text}"%'),
+                meta_text.like(f'%"shot_id":{shot_filter_text},%'),
+                meta_text.like(f'%"shot_id":{shot_filter_text}}}%'),
+                Asset.filename.ilike(f"shot_{shot_filter_text}_%"),
+            )
+        )
+
     ordered_query = query.order_by(Asset.created_at.desc())
 
     filtered_assets: List[Asset] = []
@@ -1244,6 +1261,7 @@ def get_assets(
         shot_map = {s.id: s.shot_id for s in shots}
 
     provider_alias_map = _build_provider_alias_lookup(db)
+    oss_enabled = bool(oss_storage_service.is_enabled(db))
     results = []
     for a in filtered_assets:
         meta = _asset_meta_dict(a.meta_info)
@@ -1294,7 +1312,7 @@ def get_assets(
         results.append({
             "id": a.id,
             "type": _resolve_asset_response_type(a, meta),
-            "url": oss_storage_service.refresh_url(a.url) if oss_storage_service.is_enabled(db) else a.url,
+            "url": oss_storage_service.refresh_url(a.url) if oss_enabled else a.url,
             "filename": a.filename,
             "project_id": getattr(a, 'project_id', None),
             "episode_id": getattr(a, 'episode_id', None),
@@ -1395,11 +1413,20 @@ def upload_asset(
                 db.refresh(existing_asset)
             return _serialize_asset_row(existing_asset, db)
 
+    # Idempotency lookup is done. Drop the request connection before the body
+    # read and OSS upload; a preview batch otherwise pins one slot per panel.
+    upload_user_id = int(getattr(current_user, "id", 0) or 0)
+    upload_filename = file.filename
+    upload_content_type = file.content_type
+    from app.services.db_session_utils import _release_db_connection
+
+    _release_db_connection(db, "asset_upload_before_io")
+
     # Ensure upload directory
     upload_dir = settings.UPLOAD_DIR
     
     # Store by user
-    user_upload_dir = os.path.join(upload_dir, str(current_user.id))
+    user_upload_dir = os.path.join(upload_dir, str(upload_user_id))
     if not os.path.exists(user_upload_dir):
         os.makedirs(user_upload_dir)
     
@@ -1447,7 +1474,7 @@ def upload_asset(
         if os.path.exists(file_path):
             os.remove(file_path)
         raise HTTPException(status_code=400, detail="Empty file")
-        
+
     # Extract Metadata
     meta_info = {'source': 'file_upload'}
     if project_id: meta_info['project_id'] = project_id
@@ -1477,16 +1504,16 @@ def upload_asset(
     # Construct URL (assuming /uploads is mounted)
     # Get base URL from request ideally, but relative works for frontend
     base_url = settings.RENDER_EXTERNAL_URL.rstrip('/') if settings.RENDER_EXTERNAL_URL else ""
-    url = f"{base_url}/uploads/{current_user.id}/{filename}"
+    url = f"{base_url}/uploads/{upload_user_id}/{filename}"
 
     oss_url = None
-    if oss_storage_service.is_enabled(db):
+    if oss_storage_service.is_enabled(None):
         try:
             oss_res = oss_storage_service.upload_file(
                 file_path,
-                user_id=current_user.id,
-                filename=file.filename,
-                content_type=file.content_type,
+                user_id=upload_user_id,
+                filename=upload_filename,
+                content_type=upload_content_type,
                 category="uploads"
             )
             if oss_res and oss_res.get("url"):
@@ -1508,10 +1535,10 @@ def upload_asset(
             pass
 
     asset = Asset(
-        user_id=current_user.id,
+        user_id=upload_user_id,
         type=type,
         url=url,
-        filename=file.filename,
+        filename=upload_filename,
         project_id=_asset_optional_int(meta_info.get('project_id')),
         episode_id=_asset_optional_int(meta_info.get('episode_id')),
         meta_info=meta_info,

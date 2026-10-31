@@ -563,13 +563,18 @@ def update_shot(
 
     for key, value in update_data.items():
         setattr(db_shot, key, value)
-    try:
-        _recompute_and_persist_project_cost_estimation(db, int(project.id))
-    except Exception as cost_exc:
-        logger.warning("update_shot cost recompute skipped | project_id=%s err=%s", project.id, cost_exc)
-        
+
     db.commit()
     db.refresh(db_shot)
+    # Media-heavy batches (storyboard preview) update many shots at once.
+    # Recompute after the request connection is back in the pool, and fold
+    # the burst into one trailing run instead of locking the project row per shot.
+    try:
+        from app.services.project_cost_estimation import schedule_debounced_project_cost_recompute
+
+        schedule_debounced_project_cost_recompute(int(project.id))
+    except Exception as cost_exc:
+        logger.warning("update_shot cost recompute skipped | project_id=%s err=%s", project.id, cost_exc)
     return _refresh_shot_media_urls(db_shot, db)
 
 

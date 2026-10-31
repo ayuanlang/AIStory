@@ -8029,7 +8029,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
          await onUpdateShot(editingShot.id, newData);
     };
 
-    const applyMultiPanelImageResult = useCallback(async ({ shotRecord, compositeUrl, presetKey, basePrompt = '', promptLanguage = 'cn' }) => {
+    const applyMultiPanelImageResult = useCallback(async ({ shotRecord, compositeUrl, presetKey, basePrompt = '', promptLanguage = 'cn', refreshAssets = true }) => {
         const stableShot = shotRecord || editingShot || null;
         const targetShotId = String(stableShot?.id || '').trim();
         const stableCompositeUrl = String(compositeUrl || '').trim();
@@ -8190,7 +8190,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (String(editingShot?.id || '') === targetShotId) {
             setLocalKeyframes(nextList);
         }
-        refreshShotAssetsMeta();
+        if (refreshAssets !== false) {
+            refreshShotAssetsMeta();
+        }
         return { startUrl, endUrl, keyframes: nextList, shotPatch: nextPatch };
     }, [activeEpisode?.episode_info, activeEpisode?.id, cropGeneratedGridPanelToBlob, editingShot?.id, loadImageElementFromBlob, onUpdateShot, project?.global_info, projectId, refreshShotAssetsMeta]);
     applyMultiPanelImageResultRef.current = applyMultiPanelImageResult;
@@ -9516,6 +9518,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 presetKey: activePresetKey,
                 basePrompt: rawVideoPrompt,
                 promptLanguage: resolvedPromptSubmitLang,
+                refreshAssets: !silent,
             });
 
             return {
