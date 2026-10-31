@@ -1417,6 +1417,79 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
         db.close()
 
 
+def _stamp_scheduled_image_persistence_attempt(job_id: str, result: Dict[str, Any]) -> None:
+    """Record the retry clock without replacing a durable URL the worker already stored."""
+    meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
+    if not meta or "persistence_retry_count" not in meta:
+        return
+    with IMAGE_JOB_LOCK:
+        current = IMAGE_JOB_STORE.get(job_id)
+        stored = current.get("result") if isinstance(current, dict) and isinstance(current.get("result"), dict) else None
+        stored_url = _extract_job_result_url(stored)
+    if not isinstance(stored, dict) or _is_durable_persisted_media_url(stored_url):
+        return
+    with IMAGE_JOB_LOCK:
+        current = IMAGE_JOB_STORE.get(job_id)
+        if not isinstance(current, dict) or not isinstance(current.get("result"), dict):
+            return
+        if _extract_job_result_url(current.get("result")) != stored_url:
+            return
+        stamped = dict(current["result"])
+        stamped_meta = dict(stamped.get("metadata") or {})
+        for key in ("persistence_retry_count", "persistence_retry_at", "needs_persistence_retry"):
+            if key in meta:
+                stamped_meta[key] = meta[key]
+        stamped["metadata"] = stamped_meta
+        current["result"] = stamped
+
+
+def _run_scheduled_image_job_persistence(job_id: str, job: Dict[str, Any], result: Dict[str, Any]) -> None:
+    """Download and bind an image off the request thread. The status GET must not wait on this."""
+    try:
+        _stamp_scheduled_image_persistence_attempt(job_id, result)
+        persisted = _finalize_image_job_result_persistence(job_id, job, result)
+        persisted_url = _extract_job_result_url(persisted) if isinstance(persisted, dict) else ""
+        if not persisted_url and isinstance(persisted, dict):
+            persisted_url = str(persisted.get("url") or "").strip()
+        if persisted_url and _is_durable_persisted_media_url(persisted_url):
+            _set_image_job(
+                job_id,
+                result=persisted,
+                status="succeeded",
+                finished_at=job.get("finished_at") or now_bj_iso(),
+            )
+            logger.info(
+                "[ImageJobPersist] background persistence succeeded | job_id=%s persisted_url=%s",
+                job_id,
+                persisted_url,
+            )
+        elif isinstance(persisted, dict):
+            _set_image_job(job_id, result=persisted)
+    except Exception:
+        logger.exception("[ImageJobPersist] background persistence failed | job_id=%s", job_id)
+    finally:
+        _clear_image_callback_persist_inflight(job_id)
+
+
+def _schedule_image_job_result_persistence(job_id: str, job: Dict[str, Any], result: Dict[str, Any]) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if not _mark_image_callback_persist_inflight(job_id):
+        return False
+    try:
+        GENERATION_CALLBACK_FINALIZE_EXECUTOR.submit(
+            _run_scheduled_image_job_persistence,
+            str(job_id or ""),
+            dict(job or {}),
+            dict(result),
+        )
+    except Exception:
+        _clear_image_callback_persist_inflight(job_id)
+        logger.exception("[ImageJobPersist] failed to schedule background persistence | job_id=%s", job_id)
+        return False
+    return True
+
+
 def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
     provider_task_id = _extract_job_provider_task_id(job)
     callback_ticket = _extract_job_provider_callback_ticket(job)
@@ -1505,30 +1578,18 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
             result if isinstance(result, dict) else (job.get("result") if isinstance(job.get("result"), dict) else None)
         )
         if candidate_result:
-            if _mark_image_callback_persist_inflight(job_id):
-                try:
-                    effective_job = dict(job)
-                    effective_job.update(updates)
-                    persisted_result = _finalize_image_job_result_persistence(job_id, effective_job, dict(candidate_result))
-                    persisted_result_url = _extract_job_result_url(persisted_result)
-                    if not persisted_result_url and isinstance(persisted_result, dict):
-                        persisted_result_url = str(persisted_result.get("url") or "").strip()
-                    effective_current_result = updates.get("result") if "result" in updates else job.get("result")
-                    effective_current_result_url = _extract_job_result_url(effective_current_result)
-                    if persisted_result_url and (
-                        persisted_result_url != effective_current_result_url or persisted_result != effective_current_result
-                    ):
-                        updates["result"] = persisted_result
-                        callback_result_url = persisted_result_url
-                finally:
-                    _clear_image_callback_persist_inflight(job_id)
-            else:
+            effective_job = dict(job)
+            effective_job.update(updates)
+            if not _schedule_image_job_result_persistence(job_id, effective_job, dict(candidate_result)):
                 logger.info(
                     "[ImageJob] skip duplicate callback persistence while in-flight | job_id=%s callback_ticket=%s",
                     job_id,
                     callback_ticket,
                 )
                 return job
+            # early_save already stored the provider URL. Leave result to the
+            # background task so a fast durable write is not overwritten here.
+            updates.pop("result", None)
         if "callback_pending" in str(job.get("upstream_submit_state") or "").strip().lower():
             updates.setdefault("upstream_submit_state", "completed")
             updates.setdefault("callback_submit_retries", 0)
@@ -2053,51 +2114,27 @@ def _maybe_retry_image_job_result_persistence(job_id: str, job: Dict[str, Any]) 
     if not source_url:
         return job
 
-    if not _mark_image_callback_persist_inflight(job_id):
+    retry_input = dict(result)
+    retry_input["url"] = source_url
+    meta["persistence_retry_count"] = retry_count + 1
+    meta["persistence_retry_at"] = now_bj_iso()
+    meta["needs_persistence_retry"] = True
+    retry_input["metadata"] = meta
+
+    if not _schedule_image_job_result_persistence(job_id, job, retry_input):
         logger.debug("[ImageJobPersist] skip retry persistence while in-flight | job_id=%s", job_id)
-        return job
+        with IMAGE_JOB_LOCK:
+            return dict(IMAGE_JOB_STORE.get(job_id) or job)
 
-    try:
-        retry_input = dict(result)
-        retry_input["url"] = source_url
-        meta["persistence_retry_count"] = retry_count + 1
-        meta["persistence_retry_at"] = now_bj_iso()
-        meta["needs_persistence_retry"] = True
-        retry_input["metadata"] = meta
-
-        reserved_result = dict(result)
-        reserved_result["metadata"] = dict(meta)
-        _set_image_job(job_id, result=reserved_result)
-
-        logger.info(
-            "[ImageJobPersist] retry persistence | job_id=%s attempt=%s/%s source_url=%s",
-            job_id,
-            retry_count + 1,
-            max_retries,
-            source_url,
-        )
-        persisted = _finalize_image_job_result_persistence(job_id, job, retry_input)
-        persisted_url = str(persisted.get("url") or "").strip() if isinstance(persisted, dict) else ""
-        if not persisted_url and isinstance(persisted, dict):
-            persisted_url = _extract_job_result_url(persisted)
-        if persisted_url and _is_durable_persisted_media_url(persisted_url):
-            _set_image_job(job_id, result=persisted, status="succeeded", finished_at=now_bj_iso())
-            with IMAGE_JOB_LOCK:
-                updated = dict(IMAGE_JOB_STORE.get(job_id) or job)
-            logger.info(
-                "[ImageJobPersist] retry persistence succeeded | job_id=%s persisted_url=%s",
-                job_id,
-                persisted_url,
-            )
-            return updated
-
-        if isinstance(persisted, dict) and persisted != result:
-            _set_image_job(job_id, result=persisted)
-            with IMAGE_JOB_LOCK:
-                return dict(IMAGE_JOB_STORE.get(job_id) or job)
-        return job
-    finally:
-        _clear_image_callback_persist_inflight(job_id)
+    logger.info(
+        "[ImageJobPersist] retry persistence scheduled | job_id=%s attempt=%s/%s source_url=%s",
+        job_id,
+        retry_count + 1,
+        max_retries,
+        source_url,
+    )
+    with IMAGE_JOB_LOCK:
+        return dict(IMAGE_JOB_STORE.get(job_id) or job)
 
 
 def _video_callback_result_needs_oss_persist(

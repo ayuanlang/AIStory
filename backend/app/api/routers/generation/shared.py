@@ -468,7 +468,31 @@ def get_generate_image_job_status(
         )
 
     public_result = job.get("result")
-    if isinstance(public_result, dict):
+    response_status = job.get("status")
+    from app.services.generation_runtime.media_persist import _is_ephemeral_provider_media_url
+
+    raw_url = _extract_job_result_url(public_result)
+    # Poll clients stop as soon as any URL is present. Hide the provider temp
+    # link so they keep polling until background persistence writes a durable URL.
+    if raw_url and _is_ephemeral_provider_media_url(raw_url):
+        if isinstance(public_result, dict):
+            public_result = dict(public_result)
+            for key in (
+                "url",
+                "image_url",
+                "imageUrl",
+                "video_url",
+                "videoUrl",
+                "generated_url",
+                "result_url",
+                "output_url",
+                "media_url",
+            ):
+                public_result.pop(key, None)
+        else:
+            public_result = {}
+        response_status = "storing_asset"
+    elif isinstance(public_result, dict):
         public_result = dict(public_result)
         accessible_url = _ensure_accessible_media_result_url(
             _extract_job_result_url(public_result),
@@ -479,7 +503,7 @@ def get_generate_image_job_status(
 
     return {
         "job_id": job.get("job_id"),
-        "status": job.get("status"),
+        "status": response_status,
         "created_at": job.get("created_at"),
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),

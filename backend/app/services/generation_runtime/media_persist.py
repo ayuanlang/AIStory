@@ -2016,9 +2016,12 @@ def _refresh_managed_media_url(url: Any, db: Session) -> str:
     raw = str(url or "").strip()
     if not raw:
         return raw
-    if not oss_storage_service.is_enabled(db):
-        return raw
     try:
+        # Fill the cache on the caller's connection. refresh_url then matches
+        # pools in memory instead of opening a second SessionLocal.
+        oss_storage_service.warm_pool_cache(db)
+        if not oss_storage_service.is_enabled(None):
+            return raw
         return str(oss_storage_service.refresh_url(raw) or raw)
     except Exception:
         return raw

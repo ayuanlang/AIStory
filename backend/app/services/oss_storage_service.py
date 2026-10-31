@@ -702,12 +702,18 @@ class OSSStorageService:
 
     def _load_db_pools(self, db=None, *, active_only: bool = True) -> List[SimpleNamespace]:
         cache_key = "active" if active_only else "all"
-        if db is not None:
-            return list(self._query_db_pools(db, active_only=active_only) or [])
-
         cached = self._cached_db_pools(cache_key)
         if cached is not None:
             return cached
+
+        # A caller that already holds a connection must fill the cache from that
+        # session. Querying again via a new SessionLocal nests a checkout and
+        # deadlocks the pool once every request is waiting on a second connection.
+        if db is not None:
+            pools = self._query_db_pools(db, active_only=active_only)
+            with _db_pool_cache_lock:
+                _db_pool_cache[cache_key] = (time.monotonic(), pools)
+            return list(pools or [])
 
         with _db_pool_load_lock:
             cached = self._cached_db_pools(cache_key)
@@ -718,6 +724,11 @@ class OSSStorageService:
                 # None marks a failed load so the next burst does not stampede the pool.
                 _db_pool_cache[cache_key] = (time.monotonic(), pools)
             return list(pools or [])
+
+    def warm_pool_cache(self, db=None) -> None:
+        """Load both pool caches. Pass an open session so this does not checkout another connection."""
+        self._load_db_pools(db, active_only=False)
+        self._load_db_pools(db, active_only=True)
 
     def _query_db_pools(self, db=None, *, active_only: bool = True) -> Optional[List[SimpleNamespace]]:
         owned_session = None
@@ -1852,7 +1863,17 @@ class OSSStorageService:
         return best[1], best[2]
 
     def _extract_managed_target(self, url: str) -> Tuple[Optional[SimpleNamespace], Optional[str]]:
-        return self._extract_managed_target_from_pools(url, self._get_all_pools(None))
+        cached = self._cached_db_pools("all")
+        if cached is None:
+            cached = self._cached_db_pools("active")
+        if cached is None:
+            pools = self._get_all_pools(None)
+        else:
+            pools = list(cached)
+            env_pool = self._pick_env_pool()
+            if env_pool:
+                pools.append(env_pool)
+        return self._extract_managed_target_from_pools(url, pools)
 
     def match_active_pool(self, url: str, db=None) -> Tuple[Optional[SimpleNamespace], Optional[str]]:
         return self._extract_managed_target_from_pools(url, self._get_active_pools(db))

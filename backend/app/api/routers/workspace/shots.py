@@ -79,6 +79,13 @@ def read_episode_shots(
     safe_skip = max(int(skip or 0), 0)
     safe_limit = max(1, min(int(limit or 300), 500))
 
+    try:
+        from app.services.oss_storage_service import oss_storage_service
+
+        oss_storage_service.warm_pool_cache(db)
+    except Exception as warm_exc:
+        logger.warning("read_episode_shots oss cache warm skipped | err=%s", warm_exc)
+
     if compact:
         compact_query = query.with_entities(
             Shot.id.label("id"),
@@ -556,6 +563,13 @@ def update_shot(
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
     project = _require_project_access(db, episode.project_id, current_user)
 
+    try:
+        from app.services.oss_storage_service import oss_storage_service
+
+        oss_storage_service.warm_pool_cache(db)
+    except Exception as warm_exc:
+        logger.warning("update_shot oss cache warm skipped | err=%s", warm_exc)
+
     update_data = shot_in.dict(exclude_unset=True)
     update_data = _replace_legacy_temp_urls_in_shot_payload(db, current_user, project, db_shot, update_data)
     update_data = _normalize_ephemeral_shot_media_update(update_data, existing_shot=db_shot)
@@ -575,6 +589,12 @@ def update_shot(
         schedule_debounced_project_cost_recompute(int(project.id))
     except Exception as cost_exc:
         logger.warning("update_shot cost recompute skipped | project_id=%s err=%s", project.id, cost_exc)
+    # Commit already finished. Close without rollback so the loaded shot stays
+    # readable, and return this connection before URL refresh / response build.
+    try:
+        db.close()
+    except Exception as close_exc:
+        logger.warning("update_shot close skipped | shot_id=%s err=%s", shot_id, close_exc)
     return _refresh_shot_media_urls(db_shot, db)
 
 
