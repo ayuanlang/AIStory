@@ -11643,17 +11643,37 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
     const runLocalMultiPanelPreviewBatch = useCallback(async () => {
         const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
-        const targetShots = orderedShots;
-        if (targetShots.length === 0) {
+        if (orderedShots.length === 0) {
             alert(t('当前没有可批量处理的镜头。', 'No shots available for batch processing.'));
             return;
         }
 
+        const shotHasGeneratedStoryboardPreview = (shot) => {
+            const tech = parseShotTechnicalNotes(shot?.technical_notes);
+            if (String(tech?.multi_panel_image_url || tech?.storyboard_url || '').trim()) return true;
+            return Boolean(String(shot?.image_url || '').trim());
+        };
+        const skippedShots = orderedShots.filter(shotHasGeneratedStoryboardPreview);
+        const targetShots = orderedShots.filter((shot) => !shotHasGeneratedStoryboardPreview(shot));
+        if (targetShots.length === 0) {
+            alert(t(
+                `当前 ${orderedShots.length} 个镜头都已有分镜预览或起始帧，已跳过，不会重复生成。`,
+                `All ${orderedShots.length} shots already have a storyboard preview or start frame. They were skipped and will not be generated again.`
+            ));
+            return;
+        }
+
         const presetOption = getMultiPanelPresetOption(batchMultiPanelPresetKey);
+        const skipNote = skippedShots.length > 0
+            ? t(
+                `已有分镜预览或起始帧的 ${skippedShots.length} 个镜头会跳过，不重复生成。`,
+                `${skippedShots.length} shot(s) that already have a storyboard preview or start frame will be skipped.`
+            )
+            : '';
         const ok = await confirmUiMessage(
             t(
-                `将为 ${targetShots.length} 个镜头批量生成分镜预览（${presetOption.labelZh}）。每个镜头会生成多画格图并自动拆分，首格填入起始帧、末格填入结束帧，中间格填入关键帧。系统会本地并发调度，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个。是否继续？`,
-                `Generate storyboard previews for ${targetShots.length} shots (${presetOption.labelEn}). Each shot will generate a multi-panel image, split it, fill the first panel into the start frame, the last panel into the end frame, and middle panels into keyframes. The local scheduler will run up to ${SHOT_BATCH_PARALLEL_LIMIT} shots per wave. Continue?`
+                `将为 ${targetShots.length} 个尚未生成的镜头批量生成分镜预览（${presetOption.labelZh}）。${skipNote}每个镜头会生成多画格图并自动拆分，首格填入起始帧、末格填入结束帧，中间格填入关键帧。系统会本地并发调度，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个。是否继续？`,
+                `Generate storyboard previews for ${targetShots.length} shot(s) that do not have one yet (${presetOption.labelEn}). ${skipNote ? `${skipNote} ` : ''}Each shot will generate a multi-panel image, split it, fill the first panel into the start frame, the last panel into the end frame, and middle panels into keyframes. The local scheduler will run up to ${SHOT_BATCH_PARALLEL_LIMIT} shots per wave. Continue?`
             )
         );
         if (!ok) return;
@@ -11692,7 +11712,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             currentAssetLabel: t('生成+拆分', 'Generate + Split'),
             mode: 'multi-panel-local',
         });
-        onLog?.(t('开始本地分镜预览批量任务（生成后自动拆分回填）。', 'Started local storyboard preview batch (auto-split after generation).'), 'process');
+        onLog?.(t(
+            skippedShots.length > 0
+                ? `开始本地分镜预览批量任务：生成 ${targetShots.length} 个，跳过已生成 ${skippedShots.length} 个。`
+                : '开始本地分镜预览批量任务（生成后自动拆分回填）。',
+            skippedShots.length > 0
+                ? `Started local storyboard preview batch: generating ${targetShots.length}, skipped ${skippedShots.length} already generated.`
+                : 'Started local storyboard preview batch (auto-split after generation).'
+        ), 'process');
 
         let completed = 0;
         let success = 0;
@@ -12681,7 +12708,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         <button
                                                             onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerateMultiPanelPreview(); }}
                                                             className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
-                                                            title={t('按当前画格预设为每个镜头生成分镜预览并拆分回填', 'Generate storyboard previews for each shot using the current panel preset, then split and fill frames')}
+                                                            title={t('按当前画格预设为尚未生成的镜头生成分镜预览并拆分回填；已有分镜预览或起始帧的镜头会跳过', 'Generate storyboard previews for shots that do not have one yet, using the current panel preset, then split and fill frames. Shots that already have a preview or start frame are skipped')}
                                                         >
                                                             <Layers className="w-3 h-3 text-muted-foreground"/>
                                                             {t('分镜预览 (批量)', 'Storyboard Preview (Batch)')}
@@ -12752,7 +12779,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 onClick={handleBatchGenerateMultiPanelPreview}
                                 disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
                                 className={`px-3 py-1.5 rounded text-xs flex items-center gap-1 transition-all ${(isBatchGenerating || isShotBatchStarting) ? 'bg-amber-500/20 text-amber-200 cursor-wait' : 'bg-amber-500/10 text-amber-200 hover:bg-amber-500/20'}`}
-                                title={t('为当前列表每个镜头批量生成分镜预览，并拆分填入首尾帧与关键帧', 'Batch-generate storyboard previews for each listed shot, split panels into start/end frames and keyframes')}
+                                title={t('为当前列表中尚未生成分镜预览的镜头批量生成，并拆分填入首尾帧与关键帧；已有预览或起始帧的镜头会跳过', 'Batch-generate storyboard previews for listed shots that do not have one yet, then split panels into start/end frames and keyframes. Shots that already have a preview or start frame are skipped')}
                             >
                                 {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Layers className="w-3 h-3"/>}
                                 {t('批量分镜预览', 'Batch Storyboard Preview')}
