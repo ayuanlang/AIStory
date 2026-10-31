@@ -407,6 +407,14 @@ export function isGridCropDerivedEntity(entity) {
     return String(entity?.generation_prompt_cn || '').includes('只切割');
 }
 
+/** Angle derivatives take one cropped cell. A derived main still uses the whole four-grid. */
+export function usesCroppedCellReference(entity) {
+    if (!isEnvironmentEntity(entity) || isDerivedMainEnvironmentEntity(entity)) return false;
+    if (isMainEnvironmentEntity(entity)) return false;
+    if (isGridCropDerivedEntity(entity)) return true;
+    return isStateDerivedEntity(entity) && resolveDerivedViewAngle(entity) != null;
+}
+
 export function mainQuadCellAddresses(entity) {
     if (!isMainEnvironmentEntity(entity)) return [];
     const sourceUrl = String(entity?.image_url || '').trim();
@@ -434,17 +442,29 @@ export function derivedCellReference(entity, entities) {
     };
 }
 
+function savedQuadCellUrl(quad, position) {
+    const sourceUrl = String(quad?.image_url || '').trim();
+    const cells = readQuadCellImages(quad, sourceUrl) || {};
+    return String(cells[position] || '').trim();
+}
+
 export function derivedDependencyImageUrl(owner, depEntity, entities) {
     const fallback = String(depEntity?.image_url || '').trim();
-    if (!owner || isStateDerivedEntity(owner) || !isGridCropDerivedEntity(owner)) return fallback;
-    const cell = derivedCellReference(owner, entities);
-    if (cell?.url) return cell.url;
-    const plan = planDerivedGridCell(owner, entities);
-    const mainUrl = String(plan?.mainEntity?.image_url || '').trim();
-    if (mainUrl && plan.mainEntity && String(plan.mainEntity.id || '') !== String(depEntity?.id || '')) {
-        return mainUrl;
+    if (!owner || !usesCroppedCellReference(owner)) return fallback;
+    const plan = planDerivedCellReference(owner, entities);
+    let quad = plan?.mainEntity && isMainEnvironmentEntity(plan.mainEntity) ? plan.mainEntity : null;
+    let position = String(plan?.position || '').trim();
+    const depIsQuad = isMainEnvironmentEntity(depEntity);
+    if (!quad && depIsQuad) {
+        const angle = resolveDerivedViewAngle(owner);
+        if (angle == null) return '';
+        const crop = resolveGridForAngle(angle, depEntity?.generation_prompt_cn || '');
+        quad = depEntity;
+        position = crop.position;
     }
-    return fallback;
+    if (!quad || !position) return fallback;
+    if (depEntity && !depIsQuad && String(depEntity.id || '') !== String(quad.id || '')) return fallback;
+    return savedQuadCellUrl(quad, position);
 }
 
 const dependencyNames = (entity) => {
@@ -834,8 +854,7 @@ export function buildDerivedGridRegenPrompt({ mainName, grid, cellPrompt, mainPr
     ].join('\n');
 }
 
-export function planDerivedGridCell(entity, entities) {
-    if (!isGridCropDerivedEntity(entity)) return { ok: false, errorCode: 'not_grid_crop' };
+function planOwningCell(entity, entities) {
     const angle = resolveDerivedViewAngle(entity);
     if (angle == null) return { ok: false, errorCode: 'missing_angle' };
     const mainEntity = findOwningMainEnvironment(entity, entities);
@@ -858,6 +877,16 @@ export function planDerivedGridCell(entity, entities) {
         mainName,
         ...crop,
     };
+}
+
+export function planDerivedGridCell(entity, entities) {
+    if (!isGridCropDerivedEntity(entity)) return { ok: false, errorCode: 'not_grid_crop' };
+    return planOwningCell(entity, entities);
+}
+
+export function planDerivedCellReference(entity, entities) {
+    if (!usesCroppedCellReference(entity)) return { ok: false, errorCode: 'not_grid_crop' };
+    return planOwningCell(entity, entities);
 }
 
 export function planDerivedGridRegen(entity, entities) {

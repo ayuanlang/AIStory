@@ -227,7 +227,34 @@ describe('saved quad cells', () => {
         assert.equal(isStateDerivedEntity(stateDerived), true);
         assert.equal(isGridCropDerivedEntity(stateDerived), false);
         assert.equal(derivedDependencyImageUrl(stateDerived, derived, [main, derived, stateDerived]), 'https://cdn.example/derived.jpg');
-        assert.equal(derivedDependencyImageUrl(stateDerived, main, [main, derived, stateDerived]), 'https://cdn.example/main.jpg');
+        assert.equal(derivedDependencyImageUrl(stateDerived, main, [main, derived, stateDerived]), 'https://cdn.example/tr.jpg');
+    });
+
+    it('does not send the whole four-grid when the matching cell is not saved yet', () => {
+        const main = {
+            id: 1,
+            type: 'environment',
+            name: '城门大街',
+            image_url: 'https://cdn.example/main.jpg',
+            generation_prompt_cn: '四宫度数=左上0度｜右上90度｜左下180度｜右下270度',
+        };
+        const derived = {
+            id: 2,
+            type: 'environment',
+            name: '90度城门大街',
+            generation_prompt_cn: '待生成',
+            custom_attributes: { derived_kind: 'first_cut', main_environment: '城门大街', view_angle_from_main: 90 },
+            visual_dependencies: ['ENV:[城门大街]'],
+        };
+        const derivedMain = {
+            id: 3,
+            type: 'environment',
+            name: '城门大街_夜雨',
+            custom_attributes: { derived_kind: 'derived_main', source_main_environment: '城门大街' },
+            visual_dependencies: ['ENV:[城门大街]'],
+        };
+        assert.equal(derivedDependencyImageUrl(derived, main, [main, derived]), '');
+        assert.equal(derivedDependencyImageUrl(derivedMain, main, [main, derivedMain]), 'https://cdn.example/main.jpg');
     });
 
     it('reads named four-grid gaps and leaves library misses out of the rerun list', () => {

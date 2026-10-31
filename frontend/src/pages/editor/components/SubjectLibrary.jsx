@@ -36,7 +36,12 @@ import {
     isStateDerivedEntity,
     mainQuadCellAddresses,
     planDerivedGridCell,
+    planDerivedCellReference,
     planDerivedGridRegen,
+    resolveDerivedViewAngle,
+    resolveGridForAngle,
+    sameMediaUrl,
+    usesCroppedCellReference,
     QUAD_CELL_POSITIONS,
     isCollidingGridCellUrl,
     readQuadCellImages,
@@ -7017,8 +7022,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 collectPromoSourceImageUrls(activeEntity, project?.global_info).forEach((url) => allRefs.push(url));
             }
             
-            // Deduplicate
-            const uniqueRefs = [...new Set(allRefs)];
+            // Deduplicate. Angle derivatives never send the whole four-grid.
+            let uniqueRefs = [...new Set(allRefs)];
+            if (!qualityRegen && !imageEditOnly) {
+                uniqueRefs = await applyCroppedCellReference(activeEntity, allEntities, uniqueRefs);
+            }
 
             if (onLog) {
                 onLog(
@@ -7258,6 +7266,40 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         );
         return String(cells?.[stablePosition] || '').trim();
     }, [onLog, persistMainEnvironmentQuadCells, t]);
+
+    const applyCroppedCellReference = useCallback(async (entity, entities, refs) => {
+        if (!usesCroppedCellReference(entity)) return refs || [];
+        let plan = planDerivedCellReference(entity, entities);
+        if (!plan?.ok) {
+            const quadDep = getEntityVisualDependencyTargets(entity, entities)
+                .map((row) => row.entity)
+                .find((item) => isMainEnvironmentEntity(item) && String(item?.image_url || '').trim());
+            const angle = resolveDerivedViewAngle(entity);
+            if (!quadDep || angle == null) return refs || [];
+            const crop = resolveGridForAngle(angle, quadDep.generation_prompt_cn || '');
+            plan = { ok: true, mainEntity: quadDep, position: crop.position, angle: crop.angle, grid: crop.grid };
+        }
+        const mainEntity = plan.mainEntity;
+        const mainUrl = String(mainEntity?.image_url || '').trim();
+        if (!mainUrl || !plan.position) return refs || [];
+        const cropUrl = await ensureMainQuadCellUrl(mainEntity, plan.position, mainUrl);
+        if (!cropUrl) {
+            throw new Error(t('对应宫格没有裁出来。', 'The matching grid cell could not be cropped.'));
+        }
+        const quadUrls = (entities || [])
+            .filter((item) => isMainEnvironmentEntity(item))
+            .map((item) => String(item?.image_url || '').trim())
+            .filter(Boolean);
+        const kept = (refs || []).filter((url) => !quadUrls.some((quadUrl) => sameMediaUrl(url, quadUrl)));
+        onLog?.(
+            t(
+                `衍生环境生图参考图用裁出的${plan.grid || plan.position}：${entity?.name || entity?.name_en || ''}`,
+                `Derived environment generation uses the cropped ${plan.grid || plan.position}: ${entity?.name || entity?.name_en || ''}`
+            ),
+            'process'
+        );
+        return [cropUrl, ...kept.filter((url) => !sameMediaUrl(url, cropUrl))];
+    }, [ensureMainQuadCellUrl, onLog, t]);
 
     onMainEnvironmentImageReadyRef.current = async (entityId, imageUrl) => {
         const stableId = String(entityId || '').trim();
@@ -8594,6 +8636,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 });
                 collectPromoSourceImageUrls(entity, project?.global_info).forEach((url) => depUrls.push(url));
                 let uniqueRefs = [...new Set(depUrls)];
+                if (usesCroppedCellReference(entity)) {
+                    uniqueRefs = await applyCroppedCellReference(entity, entitiesWithLatestImages(), uniqueRefs);
+                }
                 if (regenPlan) {
                     const mainId = regenPlan.mainEntity?.id;
                     const mainUrl = String((mainId != null && urlMap.get(mainId)) || regenPlan.mainEntity?.image_url || '').trim();
