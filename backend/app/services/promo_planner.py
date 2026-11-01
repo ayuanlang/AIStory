@@ -3108,6 +3108,44 @@ def load_planner_state(db: Session, project: PromoProject) -> Dict[str, Any]:
     }
 
 
+def serialize_promo_project_card(project: PromoProject, current_user: Any) -> Dict[str, Any]:
+    """Homepage card. Does not read planner rows, script text, or catalog assets."""
+    user = _snapshot_user_principal(current_user)
+    is_owner = int(getattr(project, "owner_id", 0) or 0) == int(user.id or 0)
+    is_superuser = bool(user.is_superuser)
+    is_root = is_superuser and str(user.username or "").strip().lower() == "ylsystem"
+    is_temp_view = bool(is_superuser and not is_owner and not is_root)
+    return {
+        "id": project.id,
+        "title": project.title or "",
+        "description": project.description or "",
+        "extra_info": {},
+        "global_info": {},
+        "owner_id": project.owner_id,
+        "enterprise_id": None,
+        "brand_id": None,
+        "product_id": None,
+        "enterprise": None,
+        "brand": None,
+        "product": None,
+        "kind": "promo",
+        "cover_image": None,
+        "cover_images": [],
+        "promo_planner_input": None,
+        "promo_planner_result": None,
+        "promo_dna_global_md": "",
+        "linked_story_project_id": None,
+        "script_episode_id": None,
+        "has_script": False,
+        "is_owner": is_owner,
+        "is_temp_view": is_temp_view,
+        "can_edit": bool(is_owner or is_root),
+        "list_summary": True,
+        "created_at": project.created_at,
+        "updated_at": project.updated_at,
+    }
+
+
 def serialize_promo_project(db: Session, project: PromoProject, current_user: Any) -> Dict[str, Any]:
     state = load_planner_state(db, project)
     assets = list((state.get("promo_planner_input") or {}).get("enterprise_info", {}).get("image_assets") or [])

@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     api,
     fetchProjects,
+    fetchProjectCardCovers,
     fetchPromoProjects,
     createProject,
     createPromoProject,
@@ -235,17 +236,19 @@ const ProjectCardCover = ({ coverImage, coverImages }) => {
         const seen = new Set();
         const out = [];
         for (const item of raw) {
-            const resolved = resolveProjectListImageUrl(item);
-            if (!resolved || seen.has(resolved)) continue;
-            seen.add(resolved);
-            out.push(resolved);
+            const direct = resolveMediaUrl(item);
+            if (!direct || seen.has(direct)) continue;
+            seen.add(direct);
+            const proxied = resolveProjectListImageUrl(item);
+            out.push({ direct, proxied: proxied && proxied !== direct ? proxied : '' });
         }
         return out;
     }, [coverImage, coverImages]);
 
-    const imagesKey = images.join('\0');
+    const imagesKey = images.map((item) => item.direct).join('\0');
     const [index, setIndex] = useState(0);
     const [visible, setVisible] = useState(true);
+    const [useProxy, setUseProxy] = useState({});
 
     useEffect(() => {
         if (images.length === 0) return;
@@ -291,12 +294,17 @@ const ProjectCardCover = ({ coverImage, coverImages }) => {
 
     if (images.length === 0) return null;
 
-    const src = images[Math.min(index, images.length - 1)] || images[0];
+    const current = images[Math.min(index, images.length - 1)] || images[0];
+    const src = (useProxy[current.direct] && current.proxied) ? current.proxied : current.direct;
     return (
         <img
             src={src}
             alt=""
             loading="lazy"
+            onError={() => {
+                if (!current.proxied || useProxy[current.direct]) return;
+                setUseProxy((prev) => (prev[current.direct] ? prev : { ...prev, [current.direct]: true }));
+            }}
             className={`absolute inset-0 z-[1] h-full w-full object-cover transition-opacity duration-300 ${visible ? 'opacity-100' : 'opacity-0'}`}
         />
     );
@@ -970,6 +978,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         loadProjectCreateOptions();
     }, []);
 
+    const projectListGenerationRef = useRef(0);
+
 const loadProjects = useCallback(async (isLoadMore = false) => {
         if (isLoadMore) {
             setIsLoadMoreProjects(true);
@@ -981,8 +991,8 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
             const currentObjPage = isLoadMore ? projectPage + 1 : 0;
             const currentLimit = isLoadMore ? PROJECT_LIMIT : (projectPage + 1) * PROJECT_LIMIT;
             const [storyData, promoData] = await Promise.all([
-                fetchProjects(isLoadMore ? currentObjPage * PROJECT_LIMIT : 0, currentLimit),
-                isLoadMore ? Promise.resolve([]) : fetchPromoProjects(0, 200).catch(() => []),
+                fetchProjects(isLoadMore ? currentObjPage * PROJECT_LIMIT : 0, currentLimit, { summary: true }),
+                isLoadMore ? Promise.resolve([]) : fetchPromoProjects(0, 200, { summary: true }).catch(() => []),
             ]);
             const storyRows = (Array.isArray(storyData) ? storyData : []).map((item) => ({ ...item, kind: 'story' }));
             const promoRows = (Array.isArray(promoData) ? promoData : []).map((item) => ({ ...item, kind: 'promo' }));
@@ -1072,10 +1082,41 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                 setProjects(merged);
             }
 
-            // Turn off loading immediately to render the project list without delay
+            // Turn off loading immediately to render the project list without delay.
+            // Cover lookups stay off this response so the cards can paint first.
             setIsProjectsLoading(false);
             setIsLoadMoreProjects(false);
             setHasLoadedProjectsOnce(true);
+
+            if (!isLoadMore) {
+                projectListGenerationRef.current += 1;
+            }
+            const coverGeneration = projectListGenerationRef.current;
+            const storyIds = storyRows.map((item) => Number(item?.id)).filter((id) => Number.isFinite(id) && id > 0);
+            const promoIds = (isLoadMore ? [] : promoRows)
+                .map((item) => Number(item?.id))
+                .filter((id) => Number.isFinite(id) && id > 0);
+            if (storyIds.length || promoIds.length) {
+                fetchProjectCardCovers({ ids: storyIds, promoIds })
+                    .then((payload) => {
+                        if (coverGeneration !== projectListGenerationRef.current) return;
+                        const items = Array.isArray(payload?.items) ? payload.items : [];
+                        if (!items.length) return;
+                        const byKey = new Map(items.map((item) => [`${item?.kind || 'story'}:${Number(item?.id) || 0}`, item]));
+                        setProjects((prev) => prev.map((project) => {
+                            const cover = byKey.get(getProjectKey(project));
+                            if (!cover) return project;
+                            return {
+                                ...project,
+                                cover_image: cover.cover_image || null,
+                                cover_images: Array.isArray(cover.cover_images) ? cover.cover_images : [],
+                            };
+                        }));
+                    })
+                    .catch((coverError) => {
+                        console.warn('Failed to load project card covers', coverError);
+                    });
+            }
 
             // Fetch extra stats quietly in the background
             (async () => {

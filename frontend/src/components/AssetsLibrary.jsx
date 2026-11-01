@@ -627,7 +627,7 @@ const AssetsLibrary = ({ projectId = null, currentEpisodeId = null, projectOptio
                 return;
             }
             try {
-                const rows = await fetchProjects(0, 200);
+                const rows = await fetchProjects(0, 200, { summary: true });
                 const normalized = Array.isArray(rows) ? rows : [];
                 setProjectOptions(normalized);
             } catch (e) {

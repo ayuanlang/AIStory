@@ -428,14 +428,156 @@ def create_project(
 
 
 
+_CARD_POSTER_NAMES = ("封面海报", "海报", "封面", "cover", "poster")
+_CARD_POSTER_TYPES = ("poster", "posters", "cover", "project_cover", "cover_image")
+
+
+def _json_text_truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes"}
+
+
+def _json_text_present(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return text not in {"", "none", "null", "0", "false"}
+
+
+def _clean_json_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.lower() in {"", "none", "null"}:
+        return ""
+    return text
+
+
+def _refresh_media_url_cached(url: Any, db: Session, cache: Dict[str, str]) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    cached = cache.get(raw)
+    if cached is not None:
+        return cached
+    refreshed = _refresh_managed_media_url(raw, db)
+    cache[raw] = refreshed or ""
+    return cache[raw]
+
+
+def _query_project_cards(session: Session, current_user: User, skip: int, limit: int) -> List[Any]:
+    """Project homepage cards.
+
+    The full ``global_info`` document holds scripts, reports, and canon data.
+    Selecting it for every card makes the list wait on a large JSON transfer,
+    which is much slower against the remote production database.
+    """
+    from types import SimpleNamespace
+
+    shared_project_ids = [
+        row[0]
+        for row in session.query(ProjectShare.project_id).filter(ProjectShare.user_id == current_user.id).all()
+    ]
+    notes_col = Project.global_info["notes"].as_string()
+    aspect_col = Project.global_info["aspectRatio"].as_string()
+    stage_col = Project.global_info["workflow_stage"].as_string()
+    hidden_col = Project.global_info["hidden_from_list"].as_string()
+    promo_source_col = Project.global_info["source_promo_project_id"].as_string()
+
+    rows = (
+        session.query(
+            Project.id,
+            Project.title,
+            Project.owner_id,
+            Project.created_at,
+            Project.updated_at,
+            notes_col.label("notes"),
+            aspect_col.label("aspect_ratio"),
+            stage_col.label("workflow_stage"),
+            hidden_col.label("hidden_from_list"),
+            promo_source_col.label("source_promo_project_id"),
+        )
+        .filter(
+            _active_project_clause(),
+            or_(
+                Project.owner_id == current_user.id,
+                *([Project.id.in_(shared_project_ids)] if shared_project_ids else []),
+            ),
+        )
+        .order_by(Project.updated_at.desc(), Project.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    if not rows:
+        return []
+
+    visible_rows = []
+    for row in rows:
+        if _json_text_truthy(row.hidden_from_list) or _json_text_present(row.source_promo_project_id):
+            continue
+        visible_rows.append(row)
+    if not visible_rows:
+        return []
+
+    p_ids = [row.id for row in visible_rows]
+    share_counts = {
+        project_id: int(count or 0)
+        for project_id, count in (
+            session.query(ProjectShare.project_id, func.count(ProjectShare.id))
+            .filter(ProjectShare.project_id.in_(p_ids))
+            .group_by(ProjectShare.project_id)
+            .all()
+        )
+    }
+
+    shared_set = set(shared_project_ids)
+    is_superuser = bool(getattr(current_user, "is_superuser", False))
+    is_root = is_superuser and str(getattr(current_user, "username", "")).strip().lower() == "ylsystem"
+    cards: List[Any] = []
+    for row in visible_rows:
+        notes = _clean_json_text(row.notes)
+        aspect = _clean_json_text(row.aspect_ratio)
+        stage = _clean_json_text(row.workflow_stage) or "script"
+        is_owner = row.owner_id == current_user.id
+        is_shared = (not is_owner) and row.id in shared_set
+        cards.append(SimpleNamespace(
+            id=row.id,
+            title=row.title,
+            description=notes or None,
+            owner_id=row.owner_id,
+            global_info={
+                "notes": notes,
+                "aspectRatio": aspect or None,
+                "workflow_stage": stage,
+            },
+            aspectRatio=aspect or None,
+            cover_image=None,
+            cover_images=[],
+            is_owner=is_owner,
+            is_temp_view=bool(is_superuser and not is_owner and not is_shared and not is_root),
+            can_edit=bool(is_owner or is_shared or is_root),
+            share_count=share_counts.get(row.id, 0),
+            list_summary=True,
+            generation_seed=None,
+            seed_initialized=False,
+            missing_basic_fields=None,
+            has_missing_basic_info=False,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        ))
+    return cards
+
+
 @router.get("/projects/", response_model=List[ProjectOut])
 def read_projects(
     skip: int = 0, 
-    limit: int = 100, 
+    limit: int = 100,
+    summary: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    def _query_with(session: Session) -> List[Project]:
+    def _query_with(session: Session):
+        if summary:
+            return _query_project_cards(session, current_user, skip, limit)
+        return _query_project_list_full(session)
+
+    def _query_project_list_full(session: Session) -> List[Project]:
         shared_project_ids = [
             row[0]
             for row in session.query(ProjectShare.project_id).filter(ProjectShare.user_id == current_user.id).all()
@@ -598,6 +740,240 @@ def read_projects(
             return _query_with(retry_db)
         finally:
             retry_db.close()
+
+
+def _parse_card_cover_ids(raw: str, cap: int = 100) -> List[int]:
+    parsed: List[int] = []
+    seen = set()
+    for part in str(raw or "").split(","):
+        text = part.strip()
+        if not text:
+            continue
+        try:
+            value = int(text)
+        except Exception:
+            continue
+        if value <= 0 or value in seen:
+            continue
+        seen.add(value)
+        parsed.append(value)
+        if len(parsed) >= cap:
+            break
+    return parsed
+
+
+def _resolve_story_card_covers(session: Session, project_ids: List[int]) -> List[Dict[str, Any]]:
+    if not project_ids:
+        return []
+    cover_col = Project.global_info["cover_image"].as_string()
+    cover_alt_col = Project.global_info["coverImage"].as_string()
+    rows = (
+        session.query(
+            Project.id,
+            cover_col.label("cover_image"),
+            cover_alt_col.label("cover_image_alt"),
+        )
+        .filter(Project.id.in_(project_ids), _active_project_clause())
+        .all()
+    )
+    if not rows:
+        return []
+
+    row_ids = [row.id for row in rows]
+    poster_name = func.lower(func.trim(Entity.name))
+    poster_type = func.lower(func.trim(Entity.type))
+    posters = session.query(
+        Entity.project_id, Entity.episode_id, Entity.image_url, Entity.name
+    ).filter(
+        Entity.project_id.in_(row_ids),
+        _active_entity_clause(),
+        or_(
+            poster_name.in_(list(_CARD_POSTER_NAMES)),
+            poster_type.in_(list(_CARD_POSTER_TYPES)),
+        ),
+        Entity.image_url.isnot(None),
+        Entity.image_url != "",
+    ).all()
+
+    refreshed_urls: Dict[str, str] = {}
+    poster_map: Dict[int, str] = {}
+    cover_images_map: Dict[int, List[str]] = {}
+    episode_posters: Dict[Tuple[int, Any], Dict[str, Any]] = {}
+    for p_id, episode_id, image_url, name in posters:
+        is_exact = str(name or "").strip() == "封面海报"
+        current = poster_map.get(p_id)
+        if current is None or is_exact:
+            poster_map[p_id] = image_url
+        ep_key = (p_id, episode_id)
+        previous = episode_posters.get(ep_key)
+        if previous is None or (is_exact and not previous.get("exact")):
+            episode_posters[ep_key] = {"url": image_url, "exact": is_exact}
+
+    for p_id, raw_url in list(poster_map.items()):
+        poster_map[p_id] = _refresh_media_url_cached(raw_url, session, refreshed_urls)
+
+    for p_id, episode_id in sorted(
+        episode_posters.keys(),
+        key=lambda item: (item[1] is None, item[1] or 0, item[0]),
+    ):
+        refreshed = _refresh_media_url_cached(episode_posters[(p_id, episode_id)]["url"], session, refreshed_urls)
+        if not refreshed:
+            continue
+        bucket = cover_images_map.setdefault(p_id, [])
+        if refreshed not in bucket:
+            bucket.append(refreshed)
+
+    missing_cover_ids = []
+    configured_map: Dict[int, str] = {}
+    for row in rows:
+        configured = _clean_json_text(row.cover_image) or _clean_json_text(row.cover_image_alt)
+        if configured:
+            configured_map[row.id] = _refresh_media_url_cached(configured, session, refreshed_urls)
+        if not poster_map.get(row.id) and row.id not in configured_map:
+            missing_cover_ids.append(row.id)
+
+    shot_map: Dict[int, str] = {}
+    entity_map: Dict[int, str] = {}
+    if missing_cover_ids:
+        shot_subq = session.query(
+            Shot.project_id,
+            func.min(Shot.id).label("min_img_shot_id"),
+        ).filter(
+            Shot.project_id.in_(missing_cover_ids),
+            Shot.image_url.isnot(None),
+            Shot.image_url != "",
+        ).group_by(Shot.project_id).subquery()
+        for p_id, image_url in session.query(Shot.project_id, Shot.image_url).join(
+            shot_subq, Shot.id == shot_subq.c.min_img_shot_id
+        ).all():
+            shot_map[p_id] = _refresh_media_url_cached(image_url, session, refreshed_urls)
+
+        still_missing = [p_id for p_id in missing_cover_ids if p_id not in shot_map]
+        if still_missing:
+            entity_subq = session.query(
+                Entity.project_id,
+                func.min(Entity.id).label("min_img_entity_id"),
+            ).filter(
+                Entity.project_id.in_(still_missing),
+                Entity.image_url.isnot(None),
+                Entity.image_url != "",
+            ).group_by(Entity.project_id).subquery()
+            for p_id, image_url in session.query(Entity.project_id, Entity.image_url).join(
+                entity_subq, Entity.id == entity_subq.c.min_img_entity_id
+            ).all():
+                entity_map[p_id] = _refresh_media_url_cached(image_url, session, refreshed_urls)
+
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        cover_image = poster_map.get(row.id) or configured_map.get(row.id) or shot_map.get(row.id) or entity_map.get(row.id) or None
+        cover_images = list(cover_images_map.get(row.id) or [])
+        if cover_image and cover_image not in cover_images:
+            cover_images.insert(0, cover_image)
+        if not cover_image and not cover_images:
+            continue
+        items.append({
+            "id": row.id,
+            "kind": "story",
+            "cover_image": cover_image,
+            "cover_images": cover_images,
+        })
+    return items
+
+
+def _resolve_promo_card_covers(session: Session, promo_ids: List[int]) -> List[Dict[str, Any]]:
+    if not promo_ids:
+        return []
+    refreshed_urls: Dict[str, str] = {}
+    cover_map: Dict[int, str] = {}
+    asset_rows = (
+        session.query(PromoImageAsset.promo_project_id, PromoImageAsset.img_url)
+        .filter(PromoImageAsset.promo_project_id.in_(promo_ids))
+        .order_by(PromoImageAsset.id.asc())
+        .all()
+    )
+    for promo_id, image_url in asset_rows:
+        if promo_id in cover_map:
+            continue
+        refreshed = _refresh_media_url_cached(image_url, session, refreshed_urls)
+        if refreshed:
+            cover_map[promo_id] = refreshed
+
+    missing = [promo_id for promo_id in promo_ids if promo_id not in cover_map]
+    if missing:
+        planner_rows = (
+            session.query(PromoPlannerInput.promo_project_id, PromoPlannerInput.enterprise_info)
+            .filter(PromoPlannerInput.promo_project_id.in_(missing))
+            .all()
+        )
+        for promo_id, enterprise_info in planner_rows:
+            assets = enterprise_info.get("image_assets") if isinstance(enterprise_info, dict) else None
+            if not isinstance(assets, list):
+                continue
+            for asset in assets:
+                raw_url = ""
+                if isinstance(asset, dict):
+                    raw_url = str(asset.get("img_url") or asset.get("file_url") or "").strip()
+                if not raw_url:
+                    continue
+                refreshed = _refresh_media_url_cached(raw_url, session, refreshed_urls)
+                if refreshed:
+                    cover_map[promo_id] = refreshed
+                    break
+
+    return [
+        {
+            "id": promo_id,
+            "kind": "promo",
+            "cover_image": cover_map[promo_id],
+            "cover_images": [cover_map[promo_id]],
+        }
+        for promo_id in promo_ids
+        if cover_map.get(promo_id)
+    ]
+
+
+@router.get("/projects/card_covers")
+def read_project_card_covers(
+    ids: str = Query(""),
+    promo_ids: str = Query(""),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cover art for cards already on screen. The project list does not wait for this."""
+    story_ids = _parse_card_cover_ids(ids)
+    promo_ids_parsed = _parse_card_cover_ids(promo_ids)
+    items: List[Dict[str, Any]] = []
+    if story_ids:
+        shared_project_ids = [
+            row[0]
+            for row in db.query(ProjectShare.project_id).filter(
+                ProjectShare.user_id == current_user.id,
+                ProjectShare.project_id.in_(story_ids),
+            ).all()
+        ]
+        membership = [Project.owner_id == current_user.id]
+        if shared_project_ids:
+            membership.append(Project.id.in_(shared_project_ids))
+        allowed_ids = [
+            row[0]
+            for row in db.query(Project.id).filter(
+                Project.id.in_(story_ids),
+                _active_project_clause(),
+                or_(*membership),
+            ).all()
+        ]
+        items.extend(_resolve_story_card_covers(db, allowed_ids))
+    if promo_ids_parsed:
+        allowed_promo_ids = [
+            row[0]
+            for row in db.query(PromoProject.id).filter(
+                PromoProject.id.in_(promo_ids_parsed),
+                PromoProject.owner_id == current_user.id,
+                PromoProject.is_deleted.is_(False),
+            ).all()
+        ]
+        items.extend(_resolve_promo_card_covers(db, allowed_promo_ids))
+    return {"items": items}
 
 
 @router.get("/projects/{project_id}", response_model=ProjectOut)

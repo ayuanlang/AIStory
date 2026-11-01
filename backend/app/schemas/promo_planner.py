@@ -333,6 +333,8 @@ class PromoProjectOut(BaseModel):
     is_owner: Optional[bool] = True
     is_temp_view: Optional[bool] = False
     can_edit: Optional[bool] = True
+    # Card list skips planner, script text, and catalog lookups.
+    list_summary: Optional[bool] = False
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

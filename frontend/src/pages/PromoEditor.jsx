@@ -34,8 +34,9 @@ const PromoEditor = ({
     const [searchParams, setSearchParams] = useSearchParams();
     const id = projectId || params.id;
     const cached = initialProject && String(initialProject.id) === String(id) ? initialProject : null;
-    const [project, setProject] = useState(cached || null);
-    const [isInitializing, setIsInitializing] = useState(!cached);
+    const cachedIsListSummary = Boolean(cached?.list_summary);
+    const [project, setProject] = useState(cachedIsListSummary ? null : (cached || null));
+    const [isInitializing, setIsInitializing] = useState(!cached || cachedIsListSummary);
     const [isGenerating, setIsGenerating] = useState(false);
     const [isGeneratingScript, setIsGeneratingScript] = useState(false);
     const [isEnsuringStory, setIsEnsuringStory] = useState(false);

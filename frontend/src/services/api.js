@@ -1019,8 +1019,21 @@ export const streamAnalyzeScene = async (payload, callbacks = {}) => {
 };
 
 
-export const fetchProjects = async (skip = 0, limit = 100) => {
-    const response = await api.get('/projects/', { params: { skip, limit } });
+export const fetchProjects = async (skip = 0, limit = 100, options = {}) => {
+    const params = { skip, limit };
+    if (options?.summary) params.summary = 1;
+    const response = await api.get('/projects/', { params });
+    return response.data;
+}
+
+export const fetchProjectCardCovers = async ({ ids = [], promoIds = [] } = {}) => {
+    const params = {};
+    const storyIds = (Array.isArray(ids) ? ids : []).filter((id) => Number(id) > 0);
+    const promoIdList = (Array.isArray(promoIds) ? promoIds : []).filter((id) => Number(id) > 0);
+    if (storyIds.length) params.ids = storyIds.join(',');
+    if (promoIdList.length) params.promo_ids = promoIdList.join(',');
+    if (!params.ids && !params.promo_ids) return { items: [] };
+    const response = await api.get('/projects/card_covers', { params });
     return response.data;
 }
 
@@ -1268,8 +1281,10 @@ export const getMarketIntelReport = async (projectId, reportId) => {
     return response.data;
 }
 
-export const fetchPromoProjects = async (skip = 0, limit = 100) => {
-    const response = await api.get(`/promo-projects/`, { params: { skip, limit } });
+export const fetchPromoProjects = async (skip = 0, limit = 100, options = {}) => {
+    const params = { skip, limit };
+    if (options?.summary) params.summary = 1;
+    const response = await api.get(`/promo-projects/`, { params });
     return response.data;
 };
 

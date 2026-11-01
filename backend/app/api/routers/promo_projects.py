@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.api.deps import get_current_user
 from app.api.routers.workspace import shared as _shared
@@ -70,6 +70,7 @@ from app.services.promo_planner import (
     serialize_promo_enterprise,
     serialize_promo_product,
     serialize_promo_project,
+    serialize_promo_project_card,
     serialize_promo_script,
     save_promo_script_content,
     soft_delete_promo_linked_story,
@@ -90,17 +91,30 @@ catalog_asset_router = APIRouter(tags=["promo-catalog-assets"])
 def list_promo_projects(
     skip: int = 0,
     limit: int = 100,
+    summary: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    query = db.query(PromoProject).filter(_active_promo_clause(), PromoProject.owner_id == current_user.id)
+    if summary:
+        # Card grid only needs identity columns. extra_info and planner rows stay out of this query.
+        query = query.options(load_only(
+            PromoProject.id,
+            PromoProject.title,
+            PromoProject.description,
+            PromoProject.owner_id,
+            PromoProject.created_at,
+            PromoProject.updated_at,
+        ))
     rows = (
-        db.query(PromoProject)
-        .filter(_active_promo_clause(), PromoProject.owner_id == current_user.id)
+        query
         .order_by(PromoProject.updated_at.desc(), PromoProject.id.desc())
         .offset(skip)
         .limit(limit)
         .all()
     )
+    if summary:
+        return [serialize_promo_project_card(row, current_user) for row in rows]
     return [serialize_promo_project(db, row, current_user) for row in rows]
 
 

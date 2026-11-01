@@ -221,8 +221,9 @@ const Editor = ({
     const id = projectId || params.id;
     const navigate = useNavigate();
     const cachedInitialProject = initialProject && String(initialProject.id) === String(id) ? initialProject : null;
+    const cachedIsListSummary = Boolean(cachedInitialProject?.list_summary);
 
-    const [isInitializing, setIsInitializing] = useState(!cachedInitialProject);
+    const [isInitializing, setIsInitializing] = useState(!cachedInitialProject || cachedIsListSummary);
     const [project, setProject] = useState(cachedInitialProject || null);
     const [episodes, setEpisodes] = useState([]);
     const [isEpisodesLoading, setIsEpisodesLoading] = useState(false);
@@ -693,12 +694,12 @@ const Editor = ({
         let isStale = false;
         const initEditor = async () => {
             if (!id) return;
-            if (!cachedInitialProject) {
+            if (!cachedInitialProject || cachedIsListSummary) {
                 setIsInitializing(true);
             }
             try {
                 const [p, user] = await Promise.all([
-                    cachedInitialProject
+                    cachedInitialProject && !cachedIsListSummary
                         ? Promise.resolve(cachedInitialProject)
                         : fetchProject(id).catch(e => { console.error(e); return null; }),
                     fetchMe().catch(() => null)

@@ -47,6 +47,8 @@ class ProjectOut(BaseModel):
     missing_basic_fields: Optional[List[str]] = None
     has_missing_basic_info: Optional[bool] = False
     share_count: Optional[int] = 0
+    # Card list omits story bodies and other large JSON. Open the project to load the full record.
+    list_summary: Optional[bool] = False
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     
