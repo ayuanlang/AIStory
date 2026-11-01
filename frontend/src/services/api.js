@@ -1756,6 +1756,18 @@ export const regenerateSceneShots = async (sceneId, payload = null, runtimeHooks
     }
 }
 
+export const checkShotDerivedSubjects = async (sceneId, shotId) => {
+    const response = await api.post(`/scenes/${sceneId}/shots/${shotId}/derived_subject_check`);
+    return response.data;
+}
+
+export const regenerateShotDerivedSubject = async (sceneId, shotId) => {
+    return await asyncLLMPost(`/scenes/${sceneId}/shots/${shotId}/regenerate_derived_subject`, {
+        function_name: 'script_analysis',
+        system_api_id: Number(localStorage.getItem('func_api_script_analysis')) || null,
+    });
+}
+
 export const getSceneLatestAIResult = async (sceneId) => {
     const response = await api.get(`/scenes/${sceneId}/latest_ai_result`);
     return response.data;

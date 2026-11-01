@@ -635,3 +635,78 @@ def apply_scene_ai_result(
         except Exception:
             pass
     return applied_shots
+
+
+class DerivedSubjectShotRequest(BaseModel):
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
+
+
+@router.post("/scenes/{scene_id}/shots/{shot_id}/derived_subject_check")
+def check_shot_derived_subjects_route(
+    scene_id: int,
+    shot_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.models.all_models import Entity, Shot
+    from app.services.shot_derived_subject_check import check_shot_derived_subjects
+    from app.services.soft_delete import _active_entity_clause
+
+    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    project = _require_project_access(db, episode.project_id, current_user)
+    shot = (
+        db.query(Shot)
+        .filter(Shot.id == int(shot_id), Shot.scene_id == int(scene.id))
+        .first()
+    )
+    if shot is None or bool(getattr(shot, "is_deleted", False)):
+        raise HTTPException(status_code=404, detail="Shot not found")
+    entities = (
+        db.query(Entity)
+        .filter(Entity.project_id == project.id, _active_entity_clause())
+        .all()
+    )
+    return check_shot_derived_subjects(
+        entities,
+        shot_logic=str(shot.shot_logic_cn or ""),
+        video_content=str(shot.video_content or ""),
+        scene_id=int(scene.id),
+    )
+
+
+@router.post("/scenes/{scene_id}/shots/{shot_id}/regenerate_derived_subject")
+async def regenerate_shot_derived_subject_route(
+    scene_id: int,
+    shot_id: int,
+    req: Optional[DerivedSubjectShotRequest] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
+):
+    from app.services.shot_ai_generation_ops import execute_regenerate_one_shot_for_subjects
+
+    if async_mode == "1":
+        tid = _submit_async(
+            regenerate_shot_derived_subject_route,
+            user_id=current_user.id,
+            kind="regenerate_one_shot",
+            scene_id=scene_id,
+            shot_id=shot_id,
+            req=req,
+            async_mode="0",
+        )
+        return JSONResponse({"task_id": tid, "async": True})
+    return await execute_regenerate_one_shot_for_subjects(
+        scene_id=scene_id,
+        shot_db_id=shot_id,
+        db=db,
+        current_user=current_user,
+        function_name=(req.function_name if req else None),
+        system_api_id=(req.system_api_id if req else None),
+    )

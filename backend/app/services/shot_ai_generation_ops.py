@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.time_utils import now_bj_iso
-from app.models.all_models import Episode, Scene, User
+from app.models.all_models import Episode, Scene, Shot, User
 from app.services.db_session_utils import _release_db_connection
 from app.services.billing_service import billing_service
 from app.services.llm_markdown_sanitize import sanitize_llm_markdown_output
@@ -968,3 +968,229 @@ async def execute_ai_regenerate_shots(
         except Exception:
             pass
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _pick_generated_shot_cell(row: Dict[str, Any], keys: List[str]) -> str:
+    if not isinstance(row, dict):
+        return ""
+    normalized = {
+        re.sub(r"[\s_（）()]+", "", str(key or "")).lower(): value
+        for key, value in row.items()
+    }
+    for key in keys:
+        if row.get(key) not in (None, ""):
+            return str(row.get(key))
+        token = re.sub(r"[\s_（）()]+", "", key).lower()
+        if normalized.get(token) not in (None, ""):
+            return str(normalized.get(token))
+    return ""
+
+
+async def execute_regenerate_one_shot_for_subjects(
+    *,
+    scene_id: int,
+    shot_db_id: int,
+    db: Session,
+    current_user: User,
+    function_name: Optional[str] = None,
+    system_api_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Rewrite one shot from its own beats. Other injections stay the full-scene set."""
+    from app.models.all_models import Entity
+    from app.services.shot_derived_subject_check import check_shot_derived_subjects
+    from app.services.shot_markdown import stabilize_shot_logic_merged_beats
+    from app.services.soft_delete import _active_entity_clause
+
+    current_user_id = int(getattr(current_user, "id", 0) or 0)
+    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    project = _require_project_access(db, episode.project_id, current_user)
+    shot = (
+        db.query(Shot)
+        .filter(Shot.id == int(shot_db_id), Shot.scene_id == int(scene.id))
+        .first()
+    )
+    if shot is None or bool(getattr(shot, "is_deleted", False)):
+        raise HTTPException(status_code=404, detail="Shot not found")
+
+    entities = (
+        db.query(Entity)
+        .filter(Entity.project_id == project.id, _active_entity_clause())
+        .all()
+    )
+    before = check_shot_derived_subjects(
+        entities,
+        shot_logic=str(shot.shot_logic_cn or ""),
+        video_content=str(shot.video_content or ""),
+        scene_id=int(scene.id),
+    )
+    beat_ids = list(before.get("beat_ids") or [])
+    if not beat_ids:
+        raise HTTPException(status_code=400, detail="shot_missing_merged_beats")
+
+    system_prompt, user_input = _build_shot_prompts(
+        db,
+        scene,
+        project,
+        only_beat_ids=beat_ids,
+        single_shot_id=str(shot.shot_id or "").strip(),
+    )
+    from app.services.script_analysis_flow.node_advanced_spec import (
+        load_storyboard_advanced_spec,
+        prepend_node_advanced_spec,
+    )
+
+    storyboard_spec = load_storyboard_advanced_spec(
+        episode, str(getattr(scene, "scene_no", "") or "").strip()
+    )
+    if storyboard_spec:
+        user_input = prepend_node_advanced_spec(user_input, storyboard_spec)
+
+    function_name = function_name or "script_analysis"
+    try:
+        db.commit()
+    except Exception:
+        pass
+    llm_config, _, _, _ = _resolve_script_analysis_dropdown_llm_config(
+        db,
+        current_user_id,
+        function_name,
+        system_api_id,
+        context="ai_regenerate_one_shot",
+    )
+    llm_config = _inject_user_advanced_llm_preferences(llm_config, current_user)
+    llm_config = _inject_project_creativity_temperature(
+        llm_config,
+        project.global_info,
+        context="ai_regenerate_one_shot",
+    )
+    llm_config = _inject_llm_call_log_trace(
+        llm_config,
+        user_id=current_user_id,
+        user_name=getattr(current_user, "username", None),
+        project_id=getattr(project, "id", None),
+        action_name=_script_analysis_action_label(context="ai_regenerate_one_shot"),
+    )
+    provider = llm_config.get("provider")
+    model = llm_config.get("model")
+    reservation_tx_id: Optional[int] = None
+    if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        messages_est = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_input},
+        ]
+        est = billing_service.estimate_reserve_tokens_from_messages(messages_est)
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user_id,
+            "llm_chat",
+            provider,
+            model,
+            {
+                "item": "regenerate_one_shot",
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            },
+        )
+        reservation_tx_id = int(getattr(reservation_tx, "id", 0) or 0) or None
+    else:
+        billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
+
+    _release_db_connection(db, "ai_regenerate_one_shot_llm_call")
+    response_dict = await generate_shots_content(
+        user_input,
+        system_prompt,
+        llm_config,
+        response_validator=_build_ai_shots_response_validator(
+            context="ai_regenerate_one_shot",
+            scene_id=scene_id,
+            user_id=current_user_id,
+            source_label="Regenerate One Shot",
+            strip_reasoning_prefixes=True,
+        ),
+        context="ai_regenerate_one_shot",
+    )
+    raw_text = str(response_dict.get("content") or "")
+    usage = response_dict.get("usage") or {}
+    response_content = sanitize_shots_markdown_table_text(
+        _strip_ai_shots_reasoning_prefix_lines(raw_text, context="ai_regenerate_one_shot")
+    )
+    if not response_content:
+        if reservation_tx_id is not None:
+            billing_service.cancel_reservation(db, reservation_tx_id, "empty one-shot response")
+        raise HTTPException(status_code=502, detail="LLM response became empty after sanitize")
+
+    if reservation_tx_id is not None:
+        actual = {"item": "regenerate_one_shot"}
+        if isinstance(usage, dict):
+            actual.update(usage)
+        _apply_llm_routing_to_billing_details(actual, response_dict)
+        billing_service.settle_reservation(db, reservation_tx_id, actual)
+    else:
+        details = {"item": "regenerate_one_shot"}
+        if isinstance(usage, dict):
+            details.update(usage)
+        _apply_llm_routing_to_billing_details(details, response_dict)
+        billing_service.deduct_credits(db, current_user_id, "llm_chat", provider, model, details)
+
+    _, rows, _ = parse_shots_markdown_table(response_content)
+    if not rows:
+        raise HTTPException(status_code=502, detail="Regenerate one shot returned 0 parsed rows")
+    target_key = str(shot.shot_id or "").strip().lower()
+    chosen = rows[0]
+    for row in rows:
+        row_id = _pick_generated_shot_cell(row, ["Shot ID", "shot_id", "镜头ID"]).strip().lower()
+        if target_key and row_id == target_key:
+            chosen = row
+            break
+    video_text = _pick_generated_shot_cell(chosen, ["Video Content", "video_content", "视频内容"])
+    logic_text = _pick_generated_shot_cell(
+        chosen, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"]
+    )
+    if not video_text and not logic_text:
+        raise HTTPException(status_code=502, detail="Regenerated shot row has no video or logic")
+    if logic_text:
+        logic_text = stabilize_shot_logic_merged_beats(logic_text)
+        shot.shot_logic_cn = logic_text
+    if video_text:
+        shot.video_content = video_text
+        shot.prompt = video_text
+    duration_text = _pick_generated_shot_cell(chosen, ["Duration (s)", "Duration", "duration", "时长"])
+    if duration_text:
+        shot.duration = duration_text
+    entities_text = _pick_generated_shot_cell(
+        chosen, ["Associated Entities", "associated_entities", "关联实体"]
+    )
+    if entities_text:
+        shot.associated_entities = entities_text
+    name_text = _pick_generated_shot_cell(chosen, ["Shot Name", "shot_name", "镜头名称"])
+    if name_text:
+        shot.shot_name = name_text
+    db.add(shot)
+    db.commit()
+    db.refresh(shot)
+    after = check_shot_derived_subjects(
+        entities,
+        shot_logic=str(shot.shot_logic_cn or ""),
+        video_content=str(shot.video_content or ""),
+        scene_id=int(scene.id),
+    )
+    return {
+        "shot": {
+            "id": shot.id,
+            "shot_id": shot.shot_id,
+            "shot_name": shot.shot_name,
+            "shot_logic_cn": shot.shot_logic_cn,
+            "video_content": shot.video_content,
+            "duration": shot.duration,
+            "associated_entities": shot.associated_entities,
+            "prompt": shot.prompt,
+        },
+        "before": before,
+        "check": after,
+    }

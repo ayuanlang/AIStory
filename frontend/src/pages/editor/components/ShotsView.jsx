@@ -73,6 +73,8 @@ import {
     fetchAssets, 
     generateSceneShots,
     regenerateSceneShots,
+    checkShotDerivedSubjects,
+    regenerateShotDerivedSubject,
     createAsset,
     uploadAsset,
     getSettings,
@@ -743,6 +745,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     // Local Notification for ShotsView (Edit Dialog)
     const [notification, setNotification] = useState(null);
     const [restoringFromStaging, setRestoringFromStaging] = useState(false);
+    const [checkingShotSubjects, setCheckingShotSubjects] = useState(false);
+    const [regeneratingShotSubjects, setRegeneratingShotSubjects] = useState(false);
+    const [shotSubjectCheck, setShotSubjectCheck] = useState(null);
     const showNotification = (message, type = 'success') => {
         setNotification({ message, type });
         setTimeout(() => setNotification(null), 3000);
@@ -4504,6 +4509,75 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             setRestoringFromStaging(false);
         }
     }, [editingShot, onLog, onUpdateShot, restoringFromStaging, scenes, showNotification, t]);
+
+    useEffect(() => {
+        setShotSubjectCheck(null);
+    }, [editingShot?.id]);
+
+    const applyRegeneratedShot = useCallback((shotPatch) => {
+        if (!shotPatch?.id) return;
+        setEditingShot((prev) => (prev && String(prev.id) === String(shotPatch.id) ? { ...prev, ...shotPatch } : prev));
+        setShots((prev) => prev.map((shot) => (
+            String(shot?.id) === String(shotPatch.id) ? { ...shot, ...shotPatch } : shot
+        )));
+    }, []);
+
+    const handleRegenerateShotSubjects = useCallback(async () => {
+        if (!editingShot?.id || !editingShot?.scene_id || regeneratingShotSubjects) return;
+        setRegeneratingShotSubjects(true);
+        try {
+            const result = await regenerateShotDerivedSubject(editingShot.scene_id, editingShot.id);
+            if (result?.shot) applyRegeneratedShot(result.shot);
+            setShotSubjectCheck(result?.check || null);
+            const stillMissing = Array.isArray(result?.check?.missing) ? result.check.missing : [];
+            if (result?.check?.ok) {
+                showNotification(t('已重写这一镜，主体与衍生环境一致', 'This shot was rewritten and now matches its derived environment'), 'success');
+            } else if (stillMissing.length) {
+                showNotification(t(
+                    `已重写这一镜，仍有 ${stillMissing.length} 处主体不在对应衍生环境里`,
+                    `This shot was rewritten, and ${stillMissing.length} subject(s) are still missing from the derived environment`
+                ), 'error');
+            } else {
+                showNotification(t('已重写这一镜', 'This shot was rewritten'), 'success');
+            }
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || t('未知错误', 'Unknown error');
+            showNotification(t(`重写分镜失败: ${detail}`, `Rewrite failed: ${detail}`), 'error');
+        } finally {
+            setRegeneratingShotSubjects(false);
+        }
+    }, [applyRegeneratedShot, editingShot, regeneratingShotSubjects, showNotification, t]);
+
+    const handleCheckShotSubjects = useCallback(async () => {
+        if (!editingShot?.id || !editingShot?.scene_id || checkingShotSubjects) return;
+        setCheckingShotSubjects(true);
+        try {
+            const result = await checkShotDerivedSubjects(editingShot.scene_id, editingShot.id);
+            setShotSubjectCheck(result);
+            setCheckingShotSubjects(false);
+            const missing = Array.isArray(result?.missing) ? result.missing : [];
+            if (result?.ok) {
+                showNotification(t('这一镜的主体和光源都在对应衍生环境里', 'Every subject and light in this shot exists in its derived environment'), 'success');
+                return;
+            }
+            const names = missing.map((item) => item?.name).filter(Boolean).join('、');
+            const reason = result?.reason === 'no_env'
+                ? t('这一镜没有解析到衍生环境', 'This shot has no derived environment')
+                : result?.reason === 'no_cell'
+                    ? t('对应衍生环境没有可核对的宫格', 'The derived environment has no quad cell to check')
+                    : t(`有主体不在对应衍生环境里：${names}`, `Subjects missing from the derived environment: ${names}`);
+            const confirmed = await confirmUiMessage(t(
+                `${reason}。只重写这一镜，注入它对应的拍，其余与整场分镜生成相同。已生成的图片和视频保留。`,
+                `${reason}. Rewrite only this shot, using its beats. Everything else matches a full-scene generation. Generated images and video stay.`
+            ));
+            if (confirmed) await handleRegenerateShotSubjects();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || t('未知错误', 'Unknown error');
+            showNotification(t(`分镜检查失败: ${detail}`, `Shot check failed: ${detail}`), 'error');
+        } finally {
+            setCheckingShotSubjects(false);
+        }
+    }, [checkingShotSubjects, editingShot, handleRegenerateShotSubjects, showNotification, t]);
 
     const handleApplyTunedShotPrompt = useCallback(async (refinedPrompt) => {
         if (!editingShot?.id) return;
@@ -13294,6 +13368,17 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             <div>
                                 <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                                     <label className="text-[10px] uppercase font-bold text-muted-foreground">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                    <button
+                                        type="button"
+                                        onClick={handleCheckShotSubjects}
+                                        disabled={checkingShotSubjects || regeneratingShotSubjects || !editingShot?.scene_id}
+                                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-amber-500/40 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                                        title={t('核对这一镜点到的环境主体和光源是否都在对应衍生环境宫格里', 'Check that environment subjects and lights named in this shot exist in its derived-environment cell')}
+                                    >
+                                        {checkingShotSubjects ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                                        {checkingShotSubjects ? t('检查中…', 'Checking…') : t('分镜检查', 'Check Shot')}
+                                    </button>
                                     <button
                                         type="button"
                                         onClick={handleRestoreShotFromAiStaging}
@@ -13304,7 +13389,37 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         {restoringFromStaging ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
                                         {restoringFromStaging ? t('恢复中…', 'Restoring…') : t('恢复分镜', 'Restore Storyboard')}
                                     </button>
+                                    </div>
                                 </div>
+                                {shotSubjectCheck && (
+                                    <div className={`mb-2 rounded-md border px-2.5 py-2 text-xs ${shotSubjectCheck.ok ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-amber-500/40 bg-amber-500/10 text-amber-50'}`}>
+                                        {shotSubjectCheck.ok
+                                            ? t('主体与对应衍生环境一致', 'Subjects match the derived environment')
+                                            : (
+                                                <>
+                                                    <div>
+                                                        {(shotSubjectCheck.missing || []).length
+                                                            ? t(
+                                                                `不在对应衍生环境里：${(shotSubjectCheck.missing || []).map((item) => item.name).join('、')}`,
+                                                                `Missing from the derived environment: ${(shotSubjectCheck.missing || []).map((item) => item.name).join(', ')}`
+                                                            )
+                                                            : (shotSubjectCheck.reason === 'no_cell'
+                                                                ? t('对应衍生环境没有可核对的宫格', 'The derived environment has no quad cell to check')
+                                                                : t('这一镜没有解析到衍生环境', 'This shot has no derived environment'))}
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleRegenerateShotSubjects}
+                                                        disabled={regeneratingShotSubjects}
+                                                        className="mt-1.5 flex items-center gap-1.5 px-2 py-1 rounded border border-amber-200/40 bg-black/20 hover:bg-black/30 disabled:opacity-40"
+                                                    >
+                                                        {regeneratingShotSubjects ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+                                                        {regeneratingShotSubjects ? t('重写中…', 'Rewriting…') : t('重新生成该分镜', 'Regenerate This Shot')}
+                                                    </button>
+                                                </>
+                                            )}
+                                    </div>
+                                )}
                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                     className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-[80px] focus:outline-none focus:border-primary/50 cursor-not-allowed opacity-80"
                                     value={editingShot.shot_logic_cn || ''}

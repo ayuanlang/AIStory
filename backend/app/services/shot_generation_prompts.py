@@ -1085,6 +1085,8 @@ def _build_shot_prompts(
     *,
     mode: Optional[str] = None,
     explicit_features: Optional[Dict[str, Any]] = None,
+    only_beat_ids: Optional[List[int]] = None,
+    single_shot_id: Optional[str] = None,
 ):
     # 2. Gather Data
     # Global Style & Context
@@ -1441,7 +1443,7 @@ def _build_shot_prompts(
             f"合镜计时：Beat小计=建置串行+并行核Max(语言/动作/微表情/特效/运镜/音效)，禁止七类分项全额相加灌到MaxShotSeconds；同一衍生环境的后续P建置=0s，不抄该拍建置，不写当前环境、环境保持、仍在该环境、背景参考图；机位和透视与上一P相同的不再写，变了只写变化和该拍入戏；跨P同一连续运镜只计一次；ENV微动/窗雨/雨丝/配乐特效=0s。无对白且无复杂动作且无宏大特效的建立/凝视合镜Duration落5–8（~可到9），禁止无撑满内容却填MaxShotSeconds。"
             f"景别构图与镜头角度：镜首与ENV名变Pn抄该拍【建置】拍摄键进Logic与Video。同一衍生环境合镜的后续P，和上一P已经写出的机位、景别、俯仰、视角、透视、构图相同就不再写，只写变了的档和接到新机位的运镜。禁止本层另选锁档。缺锁定标upstream_missing_framing回流。"
             f"影视语言：焦距/视角°/光学/运镜/构图/镜头位置/跟焦/帧率/快门速度/曝光三角/光比/色温/柔硬/色调须可回指Video；每项技术动作点名后须接§四.0该档执行效果（47°标准人眼=日常叙事对话全景纪实无畸变画面自然；84°广角=人物+环境融合近身动作透视自然扩张；107°超广角=大场景灾难宏大环境沉浸式空间感；29°中长焦=人物近景情绪特写背景柔和虚化；18°长焦=五官细节微表情极致压缩景深；8°超长焦=远距离观察偷窥画面扁平化；压迫光影=仅保留轮廓光高光眼神光勾勒层次，面部沉入压暗阴影；运镜/构图/机位距侧同样参数+效果）。光学须点名快门速度1/Xs（与帧率同核：24fps冻结=1/96s、微拖=1/48s；48fps冻结=1/192s、微拖=1/96s；60fps冻结=1/240s、微拖=1/120s），允许写1/48s等EXIF速度，禁止只写冻结/微拖不写速度。高速追逐/飙车/急飞须点§四.4B技巧词：光学≥2（Background Motion Blur/Strong Parallax/Speed Tunnel/Ground Rush/Light Streak等）＋运镜≥2（Distance Lock Follow＋Follow/Lead/Car Mount/Hood Mount/Pursuit Cam/Drone Chase/Bank Follow/FPV Dive）＋构图落地≥1（灭点吸力/速度隧道框/运动前留白/追逃同轴/垂直层位叠，只实现已锁构图）；禁止只写Follow或背景糊了。打斗/仙攻/魔法须点§四.4C技巧词：光学≥2（Impact Flash/Dust Burst/Aura Attachment/Particle Lattice/Spatial Warp/Cast Glow/Rune Circle/Spell Beam Volume/Elemental Wash等）＋运镜≥2（Handheld Combat/Attack Axis Track/Whip/Crash Zoom/Bullet Time/Speed Ramp/Scale Contrast/Impact Shake/Orbit Cast/Follow Beam）＋构图落地≥1（攻击同轴/攻防同框/体量对比框/阵形满幅/阵盘铺地/咒束引导线，只实现已锁构图）；快相48/60fps，升格24fps+Ramp；禁止只写快速打斗/金光爆发/放了个魔法。"
-            f"美术锚=项目 Lighting、Tone 与本场氛围，不读未注入的主环境四宫格。"
+            f"本拍宫格里已有的灯、来向，与卖点、剧情、角色特征同等，互相配合，一起定 Key 和来光侧，高于色光规划=和项目 Lighting、Tone。点名的灯、窗、幕墙必须是格子里已有的那一具，来向用这一具在格子里的那一侧。冷暖两边都没写时，才用色光规划=，还没有才用项目 Lighting。"
             f"最终提示词镜头语言：Video四段须中英专业词并列点名（MCU/OTS/Eye-level/47°标准人眼/29°中长焦/Shallow DOF/Follow Focus/24fps/Key/Fill/Soft Light/Medium Contrast/Cool等）并接§四.0该档执行效果，禁止只点名mm/DOF/Freeze/三分/一臂/技法名不写效果，禁止口语冲淡（有光/推近一点/背景糊了/电影感）。光学视场闭集8°/18°/29°/47°/84°/107°必须写入Video，禁止把ENV名180度当视角档。"
             f"P段描述逻辑：先按合并逻辑把该并的Beat并进同一镜，再写Video。一般一P对应一Beat，必须按播放时间序一一对应（时序不可变，禁止因卖点/高潮倒排Pn，禁止同一Shot把一Beat拆成多个P）；每个Pn必须标本镜内起止秒，写法=(Pn 0s–4s)，P1从0s起、相邻P首尾相接、末P止秒=本镜Duration，禁止只写(P1)无秒；同拍内CHAR/PROP按上游【卖点综合】【情绪峰谷综合】【叙事综合】的重点对象/峰谷承载/关键人物优先写到建置句序、主拍与Associated Entities前列，只覆盖该拍建置已写入的可见角色与道具；该拍暂不可见的不写入这一 Pn，换衍生环境后建置重新写入的才从对应 P 提及；Video以运镜与动作流起笔（禁以ENV或全局风格起笔）；开镜P1第一句写「当前环境=ENV:[本段名]。全程空间锁位，空间结构必须完全按当前背景参考图。」同一衍生环境只在开镜写当前环境、空间结构、该拍建置和背景参考图。后续同衍生环境的P不再写当前环境、空间结构、环境保持、仍在该环境、前环境、背景参考图，也不抄该拍建置。机位、景别、俯仰、视角、透视、构图、落位、朝向、手持与上一P相同的不再写，只写变了的部分和该拍入戏。有推拉摇移环绕跟或升降时，已在画内、本拍仍在的非主拍各写半句「CHAR:[@名]仍在原位」，不重写落位；入画只写从哪一侧进入，出画写裁出画缘或走出画面，禁止凭空出现或直接消失。ENV名变的P整句抄该拍建置，并写背景切换到参考图ENV:[新]，落幅后背景保持参考图ENV:[新]，因为这一拍当前环境是ENV:[新]。禁止写不再使用上一张环境。禁止写参考@Image，禁止在CHAR/ENV/PROP后写括号锚点（简要特征、外形、尺寸、英文描点）；这些只在提交视频模型时注入，不进页面成稿。四宫方向角标不进Video：角标=、0度·望北、90度·望东、180度·望南、270度·望西、格标题[N度格-左上·北]、四宫度数=、罗盘标都是拼图角标，禁止抄进视频提示词，禁止生成到画面上。ENV的{{N}}度名字和镜头47°/84°留下。禁止把两拍建置揉成一句，禁止用承上掩盖入戏里的变化；成稿顺序=运镜与动作流→两光影段→全局动态风格→品质收束；禁止另起物理文字段。坐标轴不生成：镜首和换衍生环境的P，本格轴那一行抄完后紧接「本格X线、本格Y线和Z不画成线，不画成字，不生成坐标轴。」同一环境的后续P不重复这句。品质收束固定原文后再写一次同一句。沿本格两句原样留下。画面里不生成X轴、Y轴、Z轴，不画线，不画箭头，不写XYZ字。"
             f"配乐与音效：上游【配乐】听感在（）内、【音效】在<>内，嵌在对应动作或运镜句上并保持原符号，与锚=/配合=同一瞬间同拍同频；禁止堆到段末或光影段；禁止把听感或音效改写成{{}}；禁止因品质收束「无背景音乐」删已写入的配乐/音效。"
@@ -1472,10 +1474,20 @@ def _build_shot_prompts(
         getattr(scene, "scene_no", None),
     )
     locked_body = load_shot_locked_body(db, int(getattr(scene, "episode_id", 0) or 0), scene_public_id)
+    from app.services.shot_derived_subject_check import (
+        filter_shot_locked_to_beats,
+        slice_core_scene_to_beats,
+    )
+
+    had_guidance = shot_locked_has_guidance(locked_body)
+    if only_beat_ids:
+        locked_body = filter_shot_locked_to_beats(locked_body, only_beat_ids)
     locked_section = format_shot_locked_injection(locked_body)
     core_goal_for_shot = core_goal_text
-    if shot_locked_has_guidance(locked_body):
-        core_goal_for_shot = strip_guidance_lines(core_goal_text)
+    if only_beat_ids:
+        core_goal_for_shot = slice_core_scene_to_beats(core_goal_for_shot, only_beat_ids)
+    if had_guidance:
+        core_goal_for_shot = strip_guidance_lines(core_goal_for_shot)
     core_scene_info_block = wrap_injection_section(
         "Core Scene Info",
         f"""| Field | Value |
@@ -1491,14 +1503,17 @@ def _build_shot_prompts(
 | **Core Goal** | {core_goal_for_shot} |""",
     )
 
-    user_input = f"""{project_context_section}
-
-{locked_section}
-{core_scene_info_block}
-
-{scene_subject_index_section}
-{scene_subject_image_prompts_section}
-# Instruction
+    if only_beat_ids:
+        beat_label = "+".join(f"Beat{num}" for num in only_beat_ids)
+        shot_id_label = str(single_shot_id or "").strip() or f"{scene_public_id}_SHxx"
+        instruction = f"""# Instruction
+本次只重写一镜，只覆盖 {beat_label}。Core Scene Info 里只有这些拍。项目信息、分镜锁定里的场级条目、Subject Index、衍生环境宫格与整场分镜生成相同。
+1. Output exactly one Shot List markdown table row. Shot ID is fixed as `{shot_id_label}`. Scene ID is `{scene_public_id}`.
+2. Beat-Shot映射 first segment must be `合镜Beat={beat_label}`. Do not add other beats. Do not write `单Beat=` or `合镜=`.
+3. The matching cell and 卖点, plot, and character traits are equal and must be used together to choose Key and light direction. Named lights, windows, and walls must already be in that cell; direction is that fixture's direction in the cell. This pair outranks 色光规划= and project Lighting.
+"""
+    else:
+        instruction = f"""# Instruction
 1. Analyze `# Core Scene Info` Beats and break them down into shots per §三.3.
 2. After shot boundaries are locked, evaluate every adjacent pair per §三.3B: split transition camera moves and other cut requirements into outgoing (previous-shot last P) and incoming (next-shot P1).
 3. For character entry/exit beats, land reactions + locked shot-size change + complementary camera per §二.3B; do not flatten to one enter/exit sentence.
@@ -1506,6 +1521,16 @@ def _build_shot_prompts(
 5. Scene opening / OT- / 吸睛 must be P segments inside the Shot that covers Beat 1 — never an extra Shot outside Beat-Shot mapping.
 6. Every Beat must appear in some row's `Beat-Shot映射`; do not invent unmapped opening shots. The first segment of that field is always `合镜Beat=BeatN` or `合镜Beat=BeatN+BeatM+...` (no spaces, narrative order, same n as upstream `[BEAT_START:n]`). Single-beat shots use the same key. Do not write `单Beat=` or `合镜=蒙太奇链` in place of the beat list. Montage may add `｜链=蒙太奇` after the list.
 7. Episode ID and Scene ID in `# Core Scene Info` are authoritative. Copy Scene ID `{scene_public_id}` onto every row. Shot ID is `{scene_public_id}_SHzz` (zz zero-padded from 01). Do not refuse because Scene No is numeric, and do not invent a different EP/SC from Scene No.
+8. Every named environment subject, opening, wall, door, window, and light in Video or Logic must already appear in the matching derived-environment cell under 【衍生环境信息】. A name that is not in that cell is an error. CHAR and PROP tags are not environment subjects. That cell and 卖点, plot, and character traits are equal: together they choose which existing source is Key and from which of its sides the light comes. This pair outranks 色光规划= and project Lighting. Do not invent a window.
+"""
+    user_input = f"""{project_context_section}
+
+{locked_section}
+{core_scene_info_block}
+
+{scene_subject_index_section}
+{scene_subject_image_prompts_section}
+{instruction}
 """
     
     return system_prompt, user_input
