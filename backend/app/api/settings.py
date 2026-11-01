@@ -2079,14 +2079,7 @@ def _apply_system_provider_key_pool(db: Session, provider: str, keys: List[str])
             updated_at=now_iso,
         ))
 
-    # Sync primary key to all system_api_settings rows for legacy compatibility
-    primary_key = normalized[0] if normalized else ""
-    rows = db.query(SystemAPISetting).filter(
-        _system_provider_case_insensitive_filter(provider_name)
-    ).all()
-    for row in rows:
-        row.provider = provider_name
-        row.api_key = primary_key
+    # System rows keep their own api_key. Empty means runtime falls through to this pool.
 
 
 def _apply_provider_key_bundle_to_rows(
@@ -2102,7 +2095,7 @@ def _apply_provider_key_bundle_to_rows(
     created_at: Optional[str] = None,
     updated_at: Optional[str] = None,
 ) -> None:
-    """Write full key pool bundle to provider_key_pool and sync api_key on system_api_settings rows."""
+    """Write the provider key pool. System rows keep their own api_key."""
     normalized = _normalize_api_keys(keys)
     provider_name = _normalize_system_provider_name(provider_name)
 
@@ -2138,12 +2131,7 @@ def _apply_provider_key_bundle_to_rows(
     else:
         logger.warning("Skip provider_key_pool sync for provider=%s: table provider_key_pool not found", provider_name)
 
-    primary_key = normalized[0] if normalized else ""
-    rows = db.query(SystemAPISetting).filter(
-        _system_provider_case_insensitive_filter(provider_name)
-    ).all()
-    for row in rows:
-        row.api_key = primary_key
+    # Do not copy the pool's first key onto system_api_settings rows.
 
 
 def _normalize_optional_http_url(value: Any) -> Optional[str]:
@@ -2353,18 +2341,8 @@ def _cleanup_user_api_settings_records(db: Session, user_id: int) -> None:
 
 
 def _sync_system_provider_shared_key(db: Session, provider: str, current_setting_id: int, incoming_api_key: str = None) -> str:
-    if not provider:
-        return incoming_api_key or ""
-
-    provider = _normalize_system_provider_name(provider)
-
-    key = (incoming_api_key or "").strip()
-    pool = _get_system_provider_key_pool(db, provider)
-    if key and key not in pool:
-        pool = [key, *pool]
-
-    _apply_system_provider_key_pool(db, provider, pool)
-    return pool[0] if pool else ""
+    """Keep the system row key as entered. Empty stays empty."""
+    return str(incoming_api_key or "").strip()
 
 
 def _task_type_to_category(task_type: str) -> str:
@@ -7621,14 +7599,8 @@ def update_system_setting_for_manage(
     elif payload.is_active is False:
         clear_task_default_for_category(db, target.category)
 
-    # Keep provider-level key shared among system rows as well.
-    effective_key = _sync_system_provider_shared_key(
-        db,
-        target.provider,
-        target.id,
-        payload.api_key,
-    )
-    target.api_key = effective_key
+    if "api_key" in update_data:
+        target.api_key = str(update_data.get("api_key") or "").strip()
 
     # Explicit billing fields in the update payload always upsert the base rule.
     # Legacy auto-sync remains gated for updates that omit billing_* fields.
@@ -10259,13 +10231,8 @@ def import_system_settings_for_manage(
                 _refresh_has_granular_billing_rules_flag(db, target.id)
             created += 1
 
-        effective_key = _sync_system_provider_shared_key(
-            db,
-            target.provider,
-            target.id,
-            item.api_key,
-        )
-        target.api_key = effective_key
+        if item.api_key is not None:
+            target.api_key = str(item.api_key).strip()
 
         if bool(item.is_active):
             last_active_id_by_category[category] = target.id

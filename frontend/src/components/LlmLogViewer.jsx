@@ -52,10 +52,22 @@ function toOpenableUrl(raw) {
   return '';
 }
 
-function looksLikeImage(href) {
-  if (/^data:image\//i.test(href)) return true;
-  const path = String(href || '').split('?')[0].split('#')[0];
-  return /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(path);
+class LogBodyBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (this.state.failed) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
 }
 
 export default function LlmLogViewer({ log, onClose }) {
@@ -135,6 +147,21 @@ export default function LlmLogViewer({ log, onClose }) {
     completionContent = responseObj.partial_content;
   }
 
+  const markdownComponents = {
+    a: ({ href, children }) => (
+      <a href={href || ''} target="_blank" rel="noopener noreferrer" className="break-all [overflow-wrap:anywhere]">{children}</a>
+    ),
+    img: ({ src, alt }) => {
+      const href = toOpenableUrl(src);
+      if (!href) return null;
+      return (
+        <a href={href} target="_blank" rel="noopener noreferrer" className="block max-w-full break-all [overflow-wrap:anywhere] text-sky-300 hover:text-sky-200 hover:underline">
+          {alt || href}
+        </a>
+      );
+    },
+  };
+
   const renderAttachment = (part, key) => {
     const raw = attachmentRawUrl(part);
     const href = toOpenableUrl(raw);
@@ -148,32 +175,27 @@ export default function LlmLogViewer({ log, onClose }) {
       );
     }
     return (
-      <div key={key} className="mt-2 space-y-2">
+      <div key={key} className="mt-2 min-w-0 max-w-full space-y-2">
         <a
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="block text-xs text-sky-300 hover:text-sky-200 hover:underline break-all"
+          className="block max-w-full text-xs text-sky-300 hover:text-sky-200 hover:underline break-all [overflow-wrap:anywhere]"
         >
           {href}
         </a>
-        {looksLikeImage(href) ? (
-          <a href={href} target="_blank" rel="noopener noreferrer" className="inline-block">
-            <img src={href} alt="" className="max-h-56 max-w-full rounded-lg border border-white/10 object-contain bg-black/40" />
-          </a>
-        ) : null}
       </div>
     );
   };
 
   const renderMessageContent = (content) => {
-    if (typeof content === 'string') return <div className="prose prose-invert max-w-none prose-sm"><Markdown>{content}</Markdown></div>;
+    if (typeof content === 'string') return <div className="prose prose-invert max-w-full min-w-0 prose-sm break-words"><Markdown components={markdownComponents}>{content}</Markdown></div>;
     if (Array.isArray(content)) {
       return content.map((c, i) => {
         if (!c || typeof c !== 'object') return <div key={i}>{String(c ?? '')}</div>;
         const type = String(c.type || '').toLowerCase();
         if (type === 'text' || type === 'input_text' || type === 'output_text') {
-          return <div key={i} className="prose prose-invert max-w-none prose-sm overflow-x-auto break-words"><Markdown>{c.text || ''}</Markdown></div>;
+          return <div key={i} className="prose prose-invert max-w-full min-w-0 prose-sm overflow-x-hidden break-words"><Markdown components={markdownComponents}>{typeof c.text === 'string' ? c.text : ''}</Markdown></div>;
         }
         if (MEDIA_PART_TYPES.has(type) || (!type && attachmentRawUrl(c))) {
           return renderAttachment(c, i);
@@ -221,7 +243,7 @@ export default function LlmLogViewer({ log, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50" onClick={onClose}>
-      <div className="bg-gray-900 border border-gray-700 p-6 rounded-xl w-full max-w-6xl flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-gray-900 border border-gray-700 p-6 rounded-xl w-full max-w-6xl min-w-0 overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-xl font-bold">{t('日志详情', 'Log Details')}</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-white">
@@ -236,7 +258,12 @@ export default function LlmLogViewer({ log, onClose }) {
           <span><strong className="text-gray-200">Date:</strong> {new Date(log.timestamp || log.created_at).toLocaleString()}</span>
         </div>
 
-        <div className="space-y-4 overflow-y-auto pr-2 custom-scrollbar flex-1">
+        <LogBodyBoundary
+          fallback={(
+            <pre className="max-w-full overflow-auto whitespace-pre-wrap break-all text-xs text-gray-300">{displayPayloadJson || displayResponseJson || t('（空）', '(Empty)')}</pre>
+          )}
+        >
+        <div className="space-y-4 overflow-y-auto overflow-x-hidden pr-2 custom-scrollbar flex-1 min-w-0 min-h-0">
           {String(log.error_msg || '').trim() ? (
             <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200 whitespace-pre-wrap break-words">
               <div className="text-xs font-bold uppercase tracking-wider text-red-300 mb-2">{t('错误', 'Error')}</div>
@@ -254,7 +281,7 @@ export default function LlmLogViewer({ log, onClose }) {
                      <Copy size={14} />
                   </button>
               </summary>
-              <div className="px-4 pb-4 overflow-x-auto break-words border-t border-white/10 pt-4">
+              <div className="px-4 pb-4 min-w-0 max-w-full overflow-x-hidden break-words border-t border-white/10 pt-4">
                 {renderMessageContent(m.content)}
               </div>
             </details>
@@ -269,8 +296,8 @@ export default function LlmLogViewer({ log, onClose }) {
                     <Copy size={14}/>
                  </button>
                </summary>
-               <div className="px-4 pb-4 overflow-x-auto break-words border-t border-white/10 pt-4">
-                 <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-words overflow-x-auto border border-white/5 text-xs text-gray-300">{displayPayloadJson || t('（空）', '(Empty)')}</pre>
+               <div className="px-4 pb-4 min-w-0 max-w-full overflow-x-hidden break-words border-t border-white/10 pt-4">
+                 <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-all [overflow-wrap:anywhere] border border-white/5 text-xs text-gray-300">{displayPayloadJson || t('（空）', '(Empty)')}</pre>
                </div>
              </details>
           )}
@@ -286,14 +313,15 @@ export default function LlmLogViewer({ log, onClose }) {
                        <Copy size={14} />
                   </button>
               </summary>
-              <div className="px-4 pb-4 overflow-x-auto break-words border-t border-white/10 pt-4">
-                {completionContent ? <div className="prose prose-invert max-w-none prose-sm"><Markdown>{completionContent}</Markdown></div> : (
-                   <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-words overflow-x-auto border border-white/5 text-xs text-gray-300">{displayResponseJson}</pre>
+              <div className="px-4 pb-4 min-w-0 max-w-full overflow-x-hidden break-words border-t border-white/10 pt-4">
+                {typeof completionContent === 'string' && completionContent ? <div className="prose prose-invert max-w-full min-w-0 prose-sm break-words"><Markdown components={markdownComponents}>{completionContent}</Markdown></div> : (
+                   <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-all [overflow-wrap:anywhere] border border-white/5 text-xs text-gray-300">{displayResponseJson}</pre>
                 )}
               </div>
             </details>
           )}
         </div>
+        </LogBodyBoundary>
       </div>
     </div>
   );

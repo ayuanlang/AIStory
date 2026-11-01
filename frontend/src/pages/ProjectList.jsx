@@ -41,7 +41,7 @@ import {
     importProjectBackup,
     peekProjectAsSuperuser,
 } from '../services/api';
-import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
+import { BASE_URL, ASSET_BASE_URL } from '../config';
 import Editor from './Editor';
 import PromoEditor from './PromoEditor';
 import InputGroup from './editor/components/InputGroup';
@@ -209,22 +209,6 @@ const resolveMediaUrl = (url) => {
     return normalized;
 };
 
-const resolveProjectListImageUrl = (url) => {
-    const directUrl = resolveMediaUrl(url);
-    if (!directUrl) return '';
-    if (directUrl.startsWith('blob:') || directUrl.startsWith('data:')) {
-        return directUrl;
-    }
-
-    const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
-    const isSameOrigin = currentOrigin && directUrl.startsWith(currentOrigin);
-    if (isSameOrigin || !/^https?:\/\//i.test(directUrl)) {
-        return directUrl;
-    }
-
-    return `${API_URL}/assets/proxy?url=${encodeURIComponent(directUrl)}`;
-};
-
 const PROJECT_CARD_COVER_ROTATE_MS = 4500;
 
 /** Randomly cycles through each episode's cover poster on the project card. */
@@ -239,16 +223,14 @@ const ProjectCardCover = ({ coverImage, coverImages }) => {
             const direct = resolveMediaUrl(item);
             if (!direct || seen.has(direct)) continue;
             seen.add(direct);
-            const proxied = resolveProjectListImageUrl(item);
-            out.push({ direct, proxied: proxied && proxied !== direct ? proxied : '' });
+            out.push(direct);
         }
         return out;
     }, [coverImage, coverImages]);
 
-    const imagesKey = images.map((item) => item.direct).join('\0');
+    const imagesKey = images.join('\0');
     const [index, setIndex] = useState(0);
     const [visible, setVisible] = useState(true);
-    const [useProxy, setUseProxy] = useState({});
 
     useEffect(() => {
         if (images.length === 0) return;
@@ -294,17 +276,12 @@ const ProjectCardCover = ({ coverImage, coverImages }) => {
 
     if (images.length === 0) return null;
 
-    const current = images[Math.min(index, images.length - 1)] || images[0];
-    const src = (useProxy[current.direct] && current.proxied) ? current.proxied : current.direct;
+    const src = images[Math.min(index, images.length - 1)] || images[0];
     return (
         <img
             src={src}
             alt=""
             loading="lazy"
-            onError={() => {
-                if (!current.proxied || useProxy[current.direct]) return;
-                setUseProxy((prev) => (prev[current.direct] ? prev : { ...prev, [current.direct]: true }));
-            }}
             className={`absolute inset-0 z-[1] h-full w-full object-cover transition-opacity duration-300 ${visible ? 'opacity-100' : 'opacity-0'}`}
         />
     );
@@ -2370,7 +2347,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                             <User className="w-5 h-5 text-muted-foreground" />
                             {currentUser?.avatar_url ? (
                                 <img
-                                    src={resolveProjectListImageUrl(currentUser.avatar_url)}
+                                    src={resolveMediaUrl(currentUser.avatar_url)}
                                     alt={currentUser?.full_name || currentUser?.username || 'avatar'}
                                     className="absolute inset-0 w-10 h-10 rounded-full object-cover"
                                     onError={(e) => { e.currentTarget.style.display = 'none'; }}
@@ -2462,7 +2439,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                             <User className="w-5 h-5 text-muted-foreground" />
                             {currentUser?.avatar_url ? (
                                 <img
-                                    src={resolveProjectListImageUrl(currentUser.avatar_url)}
+                                    src={resolveMediaUrl(currentUser.avatar_url)}
                                     alt={currentUser?.full_name || currentUser?.username || 'avatar'}
                                     className="absolute inset-0 w-10 h-10 object-cover"
                                     onError={(e) => { e.currentTarget.style.display = 'none'; }}

@@ -28,39 +28,7 @@ const normalizeExternalMediaUrl = (rawUrl) => {
     return stable;
 };
 
-const shouldProxyExternalMediaUrl = (rawUrl) => {
-    const stable = String(rawUrl || '').trim();
-    if (!stable || !/^https?:\/\//i.test(stable)) return false;
-    if (stable.includes('/api/v1/assets/proxy?url=')) return false;
-
-    try {
-        const parsed = new URL(stable);
-        const host = String(parsed.hostname || '').trim().toLowerCase();
-        const backendHost = (() => {
-            try {
-                return String(new URL(String(BASE_URL || ''), window.location.origin).hostname || '').trim().toLowerCase();
-            } catch {
-                return '';
-            }
-        })();
-        const isLocalHost = host === 'localhost' || host === '127.0.0.1';
-        if (!host || isLocalHost) return false;
-        if (backendHost && host === backendHost) return false;
-
-        // Any cross-origin media that fails direct browser access can fall back to the backend proxy.
-        return true;
-    } catch {
-        return false;
-    }
-};
-
-const buildAssetProxyUrl = (rawUrl) => {
-    const stable = String(rawUrl || '').trim();
-    if (!stable) return '';
-    const resolvedBase = String(BASE_URL || '').trim().replace(/\/+$/, '');
-    if (!resolvedBase) return stable;
-    return `${resolvedBase}/api/v1/assets/proxy?url=${encodeURIComponent(stable)}`;
-};
+const shouldProxyExternalMediaUrl = () => false;
 
 // Helper to handle relative URLs
 export const getFullUrl = (url) => {
@@ -107,27 +75,16 @@ export const getThumbUrl = (url) => {
         return raw;
     }
 
-    let normalizedPath = raw;
-    if (normalizedPath.startsWith('/uploads/')) {
-        normalizedPath = normalizedPath.replace('/uploads/', '');
-    } else if (normalizedPath.startsWith('/')) {
-        normalizedPath = normalizedPath.slice(1);
-    }
-    const resolvedAssetBase = String(ASSET_BASE_URL || BASE_URL || '').trim();
-    const base = resolvedAssetBase.endsWith('/') ? resolvedAssetBase.slice(0, -1) : resolvedAssetBase;
-    return `${base}/api/v1/assets/thumb/${normalizedPath}`;
+    return getFullUrl(raw);
 };
 
 export const canFallbackToAssetProxy = (url) => {
     return shouldProxyExternalMediaUrl(normalizeExternalMediaUrl(url));
 };
 
-export const getMediaUrlWithFallback = (url, useProxy = false) => {
+export const getMediaUrlWithFallback = (url, _useProxy = false) => {
     const normalized = normalizeExternalMediaUrl(url);
     if (!normalized) return '';
-    if (useProxy && canFallbackToAssetProxy(normalized)) {
-        return buildAssetProxyUrl(normalized);
-    }
     return getFullUrl(normalized);
 };
 

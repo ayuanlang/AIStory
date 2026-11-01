@@ -4966,15 +4966,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, preferredImageSize);
 
             const directUrl = getFullUrl(stableCompositeUrl);
-            const isLocalOrigin = directUrl.startsWith(window.location.origin) || directUrl.startsWith('blob:') || directUrl.startsWith('data:');
-            // Use backend proxy for external URLs to bypass CORS restrictions during Canvas processing
-            // MUST use API_URL instead of getFullUrl here to hit current environment's backend proxy,
-            // otherwise ASSET_BASE_URL resolution will incorrectly point to remote staging server on local dev.
-            const fetchUrl = isLocalOrigin 
-                ? directUrl 
-                : `${API_URL}/assets/proxy?url=${encodeURIComponent(directUrl)}`;
-
-            const compositeResp = await fetch(fetchUrl);
+            const compositeResp = await fetch(directUrl, directUrl.startsWith(window.location.origin)
+                ? { credentials: 'include' }
+                : { mode: 'cors', credentials: 'omit' });
             if (!compositeResp.ok) {
                 throw new Error(`Failed to download composite image (${compositeResp.status})`);
             }
@@ -8117,16 +8111,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
         const exportSize = resolveShotPanelExportResolution(preferredAspectRatio, preferredImageSize);
         const directUrl = getFullUrl(stableCompositeUrl);
-        const isLocalOrigin = directUrl.startsWith(window.location.origin) || directUrl.startsWith('blob:') || directUrl.startsWith('data:');
-        const fetchUrl = isLocalOrigin
-            ? directUrl
-            : `${API_URL}/assets/proxy?url=${encodeURIComponent(directUrl)}`;
 
         let compositeBlob = null;
         let lastDownloadError = null;
         for (let attempt = 1; attempt <= 3; attempt += 1) {
             try {
-                const compositeResp = await fetch(fetchUrl);
+                const compositeResp = await fetch(directUrl, directUrl.startsWith(window.location.origin)
+                    ? { credentials: 'include' }
+                    : { mode: 'cors', credentials: 'omit' });
                 if (!compositeResp.ok) {
                     throw new Error(`Failed to download multi-panel image (${compositeResp.status})`);
                 }
@@ -8973,14 +8965,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         });
 
         const waitMetadata = async () => {
-            try {
-                await loadVideoMetadata(false);
-            } catch (directError) {
-                if (!canFallbackToAssetProxy(videoUrl)) {
-                    throw directError;
-                }
-                await loadVideoMetadata(true);
-            }
+            await loadVideoMetadata(false);
         };
 
         const waitPresentedFrame = () => new Promise((resolve) => {
