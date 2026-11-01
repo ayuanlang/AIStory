@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Compare environment grids and derived assets with the main-environment opening.
 
-The opening is the authority for subject count, facing, and position. When a
-grid cell or a derived-environment prompt disagrees with it, rewrite that cell
-or derived prompt. The opening stays verbatim unless the checker marks an
-internal contradiction in the opening itself.
+A cell is consistent when it is a reasonable view of the opening's physical
+four directions: the same subjects, facing turned for that view, with the
+central subjects checked first. The picture must match both the opening and
+that cell. When the opening and a cell disagree, the opening wins.
 """
 from __future__ import annotations
 
@@ -1616,6 +1616,8 @@ def _build_derived_main_consistency_messages(
     own_prompt = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
     system_prompt = (
         "你是衍生主环境一致性校对。这张图是基于被依赖主环境生成的一块新主环境，仍然是四格拼图。\n"
+        "一致的要点：四格是被依赖主环境物理世界四向的视角合理转换，主体匹配，朝向按望向合理转换，重点核对中部。"
+        "图片必须与被依赖主环境、对应宫格和 Delta 一致。Delta 没写到的，宫格与被依赖主环境不一致时，以被依赖主环境为准，改这一份四格或改图，不改被依赖主环境。\n"
         "注入只有两部分：被依赖主环境的完整提示词，以及这份衍生Delta。用这两部分一起核对。\n"
         "四格必须对同一主体的相关内容一起改。某一格改了、另一格同一主体还是原样，就不一致。\n"
         "未写入 Delta 的实体保持被依赖主环境的样子。不要把 Delta 写回被依赖主环境。revised_main_prompt 必须为 null。\n"
@@ -1686,6 +1688,8 @@ def _build_cell_consistency_messages(
     if from_derived_main:
         system_prompt = (
             "你是衍生主环境名下这一角的一致性校对。这次只核对本角度的一张已经裁出的单格参考图。\n"
+            "这一格必须是开篇物理世界四向转到本角度后的合理视角转换，主体匹配，朝向按望向合理转换，重点核对中部。"
+            "图片必须同时符合开篇可见五壁、这一格正文和 Delta。Delta 没写到的，判断以开篇为准：正文不符只写进 summary，不改这一格；图片按开篇和 Delta 改。\n"
             "注入只有三部分：这一角看得见的五壁（正面、左侧面、右侧面、中部、上），"
             "衍生主环境四宫里这一格的正文，以及衍生Delta。"
             "这一格正文取自衍生主环境，不取被依赖的原来主环境。"
@@ -1703,6 +1707,8 @@ def _build_cell_consistency_messages(
     else:
         system_prompt = (
             "你是衍生环境一致性校对。这次只核对本角度的一张已经裁出的单格参考图。\n"
+            "这一格必须是开篇物理世界四向转到本角度后的合理视角转换，主体匹配，朝向按望向合理转换，重点核对中部。"
+            "图片必须与开篇可见五壁以及这一格正文一致。开篇与宫格不一致时，以开篇为准，改这一格，不改开篇。\n"
             "注入只有两部分：开篇里这一角看得见的五壁（正面、左侧面、右侧面、中部、上），以及这一格的四宫格正文。"
             "镜头后面的那一壁没有注入，不要用它。\n"
             "做两件核对，两件都要有结论：\n"
@@ -1774,8 +1780,10 @@ def build_consistency_messages(
             depended_entity=depended_entity,
         )
     system_prompt = (
-        "你是环境资产一致性校对。主环境开篇在【四向拼图】之前，是权威。"
-        "按开篇核对四个宫格正文，以及图片里同一格的主体个数、朝向、位置。\n"
+        "你是环境资产一致性校对。主环境开篇在【四向拼图】之前，是权威。\n"
+        "一致的要点：各宫格是开篇物理世界四向的视角合理转换，主体匹配，朝向按望向合理转换，重点核对中部。"
+        "图片必须与开篇以及对应宫格一致。开篇与宫格不一致时，以开篇为准，改宫格或衍生，不改开篇。\n"
+        "按这个要点核对四个宫格正文，以及图片里同一格的主体个数、朝向、位置。中部主体优先。\n"
         "图片对格：左上是0度格望北，右上是90度格望东，左下是180度格望南，右下是270度格望西。"
         "衍生图、切割图、重生图只核对自己的那一个角度。\n"
         "个数：开篇点名并且这一格该看见的主体，正文写一次，图片里出现一次。"
@@ -1816,15 +1824,16 @@ def build_consistency_messages(
         "位置：开篇的南北差，在望北和望南写成靠近镜头或远离镜头，在望东和望西写成画面左或画面右。"
         "东西差对调。0度与180度、90度与270度都要左右对调，并且近远对调。"
         "心点或在桌侧旋反了，就是位置不一致。\n"
-        "一致：宫格正文和衍生正文都能被开篇解释，图片里的个数、朝向、位置也和这个结果相同。"
+        "一致：每一格都是开篇物理世界四向转到这一望向后的合理画面，主体与开篇该看见的主体匹配，朝向按望向转对。"
+        "中部主体的个数、朝向和位置优先对上。图片里的同一格也与开篇和这一格正文相同。"
         "缝档、光色、材质的小差异算一致。"
-        "正文已经对齐开篇、只有图片画错时，也算一致，summary 写明哪一格的图片错在个数、朝向或位置。"
-        "revised_prompt 和 revised_main_prompt 都为 null。提示词保持对齐开篇。"
-        "这时 image_edit_instruction 仍要写出怎么改这张图。"
+        "正文已经是开篇的合理视角转换、只有图片画错时，提示词保持对齐开篇，revised_prompt 和 revised_main_prompt 都为 null。"
+        "这时正文仍算一致，summary 写明哪一格的图片错在主体、朝向或中部位置，image_edit_instruction 仍要写出怎么改这张图，改到与开篇和对应宫格一致。"
         "summary 里点名的每一处画面错误都要写进 image_edit_instruction，不能摘要写两格、指令只改一格。"
         "正文还有错误时，不要写「四向正文与开篇一致」。\n"
-        "不一致：同一件的宫格长边或朝向和开篇竖边旋出的画面轴相反；件数和开篇不同；"
-        "左右或远近和开篇心点、在桌侧旋出的结果相反；衍生正文和开篇不是同一处空间。\n"
+        "不一致：宫格不是开篇四向的合理视角转换；同一件的宫格长边或朝向和开篇竖边旋出的画面轴相反；件数和开篇不同；"
+        "中部主体没转到这一望向该在的画面侧；左右或远近和开篇心点、在桌侧旋出的结果相反；"
+        "图片与开篇或对应宫格的主体、朝向不一致；衍生正文和开篇不是同一处空间。\n"
         "修改：只改宫格或衍生里和开篇不符的句子，保留主体名字。不要新造第二套房间。\n"
         "开篇默认保持原句，东南西北、占地、竖边、心点和朝向保持原值。"
         "只有开篇内部互相矛盾时才改开篇：同一件写出两个相反的竖边；"
@@ -1894,19 +1903,23 @@ def build_consistency_messages(
         if kind == "crop":
             parts.append(
                 "这次生成用的是切割提示词。不要改写切割提示词。"
-                "只对照上面的开篇和对应宫格，核对该角度图片的主体个数、件数核销、朝向、位置。"
+                "这一格是开篇物理世界四向转到本角度后的视角转换。只对照上面的开篇和对应宫格，核对该角度图片的主体个数、件数核销、朝向、位置，重点核对中部。"
+                "图片必须与开篇及对应宫格一致。开篇与宫格不一致时，以开篇为准。"
                 "和开篇不符时，把改过的宫格写进 revised_main_prompt。没改的格子可以不写。"
                 "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_main_prompt 里把改正后的开篇写在格子前面。"
             )
         else:
             parts.append(
-                "只对照上面的开篇和对应宫格，核对该角度图片和这份衍生正文的主体个数、件数核销、朝向、位置。"
+                "这一格是开篇物理世界四向转到本角度后的视角转换。"
+                "只对照上面的开篇和对应宫格，核对该角度图片和这份衍生正文的主体个数、件数核销、朝向、位置，重点核对中部。"
+                "图片必须与开篇及对应宫格一致。开篇与宫格不一致时，以开篇为准，改这份衍生提示词。"
                 "和开篇不符时，把对齐开篇后的完整衍生提示词写进 revised_prompt。revised_main_prompt 置 null。"
                 "重生和衍生检查不改开篇，也不改主环境。"
             )
     else:
         parts.append(
-            "这是主环境四宫格图。按左上0度、右上90度、左下180度、右下270度，逐格核对正文和图片的主体个数、件数核销、朝向、位置。"
+            "这是主环境四宫格图。各宫格是开篇物理世界四向的视角转换：左上0度望北、右上90度望东、左下180度望南、右下270度望西。"
+            "逐格核对正文和图片的主体个数、件数核销、朝向、位置，重点核对中部。图片必须与开篇及对应宫格一致。开篇与宫格不一致时，以开篇为准。"
             "和开篇不符时，把改过的宫格写进 revised_prompt。没改的格子可以不写。不要重抄开篇。revised_main_prompt 置 null。"
             "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_prompt 里把改正后的开篇写在格子前面。"
             "核对完成后，image_edit_instruction 按左上格、左下格、右上格、右下格描述要改的宫格。"

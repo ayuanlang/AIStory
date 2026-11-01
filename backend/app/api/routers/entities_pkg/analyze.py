@@ -1262,9 +1262,10 @@ async def check_environment_consistency(
 ):
     """Compare each grid and its image with the main-environment opening.
 
-    Subject count, facing, and position must match the opening. When they
-    disagree, rewrite the grid cells or the derived prompt. The opening stays
-    unless the checker marks an internal contradiction in the opening itself.
+    A cell is a reasonable view of the opening's physical four directions:
+    matching subjects, facing turned for that view, central subjects first.
+    The picture must match the opening and that cell. When they disagree, the
+    opening wins. The opening stays unless it contradicts itself.
     """
     from urllib.parse import urlparse
 
