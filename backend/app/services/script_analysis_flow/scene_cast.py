@@ -16,6 +16,7 @@ from app.services.script_analysis_flow.character_asset_brief import (
 )
 from app.services.script_analysis_flow.prop_asset_brief import (
     PROP_ITEM_PATTERN,
+    PROP_RECORD_PATTERN,
     extract_prop_extract_blocks,
 )
 
@@ -179,13 +180,18 @@ def extract_legacy_scene_cast_lines(scene_text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _field_token(record_text: str, key: str) -> str:
+    raw = _header_field(record_text, key)
+    return _clean(raw.split("｜", 1)[0].split("|", 1)[0])
+
+
 def _header_field(record_text: str, key: str) -> str:
-    first = str(record_text or "").split("\n", 1)[0]
-    for part in first.replace("|", "｜").split("｜"):
-        item = part.strip()
-        prefix = f"{key}="
-        if item.startswith(prefix):
-            return _clean(item[len(prefix):])
+    prefix = f"{key}="
+    for line in str(record_text or "").splitlines():
+        for part in line.replace("|", "｜").split("｜"):
+            item = part.strip()
+            if item.startswith(prefix):
+                return _clean(item[len(prefix):])
     return extract_char_field(record_text, key)
 
 
@@ -202,6 +208,34 @@ def _parse_applicable_scenes(record_text: str) -> List[str]:
             seen.add(key)
             scenes.append(scene_id)
     return scenes
+
+
+def _parse_prop_records(script_text: str) -> List[Dict[str, str]]:
+    body = extract_prop_extract_blocks(script_text) or ""
+    records: List[Dict[str, str]] = []
+    seen = set()
+    for match in PROP_RECORD_PATTERN.finditer(body):
+        text = _clean(match.group(0))
+        header = PROP_ITEM_PATTERN.search(text)
+        if not header:
+            continue
+        name = _clean(header.group(1)).split("｜", 1)[0].split("|", 1)[0].strip()
+        if not name or name in seen or name == "无":
+            continue
+        seen.add(name)
+        records.append({"name": name, "text": text})
+    return records
+
+
+def _first_prop_cast_scene(script_text: str, prop_name: str) -> str:
+    wanted = _clean(prop_name)
+    if not wanted:
+        return ""
+    for scene_id, block in extract_scene_cast_blocks(script_text).items():
+        names = scene_cast_token_names(block).get("props") or []
+        if wanted in names:
+            return scene_id
+    return ""
 
 
 def _first_cast_scene(script_text: str, char_name: str) -> str:
@@ -336,7 +370,8 @@ def _character_label_style(record_text: str, field_name: str, base_text: str = "
     return "待补"
 
 
-_NAMEPLATE_STYLE_KEYS = ("字体", "样式", "字色", "字级")
+_NAMEPLATE_STYLE_KEYS = ("字体", "样式", "字色", "字级", "出字")
+_NAMEPLATE_BURN_TOKENS = {"烧制", "后期烧录", "烧录"}
 
 
 def _parse_nameplate_style_text(raw: str) -> Dict[str, str]:
@@ -355,6 +390,8 @@ def _parse_nameplate_style_text(raw: str) -> Dict[str, str]:
         return {}
     found.setdefault("样式", "无衬细字")
     found.setdefault("字级", "中")
+    mode = found.get("出字") or "模型直出"
+    found["出字"] = "烧制" if mode in _NAMEPLATE_BURN_TOKENS else "模型直出"
     return found
 
 
@@ -616,9 +653,9 @@ def build_scene_entity_token_brief(
         "有【名牌展现】时，角色名牌与环境名牌的字体、样式、字色逐字抄这一套，禁止按场、按人另选。"
         "没有【名牌展现】时，剧本或提取块已写的字样/字体/样式/字色原样服从，禁改写。"
         "中文项目用 裸名+标签；英文项目用 裸名_en+标签_en；禁中英并列、禁用错语种上屏。"
-        "标签优先抄 CHAR|#身份 的客观身份（阶层/职业/职衔/物种，如千金/第一家族继承人/智能AI宠物猫）；"
-        "只上客观信息，禁透露剧情：处境词须剥（落魄千金→千金），弧光/表里里/未揭真身份不进。"
-        "禁推理，禁从称呼、服制、叙述或提取块身份=自拟；为无则只打裸名，禁臆造。"
+        "角色名牌的副标是剧本已经写明的公开社会身份（阶层/职业/职衔/品秩/物种，如千金/客栈掌柜/第一家族继承人/智能AI宠物猫）。"
+        "只上社会身份，禁透露剧情：处境、轨迹、曾经、弧光、表里里、未揭真身份不进（落魄千金→千金）。"
+        "禁推理，禁从称呼、服制自拟；剧本没写社会身份则只打裸名，禁臆造。"
         "女主/反派等定位当无。"
         "蒙面/易容/面具/面罩等见不到真脸：字幕必须=无，连裸名也不打，禁为蒙面态补名牌。"
         "名牌条件=须真脸 则等该人真脸正面/¾可读后再挂；全场未见真脸则不写、不标缺口。"
@@ -633,9 +670,16 @@ def build_scene_entity_token_brief(
         "复用场景（复用=是｜来源=项目库|上集|本集）禁止打环境名牌，回切已见空间也不打。"
         "未列入【本场环境名牌】的主环境禁止打。同主切角/仅状态衍生不打。"
         "挂入戏起笔（新环境落定后、角色主动作前）；不算动作；禁挂建置、禁画幅底部。"
-        "名牌出字默认模型直出：画面打出句末写 名牌出字=模型直出。"
-        "名牌出字=后期烧录时不写画面打出，角色改写 名牌字样=「裸名｜标签」｜落位=人物下方｜字体=｜样式=｜字色=｜字级=中｜名牌出字=后期烧录；"
-        "环境改写 名牌字样=「注册名」或「注册名｜时间」｜落位=顶部中央｜字体=｜样式=｜字色=｜字级=中｜名牌出字=后期烧录。"
+        "出字从【名牌展现】抄，角色与环境同一套。未写默认模型直出。"
+        "【名牌标签】是可抽取的名牌行：种类=角色|环境|道具，对象、主标、副标、落位、字体、样式、字色、字级、出字、上屏都在这一行。"
+        "上屏=待落或首见才打。上屏=已过|无不打。"
+        "出字=模型直出：画面打出句末写 名牌出字=模型直出。"
+        "出字=烧制时不写画面打出。名牌出字=后期烧录与烧制同一路。"
+        "角色改写 名牌字样=「裸名｜标签」｜落位=人物下方｜字体=｜样式=｜字色=｜字级=中｜名牌出字=烧制；"
+        "环境改写 名牌字样=「注册名」或「注册名｜时间」｜落位=顶部中央｜字体=｜样式=｜字色=｜字级=中｜名牌出字=烧制。"
+        "非常规道具和宣传片产品与角色同一套出字，落位=道具下方。"
+        "只有种类=道具且上屏=待落才打。常规道具、上屏=已过|无、变化后状态不打。"
+        "道具改写 名牌字样=「裸名｜标签」｜落位=道具下方｜字体=｜样式=｜字色=｜字级=中｜名牌出字=烧制。"
         "名牌行禁止写 烧录=libass、手写=禁、文案=。"
     )
     body = (
@@ -650,13 +694,17 @@ def build_scene_entity_token_brief(
         body = (
             f"{body}\n\n【名牌展现】"
             f"字体={presentation['字体']}｜样式={presentation['样式']}｜"
-            f"字色={presentation['字色']}｜字级={presentation['字级']}\n"
-            "角色名牌与环境名牌各场只抄这一套。落位仍是角色在人物下方、环境在顶部中央。"
-            "禁止按场、按人另选书体、样式或字色。"
+            f"字色={presentation['字色']}｜字级={presentation['字级']}｜"
+            f"出字={presentation['出字']}\n"
+            "角色名牌、环境名牌、非常规道具和产品名牌各场只抄这一套，含出字。"
+            "落位仍是角色在人物下方、环境在顶部中央、道具在该件下方。"
+            "禁止按场、按人另选书体、样式、字色或出字。"
         )
+    output_mode = presentation["出字"] if presentation else "模型直出"
     scene_char_names = set(cast_names.get("characters") or [])
     voice_rows = []
     tag_rows = []
+    plate_rows = []
     records = parse_char_extract_records(script)
     all_record_names = [rec.get("name") or "" for rec in records]
     for rec in records:
@@ -712,7 +760,13 @@ def build_scene_entity_token_brief(
             f"CHAR:[@{name}]｜标签={tag}｜标签_en={tag_en}｜"
             f"标签字体={font}{style_part}｜标签字色={color}｜"
             f"裸名={display_name}｜裸名_en={display_name_en}｜字幕={subtitle}"
-            f"{face_gate}"
+            f"{face_gate}｜落位=人物下方｜字级=中｜出字={output_mode}｜名牌种类=角色"
+        )
+        shown = "待落" if subtitle == "待落" else subtitle
+        plate_rows.append(
+            f"种类=角色｜对象=CHAR:[@{name}]｜主标={display_name}｜副标={tag}｜"
+            f"落位=人物下方｜字体={font}｜样式={style or '无'}｜字色={color}｜"
+            f"字级=中｜出字={output_mode}｜上屏={shown}"
         )
     if voice_rows:
         body = f"{body}\n\n【本场对白声线】\n" + "\n".join(voice_rows)
@@ -758,11 +812,53 @@ def build_scene_entity_token_brief(
             f"ENV:[{env_name}]｜字样=【{env_name}】｜时间={env_time}｜标签={env_time}｜"
             f"落位=顶部中央｜字体={env_font}｜字色={env_color}"
             + (f"｜样式={env_style}" if env_style else "")
+            + f"｜字级=中｜出字={output_mode}｜名牌种类=环境"
+        )
+        plate_rows.append(
+            f"种类=环境｜对象=ENV:[{env_name}]｜主标={env_name}｜副标={env_time}｜"
+            f"落位=顶部中央｜字体={env_font}｜样式={env_style or '无'}｜字色={env_color}｜"
+            f"字级=中｜出字={output_mode}｜上屏=首见"
         )
     if env_rows:
         body = (
             f"{body}\n\n【本场环境名牌】\n"
             + "\n".join(env_rows)
             + "\n只抄字样【注册名】；时间有明确时刻/故事日才打，可空；禁止写成【名】日】或【名】外】。"
+        )
+    scene_prop_names = set(cast_names.get("props") or [])
+    for rec in _parse_prop_records(script):
+        name = rec.get("name") or ""
+        if name not in scene_prop_names:
+            continue
+        text = rec.get("text") or ""
+        regularity = _field_token(text, "常规性")
+        if regularity not in {"非常规", "产品"}:
+            continue
+        plate_flag = _field_token(text, "名牌") or "可"
+        state = _field_token(text, "状态")
+        if plate_flag == "无" or state == "变化后":
+            shown = "无"
+        else:
+            debut = (_parse_applicable_scenes(text) or [None])[0] or _first_prop_cast_scene(
+                script, name
+            )
+            if debut and _same_scene_id(debut, scene_id):
+                shown = "待落"
+            elif debut:
+                shown = "已过"
+            else:
+                shown = "待落"
+        tag = _public_nameplate_label(_field_token(text, "标签"))
+        plate_rows.append(
+            f"种类=道具｜对象=PROP:[{name}]｜主标={name}｜副标={tag}｜"
+            f"落位=道具下方｜字体={env_font}｜样式={env_style or '无'}｜字色={env_color}｜"
+            f"字级=中｜出字={output_mode}｜上屏={shown}"
+        )
+    if plate_rows:
+        body = (
+            f"{body}\n\n【名牌标签】\n"
+            + "\n".join(plate_rows)
+            + "\n这一块供抽取。上屏=待落或首见才打到画面。出字=模型直出由视频模型画字。"
+            "出字=烧制只留名牌字样，不让视频模型描这些字。"
         )
     return wrap_injection_section("本场角色道具白名单", body)

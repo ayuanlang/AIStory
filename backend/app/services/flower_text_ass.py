@@ -123,7 +123,7 @@ def _nameplate_output_mode(block: str) -> str:
     (``名牌出字=后期烧录时`` / ``名牌出字=模型直出（含未写``). Those are not a choice.
     """
     text = str(block or "")
-    if re.search(r"名牌出字=后期烧录(?!时)", text):
+    if re.search(r"名牌出字=(?:后期烧录|烧制)(?!时)", text):
         return "burn"
     if re.search(r"名牌出字=模型直出(?![(（])", text):
         return "model"

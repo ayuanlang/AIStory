@@ -83,6 +83,9 @@ def test_build_scene_entity_token_brief():
     assert "物理文字标签" in brief
     assert "名牌出字=模型直出" in brief
     assert "名牌出字=后期烧录" in brief
+    assert "【名牌标签】" in brief
+    assert "种类=角色｜对象=CHAR:[@沈青]｜主标=沈青｜副标=江湖侠客｜" in brief
+    assert "出字=模型直出｜上屏=待落" in brief
     assert "不是对白硬字幕" in brief
     assert "只有字幕=待落的本集新角色" in brief
     assert "禁把多名牌攒到建置段末或入戏一起写" in brief
@@ -91,8 +94,8 @@ def test_build_scene_entity_token_brief():
     assert "落位=顶部中央" in brief
     assert "时间可空" in brief
     assert "禁止套成【名】日】" in brief
-    assert "标签优先抄 CHAR|#身份 的客观身份" in brief
-    assert "只上客观信息，禁透露剧情" in brief
+    assert "剧本已经写明的公开社会身份" in brief
+    assert "禁透露剧情" in brief
     assert "禁推理" in brief
 
 
@@ -402,7 +405,7 @@ def test_global_nameplate_style_unifies_every_scene():
 {
   "project_visual_backfill": {
     "Global_Style": "视觉基调=古典/古装｜气质=精致",
-    "nameplate_style": "字体=楷｜样式=牌匾｜字色=朱红｜字级=中｜依据=古典/古装"
+    "nameplate_style": "字体=楷｜样式=牌匾｜字色=朱红｜字级=中｜出字=后期烧录｜依据=古典/古装"
   }
 }
 [SCENE_ENV_IDENT_START:EP01_SC01]
@@ -440,6 +443,9 @@ def test_global_nameplate_style_unifies_every_scene():
         "标签字体=楷｜标签样式=牌匾｜标签字色=朱红｜"
     ) in second
     assert f"ENV:[清河城茶摊]｜字样=【清河城茶摊】｜时间=无｜标签=无｜落位=顶部中央｜{plate}" in second
+    assert "出字=烧制" in first
+    assert "种类=环境｜对象=ENV:[龙门风月客栈]｜主标=龙门风月客栈｜副标=无｜" in first
+    assert "上屏=首见" in first
 
 
 def test_reused_character_does_not_get_nameplate():
@@ -485,6 +491,57 @@ def test_framing_brief_keeps_names_only():
     assert "voice_identity" not in brief
     assert "林岳_礼服版" not in brief
     assert "[SCENE_CAST_START" not in brief
+
+
+def test_uncommon_and_promo_props_get_nameplates_like_characters():
+    script = """[SCENES_BLOCK_START]
+[SCENE_START:EP01_SC01]
+[SCENE_CAST_START:EP01_SC01]
+【本场角色】在场=CHAR:[@沈青]｜待入画=无｜群演=无
+【本场道具】在场=PROP:[银打火机]，PROP:[玄铁剑]，PROP:[玄铁剑_折断态]，PROP:[清露]｜待入画=无
+[SCENE_CAST_END:EP01_SC01]
+[SCENE_END:EP01_SC01]
+[SCENE_START:EP01_SC02]
+[SCENE_CAST_START:EP01_SC02]
+【本场角色】在场=CHAR:[@沈青]｜待入画=无｜群演=无
+【本场道具】在场=PROP:[玄铁剑]｜待入画=无
+[SCENE_CAST_END:EP01_SC02]
+[SCENE_END:EP01_SC02]
+[CHAR_EXTRACT_START]
+[CHAR] 名称=沈青｜名称_en=Shen Qing｜番位=女主｜适用场=EP01_SC01
+标签=江湖侠客
+标签字体=魏碑
+标签字色=鎏金
+[CHAR_EXTRACT_END]
+[PROP_EXTRACT_START]
+[PROP] 名称=银打火机
+常规性=常规｜名牌=无｜标签=无
+适用场=EP01_SC01
+[PROP] 名称=玄铁剑
+常规性=非常规｜名牌=可｜标签=法器
+适用场=EP01_SC01|EP01_SC02
+[PROP] 名称=玄铁剑_折断态
+常规性=非常规｜名牌=无｜标签=无
+状态=变化后
+适用场=EP01_SC01
+[PROP] 名称=清露
+常规性=产品｜名牌=可｜标签=饮品
+适用场=EP01_SC01
+[PROP_EXTRACT_END]
+[SCENES_BLOCK_END]
+"""
+    first = build_scene_entity_token_brief(script, "EP01_SC01")
+    second = build_scene_entity_token_brief(script, "EP01_SC02")
+    plates = first.split("\n【名牌标签】\n", 1)[-1]
+    later = second.split("\n【名牌标签】\n", 1)[-1]
+    assert "种类=道具｜对象=PROP:[玄铁剑]｜主标=玄铁剑｜副标=法器｜落位=道具下方｜" in plates
+    assert "种类=道具｜对象=PROP:[清露]｜主标=清露｜副标=饮品｜落位=道具下方｜" in plates
+    assert "出字=模型直出｜上屏=待落" in plates
+    assert "对象=PROP:[银打火机]" not in plates
+    broken = plates.split("PROP:[玄铁剑_折断态]", 1)[1].split("\n", 1)[0]
+    assert "上屏=无" in broken
+    assert "种类=道具｜对象=PROP:[玄铁剑]｜主标=玄铁剑｜副标=法器｜" in later
+    assert "上屏=已过" in later.split("PROP:[玄铁剑]", 1)[1].split("\n", 1)[0]
 
 
 def test_dash_rule_is_not_an_environment_nameplate():

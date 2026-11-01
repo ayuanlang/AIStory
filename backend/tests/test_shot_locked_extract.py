@@ -10,6 +10,7 @@ _SPLIT = """
 [SCENE_START:EP01_SC01]
 【场景衔接】上场=开篇｜切法转入=艺术覆写｜艺术转入=叠化｜动作=火光吞入｜切法转出=HARD CUT
 【闪回分档】同场短闪回｜依据=原文：“三年前”｜新增主环境=无
+【空镜规划】空镜=是｜模式=城市车流｜地点=本场｜新增主环境=无
 【本场时地】季节=夏
 [SCENE_CONTENT_START:EP01_SC01]
 正文
@@ -50,6 +51,7 @@ def test_locked_body_takes_join_from_split_and_fields_from_drama():
     assert "切法转入=艺术覆写" in body
     assert "被改过" not in body
     assert "同场短闪回" in body
+    assert "模式=城市车流" in body
     assert "【卖点综合】卖点=对质" in body
     assert "落地=表情特写@B2" in body
     assert "【情绪峰谷综合】" in body
