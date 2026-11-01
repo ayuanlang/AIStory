@@ -237,22 +237,23 @@ def enrich_llm_logs_charged_amount(db: Session, logs: Iterable[Any]) -> List[Any
     return rows
 
 
-def serialize_llm_call_log(log: Any) -> Dict[str, Any]:
-    """Admin payload with runtime/charge fields always present."""
+def serialize_llm_call_log(log: Any, *, include_body: bool = True) -> Dict[str, Any]:
+    """Admin payload with runtime/charge fields always present.
+
+    The list view omits request/response bodies. Those columns hold remote attachment
+    URLs and can be large enough that reading every row prevents the list from loading.
+    """
     latency_ms = getattr(log, "latency_ms", None)
     try:
         latency_ms = int(latency_ms) if latency_ms not in (None, "") else None
     except Exception:
         latency_ms = None
-    return {
+    payload = {
         "id": getattr(log, "id", None),
         "tag": getattr(log, "tag", None),
         "provider": getattr(log, "provider", None),
         "model": getattr(log, "model", None),
         "api_url": getattr(log, "api_url", None),
-        "payload_json": getattr(log, "payload_json", None),
-        "response_json": getattr(log, "response_json", None),
-        "error_msg": getattr(log, "error_msg", None),
         "latency_ms": latency_ms,
         "charged_amount": _safe_charge_int(getattr(log, "charged_amount", None)),
         "user_id": getattr(log, "user_id", None),
@@ -261,7 +262,13 @@ def serialize_llm_call_log(log: Any) -> Dict[str, Any]:
         "action": getattr(log, "action", None),
         "request_id": getattr(log, "request_id", None),
         "timestamp": getattr(log, "timestamp", None),
+        "has_body": bool(include_body),
     }
+    if include_body:
+        payload["payload_json"] = getattr(log, "payload_json", None)
+        payload["response_json"] = getattr(log, "response_json", None)
+        payload["error_msg"] = getattr(log, "error_msg", None)
+    return payload
 
 
 def _extract_llm_routing_metadata(payload: Any) -> Dict[str, Any]:

@@ -3713,6 +3713,11 @@ export const getLlmCallLogs = async (params = {}) => {
     return response.data;
 }
 
+export const getLlmCallLog = async (logId) => {
+    const response = await api.get(`/admin/llm_logs/${logId}`);
+    return response.data;
+}
+
 export const cleanLlmLogs = async (days = 3) => {
     const response = await api.delete(`/admin/llm_logs/clean?days=${days}`);
     return response.data;
@@ -4633,6 +4638,7 @@ export const getAdminQueueStats = async () => (await api.get('/admin/queue/stats
 export const updateAdminQueueConfig = async (payload) => (await api.put('/admin/queue/config', payload)).data;
 export const cancelAdminQueueTask = async (jobId) => (await api.post(`/admin/queue/tasks/${jobId}/cancel`)).data;
 export const cancelAllQueuedAdminTasks = async () => (await api.post('/admin/queue/tasks/cancel-queued')).data;
+export const purgeAdminQueueTasksOlderThan = async () => (await api.post('/admin/queue/tasks/purge-older-than')).data;
 
 export const getAdminMemoryStats = async (params = {}) =>
     (await api.get('/admin/memory-stats', { params })).data;

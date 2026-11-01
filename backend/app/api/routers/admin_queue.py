@@ -233,6 +233,17 @@ def admin_cancel_all_queued(current_user: "User" = Depends(get_current_user)):
     return {"status": "ok", "canceled_count": count, "runtime_store_cleared": mem_cleared}
 
 
+@router.post("/admin/queue/tasks/purge-older-than")
+def admin_purge_queue_tasks_older_than(current_user: "User" = Depends(get_current_user)):
+    """Delete queue rows created more than 1 day ago, including waiting_callback."""
+    if not getattr(current_user, "is_superuser", False):
+        raise HTTPException(status_code=403, detail="Superuser required")
+    from app.services.generation_task_queue import purge_generation_tasks_older_than
+
+    result = purge_generation_tasks_older_than()
+    return {"status": "ok", **result}
+
+
 @router.get("/admin/queue/stats")
 def admin_get_queue_stats(
     current_user: "User" = Depends(get_current_user),

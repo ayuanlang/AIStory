@@ -1420,7 +1420,10 @@ def mark_generation_task_status_external(
                 SET status = :status,
                     worker_id = CASE WHEN :clear_worker THEN NULL ELSE worker_id END,
                     finished_at = :finished_at,
-                    last_heartbeat = :last_heartbeat,
+                    last_heartbeat = CASE
+                        WHEN :status = 'waiting_callback' AND status = 'waiting_callback' THEN last_heartbeat
+                        ELSE :last_heartbeat
+                    END,
                     error = :error
                 """
                 + where_sql
@@ -1903,6 +1906,352 @@ def _repair_waiting_callback_worker_leases() -> int:
     finally:
         db.close()
 
+_QUEUE_PURGE_AGE_SECONDS = 86400.0
+_IMAGE_CALLBACK_WAIT_TIMEOUT_SECONDS = 300.0
+_VIDEO_CALLBACK_WAIT_TIMEOUT_SECONDS = 900.0
+
+
+def _release_purged_media_runtime(rows: List[Dict[str, Any]], *, reason: str) -> int:
+    """Drop image/video runtime slots for queue rows that were still occupying a parallel slot."""
+    active = {
+        "queued",
+        "submit",
+        "pending",
+        "running",
+        "waiting_callback",
+        "callback_processing",
+    }
+    released = 0
+    try:
+        from app.core.time_utils import now_bj_iso
+        from app.services.generation_runtime.job_store import (
+            IMAGE_ACTIVE_SCOPE_STORE,
+            IMAGE_JOB_LOCK,
+            IMAGE_JOB_STORE,
+            IMAGE_JOB_TASKS,
+            VIDEO_ACTIVE_SCOPE_STORE,
+            VIDEO_JOB_LOCK,
+            VIDEO_JOB_STORE,
+            VIDEO_JOB_TASKS,
+            _set_image_job,
+            _set_video_job,
+        )
+    except Exception:
+        logger.warning("generation queue purge skipped runtime release", exc_info=True)
+        return 0
+
+    finished_at = now_bj_iso()
+    for row in rows:
+        job_id = str(row.get("job_id") or "").strip()
+        kind = str(row.get("kind") or "").strip().lower()
+        status = str(row.get("status") or "").strip().lower()
+        if not job_id or kind not in {"image", "video"} or status not in active:
+            continue
+        try:
+            if kind == "image":
+                with IMAGE_JOB_LOCK:
+                    if job_id not in IMAGE_JOB_STORE:
+                        continue
+                _set_image_job(job_id, status="canceled", finished_at=finished_at, error=reason)
+                with IMAGE_JOB_LOCK:
+                    IMAGE_JOB_TASKS.pop(job_id, None)
+                    scope_key = str((IMAGE_JOB_STORE.get(job_id) or {}).get("task_scope") or "").strip()
+                    if scope_key and IMAGE_ACTIVE_SCOPE_STORE.get(scope_key) == job_id:
+                        IMAGE_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+            else:
+                with VIDEO_JOB_LOCK:
+                    if job_id not in VIDEO_JOB_STORE:
+                        continue
+                _set_video_job(job_id, status="canceled", finished_at=finished_at, error=reason)
+                with VIDEO_JOB_LOCK:
+                    VIDEO_JOB_TASKS.pop(job_id, None)
+                    scope_key = str((VIDEO_JOB_STORE.get(job_id) or {}).get("task_scope") or "").strip()
+                    if scope_key and VIDEO_ACTIVE_SCOPE_STORE.get(scope_key) == job_id:
+                        VIDEO_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+            released += 1
+        except Exception:
+            logger.warning(
+                "generation queue purge runtime release failed | kind=%s job_id=%s",
+                kind,
+                job_id,
+                exc_info=True,
+            )
+    return released
+
+
+def _delete_related_rows_for_purged_jobs(job_ids: List[str]) -> None:
+    stable_ids = [str(job_id or "").strip() for job_id in job_ids if str(job_id or "").strip()]
+    if not stable_ids:
+        return
+    try:
+        _ensure_job_state_table_ready()
+    except Exception:
+        logger.warning("generation queue purge skipped job-state delete", exc_info=True)
+    try:
+        _ensure_submit_scope_table_ready()
+    except Exception:
+        logger.warning("generation queue purge skipped scope delete", exc_info=True)
+    db = SessionLocal()
+    try:
+        for offset in range(0, len(stable_ids), 200):
+            chunk = stable_ids[offset:offset + 200]
+            params = {f"id_{index}": job_id for index, job_id in enumerate(chunk)}
+            placeholders = ", ".join(f":id_{index}" for index in range(len(chunk)))
+            db.execute(
+                text(f"DELETE FROM generation_job_state WHERE job_id IN ({placeholders})"),
+                params,
+            )
+            db.execute(
+                text(f"DELETE FROM generation_submit_scope WHERE job_id IN ({placeholders})"),
+                params,
+            )
+        db.commit()
+    except Exception:
+        logger.warning("generation queue purge related-row delete failed", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+def purge_generation_tasks_older_than(*, max_age_seconds: float = _QUEUE_PURGE_AGE_SECONDS) -> Dict[str, int]:
+    """Delete every queue row older than ``max_age_seconds``, including waiting_callback.
+
+    Terminal rows were already purged hourly. Rows left in waiting_callback kept a
+    user parallel slot and fell off the admin list (newest 100 only).
+    """
+    _ensure_queue_table_ready()
+    cutoff = time.time() - max(1.0, float(max_age_seconds or _QUEUE_PURGE_AGE_SECONDS))
+    reason = "Purged queue task older than 1 day"
+    db = SessionLocal()
+    rows: List[Dict[str, Any]] = []
+    try:
+        result = db.execute(
+            text(
+                """
+                DELETE FROM generation_task_queue
+                WHERE created_at < :cutoff
+                RETURNING job_id, kind, status
+                """
+            ),
+            {"cutoff": cutoff},
+        )
+        rows = [dict(row) for row in result.mappings().all()]
+        db.commit()
+    except Exception:
+        logger.warning("generation queue purge failed", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        db.close()
+
+    waiting = sum(1 for row in rows if str(row.get("status") or "").strip().lower() == "waiting_callback")
+    released = _release_purged_media_runtime(rows, reason=reason)
+    _delete_related_rows_for_purged_jobs([str(row.get("job_id") or "") for row in rows])
+    if rows:
+        logger.info(
+            "generation queue purge deleted %s tasks older than 1 day | waiting_callback=%s runtime_released=%s",
+            len(rows),
+            waiting,
+            released,
+        )
+    return {
+        "deleted": len(rows),
+        "waiting_callback": waiting,
+        "runtime_released": released,
+    }
+
+
+def _fail_callback_wait_runtime(rows: List[Dict[str, Any]]) -> None:
+    """Mark image/video runtime records failed so the UI and compensation leave the slot."""
+    if not rows:
+        return
+    try:
+        from app.core.time_utils import now_bj_iso
+        from app.services.generation_runtime.job_store import (
+            IMAGE_JOB_LOCK,
+            IMAGE_JOB_STORE,
+            IMAGE_JOB_TASKS,
+            VIDEO_JOB_LOCK,
+            VIDEO_JOB_STORE,
+            VIDEO_JOB_TASKS,
+            _read_image_job_file,
+            _read_video_job_file,
+            _set_image_job,
+            _set_video_job,
+        )
+    except Exception:
+        logger.warning("callback wait timeout skipped runtime update", exc_info=True)
+        return
+
+    finished_at = now_bj_iso()
+    for row in rows:
+        job_id = str(row.get("job_id") or "").strip()
+        kind = str(row.get("kind") or "").strip().lower()
+        if not job_id or kind not in {"image", "video"}:
+            continue
+        reason = (
+            "图片等待回执超过 5 分钟"
+            if kind == "image"
+            else "视频等待回执超过 15 分钟"
+        )
+        try:
+            if kind == "image":
+                with IMAGE_JOB_LOCK:
+                    current = dict(IMAGE_JOB_STORE.get(job_id) or {})
+                if not current:
+                    loaded = _read_image_job_file(job_id)
+                    if isinstance(loaded, dict) and loaded:
+                        with IMAGE_JOB_LOCK:
+                            IMAGE_JOB_STORE.setdefault(job_id, dict(loaded))
+                        current = dict(loaded)
+                _set_image_job(
+                    job_id,
+                    status="failed",
+                    finished_at=finished_at,
+                    error=reason,
+                    upstream_submit_state="wait_timeout",
+                )
+                with IMAGE_JOB_LOCK:
+                    IMAGE_JOB_TASKS.pop(job_id, None)
+            else:
+                with VIDEO_JOB_LOCK:
+                    current = dict(VIDEO_JOB_STORE.get(job_id) or {})
+                if not current:
+                    loaded = _read_video_job_file(job_id)
+                    if isinstance(loaded, dict) and loaded:
+                        with VIDEO_JOB_LOCK:
+                            VIDEO_JOB_STORE.setdefault(job_id, dict(loaded))
+                        current = dict(loaded)
+                _set_video_job(
+                    job_id,
+                    status="failed",
+                    finished_at=finished_at,
+                    error=reason,
+                    upstream_submit_state="wait_timeout",
+                )
+                with VIDEO_JOB_LOCK:
+                    VIDEO_JOB_TASKS.pop(job_id, None)
+            scope_key = str((current or {}).get("task_scope") or "").strip()
+            if scope_key:
+                release_generation_scope(scope_key=scope_key, job_id=job_id)
+        except Exception:
+            logger.warning(
+                "callback wait timeout runtime update failed | kind=%s job_id=%s",
+                kind,
+                job_id,
+                exc_info=True,
+            )
+
+
+def _timeout_waiting_callback_tasks(now: Optional[float] = None) -> int:
+    """Fail waiting_callback rows that have waited past the image/video limit.
+
+    The clock is the moment the row entered waiting_callback (last_heartbeat),
+    and repeat status marks do not move it.
+    """
+    _ensure_queue_table_ready()
+    current = float(now if now is not None else time.time())
+    image_cutoff = current - _IMAGE_CALLBACK_WAIT_TIMEOUT_SECONDS
+    video_cutoff = current - _VIDEO_CALLBACK_WAIT_TIMEOUT_SECONDS
+    db = SessionLocal()
+    rows: List[Dict[str, Any]] = []
+    try:
+        selected = db.execute(
+            text(
+                """
+                SELECT job_id, kind, user_id
+                FROM generation_task_queue
+                WHERE status = 'waiting_callback'
+                  AND (
+                    (
+                        LOWER(kind) = 'image'
+                        AND COALESCE(NULLIF(last_heartbeat, 0), NULLIF(started_at, 0), created_at) < :image_cutoff
+                    )
+                    OR (
+                        LOWER(kind) = 'video'
+                        AND COALESCE(NULLIF(last_heartbeat, 0), NULLIF(started_at, 0), created_at) < :video_cutoff
+                    )
+                  )
+                """
+            ),
+            {"image_cutoff": image_cutoff, "video_cutoff": video_cutoff},
+        ).mappings().all()
+        rows = [dict(row) for row in selected]
+        if not rows:
+            return 0
+
+        def _mark_failed(kind: str, reason: str) -> None:
+            ids = [
+                str(row.get("job_id") or "")
+                for row in rows
+                if str(row.get("kind") or "").strip().lower() == kind and str(row.get("job_id") or "").strip()
+            ]
+            for offset in range(0, len(ids), 200):
+                chunk = ids[offset:offset + 200]
+                params = {
+                    "finished_at": current,
+                    "error": reason,
+                }
+                placeholders = []
+                for index, job_id in enumerate(chunk):
+                    key = f"id_{index}"
+                    params[key] = job_id
+                    placeholders.append(f":{key}")
+                in_sql = ", ".join(placeholders)
+                db.execute(
+                    text(
+                        f"""
+                        UPDATE generation_task_queue
+                        SET status = 'failed',
+                            worker_id = NULL,
+                            finished_at = :finished_at,
+                            error = :error
+                        WHERE status = 'waiting_callback'
+                          AND job_id IN ({in_sql})
+                        """
+                    ),
+                    params,
+                )
+                try:
+                    _ensure_submit_scope_table_ready()
+                    db.execute(
+                        text(f"DELETE FROM generation_submit_scope WHERE job_id IN ({in_sql})"),
+                        params,
+                    )
+                except Exception:
+                    logger.warning("callback wait timeout skipped scope release", exc_info=True)
+
+        _mark_failed("image", "图片等待回执超过 5 分钟")
+        _mark_failed("video", "视频等待回执超过 15 分钟")
+        db.commit()
+    except Exception:
+        logger.warning("callback wait timeout sweep failed", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        db.close()
+
+    _fail_callback_wait_runtime(rows)
+    image_count = sum(1 for row in rows if str(row.get("kind") or "").strip().lower() == "image")
+    video_count = sum(1 for row in rows if str(row.get("kind") or "").strip().lower() == "video")
+    logger.warning(
+        "callback wait timeout failed %s tasks | image=%s video=%s",
+        len(rows),
+        image_count,
+        video_count,
+    )
+    return len(rows)
+
+
 def _cleanup_old_tasks() -> None:
     global _QUEUE_LAST_CLEANUP_TIME, _QUEUE_LAST_TIMEOUT_SWEEP_TIME, _QUEUE_LAST_CALLBACK_LEASE_REPAIR_TIME
     now = time.time()
@@ -1921,22 +2270,20 @@ def _cleanup_old_tasks() -> None:
     if now - _QUEUE_LAST_TIMEOUT_SWEEP_TIME < 60.0:
         return
     _QUEUE_LAST_TIMEOUT_SWEEP_TIME = now
-    
-    # We sweep for timeouts every minute, but full deletes only every hour.
+
+    # Timeouts every minute. Full delete of anything older than 1 day, hourly.
     do_full_cleanup = False
     if now - _QUEUE_LAST_CLEANUP_TIME >= 3600.0:
         _QUEUE_LAST_CLEANUP_TIME = now
         do_full_cleanup = True
-    cutoff = now - 86400.0  # 1 day cutoff
-    timeout_cutoff = now - 3600.0 # 60 min timeout for worker-owned tasks
+    timeout_cutoff = now - 3600.0  # 60 min timeout for worker-owned tasks
     db = SessionLocal()
     try:
-        # Mark long worker-owned tasks as failed.
         r_timeout = db.execute(
             text(
                 """
-                UPDATE generation_task_queue 
-                SET status = 'failed', 
+                UPDATE generation_task_queue
+                SET status = 'failed',
                     worker_id = NULL,
                     error = 'Task submit/running for over 60 minutes. Timed out.',
                     finished_at = :now
@@ -1949,21 +2296,21 @@ def _cleanup_old_tasks() -> None:
         db.commit()
         if (r_timeout.rowcount or 0) > 0:
             logger.warning("generation queue sweep timed out %s submit/running tasks (>60m)", r_timeout.rowcount)
-
-        if do_full_cleanup:
-            result = db.execute(
-                text(
-                    "DELETE FROM generation_task_queue WHERE status IN ('completed', 'failed', 'canceled') AND created_at < :cutoff"
-                ),
-                {"cutoff": cutoff},
-            )
-            db.commit()
-            if (result.rowcount or 0) > 0:
-                logger.info("generation queue cleanup deleted %s old tasks", result.rowcount)
     except Exception as exc:
         logger.warning("generation queue cleanup failed: %s", exc)
     finally:
         db.close()
+
+    try:
+        _timeout_waiting_callback_tasks(now)
+    except Exception as exc:
+        logger.warning("callback wait timeout sweep failed: %s", exc)
+
+    if do_full_cleanup:
+        try:
+            purge_generation_tasks_older_than()
+        except Exception as exc:
+            logger.warning("generation queue purge failed: %s", exc)
 
 async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, int, Dict[str, Any]], Any]) -> None:
     logger.info("generation queue async worker started | worker=%s", worker_name)

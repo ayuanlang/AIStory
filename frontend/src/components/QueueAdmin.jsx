@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useMemo } from 'react';
 import { RefreshCw, Trash2, StopCircle, Clock, PlayCircle, Loader2, Save, X } from 'lucide-react';
-import { getAdminQueueTasks, cancelAdminQueueTask, cancelAllQueuedAdminTasks, getAdminQueueConfig, getAdminQueueStats, updateAdminQueueConfig, getSystemSettingsManage } from '../services/api';
+import { getAdminQueueTasks, cancelAdminQueueTask, cancelAllQueuedAdminTasks, purgeAdminQueueTasksOlderThan, getAdminQueueConfig, getAdminQueueStats, updateAdminQueueConfig, getSystemSettingsManage } from '../services/api';
 import { confirmUiMessage, notifyUiMessage } from '../lib/uiMessage';
 
 export default function QueueAdmin() {
@@ -382,6 +382,21 @@ export default function QueueAdmin() {
     }
   };
 
+  const handlePurgeOlderThan = async () => {
+    if (!(await confirmUiMessage('清除创建时间早于 1 天的队列任务？等待回调的旧任务也会删掉，并释放并行槽位。'))) {
+      return;
+    }
+    try {
+      const result = await purgeAdminQueueTasksOlderThan();
+      const deleted = Number(result?.deleted || 0);
+      const waiting = Number(result?.waiting_callback || 0);
+      notifyUiMessage(`已清除 ${deleted} 条，其中等待回调 ${waiting} 条。`, 'success');
+      await refreshAll();
+    } catch (e) {
+      notifyUiMessage('清除 1 天前的队列任务失败', 'error');
+    }
+  };
+
   const pureCallbackRuntime = resolvePureCallbackRuntime();
 
   return (
@@ -394,6 +409,9 @@ export default function QueueAdmin() {
         <div className="flex gap-3">
           <button onClick={handleCancelAll} className="flex items-center gap-2 px-4 py-2 bg-red-600/20 text-red-500 rounded-lg hover:bg-red-600/40 transition-colors">
             <StopCircle size={18} /> Cancel All Queued
+          </button>
+          <button onClick={handlePurgeOlderThan} className="flex items-center gap-2 px-4 py-2 bg-amber-600/20 text-amber-300 rounded-lg hover:bg-amber-600/40 transition-colors">
+            <Trash2 size={18} /> 清除1天前
           </button>
           <button onClick={refreshAll} className="flex items-center gap-2 px-4 py-2 bg-white/10 rounded-lg hover:bg-white/20 transition-colors">
             <RefreshCw size={18} className={loading ? 'animate-spin' : ''} /> Refresh

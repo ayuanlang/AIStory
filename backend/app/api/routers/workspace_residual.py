@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional, Union
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.api.deps import get_current_user
 from app.core.config import settings
@@ -218,12 +219,22 @@ def get_llm_logs(
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Only superusers can view LLM Call Logs")
+    started = time.perf_counter()
     try:
         from app.services.llm_service import finalize_stale_llm_request_logs
-        finalize_stale_llm_request_logs(db)
+        finalize_llm_request_count = finalize_stale_llm_request_logs(db)
     except Exception as exc:
+        finalize_llm_request_count = -1
         logger.warning("Failed to finalize stale LLM_REQUEST logs: %s", exc)
-    query = db.query(LLMCallLog).order_by(LLMCallLog.timestamp.desc())
+    query = (
+        db.query(LLMCallLog)
+        .options(
+            defer(LLMCallLog.payload_json),
+            defer(LLMCallLog.response_json),
+            defer(LLMCallLog.error_msg),
+        )
+        .order_by(LLMCallLog.timestamp.desc())
+    )
     if provider:
         query = query.filter(LLMCallLog.provider == provider)
     if tag:
@@ -237,7 +248,39 @@ def get_llm_logs(
         enrich_llm_logs_charged_amount(db, logs)
     except Exception as exc:
         logger.warning("Failed to enrich LLM logs with charged_amount: %s", exc)
-    return [serialize_llm_call_log(log) for log in logs]
+    payload = [serialize_llm_call_log(log, include_body=False) for log in logs]
+    logger.info(
+        "llm_logs list ok count=%s offset=%s limit=%s finalized=%s elapsed_ms=%s",
+        len(payload),
+        offset,
+        limit,
+        finalize_llm_request_count,
+        int((time.perf_counter() - started) * 1000),
+    )
+    return payload
+
+
+@router.get("/admin/llm_logs/{log_id}")
+def get_llm_log(
+    log_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superusers can view LLM Call Logs")
+    row = db.query(LLMCallLog).filter(LLMCallLog.id == int(log_id)).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="LLM log not found")
+    payload_bytes = len(getattr(row, "payload_json", None) or "")
+    response_bytes = len(getattr(row, "response_json", None) or "")
+    logger.info(
+        "llm_logs detail id=%s payload_bytes=%s response_bytes=%s",
+        row.id,
+        payload_bytes,
+        response_bytes,
+    )
+    from app.services.model_invocation_billing import serialize_llm_call_log
+    return serialize_llm_call_log(row, include_body=True)
 
 
 @router.delete("/admin/llm_logs/clean")

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import FunctionApiConfigTab from '../components/FunctionApiConfigTab';
 import PricingRulesTab from '../components/PricingRulesTab';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getProjectCostEstimationConfigManage, updateProjectCostEstimationConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getLlmCallLogs, cleanLlmLogs, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminOrphanFiles, deleteAdminOrphanFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage, getFunctionApiConfigs } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getProjectCostEstimationConfigManage, updateProjectCostEstimationConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getLlmCallLogs, getLlmCallLog, cleanLlmLogs, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminOrphanFiles, deleteAdminOrphanFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage, getFunctionApiConfigs } from '../services/api';
 import Footer from '../components/Footer';
 import LlmLogViewer from '../components/LlmLogViewer';
 import QueueAdmin from '../components/QueueAdmin';
@@ -5763,6 +5763,7 @@ const UserAdmin = () => {
                                         </div>
                                         <div>
                                             <label className="block text-xs uppercase font-bold text-gray-500 mb-1">{t('API V3 密钥', 'API V3 Key')}</label>
+                                            <form autoComplete="off" onSubmit={(e) => e.preventDefault()}>
                                             <input 
                                                 type="password"
                                                 autoComplete="off"
@@ -5771,6 +5772,7 @@ const UserAdmin = () => {
                                                 className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
                                                 placeholder={t('32 位 API Key', '32 characters API Key')}
                                             />
+                                            </form>
                                         </div>
                                         <div>
                                             <label className="block text-xs uppercase font-bold text-gray-500 mb-1">{t('回调通知 URL', 'Notify URL')}</label>
@@ -5911,6 +5913,7 @@ const UserAdmin = () => {
                                         </div>
                                         <div>
                                             <label className="block text-xs uppercase font-bold text-gray-500 mb-1">SMTP Password / App Password</label>
+                                            <form autoComplete="off" onSubmit={(e) => e.preventDefault()}>
                                             <input
                                                 type="password"
                                                 autoComplete="off"
@@ -5919,6 +5922,7 @@ const UserAdmin = () => {
                                                 className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
                                                 placeholder={t('邮箱授权码', 'Email app password')}
                                             />
+                                            </form>
                                         </div>
                                     </div>
                                     <div className="space-y-4">
@@ -8831,6 +8835,7 @@ const UserAdmin = () => {
                                             )}
                                             <div className="md:col-span-2">
                                                 <label className="block text-xs uppercase text-gray-400 mb-1">{t('素材审核密钥', 'Asset Moderation Key')}</label>
+                                                <form autoComplete="off" onSubmit={(e) => e.preventDefault()}>
                                                 <input
                                                     type="password"
                                                     value={systemApiForm.moderation_aes_key}
@@ -8839,6 +8844,7 @@ const UserAdmin = () => {
                                                     placeholder={t('保存到 config.moderation_aes_key', 'Saved to config.moderation_aes_key')}
                                                     autoComplete="new-password"
                                                 />
+                                                </form>
                                             </div>
                                             <div className="md:col-span-2">
                                                 <label className="block text-xs uppercase text-gray-400 mb-1">{t('端点', 'Base URL')}</label>
@@ -9325,7 +9331,14 @@ const UserAdmin = () => {
                                                       <td className="px-4 py-3 whitespace-nowrap font-mono text-xs text-sky-200">{formatLlmRuntime(log.latency_ms)}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap font-mono text-xs text-amber-200">{formatLlmCharge(log.charged_amount)}</td>
                                                       <td className="px-4 py-3">
-                                                          <button className="text-primary hover:underline text-xs" onClick={() => setSelectedLlmLog(log)}>{t('查看', 'View')}</button>
+                                                          <button className="text-primary hover:underline text-xs" onClick={async () => {
+                                                              try {
+                                                                  const full = await getLlmCallLog(log.id);
+                                                                  setSelectedLlmLog(full || log);
+                                                              } catch (e) {
+                                                                  setLlmLogsError(e.response?.data?.detail || e.message || 'Failed to load log');
+                                                              }
+                                                          }}>{t('查看', 'View')}</button>
                                                       </td>
                                                   </tr>
                                               ))}

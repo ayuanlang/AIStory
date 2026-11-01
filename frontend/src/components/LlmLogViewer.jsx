@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import Markdown from 'react-markdown';
 import { getUiLang, tUI } from '../lib/uiLang';
+import { useLog } from '../context/LogContext';
 import { ASSET_BASE_URL, BASE_URL } from '../config';
 import { X, Copy } from 'lucide-react';
 
@@ -37,9 +38,94 @@ function attachmentRawUrl(part) {
   );
 }
 
+const MEDIA_FIELD_KEYS = new Set(['image_url', 'video_url', 'audio_url', 'file_url']);
+
+function isMediaHref(href) {
+  return /(\.(png|jpe?g|gif|webp|bmp|avif|svg|mp4|webm|mov|m4v|mp3|wav|m4a)(\?|#|$))|(?:qn\.woola\.fun|clouddn\.com|qiniucs\.com|aliyuncs\.com|myqcloud\.com|volces\.com)/i.test(href);
+}
+
+function collectAttachmentUrls(value, acc, keyName = '') {
+  if (typeof value === 'string') {
+    const href = toOpenableUrl(value);
+    if (href && /^https?:\/\//i.test(href) && (MEDIA_FIELD_KEYS.has(keyName) || isMediaHref(href))) acc.add(href);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectAttachmentUrls(item, acc, keyName));
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  const type = String(value.type || '').toLowerCase();
+  if (MEDIA_PART_TYPES.has(type)) {
+    const href = toOpenableUrl(attachmentRawUrl(value));
+    if (href && /^https?:\/\//i.test(href)) acc.add(href);
+  }
+  Object.entries(value).forEach(([key, item]) => collectAttachmentUrls(item, acc, key));
+}
+
+function classifyAttachmentHref(href) {
+  const pageOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  try {
+    const parsed = new URL(String(href || ''), pageOrigin || undefined);
+    return {
+      kind: parsed.origin === pageOrigin ? 'local' : 'remote',
+      origin: parsed.origin,
+      host: parsed.host,
+      path: parsed.pathname,
+      queryLen: parsed.search.length,
+      hrefLen: parsed.href.length,
+      hasToken: /(?:^|[?&])token=/.test(parsed.search),
+    };
+  } catch (error) {
+    return {
+      kind: 'invalid',
+      error: String(error?.message || error),
+      hrefLen: String(href || '').length,
+    };
+  }
+}
+
+function writeAttachmentDebug(addLog, stage, detail) {
+  const message = `[llm-log-attachment] ${stage} ${JSON.stringify(detail)}`;
+  console.info(message);
+  if (typeof addLog === 'function') addLog(message, 'info');
+}
+
+function LinkifiedPre({ text, className, onLinkClick }) {
+  const source = String(text || '');
+  const re = /https?:\/\/[^\s"'<>\\]+/g;
+  const nodes = [];
+  let last = 0;
+  let match;
+  while ((match = re.exec(source))) {
+    if (match.index > last) nodes.push(source.slice(last, match.index));
+    const href = match[0].replace(/[),.;]+$/g, '');
+    const rest = match[0].slice(href.length);
+    nodes.push(
+      <a
+        key={`${match.index}-${nodes.length}`}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-sky-300 underline"
+        onClick={onLinkClick}
+      >
+        {href}
+      </a>
+    );
+    if (rest) nodes.push(rest);
+    last = match.index + match[0].length;
+  }
+  if (last < source.length) nodes.push(source.slice(last));
+  return <pre className={className}>{nodes}</pre>;
+}
+
 function toOpenableUrl(raw) {
-  const url = String(raw || '').trim();
+  let url = String(raw || '').trim();
   if (!url || url.includes('BASE64_STRIPPED')) return '';
+  if (/^(?:[a-z0-9.-]+\.)?(?:woola\.fun|clouddn\.com|qiniucs\.com|aliyuncs\.com|myqcloud\.com|volces\.com)\//i.test(url)) {
+    url = `https://${url}`;
+  }
   if (/^https?:\/\//i.test(url) || url.startsWith('blob:') || url.startsWith('data:')) return url;
   if (url.startsWith('/')) {
     const base = String(
@@ -73,6 +159,37 @@ class LogBodyBoundary extends React.Component {
 export default function LlmLogViewer({ log, onClose }) {
   const uiLang = getUiLang();
   const t = (zh, en) => tUI(uiLang, zh, en);
+  const logApi = useLog();
+  const addLog = logApi?.addLog;
+
+  useEffect(() => {
+    if (!log) return;
+    let payloadObj = log.payload_json;
+    let responseObj = log.response_json;
+    try {
+      if (typeof payloadObj === 'string') payloadObj = JSON.parse(payloadObj);
+    } catch (error) {
+      payloadObj = null;
+    }
+    try {
+      if (typeof responseObj === 'string') responseObj = JSON.parse(responseObj);
+    } catch (error) {
+      responseObj = null;
+    }
+    const found = new Set();
+    collectAttachmentUrls(payloadObj, found);
+    collectAttachmentUrls(responseObj, found);
+    writeAttachmentDebug(addLog, 'open', {
+      logId: log.id,
+      pageOrigin: window.location.origin,
+      baseUrl: String(BASE_URL || ''),
+      assetBase: String(ASSET_BASE_URL || ''),
+      count: found.size,
+    });
+    found.forEach((href) => {
+      writeAttachmentDebug(addLog, 'url', { logId: log.id, href, ...classifyAttachmentHref(href) });
+    });
+  }, [log, addLog]);
 
   if (!log) return null;
 
@@ -147,15 +264,32 @@ export default function LlmLogViewer({ log, onClose }) {
     completionContent = responseObj.partial_content;
   }
 
+  const debugAttachmentClick = (event) => {
+    event.stopPropagation();
+    const anchor = event.currentTarget;
+    const intended = anchor?.getAttribute?.('href') || '';
+    const browserHref = anchor?.href || '';
+    writeAttachmentDebug(addLog, 'click', {
+      logId: log?.id,
+      intended,
+      browserHref,
+      hrefMatches: intended === browserHref,
+      defaultPrevented: Boolean(event.defaultPrevented),
+      button: event.button,
+      target: anchor?.target || '',
+      ...classifyAttachmentHref(browserHref || intended),
+    });
+  };
+
   const markdownComponents = {
     a: ({ href, children }) => (
-      <a href={href || ''} target="_blank" rel="noopener noreferrer" className="break-all [overflow-wrap:anywhere]">{children}</a>
+      <a href={href || ''} target="_blank" rel="noopener noreferrer" className="break-all [overflow-wrap:anywhere]" onClick={debugAttachmentClick}>{children}</a>
     ),
     img: ({ src, alt }) => {
       const href = toOpenableUrl(src);
       if (!href) return null;
       return (
-        <a href={href} target="_blank" rel="noopener noreferrer" className="block max-w-full break-all [overflow-wrap:anywhere] text-sky-300 hover:text-sky-200 hover:underline">
+        <a href={href} target="_blank" rel="noopener noreferrer" className="block max-w-full break-all [overflow-wrap:anywhere] text-sky-300 hover:text-sky-200 hover:underline" onClick={debugAttachmentClick}>
           {alt || href}
         </a>
       );
@@ -180,6 +314,7 @@ export default function LlmLogViewer({ log, onClose }) {
           href={href}
           target="_blank"
           rel="noopener noreferrer"
+          onClick={debugAttachmentClick}
           className="block max-w-full text-xs text-sky-300 hover:text-sky-200 hover:underline break-all [overflow-wrap:anywhere]"
         >
           {href}
@@ -240,6 +375,18 @@ export default function LlmLogViewer({ log, onClose }) {
 
   const displayPayloadJson = typeof log.payload_json === 'object' ? JSON.stringify(log.payload_json, null, 2) : (log.payload_json || '');
   const displayResponseJson = typeof log.response_json === 'object' ? JSON.stringify(log.response_json, null, 2) : (log.response_json || '');
+  const attachmentUrls = [];
+  {
+    const found = new Set();
+    collectAttachmentUrls(payload, found);
+    collectAttachmentUrls(response, found);
+    attachmentUrls.push(...found);
+  }
+  const contentHasAttachment = (content) => {
+    const found = new Set();
+    collectAttachmentUrls(content, found);
+    return found.size > 0;
+  };
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50" onClick={onClose}>
@@ -260,10 +407,27 @@ export default function LlmLogViewer({ log, onClose }) {
 
         <LogBodyBoundary
           fallback={(
-            <pre className="max-w-full overflow-auto whitespace-pre-wrap break-all text-xs text-gray-300">{displayPayloadJson || displayResponseJson || t('（空）', '(Empty)')}</pre>
+            <LinkifiedPre text={displayPayloadJson || displayResponseJson || t('（空）', '(Empty)')} className="max-w-full overflow-auto whitespace-pre-wrap break-all text-xs text-gray-300" onLinkClick={debugAttachmentClick} />
           )}
         >
         <div className="space-y-4 overflow-y-auto overflow-x-hidden pr-2 custom-scrollbar flex-1 min-w-0 min-h-0">
+          {attachmentUrls.length > 0 ? (
+            <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-4 space-y-2 min-w-0">
+              <div className="text-xs font-bold uppercase tracking-wider text-sky-200">{t('附件', 'Attachments')}</div>
+              {attachmentUrls.map((href) => (
+                <a
+                  key={href}
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={debugAttachmentClick}
+                  className="block max-w-full text-xs text-sky-300 hover:text-sky-200 hover:underline break-all [overflow-wrap:anywhere]"
+                >
+                  {href}
+                </a>
+              ))}
+            </div>
+          ) : null}
           {String(log.error_msg || '').trim() ? (
             <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200 whitespace-pre-wrap break-words">
               <div className="text-xs font-bold uppercase tracking-wider text-red-300 mb-2">{t('错误', 'Error')}</div>
@@ -271,7 +435,7 @@ export default function LlmLogViewer({ log, onClose }) {
             </div>
           ) : null}
           {messages.length > 0 ? messages.map((m, i) => (
-            <details key={i} className={`rounded-xl border ${m.role === 'system' ? 'bg-purple-500/10 border-purple-500/20' : m.role === 'user' ? 'bg-blue-500/10 border-blue-500/20' : 'bg-emerald-500/10 border-emerald-500/20'} relative group`}>
+            <details key={i} open={contentHasAttachment(m.content) ? true : undefined} className={`rounded-xl border ${m.role === 'system' ? 'bg-purple-500/10 border-purple-500/20' : m.role === 'user' ? 'bg-blue-500/10 border-blue-500/20' : 'bg-emerald-500/10 border-emerald-500/20'} relative group`}>
               <summary className="flex justify-between items-center p-4 cursor-pointer outline-none select-none list-none [&::-webkit-details-marker]:hidden">
                   <div className="text-xs font-bold uppercase tracking-wider opacity-60 flex items-center space-x-2">
                      <span className="text-gray-500 transition-transform group-open:rotate-90">▶</span>
@@ -297,7 +461,7 @@ export default function LlmLogViewer({ log, onClose }) {
                  </button>
                </summary>
                <div className="px-4 pb-4 min-w-0 max-w-full overflow-x-hidden break-words border-t border-white/10 pt-4">
-                 <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-all [overflow-wrap:anywhere] border border-white/5 text-xs text-gray-300">{displayPayloadJson || t('（空）', '(Empty)')}</pre>
+                 <LinkifiedPre text={displayPayloadJson || t('（空）', '(Empty)')} className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-all [overflow-wrap:anywhere] border border-white/5 text-xs text-gray-300" onLinkClick={debugAttachmentClick} />
                </div>
              </details>
           )}
@@ -315,7 +479,7 @@ export default function LlmLogViewer({ log, onClose }) {
               </summary>
               <div className="px-4 pb-4 min-w-0 max-w-full overflow-x-hidden break-words border-t border-white/10 pt-4">
                 {typeof completionContent === 'string' && completionContent ? <div className="prose prose-invert max-w-full min-w-0 prose-sm break-words"><Markdown components={markdownComponents}>{completionContent}</Markdown></div> : (
-                   <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-all [overflow-wrap:anywhere] border border-white/5 text-xs text-gray-300">{displayResponseJson}</pre>
+                   <LinkifiedPre text={displayResponseJson} className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-all [overflow-wrap:anywhere] border border-white/5 text-xs text-gray-300" onLinkClick={debugAttachmentClick} />
                 )}
               </div>
             </details>
