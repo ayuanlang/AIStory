@@ -1723,6 +1723,14 @@ def _normalize_key_strategy(value: str) -> str:
     return "random"
 
 
+def _normalize_callback_mode(value: Any) -> Optional[str]:
+    """Image/video callback override. Empty inherits; no_callback forces polling."""
+    text = str(value or "").strip().lower()
+    if text in {"no_callback", "poll", "unsupported", "不支持回调"}:
+        return "no_callback"
+    return None
+
+
 def _normalize_key_weights(values, keys: List[str]) -> List[float]:
     if not keys:
         return []
@@ -2039,8 +2047,9 @@ def _get_system_provider_key_pool_full(db: Session, provider: str) -> dict:
             "weights": _normalize_key_weights(record.weights, keys),
             "provider_alias": str(getattr(record, "provider_alias", "") or "").strip() or None,
             "intro_url": str(getattr(record, "intro_url", "") or "").strip() or None,
+            "callback_mode": _normalize_callback_mode(getattr(record, "callback_mode", None)),
         }
-    return {"keys": [], "strategy": "random", "weights": [], "provider_alias": None, "intro_url": None}
+    return {"keys": [], "strategy": "random", "weights": [], "provider_alias": None, "intro_url": None, "callback_mode": None}
 
 
 def _apply_system_provider_key_pool(db: Session, provider: str, keys: List[str]) -> None:
@@ -2089,6 +2098,7 @@ def _apply_provider_key_bundle_to_rows(
     *,
     provider_alias: Optional[str] = None,
     intro_url: Optional[str] = None,
+    callback_mode: Optional[str] = None,
     created_at: Optional[str] = None,
     updated_at: Optional[str] = None,
 ) -> None:
@@ -2108,6 +2118,7 @@ def _apply_provider_key_bundle_to_rows(
                 "weights": weights,
                 "provider_alias": str(provider_alias or "").strip() or None,
                 "intro_url": _normalize_optional_http_url(intro_url),
+                "callback_mode": _normalize_callback_mode(callback_mode),
                 "updated_at": now_iso,
             },
             synchronize_session=False,
@@ -2120,6 +2131,7 @@ def _apply_provider_key_bundle_to_rows(
                 weights=weights,
                 provider_alias=str(provider_alias or "").strip() or None,
                 intro_url=_normalize_optional_http_url(intro_url),
+                callback_mode=_normalize_callback_mode(callback_mode),
                 created_at=str(created_at or now_iso),
                 updated_at=now_iso,
             ))
@@ -9231,6 +9243,7 @@ def export_system_config_sync_bundle_for_manage(
                 "strategy": _normalize_key_strategy(row.strategy),
                 "weights": row.weights if row.weights else [],
                 "intro_url": _normalize_optional_http_url(getattr(row, "intro_url", None)),
+                "callback_mode": _normalize_callback_mode(getattr(row, "callback_mode", None)),
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
             }
@@ -9825,6 +9838,7 @@ def import_system_config_sync_bundle_for_manage(
                 weights = _normalize_key_weights(raw_pool.get("weights"), keys)
                 provider_alias = str(raw_pool.get("provider_alias") or "").strip() or None
                 intro_url = _normalize_optional_http_url(raw_pool.get("intro_url"))
+                callback_mode = _normalize_callback_mode(raw_pool.get("callback_mode"))
                 updated_at = str(raw_pool.get("updated_at") or now_bj_iso())
                 created_at = str(raw_pool.get("created_at") or updated_at)
                 existed_before = bool(_get_provider_key_pool_record(db, provider_name)) if has_provider_key_pool_table else False
@@ -9837,6 +9851,7 @@ def import_system_config_sync_bundle_for_manage(
                     weights,
                     provider_alias=provider_alias,
                     intro_url=intro_url,
+                    callback_mode=callback_mode,
                     created_at=created_at,
                     updated_at=updated_at,
                 )
@@ -10324,6 +10339,7 @@ def list_provider_key_pools(
             strategy=_normalize_key_strategy(row.strategy),
             weights=row.weights if row.weights else [],
             intro_url=_normalize_optional_http_url(getattr(row, "intro_url", None)),
+            callback_mode=_normalize_callback_mode(getattr(row, "callback_mode", None)),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -10372,6 +10388,7 @@ def create_provider_key_pool(
         strategy=strategy,
         weights=weights,
         intro_url=_normalize_optional_http_url(payload.intro_url),
+        callback_mode=_normalize_callback_mode(payload.callback_mode),
         created_at=now,
         updated_at=now,
     )
@@ -10387,6 +10404,7 @@ def create_provider_key_pool(
         strategy=_normalize_key_strategy(record.strategy),
         weights=record.weights if record.weights else [],
         intro_url=_normalize_optional_http_url(getattr(record, "intro_url", None)),
+        callback_mode=_normalize_callback_mode(getattr(record, "callback_mode", None)),
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -10434,6 +10452,8 @@ def update_provider_key_pool(
         record.weights = _normalize_key_weights(payload.weights, keys)
     if payload.intro_url is not None:
         record.intro_url = _normalize_optional_http_url(payload.intro_url)
+    if payload.callback_mode is not None:
+        record.callback_mode = _normalize_callback_mode(payload.callback_mode)
     record.updated_at = now_bj_iso()
     db.commit()
     db.refresh(record)
@@ -10446,6 +10466,7 @@ def update_provider_key_pool(
         strategy=_normalize_key_strategy(record.strategy),
         weights=record.weights if record.weights else [],
         intro_url=_normalize_optional_http_url(getattr(record, "intro_url", None)),
+        callback_mode=_normalize_callback_mode(getattr(record, "callback_mode", None)),
         created_at=record.created_at,
         updated_at=record.updated_at,
     )

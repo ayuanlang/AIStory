@@ -1057,6 +1057,7 @@ class ProviderKeyPoolCreate(BaseModel):
     strategy: Optional[str] = "random"
     weights: Optional[List[float]] = None
     intro_url: Optional[str] = None
+    callback_mode: Optional[str] = None
 
 class ProviderKeyPoolUpdate(BaseModel):
     provider: Optional[str] = None
@@ -1065,6 +1066,7 @@ class ProviderKeyPoolUpdate(BaseModel):
     strategy: Optional[str] = None
     weights: Optional[List[float]] = None
     intro_url: Optional[str] = None
+    callback_mode: Optional[str] = None
 
 class ProviderKeyPoolOut(BaseModel):
     id: int
@@ -1074,6 +1076,7 @@ class ProviderKeyPoolOut(BaseModel):
     strategy: Optional[str] = "random"
     weights: Optional[List[float]] = []
     intro_url: Optional[str] = None
+    callback_mode: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     class Config:

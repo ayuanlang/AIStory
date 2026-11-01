@@ -31,7 +31,7 @@ from app.core.logging import (
     flush_request_traffic_stats,
     log_request_traffic_startup,
 )
-from app.db.init_db import create_default_superuser, init_initial_data
+from app.db.init_db import _ensure_missing_table_columns, create_default_superuser, init_initial_data
 from app.api.deps import warm_user_auth_cache_from_db
 from app.services.system_api_runtime_cache import warm_system_api_cache
 from fastapi import Request
@@ -162,9 +162,21 @@ _DB_BOOT_LOCK_POLL_DELAY = max(1, int(os.getenv("DB_BOOT_LOCK_POLL_DELAY", "2"))
 _PROCESS_STARTED_UNIX_TS = time.time()
 
 
+def _ensure_provider_key_pool_columns() -> None:
+    """Add columns on an existing provider_key_pool. create_all does not alter it."""
+    try:
+        from app.models.all_models import ProviderKeyPool
+
+        is_postgres = engine.dialect.name == "postgresql"
+        _ensure_missing_table_columns("provider_key_pool", ProviderKeyPool, is_postgres=is_postgres)
+    except Exception as exc:
+        logger.warning("DB bootstrap: provider_key_pool column ensure failed: %s", exc)
+
+
 def _run_critical_db_bootstrap_steps() -> None:
     logger.info("DB bootstrap: create_all start")
     Base.metadata.create_all(bind=engine)
+    _ensure_provider_key_pool_columns()
     readiness_issue = _get_minimum_schema_readiness_issue()
     if readiness_issue:
         raise RuntimeError(f"Critical DB schema bootstrap finished but readiness probe still failed: {readiness_issue}")
@@ -374,6 +386,7 @@ def _bootstrap_db_schema() -> tuple[bool, bool]:
         logger.info("DB bootstrap: minimum schema already ready; ensuring missing tables")
         try:
             Base.metadata.create_all(bind=engine)
+            _ensure_provider_key_pool_columns()
             create_default_superuser()
         except Exception as exc:
             logger.warning("DB bootstrap: create_all/superuser on ready schema failed: %s", exc)

@@ -367,7 +367,7 @@ const UserAdmin = () => {
     const [providerKeyPoolRows, setProviderKeyPoolRows] = useState([]);
     const [isProviderKeyPoolLoading, setIsProviderKeyPoolLoading] = useState(false);
     const [selectedKeyPoolId, setSelectedKeyPoolId] = useState('');
-    const [keyPoolForm, setKeyPoolForm] = useState({ provider: '', provider_alias: '', api_keys: '', strategy: 'random', weights: '', intro_url: '' });        
+    const [keyPoolForm, setKeyPoolForm] = useState({ provider: '', provider_alias: '', api_keys: '', strategy: 'random', weights: '', intro_url: '', callback_mode: '' });        
     const [ossProviderPoolRows, setOssProviderPoolRows] = useState([]);        
     const [isOssProviderPoolLoading, setIsOssProviderPoolLoading] = useState(false);
     const [selectedOssProviderPoolId, setSelectedOssProviderPoolId] = useState('');
@@ -426,6 +426,7 @@ const UserAdmin = () => {
         category: 'LLM',
         provider: '',
         api_key: '',
+        callback_mode: '',
         base_url: '',
         model: '',
         base_model: '',
@@ -1584,6 +1585,12 @@ const UserAdmin = () => {
         return !!cfg?.strict_provider;
     };
 
+    const getSystemApiCallbackMode = (row) => {
+        const cfg = getSystemApiConfig(row);
+        const raw = String(cfg?.callback_mode || cfg?.callbackMode || '').trim().toLowerCase();
+        return raw === 'no_callback' || raw === '不支持回调' ? 'no_callback' : '';
+    };
+
     const getSystemApiRetryPriceGroup = (row) => {
         const cfg = getSystemApiConfig(row);
         return String(cfg?.retry_price_group || '').trim();
@@ -1665,6 +1672,14 @@ const UserAdmin = () => {
             baseConfig.moderation_aes_key = moderationAesKey;
         } else {
             delete baseConfig.moderation_aes_key;
+        }
+        const callbackMode = String(systemApiForm.callback_mode || '').trim();
+        const callbackCategory = String(systemApiForm.category || '').trim();
+        if ((callbackCategory === 'Image' || callbackCategory === 'Video') && callbackMode === 'no_callback') {
+            baseConfig.callback_mode = 'no_callback';
+        } else {
+            delete baseConfig.callback_mode;
+            delete baseConfig.callbackMode;
         }
         delete baseConfig.moderationEndpoint;
         delete baseConfig.moderationUserId;
@@ -2661,6 +2676,7 @@ const UserAdmin = () => {
                 category: 'LLM',
                 provider: '',
                 api_key: '',
+                callback_mode: '',
                 base_url: '',
                 model: '',
                 base_model: '',
@@ -2721,6 +2737,7 @@ const UserAdmin = () => {
             category: row.category || 'LLM',
             provider: row.provider || '',
             api_key: row.api_key || '',
+            callback_mode: getSystemApiCallbackMode(row),
             base_url: row.base_url || '',
             model: row.model || '',
             base_model: row.base_model || '',
@@ -3421,7 +3438,7 @@ const UserAdmin = () => {
 
     useEffect(() => {
         if (!selectedKeyPoolId) {
-            setKeyPoolForm({ provider: '', provider_alias: '', api_keys: '', strategy: 'random', weights: '', intro_url: '' });
+            setKeyPoolForm({ provider: '', provider_alias: '', api_keys: '', strategy: 'random', weights: '', intro_url: '', callback_mode: '' });
             return;
         }
         const row = providerKeyPoolRows.find((r) => String(r.id) === String(selectedKeyPoolId));
@@ -3433,6 +3450,7 @@ const UserAdmin = () => {
             strategy: row.strategy || 'random',
             weights: Array.isArray(row.weights) && row.weights.length ? row.weights.join('\n') : '',
             intro_url: row.intro_url || '',
+            callback_mode: row.callback_mode === 'no_callback' ? 'no_callback' : '',
         });
     }, [selectedKeyPoolId, providerKeyPoolRows]);
 
@@ -3542,6 +3560,7 @@ const UserAdmin = () => {
                 strategy: keyPoolForm.strategy || 'random',
                 weights: keyPoolForm.strategy === 'weighted' ? weights : undefined,
                 intro_url: String(keyPoolForm.intro_url || '').trim() || undefined,
+                callback_mode: keyPoolForm.callback_mode === 'no_callback' ? 'no_callback' : '',
             });
             await fetchProviderKeyPools();
             setSelectedKeyPoolId('');
@@ -3561,6 +3580,7 @@ const UserAdmin = () => {
                 strategy: keyPoolForm.strategy || 'random',
                 weights: keyPoolForm.strategy === 'weighted' ? weights : undefined,
                 intro_url: String(keyPoolForm.intro_url || '').trim() || undefined,
+                callback_mode: keyPoolForm.callback_mode === 'no_callback' ? 'no_callback' : '',
             });
             await fetchProviderKeyPools();
             alert(t('已更新', 'Updated'));
@@ -7698,6 +7718,18 @@ const UserAdmin = () => {
                                                             <option value="weighted">{t('权重随机', 'Weighted Random')}</option>
                                                         </select>
                                                     </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('图片/视频回调', 'Image/Video Callback')}</label>
+                                                        <select
+                                                            value={keyPoolForm.callback_mode || ''}
+                                                            onChange={(e) => setKeyPoolForm(f => ({ ...f, callback_mode: e.target.value }))}
+                                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                        >
+                                                            <option value="">{t('空', 'Empty')}</option>
+                                                            <option value="no_callback">{t('不支持回调', 'No callback')}</option>
+                                                        </select>
+                                                        <p className="mt-1 text-[11px] text-gray-500">{t('只作用于图片和视频。系统 API 留空时才用这里。不支持回调时提交后轮询。', 'Image and video only. Used when the system API row is empty. No callback means poll after submit.')}</p>
+                                                    </div>
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">{t('供应商介绍 URL', 'Provider Intro URL')}</label>
@@ -8783,6 +8815,20 @@ const UserAdmin = () => {
                                                     placeholder={t('可选', 'Optional')}
                                                 />
                                             </div>
+                                            {(systemApiForm.category === 'Image' || systemApiForm.category === 'Video') && (
+                                                <div className="md:col-span-2">
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">{t('回调', 'Callback')}</label>
+                                                    <select
+                                                        value={systemApiForm.callback_mode || ''}
+                                                        onChange={(e) => setSystemApiForm((prev) => ({ ...prev, callback_mode: e.target.value }))}
+                                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                    >
+                                                        <option value="">{t('空（跟随供应商）', 'Empty (follow provider)')}</option>
+                                                        <option value="no_callback">{t('不支持回调', 'No callback')}</option>
+                                                    </select>
+                                                    <p className="mt-1 text-[11px] text-gray-500">{t('空则跟随供应商。不支持回调时提交后轮询，不等待回调。', 'Empty follows the provider. No callback polls after submit and does not wait for a webhook.')}</p>
+                                                </div>
+                                            )}
                                             <div className="md:col-span-2">
                                                 <label className="block text-xs uppercase text-gray-400 mb-1">{t('素材审核密钥', 'Asset Moderation Key')}</label>
                                                 <input

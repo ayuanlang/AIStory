@@ -1355,9 +1355,7 @@ async def _run_generate_video(
             video_provider_options["_provider_task_id_callback"] = provider_task_id_callback
         if callable(provider_result_callback):
             video_provider_options["_provider_result_callback"] = provider_result_callback
-        video_provider_options["_request_user_id"] = int(getattr(current_user, "id", 0) or 0) or 1
         if (force_pure_callback_mode or _is_pure_callback_mode_enabled()) and provider_callback_ticket and provider_callback_url:
-            # NukoAi is poll-only: no upstream webhook. Never enable pure callback.
             from app.services.media_service import media_service as _media_svc
 
             if _media_svc._normalize_provider_name(resolved_video_provider, "Video") not in {
@@ -1367,6 +1365,7 @@ async def _run_generate_video(
                 "globalaiopc",
             }:
                 video_provider_options["_pure_callback_mode"] = True
+        video_provider_options["_request_user_id"] = int(getattr(current_user, "id", 0) or 0) or 1
         is_kie_kling3_video = bool(
             resolved_video_provider == "kie"
             and resolved_video_model in {"kling-3.0/video", "kling3", "kling-3.0", "kling-3-0"}

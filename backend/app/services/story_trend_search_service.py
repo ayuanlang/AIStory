@@ -19,6 +19,7 @@ from app.models.all_models import ProviderKeyPool, SystemAPISetting
 
 
 logger = logging.getLogger(__name__)
+_tools_key_cursors: Dict[str, int] = {}
 
 BJ_TZ = timezone(timedelta(hours=8))
 BROWSER_USER_AGENT = (
@@ -924,12 +925,48 @@ def _normalize_api_keys(value: Any) -> List[str]:
     return out
 
 
-def resolve_tools_provider_api_key(provider: str, *, env_fallback: str = "") -> str:
-    """Resolve Tools provider API key from provider key pool, system API row, then env."""
+def _select_tools_api_key(
+    keys: List[str],
+    strategy: Any = None,
+    weights: Any = None,
+    cursor_key: str = "default",
+) -> str:
+    if not keys:
+        return ""
+    if len(keys) == 1:
+        return keys[0]
+    resolved = str(strategy or "random").strip().lower()
+    if resolved == "round_robin":
+        cursor = int(_tools_key_cursors.get(cursor_key, 0))
+        selected = keys[cursor % len(keys)]
+        _tools_key_cursors[cursor_key] = cursor + 1
+        return selected
+    if resolved == "weighted" and isinstance(weights, list) and weights:
+        parsed: List[float] = []
+        for index, _key in enumerate(keys):
+            try:
+                weight = float(weights[index]) if index < len(weights) else 1.0
+            except Exception:
+                weight = 1.0
+            parsed.append(weight if weight > 0 else 1.0)
+        return random.choices(keys, weights=parsed, k=1)[0]
+    return random.choice(keys)
+
+
+def _ordered_tools_api_keys(provider: str, *, primary: str = "", env_fallback: str = "") -> List[str]:
+    """System API key first, then the provider pool, then the environment fallback."""
     provider_norm = str(provider or "").strip().lower()
-    env_key = str(env_fallback or "").strip()
+    ordered: List[str] = []
+
+    def _add(value: Any) -> None:
+        for key in _normalize_api_keys(value):
+            if key not in ordered:
+                ordered.append(key)
+
+    _add(primary)
     if not provider_norm:
-        return env_key
+        _add(env_fallback)
+        return ordered
     try:
         with SessionLocal() as db:
             row = (
@@ -942,27 +979,39 @@ def resolve_tools_provider_api_key(provider: str, *, env_fallback: str = "") -> 
                 .order_by(SystemAPISetting.is_active.desc(), SystemAPISetting.id.asc())
                 .first()
             )
-            fallback_key = str(getattr(row, "api_key", "") or "").strip() if row else ""
+            _add(getattr(row, "api_key", None) if row else None)
 
             pool_row = (
                 db.query(ProviderKeyPool)
                 .filter(func.lower(func.trim(func.coalesce(ProviderKeyPool.provider, ""))) == provider_norm)
                 .first()
             )
-            if pool_row and pool_row.api_keys:
-                pooled = _normalize_api_keys(pool_row.api_keys)
-                if pooled:
-                    return random.choice(pooled)
-
-            if fallback_key:
-                return fallback_key
+            pooled = _normalize_api_keys(pool_row.api_keys) if pool_row and pool_row.api_keys else []
+            remaining = [key for key in pooled if key not in ordered]
+            if remaining:
+                if not ordered:
+                    chosen = _select_tools_api_key(
+                        remaining,
+                        getattr(pool_row, "strategy", None),
+                        getattr(pool_row, "weights", None),
+                        cursor_key=provider_norm,
+                    )
+                    _add(chosen)
+                _add(remaining)
     except Exception as exc:
         logger.warning(
             "[ai_short_drama_search] Failed to resolve %s API key from system settings: %s",
             provider_norm,
             exc,
         )
-    return env_key
+    _add(env_fallback)
+    return ordered
+
+
+def resolve_tools_provider_api_key(provider: str, *, env_fallback: str = "") -> str:
+    """Resolve one Tools API key: system row first, then provider pool, then env."""
+    keys = _ordered_tools_api_keys(provider, env_fallback=env_fallback)
+    return keys[0] if keys else ""
 
 
 def resolve_search_api_keys() -> Dict[str, str]:
@@ -977,18 +1026,28 @@ def resolve_serper_api_key() -> str:
     return resolve_search_api_keys().get("serper", "")
 
 def _search_serper(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_PER_QUERY) -> List[Dict[str, str]]:
-    api_key = str(api_key or resolve_serper_api_key()).strip()
-    if not api_key:
+    keys = _ordered_tools_api_keys(
+        "serper",
+        primary=api_key,
+        env_fallback=str(getattr(settings, "SERPER_API_KEY", "") or ""),
+    )
+    if not keys:
         return []
     results: List[Dict[str, str]] = []
     try:
-        response = requests.post(
-            SERPER_API_URL,
-            headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-            json={"q": query, "gl": "cn", "hl": "zh-cn", "num": max(3, min(limit, 10))},
-            timeout=20,
-        )
-        if response.status_code != 200:
+        response = None
+        for index, key in enumerate(keys):
+            response = requests.post(
+                SERPER_API_URL,
+                headers={"X-API-KEY": key, "Content-Type": "application/json"},
+                json={"q": query, "gl": "cn", "hl": "zh-cn", "num": max(3, min(limit, 10))},
+                timeout=20,
+            )
+            if response.status_code == 401 and index + 1 < len(keys):
+                logger.warning("[ai_short_drama_search] Serper api key rejected, try provider pool | query=%s", query)
+                continue
+            break
+        if response is None or response.status_code != 200:
             logger.warning(
                 "[ai_short_drama_search] Serper search failed query=%s status=%s",
                 query,
@@ -1016,28 +1075,38 @@ def _search_serper(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_
 
 
 def _search_brave(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_PER_QUERY) -> List[Dict[str, str]]:
-    api_key = str(api_key or resolve_search_api_keys().get("brave", "")).strip()
-    if not api_key:
+    keys = _ordered_tools_api_keys(
+        "brave",
+        primary=api_key,
+        env_fallback=str(getattr(settings, "BRAVE_SEARCH_API_KEY", "") or ""),
+    )
+    if not keys:
         return []
     results: List[Dict[str, str]] = []
     try:
-        response = requests.get(
-            BRAVE_SEARCH_API_URL,
-            headers={
-                "Accept": "application/json",
-                "Accept-Encoding": "gzip",
-                "X-Subscription-Token": api_key,
-            },
-            params={
-                "q": query,
-                "count": max(3, min(limit, 20)),
-                "search_lang": "zh-hans",
-                "country": "CN",
-                "extra_snippets": "true",
-            },
-            timeout=20,
-        )
-        if response.status_code != 200:
+        response = None
+        for index, key in enumerate(keys):
+            response = requests.get(
+                BRAVE_SEARCH_API_URL,
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                    "X-Subscription-Token": key,
+                },
+                params={
+                    "q": query,
+                    "count": max(3, min(limit, 20)),
+                    "search_lang": "zh-hans",
+                    "country": "CN",
+                    "extra_snippets": "true",
+                },
+                timeout=20,
+            )
+            if response.status_code == 401 and index + 1 < len(keys):
+                logger.warning("[ai_short_drama_search] Brave api key rejected, try provider pool | query=%s", query)
+                continue
+            break
+        if response is None or response.status_code != 200:
             logger.warning(
                 "[ai_short_drama_search] Brave search failed query=%s status=%s",
                 query,
@@ -1071,8 +1140,12 @@ def _search_brave(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_P
 
 
 def _search_tavily(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_PER_QUERY) -> List[Dict[str, Any]]:
-    api_key = str(api_key or resolve_search_api_keys().get("tavily", "")).strip()
-    if not api_key:
+    keys = _ordered_tools_api_keys(
+        "tavily",
+        primary=api_key,
+        env_fallback=str(getattr(settings, "TAVILY_API_KEY", "") or ""),
+    )
+    if not keys:
         return []
     results: List[Dict[str, Any]] = []
     depth = str(getattr(settings, "TAVILY_SEARCH_DEPTH", "") or os.getenv("TAVILY_SEARCH_DEPTH", "advanced") or "advanced").strip().lower()
@@ -1082,23 +1155,29 @@ def _search_tavily(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_
     excerpt_limit = resolve_excerpt_max_len()
     snippet_limit = resolve_snippet_max_len()
     try:
-        response = requests.post(
-            TAVILY_SEARCH_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "query": query,
-                "max_results": max(3, min(limit, 10)),
-                "search_depth": depth,
-                "topic": "general",
-                "include_answer": False,
-                "include_raw_content": include_raw,
-            },
-            timeout=35,
-        )
-        if response.status_code != 200:
+        response = None
+        for index, key in enumerate(keys):
+            response = requests.post(
+                TAVILY_SEARCH_API_URL,
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "query": query,
+                    "max_results": max(3, min(limit, 10)),
+                    "search_depth": depth,
+                    "topic": "general",
+                    "include_answer": False,
+                    "include_raw_content": include_raw,
+                },
+                timeout=35,
+            )
+            if response.status_code == 401 and index + 1 < len(keys):
+                logger.warning("[ai_short_drama_search] Tavily api key rejected, try provider pool | query=%s", query)
+                continue
+            break
+        if response is None or response.status_code != 200:
             logger.warning(
                 "[ai_short_drama_search] Tavily search failed query=%s status=%s",
                 query,

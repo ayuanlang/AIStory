@@ -1,7 +1,62 @@
 import React from 'react';
 import Markdown from 'react-markdown';
 import { getUiLang, tUI } from '../lib/uiLang';
+import { ASSET_BASE_URL, BASE_URL } from '../config';
 import { X, Copy } from 'lucide-react';
+
+const MEDIA_PART_TYPES = new Set([
+  'image_url', 'input_image', 'image',
+  'video_url', 'input_video', 'video',
+  'audio_url', 'input_audio', 'audio',
+  'file', 'input_file', 'file_url',
+]);
+
+function pickUrl(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'object') {
+    for (const key of ['url', 'file_url', 'image_url', 'video_url', 'audio_url']) {
+      const candidate = value[key];
+      if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    }
+  }
+  return '';
+}
+
+function attachmentRawUrl(part) {
+  if (!part || typeof part !== 'object') return '';
+  return (
+    pickUrl(part.image_url)
+    || pickUrl(part.video_url)
+    || pickUrl(part.audio_url)
+    || pickUrl(part.file_url)
+    || pickUrl(part.file)
+    || pickUrl(part.source)
+    || pickUrl(part.url)
+    || ''
+  );
+}
+
+function toOpenableUrl(raw) {
+  const url = String(raw || '').trim();
+  if (!url || url.includes('BASE64_STRIPPED')) return '';
+  if (/^https?:\/\//i.test(url) || url.startsWith('blob:') || url.startsWith('data:')) return url;
+  if (url.startsWith('/')) {
+    const base = String(
+      ASSET_BASE_URL
+      || BASE_URL
+      || (typeof window !== 'undefined' ? window.location.origin : '')
+    ).replace(/\/+$/, '');
+    return base ? `${base}${url}` : url;
+  }
+  return '';
+}
+
+function looksLikeImage(href) {
+  if (/^data:image\//i.test(href)) return true;
+  const path = String(href || '').split('?')[0].split('#')[0];
+  return /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(path);
+}
 
 export default function LlmLogViewer({ log, onClose }) {
   const uiLang = getUiLang();
@@ -80,21 +135,56 @@ export default function LlmLogViewer({ log, onClose }) {
     completionContent = responseObj.partial_content;
   }
 
+  const renderAttachment = (part, key) => {
+    const raw = attachmentRawUrl(part);
+    const href = toOpenableUrl(raw);
+    if (!href) {
+      return (
+        <div key={key} className="mt-2 text-xs text-gray-400 break-all">
+          {raw
+            ? t(`附件无法打开：${String(raw).slice(0, 180)}`, `Attachment cannot be opened: ${String(raw).slice(0, 180)}`)
+            : t('附件没有链接', 'Attachment has no URL')}
+        </div>
+      );
+    }
+    return (
+      <div key={key} className="mt-2 space-y-2">
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block text-xs text-sky-300 hover:text-sky-200 hover:underline break-all"
+        >
+          {href}
+        </a>
+        {looksLikeImage(href) ? (
+          <a href={href} target="_blank" rel="noopener noreferrer" className="inline-block">
+            <img src={href} alt="" className="max-h-56 max-w-full rounded-lg border border-white/10 object-contain bg-black/40" />
+          </a>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderMessageContent = (content) => {
     if (typeof content === 'string') return <div className="prose prose-invert max-w-none prose-sm"><Markdown>{content}</Markdown></div>;
     if (Array.isArray(content)) {
       return content.map((c, i) => {
-        if (c.type === 'text' || c.type === 'input_text' || c.type === 'output_text') {
+        if (!c || typeof c !== 'object') return <div key={i}>{String(c ?? '')}</div>;
+        const type = String(c.type || '').toLowerCase();
+        if (type === 'text' || type === 'input_text' || type === 'output_text') {
           return <div key={i} className="prose prose-invert max-w-none prose-sm overflow-x-auto break-words"><Markdown>{c.text || ''}</Markdown></div>;
         }
-        if (c.type === 'image_url' || c.type === 'input_image') {
-          const url = typeof c.image_url === 'string' ? c.image_url : (c.image_url?.url || '');
-          return <div key={i} className="mt-2 opacity-50 text-xs truncate">[Image URL: {url ? url.substring(0, 80) : ''}...]</div>;
+        if (MEDIA_PART_TYPES.has(type) || (!type && attachmentRawUrl(c))) {
+          return renderAttachment(c, i);
         }
-        return <div key={i}>{JSON.stringify(c)}</div>;
+        return <div key={i} className="text-xs break-all">{JSON.stringify(c)}</div>;
       });
     }
-    return <div>{JSON.stringify(content)}</div>;
+    if (content && typeof content === 'object' && (MEDIA_PART_TYPES.has(String(content.type || '').toLowerCase()) || attachmentRawUrl(content))) {
+      return renderAttachment(content, 'attachment');
+    }
+    return <div className="text-xs break-all">{JSON.stringify(content)}</div>;
   };
 
   const handleCopy = async (e, text) => {

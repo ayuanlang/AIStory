@@ -1527,12 +1527,52 @@ Output ONLY the JSON object now."""
             result.append(key)
         return result
 
+    def _select_api_key_from_list(
+        self,
+        keys: List[str],
+        strategy: Any = None,
+        weights: Any = None,
+        cursor_key: str = "default",
+    ) -> str:
+        if not keys:
+            return ""
+        if len(keys) == 1:
+            return keys[0]
+        resolved = str(strategy or "random").strip().lower()
+        if resolved not in {"random", "round_robin", "weighted"}:
+            resolved = "random"
+        if resolved == "round_robin":
+            cursor = int(self._provider_key_cursors.get(cursor_key, 0))
+            selected = keys[cursor % len(keys)]
+            self._provider_key_cursors[cursor_key] = cursor + 1
+            return selected
+        if resolved == "weighted" and isinstance(weights, list) and weights:
+            parsed: List[float] = []
+            for i in range(len(keys)):
+                try:
+                    weight = float(weights[i]) if i < len(weights) else 1.0
+                except Exception:
+                    weight = 1.0
+                parsed.append(weight if weight > 0 else 1.0)
+            return random.choices(keys, weights=parsed, k=1)[0]
+        return random.choice(keys)
+
     def _pick_runtime_api_key(self, config_value: Any, fallback_key: Any = None, session=None, provider_name: str = None) -> str:
-        """Pick a runtime API key.
-        If session + provider_name given, reads key pool from provider_key_pool table.
-        Otherwise falls back to legacy config dict reading (for backward compat).
-        """
-        # New path: read from provider_key_pool table
+        """Use system_api_settings.api_key first. The provider pool is only for an empty key."""
+        cfg = self._safe_json_dict_or_none(config_value) or {}
+        strategy = str(cfg.get("provider_api_key_strategy") or "random").strip().lower()
+        weights = cfg.get("provider_api_key_weights")
+        cursor_base = str(cfg.get("provider") or cfg.get("__provider") or provider_name or "default").strip().lower() or "default"
+
+        explicit_pool = self._normalize_api_keys(fallback_key)
+        if explicit_pool:
+            return self._select_api_key_from_list(
+                explicit_pool,
+                strategy,
+                weights,
+                cursor_key=f"{cursor_base}:system",
+            )
+
         if session and provider_name:
             prov = str(provider_name or "").strip().lower()
             if prov:
@@ -1540,49 +1580,17 @@ Output ONLY the JSON object now."""
                 if record and record.api_keys:
                     pooled = self._normalize_api_keys(record.api_keys)
                     if pooled:
-                        strategy = str(record.strategy or "random").strip().lower()
-                        if strategy == "round_robin":
-                            cursor = int(self._provider_key_cursors.get(prov, 0))
-                            selected = pooled[cursor % len(pooled)]
-                            self._provider_key_cursors[prov] = cursor + 1
-                            return selected
-                        if strategy == "weighted":
-                            raw_weights = record.weights
-                            if isinstance(raw_weights, list) and raw_weights:
-                                weights = []
-                                for i in range(len(pooled)):
-                                    try:
-                                        w = float(raw_weights[i]) if i < len(raw_weights) else 1.0
-                                    except Exception:
-                                        w = 1.0
-                                    weights.append(w if w > 0 else 1.0)
-                                return random.choices(pooled, weights=weights, k=1)[0]
-                        return random.choice(pooled)
+                        return self._select_api_key_from_list(
+                            pooled,
+                            record.strategy,
+                            record.weights,
+                            cursor_key=prov,
+                        )
 
-        # Legacy fallback: read from config dict
-        cfg = self._safe_json_dict_or_none(config_value) or {}
         pooled = self._normalize_api_keys(cfg.get("provider_api_keys"))
         if pooled:
-            strategy = str(cfg.get("provider_api_key_strategy") or "random").strip().lower()
-            if strategy == "round_robin":
-                cursor_key = str(cfg.get("provider") or cfg.get("__provider") or "default")
-                cursor = int(self._provider_key_cursors.get(cursor_key, 0))
-                selected = pooled[cursor % len(pooled)]
-                self._provider_key_cursors[cursor_key] = cursor + 1
-                return selected
-            if strategy == "weighted":
-                raw_weights = cfg.get("provider_api_key_weights")
-                if isinstance(raw_weights, list) and raw_weights:
-                    weights = []
-                    for i in range(len(pooled)):
-                        try:
-                            w = float(raw_weights[i]) if i < len(raw_weights) else 1.0
-                        except Exception:
-                            w = 1.0
-                        weights.append(w if w > 0 else 1.0)
-                    return random.choices(pooled, weights=weights, k=1)[0]
-            return random.choice(pooled)
-        return str(fallback_key or "").strip()
+            return self._select_api_key_from_list(pooled, strategy, weights, cursor_key=cursor_base)
+        return ""
 
     def get_api_config(self, provider: str, user_id: int = 1, category: Optional[str] = None) -> Dict[str, Any]:
         """

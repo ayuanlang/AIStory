@@ -864,6 +864,7 @@ class ProviderKeyPool(Base):
     strategy = Column(String, default="random")   # random / round_robin / weighted
     weights = Column(JSON, default=[])            # Weights list when strategy=weighted
     intro_url = Column(String, nullable=True)     # Provider API documentation URL
+    callback_mode = Column(String, nullable=True)  # empty | no_callback; image/video, used when the system row is empty
     created_at = Column(String, default=now_bj_iso)
     updated_at = Column(String, default=now_bj_iso)
 

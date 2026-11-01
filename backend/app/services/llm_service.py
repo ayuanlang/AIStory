@@ -577,6 +577,71 @@ class LLMService:
             return True
         return any(marker in text for marker in self._IMMEDIATE_FALLBACK_MARKERS)
 
+    def _is_api_key_auth_error(self, error: Any, *, status_code: Any = None) -> bool:
+        try:
+            status = int(status_code)
+        except Exception:
+            status = 0
+        if status in {408, 429, 500, 502, 503}:
+            return False
+        if status == 401:
+            return True
+        text = str(error or "").lower()
+        if not text:
+            return False
+        markers = (
+            "apikey error",
+            "api key error",
+            "invalid api key",
+            "invalid_api_key",
+            "incorrect api key",
+            "authentication",
+            "unauthorized",
+            "鉴权失败",
+            "401",
+        )
+        return any(marker in text for marker in markers)
+
+    def _claim_next_provider_pool_key(self, provider: Any, current_key: Any, extra_config: Dict[str, Any]) -> str:
+        """After system_api_settings.api_key fails auth, take the next provider-pool key."""
+        if not isinstance(extra_config, dict):
+            return ""
+        tried = extra_config.setdefault("__tried_api_keys", [])
+        if not isinstance(tried, list):
+            tried = []
+            extra_config["__tried_api_keys"] = tried
+        current = str(current_key or "").strip()
+        if current and current not in tried:
+            tried.append(current)
+
+        configured: List[str] = []
+        raw_pool = extra_config.get("provider_api_keys")
+        if isinstance(raw_pool, list):
+            configured = [str(item or "").strip() for item in raw_pool if str(item or "").strip()]
+
+        provider_norm = str(provider or extra_config.get("__provider") or "").strip().lower()
+        if not configured and provider_norm:
+            try:
+                from app.db.session import SessionLocal
+                from app.models.all_models import ProviderKeyPool
+
+                with SessionLocal() as session:
+                    record = session.query(ProviderKeyPool).filter(ProviderKeyPool.provider == provider_norm).first()
+                    raw_keys = getattr(record, "api_keys", None) if record is not None else None
+                    if isinstance(raw_keys, list):
+                        configured = [str(item or "").strip() for item in raw_keys if str(item or "").strip()]
+                    elif isinstance(raw_keys, str) and raw_keys.strip():
+                        configured = [part.strip() for part in raw_keys.replace(",", "\n").splitlines() if part.strip()]
+            except Exception as exc:
+                logger.warning("LLM provider pool lookup failed | provider=%s err=%s", provider_norm, exc)
+                configured = []
+
+        for key in configured:
+            if key and key not in tried:
+                tried.append(key)
+                return key
+        return ""
+
     def _result_requests_immediate_fallback(self, result: Any, content: str = "") -> bool:
         """True only for an upstream failure, not for story text that happens to contain the phrase."""
         if isinstance(result, dict) and result.get("_immediate_fallback"):
@@ -3259,7 +3324,20 @@ class LLMService:
                      base_url = f"{base_url}/v1"
             
         if provider == "kie" and resolved_category == "LLM" and not use_claude_api:
-            return await self._raw_kie_llm_request_full(base_url, api_key, model, messages, extra_config)
+            try:
+                return await self._raw_kie_llm_request_full(base_url, api_key, model, messages, extra_config)
+            except Exception as exc:
+                if self._is_api_key_auth_error(exc):
+                    next_key = self._claim_next_provider_pool_key(provider, api_key, extra_config)
+                    if next_key:
+                        logger.warning(
+                            "LLM api key rejected, retry provider pool | provider=%s model=%s key_tail=%s",
+                            provider,
+                            model,
+                            next_key[-4:],
+                        )
+                        return await self._raw_llm_request_full(base_url, next_key, model, messages, extra_config)
+                raise
         if provider == "grsai" and resolved_category == "LLM":
             base_url = self._normalize_grsai_llm_base_url(base_url)
 
@@ -3574,6 +3652,16 @@ class LLMService:
             })
             raw_reason = f"API Error {response.status_code} [provider={provider}, model={model}, endpoint={url}, setting_id={resolved_setting_id}, source={resolved_source}]: {response.text}"
             wrapped = self._vendor_failed_message(provider, raw_reason)
+            if self._is_api_key_auth_error(wrapped, status_code=response.status_code):
+                next_key = self._claim_next_provider_pool_key(provider, api_key, extra_config)
+                if next_key:
+                    logger.warning(
+                        "LLM api key rejected, retry provider pool | provider=%s model=%s key_tail=%s",
+                        provider,
+                        model,
+                        next_key[-4:],
+                    )
+                    return await self._raw_llm_request_full(base_url, next_key, model, messages, extra_config)
             if self._is_immediate_provider_fallback_error(wrapped, status_code=response.status_code):
                 raise ImmediateLLMFallbackError(wrapped)
             raise Exception(wrapped)
@@ -4007,6 +4095,25 @@ class LLMService:
                             provider,
                             f"API Error {response.status_code}: {error_text}",
                         )
+                        if self._is_api_key_auth_error(wrapped, status_code=status_code):
+                            next_key = self._claim_next_provider_pool_key(provider, api_key, extra_config)
+                            if next_key:
+                                self._abandon_open_stream(response)
+                                logger.warning(
+                                    "LLM api key rejected, retry provider pool | provider=%s model=%s key_tail=%s",
+                                    provider,
+                                    payload.get("model") or model,
+                                    next_key[-4:],
+                                )
+                                async for chunk in self._raw_llm_request_stream(
+                                    base_url,
+                                    next_key,
+                                    model,
+                                    messages,
+                                    extra_config,
+                                ):
+                                    yield chunk
+                                return
                         if unread_refusal or self._is_immediate_provider_fallback_error(wrapped, status_code=status_code):
                             self._abandon_open_stream(response)
                             raise ImmediateLLMFallbackError(wrapped)

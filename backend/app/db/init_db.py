@@ -1370,6 +1370,20 @@ def check_and_migrate_tables(*, critical_only: bool = False):
         except Exception as e:
             logger.error(f"Failed to ensure provider_key_pool.provider_alias column: {e}")
 
+        # Image/video callback override. Empty means unset; no_callback forces polling.
+        try:
+            inspector = inspect(engine)
+            existing_pool_cols = {c['name'] for c in inspector.get_columns('provider_key_pool')} if inspector.has_table('provider_key_pool') else set()
+            if 'callback_mode' not in existing_pool_cols:
+                with engine.begin() as conn:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE provider_key_pool ADD COLUMN IF NOT EXISTS callback_mode VARCHAR"))
+                    else:
+                        conn.execute(text("ALTER TABLE provider_key_pool ADD COLUMN callback_mode VARCHAR"))
+                logger.info("Ensured provider_key_pool.callback_mode column")
+        except Exception as e:
+            logger.error(f"Failed to ensure provider_key_pool.callback_mode column: {e}")
+
         # Ensure oss_provider_pools table exists for OSS admin/storage routing.
         try:
             if DeletedMedia is not None and not inspector.has_table("deleted_media"):

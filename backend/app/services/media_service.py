@@ -5345,38 +5345,52 @@ class MediaGenerationService:
             result.append(key)
         return result
 
+    def _select_api_key_from_list(
+        self,
+        keys: List[str],
+        strategy: Any = None,
+        weights: Any = None,
+        cursor_key: str = "default",
+    ) -> str:
+        if not keys:
+            return ""
+        if len(keys) == 1:
+            return keys[0]
+        resolved = str(strategy or "random").strip().lower()
+        if resolved not in {"random", "round_robin", "weighted"}:
+            resolved = "random"
+        if resolved == "round_robin":
+            cursor = int(self._provider_key_cursors.get(cursor_key, 0))
+            selected = keys[cursor % len(keys)]
+            self._provider_key_cursors[cursor_key] = cursor + 1
+            return selected
+        if resolved == "weighted" and isinstance(weights, list) and weights:
+            parsed: List[float] = []
+            for i in range(len(keys)):
+                try:
+                    weight = float(weights[i]) if i < len(weights) else 1.0
+                except Exception:
+                    weight = 1.0
+                parsed.append(weight if weight > 0 else 1.0)
+            return random.choices(keys, weights=parsed, k=1)[0]
+        return random.choice(keys)
+
     def _pick_runtime_api_key(self, config_value: Any, fallback_key: Any = None, session=None, provider_name: str = None) -> str:
+        """Use system_api_settings.api_key first. The provider pool is only for an empty key."""
         cfg = self._safe_json_dict(config_value)
         strategy = str(cfg.get("provider_api_key_strategy") or "random").strip().lower()
+        weights = cfg.get("provider_api_key_weights")
+        cursor_base = str(cfg.get("provider") or cfg.get("__provider") or provider_name or "default").strip().lower() or "default"
 
-        def _pick_from_pool(keys: List[str]) -> str:
-            if not keys:
-                return ""
-            if strategy == "round_robin":
-                cursor_key = str(cfg.get("provider") or cfg.get("__provider") or "default")
-                cursor = int(self._provider_key_cursors.get(cursor_key, 0))
-                selected = keys[cursor % len(keys)]
-                self._provider_key_cursors[cursor_key] = cursor + 1
-                return selected
-            if strategy == "weighted":
-                raw_weights = cfg.get("provider_api_key_weights")
-                if isinstance(raw_weights, list) and raw_weights:
-                    weights = []
-                    for i in range(len(keys)):
-                        try:
-                            w = float(raw_weights[i]) if i < len(raw_weights) else 1.0
-                        except Exception:
-                            w = 1.0
-                        weights.append(w if w > 0 else 1.0)
-                    return random.choices(keys, weights=weights, k=1)[0]
-            return random.choice(keys)
-
-        # 1. 优先使用系统配置自带的 API Key (system_api_settings.api_key)
         explicit_pool = self._normalize_api_keys(fallback_key)
         if explicit_pool:
-            return _pick_from_pool(explicit_pool)
+            return self._select_api_key_from_list(
+                explicit_pool,
+                strategy,
+                weights,
+                cursor_key=f"{cursor_base}:system",
+            )
 
-        # 2. 如果系统配置为空，尝试从 ProviderKeyPool (直接查询) 获取
         if session and provider_name:
             prov = str(provider_name or "").strip().lower()
             if prov:
@@ -5384,32 +5398,18 @@ class MediaGenerationService:
                 if record and record.api_keys:
                     pooled = self._normalize_api_keys(record.api_keys)
                     if pooled:
-                        # 对于 ProviderKeyPool 的情况，覆盖上面的 strategy 为表内的策略
-                        strategy = str(record.strategy or "random").strip().lower()
-                        if strategy == "round_robin":
-                            cursor = int(self._provider_key_cursors.get(prov, 0))
-                            selected = pooled[cursor % len(pooled)]
-                            self._provider_key_cursors[prov] = cursor + 1
-                            return selected
-                        if strategy == "weighted":
-                            raw_weights = record.weights
-                            if isinstance(raw_weights, list) and raw_weights:
-                                weights = []
-                                for i in range(len(pooled)):
-                                    try:
-                                        w = float(raw_weights[i]) if i < len(raw_weights) else 1.0
-                                    except Exception:
-                                        w = 1.0
-                                    weights.append(w if w > 0 else 1.0)
-                                return random.choices(pooled, weights=weights, k=1)[0]
-                        return random.choice(pooled)
+                        return self._select_api_key_from_list(
+                            pooled,
+                            record.strategy,
+                            record.weights,
+                            cursor_key=prov,
+                        )
 
-        # 3. 兼容配置字典中的 provider_api_keys
         pooled = self._normalize_api_keys(cfg.get("provider_api_keys"))
         if pooled:
-            return _pick_from_pool(pooled)
+            return self._select_api_key_from_list(pooled, strategy, weights, cursor_key=cursor_base)
 
-        return str(fallback_key or "").strip()
+        return ""
 
     def _collect_provider_key_pool_bundle(self, session, category: str, provider: str) -> Dict[str, Any]:
         prov = str(provider or "").strip().lower()
@@ -6395,6 +6395,9 @@ class MediaGenerationService:
             provider_pool_bundle = provider_bundle_cache.get(provider) or {}
 
             merged_config = self._safe_json_dict(row.config)
+            system_keys = self._normalize_api_keys(getattr(row, "api_key", None))
+            if system_keys:
+                merged_config["system_api_keys"] = system_keys
             pooled_keys = self._normalize_api_keys(provider_pool_bundle.get("provider_api_keys"))
             if pooled_keys:
                 merged_config["provider_api_keys"] = pooled_keys
@@ -6465,15 +6468,27 @@ class MediaGenerationService:
             runtime_inner_cfg.setdefault("provider", provider)
             runtime_inner_cfg.setdefault("__provider", provider)
 
+        system_keys = self._normalize_api_keys(runtime_inner_cfg.get("system_api_keys"))
         provider_key_pool = self._normalize_api_keys(runtime_inner_cfg.get("provider_api_keys"))
-        fallback_key_pool = self._normalize_api_keys(runtime_config.get("api_key"))
-        selectable_key_pool = provider_key_pool or fallback_key_pool
-
-        runtime_config["api_key"] = self._pick_runtime_api_key(
-            runtime_inner_cfg,
-            selectable_key_pool if selectable_key_pool else runtime_config.get("api_key"),
-        )
+        current_key = str(runtime_config.get("api_key") or "").strip()
+        if system_keys:
+            selected_key = current_key if current_key in system_keys else self._pick_runtime_api_key(
+                runtime_inner_cfg,
+                system_keys,
+            )
+        elif current_key:
+            selected_key = current_key
+        elif provider_key_pool:
+            selected_key = self._pick_runtime_api_key(runtime_inner_cfg, None)
+        else:
+            selected_key = ""
+        runtime_config["api_key"] = selected_key
         runtime_config["config"] = runtime_inner_cfg
+        retry_keys: List[str] = []
+        for candidate_key in [*system_keys, *provider_key_pool]:
+            candidate_text = str(candidate_key or "").strip()
+            if candidate_text and candidate_text != selected_key and candidate_text not in retry_keys:
+                retry_keys.append(candidate_text)
 
         def _is_auth_key_error(result: Dict[str, Any]) -> bool:
             if not isinstance(result, dict):
@@ -6881,10 +6896,8 @@ class MediaGenerationService:
 
         first_result = await _dispatch_with_config(runtime_config)
 
-        # When upstream rejects current key (e.g. "apikey error"), rotate within pool and retry.
-        if bool((first_result or {}).get("submit_failed")) and _is_auth_key_error(first_result) and len(selectable_key_pool) > 1:
-            selected_key = str(runtime_config.get("api_key") or "").strip()
-            retry_keys = [k for k in selectable_key_pool if str(k or "").strip() and str(k).strip() != selected_key]
+        # System key is tried first. On an auth failure, try remaining system keys, then the provider pool.
+        if bool((first_result or {}).get("submit_failed")) and _is_auth_key_error(first_result) and retry_keys:
             last_result = first_result
             for idx, alt_key in enumerate(retry_keys, start=1):
                 retry_config = dict(runtime_config)
@@ -6973,11 +6986,23 @@ class MediaGenerationService:
         if isinstance((api_config or {}).get("__request_provider_options"), dict):
             request_provider_options = dict((api_config or {}).get("__request_provider_options") or {})
 
-        def _merge_request_provider_options(config_obj: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        def _merge_request_provider_options(config_obj: Optional[Dict[str, Any]], provider_name: Optional[str] = None) -> Dict[str, Any]:
             merged_config_obj = dict(config_obj or {})
             if request_provider_options:
                 merged_inner = self._safe_json_dict(merged_config_obj.get("config"))
                 merged_inner.update(request_provider_options)
+                merged_config_obj["config"] = merged_inner
+            if str(category or "").strip() in {"Image", "Video"}:
+                attempt_provider = str(provider_name or merged_config_obj.get("provider") or effective_provider or "").strip()
+                merged_inner = self._safe_json_dict(merged_config_obj.get("config"))
+                if self.image_video_callback_disabled(merged_config_obj, attempt_provider, category):
+                    merged_inner["_callback_unsupported"] = True
+                    merged_inner.pop("_pure_callback_mode", None)
+                    merged_inner.pop("_provider_callback_url", None)
+                    for callback_key in ("webhookUrl", "webHook", "webhook", "callBackUrl", "callback_url", "callbackUrl"):
+                        merged_inner.pop(callback_key, None)
+                else:
+                    merged_inner.pop("_callback_unsupported", None)
                 merged_config_obj["config"] = merged_inner
             return merged_config_obj
 
@@ -7157,7 +7182,7 @@ class MediaGenerationService:
                 first = multi_ref_target[0]
                 attempt_items.append({
                     "provider": first.get("provider"),
-                    "config": _merge_request_provider_options(first.get("config")),
+                    "config": _merge_request_provider_options(first.get("config"), first.get("provider")),
                     "tag": "multi_ref_default",
                 })
 
@@ -7172,21 +7197,21 @@ class MediaGenerationService:
             for c in fallback_candidates:
                 attempt_items.append({
                     "provider": c.get("provider"),
-                    "config": _merge_request_provider_options(c.get("config")),
+                    "config": _merge_request_provider_options(c.get("config"), c.get("provider")),
                     "tag": "group_fallback",
                 })
         elif strategy == self.USER_API_STRATEGY_LOW_PRICE_REPLACE:
             for c in fallback_candidates:
                 attempt_items.append({
                     "provider": c.get("provider"),
-                    "config": _merge_request_provider_options(c.get("config")),
+                    "config": _merge_request_provider_options(c.get("config"), c.get("provider")),
                     "tag": "priority_fallback",
                 })
         elif smart_enabled and legacy_strategy:
             for c in fallback_candidates:
                 attempt_items.append({
                     "provider": c.get("provider"),
-                    "config": _merge_request_provider_options(c.get("config")),
+                    "config": _merge_request_provider_options(c.get("config"), c.get("provider")),
                     "tag": "priority_fallback",
                 })
 
@@ -7232,7 +7257,7 @@ class MediaGenerationService:
                 continue
 
             selected_provider = self._normalize_provider_name(attempt.get("provider"), category)
-            selected_config = _merge_request_provider_options(attempt.get("config"))
+            selected_config = _merge_request_provider_options(attempt.get("config"), selected_provider)
             if not selected_provider:
                 continue
 
@@ -7616,6 +7641,7 @@ class MediaGenerationService:
                         **runtime_config,
                         "provider": resolved_provider,
                     }
+                    system_keys = self._normalize_api_keys(getattr(system_row, "api_key", None))
                     pooled_keys = self._normalize_api_keys(provider_key_pool_bundle.get("provider_api_keys"))
                     if pooled_keys:
                         merged_runtime_config["provider_api_keys"] = pooled_keys
@@ -7640,22 +7666,37 @@ class MediaGenerationService:
                         or ""
                     ).strip()
 
+                    returned_config = {
+                        **runtime_config,
+                        "__selection_source": "system_only",
+                        "__resolved_source": resolved_source,
+                        "__resolved_setting_id": system_row.id,
+                        "__api_strategy": selected_strategy,
+                        **func_explicit_args,
+                    }
+                    if system_keys:
+                        returned_config["system_api_keys"] = system_keys
+                    if pooled_keys:
+                        returned_config["provider_api_keys"] = pooled_keys
+                        pool_strategy = str(provider_key_pool_bundle.get("provider_api_key_strategy") or "random").strip().lower()
+                        if pool_strategy in {"random", "round_robin", "weighted"}:
+                            returned_config["provider_api_key_strategy"] = pool_strategy
+                        if pool_strategy == "weighted":
+                            returned_config["provider_api_key_weights"] = provider_key_pool_bundle.get("provider_api_key_weights") or []
                     return {
                         "provider": system_row.provider,
-                        "api_key": self._pick_runtime_api_key(merged_runtime_config, system_row.api_key),
+                        "api_key": self._pick_runtime_api_key(
+                            merged_runtime_config,
+                            system_row.api_key,
+                            session=session,
+                            provider_name=resolved_provider,
+                        ),
                         "base_url": system_row.base_url or defaults.get(resolved_provider, {}).get("base_url"),
                         "model": runtime_model,
                         "base_model": getattr(system_row, "base_model", None),
                         "modality": getattr(system_row, "modality", None),
                         "supplier_info": getattr(system_row, "supplier_info", None),
-                        "config": {
-                            **runtime_config,
-                            "__selection_source": "system_only",
-                            "__resolved_source": resolved_source,
-                            "__resolved_setting_id": system_row.id,
-                            "__api_strategy": selected_strategy,
-                            **func_explicit_args,
-                        },
+                        "config": returned_config,
                     }
 
                 # Strict mode: explicit provider/model request must resolve from system_api_settings directly.
@@ -23263,7 +23304,37 @@ class MediaGenerationService:
             or str(os.getenv("VERCEL_URL") or "").strip()
         )
 
+    def _normalize_callback_mode(self, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if text in {"no_callback", "poll", "unsupported", "不支持回调"}:
+            return "no_callback"
+        return ""
+
+    def image_video_callback_disabled(self, api_config: Any, provider: str = "", category: str = "") -> bool:
+        """Image/video: system row callback_mode wins. Empty falls through to the provider pool.
+
+        no_callback means do not wait for a webhook; poll the task instead.
+        """
+        outer = api_config if isinstance(api_config, dict) else {}
+        nested = outer.get("config") if isinstance(outer.get("config"), dict) else {}
+        row_mode = self._normalize_callback_mode(nested.get("callback_mode") or outer.get("callback_mode"))
+        if row_mode:
+            return True
+        resolved_category = str(category or outer.get("category") or "").strip()
+        prov = self._normalize_provider_name(provider or outer.get("provider"), resolved_category or None) or str(provider or outer.get("provider") or "").strip().lower()
+        if not prov:
+            return False
+        try:
+            with SessionLocal() as session:
+                record = session.query(ProviderKeyPool).filter(ProviderKeyPool.provider == prov).first()
+                return self._normalize_callback_mode(getattr(record, "callback_mode", None) if record is not None else None) == "no_callback"
+        except Exception as exc:
+            logger.warning("Image/video callback mode lookup failed | provider=%s err=%s", prov, exc)
+            return False
+
     def _resolve_provider_callback_url(self, tool_conf: Dict[str, Any], callback_ticket: str) -> str:
+        if str((tool_conf or {}).get("_callback_unsupported") or "").strip().lower() in {"1", "true", "yes", "on"}:
+            return ""
         callback_url = str(
             tool_conf.get("webhookUrl")
             or tool_conf.get("webHook")
