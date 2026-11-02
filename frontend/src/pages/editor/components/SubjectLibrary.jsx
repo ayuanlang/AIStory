@@ -26,6 +26,7 @@ import {
     gridCropPixels,
     isEnvironmentEntity,
     isGridCropDerivedEntity,
+    isSpecialCutDerivedEntity,
     assetCardIntro,
     isMainEnvironmentEntity,
     omitsProjectStyleInjection,
@@ -7269,28 +7270,36 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
     const applyCroppedCellReference = useCallback(async (entity, entities, refs) => {
         if (!usesCroppedCellReference(entity)) return refs || [];
+        const quadUrls = (entities || [])
+            .filter((item) => isMainEnvironmentEntity(item))
+            .map((item) => String(item?.image_url || '').trim())
+            .filter(Boolean);
+        const withoutQuad = (refs || []).filter((url) => !quadUrls.some((quadUrl) => sameMediaUrl(url, quadUrl)));
+        const droppedQuad = withoutQuad.length !== (refs || []).length;
         let plan = planDerivedCellReference(entity, entities);
         if (!plan?.ok) {
             const quadDep = getEntityVisualDependencyTargets(entity, entities)
                 .map((row) => row.entity)
                 .find((item) => isMainEnvironmentEntity(item) && String(item?.image_url || '').trim());
             const angle = resolveDerivedViewAngle(entity);
-            if (!quadDep || angle == null) return refs || [];
-            const crop = resolveGridForAngle(angle, quadDep.generation_prompt_cn || '');
-            plan = { ok: true, mainEntity: quadDep, position: crop.position, angle: crop.angle, grid: crop.grid };
+            if (quadDep && angle != null) {
+                const crop = resolveGridForAngle(angle, quadDep.generation_prompt_cn || '');
+                plan = { ok: true, mainEntity: quadDep, position: crop.position, angle: crop.angle, grid: crop.grid };
+            }
         }
-        const mainEntity = plan.mainEntity;
+        const mainEntity = plan?.mainEntity;
         const mainUrl = String(mainEntity?.image_url || '').trim();
-        if (!mainUrl || !plan.position) return refs || [];
+        if (!plan?.ok || !mainUrl || !plan.position) {
+            if (droppedQuad) {
+                throw new Error(t('对应宫格没有裁出来。', 'The matching grid cell could not be cropped.'));
+            }
+            return withoutQuad;
+        }
         const cropUrl = await ensureMainQuadCellUrl(mainEntity, plan.position, mainUrl);
         if (!cropUrl) {
             throw new Error(t('对应宫格没有裁出来。', 'The matching grid cell could not be cropped.'));
         }
-        const quadUrls = (entities || [])
-            .filter((item) => isMainEnvironmentEntity(item))
-            .map((item) => String(item?.image_url || '').trim())
-            .filter(Boolean);
-        const kept = (refs || []).filter((url) => !quadUrls.some((quadUrl) => sameMediaUrl(url, quadUrl)));
+        const kept = withoutQuad;
         onLog?.(
             t(
                 `衍生环境生图参考图用裁出的${plan.grid || plan.position}：${entity?.name || entity?.name_en || ''}`,
@@ -7553,10 +7562,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return text;
     };
 
-    const submitAdvancedLocalModify = async (entity, instruction, options = null) => {
+    const submitAdvancedLocalModify = async (entity, instruction) => {
         const appended = String(instruction || '').trim();
         const target = entity || viewingEntity;
-        const sourceUrl = String(options?.referenceImageUrl || target?.image_url || '').trim();
+        const sourceUrl = String(target?.image_url || '').trim();
         if (!appended || !target) return;
         if (!sourceUrl) {
             showSubjectNotification(
@@ -7730,7 +7739,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             setAdvancedInstruction(imageEditInstruction);
             setEnvironmentConsistency({ entityId, running: false, text, tone: 'changed' });
             showSubjectNotification(text, 'success');
-            await submitAdvancedLocalModify(nextEntity, imageEditInstruction, { referenceImageUrl });
+            await submitAdvancedLocalModify(nextEntity, imageEditInstruction);
         } catch (error) {
             const message = consistencyDetailText(error);
             setEnvironmentConsistency({ entityId, running: false, text: message, tone: 'error' });
@@ -7770,6 +7779,63 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             const result = await checkEnvironmentImageConsistency(entityId, { prompt, imageUrl: cropUrl });
             const absorbed = absorbEnvironmentConsistencyResult(entity, result);
             const instruction = absorbed.imageEditInstruction;
+            if (isSpecialCutDerivedEntity(entity)) {
+                const redrawPrompt = String(absorbed.nextEntity?.generation_prompt_cn || prompt || '').trim();
+                onLog?.(
+                    t(
+                        `正在用裁出的${plan.grid || plan.position}按特别表述生图：${entityName}`,
+                        `Generating ${entityName} from the cropped ${plan.grid || plan.position} with the special camera note.`
+                    ),
+                    'process'
+                );
+                if (!waitForImage) {
+                    const text = absorbed.summary || t('已对照裁出的宫格做完一致性检查，正在按特别表述生图。', 'Checked the cropped cell. Generating with the special camera note.');
+                    setEnvironmentConsistency({ entityId, running: false, text, tone: absorbed.consistent ? 'ok' : 'changed' });
+                    showSubjectNotification(text, 'success');
+                    await handleGenerate(
+                        absorbed.nextEntity,
+                        [cropUrl],
+                        redrawPrompt,
+                        { aspect_ratio: '16:9' },
+                        { omitDependencyEntityIds: [plan.mainEntity.id], keepPromptDraft: true }
+                    );
+                    return { ok: true, mode: 'redraw' };
+                }
+                const built = buildEntityImageGenerationPrompts(redrawPrompt, redrawPrompt, entity, entities);
+                const res = await generateImage(built.prompt, null, [cropUrl], {
+                    function_name: 'generate_subjects_i2i',
+                    project_id: projectId,
+                    episode_id: currentEpisode?.id,
+                    entity_id: entity?.id,
+                    entity_name: entityName,
+                    subject_name: entityName,
+                    subject_type: entity?.type,
+                    entity_type: entity?.type,
+                    prompt_language: resolvedPromptSubmitLang,
+                    asset_type: 'subject',
+                    aspect_ratio: '16:9',
+                    negative_prompt: built.negative_prompt,
+                    ...(options?.shouldCancel ? { shouldCancel: options.shouldCancel, parallel_limit_poll_ms: 60_000 } : {}),
+                    ...(options?.onJobCreated ? { on_job_created: options.onJobCreated } : {}),
+                });
+                if (options?.shouldCancel?.()) return { entity, stopped: true };
+                const generatedImageUrl = extractImageJobResultUrl(res);
+                let resolvedImageUrl = String(generatedImageUrl || '').trim();
+                if (!resolvedImageUrl) throw new Error('Generated result missing image URL');
+                if (isEphemeralProviderMediaUrl(resolvedImageUrl)) {
+                    resolvedImageUrl = await awaitPersistedSubjectEntityImage(entity.id, {
+                        initialUrl: resolvedImageUrl,
+                        entityName,
+                    });
+                    if (!resolvedImageUrl) throw new Error('Timed out waiting for durable subject image URL');
+                }
+                await updateEntity(entity.id, { image_url: resolvedImageUrl });
+                return {
+                    entity,
+                    updatedEnt: { ...absorbed.nextEntity, image_url: resolvedImageUrl },
+                    imageUrl: resolvedImageUrl,
+                };
+            }
             if (!waitForImage) {
                 if (instruction) {
                     const text = absorbed.summary || t('已按差异生成改图指令，正在局部修改图片。', 'Built an edit instruction from the differences and started a local image edit.');

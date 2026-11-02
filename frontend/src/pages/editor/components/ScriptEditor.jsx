@@ -5368,6 +5368,18 @@ const hasAssetRerunExtractSignals = (text) => {
         || /【主环境】/.test(source);
 };
 
+const isSceneOrchestrationResumePhase = (phase) => {
+    const key = String(phase || '').trim().toLowerCase();
+    return [
+        'scene_beats',
+        'scene_subskills',
+        'scene_subskill_pipeline',
+        'scene_matrix_rerun',
+        'scene_markdown',
+        'staging',
+    ].includes(key);
+};
+
 const resolveAssetCategoryKeysFromTargets = (targetEntityTypes) => {
     const raw = Array.isArray(targetEntityTypes) ? targetEntityTypes : null;
     if (!raw || raw.length === 0) return ['characters', 'props', 'environments'];
@@ -20186,11 +20198,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             importedSubjectCounts: { character: 0, prop: 0, environment: 0 },
         };
 
-        if ((sceneBeatsOnlyRerunInFlightRef.current || sceneMatrixRerunInFlightRef.current) && !options?.forceAssetDesign) {
+        if (sceneBeatsOnlyRerunInFlightRef.current || sceneMatrixRerunInFlightRef.current) {
             onLog?.(
                 sceneMatrixRerunInFlightRef.current
-                    ? t('分场重跑期间，已完成的资产设计不会再启动。', 'During a per-scene rerun, completed asset design is not started again.')
-                    : t('仅场景重排期间，资产设计流程已按保护策略暂停。', 'Asset design is paused while a scene-beats-only rerun is in progress.'),
+                    ? t('分场重跑期间，不重新启动角色、道具或环境资产设计。', 'During a per-scene rerun, character, prop, and environment asset design are not started again.')
+                    : t('场景编排重跑期间，不重新启动角色、道具或环境资产设计。', 'During a scene-orchestration rerun, character, prop, and environment asset design are not started again.'),
                 'info'
             );
             return {
@@ -22945,7 +22957,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
-            const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, analyzedText);
+            const resumedPhase = String(marker?.phase || '').trim();
+            const skipAssetDesignAfterSceneImport = isSceneOrchestrationResumePhase(resumedPhase)
+                || sceneBeatsOnlyRerunInFlightRef.current
+                || sceneMatrixRerunInFlightRef.current;
+            let postImportSceneSubjectReport = null;
+            if (skipAssetDesignAfterSceneImport) {
+                onLog?.(
+                    t(
+                        '场景编排恢复只导入场景，不重新启动角色、道具或环境资产设计。',
+                        'Scene-orchestration resume imports scenes only and does not restart character, prop, or environment asset design.'
+                    ),
+                    'info'
+                );
+            } else {
+                postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, analyzedText);
+            }
             const mergedResumeScenePostReport = syncScenePostImportCheckedCount(importReport, postImportSceneSubjectReport);
             if (importReport && typeof importReport === 'object') {
                 importReport = {
@@ -26667,7 +26694,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const tryResumeAnalysisFromExistingArtifacts = useCallback(async (resumeState, retryCount = 0, options = {}) => {
-        if (sceneMatrixRerunInFlightRef.current || artDirectionRerunInFlightRef.current) {
+        if (
+            sceneBeatsOnlyRerunInFlightRef.current
+            || sceneMatrixRerunInFlightRef.current
+            || artDirectionRerunInFlightRef.current
+        ) {
             return false;
         }
         if (!activeEpisode?.id || !resumeState || resumeState.decision === 'phase1') {
@@ -30444,9 +30475,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || activeEpisode?.ai_scene_analysis_subject_index
             || ''
         ).trim();
-        const healedSubjectIndexText = String(stage2_1Text || '').trim();
-        const stage2_1SubjectIndexText = extractPureSubjectIndexText(healedSubjectIndexText).trim()
-            || healedSubjectIndexText;
 
         const rerunMode = String(mode || 'all').trim().toLowerCase() === 'single' ? 'single' : 'all';
         const targetSceneId = String(sceneId || '').trim();
@@ -30472,16 +30500,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return { ok: false, error: 'no_rerunnable_scenes', notified: true };
         }
 
-        // Scene-beats-only rerun still needs ENV design for storyboard kickoff.
-        // Source of truth is environment plan + scene analysis (legacy Index ENV rows remain compatible).
-        const stage3Config = await ensureStage3AutoStartCache();
-        const envAutoStartOn = stage3Config?.asset_design_environment !== false;
-        const subjectHasEnvRows = /(?:^|\n)\s*\|[^|\n]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(stage2_1SubjectIndexText)
-            || /(?:^|\n)\s*S\d+[^\n|]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(stage2_1SubjectIndexText);
-        const freshOwnedEntities = await refreshEpisodeOwnedEntities();
-        const envDesignMissing = !hasPersistedEnvironmentAssetDesign(freshOwnedEntities);
-        const shouldRunEnvAssetDesign = envAutoStartOn && (hasEnvironmentsToDesign() || subjectHasEnvRows) && envDesignMissing;
-
         const startedAt = Date.now();
         let importReport = null;
         let runtimeMeta = null;
@@ -30491,25 +30509,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const unitsForRerun = rerunMode === 'single' ? (targetSceneUnits || []) : executableCandidates;
         const orchestrationSceneCount = unitsForRerun.length;
 
+        // Set before any await so a concurrent analysis resume cannot import scenes and then start asset design.
         analysisRunInFlightRef.current = true;
         sceneBeatsOnlyRerunInFlightRef.current = true;
-        const beatsRerunMessage = shouldRunEnvAssetDesign
-            ? (
-                rerunMode === 'single'
-                    ? t(
-                        `正在重排场景 ${targetSceneId}，并同步启动缺失的环境资产设计...`,
-                        `Rerunning scene ${targetSceneId} and co-starting missing environment asset design...`
-                    )
-                    : t(
-                        `正在重排全部 ${orchestrationSceneCount} 场场景编排，并同步启动缺失的环境资产设计...`,
-                        `Rerunning all ${orchestrationSceneCount} scene beats and co-starting missing environment asset design...`
-                    )
-            )
-            : (
-                rerunMode === 'single'
-                    ? t(`正在重排单个场景：${targetSceneId}...`, `Rerunning scene beats for ${targetSceneId}...`)
-                    : t(`正在同步发起全部 ${orchestrationSceneCount} 场场景编排...`, `Sync-launching all ${orchestrationSceneCount} scene beats...`)
-            );
+        const beatsRerunMessage = rerunMode === 'single'
+            ? t(`正在重排单个场景：${targetSceneId}...`, `Rerunning scene beats for ${targetSceneId}...`)
+            : t(`正在同步发起全部 ${orchestrationSceneCount} 场场景编排...`, `Sync-launching all ${orchestrationSceneCount} scene beats...`);
         if (continueFromUpstream) {
             setAnalysisFlowStatus({ phase: 'scene_beats', message: beatsRerunMessage });
         } else {
@@ -30522,7 +30527,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         logSelectedScriptAnalysisApi(rerunLabel);
 
-        let envAssetDesignPromise = null;
         try {
             const rerunSceneIds = collectOrchestrationResetSceneIds(
                 unitsForRerun,
@@ -30561,35 +30565,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            if (shouldRunEnvAssetDesign) {
-                armEnvironmentAssetDesignGate('scene-beats-rerun-env-missing');
-                onLog?.(
-                    t(
-                        '场景编排重跑检测到环境资产尚未完成，已并发启动环境资产设计。',
-                        'Scene-beats rerun detected missing environment assets; co-starting environment asset design.'
-                    ),
-                    'info'
-                );
-                envAssetDesignPromise = runPostImportSceneSubjectPipeline(
-                    null,
-                    stage2_1SubjectIndexText,
-                    {
-                        explicitSubjectIndexText: stage2_1SubjectIndexText,
-                        parallelWithScenes: true,
-                        targetEntityTypes: ['environments', 'posters', 'covers'],
-                        forceAssetDesign: true,
-                        skipExistingAssets: true,
-                    }
-                );
-            } else if (envAutoStartOn && (hasEnvironmentsToDesign() || subjectHasEnvRows) && !envDesignMissing) {
-                // Open gate so early scene imports can kick storyboard while analysis is still in flight.
+            const freshOwnedEntities = await refreshEpisodeOwnedEntities();
+            if (hasPersistedEnvironmentAssetDesign(freshOwnedEntities)) {
                 markEnvironmentAssetDesignReady('scene-beats-rerun-env-already-persisted');
-            } else {
-                markEnvironmentAssetDesignReady(
-                    !envAutoStartOn
-                        ? 'scene-beats-rerun-env-auto-start-off'
-                        : 'scene-beats-rerun-no-env-source'
-                );
             }
 
             const adaptedScriptForRerun = String(adaptedScriptText || '').trim()
@@ -30822,39 +30800,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             setAnalysisFlowStatus({
                 phase: 'scene_beats',
-                message: envAssetDesignPromise
-                    ? t(
-                        '✅ 场景编排导入完成，等待环境资产设计结束后再启动分镜...',
-                        'Scene beats import completed; waiting for environment asset design before storyboard...'
-                    )
-                    : t('✅ 场景编排导入完成，正在更新任务状态...', 'Scene beats import completed, updating task status...'),
+                message: t('✅ 场景编排导入完成，正在更新任务状态...', 'Scene beats import completed, updating task status...'),
             });
-
-            if (envAssetDesignPromise) {
-                try {
-                    const envReport = await envAssetDesignPromise;
-                    if (envReport && typeof envReport === 'object') {
-                        const mergedScenePostReport = syncScenePostImportCheckedCount(importReport, envReport);
-                        importReport = {
-                            ...(importReport && typeof importReport === 'object' ? importReport : {}),
-                            sceneSubjectPostImportReport: mergedScenePostReport,
-                            dbRunInsertedCounts: envReport?.dbRunInsertedCounts,
-                            dbPersistedCounts: envReport?.dbPersistedCounts,
-                            importedSubjectCounts: envReport?.importedSubjectCounts,
-                        };
-                    }
-                } catch (envErr) {
-                    const envMsg = envErr?.message || String(envErr || 'environment asset design failed');
-                    onLog?.(
-                        t(
-                            `场景编排重跑时环境资产设计失败：${envMsg}`,
-                            `Environment asset design failed during scene-beats rerun: ${envMsg}`
-                        ),
-                        'error'
-                    );
-                    throw envErr instanceof Error ? envErr : new Error(envMsg);
-                }
-            }
 
             await kickoffStoryboardsAfterOrchestrationSuccess(importReport);
             const rerunStoryboard = await awaitPendingStoryboardTasks({
@@ -30884,10 +30831,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     rerunMode === 'single'
                         ? t(`场景 ${targetSceneId} 编排已重排完成。`, `Scene ${targetSceneId} beats rerun completed.`)
                         : t(`全部 ${orchestrationSceneCount} 场场景编排已重排完成。`, `All ${orchestrationSceneCount} scene beats reruns completed.`)
-                ) + (
-                    shouldRunEnvAssetDesign
-                        ? t(' 环境资产设计已同步完成。', ' Environment asset design also completed.')
-                        : ''
                 ) + rerunStoryboardSuffix,
             });
             return { ok: true };
@@ -30910,18 +30853,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             return { ok: false, error: friendlyError, notified: true };
         } finally {
-            // If scene branch failed before awaiting ENV, keep ENV running but avoid unhandled rejection.
-            if (envAssetDesignPromise) {
-                void envAssetDesignPromise.catch((err) => {
-                    onLog?.(
-                        t(
-                            `场景编排重跑附带的环境资产设计后续失败：${err?.message || err}`,
-                            `Background environment asset design from scene-beats rerun failed: ${err?.message || err}`
-                        ),
-                        'warning'
-                    );
-                });
-            }
             sceneBeatsOnlyRerunInFlightRef.current = false;
             endSceneOrchestrationPanelTracking();
             if (!continueFromUpstream) {
@@ -30941,8 +30872,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.ai_scene_analysis_result,
         activeEpisode?.ai_scene_analysis_subject_index,
         activeEpisode?.id,
-        armEnvironmentAssetDesignGate,
-        buildStage2_2UserInputFromStage1,
         buildCompletedAnalysisUiReport,
         beginSceneOrchestrationPanelTracking,
         buildStoryboardCompletionSuffix,
@@ -30951,10 +30880,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         endSceneOrchestrationPanelTracking,
         ensureOrchestrationScenesInWorkspace,
         ensurePersistedSubjectIndexForDownstream,
-        ensureStage3AutoStartCache,
         awaitPendingStoryboardTasks,
         beginStageRerunUi,
-        extractPureSubjectIndexText,
         extractSceneDisplayLabel,
         extractStage1AdaptedScriptBody,
         getStageOutputContent,
@@ -30978,7 +30905,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         resetSceneOrchestrationProgress,
         resetStoryboardKickoffTracking,
         runAutoImportAndSwitchToScenes,
-        runPostImportSceneSubjectPipeline,
         runStage2_2WithValidationRetry,
         saveAnalysisTaskMarker,
         setAnalysisFlowStatus,
@@ -34751,6 +34677,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 probe.needsAssets
                 && Array.isArray(probe.pendingAssetTargets)
                 && probe.pendingAssetTargets.length > 0
+                && !sceneBeatsOnlyRerunInFlightRef.current
                 && !sceneMatrixRerunInFlightRef.current
             ) {
                 throwIfAnalysisStopped();

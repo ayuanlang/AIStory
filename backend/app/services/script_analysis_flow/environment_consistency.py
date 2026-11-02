@@ -97,6 +97,18 @@ def resolve_checked_prompt(entity: Any, override: Optional[str] = None) -> str:
     return str(getattr(entity, "generation_prompt_cn", "") or "").strip()
 
 
+def _is_single_cell_check(entity: Any, text: str, derived_kind: str) -> bool:
+    """Angle derivatives are checked as one cropped cell, never as the whole four-grid."""
+    if derived_kind in {"first_cut", "special"}:
+        return True
+    blob = f"{text}\n{getattr(entity, 'generation_prompt_cn', '') or ''}"
+    if "不要重切" in blob:
+        return False
+    if "只切割" in blob or "截取宫格=" in blob or "angle_key=" in blob:
+        return True
+    return derived_view_angle(entity) is not None
+
+
 def classify_checked_prompt(entity: Any, prompt: str) -> str:
     """main | derived_main | cell | crop | regen | derived."""
     if is_derived_main_environment_entity(entity):
@@ -113,7 +125,7 @@ def classify_checked_prompt(entity: Any, prompt: str) -> str:
     saved_kind = str(attrs.get(LAST_SUBMITTED_KIND_ATTR) or "").strip()
     if saved_kind == "regen" or (regen and text == regen) or (is_stub_prompt(generation) and text and text != generation):
         return "regen"
-    if derived_kind == "first_cut" or ("只切割" in text and "不要重切" not in text):
+    if _is_single_cell_check(entity, text, derived_kind):
         return "cell"
     if is_stub_prompt(text):
         return "crop"

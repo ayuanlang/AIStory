@@ -4,6 +4,7 @@ import {
     derivedDependencyImageUrl,
     isCollidingGridCellUrl,
     isGridCropDerivedEntity,
+    isSpecialCutDerivedEntity,
     isStateDerivedEntity,
     mainQuadCellAddresses,
     planDerivedGridCell,
@@ -255,6 +256,59 @@ describe('saved quad cells', () => {
         };
         assert.equal(derivedDependencyImageUrl(derived, main, [main, derived]), '');
         assert.equal(derivedDependencyImageUrl(derivedMain, main, [main, derivedMain]), 'https://cdn.example/main.jpg');
+    });
+
+    it('treats an existing angled shot as a cell crop even after the cut sentence is gone', () => {
+        const main = {
+            id: 1,
+            type: 'environment',
+            name: '泓林土菜馆正门',
+            image_url: 'https://cdn.example/quad.jpg',
+            generation_prompt_cn: '四宫度数=左上0度｜右上90度｜左下180度｜右下270度',
+            custom_attributes: {
+                quad_cell_images: {
+                    source_url: 'https://cdn.example/quad.jpg',
+                    cells: { 左上: 'https://cdn.example/tl.jpg', 右上: 'https://cdn.example/tr.jpg' },
+                },
+            },
+        };
+        const derived = {
+            id: 2,
+            type: 'environment',
+            name: '0度泓林土菜馆正门',
+            image_url: 'https://cdn.example/current.jpg',
+            generation_prompt_cn: '门庭正面。长边横在画面里。',
+            visual_dependencies: ['ENV:[泓林土菜馆正门]'],
+        };
+        const hall = {
+            id: 4,
+            type: 'environment',
+            name: '龙门风月客栈大堂',
+            image_url: 'https://cdn.example/hall-quad.jpg',
+            generation_prompt_cn: '四宫度数=左上0度｜右上90度｜左下180度｜右下270度',
+        };
+        const special = {
+            id: 3,
+            type: 'environment',
+            name: '0度龙门风月客栈大堂_仰天',
+            image_url: 'https://cdn.example/up.jpg',
+            generation_prompt_cn: '所属主环境=龙门风月客栈大堂。angle_key=龙门风月客栈大堂|0。截取宫格=左上0度。禁止只做平视宫格原样切割。特别表述=仰天。',
+            custom_attributes: { derived_kind: 'special', main_environment: '龙门风月客栈大堂', view_angle_from_main: 0 },
+            visual_dependencies: ['ENV:[龙门风月客栈大堂]'],
+        };
+        assert.equal(isGridCropDerivedEntity(derived), true);
+        assert.equal(isSpecialCutDerivedEntity(derived), false);
+        assert.equal(isSpecialCutDerivedEntity(special), true);
+        assert.equal(isGridCropDerivedEntity(special), true);
+        assert.equal(derivedDependencyImageUrl(derived, main, [main, derived]), 'https://cdn.example/tl.jpg');
+        assert.equal(derivedDependencyImageUrl(special, hall, [hall, special]), '');
+        const planned = planDerivedGridCell(derived, [main, derived]);
+        assert.equal(planned.ok, true);
+        assert.equal(planned.position, '左上');
+        const specialPlan = planDerivedGridCell(special, [hall, special]);
+        assert.equal(specialPlan.ok, true);
+        assert.equal(specialPlan.mainEntity.id, 4);
+        assert.equal(specialPlan.position, '左上');
     });
 
     it('reads named four-grid gaps and leaves library misses out of the rerun list', () => {

@@ -400,11 +400,22 @@ export function isStateDerivedEntity(entity) {
     return prompt.includes('以已切割的同角衍生') || prompt.includes('以同角衍生「') || prompt.includes('不要重切宫格');
 }
 
+export function isSpecialCutDerivedEntity(entity) {
+    if (!isEnvironmentEntity(entity) || isStateDerivedEntity(entity) || isDerivedMainEnvironmentEntity(entity)) return false;
+    const kind = String(readAttrs(entity).derived_kind || '').trim();
+    if (kind === 'special') return true;
+    const prompt = String(entity?.generation_prompt_cn || '');
+    return prompt.includes('禁止只做平视宫格原样切割') || prompt.includes('特别表述=');
+}
+
 export function isGridCropDerivedEntity(entity) {
     if (!isEnvironmentEntity(entity) || isStateDerivedEntity(entity)) return false;
+    if (isDerivedMainEnvironmentEntity(entity) || isMainEnvironmentEntity(entity)) return false;
     const kind = String(readAttrs(entity).derived_kind || '').trim();
-    if (kind === 'first_cut') return true;
-    return String(entity?.generation_prompt_cn || '').includes('只切割');
+    if (kind === 'first_cut' || kind === 'special') return true;
+    const prompt = String(entity?.generation_prompt_cn || '');
+    if (prompt.includes('只切割') || prompt.includes('截取宫格=') || /angle_key=/.test(prompt)) return true;
+    return resolveDerivedViewAngle(entity) != null;
 }
 
 /** Angle derivatives take one cropped cell. A derived main still uses the whole four-grid. */
@@ -462,7 +473,7 @@ export function derivedDependencyImageUrl(owner, depEntity, entities) {
         quad = depEntity;
         position = crop.position;
     }
-    if (!quad || !position) return fallback;
+    if (!quad || !position) return depIsQuad ? '' : fallback;
     if (depEntity && !depIsQuad && String(depEntity.id || '') !== String(quad.id || '')) return fallback;
     return savedQuadCellUrl(quad, position);
 }

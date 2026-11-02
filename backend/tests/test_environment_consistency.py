@@ -224,6 +224,30 @@ def test_opening_without_six_face_heading_can_still_update_grids():
     assert "[270度格-右下" in written
 
 
+def test_angled_and_special_derivatives_are_checked_as_one_cell():
+    angled = Dummy(
+        id=21,
+        name="0度泓林土菜馆正门",
+        prompt="门庭正面。长边横在画面里。",
+        attrs={},
+    )
+    special = Dummy(
+        id=22,
+        name="0度龙门风月客栈大堂_仰天",
+        prompt="禁止只做平视宫格原样切割。特别表述=仰天。",
+        attrs={"derived_kind": "special", "view_angle_from_main": 0},
+    )
+    state = Dummy(
+        id=23,
+        name="90度厨房_夜雨",
+        prompt="以已切割的同角衍生「90度厨房」参考图为本镜头最终画面。不要重切宫格。",
+        attrs={"derived_kind": "state"},
+    )
+    assert classify_checked_prompt(angled, angled.generation_prompt_cn) == "cell"
+    assert classify_checked_prompt(special, special.generation_prompt_cn) == "cell"
+    assert classify_checked_prompt(state, state.generation_prompt_cn) == "derived"
+
+
 def test_cell_check_rewrites_one_grid_and_fills_derived_prompt():
     derived = Dummy(
         id=9,
