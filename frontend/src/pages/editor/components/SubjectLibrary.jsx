@@ -686,14 +686,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         if (!stable) return;
         setAssetRefPreview({ url: stable, name: String(name || '').trim() });
     }, []);
-    useEffect(() => {
-        if (!assetRefPreview?.url) return undefined;
-        const onKey = (event) => {
-            if (event.key === 'Escape') setAssetRefPreview(null);
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [assetRefPreview]);
     const selectedScriptAnalysisApiId = useMemo(() => {
         return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
     }, [functionApiConfigs?.script_analysis, aiDiagnosisOpen]);
@@ -725,6 +717,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
     const [refImage, setRefImage] = useState(null);
     const [assetRefPreview, setAssetRefPreview] = useState(null);
+    useEffect(() => {
+        if (!assetRefPreview?.url) return undefined;
+        const onKey = (event) => {
+            if (event.key === 'Escape') setAssetRefPreview(null);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [assetRefPreview]);
     const [inheritAppearance, setInheritAppearance] = useState(true);
     const [derivedImageGenMode, setDerivedImageGenMode] = useState('crop');
     const [gridRegenPreparing, setGridRegenPreparing] = useState(false);
