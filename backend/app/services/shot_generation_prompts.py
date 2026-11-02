@@ -51,7 +51,7 @@ from app.services.shot_markdown import (
 )
 from app.services.script_analysis_flow.derived_env_ingest import (
     DEGREE_NAME_PATTERN,
-    extract_grid_cell_prompt,
+    compose_derived_view_prompt,
 )
 from app.services.soft_delete import _active_episode_clause, _active_entity_clause, _active_scene_clause
 
@@ -738,7 +738,7 @@ def _drop_quad_corner_badges(cell: str) -> str:
 def _quad_cell_from_main_prompt(prompt: str, angle: Optional[int]) -> str:
     if angle is None:
         return ""
-    cell = str(extract_grid_cell_prompt(prompt, angle).get("cell_prompt") or "").strip()
+    cell = compose_derived_view_prompt(prompt, angle)
     return _drop_quad_corner_badges(cell)
 
 
@@ -769,9 +769,10 @@ def _shot_derived_env_cell_block(rows: List[Dict[str, Any]]) -> str:
         return ""
     return (
         "【衍生环境信息】\n"
-        "每一条正文是所属主环境【四向拼图】里与这一度对应的那一格，"
+        "每一条是两段：先是四宫坐标系，再是所属主环境【四向拼图】里与这一度对应的那一格，"
         "例如 90 度对应 [90度格-右上·东]。方向角标已去掉。"
-        "格标题只用来认这一格，禁止抄进 Video。不是该衍生环境自己的提示词。\n"
+        "坐标系和格标题只用来认这一格，禁止抄成画面里的轴，格标题禁止抄进 Video。"
+        "不是该衍生环境自己的提示词。\n"
         + "\n\n".join(chunks)
     )
 

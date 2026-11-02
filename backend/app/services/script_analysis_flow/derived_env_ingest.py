@@ -266,6 +266,41 @@ def extract_grid_cell_prompt(main_prompt: str, angle: int) -> Dict[str, str]:
     return {**crop, "cell_prompt": cell}
 
 
+QUAD_AXIS_SENTENCE = (
+    "坐标系：X线从画面左到画面右，正方向在画面右。"
+    "Y线从靠近镜头到远离镜头，正方向在远离镜头。"
+    "Z向上。四格同一套。X线、Y线和Z不画成线，不画成字。"
+)
+_QUAD_AXIS_LINE_RE = re.compile(r"坐标系：[^\n]+")
+
+
+def extract_quad_axis_line(prompt: str) -> str:
+    """The shared screen axis published once before the four cells.
+
+    Older quads omit the line. Callers that show one cell still prepend this
+    default so X stays left-right and Y stays near-far.
+    """
+    match = _QUAD_AXIS_LINE_RE.search(str(prompt or ""))
+    if match:
+        return match.group(0).strip()
+    return QUAD_AXIS_SENTENCE
+
+
+def compose_derived_view_prompt(main_prompt: str, angle: int) -> str:
+    """Derived-view text is the shared axis plus that degree's raw cell.
+
+    ``cell_prompt`` itself stays the raw slice so grid replacement can match
+    it inside the main prompt.
+    """
+    cell = str(extract_grid_cell_prompt(main_prompt, angle).get("cell_prompt") or "").strip()
+    if not cell:
+        return ""
+    axis = extract_quad_axis_line(main_prompt)
+    if cell.startswith("坐标系："):
+        return cell
+    return f"{axis}\n{cell}"
+
+
 def load_main_environment_prompts(
     db: Session,
     *,

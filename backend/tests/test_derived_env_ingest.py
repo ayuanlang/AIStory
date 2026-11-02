@@ -7,6 +7,7 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     format_camera_switch_line,
     parse_derived_env_extract_items,
     extract_grid_cell_prompt,
+    compose_derived_view_prompt,
     align_returned_quad_rows,
     apply_main_environment_quad_prompts,
     compose_stored_quad_prompt,
@@ -222,6 +223,31 @@ def test_extract_grid_cell_prompt_slices_matching_panel():
     assert "南门" in legacy_cell["cell_prompt"]
     assert "东窗" not in legacy_cell["cell_prompt"]
     assert extract_grid_cell_prompt("只有开篇", 90)["cell_prompt"] == ""
+
+
+def test_compose_derived_view_prompt_prefixes_shared_axis():
+    prompt = (
+        "【四向拼图】\n"
+        "坐标系：X线从画面左到画面右，正方向在画面右。Y线从靠近镜头到远离镜头，正方向在远离镜头。Z向上。四格同一套。X线、Y线和Z不画成线，不画成字。\n"
+        "[0度格-左上·北]\n左侧面：床在画面左。\n"
+        "[90度格-右上·东]\n正面：窗。\n"
+        "[180度格-左下·南]\n正面：门在远处。\n"
+        "[270度格-右下·西]\n正面：柜。\n"
+    )
+    raw = extract_grid_cell_prompt(prompt, 180)["cell_prompt"]
+    assert raw.startswith("[180度格-左下·南]")
+    composed = compose_derived_view_prompt(prompt, 180)
+    assert composed.startswith("坐标系：")
+    assert "[180度格-左下·南]" in composed
+    assert composed.index("坐标系：") < composed.index("[180度格-左下·南]")
+    assert "正面：窗" not in composed
+    assert compose_derived_view_prompt("只有开篇", 90) == ""
+    legacy = compose_derived_view_prompt(
+        "[180度格-左下·南]\n正面：门。\n",
+        180,
+    )
+    assert legacy.startswith("坐标系：X线从画面左到画面右")
+    assert "[180度格-左下·南]" in legacy
 
 
 def test_main_environment_quad_prompt_requires_opening_and_four_cells():
