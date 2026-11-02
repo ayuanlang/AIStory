@@ -681,6 +681,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
     const { addLog: onLog, logs: systemPanelLogs } = useLog();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
+    const openAssetRefPreview = useCallback((url, name) => {
+        const stable = String(url || '').trim();
+        if (!stable) return;
+        setAssetRefPreview({ url: stable, name: String(name || '').trim() });
+    }, []);
+    useEffect(() => {
+        if (!assetRefPreview?.url) return undefined;
+        const onKey = (event) => {
+            if (event.key === 'Escape') setAssetRefPreview(null);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [assetRefPreview]);
     const selectedScriptAnalysisApiId = useMemo(() => {
         return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
     }, [functionApiConfigs?.script_analysis, aiDiagnosisOpen]);
@@ -711,6 +724,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
     const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
     const [refImage, setRefImage] = useState(null);
+    const [assetRefPreview, setAssetRefPreview] = useState(null);
     const [inheritAppearance, setInheritAppearance] = useState(true);
     const [derivedImageGenMode, setDerivedImageGenMode] = useState('crop');
     const [gridRegenPreparing, setGridRegenPreparing] = useState(false);
@@ -11108,7 +11122,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                     </button>
                                                                     <div className={`relative aspect-square bg-black rounded overflow-hidden z-0 ${depExcluded ? 'grayscale' : ''}`}>
                                                                          {depImageUrl ? (
-                                                                             <SafeImage src={depImageUrl} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depImageUrl)} />
+                                                                             <button
+                                                                                 type="button"
+                                                                                 title={t('查看大图', 'View large image')}
+                                                                                 onClick={(e) => {
+                                                                                     e.preventDefault();
+                                                                                     e.stopPropagation();
+                                                                                     openAssetRefPreview(depImageUrl, depEntity?.name || dep);
+                                                                                 }}
+                                                                                 className="absolute inset-0 z-0 cursor-zoom-in"
+                                                                             >
+                                                                                 <SafeImage src={depImageUrl} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depImageUrl)} />
+                                                                             </button>
                                                                          ) : (
                                                                              <div className="w-full h-full flex items-center justify-center bg-white/5">
                                                                                  <ImageIcon className="w-4 h-4 opacity-40" />
@@ -11119,9 +11144,21 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                                  <span className="text-[9px] font-bold text-white/80 px-1 text-center">{t('已取消', 'Cancelled')}</span>
                                                                              </div>
                                                                          ) : (
-                                                                         <div className="absolute inset-0 z-20 bg-black/80 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto flex flex-col gap-1 items-center justify-center transition-opacity rounded p-1">
+                                                                         <div className="absolute inset-0 z-20 bg-black/80 opacity-0 pointer-events-none group-hover:opacity-100 group-focus-within:opacity-100 flex flex-col gap-1 items-center justify-center transition-opacity rounded p-1">
                                                                              {depImageUrl ? (
-                                                                                 <>
+                                                                                 <div className="pointer-events-auto flex w-full flex-col gap-1">
+                                                                                     <button
+                                                                                         type="button"
+                                                                                         title={t('查看大图', 'View large image')}
+                                                                                         onClick={(e) => {
+                                                                                             e.preventDefault();
+                                                                                             e.stopPropagation();
+                                                                                             openAssetRefPreview(depImageUrl, depEntity?.name || dep);
+                                                                                         }}
+                                                                                         className="relative z-10 w-full text-[10px] py-1 bg-white/15 hover:bg-white/25 text-white border border-white/15 rounded font-bold inline-flex items-center justify-center gap-1"
+                                                                                     >
+                                                                                         <Maximize2 size={10} /> {t('查看大图', 'View')}
+                                                                                     </button>
                                                                                      <button
                                                                                          type="button"
                                                                                          title={t('同时更新图片与锚点并退出', 'Reuse asset and exit')}
@@ -11194,9 +11231,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                                      >
                                                                                          {t('取消参考', 'Cancel Ref')}
                                                                                      </button>
-                                                                                 </>
+                                                                                 </div>
                                                                              ) : (
-                                                                                 <div className="flex flex-col gap-1 items-center w-full px-0.5">
+                                                                                 <div className="pointer-events-auto flex flex-col gap-1 items-center w-full px-0.5">
                                                                                      <div className="text-[10px] text-muted-foreground">{t('无图', 'No Image')}</div>
                                                                                      <button
                                                                                          type="button"
@@ -12025,7 +12062,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                 </button>
                                                                 <div className={`aspect-square bg-black rounded overflow-hidden relative ${depExcluded ? 'grayscale' : ''}`}>
                                                                      {depImageUrl ? (
-                                                                         <SafeImage src={depImageUrl} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depImageUrl)} />
+                                                                         <button
+                                                                             type="button"
+                                                                             title={t('查看大图', 'View large image')}
+                                                                             onClick={(e) => {
+                                                                                 e.preventDefault();
+                                                                                 e.stopPropagation();
+                                                                                 openAssetRefPreview(depImageUrl, depEntity?.name || dep);
+                                                                             }}
+                                                                             className="absolute inset-0 cursor-zoom-in"
+                                                                         >
+                                                                             <SafeImage src={depImageUrl} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depImageUrl)} />
+                                                                         </button>
                                                                      ) : (
                                                                          <div className="w-full h-full flex items-center justify-center bg-white/5">
                                                                              <Users size={16} className="text-white/20"/>
@@ -12443,6 +12491,32 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 uiLang={uiLang}
                 onRestored={() => loadEntities()}
             />
+            {assetRefPreview?.url ? (
+                <div
+                    className="fixed inset-0 z-[80] flex items-center justify-center bg-black/85 p-6"
+                    onClick={() => setAssetRefPreview(null)}
+                >
+                    <button
+                        type="button"
+                        onClick={() => setAssetRefPreview(null)}
+                        className="absolute top-4 right-4 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
+                        title={t('关闭', 'Close')}
+                    >
+                        <X size={18} />
+                    </button>
+                    <img
+                        src={getFullUrl(assetRefPreview.url)}
+                        alt={assetRefPreview.name || ''}
+                        className="max-h-[90vh] max-w-[92vw] object-contain"
+                        onClick={(event) => event.stopPropagation()}
+                    />
+                    {assetRefPreview.name ? (
+                        <div className="absolute bottom-6 left-1/2 max-w-[80vw] -translate-x-1/2 truncate rounded bg-black/70 px-3 py-1 text-sm text-white">
+                            {assetRefPreview.name}
+                        </div>
+                    ) : null}
+                </div>
+            ) : null}
         </div>
     );
 };
