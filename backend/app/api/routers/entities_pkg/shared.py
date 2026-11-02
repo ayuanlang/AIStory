@@ -751,6 +751,28 @@ def update_entity(
         for meta_key in ("ephemeral_binding", "needs_persistence_retry"):
             if meta_key in entity_attrs:
                 custom_attrs[meta_key] = entity_attrs.get(meta_key)
+
+    from types import SimpleNamespace
+
+    from app.services.script_analysis_flow.derived_env_ingest import retain_quad_sheet_image_url
+
+    sheet_attrs = dict(custom_attrs)
+    if "quad_cell_images" in update_data:
+        sheet_attrs["quad_cell_images"] = update_data.get("quad_cell_images")
+    if update_data.get("quad_sheet_image_url"):
+        sheet_attrs["quad_sheet_image_url"] = update_data.get("quad_sheet_image_url")
+    sheet_view = SimpleNamespace(
+        id=getattr(entity, "id", None),
+        image_url=getattr(entity, "image_url", None),
+        custom_attributes=sheet_attrs,
+    )
+    if "image_url" in update_data and update_data.get("image_url") is not None:
+        update_data["image_url"] = retain_quad_sheet_image_url(sheet_view, update_data.get("image_url"))
+    elif any(key in update_data for key in ("quad_cell_images", "quad_sheet_image_url")):
+        kept_sheet = retain_quad_sheet_image_url(sheet_view, getattr(entity, "image_url", None))
+        current_sheet = str(getattr(entity, "image_url", None) or "").strip()
+        if kept_sheet and kept_sheet != current_sheet:
+            update_data["image_url"] = kept_sheet
     
     for field, value in update_data.items():
         if field == "image_url" and value != entity.image_url:

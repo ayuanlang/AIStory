@@ -1839,6 +1839,12 @@ def _repair_entity_image_url_from_assets(
     if not resolved_url:
         return False
 
+    from app.services.script_analysis_flow.derived_env_ingest import retain_quad_sheet_image_url
+
+    resolved_url = retain_quad_sheet_image_url(entity, resolved_url)
+    if not resolved_url or resolved_url == legacy_url:
+        return False
+
     entity.image_url = resolved_url
     db.add(entity)
     logger.info(

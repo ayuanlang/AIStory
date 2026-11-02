@@ -58,6 +58,118 @@ LOCKED_QUAD_DEGREES = {
     "右下": 270,
 }
 QUAD_DEGREE_CONTRACT = "四宫度数=左上0度｜右上90度｜左下180度｜右下270度"
+QUAD_SHEET_SENTENCE = (
+    "同一张16:9图，必须画成2×2四宫格，四格一样大。"
+    "正中一条横线、一条竖线分成四格。"
+    "左上、右上、左下、右下都要画满。"
+    "不许只画其中一格，不许画成单张全景，不许留空格。"
+    + QUAD_DEGREE_CONTRACT
+    + "。左上望北，右上望东，左下望南，右下望西。"
+    "四格是同一处的四个方向，材质与开闭相同。"
+)
+QUAD_CELL_POSITIONS = ("左上", "右上", "左下", "右下")
+
+
+def _media_identity(url: Any) -> str:
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    base = text.split("#", 1)[0].split("?", 1)[0]
+    try:
+        from urllib.parse import unquote, urlparse
+
+        path = unquote(urlparse(base).path or "")
+        return path or base
+    except Exception:
+        return base
+
+
+def _same_media_url(left: Any, right: Any) -> bool:
+    a = str(left or "").strip()
+    b = str(right or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    left_path = _media_identity(a)
+    right_path = _media_identity(b)
+    return bool(left_path) and left_path == right_path
+
+
+def _entity_attr_dict(entity: Any) -> Dict[str, Any]:
+    raw = getattr(entity, "custom_attributes", None)
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _quad_cell_record(attrs: Dict[str, Any]) -> Dict[str, Any]:
+    record = attrs.get("quad_cell_images")
+    if isinstance(record, str) and record.strip():
+        try:
+            record = json.loads(record)
+        except Exception:
+            record = None
+    return record if isinstance(record, dict) else {}
+
+
+def quad_cell_image_urls(entity: Any) -> List[str]:
+    record = _quad_cell_record(_entity_attr_dict(entity))
+    cells = record.get("cells")
+    if isinstance(cells, str) and cells.strip():
+        try:
+            cells = json.loads(cells)
+        except Exception:
+            cells = None
+    if not isinstance(cells, dict):
+        return []
+    urls: List[str] = []
+    for position in QUAD_CELL_POSITIONS:
+        value = cells.get(position)
+        if isinstance(value, dict):
+            value = value.get("url") or value.get("image_url") or value.get("href")
+        text = str(value or "").strip()
+        if text:
+            urls.append(text)
+    return urls
+
+
+def quad_sheet_image_url(entity: Any) -> str:
+    attrs = _entity_attr_dict(entity)
+    record = _quad_cell_record(attrs)
+    return str(
+        record.get("source_url")
+        or record.get("sourceUrl")
+        or attrs.get("quad_sheet_image_url")
+        or ""
+    ).strip()
+
+
+def retain_quad_sheet_image_url(entity: Any, proposed_url: Any) -> str:
+    """Keep the original four-grid when a cropped cell is written back as the portrait."""
+    proposed = str(proposed_url or "").strip()
+    if not proposed:
+        return proposed
+    cells = quad_cell_image_urls(entity)
+    if not any(_same_media_url(proposed, cell) for cell in cells):
+        return proposed
+    current = str(getattr(entity, "image_url", None) or "").strip()
+    for candidate in (quad_sheet_image_url(entity), current):
+        if candidate and not any(_same_media_url(candidate, cell) for cell in cells):
+            logger.info(
+                "[QuadSheetKeep] entity_id=%s kept_sheet=%s rejected_cell=%s",
+                getattr(entity, "id", None),
+                candidate,
+                proposed,
+            )
+            return candidate
+    return proposed
 QUAD_DEGREE_LINE_PATTERN = re.compile(r"四宫度数\s*[=：:]\s*(?P<body>[^。\n]+)")
 QUAD_DEGREE_PAIR_PATTERN = re.compile(
     r"(?P<pos>左上|右上|左下|右下)\s*[=：:]?\s*(?P<deg>0|90|180|270)\s*度"
@@ -2615,7 +2727,12 @@ def compose_stored_quad_prompt(
     quad = _quad_only_prompt(returned_prompt)
     if quad:
         parts.append(quad)
-    return "\n\n".join(parts).strip()
+    text = "\n\n".join(parts).strip()
+    if not text:
+        return ""
+    if text.startswith(QUAD_SHEET_SENTENCE):
+        return text
+    return f"{QUAD_SHEET_SENTENCE}\n\n{text}"
 
 
 def format_main_environment_quad_apply_failure(

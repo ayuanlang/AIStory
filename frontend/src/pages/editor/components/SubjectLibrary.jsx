@@ -46,6 +46,9 @@ import {
     QUAD_CELL_POSITIONS,
     isCollidingGridCellUrl,
     readQuadCellImages,
+    quadSheetImageUrl,
+    entityImageMatchesQuadCell,
+    mainEnvironmentDisplayImageUrl,
     singleCellEditInstruction,
     mainEnvironmentDesignDescription,
     withMainEnvironmentOpening,
@@ -1409,6 +1412,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const onMainEnvironmentImageReadyRef = useRef(null);
     const quadCellStoreRef = useRef(new Map());
     const quadCellInflightRef = useRef({});
+    const quadSheetRepairRef = useRef(new Set());
     const loadEntitiesRef = useRef(async () => []);
     const RECENT_SUBJECT_IMAGE_URL_TTL_MS = 1000 * 60 * 10;
     const subjectImageJobTerminalLogRef = useRef(new Set());
@@ -3275,10 +3279,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             return String(currentEntry?.jobId || '').trim() === stableExpectedJobId ? currentEntry : null;
         };
 
-        const notifyMainEnvironmentImage = (entityId, imageUrl) => {
+        const notifyMainEnvironmentImage = (entityId, imageUrl, previewUrl) => {
             const notify = onMainEnvironmentImageReadyRef.current;
             if (typeof notify !== 'function') return;
-            void Promise.resolve(notify(entityId, imageUrl)).catch((error) => {
+            void Promise.resolve(notify(entityId, imageUrl, previewUrl)).catch((error) => {
                 console.warn('main environment quad crop failed', error);
             });
         };
@@ -3429,7 +3433,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                 onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
                             }
                             refreshSubjectAssetsAfterImageCompletion(entityId);
-                            notifyMainEnvironmentImage(entityId, recoveredUrl);
+                            notifyMainEnvironmentImage(entityId, recoveredUrl, generatedUrl);
                             continue;
                         }
 
@@ -3733,9 +3737,28 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     && prevLocalImageUrl
                     && prevLocalImageUrl === recentImageUrl
                 );
-                const resolvedImageUrl = keepRecentImage
+                let resolvedImageUrl = keepRecentImage
                     ? recentImageUrl
                     : (keepPrevLocalImage ? prevLocalImageUrl : backendImageUrl);
+                const localEntity = (allEntitiesRef.current || []).find((entry) => String(entry?.id || '') === stableEntityId);
+                const sheetDisplay = mainEnvironmentDisplayImageUrl(item, resolvedImageUrl, localEntity);
+                if (sheetDisplay && sheetDisplay !== resolvedImageUrl) {
+                    resolvedImageUrl = sheetDisplay;
+                    recentlyCompletedSubjectImageUrlsRef.current = {
+                        ...(recentlyCompletedSubjectImageUrlsRef.current || {}),
+                        [stableEntityId]: {
+                            imageUrl: sheetDisplay,
+                            updatedAt: Date.now(),
+                        },
+                    };
+                    const repairKey = `${stableEntityId}::${backendImageUrl}`;
+                    if (backendImageUrl && !quadSheetRepairRef.current.has(repairKey)) {
+                        quadSheetRepairRef.current.add(repairKey);
+                        void updateEntity(stableEntityId, { image_url: sheetDisplay }).catch(() => {
+                            quadSheetRepairRef.current.delete(repairKey);
+                        });
+                    }
+                }
                 const nextItem = resolvedImageUrl && resolvedImageUrl !== backendImageUrl
                     ? { ...item, image_url: resolvedImageUrl }
                     : item;
@@ -7178,7 +7201,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const uniqueName = `grid-cell-${positionCode}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}.jpg`;
         const file = new File([outBlob], uniqueName, { type: 'image/jpeg' });
         const uploaded = await uploadAsset(file, {
-            asset_type: 'subject',
+            asset_type: 'quad_cell',
+            source_asset_url: imageUrl,
             remark: 'derived_grid_regen_ref',
         });
         const url = String(uploaded?.url || '').trim();
@@ -7187,13 +7211,39 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     }, [uploadAsset]);
 
     const persistMainEnvironmentQuadCells = useCallback(async (mainEntity, imageUrl) => {
-        const sourceUrl = String(imageUrl || mainEntity?.image_url || '').trim();
+        let sourceUrl = String(imageUrl || mainEntity?.image_url || '').trim();
+        const storedSheet = quadSheetImageUrl(mainEntity);
+        if (storedSheet && entityImageMatchesQuadCell(mainEntity, sourceUrl) && !sameMediaUrl(storedSheet, sourceUrl)) {
+            sourceUrl = storedSheet;
+        }
         const mainId = String(mainEntity?.id || '').trim();
         if (!mainId || mainId === 'new' || !sourceUrl) return null;
         const cacheKey = `${mainId}::${sourceUrl}`;
         const inflight = quadCellInflightRef.current[cacheKey];
         if (inflight) return inflight;
         const job = (async () => {
+            const portrait = String(mainEntity?.image_url || '').trim();
+            if (entityImageMatchesQuadCell(mainEntity, portrait) && !sameMediaUrl(portrait, sourceUrl)) {
+                const restored = await updateEntity(mainId, {
+                    image_url: sourceUrl,
+                    quad_sheet_image_url: sourceUrl,
+                });
+                const restoredUrl = String(restored?.image_url || '').trim();
+                const displayUrl = restoredUrl && sameMediaUrl(restoredUrl, sourceUrl) && !entityImageMatchesQuadCell(mainEntity, restoredUrl)
+                    ? restoredUrl
+                    : sourceUrl;
+                const nextAttrs = {
+                    ...parseEntityCustomAttributes(mainEntity),
+                    ...(restored?.custom_attributes && typeof restored.custom_attributes === 'object' ? restored.custom_attributes : {}),
+                    quad_sheet_image_url: sourceUrl,
+                };
+                applyEntityLocalPatch(mainId, { custom_attributes: nextAttrs, image_url: displayUrl });
+                allEntitiesRef.current = (allEntitiesRef.current || []).map((item) => (
+                    String(item?.id) === mainId
+                        ? { ...item, image_url: displayUrl, custom_attributes: nextAttrs }
+                        : item
+                ));
+            }
             const cached = quadCellStoreRef.current.get(cacheKey);
             const cachedReady = cached && QUAD_CELL_POSITIONS.every((position) => {
                 const url = String(cached[position] || '').trim();
@@ -7219,19 +7269,31 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 return [position, url];
             }));
             const cells = Object.fromEntries(entries);
+            const sheetRecord = { source_url: sourceUrl, cells };
             const saved = await updateEntity(mainId, {
-                quad_cell_images: { source_url: sourceUrl, cells },
+                image_url: sourceUrl,
+                quad_sheet_image_url: sourceUrl,
+                quad_cell_images: sheetRecord,
             });
+            const returnedUrl = String(saved?.image_url || '').trim();
+            const returnedIsCell = entityImageMatchesQuadCell(
+                { type: 'environment', custom_attributes: { quad_cell_images: sheetRecord, quad_sheet_image_url: sourceUrl } },
+                returnedUrl,
+            );
+            const displayUrl = returnedUrl && !returnedIsCell && sameMediaUrl(returnedUrl, sourceUrl)
+                ? returnedUrl
+                : sourceUrl;
             quadCellStoreRef.current.set(cacheKey, cells);
             const nextAttrs = {
                 ...parseEntityCustomAttributes(mainEntity),
                 ...(saved?.custom_attributes && typeof saved.custom_attributes === 'object' ? saved.custom_attributes : {}),
-                quad_cell_images: { source_url: sourceUrl, cells },
+                quad_sheet_image_url: sourceUrl,
+                quad_cell_images: sheetRecord,
             };
-            applyEntityLocalPatch(mainId, { custom_attributes: nextAttrs, image_url: sourceUrl });
+            applyEntityLocalPatch(mainId, { custom_attributes: nextAttrs, image_url: displayUrl });
             allEntitiesRef.current = (allEntitiesRef.current || []).map((item) => (
                 String(item?.id) === mainId
-                    ? { ...item, image_url: sourceUrl, custom_attributes: nextAttrs }
+                    ? { ...item, image_url: displayUrl, custom_attributes: nextAttrs }
                     : item
             ));
             onLog?.(
@@ -7324,12 +7386,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return [cropUrl, ...kept.filter((url) => !sameMediaUrl(url, cropUrl))];
     }, [ensureMainQuadCellUrl, onLog, t]);
 
-    onMainEnvironmentImageReadyRef.current = async (entityId, imageUrl) => {
+    onMainEnvironmentImageReadyRef.current = async (entityId, imageUrl, previewUrl) => {
         const stableId = String(entityId || '').trim();
-        const sourceUrl = String(imageUrl || '').trim();
+        let sourceUrl = String(imageUrl || '').trim();
+        const preview = String(previewUrl || '').trim();
         if (!stableId || !sourceUrl) return null;
         const entity = (allEntitiesRef.current || []).find((item) => String(item?.id) === stableId);
         if (!entity || !isMainEnvironmentEntity(entity)) return null;
+        const storedSheet = quadSheetImageUrl(entity);
+        if (storedSheet && entityImageMatchesQuadCell(entity, sourceUrl) && !sameMediaUrl(storedSheet, sourceUrl)) {
+            sourceUrl = storedSheet;
+        } else if (preview && entityImageMatchesQuadCell(entity, sourceUrl) && !entityImageMatchesQuadCell(entity, preview)) {
+            sourceUrl = preview;
+        }
         try {
             return await persistMainEnvironmentQuadCells({ ...entity, image_url: sourceUrl }, sourceUrl);
         } catch (error) {

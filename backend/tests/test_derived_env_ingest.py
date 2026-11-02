@@ -10,6 +10,7 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     compose_derived_view_prompt,
     align_returned_quad_rows,
     apply_main_environment_quad_prompts,
+    QUAD_SHEET_SENTENCE,
     compose_stored_quad_prompt,
     environment_opening_to_keep,
     extract_named_design_openings,
@@ -20,9 +21,32 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     quad_cells_prompt_ready,
     parse_quad_degrees_from_prompt,
     resolve_grid_for_angle,
+    retain_quad_sheet_image_url,
     build_derived_environment_item,
     merge_derived_environment_groups,
 )
+
+
+def test_cropped_cell_does_not_replace_quad_sheet():
+    entity = type("Entity", (), {})()
+    entity.id = 7
+    entity.image_url = "https://cdn.example/sheet.png?token=old"
+    entity.custom_attributes = {
+        "quad_sheet_image_url": "https://cdn.example/sheet.png?token=old",
+        "quad_cell_images": {
+            "source_url": "https://cdn.example/sheet.png?token=old",
+            "cells": {
+                "左上": "https://cdn.example/tl.jpg",
+                "右上": "https://cdn.example/tr.jpg",
+                "左下": "https://cdn.example/bl.jpg",
+                "右下": "https://cdn.example/br.jpg",
+            },
+        },
+    }
+    assert retain_quad_sheet_image_url(entity, "https://cdn.example/tl.jpg?e=1") == entity.image_url
+    entity.image_url = "https://cdn.example/tl.jpg"
+    assert retain_quad_sheet_image_url(entity, "https://cdn.example/tl.jpg") == "https://cdn.example/sheet.png?token=old"
+    assert retain_quad_sheet_image_url(entity, "https://cdn.example/new-sheet.png") == "https://cdn.example/new-sheet.png"
 
 
 SAMPLE = """【主体定位方案】掌柜=方式=相对｜锚=柜台｜组=无
@@ -272,7 +296,8 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
         "【北壁】\n白色瓷砖墙。\n"
     )
     stored = compose_stored_quad_prompt(draft, cells)
-    assert stored.startswith("【定位】")
+    assert stored.startswith(QUAD_SHEET_SENTENCE)
+    assert "【定位】" in stored
     assert "【主体外形】" in stored
     assert "黑铸铁" in stored
     assert "【色彩说明】" in stored
@@ -287,15 +312,17 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     assert "旧格" not in replaced
     assert "[0度格-左上·北]" in replaced
     plain = compose_stored_quad_prompt("【构图】\n大厅。\n", cells)
-    assert plain.startswith("【四向拼图】")
+    assert plain.startswith(QUAD_SHEET_SENTENCE)
+    assert "【四向拼图】" in plain
     assert "【构图】" not in plain
-    assert compose_stored_quad_prompt("", cells) == cells.strip()
+    assert compose_stored_quad_prompt("", cells) == f"{QUAD_SHEET_SENTENCE}\n\n{cells.strip()}"
     echoed = compose_stored_quad_prompt(
         "",
         "【主环境设计稿】客栈大堂\n" + draft + cells,
         draft,
     )
-    assert echoed.startswith("【定位】")
+    assert echoed.startswith(QUAD_SHEET_SENTENCE)
+    assert "【定位】" in echoed
     assert "【主体外形】" in echoed
     assert "【主环境设计稿】" not in echoed
     assert "【六面一次】" not in echoed

@@ -2082,6 +2082,12 @@ def _backfill_episode_media_from_library(
             if current and not overwrite_existing:
                 stats["skipped_existing"] += 1
                 continue
+            from app.services.script_analysis_flow.derived_env_ingest import retain_quad_sheet_image_url
+
+            kept_sheet = retain_quad_sheet_image_url(entity, stable_url)
+            if kept_sheet != stable_url:
+                stats["skipped_existing"] += 1
+                continue
             stats["bound_entities"] += 1
             if not dry_run and (overwrite_existing or not current):
                 entity.image_url = stable_url

@@ -329,6 +329,34 @@ export function sameMediaUrl(left, right) {
     return Boolean(leftPath) && leftPath === rightPath;
 }
 
+export function quadSheetImageUrl(entity) {
+    const attrs = readAttrs(entity);
+    const record = parseJsonRecord(attrs[QUAD_CELL_IMAGES_ATTR]);
+    const fromRecord = String(record?.source_url || record?.sourceUrl || '').trim();
+    const explicit = String(attrs.quad_sheet_image_url || '').trim();
+    return fromRecord || explicit;
+}
+
+export function entityImageMatchesQuadCell(entity, url) {
+    const current = String(url || '').trim();
+    if (!current) return false;
+    const cells = readQuadCellImages(entity, '', { allowStale: true });
+    if (!cells) return false;
+    return Object.values(cells).some((cell) => sameMediaUrl(cell, current));
+}
+
+export function mainEnvironmentDisplayImageUrl(incoming, imageUrl, localEntity = null) {
+    const current = String(imageUrl || '').trim();
+    const entity = isMainEnvironmentEntity(incoming) ? incoming : localEntity;
+    if (!isMainEnvironmentEntity(entity) || !current) return current;
+    const sheet = quadSheetImageUrl(localEntity) || quadSheetImageUrl(incoming);
+    const cellEntity = readQuadCellImages(localEntity, '', { allowStale: true }) ? localEntity : incoming;
+    if (sheet && entityImageMatchesQuadCell(cellEntity, current) && !sameMediaUrl(sheet, current)) {
+        return sheet;
+    }
+    return current;
+}
+
 export function readQuadCellImages(entity, sourceUrl = '', options = {}) {
     const allowStale = Boolean(options.allowStale);
     const record = parseJsonRecord(readAttrs(entity)[QUAD_CELL_IMAGES_ATTR]);

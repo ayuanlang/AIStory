@@ -1141,12 +1141,21 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
             )
             return
 
-    tech_attrs = {}
-    try:
-        tech_attrs = json.loads(entity.custom_attributes or "{}")
-        if not isinstance(tech_attrs, dict): tech_attrs = {}
-    except Exception:
-        pass
+    raw_attrs = getattr(entity, "custom_attributes", None)
+    if isinstance(raw_attrs, dict):
+        tech_attrs = dict(raw_attrs)
+    elif isinstance(raw_attrs, str) and raw_attrs.strip():
+        try:
+            parsed_attrs = json.loads(raw_attrs)
+            tech_attrs = parsed_attrs if isinstance(parsed_attrs, dict) else {}
+        except Exception:
+            tech_attrs = {}
+    else:
+        tech_attrs = {}
+
+    from app.services.script_analysis_flow.derived_env_ingest import retain_quad_sheet_image_url
+
+    stable_media_url = retain_quad_sheet_image_url(entity, stable_media_url)
 
     if str(entity.image_url or "").strip() == stable_media_url and (oss_uploaded_success is None or tech_attrs.get("oss_uploaded_success") == oss_uploaded_success):
         logger.info(
@@ -1170,12 +1179,8 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
     )
     if oss_uploaded_success is not None:
         tech_attrs["oss_uploaded_success"] = oss_uploaded_success
-        entity.custom_attributes = json.dumps(tech_attrs, ensure_ascii=False)
-        
-    if oss_uploaded_success is not None:
-        tech_attrs["oss_uploaded_success"] = oss_uploaded_success
-        entity.custom_attributes = json.dumps(tech_attrs, ensure_ascii=False)
-        
+        entity.custom_attributes = tech_attrs
+
     entity.image_url = stable_media_url
     db.add(entity)
     db.commit()

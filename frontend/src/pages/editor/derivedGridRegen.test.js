@@ -13,6 +13,9 @@ import {
     omitsProjectStyleInjection,
     quadNamesMissingFromResult,
     readQuadCellImages,
+    quadSheetImageUrl,
+    entityImageMatchesQuadCell,
+    mainEnvironmentDisplayImageUrl,
     singleCellEditInstruction,
     stripProjectStyleInjection,
 } from './derivedGridRegen.js';
@@ -63,6 +66,36 @@ describe('saved quad cells', () => {
             左上: 'https://cdn.example/tl.jpg',
             右上: 'https://cdn.example/tr.jpg',
         });
+    });
+
+    it('keeps the original four-grid when the stored portrait is the first cell', () => {
+        const entity = {
+            type: 'environment',
+            name: '总裁办',
+            image_url: 'https://cdn.example/tl.jpg?e=2',
+            custom_attributes: {
+                quad_sheet_image_url: 'https://cdn.example/sheet.png?token=old',
+                quad_cell_images: {
+                    source_url: 'https://cdn.example/sheet.png?token=old',
+                    cells: {
+                        左上: 'https://cdn.example/tl.jpg',
+                        右上: 'https://cdn.example/tr.jpg',
+                        左下: 'https://cdn.example/bl.jpg',
+                        右下: 'https://cdn.example/br.jpg',
+                    },
+                },
+            },
+        };
+        assert.equal(quadSheetImageUrl(entity), 'https://cdn.example/sheet.png?token=old');
+        assert.equal(entityImageMatchesQuadCell(entity, entity.image_url), true);
+        assert.equal(
+            mainEnvironmentDisplayImageUrl(entity, entity.image_url),
+            'https://cdn.example/sheet.png?token=old',
+        );
+        assert.equal(
+            mainEnvironmentDisplayImageUrl(entity, 'https://cdn.example/new-sheet.png'),
+            'https://cdn.example/new-sheet.png',
+        );
     });
 
     it('turns a quad edit instruction into a single-cell edit', () => {
