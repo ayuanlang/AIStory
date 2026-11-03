@@ -1102,50 +1102,90 @@ def seal_cell_edit_instruction(text: Optional[str], *, quad_positions: bool = Fa
     return raw
 
 
-_VISIBLE_FACES = {
-    0: (("正面", "北壁"), ("左侧面", "西壁"), ("右侧面", "东壁"), ("中部", "中区"), ("上", "上")),
-    90: (("正面", "东壁"), ("左侧面", "北壁"), ("右侧面", "南壁"), ("中部", "中区"), ("上", "上")),
-    180: (("正面", "南壁"), ("左侧面", "东壁"), ("右侧面", "西壁"), ("中部", "中区"), ("上", "上")),
-    270: (("正面", "西壁"), ("左侧面", "南壁"), ("右侧面", "北壁"), ("中部", "中区"), ("上", "上")),
-}
+_HIDDEN_WALL_BY_ANGLE = {0: "南壁", 90: "西壁", 180: "北壁", 270: "东壁"}
 _OPENING_SECTION_RE = re.compile(
     r"【(定位|主体外形|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|四向拼图)】"
 )
+_FIELD_AT = re.compile(
+    r"(?:^|\n|。|｜|\|)([ \t]*[-•·]?[ \t]*)((?:北壁|东壁|南壁|西壁|下|上|中))\s*="
+)
+_OPENING_GRID_RELATION = (
+    "开篇与宫格的关系：宫格是开篇按本角度转出的画面。"
+    "下=进宫格中部的地面，用痕迹和使用痕迹留在这块地面上。"
+    "中=进宫格中部。中=点名的主体留在中部。"
+    "中=里的舞台范围、舞台大小、动线用来核对这一具还在。"
+    "上=进宫格上。"
+    "三面可见的壁转到正面、左侧面、右侧面。"
+    "0度望北，正面是北壁，左是西壁，右是东壁，镜头后是南壁。"
+    "90度望东，正面是东壁，左是北壁，右是南壁，镜头后是西壁。"
+    "180度望南，正面是南壁，左是东壁，右是西壁，镜头后是北壁。"
+    "270度望西，正面是西壁，左是南壁，右是北壁，镜头后是东壁。"
+    "对位例子：开篇写用痕迹=战备靴痕与推车轮迹，上=外露重型通风管道与电缆桥架顶棚，中=中置指挥台。"
+    "宫格中部要有这块地面、战备靴痕、推车轮迹和中置指挥台，宫格上要有外露重型通风管道与电缆桥架顶棚。"
+    "例子只说明键怎么对到格子，这一场以注入的开篇为准。\n"
+    "注入的是开篇全文，并去掉镜头后面那一壁。"
+    "用户消息写明这一壁的名字。本次一致性检查该壁不可见，不用检查，也不要求图片里出现这一壁。"
+    "开篇其余句子仍可能点到这一壁的名字，仍不用检查这一壁。"
+    "中=、下=、用痕迹、上=和另外三壁都要核对。\n"
+)
 
 
-def _opening_section(text: str, name: str) -> str:
+def hidden_wall_for_angle(angle: Optional[int]) -> str:
+    """The wall behind the camera. 0 looks north, so the south wall is hidden."""
+    try:
+        value = int(angle)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ""
+    return _HIDDEN_WALL_BY_ANGLE.get(value, "")
+
+
+def hidden_wall_notice(angle: Optional[int]) -> str:
+    wall = hidden_wall_for_angle(angle)
+    if wall:
+        return f"本次一致性检查，{wall}在镜头后面，不可见，不用检查。"
+    return "未能识别角度，开篇四壁都保留。"
+
+
+def _drop_bracket_section(text: str, name: str) -> str:
     body = str(text or "")
     marks = list(_OPENING_SECTION_RE.finditer(body))
     for index, match in enumerate(marks):
         if match.group(1) != name:
             continue
         end = marks[index + 1].start() if index + 1 < len(marks) else len(body)
-        return body[match.start():end].strip()
-    return ""
+        return body[:match.start()] + body[end:]
+    return body
 
 
-def _opening_up_line(text: str) -> str:
-    six = _opening_section(text, "六面一次")
-    for line in six.splitlines():
-        if "上=" in line:
-            return line.strip()
-    return ""
-
-
-def visible_opening_faces(opening: str, angle: Optional[int]) -> str:
-    """The five faces this view can see: front, left, right, center, and up."""
-    faces = _VISIBLE_FACES.get(int(angle) if angle in (0, 90, 180, 270) else -1)
-    if not faces:
-        return ""
-    lines: List[str] = []
-    for role, section in faces:
-        if section == "上":
-            body = _opening_up_line(opening)
-            lines.append(f"{role}：{body or '（开篇没有上=）'}")
+def _drop_named_field(text: str, key: str) -> str:
+    """Drop one opening field such as 南壁=, including a piped or sentence-joined value."""
+    matches = list(_FIELD_AT.finditer(text))
+    if not any(match.group(2) == key for match in matches):
+        return text
+    pieces: List[str] = []
+    cursor = 0
+    for index, match in enumerate(matches):
+        if match.group(2) != key:
             continue
-        body = _opening_section(opening, section)
-        lines.append(f"{role}（{section}）：{body or f'（开篇没有【{section}】）'}")
-    return "\n".join(lines)
+        has_next = index + 1 < len(matches)
+        cut = match.start() if has_next else match.start(2)
+        next_at = matches[index + 1].start() if has_next else len(text)
+        pieces.append(text[cursor:cut])
+        cursor = next_at
+    pieces.append(text[cursor:])
+    return "".join(pieces)
+
+
+def opening_without_hidden_wall(opening: str, angle: Optional[int]) -> str:
+    """Full opening, with the wall behind this camera removed when it can be found."""
+    wall = hidden_wall_for_angle(angle)
+    body = str(opening or "").strip()
+    if not wall or not body:
+        return body
+    body = _drop_named_field(_drop_bracket_section(body, wall), wall)
+    body = re.sub(r"[ \t]+\n", "\n", body)
+    body = re.sub(r"\n{3,}", "\n\n", body)
+    return body.strip()
 
 
 def replace_grid_cell(main_prompt: str, angle: int, revised_cell: str) -> str:
@@ -1628,6 +1668,7 @@ def _build_derived_main_consistency_messages(
     own_prompt = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
     system_prompt = (
         "你是衍生主环境一致性校对。这张图是基于被依赖主环境生成的一块新主环境，仍然是四格拼图。\n"
+        "四壁都核对。北壁、东壁、南壁、西壁各自在它转到正面、左侧面或右侧面的那一格里检查。\n"
         "一致的要点：四格是被依赖主环境物理世界四向的视角合理转换，主体匹配，朝向按望向合理转换，重点核对中部。"
         "图片必须与被依赖主环境、对应宫格和 Delta 一致。Delta 没写到的，宫格与被依赖主环境不一致时，以被依赖主环境为准，改这一份四格或改图，不改被依赖主环境。\n"
         "注入只有两部分：被依赖主环境的完整提示词，以及这份衍生Delta。用这两部分一起核对。\n"
@@ -1672,7 +1713,7 @@ def _cell_wall_and_grid(source: Optional[Any], angle: Optional[int]) -> tuple:
     cell = ""
     if angle is not None and main_prompt:
         cell = str(extract_grid_cell_prompt(main_prompt, angle).get("cell_prompt") or "").strip()
-    return visible_opening_faces(opening, angle), cell
+    return opening_without_hidden_wall(opening, angle), cell
 
 
 def _build_cell_consistency_messages(
@@ -1701,14 +1742,13 @@ def _build_cell_consistency_messages(
         system_prompt = (
             "你是衍生主环境名下这一角的一致性校对。这次只核对本角度的一张已经裁出的单格参考图。\n"
             "这一格必须是开篇物理世界四向转到本角度后的合理视角转换，主体匹配，朝向按望向合理转换，重点核对中部。"
-            "图片必须同时符合开篇可见五壁、这一格正文和 Delta。Delta 没写到的，判断以开篇为准：正文不符只写进 summary，不改这一格；图片按开篇和 Delta 改。\n"
-            "注入只有三部分：这一角看得见的五壁（正面、左侧面、右侧面、中部、上），"
-            "衍生主环境四宫里这一格的正文，以及衍生Delta。"
-            "这一格正文取自衍生主环境，不取被依赖的原来主环境。"
-            "镜头后面的那一壁没有注入，不要用它。不要用没注入的其余正文。\n"
+            "图片必须同时符合开篇里本次要检查的内容、这一格正文和 Delta。Delta 没写到的，判断以开篇为准：正文不符只写进 summary，不改这一格；图片按开篇和 Delta 改。\n"
+            + _OPENING_GRID_RELATION
+            + "注入三部分：去掉镜头后那一壁的开篇，衍生主环境四宫里这一格的正文，以及衍生Delta。"
+            "这一格正文取自衍生主环境，不取被依赖的原来主环境。\n"
             "做两件核对，两件都要有结论：\n"
-            "1. 这一格正文与这五壁的个数、朝向、位置是否一致。Delta 不改这一格正文。不符就在 summary 里写明。revised_cell 必须为 null。\n"
-            "2. 参考图是否同时符合这一格正文、这五壁，以及 Delta。Delta 写到的变化必须出现在这一张图上。Delta 没写的保持这一格原样。不符就写改这一张图的指令。\n"
+            "1. 这一格正文与开篇里本次要检查的内容，在个数、朝向、位置上是否一致。镜头后那一壁不用对。Delta 不改这一格正文。不符就在 summary 里写明。revised_cell 必须为 null。\n"
+            "2. 参考图是否同时符合这一格正文、这些开篇内容，以及 Delta。镜头后那一壁不用对。Delta 写到的变化必须出现在这一张图上。Delta 没写的保持这一格原样。不符就写改这一张图的指令。\n"
             "不要把 Delta 写回被依赖主环境，也不要改另外三格。revised_main_prompt 必须为 null。\n"
             "revised_prompt 是写进这个衍生环境、之后用来生图的提示词。只保留这一格正文里仍然成立的句子，并写上 Delta 在这一格的可见变化。不要写切割。\n"
             "image_edit_instruction 只改这一张单格图。不写米，不写东南西北，不写另外三格，不写不要重画整张四宫。\n"
@@ -1720,17 +1760,17 @@ def _build_cell_consistency_messages(
         system_prompt = (
             "你是衍生环境一致性校对。这次只核对本角度的一张已经裁出的单格参考图。\n"
             "这一格必须是开篇物理世界四向转到本角度后的合理视角转换，主体匹配，朝向按望向合理转换，重点核对中部。"
-            "图片必须与开篇可见五壁以及这一格正文一致。开篇与宫格不一致时，以开篇为准，改这一格，不改开篇。\n"
-            "注入只有两部分：开篇里这一角看得见的五壁（正面、左侧面、右侧面、中部、上），以及这一格的四宫格正文。"
-            "镜头后面的那一壁没有注入，不要用它。\n"
+            "图片必须与开篇里本次要检查的内容以及这一格正文一致。开篇与宫格不一致时，以开篇为准，改这一格，不改开篇。\n"
+            + _OPENING_GRID_RELATION
+            + "注入两部分：去掉镜头后那一壁的开篇，以及这一格的四宫格正文。\n"
             "做两件核对，两件都要有结论：\n"
-            "1. 四宫格这一格的正文，与这五壁的个数、朝向、位置是否一致。不符就改这一格正文。\n"
-            "2. 参考图是否同时符合这一格正文和这五壁。不符就写改这一张图的指令。\n"
+            "1. 四宫格这一格的正文，与开篇里本次要检查的内容在个数、朝向、位置上是否一致。镜头后那一壁不用对。不符就改这一格正文。\n"
+            "2. 参考图是否同时符合这一格正文和这些开篇内容。镜头后那一壁不用对。不符就写改这一张图的指令。\n"
             "两件可以同时不符。宫格要改就给 revised_cell。图片要改就给 image_edit_instruction。两件都要改就两个都给。\n"
             "revised_prompt 是写进这个衍生环境、之后用来生图的提示词。"
             "宫格改了，就用改后的这一格；宫格没改而衍生提示词还空，就用当前这一格正文。"
             "不要写切割，不要写另外三格，不要写只切割。\n"
-            "开篇五壁不改。另外三格不改。revised_main_prompt 必须为 null。\n"
+            "开篇不改。另外三格不改。revised_main_prompt 必须为 null。\n"
             "image_edit_instruction 只改这一张单格图。不写米，不写东南西北，不写另外三格，不写不要重画整张四宫。\n"
             "两件都相符时 consistent 为 true，revised_cell、revised_prompt、image_edit_instruction 都为 null。\n"
             "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
@@ -1738,8 +1778,9 @@ def _build_cell_consistency_messages(
         )
     parts = [
         f"检查对象=衍生环境单格。主体={getattr(entity, 'name', '')}。角度={angle if angle is not None else '未知'}。",
-        "开篇可见五壁：" if not from_derived_main else "被依赖主环境开篇可见五壁：",
-        faces or "（没能按角度从开篇抽出可见五壁）",
+        hidden_wall_notice(angle),
+        "开篇：" if not from_derived_main else "被依赖主环境开篇：",
+        faces or "（主环境没有开篇）",
         f"对应宫格={angle if angle is not None else ''}度格：",
         cell or "（主环境提示词里没有这一格）",
     ]
@@ -1948,6 +1989,7 @@ def build_consistency_messages(
     else:
         parts.append(
             "这是主环境四宫格图。各宫格是开篇物理世界四向的视角转换：左上0度望北、右上90度望东、左下180度望南、右下270度望西。"
+            "四壁都核对。北壁、东壁、南壁、西壁各自在它转到正面、左侧面或右侧面的那一格里检查。"
             "逐格核对正文和图片的主体个数、件数核销、朝向、位置，重点核对中部。图片必须与开篇及对应宫格一致。开篇与宫格不一致时，以开篇为准。"
             "和开篇不符时，把改过的宫格写进 revised_prompt。没改的格子可以不写。不要重抄开篇。revised_main_prompt 置 null。"
             "只有开篇内部互相矛盾时，summary 以「开篇有误：」开头，并在 revised_prompt 里把改正后的开篇写在格子前面。"

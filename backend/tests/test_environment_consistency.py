@@ -317,6 +317,9 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "主体个数、件数核销、朝向、位置" in user
     assert "没改的格子可以不写" in user
     assert "按左上格、左下格、右上格、右下格描述要改的宫格" in user
+    assert "四壁都核对" in user
+    assert "不用检查" not in user
+    assert "不用检查" not in system
     assert "用户补充，这次要特别处理" not in user
     noted = build_consistency_messages(
         image_url="http://example.test/grid.png",
@@ -362,19 +365,67 @@ def test_derived_consistency_message_includes_opening_and_cell():
         kind="cell",
     )
     user = messages[1]["content"][0]["text"]
-    assert "开篇可见五壁" in user
-    assert "正面（东壁）" in user
+    assert "本次一致性检查，西壁在镜头后面，不可见，不用检查。" in user
+    assert "开篇：" in user
     assert "别名=门。" in user
-    assert "左侧面（北壁）" in user
     assert "别名=窗。" in user
-    assert "右侧面（南壁）" in user
-    assert "中部（中区）" in user
-    assert "上：上=天花。" in user
+    assert "别名=柜。" in user
+    assert "桌。" in user
+    assert "上=天花。" in user
     assert "别名=镜。" not in user
     assert "主环境完整提示词" not in user
     assert "对应宫格=90度格：" in user
     assert "台在画面侧面。" in user
     assert "两件核对" in messages[0]["content"]
+    assert "用痕迹=战备靴痕与推车轮迹" in messages[0]["content"]
+    assert "中=中置指挥台" in messages[0]["content"]
+
+
+def test_cell_check_keeps_center_and_names_the_hidden_wall():
+    opening = (
+        "【六面一次】\n"
+        "- 下=混凝土地。用痕迹=战备靴痕与推车轮迹。\n"
+        "- 上=外露重型通风管道与电缆桥架顶棚｜号=#2｜高度=9.6米。\n"
+        "- 中=中置指挥台1｜舞台范围=中置指挥台向南延伸至下沉通道门框五步内｜"
+        "舞台大小=纵深=动线全长。[@中置指挥台]号=#3｜形制=长方/条案｜长边平行=X线｜朝向=朝上｜占地=2.8×1.4米。\n"
+        "- 北壁=闸门。南壁=下沉通道门。西壁=配电柜。\n"
+        "【北壁】\n- 别名=闸门。北壁=位置=整面居北。\n"
+        "【东壁】\n- 别名=管线。东壁=位置=整面居东。\n"
+        "【南壁】\n- 别名=下沉通道门。南壁=位置=整面居南。\n"
+        "【西壁】\n- 别名=配电柜。西壁=位置=整面居西。\n"
+    )
+    main = Dummy(
+        id=3,
+        name="指挥室",
+        prompt=MAIN_PROMPT,
+        description=opening,
+        attrs={"main_environment_opening": opening},
+    )
+    derived = Dummy(
+        id=9,
+        name="0度指挥室",
+        prompt="",
+        attrs={"derived_kind": "first_cut", "view_angle_from_main": 0},
+    )
+    messages = build_consistency_messages(
+        image_url="http://example.test/crop.png",
+        entity=derived,
+        main_entity=main,
+        checked_prompt="",
+        kind="cell",
+    )
+    user = messages[1]["content"][0]["text"]
+    assert "本次一致性检查，南壁在镜头后面，不可见，不用检查。" in user
+    assert "用痕迹=战备靴痕与推车轮迹" in user
+    assert "上=外露重型通风管道与电缆桥架顶棚" in user
+    assert "[@中置指挥台]号=#3" in user
+    assert "别名=闸门。" in user
+    assert "别名=配电柜。" in user
+    assert "别名=下沉通道门。" not in user
+    assert "南壁=位置=整面居南" not in user
+    assert "南壁=下沉通道门" not in user
+    assert "北壁=闸门" in user
+    assert "西壁=配电柜" in user
 
 
 def test_derived_main_angle_injects_source_walls_cell_and_delta():
@@ -418,8 +469,8 @@ def test_derived_main_angle_injects_source_walls_cell_and_delta():
         depended_entity=source,
     )
     user = messages[1]["content"][0]["text"]
-    assert "被依赖主环境开篇可见五壁" in user
-    assert "正面（东壁）" in user
+    assert "被依赖主环境开篇：" in user
+    assert "本次一致性检查，西壁在镜头后面，不可见，不用检查。" in user
     assert "别名=门。" in user
     assert "别名=镜。" not in user
     assert "对应宫格=90度格：" in user
@@ -1079,6 +1130,9 @@ def test_derived_main_consistency_injects_source_prompt_and_delta():
     user_text = messages[1]["content"][0]["text"]
     assert "被依赖主环境提示词" in user_text
     assert "台在画面前方" in user_text
+    assert "四壁都核对" in messages[0]["content"]
+    assert "不用检查" not in messages[0]["content"]
+    assert "不用检查" not in user_text
     assert "衍生Delta" in user_text
     assert "幕墙破口" in user_text
     assert "一起改" in messages[0]["content"]
