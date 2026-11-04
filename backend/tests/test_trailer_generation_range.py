@@ -51,7 +51,10 @@ def test_prompt_locks_range_and_focus():
     assert "取材范围=第3集到第8集" in block
     assert "侧重点=感情线" in block
     assert "does not replace any earlier trailer" in block
-    assert "不把范围外的高光" in block
+    assert "也可以选全集高光" in block
+    assert "高光部分优先选择 AI 优势" in block
+    assert "最终 Boss 的真面目不演" in block
+    assert "不把范围外的高光" not in block
     assert "侧重点不写进标题" in block
     assert "不超过 8 字" in block
     assert "## 预告片框架规划落点" in block
