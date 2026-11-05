@@ -141,8 +141,8 @@ def build_creative_structure_search_user_prompt(
     language: str = "",
 ) -> str:
     lines = [
-        "Reference Research Focus: first lock ONE primary MODERN/CONTEMPORARY work as the PLOT-LOGIC framework (literature / film / TV / game; prefer recent decades, not pre-modern classics as default primary). Cross-style transfer is required: a modern/contemporary engine may serve an ancient/palace/xianxia story. Then auxiliary works (older classics OK only as auxiliaries) with transferable functions. Then climax and iconic scenes; then visuals, dialogue, action blocking, and tropes.",
-        "When structuring I10, name real works, extract plot logic (not costumes/era), and write 转译 (source logic → this story's era/style). When structuring I7a/I6c, synthesize image composition, dialogue lines, physical action, emotional peak staging — transcoded to this story, not copied from the source skin.",
+        "Reference Research Focus: first lock ONE primary MODERN/CONTEMPORARY work as the PLOT-LOGIC framework (literary work / film / TV / game; prefer recent decades, not pre-modern classics as default primary). Literary works are first-class sources, alongside film, TV, and games. Cross-style transfer is required: a modern/contemporary engine may serve an ancient/palace/xianxia story. Then auxiliary works (older classics, including literary works, OK only as auxiliaries) with transferable functions. Then climax and iconic scenes; then action logic and dialogue logic, visuals, and tropes. Do not copy original lines.",
+        "When structuring I10, name real works, extract plot logic plus how a move pushes and how a line answers (not costumes/era/original sentences), and write 转译 (source logic → this story's era/style). When structuring I7a/I6c, synthesize image composition, dialogue logic, physical action, emotional peak staging — transcoded to this story, not copied from the source skin.",
         "Consume evidence in priority order: P0 first, then P1, then P2. Prefer Evidence body over URLs.",
         f"Project Title: {project_title or '(none)'}",
         f"Preferred Language: {language or 'zh'}",

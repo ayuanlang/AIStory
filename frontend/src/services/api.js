@@ -3122,6 +3122,18 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
     return result;
 }
 
+export const fetchSceneScores = async (episodeId) => {
+    const response = await api.get(`/episodes/${episodeId}/scene-scores`);
+    return response.data;
+};
+
+export const generateSceneScore = async (episodeId, payload) => {
+    const response = await api.post(`/episodes/${episodeId}/scene-scores`, payload, {
+        timeout: 600000,
+    });
+    return response.data;
+};
+
 export const generateVoice = async (prompt, provider = null, model = null, options = {}) => {
     const payload = {
         prompt,
@@ -4003,6 +4015,20 @@ export const burnShotFlowerText = async (shotId, payload = {}) => {
         lines: Array.isArray(payload.lines) ? payload.lines : [],
     }, {
         timeout: Number(payload.timeout_ms || 10 * 60 * 1000),
+    });
+    return response.data;
+};
+
+export const recognizeEditSubtitles = async (episodeId, payload = {}) => {
+    const response = await api.post(`/episodes/${episodeId}/edit/subtitles`, payload, {
+        timeout: 600000,
+    });
+    return response.data;
+};
+
+export const mergeEditCut = async (episodeId, payload = {}) => {
+    const response = await api.post(`/episodes/${episodeId}/edit/merge`, payload, {
+        timeout: 30 * 60 * 1000,
     });
     return response.data;
 };

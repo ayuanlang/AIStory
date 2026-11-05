@@ -52,6 +52,12 @@ class SceneOut(BaseModel):
         from_attributes = True
 
 
+class SceneScoreGenerateRequest(BaseModel):
+    scene_marker: str
+    system_api_id: Optional[int] = None
+    function_name: Optional[str] = None
+
+
 class SceneRegenerateRequest(BaseModel):
     user_requirements: str
     prompt_file: Optional[str] = "scene_regenerate.txt"

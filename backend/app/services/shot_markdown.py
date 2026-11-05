@@ -203,6 +203,44 @@ _ENTITY_TOKEN_RE = re.compile(
     r"(?:(?:CHAR|ENV|PROP)\s*:\s*\[[^\]]+\]|\[@[^\]]+\])"
 )
 
+_SCORE_PROMO_RE = re.compile(r"无背景音乐不含已写入的宣传片配乐[；;][^。\n]*。")
+_SCORE_LOUD_RE = re.compile(r"[，,、]?\s*配乐响亮可闻")
+_SCORE_CLAUSE_RE = re.compile(
+    r"(?:（[^）\n]{0,180}）\s*)?"
+    r"配乐(?:起|续|变／加压|变/加压|加压|收|变)"
+    r"(?:[，,]\s*(?:"
+    r"（[^）\n]{0,180}）"
+    r"|音量=(?:弱|中|强)"
+    r"|质量=(?:干净|温暖|粗糙|空灵|闷浊|清脆)"
+    r"|混响空间=(?:干·近密|短·室内|中·厅堂|长·殿宇|长·户外)"
+    r"|弱|中|强|干净|温暖|粗糙|空灵|闷浊|清脆"
+    r"|干·近密|短·室内|中·厅堂|长·殿宇|长·户外"
+    r")){0,8}"
+)
+_SCORE_PAREN_RE = re.compile(
+    r"[，,、]?\s*（[^）\n]{0,180}(?:配乐|低弦|高弦|弦乐|垫底|铺底|主奏)[^）\n]{0,80}）"
+)
+
+
+def strip_score_cues_from_video_prompt(text: Any) -> str:
+    """Drop per-shot score wording before a video model sees the prompt.
+
+    Each clip is generated alone, so a score sentence becomes a new piece at
+    every cut. Diegetic ``<sfx>`` and the closer phrase 无背景音乐 stay.
+    """
+    value = str(text or "")
+    if not value.strip():
+        return ""
+    value = _SCORE_PROMO_RE.sub("", value)
+    value = _SCORE_CLAUSE_RE.sub("", value)
+    value = _SCORE_PAREN_RE.sub("", value)
+    value = _SCORE_LOUD_RE.sub("", value)
+    value = re.sub(r"[，,]{2,}", "，", value)
+    value = re.sub(r"[，,]\s*([。；])", r"\1", value)
+    value = re.sub(r"[ \t]{2,}", " ", value)
+    value = re.sub(r"\s+([，。；])", r"\1", value)
+    return value.strip()
+
 
 def strip_video_submit_injection(text: Any) -> str:
     """Drop submit-only reference tags and anchor parentheses from page prompts.
@@ -214,6 +252,7 @@ def strip_video_submit_injection(text: Any) -> str:
     value = str(text or "")
     if not value.strip():
         return ""
+    value = strip_score_cues_from_video_prompt(value)
     value = re.sub(r"参考@Image\d+\s*", "", value, flags=re.IGNORECASE)
     value = re.sub(r"(?<![A-Za-z0-9_])@Image\d+\s*", "", value, flags=re.IGNORECASE)
     previous = None

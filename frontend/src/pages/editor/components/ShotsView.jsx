@@ -380,9 +380,11 @@ const promptHasNameplate = (text) => (
     /画幅(?:顶部中央)?叠出片内图形名牌|画面打出物理文字标签|名牌字样\s*[=＝]|名牌出字=后期烧录(?!时)|名牌出字=模型直出(?![(（])/.test(String(text || ''))
 );
 
-const readShotNameplateMode = (text) => (
-    /名牌出字=后期烧录(?!时)/.test(String(text || '')) ? 'burn' : 'model'
-);
+const readShotNameplateMode = (text) => {
+    const src = String(text || '');
+    if (/名牌出字=模型直出(?![(（])/.test(src)) return 'model';
+    return 'burn';
+};
 
 const readNameplate = (clause) => {
     const src = String(clause || '');
@@ -400,6 +402,9 @@ const readNameplate = (clause) => {
         name,
         tag,
         top: src.includes('顶部中央') || src.includes('画幅顶部中央'),
+        place: src.includes('道具下方')
+            ? '道具下方'
+            : ((src.includes('顶部中央') || src.includes('画幅顶部中央')) ? '顶部中央' : '人物下方'),
         font: pick('字体') || '魏碑',
         color: pick('字色') || '鎏金',
         size: pick('字级') || '中',
@@ -407,17 +412,23 @@ const readNameplate = (clause) => {
 };
 
 const renderNameplate = (plate, mode) => {
-    const place = plate.top ? '顶部中央' : '人物下方';
+    const place = plate.place || (plate.top ? '顶部中央' : '人物下方');
     if (mode === 'burn') {
         const body = plate.tag ? `${plate.name}｜${plate.tag}` : plate.name;
         return `名牌字样=「${body}」｜落位=${place}｜字体=${plate.font}｜字色=${plate.color}｜字级=${plate.size}｜名牌出字=后期烧录。本P禁止生成该名牌字形。`;
     }
     const tail = `字体=${plate.font}，字色=${plate.color}，字级=${plate.size}，须清晰可读，禁大字占幅｜名牌出字=模型直出`;
-    if (plate.top) {
+    if (place === '顶部中央') {
         const core = plate.tag
             ? `画幅顶部中央叠出片内图形名牌【${plate.name}】${plate.tag}】`
             : `画幅顶部中央叠出片内图形名牌【${plate.name}】`;
         return `${core}，落位=顶部中央，${tail}`;
+    }
+    if (place === '道具下方') {
+        const core = plate.tag
+            ? `画幅叠出片内图形名牌【${plate.name}】${plate.tag}】`
+            : `画幅叠出片内图形名牌【${plate.name}】`;
+        return `${core}，落位=道具下方，${tail}`;
     }
     const core = plate.tag
         ? `画幅叠出片内图形名牌【${plate.name}】${plate.tag}】`
@@ -14323,12 +14334,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         });
                     }}
                 >
+                    <option value="burn">{t('后期烧制', 'Burn in post')}</option>
                     <option value="model">{t('模型直出', 'Model paints')}</option>
-                    <option value="burn">{t('后期烧录', 'Burn in post')}</option>
                 </select>
             </div>
             <p className="mt-1 text-[10px] text-white/45">
-                {t('角色名牌和环境名牌共用这一项。后期烧录时模型不画名牌，成片后再点「烧录文字」。', 'Character and place nameplates share this switch. Burn-in-post keeps those glyphs off the model; use Burn text after the video exists.')}
+                {t('默认后期烧制。选模型直出时，由视频模型把名牌画出来。角色、环境和道具名牌共用这一项。', 'Default is post burn-in. Model paints draws the nameplates in the video model. Character, place, and prop nameplates share this switch.')}
             </p>
         </div>
     );

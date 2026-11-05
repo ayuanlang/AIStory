@@ -7,7 +7,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, LayoutList, Copy, Image as ImageIcon, FolderOpen, Maximize2, Info, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, ArrowUp, Sparkles, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw, Home } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, LayoutList, Copy, Image as ImageIcon, FolderOpen, Maximize2, Info, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, ArrowUp, Sparkles, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw, Home, Scissors } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -181,9 +181,10 @@ const ScriptEditor = lazyWithChunkReload(() => import('./editor/components/Scrip
 const SubjectLibrary = lazyWithChunkReload(() => import('./editor/components/SubjectLibrary').then(m => ({ default: m.SubjectLibrary })));
 const SceneManager = lazyWithChunkReload(() => import('./editor/components/SceneManager').then(m => ({ default: m.SceneManager })));
 const ShotsView = lazyWithChunkReload(() => import('./editor/components/ShotsView').then(m => ({ default: m.ShotsView })));
+const EditBay = lazyWithChunkReload(() => import('./editor/components/EditBay').then(m => ({ default: m.EditBay })));
 
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
-const EPISODE_REQUIRED_TABS = new Set(['script', 'subjects', 'scenes', 'shots']);
+const EPISODE_REQUIRED_TABS = new Set(['script', 'subjects', 'scenes', 'shots', 'edit']);
 const normalizeEditorTab = (tab) => {
     if (tab === 'montage') return 'shots';
     if (tab === 'script_management') return 'overview';
@@ -3871,6 +3872,7 @@ const Editor = ({
     { id: 'subjects', label: '资产', icon: Users },
     { id: 'shots', label: '分镜', icon: Film },
     { id: 'scenes', label: '场景统计', icon: ImageIcon },
+    { id: 'edit', label: '剪辑', icon: Scissors },
 ];
     const activeMenuItem = MENU_ITEMS.find((item) => item.id === activeTab)
         || MENU_ITEMS.find((item) => item.id !== 'planner')
@@ -3878,6 +3880,7 @@ const Editor = ({
     const shouldRenderScriptTab = activeTab === 'script' || visitedTabs.has('script') || Boolean(assetRerunRequest);
     const shouldRenderSubjectsTab = activeTab === 'subjects' || visitedTabs.has('subjects');
     const shouldRenderScenesTab = activeTab === 'scenes' || visitedTabs.has('scenes');
+    const shouldRenderEditTab = activeTab === 'edit' || visitedTabs.has('edit');
     const shouldRenderShotsTab = activeTab === 'shots' || visitedTabs.has('shots');
 
     const trackMenuAction = (menuKey, menuLabel, actionFn) => {
@@ -4383,6 +4386,34 @@ const Editor = ({
                                             setAssetRerunRequest({ ...(patch && typeof patch === 'object' ? patch : {}), nonce: Date.now() });
                                             setActiveTab('script');
                                         }} uiLang={uiLang} />
+                                    </ErrorBoundary>
+                                </div>
+                            )}
+                            {shouldRenderEditTab && (
+                                <div className={activeTab === 'edit' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'edit'}>
+                                    <ErrorBoundary
+                                        fallbackRender={({ resetErrorBoundary }) => (
+                                            <div className="flex flex-col items-center justify-center h-[50vh] gap-3 p-6 text-center">
+                                                <AlertTriangle className="h-8 w-8 text-yellow-400" />
+                                                <div className="text-sm text-white/80">{t('剪辑页加载失败', 'Failed to load Edit tab')}</div>
+                                                <button
+                                                    type="button"
+                                                    className="px-3 py-1.5 rounded-lg bg-white/10 text-sm hover:bg-white/20"
+                                                    onClick={resetErrorBoundary}
+                                                >
+                                                    {t('重试', 'Retry')}
+                                                </button>
+                                            </div>
+                                        )}
+                                    >
+                                        <EditBay
+                                            key={`edit-${activeEpisode?.id || 'none'}-${tabResetKey}`}
+                                            activeEpisode={activeEpisode}
+                                            projectId={id}
+                                            onLog={addLog}
+                                            uiLang={uiLang}
+                                            isReadOnly={isReadOnlyView}
+                                        />
                                     </ErrorBoundary>
                                 </div>
                             )}

@@ -8,6 +8,7 @@ from app.api.routers.workspace import shared as _shared
 # Register section routes onto shared.router
 from app.api.routers.workspace import episodes as _episodes  # noqa: F401,E402
 from app.api.routers.workspace import scenes as _scenes  # noqa: F401,E402
+from app.api.routers.workspace import edit_bay as _edit_bay  # noqa: F401,E402
 from app.api.routers.workspace import shots as _shots  # noqa: F401,E402
 from app.api.routers.workspace import shot_ai_generation as _shot_ai_generation  # noqa: F401,E402
 from app.api.routers.workspace import admin_residual as _admin_residual  # noqa: F401,E402
@@ -17,7 +18,7 @@ from app.api.routers.workspace import episode_script_generator as _episode_scrip
 from app.api.routers.workspace import promo_planner as _promo_planner  # noqa: F401,E402
 from app.api.routers import promo_projects as _promo_projects  # noqa: F401,E402
 
-_SECTION_MODULES = (_episodes, _scenes, _shots, _shot_ai_generation, _admin_residual, _story_generator, _project_sharing, _episode_script_generator, _promo_planner, _promo_projects)
+_SECTION_MODULES = (_episodes, _scenes, _edit_bay, _shots, _shot_ai_generation, _admin_residual, _story_generator, _project_sharing, _episode_script_generator, _promo_planner, _promo_projects)
 _SKIP = {"__name__", "__file__", "__package__", "__loader__", "__spec__", "__doc__", "__builtins__"}
 
 

@@ -17,6 +17,7 @@ from app.schemas.scene import (  # noqa: E402,F401
     SceneOut,
     ScenePurgeRequest,
     SceneRegenerateRequest,
+    SceneScoreGenerateRequest,
 )
 
 
@@ -973,4 +974,49 @@ async def regenerate_scene(
             for s in created_scenes
         ],
     }
+
+
+@router.get("/episodes/{episode_id}/scene-scores")
+def list_episode_scene_scores(
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from sqlalchemy.orm import load_only
+
+    from app.services.scene_score import list_scene_scores
+
+    episode = (
+        db.query(Episode)
+        .options(load_only(Episode.id, Episode.project_id))
+        .filter(Episode.id == episode_id, _active_episode_clause())
+        .first()
+    )
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    return list_scene_scores(db, episode_id)
+
+
+@router.post("/episodes/{episode_id}/scene-scores")
+async def generate_episode_scene_score(
+    episode_id: int,
+    body: SceneScoreGenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.services.scene_score import generate_scene_score
+
+    episode = db.query(Episode).filter(Episode.id == episode_id, _active_episode_clause()).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    return await generate_scene_score(
+        db,
+        episode=episode,
+        scene_marker=body.scene_marker,
+        current_user=current_user,
+        system_api_id=body.system_api_id,
+        function_name=body.function_name,
+    )
 

@@ -362,6 +362,9 @@ class Scene(Base):
     key_props = Column(Text, nullable=True)
     # Raw LLM output (Markdown table). Stored as plain text to match import logic.
     ai_shots_result = Column(Text, nullable=True)
+    # One post score for this scene. Length is fitted to the storyboard timeline.
+    score_audio_url = Column(String, nullable=True)
+    score_plan = Column(Text, nullable=True)
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)
     deleted_at = Column(String, nullable=True)
 

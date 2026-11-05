@@ -1282,8 +1282,9 @@ async def _run_generate_video(
             start_frame_url=start_frame_url_for_roles,
         )
         from app.services.flower_text_ass import strip_libass_glyphs_from_prompt
+        from app.services.shot_markdown import strip_score_cues_from_video_prompt
 
-        prompt_text = strip_libass_glyphs_from_prompt(prompt_text)
+        prompt_text = strip_score_cues_from_video_prompt(strip_libass_glyphs_from_prompt(prompt_text))
         image_tag_count = len(re.findall(r"@Image\d+", str(prompt_text or ""), flags=re.IGNORECASE))
         logger.info(
             "[GenerateVideo] prompt mapping done | shot_id=%s ref_mode=%s refs=%s lookup=%s image_tags=%s prompt_len=%s",
@@ -1315,13 +1316,15 @@ async def _run_generate_video(
                         model=resolved_video_model,
                         preserve_submitted_refs=bool(uses_submit_image_urls or has_explicit_visual_refs),
                     )
-                    patched_item["prompt"] = strip_libass_glyphs_from_prompt(
-                        _ensure_video_frame_role_instructions(
-                            item_mapped,
-                            ref_mode=normalized_ref_mode,
-                            image_urls=final_image_urls_for_roles,
-                            last_frame_url=req.last_frame_url,
-                            start_frame_url=start_frame_url_for_roles,
+                    patched_item["prompt"] = strip_score_cues_from_video_prompt(
+                        strip_libass_glyphs_from_prompt(
+                            _ensure_video_frame_role_instructions(
+                                item_mapped,
+                                ref_mode=normalized_ref_mode,
+                                image_urls=final_image_urls_for_roles,
+                                last_frame_url=req.last_frame_url,
+                                start_frame_url=start_frame_url_for_roles,
+                            )
                         )
                     )
                 patched_multi_prompt.append(patched_item)

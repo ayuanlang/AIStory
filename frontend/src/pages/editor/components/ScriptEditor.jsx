@@ -99,6 +99,8 @@ import {
     getImageGenerationJobStatus,
     generateVideo,
     generateVoice,
+    fetchSceneScores,
+    generateSceneScore,
     fetchAssets, 
     generateSceneShots,
     regenerateSceneShots,
@@ -5561,6 +5563,60 @@ const runAfterScriptPaint = (fn, { immediate = false } = {}) => {
 
 export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog: parentOnLog, onImportText, onSwitchToScenes, onWorkspaceScenesChanged = null, assetRerunRequest = null, onAssetRerunRequestConsumed = null, uiLang = 'zh', tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const [sceneScores, setSceneScores] = useState([]);
+    const [sceneScoreBusyId, setSceneScoreBusyId] = useState('');
+    const [sceneScoreErrorById, setSceneScoreErrorById] = useState({});
+    useEffect(() => {
+        const episodeId = Number(activeEpisode?.id || 0);
+        if (!episodeId) {
+            setSceneScores([]);
+            return undefined;
+        }
+        let cancelled = false;
+        fetchSceneScores(episodeId)
+            .then((rows) => {
+                if (!cancelled) setSceneScores(Array.isArray(rows) ? rows : []);
+            })
+            .catch(() => {
+                if (!cancelled) setSceneScores([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [activeEpisode?.id]);
+    const handleGenerateSceneScore = useCallback(async (sceneId) => {
+        const episodeId = Number(activeEpisode?.id || 0);
+        const marker = String(sceneId || '').trim();
+        if (!episodeId || !marker) return;
+        const functionName = 'generate_entity_reference_audio_audio';
+        const selectedSystemApiId = Number(localStorage.getItem(`func_api_${functionName}`) || 0) || null;
+        setSceneScoreBusyId(marker);
+        setSceneScoreErrorById((prev) => ({ ...prev, [marker]: '' }));
+        try {
+            const result = await generateSceneScore(episodeId, {
+                scene_marker: marker,
+                function_name: functionName,
+                ...(selectedSystemApiId ? { system_api_id: selectedSystemApiId } : {}),
+            });
+            setSceneScores((prev) => {
+                const nextId = Number(result?.scene_db_id || 0);
+                const nextNo = String(result?.scene_no || '').trim();
+                const list = Array.isArray(prev) ? prev.filter((item) => {
+                    if (String(item?.scene_marker || '') === marker) return false;
+                    if (nextId && Number(item?.scene_db_id || 0) === nextId) return false;
+                    if (nextNo && String(item?.scene_no || '').trim() === nextNo) return false;
+                    return true;
+                }) : [];
+                return [...list, result];
+            });
+        } catch (error) {
+            const detail = error?.response?.data?.detail || error?.message || String(error);
+            const text = typeof detail === 'string' ? detail : JSON.stringify(detail);
+            setSceneScoreErrorById((prev) => ({ ...prev, [marker]: text }));
+        } finally {
+            setSceneScoreBusyId('');
+        }
+    }, [activeEpisode?.id]);
     const { logs: systemPanelLogs } = useLog();
     const parentOnLogRef = useRef(parentOnLog);
     parentOnLogRef.current = parentOnLog;
@@ -38598,7 +38654,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <div className="text-xs font-bold text-white/85">{t('分场节点', 'Per-scene nodes')}</div>
                                     <div className="text-[10px] text-white/35">
-                                        {t('每场一行：文戏、武戏增强、场景现场编排、建置入戏、分镜生成。左侧「重跑该场」从文戏优化重跑该场，不跑美术指导与其他分场。单节点重跑仍会按序带起该场后续节点。', 'One row per scene: drama, action enhancement, floor staging, blocking, and storyboards. “Rerun This Scene” starts that scene from drama and skips art direction and other scenes. A single-node rerun still continues through later nodes for that scene.')}
+                                        {t('每场一行：文戏、武戏增强、场景现场编排、建置入戏、分镜生成。左侧「重跑该场」从文戏优化重跑该场，不跑美术指导与其他分场。单节点重跑仍会按序带起该场后续节点。场次列的「本场配乐」按这一场分镜各镜时长生成一条。', 'One row per scene: drama, action enhancement, floor staging, blocking, and storyboards. “Rerun This Scene” starts that scene from drama and skips art direction and other scenes. A single-node rerun still continues through later nodes for that scene. “Scene Score” on the scene column builds one cue timed to that scene’s storyboard.')}
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">
@@ -38680,6 +38736,65 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     )
                                                     : t('重跑该场', 'Rerun This Scene')}
                                             </button>
+                                            {(() => {
+                                                const scoreRow = (sceneScores || []).find((item) => {
+                                                    const marker = String(item?.scene_marker || '').trim();
+                                                    if (marker && marker === row.sceneId) return true;
+                                                    const sceneNo = String(item?.scene_no || '').trim();
+                                                    if (!sceneNo) return false;
+                                                    if (sceneNo === row.sceneId) return true;
+                                                    if (/^\d+$/.test(sceneNo) && Number(sceneNo) === Number(row.order)) return true;
+                                                    return false;
+                                                });
+                                                const scoreBusy = sceneScoreBusyId === row.sceneId;
+                                                const scoreError = String(sceneScoreErrorById?.[row.sceneId] || '').trim();
+                                                const scoreUrl = String(scoreRow?.audio_url || '').trim();
+                                                const scoreSrc = scoreUrl
+                                                    ? (scoreUrl.startsWith('http') ? scoreUrl : `${ASSET_BASE_URL}${scoreUrl}`)
+                                                    : '';
+                                                const targetSeconds = Number(scoreRow?.target_seconds || scoreRow?.duration_seconds || 0);
+                                                const canGenerateScore = Boolean(shotState?.ready && !scoreBusy);
+                                                return (
+                                                    <div className="w-full flex flex-col gap-1">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleGenerateSceneScore(row.sceneId)}
+                                                            disabled={!canGenerateScore}
+                                                            className={diagnosticBtnClass}
+                                                            title={shotState?.ready
+                                                                ? t('按本场分镜各镜秒数生成一条配乐，并裁到相同时长', 'Generate one score timed to this scene’s storyboard durations')
+                                                                : t('先完成本场分镜，配乐时长才对得上', 'Finish this scene’s storyboard first so the score can match its duration')}
+                                                        >
+                                                            {scoreBusy
+                                                                ? (
+                                                                    <span className="inline-flex items-center gap-1">
+                                                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                                                        {t('生成中', 'Generating')}
+                                                                    </span>
+                                                                )
+                                                                : (scoreUrl
+                                                                    ? t('重新生成本场配乐', 'Regenerate scene score')
+                                                                    : t('本场配乐', 'Scene Score'))}
+                                                        </button>
+                                                        {targetSeconds > 0 ? (
+                                                            <span className="text-[10px] text-white/45">
+                                                                {t(`${Math.round(targetSeconds)}秒`, `${Math.round(targetSeconds)}s`)}
+                                                                {scoreRow?.status === 'raw'
+                                                                    ? t('，时长未裁准', ', length not fitted')
+                                                                    : ''}
+                                                            </span>
+                                                        ) : null}
+                                                        {scoreSrc ? (
+                                                            <audio controls preload="none" src={scoreSrc} className="w-full h-7" />
+                                                        ) : null}
+                                                        {scoreError ? (
+                                                            <span className="text-[10px] text-red-300 leading-tight" title={scoreError}>
+                                                                {scoreError}
+                                                            </span>
+                                                        ) : null}
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(dramaState, cellProps('drama_opt', dramaState))}</div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(combatState, cellProps('combat_opt', combatState))}</div>
