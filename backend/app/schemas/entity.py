@@ -156,6 +156,10 @@ class EntityOut(BaseModel):
     visual_dependencies: Optional[List[str]] = []
     dependency_strategy: Optional[Dict[str, Any]] = {}
     custom_attributes: Optional[Dict[str, Any]] = {}
+    # Card reads omit prompt bodies. Flags keep completeness checks without the text.
+    has_generation_prompt_cn: Optional[bool] = None
+    has_environment_quad: Optional[bool] = None
+    is_derived_main_prompt: Optional[bool] = None
 
     @pydantic.field_validator("anchor_description", mode="before")
     @classmethod

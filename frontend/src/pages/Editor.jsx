@@ -1,7 +1,7 @@
 ﻿
 import FunctionApiSelector from '../components/FunctionApiSelector';
 import { useFunctionApis } from '../components/useFunctionApis';
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { startTransition, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
@@ -3807,22 +3807,43 @@ const Editor = ({
         episodeFullLoadInflightRef.current = key;
         const loadGen = episodeFullLoadGenRef.current;
         let cancelled = false;
-        fetchEpisode(activeEpisodeId).then((fullEp) => {
-            if (episodeFullLoadInflightRef.current === key) {
-                episodeFullLoadInflightRef.current = '';
-            }
-            if (cancelled) return;
-            if (loadGen !== episodeFullLoadGenRef.current) return;
-            episodeFullLoadFailedRef.current = '';
+        const stillCurrent = () => !cancelled && loadGen === episodeFullLoadGenRef.current;
+        const applyEpisodePatch = (patch) => {
             setEpisodes((prev) => sortEpisodesForEditor(
-                prev.map((e) => String(e.id) === key ? { ...e, ...fullEp, _fullLoaded: true } : e)
+                prev.map((e) => String(e.id) === key ? { ...e, ...patch } : e)
             ));
+        };
+        // Script text first. Analysis columns are large and must not block the textarea.
+        fetchEpisode(activeEpisodeId, { view: 'script' }).then((scriptEp) => {
+            if (!stillCurrent() || !scriptEp) return;
+            applyEpisodePatch({
+                id: scriptEp.id,
+                project_id: scriptEp.project_id,
+                title: scriptEp.title,
+                script_content: scriptEp.script_content ?? '',
+                character_profiles: scriptEp.character_profiles,
+                _scriptLoaded: true,
+            });
         }).catch((err) => {
-            if (episodeFullLoadInflightRef.current === key) {
-                episodeFullLoadInflightRef.current = '';
-            }
-            episodeFullLoadFailedRef.current = key;
-            console.error('Failed to fetch full episode', err);
+            console.error('Failed to fetch script episode', err);
+        }).finally(() => {
+            if (!stillCurrent()) return;
+            fetchEpisode(activeEpisodeId).then((fullEp) => {
+                if (episodeFullLoadInflightRef.current === key) {
+                    episodeFullLoadInflightRef.current = '';
+                }
+                if (!stillCurrent()) return;
+                episodeFullLoadFailedRef.current = '';
+                startTransition(() => {
+                    applyEpisodePatch({ ...fullEp, _scriptLoaded: true, _fullLoaded: true });
+                });
+            }).catch((err) => {
+                if (episodeFullLoadInflightRef.current === key) {
+                    episodeFullLoadInflightRef.current = '';
+                }
+                episodeFullLoadFailedRef.current = key;
+                console.error('Failed to fetch full episode', err);
+            });
         });
         return () => {
             cancelled = true;

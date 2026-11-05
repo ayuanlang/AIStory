@@ -44,11 +44,18 @@ def read_scenes(
     keyword: Optional[str] = None,
     skip: int = 0,
     limit: int = 300,
+    compact: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Ownership check
-    episode = db.query(Episode).filter(Episode.id == episode_id, _active_episode_clause()).first()
+    # Ownership check. Do not load script/analysis text just to read project_id.
+    from sqlalchemy.orm import load_only
+    episode = (
+        db.query(Episode)
+        .options(load_only(Episode.id, Episode.project_id))
+        .filter(Episode.id == episode_id, _active_episode_clause())
+        .first()
+    )
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
         
@@ -70,6 +77,32 @@ def read_scenes(
         )
     safe_skip = max(int(skip or 0), 0)
     safe_limit = max(1, min(int(limit or 300), 500))
+    if compact:
+        # Diagnostics only need identity. Skip beat/script bodies on the script-page open.
+        from types import SimpleNamespace
+        raw_rows = query.with_entities(
+            Scene.id,
+            Scene.scene_no,
+            Scene.scene_name,
+            Scene.equivalent_duration,
+            Scene.environment_name,
+        ).all()
+        light_rows = [
+            SimpleNamespace(
+                id=row[0],
+                scene_no=row[1] or "",
+                scene_name=row[2],
+                equivalent_duration=row[3],
+                environment_name=row[4],
+                original_script_text="",
+                core_scene_info="",
+                linked_characters="",
+                key_props="",
+            )
+            for row in raw_rows
+        ]
+        rows = _sort_scenes_by_scene_no(light_rows)
+        return rows[safe_skip:safe_skip + safe_limit]
     rows = _sort_scenes_by_scene_no(query.all())
     return rows[safe_skip:safe_skip + safe_limit]
 

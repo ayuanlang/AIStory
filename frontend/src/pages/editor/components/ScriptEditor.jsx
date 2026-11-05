@@ -612,9 +612,11 @@ const isIntentionalStoryboardReplace = ({
 /** Reuse workspace shots unless this scene was explicitly asked to regenerate. */
 const shouldReuseExistingStoryboardShots = (intent = {}) => !isIntentionalStoryboardReplace(intent);
 
-const entityHasGenerationPromptCn = (entity) => (
-    Boolean(String(entity?.generation_prompt_cn || '').trim())
-);
+const entityHasGenerationPromptCn = (entity) => {
+    const prompt = String(entity?.generation_prompt_cn || '').trim();
+    if (prompt) return true;
+    return entity?.has_generation_prompt_cn === true;
+};
 
 /** Unique display names, first-seen order (same 主环境 must not repeat 4×). */
 const dedupeSubjectDisplayNames = (names) => {
@@ -3232,6 +3234,7 @@ const isMainEnvironmentCompletenessAsset = (entity) => {
     ) {
         return false;
     }
+    if (!prompt.trim() && typed.is_derived_main_prompt === true) return false;
     return !/^type\s*[ab]$/i.test(readEntityDependencyStrategyType(typed));
 };
 
@@ -3255,10 +3258,12 @@ const mainEnvironmentPromptHasQuad = (prompt) => {
 };
 
 const countDbMainEnvironmentEntitiesWithPrompt = (dbEntities) => (
-    (Array.isArray(dbEntities) ? dbEntities : []).filter((entity) => (
-        isMainEnvironmentCompletenessAsset(entity)
-        && mainEnvironmentPromptHasQuad(entity?.generation_prompt_cn)
-    )).length
+    (Array.isArray(dbEntities) ? dbEntities : []).filter((entity) => {
+        if (!isMainEnvironmentCompletenessAsset(entity)) return false;
+        const prompt = String(entity?.generation_prompt_cn || '');
+        if (prompt.trim()) return mainEnvironmentPromptHasQuad(prompt);
+        return entity?.has_environment_quad === true;
+    }).length
 );
 
 const countMainEnvironmentDesignItems = (items) => (
@@ -5540,6 +5545,19 @@ const createSkippedSubjectConsistencyReport = () => ({
     markdownSource: '',
     skipped: true,
 });
+
+const runAfterScriptPaint = (fn, { immediate = false } = {}) => {
+    if (immediate) {
+        fn();
+        return () => {};
+    }
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        const id = window.requestIdleCallback(fn, { timeout: 700 });
+        return () => window.cancelIdleCallback(id);
+    }
+    const id = window.setTimeout(fn, 80);
+    return () => window.clearTimeout(id);
+};
 
 export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog: parentOnLog, onImportText, onSwitchToScenes, onWorkspaceScenesChanged = null, assetRerunRequest = null, onAssetRerunRequestConsumed = null, uiLang = 'zh', tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
@@ -14958,6 +14976,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         isRetryingPhase2,
     ]);
 
+    const analysisSyncEpisodeIdRef = useRef(null);
     useEffect(() => {
         if (!activeEpisode) return;
 
@@ -14967,7 +14986,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || isRetryingPhase2
         );
         const skipSceneMarkdownSync = skipAiArtifactSync || liveSceneMarkdownByScene != null;
-        if (!skipAiArtifactSync) {
+        const analysisPayloadReady = Boolean(activeEpisode?._fullLoaded);
+        if (!analysisPayloadReady && analysisSyncEpisodeIdRef.current !== activeEpisode.id) {
+            analysisSyncEpisodeIdRef.current = activeEpisode.id;
+            setSubjectIndexText((prev) => (prev ? '' : prev));
+            setAdaptationText((prev) => (prev ? '' : prev));
+            setLlmAssetRawResultContent((prev) => (prev ? '' : prev));
+            setLlmRawResultContent((prev) => (prev ? '' : prev));
+            setLlmResultContent((prev) => (prev ? '' : prev));
+        }
+        if (!skipAiArtifactSync && analysisPayloadReady) {
+            analysisSyncEpisodeIdRef.current = activeEpisode.id;
             const liveSi = String(
                 extractPureSubjectIndexText(latestStage2_1TextRef.current || '') || latestStage2_1TextRef.current || ''
             ).trim();
@@ -15047,6 +15076,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         Array.isArray(activeEpisode?.episode_info?.reuse_subject_asset_ids)
             ? `${activeEpisode.id || 0}:${activeEpisode.episode_info.reuse_subject_asset_ids.map((item) => String(item)).join(',')}`
             : `${activeEpisode?.id || 0}:`,
+        activeEpisode?._fullLoaded,
         isAnalyzing,
         isRetryingPhase2,
         extractPureSubjectIndexText,
@@ -15073,9 +15103,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 // Reuse picker = project entities excluding this episode.
                 // 齐套 已齐 = this episode's imported entities (episode_id filter).
                 const episodeId = activeEpisode.id;
+                const entityParams = (isAnalyzing || isRetryingPhase2) ? {} : { view: 'card' };
                 const [allEntities, ownedEntities] = await Promise.all([
-                    fetchEntities(projectId),
-                    fetchEntities(projectId, { episode_id: Number(episodeId) || undefined }),
+                    fetchEntities(projectId, entityParams),
+                    fetchEntities(projectId, {
+                        episode_id: Number(episodeId) || undefined,
+                        ...entityParams,
+                    }),
                 ]);
                 if (!mounted || seq !== assetLibrarySyncSeqRef.current) return;
                 const all = Array.isArray(allEntities) ? allEntities : [];
@@ -15092,8 +15126,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (mounted) setIsLoadingSubjectAssets(false);
             }
         };
-        loadAssets();
-        return () => { mounted = false; };
+        const cancelIdle = runAfterScriptPaint(loadAssets, {
+            immediate: Boolean(isAnalyzing || isRetryingPhase2),
+        });
+        return () => {
+            mounted = false;
+            cancelIdle();
+        };
     }, [projectId, activeEpisode?.id, analysisUiReport?.importReport, isAnalyzing, isRetryingPhase2, analysisFlowStatus?.assetsGenSettled]);
 
     const refreshEpisodeOwnedEntities = useCallback(async () => {
@@ -15152,7 +15191,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return;
             }
             try {
-                const scenes = await fetchScenes(activeEpisode.id);
+                const scenes = await fetchScenes(activeEpisode.id, { compact: true });
                 if (!mounted || epoch !== diagnosticsEpochRef.current) return;
                 const rows = Array.isArray(scenes) ? scenes : [];
                 const cleared = sceneMatrixClearedStepsRef.current;
@@ -15177,8 +15216,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
         };
-        loadEpisodeSceneCount();
-        return () => { mounted = false; };
+        const cancelIdle = runAfterScriptPaint(() => {
+            if (mounted) void loadEpisodeSceneCount();
+        }, { immediate: Boolean(isAnalyzing || isRetryingPhase2) });
+        return () => {
+            mounted = false;
+            cancelIdle();
+        };
     }, [
         activeEpisode?.id,
         analysisUiReport?.importReport,
@@ -15374,10 +15418,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         };
 
-        loadPipelineNodes();
-        startPollingIfNeeded(diagnosticsPipelineNodesRef.current);
+        const cancelIdle = runAfterScriptPaint(() => {
+            if (!mounted) return;
+            loadPipelineNodes();
+            startPollingIfNeeded(diagnosticsPipelineNodesRef.current);
+        }, { immediate: Boolean(isAnalyzing || isRetryingPhase2) });
         return () => {
             mounted = false;
+            cancelIdle();
             if (timer) window.clearInterval(timer);
         };
     }, [
@@ -21330,7 +21378,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             || hasPersistedEnvironmentAssetDesign();
                         let envQuadOk = true;
                         if (pData.key === 'environments' && envSkipHasMain && !singleEnvironmentQuadNames.length) {
-                            envQuadOk = await runEnvironmentQuadConversion(episodeOwnedEntities, subtaskTraceId);
+                            const storedMains = await refreshEpisodeOwnedEntities();
+                            envQuadOk = await runEnvironmentQuadConversion(storedMains, subtaskTraceId);
                         } else if (pData.key === 'environments' && singleEnvironmentQuadNames.length) {
                             envQuadOk = true;
                         }

@@ -52,12 +52,87 @@ from app.schemas.entity import (  # noqa: E402
 
 
 
+def _serialize_entity_cards(query):
+    """Identity + reuse fields. Prompt bodies stay in the database."""
+    from sqlalchemy import and_, case, func, not_
+
+    prompt_col = func.coalesce(Entity.generation_prompt_cn, "")
+    has_generation_prompt_cn = case(
+        (func.length(func.trim(prompt_col)) > 0, True),
+        else_=False,
+    )
+    has_environment_quad = case(
+        (
+            and_(
+                prompt_col.contains("【四向拼图】"),
+                prompt_col.contains("[0度格-左上"),
+                prompt_col.contains("[90度格-右上"),
+                prompt_col.contains("[180度格-左下"),
+                prompt_col.contains("[270度格-右下"),
+            ),
+            True,
+        ),
+        else_=False,
+    )
+    is_derived_main_prompt = case(
+        (
+            and_(
+                prompt_col.contains("衍生主环境="),
+                prompt_col.contains("状态Delta="),
+                not_(prompt_col.contains("【四向拼图】")),
+            ),
+            True,
+        ),
+        else_=False,
+    )
+    rows = query.with_entities(
+        Entity.id,
+        Entity.episode_id,
+        Entity.name,
+        Entity.name_en,
+        Entity.type,
+        Entity.description,
+        Entity.anchor_description,
+        Entity.image_url,
+        Entity.visual_dependencies,
+        Entity.dependency_strategy,
+        Entity.custom_attributes,
+        has_generation_prompt_cn,
+        has_environment_quad,
+        is_derived_main_prompt,
+    ).all()
+    cards = []
+    for row in rows:
+        cards.append({
+            "id": row[0],
+            "episode_id": row[1],
+            "name": row[2],
+            "name_en": row[3],
+            "type": row[4],
+            "description": row[5] or "",
+            "anchor_description": row[6],
+            "image_url": row[7],
+            "video_url": None,
+            "audio_url": None,
+            "generation_prompt_en": None,
+            "generation_prompt_cn": None,
+            "visual_dependencies": [] if row[8] is None else row[8],
+            "dependency_strategy": {} if row[9] is None else row[9],
+            "custom_attributes": {} if row[10] is None else row[10],
+            "has_generation_prompt_cn": bool(row[11]),
+            "has_environment_quad": bool(row[12]),
+            "is_derived_main_prompt": bool(row[13]),
+        })
+    return cards
+
+
 @router.get("/projects/{project_id}/entities", response_model=List[EntityOut])
 def read_entities(
     project_id: int,
     type: Optional[str] = None,
     episode_id: Optional[int] = None,
     include_project_null_episode: Optional[bool] = False,
+    view: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -71,6 +146,8 @@ def read_entities(
             query = query.filter(or_(Entity.episode_id == episode_id, Entity.episode_id.is_(None)))
         else:
             query = query.filter(Entity.episode_id == episode_id)
+    if str(view or "").strip().lower() in {"card", "summary"}:
+        return _serialize_entity_cards(query)
     entities = query.all()
     repaired_entities = _repair_entities_image_urls_from_assets(db, current_user, project, entities)
 

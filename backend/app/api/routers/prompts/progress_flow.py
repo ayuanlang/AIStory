@@ -487,8 +487,10 @@ async def get_episode_progress_snapshot(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from sqlalchemy.orm import load_only
     episode = (
         db.query(Episode)
+        .options(load_only(Episode.id, Episode.project_id))
         .filter(Episode.id == int(episode_id), _active_episode_clause())
         .first()
     )

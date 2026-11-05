@@ -1480,8 +1480,11 @@ export const fetchEpisodes = async (projectId) => {
     return rows.map(sanitizeEpisodePayload);
 }
 
-export const fetchEpisode = async (episodeId) => {
-    const response = await api.get(`/episodes/${episodeId}`);
+export const fetchEpisode = async (episodeId, options = {}) => {
+    const view = String(options?.view || '').trim();
+    const response = await api.get(`/episodes/${episodeId}`, {
+        params: view ? { view } : undefined,
+    });
     const ext = response.data;
     if (ext.script_content === null) ext.script_content = "";
     return sanitizeEpisodePayload(ext);

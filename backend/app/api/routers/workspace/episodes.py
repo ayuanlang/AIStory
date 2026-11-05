@@ -55,17 +55,39 @@ def read_episodes(
 @router.get("/episodes/{episode_id}", response_model=EpisodeOut)
 def read_episode(
     episode_id: int,
+    view: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    from sqlalchemy.orm import noload
-    episode = db.query(Episode).options(noload(Episode.script_segments)).filter(
+    from sqlalchemy.orm import load_only, noload
+    script_only = str(view or "").strip().lower() == "script"
+    loaders = [noload(Episode.script_segments)]
+    if script_only:
+        # Script tab paints from script_content. Analysis blobs load on the follow-up full read.
+        loaders.append(load_only(
+            Episode.id,
+            Episode.project_id,
+            Episode.title,
+            Episode.script_content,
+            Episode.episode_info,
+            Episode.character_profiles,
+        ))
+    episode = db.query(Episode).options(*loaders).filter(
         Episode.id == episode_id,
         _active_episode_clause(),
     ).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     _require_project_access(db, episode.project_id, current_user)
+    if script_only:
+        return {
+            "id": episode.id,
+            "project_id": episode.project_id,
+            "title": episode.title,
+            "script_content": episode.script_content or "",
+            "episode_info": episode.episode_info or {},
+            "character_profiles": episode.character_profiles or [],
+        }
     return episode
 
 @router.put("/episodes/{episode_id}/segments", response_model=List[ScriptSegmentOut])
