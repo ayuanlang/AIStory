@@ -73,6 +73,14 @@ from app.services.subject_index_resolve import (
 logger = logging.getLogger("api_logger")
 
 
+def _rollback_after_db_error(db: Session, label: str) -> None:
+    """A swallowed DB error aborts the Postgres transaction until rollback."""
+    try:
+        db.rollback()
+    except Exception:
+        logger.warning("[scene_subskill_pipeline] rollback failed after %s", label, exc_info=True)
+
+
 class SceneSubskillCancelled(Exception):
     """Parent analysis task was canceled; do not start the next scene step."""
 
@@ -1572,6 +1580,7 @@ def _load_latest_subskill_llm_text(
             query = query.filter(LLMCallLog.timestamp >= started)
         row = query.order_by(LLMCallLog.id.desc()).first()
     except Exception:
+        _rollback_after_db_error(db, "load subskill llm log")
         return ""
     if row is None:
         return ""
@@ -1879,6 +1888,7 @@ def _ingest_derived_environments_after_framing(
             episode_id,
             ingest_exc,
         )
+        _rollback_after_db_error(db, "derived env ingest")
         return None
 
 
@@ -2097,6 +2107,7 @@ def _persist_storyboard_step_failure(
             scene_marker,
             exc_info=True,
         )
+        _rollback_after_db_error(db, "persist storyboard error")
 
 
 def _storyboard_step_failure_reason(text: str) -> str:
@@ -4817,6 +4828,7 @@ async def run_scene_subskill_pipeline(
                 "[scene_subskill_pipeline] failed to load reused characters: %s",
                 reuse_exc,
             )
+            _rollback_after_db_error(db, "load reused characters")
             reused_character_names = set()
         if reused_character_names:
             for task in tasks:
@@ -5007,6 +5019,7 @@ async def run_scene_subskill_pipeline(
             )
         except Exception as catalog_exc:
             logger.warning("[scene_subskill_pipeline] failed to load env catalog: %s", catalog_exc)
+            _rollback_after_db_error(db, "load env catalog")
     env_plan_task = asyncio.create_task(
         await_environment_planned_script(
             episode_id=int(node_episode_id or 0),

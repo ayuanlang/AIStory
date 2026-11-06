@@ -2963,6 +2963,12 @@ def mark_storyboard_generation_applied(
         from app.models.all_models import Episode
         episode = db.query(Episode).filter(Episode.id == eid).first()
     except Exception:
+        logger.warning("[progress] episode lookup failed episode_id=%s", eid, exc_info=True)
+        if not getattr(db, "is_active", True):
+            try:
+                db.rollback()
+            except Exception:
+                pass
         episode = None
     prefix = resolve_episode_scene_id_prefix(episode, fallback_number=1)
     if not marker and scene is not None:
@@ -3078,6 +3084,12 @@ def mark_storyboard_generation_started(
         from app.models.all_models import Episode
         episode = db.query(Episode).filter(Episode.id == eid).first()
     except Exception:
+        logger.warning("[progress] episode lookup failed episode_id=%s", eid, exc_info=True)
+        if not getattr(db, "is_active", True):
+            try:
+                db.rollback()
+            except Exception:
+                pass
         episode = None
     prefix = resolve_episode_scene_id_prefix(episode, fallback_number=1)
     if not marker and scene is not None:
@@ -3162,6 +3174,12 @@ def mark_storyboard_generation_failed(
         from app.models.all_models import Episode
         episode = db.query(Episode).filter(Episode.id == eid).first()
     except Exception:
+        logger.warning("[progress] episode lookup failed episode_id=%s", eid, exc_info=True)
+        if not getattr(db, "is_active", True):
+            try:
+                db.rollback()
+            except Exception:
+                pass
         episode = None
     prefix = resolve_episode_scene_id_prefix(episode, fallback_number=1)
     if not marker and scene is not None:
@@ -3195,6 +3213,53 @@ def mark_storyboard_generation_failed(
             "business_reason": message,
         },
     )
+
+
+def _probe_storyboard_workspace(
+    db: Session,
+    episode_id: int,
+    scene_marker: str,
+) -> Tuple[bool, Dict[str, Any]]:
+    """Read workspace shots without leaving Postgres in an aborted transaction.
+
+    A failed Scene/Shot probe used to be swallowed. The next UPDATE then failed
+    with InFailedSqlTransaction and the progress poll returned 500.
+    """
+    empty = {"scene_count": 0, "with_shots": 0, "ok": False, "no_scenes": True}
+
+    def _read() -> Tuple[bool, Dict[str, Any]]:
+        ready = False
+        marker = str(scene_marker or "").strip()
+        if marker:
+            ready = bool(_workspace_scene_has_shots(db, int(episode_id or 0), marker))
+        coverage = _episode_workspace_storyboard_coverage(db, int(episode_id or 0))
+        if not isinstance(coverage, dict):
+            coverage = dict(empty)
+        return ready, coverage
+
+    begin_nested = getattr(db, "begin_nested", None)
+    try:
+        if callable(begin_nested):
+            with db.begin_nested():
+                return _read()
+        return _read()
+    except Exception:
+        logger.warning(
+            "[progress] storyboard workspace probe failed episode_id=%s scene=%s",
+            episode_id,
+            scene_marker or "-",
+            exc_info=True,
+        )
+        if not getattr(db, "is_active", True):
+            try:
+                db.rollback()
+            except Exception:
+                logger.warning(
+                    "[progress] rollback after storyboard probe failed episode_id=%s",
+                    episode_id,
+                    exc_info=True,
+                )
+        return False, dict(empty)
 
 
 def finalize_stale_pipeline_nodes(
@@ -3267,16 +3332,11 @@ def finalize_stale_pipeline_nodes(
             continue
         if node_name in _FRONTEND_OWNED_STORYBOARD_NODES:
             scene_marker = str(getattr(row, "scene_id", "") or "").strip()
-            scene_ready = False
-            if scene_marker:
-                try:
-                    scene_ready = _workspace_scene_has_shots(db, row_episode_id, scene_marker)
-                except Exception:
-                    scene_ready = False
-            try:
-                coverage = _episode_workspace_storyboard_coverage(db, row_episode_id)
-            except Exception:
-                coverage = {"scene_count": 0, "with_shots": 0, "ok": False, "no_scenes": True}
+            scene_ready, coverage = _probe_storyboard_workspace(
+                db,
+                row_episode_id,
+                scene_marker,
+            )
             if scene_ready or coverage.get("ok"):
                 meta["business_event"] = "reconciled_from_workspace"
                 meta["business_reason"] = (

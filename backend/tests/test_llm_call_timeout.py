@@ -735,6 +735,87 @@ def test_finalize_stale_pipeline_nodes_keeps_queued_storyboard_placeholder():
     assert session.committed is False
 
 
+def test_finalize_stale_pipeline_nodes_keeps_timeout_after_workspace_probe_fails(monkeypatch):
+    from types import SimpleNamespace
+    from app.core.time_utils import now_bj
+    from app.services import script_analysis_flow as flow
+
+    stale_ts = (now_bj() - timedelta(seconds=1200)).isoformat(timespec="microseconds")
+    storyboard = SimpleNamespace(
+        status="running",
+        node_name="storyboard_generation",
+        episode_id=1,
+        scene_id="EP01_SC01",
+        updated_at=stale_ts,
+        started_at=stale_ts,
+        created_at=stale_ts,
+        runtime_meta={},
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+    )
+    scene_step = SimpleNamespace(
+        status="running",
+        node_name="scene_subskill_scene",
+        episode_id=1,
+        scene_id="EP01_SC01",
+        updated_at=stale_ts,
+        started_at=stale_ts,
+        created_at=stale_ts,
+        runtime_meta={},
+        last_error_code=None,
+        last_error_message=None,
+        ended_at=None,
+    )
+
+    class _Query:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return [storyboard, scene_step]
+
+    class _Nested:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class _Session:
+        committed = False
+        nested = 0
+        is_active = True
+
+        def query(self, *_args, **_kwargs):
+            return _Query()
+
+        def begin_nested(self):
+            self.nested += 1
+            return _Nested()
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            raise AssertionError("outer transaction should stay usable after the probe savepoint")
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("workspace probe failed")
+
+    monkeypatch.setattr(flow, "_workspace_scene_has_shots", _boom)
+    session = _Session()
+    assert flow.finalize_stale_pipeline_nodes(session, episode_id=1, timeout_seconds=900) == 1
+    assert session.nested == 1
+    assert session.committed is True
+    assert storyboard.status == "running"
+    assert scene_step.status == "failed"
+    assert scene_step.last_error_code == "NODE_TIMEOUT"
+
+
 def test_is_stale_llm_request_timestamp_uses_beijing_clock():
     now = now_bj()
     fresh = (now - timedelta(seconds=60)).isoformat(timespec="microseconds")

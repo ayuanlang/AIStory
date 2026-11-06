@@ -920,6 +920,7 @@ async def execute_scene_analysis_flow_node(
             else:
                 result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
         except Exception as exc:
+            logger.exception("[剧本分析流程] 节点 %s 执行失败", node_key)
             if node_project_id > 0 and node_episode_id > 0 and not list_reextract:
                 error_text = http_exception_detail_text(exc)
                 credit_hit = is_insufficient_credits_error(exc)
@@ -947,18 +948,32 @@ async def execute_scene_analysis_flow_node(
                 else:
                     error_code = "FLOW_RUN_NODE_FAILED"
                     error_message = error_text or str(exc)
-                upsert_pipeline_node_status(
-                    db,
-                    project_id=node_project_id,
-                    episode_id=node_episode_id,
-                    script_id=f"episode:{node_episode_id}",
-                    node_name=node_key,
-                    status="failed",
-                    error_code=error_code,
-                    error_message=error_message,
-                    runtime_meta={"business_reason": error_message} if credit_hit else None,
-                )
-                db.commit()
+                # The failed statement already aborted this Postgres transaction.
+                # Roll back before the status write, or that SELECT/UPDATE replaces
+                # the original error with InFailedSqlTransaction.
+                try:
+                    db.rollback()
+                    upsert_pipeline_node_status(
+                        db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name=node_key,
+                        status="failed",
+                        error_code=error_code,
+                        error_message=error_message,
+                        runtime_meta={"business_reason": error_message} if credit_hit else None,
+                    )
+                    db.commit()
+                except Exception:
+                    logger.exception(
+                        "[剧本分析流程] 节点 %s 失败状态未能写入",
+                        node_key,
+                    )
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
             if (
                 is_insufficient_credits_error(exc)
                 and credit_error_code(exc) == INSUFFICIENT_CREDITS_CODE
