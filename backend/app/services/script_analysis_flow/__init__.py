@@ -2843,12 +2843,15 @@ def reset_downstream_progress_for_node_rerun(
     scoped = [str(scene_id or "").strip() for scene_id in (scoped_scene_ids or []) if str(scene_id or "").strip()]
     script_id = f"episode:{eid}"
     reset_count = 0
+    # A scoped rerun names its scenes. The episode-level storyboard row is shared
+    # across 分场 and must keep whatever status the other scenes already have.
+    touch_episode_level = (not scoped) and ("storyboard_generation" in per_scene_names)
     for row in _iter_pipeline_nodes(
         db,
         episode_id=eid,
         node_names=per_scene_names,
         scene_ids=scoped or None,
-        include_episode_level="storyboard_generation" in per_scene_names,
+        include_episode_level=touch_episode_level,
     ):
         upsert_pipeline_node_status(
             db,
@@ -2870,7 +2873,7 @@ def reset_downstream_progress_for_node_rerun(
             project_id=pid,
             episode_id=eid,
             scene_markers=scoped or None,
-            include_episode_level=True,
+            include_episode_level=touch_episode_level,
         )
         reset_count += int(storyboard.get("reset_count") or 0)
     return {"reset_count": reset_count}

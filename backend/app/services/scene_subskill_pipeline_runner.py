@@ -605,18 +605,6 @@ def prepare_explicit_scene_subskill_rerun(
         error_message=None,
         runtime_meta={"business_event": "queued", "rerun_cleared": True, "cleared_steps": ["storyboard"]},
     )
-    upsert_pipeline_node_status(
-        db,
-        project_id=int(project_id or 0),
-        episode_id=int(episode_id),
-        script_id=f"episode:{int(episode_id)}",
-        node_name="storyboard_generation",
-        status="queued",
-        progress_percent=0.0,
-        error_code=None,
-        error_message=None,
-        runtime_meta={"business_event": "queued", "rerun_cleared": True, "cleared_steps": ["storyboard"]},
-    )
     _blank_alias_pipeline_node_caches(
         db,
         project_id=int(project_id or 0),
@@ -4965,6 +4953,12 @@ async def run_scene_subskill_pipeline(
         queued_scene_ids: List[str] = []
         for task in tasks:
             scene_id = str(task.get("scene_id") or "").strip()
+            if (
+                explicit_start
+                and target_scene_ids
+                and not _task_matches_target_scene(task, target_scene_ids)
+            ):
+                continue
             plan = resume_plans.get(scene_id)
             if plan and plan.start_group == "done":
                 continue

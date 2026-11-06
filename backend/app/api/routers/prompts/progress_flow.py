@@ -442,7 +442,7 @@ async def reset_storyboard_generation_progress(
         project_id=int(episode.project_id),
         episode_id=int(request.episode_id),
         scene_markers=markers or None,
-        include_episode_level=True,
+        include_episode_level=not markers,
     )
     db.commit()
     return {

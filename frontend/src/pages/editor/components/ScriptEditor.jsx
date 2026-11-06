@@ -1076,10 +1076,9 @@ const overlayStoryboardPipelineNodesFromProgress = (nodes, progress) => {
         const running = Number(normalized.running || 0);
         const waiting = Number(normalized.waiting || 0);
         const finished = Number(normalized.completed || 0) + Number(normalized.failed || 0);
-        if (started > 0 && (running > 0 || waiting > 0) && current !== 'running') {
-            changed = true;
-            return { ...node, status: 'running', progress_percent: Math.max(15, Number(node?.progress_percent || 15) || 15) };
-        }
+        // No scene_id: this row is shared by the episode. One scene's in-flight
+        // storyboard must not flip it to running, or every reader of the shared
+        // node looks like the other 分场 started too.
         if (started > 0 && running <= 0 && waiting <= 0 && finished >= started) {
             const nextStatus = Number(normalized.failed || 0) > 0 ? 'warning' : 'success';
             if (current !== nextStatus) {
@@ -12789,6 +12788,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const kickoffStoryboardsFromSuccessfulStagingNodes = useCallback(async (nodes = []) => {
         const kickoffEpoch = analysisKickoffEpochRef.current;
         if (storyboardKickoffEpochBlocked(kickoffEpoch)) return;
+        // A single 分场 node rerun must not start storyboard for the other rows.
+        if (sceneMatrixRerunInFlightRef.current) return;
         const autoStart = await isStoryboardAutoStartEnabled();
         if (!autoStart || storyboardKickoffEpochBlocked(kickoffEpoch)) return;
         const list = Array.isArray(nodes) ? nodes : [];
@@ -12897,6 +12898,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const flushPendingStoryboardKickoffs = useCallback(async (reason = '') => {
         const kickoffEpoch = analysisKickoffEpochRef.current;
         if (storyboardKickoffEpochBlocked(kickoffEpoch)) return { started: 0, total: 0, reason };
+        // Leave the pending queue in place. Flushing it here would start other 分场.
+        if (sceneMatrixRerunInFlightRef.current) return { started: 0, total: 0, reason };
         // Re-queue stranded waiting_env / ENV-blocked failures when env is ready but the
         // pending list was emptied by a prior flush that failed without updating status
         // (e.g. stale Scene.id), or ENV was retried after a hard block.
@@ -32643,8 +32646,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setDiagnosticsPipelineNodes((prev) => (Array.isArray(prev) ? prev : []).map((node) => {
             const name = String(node?.node_name || '').trim();
             if (name !== 'scene_subskill_scene' && name !== 'storyboard_generation') return node;
+            const nodeSceneId = String(node?.scene_id || '').trim();
+            // Empty scene_id canonicalizes to the target order and would rewrite
+            // the shared episode row. Only this 分场, including its real aliases.
+            if (!nodeSceneId) return node;
             if (!sceneUnitIdsMatch(
-                String(node?.scene_id || '').trim(),
+                nodeSceneId,
                 targetSceneId,
                 deriveSceneOrderFromSceneId(targetSceneId),
                 episodePrefix
