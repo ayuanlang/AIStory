@@ -38270,7 +38270,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             if (groupCompleted) {
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
-                            if (groupActiveStep.includes(step) || (group === 'drama' && rank === 1 && ['running', 'queued'].includes(status))) {
+                            // Queued scenes stay waiting. A running flag on another row
+                            // must not light this row. Only this scene's own running node spins.
+                            const sceneNodeRunning = status === 'running';
+                            const stepMatchesGroup = groupActiveStep.includes(step)
+                                || (group === 'drama' && (rank === 1 || !step));
+                            if (
+                                isThisSceneRerun
+                                && group === startGroup
+                                && ['running', 'queued'].includes(status)
+                                && (rank === 0 || !step || stepMatchesGroup)
+                            ) {
+                                return started;
+                            }
+                            if (sceneNodeRunning && stepMatchesGroup) {
                                 return {
                                     ready: false,
                                     active: true,
@@ -38279,17 +38292,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         ? t('等待环境', 'Wait ENV')
                                         : '',
                                 };
-                            }
-                            if (['running', 'queued'].includes(status) && !step && group === 'drama') {
-                                return started;
-                            }
-                            if (
-                                isThisSceneRerun
-                                && group === startGroup
-                                && ['running', 'queued'].includes(status)
-                                && (rank === 0 || !step)
-                            ) {
-                                return started;
                             }
                             return waiting;
                         };
@@ -38385,7 +38387,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             if (thisRunCompleted) {
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
-                            if (subskillActive && subskillStep === 'storyboard') {
+                            if (subskillStatus === 'running' && subskillStep === 'storyboard') {
                                 return {
                                     ready: false,
                                     active: true,

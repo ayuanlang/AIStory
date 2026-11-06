@@ -51,6 +51,34 @@ def test_grsai_minimax_h3_i2v_keeps_images_and_audios():
     assert payload["audios"] == ["https://cdn.example.com/voice.mp3"]
 
 
+def test_grsai_wan3_resolution_uses_720p_not_768p():
+    from app.services.media_service import MediaGenerationService
+
+    service = MediaGenerationService()
+    assert service._is_grsai_wan3_model("wan-3") is True
+    assert service._is_grsai_wan3_model("wan-3.0") is True
+    assert service._is_grsai_wan3_model("wan/3-0-video") is True
+    assert service._is_grsai_wan3_model("minimax-h3") is False
+    assert service._is_grsai_wan3_model("wanxiang") is False
+
+    payload = service._build_grsai_minimax_h3_payload(
+        prompt="A cat walking on the beach",
+        model="wan-3.0",
+        aspect_ratio="16:9",
+        resolution="720p",
+        duration="5",
+    )
+    assert payload["model"] == "wan-3.0"
+    assert payload["resolution"] == "720p"
+
+    assert service._map_grsai_video_resolution("wan-3", "768p") == "720p"
+    assert service._map_grsai_video_resolution("wan-3", "720") == "720p"
+    assert service._map_grsai_video_resolution("wan-3", None) == "720p"
+    assert service._map_grsai_video_resolution("wan-3", "480p") == "480p"
+    assert service._map_grsai_video_resolution("wan-3", "1080p") == "1080p"
+    assert service._map_grsai_video_resolution("minimax-h3", "720p") == "768p"
+
+
 def test_grsai_minimax_h3_duration_and_resolution_clamps():
     from app.services.media_service import MediaGenerationService
 

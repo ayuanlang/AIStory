@@ -4750,6 +4750,21 @@ class MediaGenerationService:
             tool_conf["image_size"] = effective_image_size
             tool_conf["imageSize"] = effective_image_size
 
+        if self._is_grsai_wan3_model(model_hint):
+            raw_resolutions = runtime_enum_catalog.get("resolution")
+            if isinstance(raw_resolutions, list) and raw_resolutions:
+                rewritten_resolutions = []
+                seen_resolutions = set()
+                for item in raw_resolutions:
+                    text = str(item or "").strip()
+                    if text.lower() == "768p":
+                        text = "720p"
+                    key = text.lower()
+                    if text and key not in seen_resolutions:
+                        seen_resolutions.add(key)
+                        rewritten_resolutions.append(text)
+                runtime_enum_catalog["resolution"] = rewritten_resolutions
+
         if seedance_resolution_override is None:
             mapped_resolution = self._map_resolution_to_allowed(tool_conf.get("resolution"), runtime_enum_catalog.get("resolution"))
             if mapped_resolution:
@@ -8935,6 +8950,13 @@ class MediaGenerationService:
         text = str(model or "").strip().lower().replace("_", "-")
         return text == "minimax-h3" or text.startswith("minimax-h3/")
 
+    def _is_grsai_wan3_model(self, model: Any) -> bool:
+        text = str(model or "").strip().lower().replace("_", "-")
+        if not text or "wanxiang" in text or text.startswith("wanx"):
+            return False
+        compact = re.sub(r"[^a-z0-9]", "", text)
+        return "wan-3" in text or "wan/3" in text or compact.startswith("wan3")
+
     def _grsai_api_root(self, endpoint: Optional[str] = None, base_url: Optional[str] = None) -> str:
         root = str(base_url or "").strip()
         if not root and endpoint:
@@ -9140,6 +9162,23 @@ class MediaGenerationService:
             return "1080p"
         return "768p"
 
+    def _map_grsai_video_resolution(
+        self,
+        model: Any,
+        value: Any,
+        *,
+        draft: bool = False,
+        width: Any = None,
+        height: Any = None,
+    ) -> str:
+        mapped = self._map_grsai_minimax_h3_resolution(
+            value, draft=draft, width=width, height=height
+        )
+        # MiniMax H3's mid tier is 768p. Wan-3's catalog is 480p / 720p / 1080p.
+        if self._is_grsai_wan3_model(model) and mapped == "768p":
+            return "720p"
+        return mapped
+
     def _map_grsai_minimax_h3_duration(self, value: Any, *, resolution: str = "768p") -> int:
         try:
             parsed = int(round(float(value)))
@@ -9213,14 +9252,14 @@ class MediaGenerationService:
         width: Any = None,
         height: Any = None,
     ) -> Dict[str, Any]:
-        mapped_resolution = self._map_grsai_minimax_h3_resolution(
-            resolution, draft=draft, width=width, height=height
+        final_model = str(model or "minimax-h3").strip() or "minimax-h3"
+        mapped_resolution = self._map_grsai_video_resolution(
+            final_model, resolution, draft=draft, width=width, height=height
         )
         mapped_duration = self._map_grsai_minimax_h3_duration(duration, resolution=mapped_resolution)
         reply = str(reply_type or "async").strip().lower()
         if reply not in {"json", "stream", "async"}:
             reply = "async"
-        final_model = str(model or "minimax-h3").strip() or "minimax-h3"
         payload: Dict[str, Any] = {
             "model": final_model,
             "prompt": str(prompt or ""),

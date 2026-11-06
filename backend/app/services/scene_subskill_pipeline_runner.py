@@ -4972,6 +4972,8 @@ async def run_scene_subskill_pipeline(
                 getattr(plan, "start_group", "") or start_group or "drama"
             ).strip() or "drama"
             step_name = resume_step_name.get(start_name, "drama")
+            # Rows are independent. Queue every scene that still has work;
+            # only the scene that takes a concurrency slot is marked running.
             upsert_pipeline_node_status(
                 db,
                 project_id=project_id,
@@ -4979,10 +4981,10 @@ async def run_scene_subskill_pipeline(
                 script_id=f"episode:{node_episode_id}",
                 node_name="scene_subskill_scene",
                 scene_id=scene_id,
-                status="running",
-                progress_percent=5.0,
+                status="queued",
+                progress_percent=0.0,
                 runtime_meta={
-                    "business_event": "started",
+                    "business_event": "queued",
                     "current_step": step_name,
                     "current_step_label": resume_step_label.get(start_name, "文戏增强"),
                 },
