@@ -173,10 +173,22 @@ def _ensure_provider_key_pool_columns() -> None:
         logger.warning("DB bootstrap: provider_key_pool column ensure failed: %s", exc)
 
 
+def _ensure_scene_columns() -> None:
+    """Add columns on an existing scenes table. create_all does not alter it."""
+    try:
+        from app.models.all_models import Scene
+
+        is_postgres = engine.dialect.name == "postgresql"
+        _ensure_missing_table_columns("scenes", Scene, is_postgres=is_postgres)
+    except Exception as exc:
+        logger.warning("DB bootstrap: scenes column ensure failed: %s", exc)
+
+
 def _run_critical_db_bootstrap_steps() -> None:
     logger.info("DB bootstrap: create_all start")
     Base.metadata.create_all(bind=engine)
     _ensure_provider_key_pool_columns()
+    _ensure_scene_columns()
     readiness_issue = _get_minimum_schema_readiness_issue()
     if readiness_issue:
         raise RuntimeError(f"Critical DB schema bootstrap finished but readiness probe still failed: {readiness_issue}")
@@ -387,6 +399,7 @@ def _bootstrap_db_schema() -> tuple[bool, bool]:
         try:
             Base.metadata.create_all(bind=engine)
             _ensure_provider_key_pool_columns()
+            _ensure_scene_columns()
             create_default_superuser()
         except Exception as exc:
             logger.warning("DB bootstrap: create_all/superuser on ready schema failed: %s", exc)

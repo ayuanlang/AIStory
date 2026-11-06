@@ -314,7 +314,11 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "不要重画整张四宫" in system
     assert "用户补充" in system
     user = messages[1]["content"][0]["text"]
-    assert "主体个数、件数核销、朝向、位置" in user
+    assert "主体个数、件数核销、朝向、位置、光源、光线" in user
+    assert "光源与光线" in system
+    assert "光源不可见" in system
+    assert "从天空漫射下来" in system
+    assert "影子投向" in system
     assert "没改的格子可以不写" in user
     assert "按左上格、左下格、右上格、右下格描述要改的宫格" in user
     assert "四壁都核对" in user
@@ -377,6 +381,8 @@ def test_derived_consistency_message_includes_opening_and_cell():
     assert "对应宫格=90度格：" in user
     assert "台在画面侧面。" in user
     assert "两件核对" in messages[0]["content"]
+    assert "光源和光线" in messages[0]["content"]
+    assert "从天空漫射下来" in messages[0]["content"]
     assert "用痕迹=战备靴痕与推车轮迹" in messages[0]["content"]
     assert "中=中置指挥台" in messages[0]["content"]
 
@@ -1136,6 +1142,8 @@ def test_derived_main_consistency_injects_source_prompt_and_delta():
     assert "衍生Delta" in user_text
     assert "幕墙破口" in user_text
     assert "一起改" in messages[0]["content"]
+    assert "光源与光线" in messages[0]["content"]
+    assert "从天空漫射下来" in messages[0]["content"]
     assert "左上格、左下格、右上格、右下格" in messages[0]["content"]
     plan = plan_consistency_writes(
         derived_main,
