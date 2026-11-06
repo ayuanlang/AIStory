@@ -12700,6 +12700,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     };
 
+    const totalShotDurationSeconds = Math.round(
+        (Array.isArray(shots) ? shots : []).reduce((sum, shot) => {
+            const dur = Number.parseFloat(String(shot?.duration ?? shot?.['Duration (s)'] ?? '').trim());
+            return sum + (Number.isFinite(dur) && dur > 0 ? dur : 0);
+        }, 0) * 10
+    ) / 10;
+
     return (
         <div className="flex flex-col h-full w-full p-6 overflow-hidden">
              {/* Header / Toolbar */}
@@ -12708,7 +12715,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     {/* Title & Status */}
                     <h2 className="text-2xl font-bold flex items-center gap-2">
                         {t('镜头管理', 'Shot Manager')}
-                        <span className="text-sm font-normal text-muted-foreground ml-2">({shots.length})</span>
+                        <span className="text-sm font-normal text-muted-foreground ml-2">
+                            ({shots.length} · {totalShotDurationSeconds}s)
+                        </span>
                         <TabMediaRefreshButton
                             onClick={() => onMediaRefreshRequest?.()}
                             loading={isShotsLoading}

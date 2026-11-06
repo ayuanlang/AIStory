@@ -4,6 +4,7 @@ from app.services.scene_score import (
     build_scene_score_timeline,
     build_volume_expr,
     extract_score_cue,
+    extract_score_lines,
     extract_score_style,
     parse_duration_seconds,
     score_needs_vocals,
@@ -70,3 +71,24 @@ def test_prompt_and_volume_follow_one_cue():
     expr = build_volume_expr(segments)
     assert expr.startswith("if(lt(t,4.000),0.28,")
     assert score_needs_vocals("本场梵唱") is True
+
+
+def test_prompt_combines_storyboard_picture_and_score_lines():
+    segments, total, _missing = build_scene_score_timeline([
+        {"shot_id": "SH01", "duration": "4", "logic": "配乐:P1(0s–4s)=起·弱"},
+    ])
+    block = "【配乐】 | （低弦缓推、温暖垫底） | 态=起 | 音量=弱 | 出声=后期"
+    prompt = build_scene_score_prompt(
+        total_seconds=total,
+        segments=segments,
+        music_recommendation="风格=温暖弦乐",
+        cue="",
+        instrumental=True,
+        score_lines=extract_score_lines(block),
+        shot_pictures={"SH01": "甲推门停住，乙抬眼"},
+    )
+    assert "低弦缓推" in prompt
+    assert "甲推门停住" in prompt
+    assert "0–4秒" in prompt
+    assert "SH01" in prompt
+    assert "当前分镜" in prompt

@@ -1018,5 +1018,6 @@ async def generate_episode_scene_score(
         current_user=current_user,
         system_api_id=body.system_api_id,
         function_name=body.function_name,
+        prompt_only=bool(body.prompt_only),
     )
 

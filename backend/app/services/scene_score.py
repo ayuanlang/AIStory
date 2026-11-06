@@ -42,7 +42,9 @@ _VOLUME_RE = re.compile(r"音量\s*=\s*(弱|中|强)")
 _STYLE_RE = re.compile(r"风格\s*=\s*([^｜|\n]+)")
 _VOCAL_RE = re.compile(r"梵唱|体系人声|合唱|吟唱|步虚|哼唱")
 _CUE_RE = re.compile(r"【声画综合】([^\n【]{0,800})")
+_SCORE_LINE_RE = re.compile(r"【配乐】[^\n]{0,500}")
 _GAIN = {"弱": "0.28", "中": "0.62", "强": "1"}
+_PROMPT_LIMIT = 2500
 
 
 def parse_duration_seconds(raw: Any) -> Optional[float]:
@@ -156,6 +158,29 @@ def extract_score_cue(scene_block: str) -> str:
     return str(match.group(1) or "").strip() if match else ""
 
 
+def shorten_picture(text: str, limit: int = 72) -> str:
+    raw = str(text or "")
+    raw = re.sub(r"【[^】\n]{0,40}】", " ", raw)
+    raw = re.sub(r"CHAR:\[@([^\]]+)\]", r"\1", raw)
+    raw = re.sub(r"PROP:\[([^\]]+)\]", r"\1", raw)
+    raw = re.sub(r"\s+", " ", raw).strip(" |｜")
+    if len(raw) <= limit:
+        return raw
+    return raw[:limit].rstrip() + "…"
+
+
+def extract_score_lines(scene_block: str, limit: int = 8) -> List[str]:
+    lines: List[str] = []
+    for match in _SCORE_LINE_RE.finditer(str(scene_block or "")):
+        line = shorten_picture(match.group(0), 220)
+        if not line or line in lines:
+            continue
+        lines.append(line)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
 def score_needs_vocals(*parts: str) -> bool:
     blob = "\n".join(str(part or "") for part in parts)
     return bool(_VOCAL_RE.search(blob))
@@ -168,6 +193,41 @@ def extract_score_style(*parts: str) -> str:
     return style or "Classical"
 
 
+def _shot_prompt_rows(
+    segments: List[Dict[str, Any]],
+    shot_pictures: Optional[Dict[str, str]],
+) -> List[str]:
+    pictures = shot_pictures or {}
+    rows: List[Dict[str, Any]] = []
+    index: Dict[str, int] = {}
+    for segment in segments:
+        shot_id = str(segment.get("shot_id") or "").strip() or "未编号"
+        state = f"{segment.get('state') or '续'}·{segment.get('volume') or '中'}"
+        if shot_id in index:
+            row = rows[index[shot_id]]
+            row["end"] = segment["end"]
+            if row["marks"][-1] != state:
+                mark_at = f"{float(segment['start']):.0f}秒{state}"
+                row["marks"].append(mark_at if mark_at not in row["marks"] else state)
+            continue
+        index[shot_id] = len(rows)
+        rows.append({
+            "shot_id": shot_id,
+            "start": segment["start"],
+            "end": segment["end"],
+            "marks": [state],
+            "picture": str(pictures.get(shot_id) or "").strip(),
+        })
+    lines: List[str] = []
+    for row in rows:
+        marks = "，".join(str(item) for item in row["marks"])
+        line = f"{float(row['start']):.0f}–{float(row['end']):.0f}秒｜{marks}｜{row['shot_id']}"
+        if row["picture"]:
+            line = f"{line}｜{row['picture']}"
+        lines.append(line)
+    return lines
+
+
 def build_scene_score_prompt(
     *,
     total_seconds: float,
@@ -175,6 +235,8 @@ def build_scene_score_prompt(
     music_recommendation: str,
     cue: str,
     instrumental: bool,
+    score_lines: Optional[List[str]] = None,
+    shot_pictures: Optional[Dict[str, str]] = None,
 ) -> str:
     groups: List[Dict[str, Any]] = []
     for segment in segments:
@@ -197,20 +259,38 @@ def build_scene_score_prompt(
     )
     lines = [
         f"一首连续配乐，总长约{total_seconds:.0f}秒。同一首从起到收，不要另起一首，不要对白。",
+        "时长和起承转收按这一场当前分镜。声画综合、各拍配乐和画面只用来定这一段的情绪。",
     ]
     music = str(music_recommendation or "").strip()
     if music:
         lines.append(f"项目配乐：{music[:500]}")
     cue_text = str(cue or "").strip()
     if cue_text:
-        lines.append(f"本场：{cue_text[:500]}")
+        lines.append(f"本场：{cue_text[:700]}")
+    kept_score = [str(item).strip() for item in (score_lines or []) if str(item).strip()]
+    if kept_score:
+        lines.append("各拍配乐：\n" + "\n".join(kept_score[:8]))
     if structure:
         lines.append(f"结构：{structure}。")
+    shot_rows = _shot_prompt_rows(segments, shot_pictures)
+    if shot_rows:
+        lines.append("分镜：\n" + "\n".join(shot_rows))
     if instrumental:
         lines.append("纯器乐，不要歌词，不要人声。")
     else:
         lines.append("可以有体系人声，不要对白台词。")
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    if len(text) <= _PROMPT_LIMIT:
+        return text
+    while shot_rows and len(text) > _PROMPT_LIMIT:
+        shot_rows.pop()
+        rebuilt = [line for line in lines if not line.startswith("分镜：")]
+        if shot_rows:
+            rebuilt.insert(-1, "分镜：\n" + "\n".join(shot_rows))
+        text = "\n".join(rebuilt)
+    if len(text) > _PROMPT_LIMIT:
+        text = text[:_PROMPT_LIMIT].rstrip()
+    return text
 
 
 def _json_object(raw: Any) -> Dict[str, Any]:
@@ -413,6 +493,7 @@ def fit_score_audio(
 
 def score_plan_public(scene: Scene) -> Dict[str, Any]:
     plan = _json_object(getattr(scene, "score_plan", None))
+    instrumental = plan.get("instrumental") if "instrumental" in plan else None
     return {
         "scene_db_id": int(scene.id),
         "scene_no": str(scene.scene_no or ""),
@@ -422,6 +503,11 @@ def score_plan_public(scene: Scene) -> Dict[str, Any]:
         "target_seconds": plan.get("target_seconds"),
         "status": str(plan.get("status") or ""),
         "fit_error": str(plan.get("fit_error") or ""),
+        "prompt": str(plan.get("prompt") or ""),
+        "style": str(plan.get("style") or ""),
+        "instrumental": bool(instrumental) if isinstance(instrumental, bool) else None,
+        "audio_stale": bool(plan.get("audio_stale")),
+        "shot_count": plan.get("shot_count"),
         "segments": plan.get("segments") if isinstance(plan.get("segments"), list) else [],
     }
 
@@ -450,6 +536,7 @@ async def generate_scene_score(
     current_user: User,
     system_api_id: Optional[int] = None,
     function_name: Optional[str] = None,
+    prompt_only: bool = False,
 ) -> Dict[str, Any]:
     marker = str(scene_marker or "").strip()
     if not marker:
@@ -468,6 +555,11 @@ async def generate_scene_score(
         }
         for shot in shots
     ]
+    shot_pictures = {
+        str(shot.shot_id or "").strip() or "未编号": note
+        for shot in shots
+        if (note := shorten_picture(str(shot.video_content or shot.shot_name or "")))
+    }
     segments, total_seconds, missing = build_scene_score_timeline(timeline_shots)
     if missing:
         raise HTTPException(
@@ -479,16 +571,51 @@ async def generate_scene_score(
 
     project = db.query(Project).filter(Project.id == int(episode.project_id)).first() if episode.project_id else None
     music = _music_recommendation(project, episode)
-    cue = extract_score_cue(_scene_block_for_marker(db, int(episode.id), marker))
-    instrumental = not score_needs_vocals(music, cue)
+    scene_block = _scene_block_for_marker(db, int(episode.id), marker)
+    cue = extract_score_cue(scene_block)
+    score_lines = extract_score_lines(scene_block)
+    listen_parts = (music, cue, "\n".join(score_lines))
+    instrumental = not score_needs_vocals(*listen_parts)
     prompt = build_scene_score_prompt(
         total_seconds=total_seconds,
         segments=segments,
         music_recommendation=music,
         cue=cue,
         instrumental=instrumental,
+        score_lines=score_lines,
+        shot_pictures=shot_pictures,
     )
-    style = extract_score_style(music, cue)
+    style = extract_score_style(*listen_parts)
+    previous = _json_object(getattr(scene, "score_plan", None))
+    if prompt_only:
+        audio_url = str(getattr(scene, "score_audio_url", None) or "").strip()
+        previous_prompt = str(previous.get("prompt") or "")
+        audio_stale = bool(audio_url) and previous_prompt != prompt
+        status = str(previous.get("status") or "")
+        if not audio_url:
+            status = "prompt"
+        elif not status:
+            status = "ready"
+        plan = {
+            "scene_marker": marker,
+            "audio_url": audio_url,
+            "source_url": str(previous.get("source_url") or ""),
+            "target_seconds": total_seconds,
+            "duration_seconds": previous.get("duration_seconds") if audio_url else total_seconds,
+            "status": status,
+            "fit_error": "" if audio_stale else str(previous.get("fit_error") or ""),
+            "prompt": prompt,
+            "style": style,
+            "instrumental": instrumental,
+            "audio_stale": audio_stale,
+            "segments": segments,
+            "shot_count": len(timeline_shots),
+        }
+        scene.score_plan = json.dumps(plan, ensure_ascii=False)
+        db.add(scene)
+        db.commit()
+        db.refresh(scene)
+        return score_plan_public(scene)
     resolved_api_id = int(system_api_id) if system_api_id and is_suno_system_api(db, int(system_api_id)) else None
     if not resolved_api_id:
         resolved_api_id = find_suno_system_api_id(db)
@@ -562,6 +689,7 @@ async def generate_scene_score(
         "prompt": prompt,
         "style": style,
         "instrumental": instrumental,
+        "audio_stale": False,
         "segments": segments,
         "shot_count": len(timeline_shots),
     }

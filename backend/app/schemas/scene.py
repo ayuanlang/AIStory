@@ -56,6 +56,7 @@ class SceneScoreGenerateRequest(BaseModel):
     scene_marker: str
     system_api_id: Optional[int] = None
     function_name: Optional[str] = None
+    prompt_only: Optional[bool] = False
 
 
 class SceneRegenerateRequest(BaseModel):

@@ -5548,6 +5548,23 @@ const createSkippedSubjectConsistencyReport = () => ({
     skipped: true,
 });
 
+const sceneScoreMediaSrc = (url) => {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    return raw.startsWith('http') ? raw : `${ASSET_BASE_URL}${raw}`;
+};
+
+const sceneScoreViewerFromRow = (label, row) => ({
+    label: String(label || '').trim(),
+    prompt: String(row?.prompt || '').trim(),
+    style: String(row?.style || '').trim(),
+    targetSeconds: Number(row?.target_seconds || row?.duration_seconds || 0),
+    instrumental: typeof row?.instrumental === 'boolean' ? row.instrumental : null,
+    audioUrl: sceneScoreMediaSrc(row?.audio_url),
+    audioStale: Boolean(row?.audio_stale),
+    shotCount: Number(row?.shot_count || 0),
+});
+
 const runAfterScriptPaint = (fn, { immediate = false } = {}) => {
     if (immediate) {
         fn();
@@ -5566,6 +5583,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [sceneScores, setSceneScores] = useState([]);
     const [sceneScoreBusyId, setSceneScoreBusyId] = useState('');
     const [sceneScoreErrorById, setSceneScoreErrorById] = useState({});
+    const [sceneScoreViewer, setSceneScoreViewer] = useState(null);
+    const [sceneScoreCopied, setSceneScoreCopied] = useState(false);
     useEffect(() => {
         const episodeId = Number(activeEpisode?.id || 0);
         if (!episodeId) {
@@ -5584,7 +5603,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             cancelled = true;
         };
     }, [activeEpisode?.id]);
-    const handleGenerateSceneScore = useCallback(async (sceneId) => {
+    const handleGenerateSceneScore = useCallback(async (sceneId, sceneLabel) => {
         const episodeId = Number(activeEpisode?.id || 0);
         const marker = String(sceneId || '').trim();
         if (!episodeId || !marker) return;
@@ -5595,6 +5614,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             const result = await generateSceneScore(episodeId, {
                 scene_marker: marker,
+                prompt_only: true,
                 function_name: functionName,
                 ...(selectedSystemApiId ? { system_api_id: selectedSystemApiId } : {}),
             });
@@ -5609,6 +5629,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }) : [];
                 return [...list, result];
             });
+            setSceneScoreCopied(false);
+            setSceneScoreViewer(sceneScoreViewerFromRow(sceneLabel, result));
         } catch (error) {
             const detail = error?.response?.data?.detail || error?.message || String(error);
             const text = typeof detail === 'string' ? detail : JSON.stringify(detail);
@@ -38654,7 +38676,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <div className="text-xs font-bold text-white/85">{t('分场节点', 'Per-scene nodes')}</div>
                                     <div className="text-[10px] text-white/35">
-                                        {t('每场一行：文戏、武戏增强、场景现场编排、建置入戏、分镜生成。左侧「重跑该场」从文戏优化重跑该场，不跑美术指导与其他分场。单节点重跑仍会按序带起该场后续节点。场次列的「本场配乐」按这一场分镜各镜时长生成一条。', 'One row per scene: drama, action enhancement, floor staging, blocking, and storyboards. “Rerun This Scene” starts that scene from drama and skips art direction and other scenes. A single-node rerun still continues through later nodes for that scene. “Scene Score” on the scene column builds one cue timed to that scene’s storyboard.')}
+                                        {t('每场一行：文戏、武戏增强、场景现场编排、建置入戏、分镜生成。左侧「重跑该场」从文戏优化重跑该场，不跑美术指导与其他分场。单节点重跑仍会按序带起该场后续节点。场次列的「本场配乐」按这一场当前分镜、声画综合和各拍配乐重写提示词，并可查看。', 'One row per scene: drama, action enhancement, floor staging, blocking, and storyboards. “Rerun This Scene” starts that scene from drama and skips art direction and other scenes. A single-node rerun still continues through later nodes for that scene. “Scene Score” on the scene column rewrites a viewable prompt from that scene’s current storyboard, sound-picture cue, and per-beat score lines.')}
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">
@@ -38749,21 +38771,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 const scoreBusy = sceneScoreBusyId === row.sceneId;
                                                 const scoreError = String(sceneScoreErrorById?.[row.sceneId] || '').trim();
                                                 const scoreUrl = String(scoreRow?.audio_url || '').trim();
-                                                const scoreSrc = scoreUrl
-                                                    ? (scoreUrl.startsWith('http') ? scoreUrl : `${ASSET_BASE_URL}${scoreUrl}`)
-                                                    : '';
+                                                const scorePrompt = String(scoreRow?.prompt || '').trim();
+                                                const scoreSrc = sceneScoreMediaSrc(scoreUrl);
                                                 const targetSeconds = Number(scoreRow?.target_seconds || scoreRow?.duration_seconds || 0);
                                                 const canGenerateScore = Boolean(shotState?.ready && !scoreBusy);
+                                                const sceneLabel = formatDiagnosticSceneLabel(row.sceneId, row.order, row.sceneName);
                                                 return (
                                                     <div className="w-full flex flex-col gap-1">
                                                         <button
                                                             type="button"
-                                                            onClick={() => handleGenerateSceneScore(row.sceneId)}
+                                                            onClick={() => handleGenerateSceneScore(row.sceneId, sceneLabel)}
                                                             disabled={!canGenerateScore}
                                                             className={diagnosticBtnClass}
                                                             title={shotState?.ready
-                                                                ? t('按本场分镜各镜秒数生成一条配乐，并裁到相同时长', 'Generate one score timed to this scene’s storyboard durations')
-                                                                : t('先完成本场分镜，配乐时长才对得上', 'Finish this scene’s storyboard first so the score can match its duration')}
+                                                                ? t('按当前分镜时长、声画综合和各拍配乐重写提示词', 'Rewrite the score prompt from the current storyboard, sound-picture cue, and per-beat score lines')
+                                                                : t('先完成本场分镜，配乐提示词才对得上时长', 'Finish this scene’s storyboard first so the score prompt can match its duration')}
                                                         >
                                                             {scoreBusy
                                                                 ? (
@@ -38772,10 +38794,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                                         {t('生成中', 'Generating')}
                                                                     </span>
                                                                 )
-                                                                : (scoreUrl
-                                                                    ? t('重新生成本场配乐', 'Regenerate scene score')
+                                                                : (scorePrompt
+                                                                    ? t('重新生成提示词', 'Regenerate prompt')
                                                                     : t('本场配乐', 'Scene Score'))}
                                                         </button>
+                                                        {scorePrompt ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setSceneScoreCopied(false);
+                                                                    setSceneScoreViewer(sceneScoreViewerFromRow(sceneLabel, scoreRow));
+                                                                }}
+                                                                className={diagnosticBtnClass}
+                                                                title={t('查看这一场当前的配乐提示词', 'View this scene’s current score prompt')}
+                                                            >
+                                                                {t('查看', 'View')}
+                                                            </button>
+                                                        ) : null}
                                                         {targetSeconds > 0 ? (
                                                             <span className="text-[10px] text-white/45">
                                                                 {t(`${Math.round(targetSeconds)}秒`, `${Math.round(targetSeconds)}s`)}
@@ -39216,6 +39251,90 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 </div>
             </div>
+
+            {sceneScoreViewer ? (
+                <div
+                    className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                    onClick={() => setSceneScoreViewer(null)}
+                >
+                    <div
+                        className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-3xl max-h-[88vh] shadow-2xl overflow-hidden flex flex-col"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
+                            <h3 className="text-lg font-bold">
+                                {t('本场配乐', 'Scene score')}
+                                {sceneScoreViewer.label ? ` · ${sceneScoreViewer.label}` : ''}
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setSceneScoreViewer(null)}
+                                className="text-white/50 hover:text-white"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-4 flex flex-col gap-3 overflow-auto">
+                            <p className="text-xs text-white/50 leading-relaxed">
+                                {[
+                                    sceneScoreViewer.targetSeconds > 0
+                                        ? t(`${Math.round(sceneScoreViewer.targetSeconds)}秒`, `${Math.round(sceneScoreViewer.targetSeconds)}s`)
+                                        : '',
+                                    sceneScoreViewer.shotCount > 0
+                                        ? t(`${sceneScoreViewer.shotCount}镜`, `${sceneScoreViewer.shotCount} shots`)
+                                        : '',
+                                    sceneScoreViewer.style,
+                                    sceneScoreViewer.instrumental === true
+                                        ? t('纯器乐', 'Instrumental')
+                                        : sceneScoreViewer.instrumental === false
+                                            ? t('可有体系人声', 'Vocals allowed')
+                                            : '',
+                                ].filter(Boolean).join(' · ')}
+                            </p>
+                            <p className="text-xs text-white/45 leading-relaxed">
+                                {t(
+                                    '这条提示词按这一场当前分镜的时长和起承转收，并写入声画综合、各拍配乐和画面。分镜重跑之后再点一次「重新生成提示词」。',
+                                    'This prompt uses the current storyboard durations and score states, plus the sound-picture cue, per-beat score lines, and pictures. After a storyboard rerun, generate the prompt again.'
+                                )}
+                            </p>
+                            {sceneScoreViewer.audioStale ? (
+                                <p className="text-xs text-amber-200/80">
+                                    {t('这条音频还是上一次生成的。', 'This audio is from the previous generation.')}
+                                </p>
+                            ) : null}
+                            {sceneScoreViewer.audioUrl ? (
+                                <audio controls preload="none" src={sceneScoreViewer.audioUrl} className="w-full" />
+                            ) : null}
+                            <pre className="whitespace-pre-wrap text-sm leading-relaxed text-white/90 bg-black/40 border border-white/10 rounded-lg p-3">
+                                {sceneScoreViewer.prompt}
+                            </pre>
+                        </div>
+                        <div className="flex items-center justify-end gap-2 p-4 border-t border-white/10">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const text = String(sceneScoreViewer.prompt || '');
+                                    if (navigator.clipboard?.writeText) {
+                                        navigator.clipboard.writeText(text).then(() => setSceneScoreCopied(true)).catch(() => setSceneScoreCopied(false));
+                                        return;
+                                    }
+                                    setSceneScoreCopied(false);
+                                }}
+                                className="text-sm px-3 py-1.5 rounded border border-white/10 text-white/80 hover:bg-white/5"
+                            >
+                                {sceneScoreCopied ? t('已复制', 'Copied') : t('复制', 'Copy')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setSceneScoreViewer(null)}
+                                className="text-sm px-3 py-1.5 rounded bg-white text-black font-medium"
+                            >
+                                {t('关闭', 'Close')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
 
             {nodeAdvancedSpecModal.open && (
                 <div
