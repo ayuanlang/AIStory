@@ -9109,6 +9109,61 @@ class MediaGenerationService:
             return "portrait"
         return "landscape"
 
+    def _map_grsai_wan3_aspect_ratio(self, value: Any) -> str:
+        """Wan-3 accepts 16:9, 9:16, 21:9, 4:3, 1:1, 3:4. It rejects landscape/portrait."""
+        text = str(value or "").strip().lower().replace(" ", "")
+        aliases = {
+            "landscape": "16:9",
+            "horizontal": "16:9",
+            "widescreen": "16:9",
+            "16:9": "16:9",
+            "portrait": "9:16",
+            "vertical": "9:16",
+            "9:16": "9:16",
+            "21:9": "21:9",
+            "2.35:1": "21:9",
+            "2.39:1": "21:9",
+            "4:3": "4:3",
+            "1:1": "1:1",
+            "square": "1:1",
+            "3:4": "3:4",
+        }
+        if text in aliases:
+            return aliases[text]
+        if text in {"", "auto", "adaptive"}:
+            return "16:9"
+
+        ratio = None
+        pair = self._parse_resolution_pair(text)
+        if pair:
+            ratio = pair[0] / pair[1]
+        elif ":" in text:
+            left, right = text.split(":", 1)
+            try:
+                width = float(left)
+                height = float(right)
+                if width > 0 and height > 0:
+                    ratio = width / height
+            except Exception:
+                ratio = None
+        if ratio is None:
+            return "16:9"
+
+        catalog = (
+            ("21:9", 21 / 9),
+            ("16:9", 16 / 9),
+            ("4:3", 4 / 3),
+            ("1:1", 1.0),
+            ("3:4", 3 / 4),
+            ("9:16", 9 / 16),
+        )
+        return min(catalog, key=lambda item: abs(item[1] - ratio))[0]
+
+    def _map_grsai_video_aspect_ratio(self, model: Any, value: Any) -> str:
+        if self._is_grsai_wan3_model(model):
+            return self._map_grsai_wan3_aspect_ratio(value)
+        return self._map_grsai_minimax_h3_aspect_ratio(value)
+
     def _map_grsai_minimax_h3_resolution(
         self,
         value: Any,
@@ -9189,6 +9244,15 @@ class MediaGenerationService:
         max_duration = 10 if str(resolution or "").strip().lower() == "1080p" else 15
         return max(1, min(max_duration, parsed))
 
+    def _map_grsai_wan3_duration(self, value: Any) -> int:
+        try:
+            parsed = int(round(float(value)))
+        except Exception:
+            parsed = 5
+        if parsed <= 0:
+            parsed = 5
+        return max(2, min(30, parsed))
+
     def _collect_grsai_minimax_h3_audios(
         self,
         tool_conf: Optional[Dict[str, Any]] = None,
@@ -9256,14 +9320,17 @@ class MediaGenerationService:
         mapped_resolution = self._map_grsai_video_resolution(
             final_model, resolution, draft=draft, width=width, height=height
         )
-        mapped_duration = self._map_grsai_minimax_h3_duration(duration, resolution=mapped_resolution)
+        if self._is_grsai_wan3_model(final_model):
+            mapped_duration = self._map_grsai_wan3_duration(duration)
+        else:
+            mapped_duration = self._map_grsai_minimax_h3_duration(duration, resolution=mapped_resolution)
         reply = str(reply_type or "async").strip().lower()
         if reply not in {"json", "stream", "async"}:
             reply = "async"
         payload: Dict[str, Any] = {
             "model": final_model,
             "prompt": str(prompt or ""),
-            "aspectRatio": self._map_grsai_minimax_h3_aspect_ratio(aspect_ratio),
+            "aspectRatio": self._map_grsai_video_aspect_ratio(final_model, aspect_ratio),
             "resolution": mapped_resolution,
             "duration": mapped_duration,
             "replyType": reply,
