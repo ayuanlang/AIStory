@@ -4303,6 +4303,13 @@ class MediaGenerationService:
         except Exception:
             requested_num = float(allowed[0])
 
+        low = float(min(allowed))
+        high = float(max(allowed))
+        # Durations outside the catalog min/max are submitted as requested.
+        # Do not raise a short clip to the minimum or shorten a long clip to the maximum.
+        if requested_num > 0 and (requested_num < low or requested_num > high):
+            return int(requested_num) if float(requested_num).is_integer() else int(round(requested_num))
+
         return min(
             allowed,
             key=lambda item: (
@@ -4796,19 +4803,6 @@ class MediaGenerationService:
                 )
                 if mapped_duration is not None:
                     effective_duration = int(mapped_duration)
-            max_duration = runtime_enum_catalog.get("max_duration")
-            if (
-                not is_seedance2_auto_duration
-                and not is_wan30_auto_duration
-                and effective_duration is not None
-                and max_duration is not None
-            ):
-                try:
-                    max_duration_num = int(float(max_duration))
-                    if max_duration_num > 0 and effective_duration > max_duration_num:
-                        effective_duration = max_duration_num
-                except Exception:
-                    pass
 
         sound_supported = runtime_enum_catalog.get("sound_supported")
         if sound_supported is False and tool_conf.get("sound") is True:
@@ -8763,7 +8757,7 @@ class MediaGenerationService:
                 payload["duration"] = 5
                 payload["resolution"] = "720p"
             else:
-                payload["duration"] = min(dur_int, 8)
+                payload["duration"] = dur_int
 
         if is_draft_mode:
             payload["resolution"] = "480p"
@@ -9235,14 +9229,15 @@ class MediaGenerationService:
         return mapped
 
     def _map_grsai_minimax_h3_duration(self, value: Any, *, resolution: str = "768p") -> int:
+        # Resolution used to cap 1080p at 10s. Requested seconds are kept.
+        del resolution
         try:
             parsed = int(round(float(value)))
         except Exception:
             parsed = 5
         if parsed <= 0:
             parsed = 5
-        max_duration = 10 if str(resolution or "").strip().lower() == "1080p" else 15
-        return max(1, min(max_duration, parsed))
+        return parsed
 
     def _map_grsai_wan3_duration(self, value: Any) -> int:
         try:
@@ -9251,7 +9246,7 @@ class MediaGenerationService:
             parsed = 5
         if parsed <= 0:
             parsed = 5
-        return max(2, min(30, parsed))
+        return parsed
 
     def _collect_grsai_minimax_h3_audios(
         self,
@@ -10250,7 +10245,8 @@ class MediaGenerationService:
             safe_duration = int(duration)
         except Exception:
             safe_duration = 5
-        safe_duration = max(3, min(15, safe_duration))
+        if safe_duration <= 0:
+            safe_duration = 5
 
         seed_value = config.get("seed")
         try:
@@ -12776,7 +12772,6 @@ class MediaGenerationService:
             mapped_duration = self._map_duration_nearest(duration_in, allowed_duration_values, prefer_higher_on_tie=False)
             if mapped_duration is not None:
                 duration_in = int(mapped_duration)
-        duration_in = max(4, min(15, int(duration_in)))
 
         allowed_ratios = self._normalize_str_list(
             tool_conf.get("ratios")
@@ -13969,10 +13964,12 @@ class MediaGenerationService:
         mapped_duration = self._map_duration_nearest(
             duration_in, allowed_duration_values, prefer_higher_on_tie=False
         )
-        duration_in = int(
-            mapped_duration if mapped_duration is not None else max(4, min(15, duration_in or 5))
-        )
-        duration_in = max(4, min(15, duration_in))
+        if mapped_duration is not None:
+            duration_in = int(mapped_duration)
+        elif duration_in is None or int(duration_in) <= 0:
+            duration_in = 5
+        else:
+            duration_in = int(duration_in)
 
         # Contract: ratio (or aspect) required; closed set.
         ddimatuo_ratios = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
@@ -15218,7 +15215,10 @@ class MediaGenerationService:
         )
         duration_in = int(mapped_duration if mapped_duration is not None else default_duration)
         if duration_in not in set(allowed_duration_values):
-            duration_in = min(allowed_duration_values, key=lambda item: abs(item - duration_in))
+            low = min(allowed_duration_values)
+            high = max(allowed_duration_values)
+            if low <= duration_in <= high:
+                duration_in = min(allowed_duration_values, key=lambda item: abs(item - duration_in))
 
         default_ratios = list(profile.get("ratios") or ["16:9", "9:16", "1:1"])
         allowed_ratios = self._normalize_str_list(
@@ -16008,8 +16008,10 @@ class MediaGenerationService:
         mapped_duration = self._map_duration_nearest(
             duration_in, allowed_duration_values, prefer_higher_on_tie=False
         )
-        duration_in = int(mapped_duration if mapped_duration is not None else max(4, min(15, duration_in)))
-        duration_in = max(4, min(15, duration_in))
+        if mapped_duration is not None:
+            duration_in = int(mapped_duration)
+        elif duration_in <= 0:
+            duration_in = 5
 
         allowed_ratios = self._normalize_str_list(
             tool_conf.get("ratios")
@@ -19481,7 +19483,7 @@ class MediaGenerationService:
             parsed = 6
         if parsed <= 0:
             parsed = 6
-        return max(4, min(15, parsed))
+        return parsed
 
     def _map_kie_minimax_h3_resolution(self, value: Any) -> str:
         text = str(value or "").strip().upper().replace(" ", "")
@@ -20318,12 +20320,6 @@ class MediaGenerationService:
                     if mapped_duration is not None:
                         duration_value = int(mapped_duration)
 
-                max_duration = runtime_enum_catalog.get("max_duration")
-                try:
-                    if max_duration is not None and not is_wan30_auto_duration:
-                        duration_value = min(int(duration_value), int(max_duration))
-                except Exception:
-                    pass
                 if is_wan30_auto_duration:
                     payload_input["duration"] = -1
                 else:
@@ -20758,8 +20754,10 @@ class MediaGenerationService:
                 wan30_duration = 5
             if wan30_duration == -1:
                 payload_input["duration"] = -1
+            elif wan30_duration > 0:
+                payload_input["duration"] = int(wan30_duration)
             else:
-                payload_input["duration"] = int(min(30, max(2, wan30_duration)))
+                payload_input["duration"] = 5
 
             audio_raw = tool_conf.get("audio")
             if audio_raw is None:
@@ -21387,7 +21385,8 @@ class MediaGenerationService:
                 duration_int = int(float(duration if duration is not None else 5))
             except Exception:
                 duration_int = 5
-            duration_int = max(3, min(15, duration_int))
+            if duration_int <= 0:
+                duration_int = 5
 
             kling_input: Dict[str, Any] = {
                 "prompt": prompt,
@@ -21442,14 +21441,15 @@ class MediaGenerationService:
                         shot_duration = int(item.get("duration"))
                     except Exception:
                         shot_duration = 3
-                    shot_duration = max(1, min(12, shot_duration))
+                    if shot_duration <= 0:
+                        shot_duration = 3
                     normalized_multi_prompt.append({"prompt": shot_prompt, "duration": shot_duration})
                     if len(normalized_multi_prompt) >= 5:
                         break
 
             if multi_shots:
                 if not normalized_multi_prompt:
-                    normalized_multi_prompt = [{"prompt": prompt, "duration": max(1, min(12, duration_int))}]
+                    normalized_multi_prompt = [{"prompt": prompt, "duration": duration_int}]
                 kling_input["multi_prompt"] = normalized_multi_prompt
             elif normalized_multi_prompt:
                 kling_input["multi_prompt"] = normalized_multi_prompt
@@ -21584,9 +21584,12 @@ class MediaGenerationService:
                 omni_duration_num = int(float(omni_duration_raw))
             except Exception:
                 omni_duration_num = 4
-            # Official buckets: 4 | 6 | 8 | 10
+            # Official buckets: 4 | 6 | 8 | 10. Values outside that span stay as requested.
             allowed_omni_durations = (4, 6, 8, 10)
-            omni_duration_num = min(allowed_omni_durations, key=lambda bucket: abs(bucket - max(1, omni_duration_num)))
+            if omni_duration_num <= 0:
+                omni_duration_num = 4
+            elif 4 <= omni_duration_num <= 10:
+                omni_duration_num = min(allowed_omni_durations, key=lambda bucket: abs(bucket - omni_duration_num))
             omni_input["duration"] = str(omni_duration_num)
 
             payload = {
@@ -21656,7 +21659,7 @@ class MediaGenerationService:
                     if digits in {"768", "1080"}:
                         payload_input_obj["resolution"] = f"{digits}P"
 
-            # MiniMax H3 only accepts 768P / 2K and integer duration 4-15.
+            # MiniMax H3 resolution is 768P / 2K. Duration is the requested seconds.
             if is_minimax_h3_video_model:
                 payload_input_obj["duration"] = self._map_kie_minimax_h3_duration(
                     payload_input_obj.get("duration")
@@ -21687,10 +21690,7 @@ class MediaGenerationService:
                             )
                             if mapped_duration is not None:
                                 current_duration_int = int(mapped_duration)
-                        max_duration = runtime_enum_catalog.get("max_duration")
-                        if max_duration is not None:
-                            current_duration_int = min(int(current_duration_int), int(max_duration))
-                        normalized_duration_int = int(max(1, int(current_duration_int)))
+                        normalized_duration_int = int(current_duration_int) if int(current_duration_int) > 0 else 1
                         payload_input_obj["duration"] = str(normalized_duration_int) if duration_string_required_model else normalized_duration_int
                 except Exception:
                     pass

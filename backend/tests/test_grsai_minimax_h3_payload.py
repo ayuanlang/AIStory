@@ -43,7 +43,7 @@ def test_grsai_minimax_h3_i2v_keeps_images_and_audios():
 
     assert payload["aspectRatio"] == "landscape"
     assert payload["resolution"] == "1080p"
-    assert payload["duration"] == 10
+    assert payload["duration"] == 12
     assert payload["images"] == [
         "https://cdn.example.com/first.jpg",
         "https://cdn.example.com/last.jpg",
@@ -82,9 +82,9 @@ def test_grsai_wan3_resolution_uses_720p_not_768p():
     assert service._map_grsai_wan3_aspect_ratio("3:4") == "3:4"
     assert service._map_grsai_wan3_aspect_ratio("720x1280") == "9:16"
     assert service._map_grsai_video_aspect_ratio("minimax-h3", "16:9") == "landscape"
-    assert service._map_grsai_wan3_duration(1) == 2
+    assert service._map_grsai_wan3_duration(1) == 1
     assert service._map_grsai_wan3_duration(10) == 10
-    assert service._map_grsai_wan3_duration(40) == 30
+    assert service._map_grsai_wan3_duration(40) == 40
 
     assert service._map_grsai_video_resolution("wan-3", "768p") == "720p"
     assert service._map_grsai_video_resolution("wan-3", "720") == "720p"
@@ -99,8 +99,8 @@ def test_grsai_minimax_h3_duration_and_resolution_clamps():
 
     service = MediaGenerationService()
     assert service._map_grsai_minimax_h3_duration(0) == 5
-    assert service._map_grsai_minimax_h3_duration(20) == 15
-    assert service._map_grsai_minimax_h3_duration(15, resolution="1080p") == 10
+    assert service._map_grsai_minimax_h3_duration(20) == 20
+    assert service._map_grsai_minimax_h3_duration(15, resolution="1080p") == 15
     assert service._map_grsai_minimax_h3_duration("bad") == 5
     assert service._map_grsai_minimax_h3_resolution("480p") == "480p"
     assert service._map_grsai_minimax_h3_resolution("720p") == "768p"

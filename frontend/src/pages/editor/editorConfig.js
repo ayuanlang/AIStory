@@ -168,18 +168,14 @@ export const seedanceDurationWarnMaxSeconds = (...identityParts) => {
 };
 
 /**
- * Clamp Seedance video duration to the 4s minimum only.
- * Maximum is not rewritten; the submit UI asks the user to confirm over-limit values.
+ * Keep the requested Seedance duration.
+ * Video generation does not raise a short clip to 4s or shorten a long clip.
  * Preserves -1 (auto) and non-positive values.
  * @returns {{ duration: number, clamped: boolean, original: number }}
  */
 export const clampSeedanceVideoDuration = (duration) => {
     const original = Number(duration);
-    if (!Number.isFinite(original) || original <= 0) {
-        return { duration: original, clamped: false, original };
-    }
-    const clamped = Math.max(SEEDANCE_DURATION_MIN_SECONDS, original);
-    return { duration: clamped, clamped: clamped !== original, original };
+    return { duration: original, clamped: false, original };
 };
 
 export const getSettingSourceByCategory = (settings, category) => {

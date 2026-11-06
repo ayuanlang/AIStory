@@ -317,7 +317,8 @@ def test_generation_helper_service_modules():
     assert _clamp_seedance_duration(20, "seedance-2")[0] == 20.0
     assert _clamp_seedance_duration(20, "seedance-2.5")[0] == 20.0
     assert _clamp_seedance_duration(30, "sd-2.5-720p")[0] == 30.0
-    assert _clamp_seedance_duration(2, "seedance-2.5")[0] == 4.0
+    assert _clamp_seedance_duration(2, "seedance-2.5")[0] == 2.0
+    assert _clamp_seedance_duration(2, "seedance-2.5")[1] is False
     assert _is_seedance25_model_name("星耀 sd-2.5 480p", "sd-2.5-480p")
     assert not _is_seedance25_model_name("seedance-2", "sd-2-fast")
     assert _is_seedance_model_name("seedance-1.0")

@@ -153,9 +153,7 @@ import {
     isSeedance2VideoBaseModel,
     isSeedance25VideoModelName,
     isSeedanceVideoModelName,
-    clampSeedanceVideoDuration,
     seedanceDurationWarnMaxSeconds,
-    SEEDANCE_DURATION_MIN_SECONDS,
 } from '../editorConfig';
 import {
     PROJECT_EP_TYPE_OPTIONS,
@@ -377,13 +375,17 @@ const rewriteShotFlowerMode = (text, mode) => {
 const NAMEPLATE_SPAN_RE = /(?:画幅顶部中央叠出片内图形名牌|画幅叠出片内图形名牌|画面打出物理文字标签：)\s*【[^】]+】(?:[^，。\n]*】)?[^。\n]*|名牌字样\s*[=＝]\s*「[^」]*」[^。\n]*(?:。本P禁止生成该名牌字形。)?/g;
 
 const promptHasNameplate = (text) => (
-    /画幅(?:顶部中央)?叠出片内图形名牌|画面打出物理文字标签|名牌字样\s*[=＝]|名牌出字=后期烧录(?!时)|名牌出字=模型直出(?![(（])/.test(String(text || ''))
+    /画幅(?:顶部中央)?叠出片内图形名牌|画面打出物理文字标签|名牌字样\s*[=＝]|【名牌挂位】|(?:^|\n)\s*名牌\s*[:：]|名牌出字=后期烧录(?!时)|名牌出字=模型直出(?![(（])/.test(String(text || ''))
 );
 
-const readShotNameplateMode = (text) => {
-    const src = String(text || '');
+const readShotNameplateMode = (video, logic = '') => {
+    const src = String(video || '');
+    const side = String(logic || '');
     if (/名牌出字=模型直出(?![(（])/.test(src)) return 'model';
-    return 'burn';
+    if (/名牌出字=后期烧录(?!时)|名牌字样\s*[=＝]|【名牌挂位】/.test(src)) return 'burn';
+    if (/(?:^|\n)\s*名牌\s*[:：]/.test(side) && /进视频=否|出字=后期烧录|出字=烧制/.test(side)) return 'burn';
+    if (/画幅(?:顶部中央)?叠出片内图形名牌|画面打出物理文字标签/.test(src)) return 'model';
+    return 'model';
 };
 
 const readNameplate = (clause) => {
@@ -406,44 +408,158 @@ const readNameplate = (clause) => {
             ? '道具下方'
             : ((src.includes('顶部中央') || src.includes('画幅顶部中央')) ? '顶部中央' : '人物下方'),
         font: pick('字体') || '魏碑',
+        style: pick('样式') || '',
         color: pick('字色') || '鎏金',
         size: pick('字级') || '中',
+        timing: '',
     };
+};
+
+const readStructuredNameplates = (text) => {
+    const plates = [];
+    const src = String(text || '');
+    const rows = [];
+    (src.match(/【名牌挂位】[^\n]*/g) || []).forEach((row) => rows.push(row));
+    (src.match(/(?:^|\n)\s*名牌\s*[:：][^\n]*/g) || []).forEach((line) => {
+        const body = line.replace(/^\n?\s*名牌\s*[:：]/, '');
+        body.split(/；\s*(?=P\d|主标=)/).forEach((part) => {
+            if (part.includes('主标=')) rows.push(part);
+        });
+    });
+    rows.forEach((row) => {
+        if (/进视频=是/.test(row) && !/进视频=否/.test(row)) return;
+        const name = (row.match(/主标=([^｜|\n；;]+)/) || [])[1];
+        if (!name || !name.trim() || name.trim() === '无') return;
+        const sub = ((row.match(/副标=([^｜|\n；;]+)/) || [])[1] || '').trim();
+        const place = ((row.match(/落位=([^｜|\n；;]+)/) || [])[1] || '人物下方').trim();
+        const timing = (row.match(/P\d+\([^)]*\)/) || [])[0] || '';
+        plates.push({
+            name: name.trim(),
+            tag: sub === '无' ? '' : sub,
+            top: place.includes('顶部中央'),
+            place,
+            font: ((row.match(/字体=([^｜|\n；;]+)/) || [])[1] || '魏碑').trim(),
+            style: ((row.match(/样式=([^｜|\n；;]+)/) || [])[1] || '').trim(),
+            color: ((row.match(/字色=([^｜|\n；;]+)/) || [])[1] || '鎏金').trim(),
+            size: ((row.match(/字级=([^｜|\n；;]+)/) || [])[1] || '中').trim(),
+            timing,
+        });
+    });
+    return plates;
 };
 
 const renderNameplate = (plate, mode) => {
     const place = plate.place || (plate.top ? '顶部中央' : '人物下方');
+    const styleBit = plate.style ? `｜样式=${plate.style}` : '';
     if (mode === 'burn') {
-        const body = plate.tag ? `${plate.name}｜${plate.tag}` : plate.name;
-        return `名牌字样=「${body}」｜落位=${place}｜字体=${plate.font}｜字色=${plate.color}｜字级=${plate.size}｜名牌出字=后期烧录。本P禁止生成该名牌字形。`;
+        const timing = plate.timing || 'P1(0s–4s)';
+        return `${timing}=主标=${plate.name}｜副标=${plate.tag || '无'}｜落位=${place}｜字体=${plate.font}${styleBit}｜字色=${plate.color}｜字级=${plate.size}｜进视频=否`;
     }
-    const tail = `字体=${plate.font}，字色=${plate.color}，字级=${plate.size}，须清晰可读，禁大字占幅｜名牌出字=模型直出`;
-    if (place === '顶部中央') {
-        const core = plate.tag
-            ? `画幅顶部中央叠出片内图形名牌【${plate.name}】${plate.tag}】`
-            : `画幅顶部中央叠出片内图形名牌【${plate.name}】`;
-        return `${core}，落位=顶部中央，${tail}`;
-    }
-    if (place === '道具下方') {
-        const core = plate.tag
-            ? `画幅叠出片内图形名牌【${plate.name}】${plate.tag}】`
-            : `画幅叠出片内图形名牌【${plate.name}】`;
-        return `${core}，落位=道具下方，${tail}`;
-    }
-    const core = plate.tag
-        ? `画幅叠出片内图形名牌【${plate.name}】${plate.tag}】`
-        : `画幅叠出片内图形名牌【${plate.name}】`;
-    return `${core}，${tail}`;
+    const stylePaint = plate.style ? `，样式=${plate.style}` : '';
+    const tail = `字体=${plate.font}${stylePaint}，字色=${plate.color}，字级=${plate.size}｜名牌出字=模型直出`;
+    const paint = (lead, withTag) => (
+        withTag
+            ? `${lead}【${plate.name}】${plate.tag}】，${tail}`
+            : `${lead}【${plate.name}】，${tail}`
+    );
+    if (place === '顶部中央') return paint('画幅顶部中央叠出片内图形名牌', Boolean(plate.tag));
+    if (place === '道具下方') return paint('画幅在道具下方叠出片内图形名牌', Boolean(plate.tag));
+    return paint('画幅在人物下方叠出片内图形名牌', Boolean(plate.tag));
 };
 
-const rewriteShotNameplateMode = (text, mode) => String(text || '').replace(new RegExp(NAMEPLATE_SPAN_RE.source, 'g'), (clause) => {
-    const cutAt = clause.search(/画幅叠出片内图形花字|文案\s*[=＝]|烧录=libass|手写=禁/);
-    const kept = cutAt > 0 ? clause.slice(cutAt) : '';
-    const head = cutAt > 0 ? clause.slice(0, cutAt) : clause;
-    const plate = readNameplate(head);
-    if (!plate) return clause;
-    return `${renderNameplate(plate, mode)}${kept}`;
-});
+const collectNameplates = (video, logic) => {
+    const found = [];
+    const push = (plate) => {
+        if (!plate?.name) return;
+        const key = `${plate.name}｜${plate.place || ''}`;
+        const prev = found.find((item) => `${item.name}｜${item.place || ''}` === key);
+        if (!prev) {
+            found.push({ ...plate });
+            return;
+        }
+        if (!prev.tag && plate.tag) prev.tag = plate.tag;
+        if (!prev.style && plate.style) prev.style = plate.style;
+        if (!prev.timing && plate.timing) prev.timing = plate.timing;
+    };
+    const src = String(video || '');
+    const re = new RegExp(NAMEPLATE_SPAN_RE.source, 'g');
+    let match;
+    while ((match = re.exec(src))) {
+        const plate = readNameplate(match[0]);
+        if (!plate) continue;
+        const prior = src.slice(0, match.index);
+        const heads = [...prior.matchAll(/\((P\d+)\s+(\d+(?:\.\d+)?)s\s*[–—-]\s*(\d+(?:\.\d+)?)s\)/g)];
+        if (heads.length) {
+            const last = heads[heads.length - 1];
+            plate.timing = `${last[1]}(${last[2]}s–${last[3]}s)`;
+        }
+        push(plate);
+    }
+    readStructuredNameplates(video).forEach(push);
+    readStructuredNameplates(logic).forEach(push);
+    return found;
+};
+
+const stripNameplatesFromVideo = (text) => String(text || '')
+    .replace(new RegExp(NAMEPLATE_SPAN_RE.source, 'g'), '')
+    .replace(/【名牌挂位】[^\n]*\n?/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n');
+
+const upsertLogicNameplate = (logic, plates) => {
+    const line = `名牌:出字=后期烧录｜${plates.map((plate) => renderNameplate(plate, 'burn')).join('；')}`;
+    const src = String(logic || '').trim();
+    if (/(?:^|\n)\s*名牌\s*[:：]/.test(src)) {
+        return src.replace(/(?:^|\n)\s*名牌\s*[:：][^\n]*/, (row) => (row.startsWith('\n') ? `\n${line}` : line)).trim();
+    }
+    return src ? `${src}\n${line}` : line;
+};
+
+const stripLogicNameplate = (logic) => String(logic || '')
+    .replace(/(?:^|\n)\s*名牌\s*[:：][^\n]*/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+const paintNameplatesIntoVideo = (text, plates) => {
+    let src = stripNameplatesFromVideo(text);
+    if (!plates.length) return src;
+    const pending = [];
+    plates.forEach((plate) => {
+        const painted = renderNameplate(plate, 'model');
+        const pnum = String(plate.timing || '').match(/^P\d+/)?.[0];
+        const found = pnum
+            ? src.match(new RegExp(`\\(${pnum}\\s+\\d+(?:\\.\\d+)?s\\s*[–—-]\\s*\\d+(?:\\.\\d+)?s\\)`))
+            : null;
+        if (!found || found.index == null) {
+            pending.push(painted);
+            return;
+        }
+        const at = found.index + found[0].length;
+        src = `${src.slice(0, at)} ${painted}${src.slice(at)}`;
+    });
+    if (!pending.length) return src;
+    const blob = pending.join('');
+    const head = src.match(/\((P\d+)\s+\d+(?:\.\d+)?s\s*[–—-]\s*\d+(?:\.\d+)?s\)/);
+    if (!head || head.index == null) return `${blob}\n${src}`;
+    const at = head.index + head[0].length;
+    return `${src.slice(0, at)} ${blob}${src.slice(at)}`;
+};
+
+const applyNameplateChoice = (video, logic, mode) => {
+    const plates = collectNameplates(video, logic);
+    if (!plates.length) return { video: String(video || ''), logic: String(logic || '') };
+    if (mode === 'burn') {
+        return {
+            video: stripNameplatesFromVideo(video),
+            logic: upsertLogicNameplate(logic, plates),
+        };
+    }
+    return {
+        video: paintNameplatesIntoVideo(video, plates),
+        logic: stripLogicNameplate(logic),
+    };
+};
 
 export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null, userBatchParallelLimit = 3, tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
         const aspectParts = parseAspectRatioParts(getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9');
@@ -529,25 +645,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const normalized = String(shotDuration ?? '').trim();
         if (normalized === '-1') return 5;
         const tableDuration = parseFloat(shotDuration);
-        let duration = Number.isFinite(tableDuration) && tableDuration > 0 ? tableDuration : 5;
-        if (isSelectedVideoApiSeedance) {
-            duration = clampSeedanceVideoDuration(duration).duration;
-        }
-        return duration;
-    }, [isSd2AutoDurationActive, isSelectedVideoApiSeedance]);
+        return Number.isFinite(tableDuration) && tableDuration > 0 ? tableDuration : 5;
+    }, [isSd2AutoDurationActive]);
 
     const selectedSeedanceDurationWarnMax = seedanceDurationWarnMaxSeconds(...selectedVideoApiIdentity);
-
-    const notifySeedanceDurationClampIfNeeded = useCallback((originalDuration, clampedDuration) => {
-        const original = Number(originalDuration);
-        const clamped = Number(clampedDuration);
-        if (!Number.isFinite(original) || original <= 0) return;
-        if (!Number.isFinite(clamped) || clamped === original) return;
-        if (original >= SEEDANCE_DURATION_MIN_SECONDS) return;
-        const msg = t('Seedance最小时长必须为4', 'Seedance minimum duration must be 4s');
-        notifyUiMessage(msg, 'warning');
-        onLog?.(msg, 'warning');
-    }, [t, onLog]);
 
     const confirmSeedanceDurationOverLimitIfNeeded = useCallback(async (duration, { shotLabel = '' } = {}) => {
         if (!isSelectedVideoApiSeedance || isSd2AutoDurationActive) return true;
@@ -9803,13 +9904,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             return;
         }
 
-        const rawTableDuration = (() => {
-            if (isSd2AutoDurationActive) return -1;
-            const normalized = String(shotSnapshot.duration ?? '').trim();
-            if (normalized === '-1') return 5;
-            const parsed = parseFloat(shotSnapshot.duration);
-            return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
-        })();
         const durParam = resolveShotVideoDurationParam(shotSnapshot.duration);
         if (!(await confirmSeedanceDurationOverLimitIfNeeded(durParam))) {
             return;
@@ -9936,10 +10030,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 ), 'warning');
             }
             
-            // Duration: Seedance2 auto uses -1. Over-limit values are confirmed above and not rewritten.
-            if (isSelectedVideoApiSeedance) {
-                notifySeedanceDurationClampIfNeeded(rawTableDuration, durParam);
-            }
+            // Duration is submitted as entered. Short clips are not raised, long clips are not shortened.
             const prevContShot = (usePrevVideo || shouldInjectContinuationPrompt)
                 ? findPrevContinuationShot(targetShotId || editingShot.id)
                 : null;
@@ -14324,9 +14415,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 })()}
 {(() => {
     let promptCn = '';
+    const logicCn = String(editingShot?.shot_logic_cn || '');
     try { promptCn = String(JSON.parse(editingShot?.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) {}
-    if (!promptHasNameplate(promptCn)) return null;
-    const mode = readShotNameplateMode(promptCn);
+    if (!promptHasNameplate(promptCn) && !promptHasNameplate(logicCn)) return null;
+    const mode = readShotNameplateMode(promptCn, logicCn);
     return (
         <div className="mt-2 mb-2 rounded-md border border-white/10 bg-black/20 p-2">
             <div className="flex items-center justify-between gap-2">
@@ -14336,19 +14428,23 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     value={mode}
                     onChange={(e) => {
                         const nextMode = e.target.value;
-                        if (!nextMode) return;
-                        updateShotTechnicalNotes((techObj) => {
-                            techObj.video_prompt_cn = rewriteShotNameplateMode(String(techObj.video_prompt_cn || ''), nextMode);
-                            techObj.manual_video_prompt = true;
-                        });
+                        if (!nextMode || !editingShot?.id) return;
+                        let techObj = {};
+                        try { techObj = JSON.parse(editingShot.technical_notes || '{}'); } catch (err) {}
+                        const applied = applyNameplateChoice(String(techObj.video_prompt_cn || ''), String(editingShot.shot_logic_cn || ''), nextMode);
+                        techObj.video_prompt_cn = applied.video;
+                        techObj.manual_video_prompt = true;
+                        const serialized = JSON.stringify(techObj);
+                        setEditingShot((prev) => ({ ...(prev || {}), shot_logic_cn: applied.logic, technical_notes: serialized }));
+                        onUpdateShot(editingShot.id, { technical_notes: serialized, shot_logic_cn: applied.logic });
                     }}
                 >
-                    <option value="burn">{t('后期烧制', 'Burn in post')}</option>
+                    <option value="burn">{t('后期烧录', 'Burn in post')}</option>
                     <option value="model">{t('模型直出', 'Model paints')}</option>
                 </select>
             </div>
             <p className="mt-1 text-[10px] text-white/45">
-                {t('默认后期烧制。选模型直出时，由视频模型把名牌画出来。角色、环境和道具名牌共用这一项。', 'Default is post burn-in. Model paints draws the nameplates in the video model. Character, place, and prop nameplates share this switch.')}
+                {t('跟上游出字。模型直出把前后标签写进视频提示词。后期烧录把前后标签留在镜头逻辑，不进视频提示词。改完已有视频的镜头，需要重新生成。', 'Follow the locked lettering. Model paints writes both labels into the video prompt. Burn-in-post keeps them in shot logic and out of the video prompt. Changing this on a finished video requires a regenerate.')}
             </p>
         </div>
     );

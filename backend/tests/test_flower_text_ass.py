@@ -7,6 +7,7 @@ import tempfile
 from app.services.flower_text_ass import (
     build_ass,
     extract_libass_events,
+    extract_shot_libass_events,
     flower_burn_draft,
     normalize_manual_burn_lines,
     resolve_burn_source,
@@ -118,7 +119,9 @@ def test_prompt_sent_to_video_model_drops_shop_glyphs():
 _QUALITY_FOOTER = (
     "无字幕不含片内图形名牌与花字；运镜与动作流已写的花字须上屏一次。"
     "名牌出字=模型直出（含未写名牌出字）的角色名牌与环境名牌须上屏一次。"
+    "名牌出字=模型直出（进视频=是）的前后标签须上屏一次。"
     "名牌出字=后期烧录时禁止描名牌字形，只保留名牌字样供后期烧录。"
+    "名牌出字=后期烧录时视频提示词不写这些字，禁止写名牌字样。"
 )
 
 
@@ -158,6 +161,65 @@ def test_nameplate_burn_is_separate_from_flower_text():
     assert events[0]["font_kind"] == "weibei"
     assert events[0]["look"]["title_color"] == (212, 168, 74, 255)
     assert events[0]["look"]["companion_color"] == events[0]["look"]["title_color"]
+
+
+def test_logic_nameplate_burns_without_entering_the_video_prompt():
+    logic = (
+        "名牌:出字=后期烧录｜P1(0s–4s)=主标=陈｜副标=客栈掌柜｜落位=人物下方｜"
+        "字体=魏碑｜样式=暗底横牌｜字色=鎏金｜字级=中｜进视频=否"
+    )
+    events = extract_libass_events(logic, duration=4)
+    assert len(events) == 1
+    assert events[0]["text"] == "陈"
+    assert events[0]["companion"] == "客栈掌柜"
+    assert events[0]["place"] == "名牌"
+    assert events[0]["start"] == 0
+    assert events[0]["end"] == 4
+    stripped = strip_libass_glyphs_from_prompt(logic)
+    assert "客栈掌柜" not in stripped
+    action = "(P1 0s–4s) CHAR:[@陈] 右手推开木门。"
+    assert "客栈掌柜" not in action
+    hung = (
+        "【名牌挂位】对象=CHAR:[@陈]｜主标=陈｜副标=客栈掌柜｜落位=人物下方｜"
+        "字体=魏碑｜样式=暗底横牌｜字色=鎏金｜字级=中｜出字=后期烧录｜进视频=否"
+    )
+    hung_events = extract_libass_events(hung, duration=4)
+    assert hung_events[0]["text"] == "陈"
+    assert hung_events[0]["companion"] == "客栈掌柜"
+    assert "客栈掌柜" not in strip_libass_glyphs_from_prompt(hung)
+    model_row = (
+        "【名牌挂位】对象=CHAR:[@陈]｜主标=陈｜副标=客栈掌柜｜落位=人物下方｜"
+        "字体=魏碑｜样式=暗底横牌｜字色=鎏金｜字级=中｜出字=模型直出｜进视频=是"
+    )
+    assert extract_libass_events(model_row, duration=4) == []
+    place = (
+        "名牌:出字=后期烧录｜P1(0s–4s)=主标=龙门风月客栈｜副标=早上9点｜落位=顶部中央｜"
+        "字体=魏碑｜样式=暗底横牌｜字色=鎏金｜字级=中｜进视频=否"
+    )
+    place_events = extract_libass_events(place, duration=4)
+    assert place_events[0]["text"] == "龙门风月客栈"
+    assert place_events[0]["companion"] == "早上9点"
+    assert place_events[0]["place"] == "顶"
+
+
+def test_shot_logic_nameplate_is_not_hidden_by_video_flower_text():
+    from types import SimpleNamespace
+
+    shot = SimpleNamespace(
+        video_content="",
+        prompt="",
+        duration=4,
+        shot_logic_cn=(
+            "名牌:出字=后期烧录｜P1(0s–4s)=主标=陈｜副标=客栈掌柜｜落位=人物下方｜"
+            "字体=魏碑｜样式=暗底横牌｜字色=鎏金｜字级=中｜进视频=否"
+        ),
+        technical_notes=(
+            '{"video_prompt_cn": "(P1 0s–4s) 画幅叠出片内图形花字「何以安康，家和人乐」｜出字=后期烧录"}'
+        ),
+    )
+    texts = [event["text"] for event in extract_shot_libass_events(shot)]
+    assert "陈" in texts
+    assert "何以安康，家和人乐" in texts
 
 
 def test_quality_footer_does_not_flip_nameplate_mode():

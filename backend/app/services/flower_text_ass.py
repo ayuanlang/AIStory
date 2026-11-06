@@ -46,6 +46,11 @@ _NAMEPLATE_PAINT_RE = re.compile(
     r"(?:画幅顶部中央叠出片内图形名牌|画幅叠出片内图形名牌|画面打出物理文字标签：)\s*"
     r"【[^】]*】(?:[^，。\n]*】)?"
 )
+_NAMEPLATE_MAIN_RE = re.compile(r"主标\s*[=＝]\s*([^｜|\n；;]+)")
+_NAMEPLATE_SUB_RE = re.compile(r"副标\s*[=＝]\s*([^｜|\n；;]+)")
+_INLINE_P_RE = re.compile(
+    r"P\d+\s*\(\s*(\d+(?:\.\d+)?)s\s*[–—\-]\s*(\d+(?:\.\d+)?)s\s*\)"
+)
 _REAL_BURN_MARK_RE = re.compile(r"(?<!标记)烧录=libass")
 _SIZE_RATIO = {"大": 0.20, "中": 0.13, "小": 0.08}
 _TITLE_TRACKING = 0.14
@@ -116,11 +121,42 @@ def _flower_output_mode(block: str) -> str:
     return ""
 
 
+def _row_enters_video(row: str) -> bool:
+    text = str(row or "")
+    if "进视频=否" in text:
+        return False
+    return "进视频=是" in text
+
+
+def _iter_structured_nameplate_rows(text: str):
+    source = str(text or "")
+    for match in re.finditer(r"【名牌挂位】[^\n]*", source):
+        yield match.group(0)
+    for match in re.finditer(r"(?:^|\n)\s*名牌\s*[:：]([^\n]*)", source):
+        body = match.group(1) or ""
+        for part in re.split(r"；\s*(?=P\d|主标\s*[=＝])", body):
+            if "主标" in part:
+                yield part
+
+
+def _structured_nameplate_is_burn(text: str) -> bool:
+    for row in _iter_structured_nameplate_rows(text):
+        if _row_enters_video(row):
+            continue
+        if not _NAMEPLATE_MAIN_RE.search(row):
+            continue
+        if "进视频=否" in row or re.search(r"(?:名牌)?出字=(?:后期烧录|烧制)(?!时)", row):
+            return True
+    return False
+
+
 def _nameplate_output_mode(block: str) -> str:
     """burn = post composite, model = video model paints the nameplate.
 
     The quality footer mentions both modes as instructions
-    (``名牌出字=后期烧录时`` / ``名牌出字=模型直出（含未写``). Those are not a choice.
+    (``名牌出字=后期烧录时`` / ``名牌出字=模型直出（进视频``). Those are not a choice.
+    A row with ``进视频=是`` stays on the model. ``【名牌挂位】`` and Logic ``名牌:``
+    with ``进视频=否`` are the burn side channel.
     """
     text = str(block or "")
     if re.search(r"名牌出字=(?:后期烧录|烧制)(?!时)", text):
@@ -129,54 +165,134 @@ def _nameplate_output_mode(block: str) -> str:
         return "model"
     if re.search(r"画幅(?:顶部中央)?叠出片内图形名牌|画面打出物理文字标签|名牌字样\s*[=＝]", text):
         return "model"
+    if _structured_nameplate_is_burn(text):
+        return "burn"
     return ""
 
 
-def _nameplate_burn_events(block: str, start: float, stop: float) -> List[Dict[str, Any]]:
-    if _nameplate_output_mode(block) != "burn":
-        return []
+def _nameplate_event(
+    text: str,
+    companion: str,
+    tail: str,
+    start: float,
+    stop: float,
+) -> Dict[str, Any]:
+    place = "顶" if ("落位=顶部中央" in tail or "画幅顶部中央" in tail) else "名牌"
+    font = "KaiTi"
+    font_match = re.search(r"字体=([^｜|\n，,]+)", tail)
+    if font_match:
+        raw_font = font_match.group(1).strip()
+        font = _FONT_MAP.get(raw_font) or _FONT_MAP.get(raw_font.lower()) or "KaiTi"
+    size = "中"
+    if "字级=大" in tail:
+        size = "大"
+    elif "字级=小" in tail:
+        size = "小"
+    look = script_flower_look(tail)
+    if not _mark(tail, "点缀色"):
+        look["companion_color"] = look["title_color"]
+    return {
+        "text": text,
+        "companion": companion,
+        "seal": "",
+        "start": float(start),
+        "end": float(stop),
+        "place": place,
+        "size": size,
+        "vertical": False,
+        "font": font,
+        "font_kind": look.get("font_kind") or "",
+        "look": look,
+        "kind": "nameplate",
+    }
+
+
+def _row_time_span(row: str, block: str, start: float, stop: float) -> tuple[float, float]:
+    found = _INLINE_P_RE.search(row or "")
+    if not found:
+        main = _NAMEPLATE_MAIN_RE.search(block or "")
+        if main:
+            window = (block or "")[max(0, main.start() - 40):main.start()]
+            found = _INLINE_P_RE.search(window)
+    if not found:
+        return float(start), float(stop)
+    row_start = float(found.group(1))
+    row_stop = float(found.group(2))
+    if row_stop <= row_start:
+        return float(start), float(stop)
+    return row_start, row_stop
+
+
+def _structured_nameplate_events(block: str, start: float, stop: float) -> List[Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
-    for match in _NAMEPLATE_COPY_RE.finditer(block or ""):
-        raw = str(match.group(1) or "").strip()
-        if not raw:
+    for row in _iter_structured_nameplate_rows(block):
+        if _row_enters_video(row):
             continue
-        parts = [part.strip() for part in re.split(r"[｜|]", raw) if part.strip()]
-        tail = (block or "")[match.end():match.end() + 220]
-        place = "顶" if ("落位=顶部中央" in tail or "画幅顶部中央" in tail) else "名牌"
-        font = "KaiTi"
-        font_match = re.search(r"字体=([^｜|\n，,]+)", tail)
-        if font_match:
-            raw_font = font_match.group(1).strip()
-            font = _FONT_MAP.get(raw_font) or _FONT_MAP.get(raw_font.lower()) or "KaiTi"
-        size = "中"
-        if "字级=大" in tail:
-            size = "大"
-        elif "字级=小" in tail:
-            size = "小"
-        look = script_flower_look(tail)
-        if not _mark(tail, "点缀色"):
-            look["companion_color"] = look["title_color"]
-        events.append({
-            "text": parts[0],
-            "companion": parts[1] if len(parts) > 1 else "",
-            "seal": "",
-            "start": float(start),
-            "end": float(stop),
-            "place": place,
-            "size": size,
-            "vertical": False,
-            "font": font,
-            "font_kind": look.get("font_kind") or "",
-            "look": look,
-            "kind": "nameplate",
-        })
+        if "进视频=否" not in row and not re.search(r"(?:名牌)?出字=(?:后期烧录|烧制)(?!时)", row):
+            continue
+        main_match = _NAMEPLATE_MAIN_RE.search(row)
+        if not main_match:
+            continue
+        main = main_match.group(1).strip()
+        if not main or main == "无":
+            continue
+        sub_match = _NAMEPLATE_SUB_RE.search(row)
+        companion = sub_match.group(1).strip() if sub_match else ""
+        if companion == "无":
+            companion = ""
+        row_start, row_stop = _row_time_span(row, block, start, stop)
+        events.append(_nameplate_event(main, companion, row, row_start, row_stop))
     return events
 
 
+def _nameplate_burn_events(block: str, start: float, stop: float) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    if _nameplate_output_mode(block) == "burn":
+        for match in _NAMEPLATE_COPY_RE.finditer(block or ""):
+            raw = str(match.group(1) or "").strip()
+            if not raw:
+                continue
+            parts = [part.strip() for part in re.split(r"[｜|]", raw) if part.strip()]
+            tail = (block or "")[match.end():match.end() + 220]
+            events.append(_nameplate_event(
+                parts[0],
+                parts[1] if len(parts) > 1 else "",
+                tail,
+                start,
+                stop,
+            ))
+    events.extend(_structured_nameplate_events(block, start, stop))
+    return events
+
+
+def _drop_burn_nameplate_rows(text: str) -> str:
+    def drop_hang(match: re.Match) -> str:
+        row = match.group(0)
+        if _row_enters_video(row):
+            return row
+        if "进视频=否" in row or re.search(r"出字=(?:后期烧录|烧制)(?!时)", row):
+            return ""
+        return row
+
+    cleaned = re.sub(r"【名牌挂位】[^\n]*\n?", drop_hang, str(text or ""))
+
+    def drop_logic(match: re.Match) -> str:
+        row = match.group(0)
+        if _row_enters_video(row):
+            return row
+        if "进视频=否" in row or re.search(r"出字=(?:后期烧录|烧制)(?!时)", row):
+            return "\n" if row.startswith("\n") else ""
+        return row
+
+    return re.sub(r"(?:^|\n)\s*名牌\s*[:：][^\n]*", drop_logic, cleaned)
+
+
 def _strip_nameplates(block: str) -> str:
-    if _nameplate_output_mode(block) != "burn":
-        return block
-    text = _NAMEPLATE_PAINT_RE.sub("", block)
+    mode = _nameplate_output_mode(block)
+    text = _drop_burn_nameplate_rows(block)
+    if mode != "burn":
+        return text
+    text = _NAMEPLATE_PAINT_RE.sub("", text)
     text = _NAMEPLATE_COPY_RE.sub("名牌字样=「」", text)
     note = "本P禁止生成角色名牌与环境名牌字形，字由后期烧录。"
     if note not in text:
@@ -1726,6 +1842,8 @@ def _shot_copy_texts(shot: Any) -> List[str]:
     for value in (
         getattr(shot, "video_content", None),
         notes.get("video_prompt_cn"),
+        notes.get("shot_logic_cn"),
+        getattr(shot, "shot_logic_cn", None),
         getattr(shot, "prompt", None),
     ):
         text = str(value or "").strip()
@@ -1735,13 +1853,12 @@ def _shot_copy_texts(shot: Any) -> List[str]:
 
 
 def extract_shot_libass_events(shot: Any) -> List[Dict[str, Any]]:
-    """Read the shot script, then the Chinese video prompt. video_content is often empty."""
+    """Merge burn copy from the video prompt and Logic. A flower line must not hide nameplates."""
     duration = getattr(shot, "duration", None)
+    events: List[Dict[str, Any]] = []
     for text in _shot_copy_texts(shot):
-        events = extract_libass_events(text, duration)
-        if events:
-            return events
-    return []
+        events.extend(extract_libass_events(text, duration))
+    return _dedupe_burn_events(events)
 
 
 def flower_burn_draft(shot: Any) -> Dict[str, Any]:

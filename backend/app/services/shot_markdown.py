@@ -265,7 +265,12 @@ def strip_video_submit_injection(text: Any) -> str:
         )
     value = re.sub(
         r"(落幅后背景保持参考图\s*(ENV:\[[^\]]+\]))\s*[，,]\s*不再使用[^。；\n]*",
-        r"\1，因为这一拍当前环境是 \2",
+        r"\1",
+        value,
+    )
+    value = re.sub(
+        r"[，,]\s*因为这一拍当前环境是\s*ENV:\[[^\]]+\]",
+        "",
         value,
     )
     value = re.sub(r"[，,]\s*不再使用[^。；\n]*", "", value)

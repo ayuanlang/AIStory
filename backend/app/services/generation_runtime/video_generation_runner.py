@@ -77,12 +77,6 @@ from app.services.generation_runtime.project_generation_context import (
     _should_hit_visual_breakpoint,
 )
 from app.services.generation_runtime.queue_config_runtime import _is_pure_callback_mode_enabled
-from app.services.generation_runtime.seedance_duration import (
-    SEEDANCE_DURATION_MIN_SECONDS,
-    _clamp_seedance_duration,
-    _is_seedance25_model_name,
-    _is_seedance_model_name,
-)
 from app.services.generation_runtime.video_job_billing import (
     _cancel_video_job_pending_reservation,
     _persist_video_job_billing_reservation,
@@ -572,10 +566,14 @@ async def _run_generate_video(
             "allowed_durations",
             "supported_durations",
         )
-        if req.duration is not None and allowed_video_durations:
-            mapped_duration = _map_int_value_to_allowed(req.duration, allowed_video_durations)
-            if mapped_duration is not None:
-                req.duration = float(mapped_duration)
+        if req.duration is not None and req.duration > 0 and allowed_video_durations:
+            duration_low = min(allowed_video_durations)
+            duration_high = max(allowed_video_durations)
+            # Outside the catalog min/max, keep the requested seconds.
+            if duration_low <= float(req.duration) <= duration_high:
+                mapped_duration = _map_int_value_to_allowed(req.duration, allowed_video_durations)
+                if mapped_duration is not None:
+                    req.duration = float(mapped_duration)
 
         allowed_video_qualities = _read_api_capability_list(
             pre_api_cfg,
@@ -599,39 +597,6 @@ async def _run_generate_video(
         video_output_format = str(req.output_format or req.outputFormat or "").strip().lower() or None
         if video_output_format and allowed_video_output_formats:
             video_output_format = _map_text_value_to_allowed(video_output_format, allowed_video_output_formats)
-
-        max_duration_cap = _read_api_capability_int(
-            pre_api_cfg,
-            "max_duration",
-        )
-        if req.duration is not None and max_duration_cap is not None and max_duration_cap > 0:
-            req.duration = float(min(float(req.duration), float(max_duration_cap)))
-
-        # Seedance: min 4s only. Do not rewrite values above 15s/30s.
-        pre_cfg_payload = (pre_api_cfg or {}).get("config") if isinstance((pre_api_cfg or {}).get("config"), dict) else {}
-        seedance_identity = (
-            reserve_provider,
-            reserve_model,
-            (pre_api_cfg or {}).get("name"),
-            (pre_api_cfg or {}).get("model"),
-            (pre_api_cfg or {}).get("base_model"),
-            pre_cfg_payload.get("base_model") if isinstance(pre_cfg_payload, dict) else None,
-            getattr(req, "model", None),
-            getattr(req, "provider", None),
-        )
-        if _is_seedance_model_name(*seedance_identity) or _is_seedance25_model_name(*seedance_identity):
-            clamped_duration, was_clamped = _clamp_seedance_duration(req.duration, *seedance_identity)
-            if was_clamped and clamped_duration is not None:
-                logger.info(
-                    "[GenerateVideo] Seedance duration clamped | from=%s to=%s provider=%s model=%s "
-                    "(min=%.0f max=none)",
-                    req.duration,
-                    clamped_duration,
-                    reserve_provider,
-                    reserve_model,
-                    SEEDANCE_DURATION_MIN_SECONDS,
-                )
-                req.duration = float(clamped_duration)
 
         # Inject project visual size defaults for video providers that support/need them.
         width_candidates = [
@@ -1478,9 +1443,8 @@ async def _run_generate_video(
                 )
             except Exception:
                 video_provider_options["duration"] = 5
-            video_provider_options["duration"] = max(
-                4, min(15, int(video_provider_options["duration"]))
-            )
+            if int(video_provider_options["duration"]) == 0:
+                video_provider_options["duration"] = 5
             ratio_text = str(
                 video_provider_options.get("ratio")
                 or video_provider_options.get("aspect")

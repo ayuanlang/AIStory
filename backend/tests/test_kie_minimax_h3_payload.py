@@ -110,8 +110,8 @@ def test_minimax_h3_duration_and_resolution_clamps():
     from app.services.media_service import MediaGenerationService
 
     service = MediaGenerationService()
-    assert service._map_kie_minimax_h3_duration(3) == 4
-    assert service._map_kie_minimax_h3_duration(20) == 15
+    assert service._map_kie_minimax_h3_duration(3) == 3
+    assert service._map_kie_minimax_h3_duration(20) == 20
     assert service._map_kie_minimax_h3_duration("bad") == 6
     assert service._map_kie_minimax_h3_resolution("480p") == "768P"
     assert service._map_kie_minimax_h3_resolution("1080p") == "2K"

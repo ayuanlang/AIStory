@@ -54,22 +54,19 @@ def _seedance_duration_warn_max_seconds(*identity_parts: Any) -> float:
 
 
 def _clamp_seedance_duration(duration: Any, *identity_parts: Any) -> Tuple[Optional[float], bool]:
-    """Clamp Seedance duration to the 4s minimum only.
+    """Return the requested Seedance duration unchanged.
 
-    Maximum is not rewritten here. The frontend asks the user to confirm
-    when duration exceeds 15s (or 30s for Seedance 2.5). Preserves None
-    and <=0 (e.g. -1 auto).
+    Video generation does not raise a short clip to the 4s minimum or
+    shorten a long clip to 15s/30s. Preserves None and <=0 (e.g. -1 auto).
     """
+    del identity_parts
     if duration is None:
         return None, False
     try:
         value = float(duration)
     except Exception:
         return None, False
-    if value <= 0:
-        return value, False
-    clamped = max(SEEDANCE_DURATION_MIN_SECONDS, value)
-    return clamped, clamped != value
+    return value, False
 
 
 def _resolve_shot_video_duration_value(

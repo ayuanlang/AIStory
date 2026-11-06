@@ -86,6 +86,8 @@ def test_build_scene_entity_token_brief():
     assert "【名牌标签】" in brief
     assert "种类=角色｜对象=CHAR:[@沈青]｜主标=沈青｜副标=江湖侠客｜" in brief
     assert "出字=模型直出｜上屏=待落" in brief
+    assert "进视频=是" in brief
+    assert "【名牌前后标签】" in brief
     assert "不是对白硬字幕" in brief
     assert "只有字幕=待落的本集新角色" in brief
     assert "禁把多名牌攒到建置段末或入戏一起写" in brief

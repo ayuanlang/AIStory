@@ -172,7 +172,8 @@ def test_page_prompt_drops_submit_only_anchors_and_retired_env():
     assert "成人女性前臂线性图" not in cleaned
     assert "male veteran" not in cleaned
     assert "ENV:[90度停机坪]" in cleaned
-    assert "因为这一拍当前环境是 ENV:[90度停机坪]" in cleaned
+    assert "落幅后背景保持参考图 ENV:[90度停机坪]" in cleaned
+    assert "因为这一拍当前环境是" not in cleaned
     assert "PROP:[重合金刺刃]" in cleaned
     assert "CHAR:[@严啸]" in cleaned
     assert _clean_shot_video_prompt_cell(raw) == cleaned
