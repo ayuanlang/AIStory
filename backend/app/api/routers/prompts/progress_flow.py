@@ -484,6 +484,7 @@ def cancel_running_scene_analysis(
 @router.get("/prompts/scene-analysis/progress/episodes/{episode_id}")
 async def get_episode_progress_snapshot(
     episode_id: int,
+    include_bodies: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -578,12 +579,101 @@ async def get_episode_progress_snapshot(
             "updated_at": node.get("updated_at"),
         }
 
+    if not include_bodies:
+        from app.services.progress_snapshot_payload import slim_runtime_meta, slim_scene_unit
+
+        scene_units = [slim_scene_unit(unit) for unit in scene_units]
+        pipeline_nodes = [
+            {
+                **node,
+                "runtime_meta": slim_runtime_meta(
+                    node.get("runtime_meta"),
+                    node_name=node.get("node_name"),
+                    status=node.get("status"),
+                ),
+            }
+            for node in pipeline_nodes
+        ]
+
     return {
         "project_id": int(episode.project_id),
         "episode_id": int(episode_id),
         "scene_units": scene_units,
         "pipeline_nodes": pipeline_nodes,
         "asset_matrix": asset_matrix,
+    }
+
+
+@router.get("/prompts/scene-analysis/progress/episodes/{episode_id}/node-body")
+def get_episode_progress_node_body(
+    episode_id: int,
+    scene_id: str = Query(""),
+    node_name: str = Query("scene_subskill_scene"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """One node's edit draft. The progress list does not include this text."""
+    from sqlalchemy.orm import load_only
+    from app.services.progress_snapshot_payload import scene_name_from_text, staging_import_ready
+
+    episode = (
+        db.query(Episode)
+        .options(load_only(Episode.id, Episode.project_id))
+        .filter(Episode.id == int(episode_id), _active_episode_clause())
+        .first()
+    )
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
+    _require_project_access(db, episode.project_id, current_user)
+
+    wanted = str(scene_id or "").strip()
+    node_name_text = str(node_name or "scene_subskill_scene").strip() or "scene_subskill_scene"
+    meta: Dict[str, Any] = {}
+    status = ""
+    if ScriptProgressPipelineNode is not None and wanted:
+        row = (
+            db.query(ScriptProgressPipelineNode)
+            .filter(
+                ScriptProgressPipelineNode.project_id == int(episode.project_id),
+                ScriptProgressPipelineNode.episode_id == int(episode_id),
+                ScriptProgressPipelineNode.node_name == node_name_text,
+                ScriptProgressPipelineNode.scene_id == wanted,
+            )
+            .first()
+        )
+        if row is not None:
+            meta = row.runtime_meta if isinstance(row.runtime_meta, dict) else {}
+            status = str(row.status or "")
+    block = str(meta.get("scene_block") or "")
+    markdown = ""
+    if ScriptProgressSceneUnit is not None and wanted:
+        unit = (
+            db.query(ScriptProgressSceneUnit)
+            .filter(
+                ScriptProgressSceneUnit.project_id == int(episode.project_id),
+                ScriptProgressSceneUnit.episode_id == int(episode_id),
+                ScriptProgressSceneUnit.scene_id == wanted,
+            )
+            .first()
+        )
+        if unit is not None:
+            markdown = str(getattr(unit, "scene_markdown", "") or "")
+    called = meta.get("called_subskills") if isinstance(meta.get("called_subskills"), list) else []
+    return {
+        "episode_id": int(episode_id),
+        "scene_id": wanted,
+        "node_name": node_name_text,
+        "status": status,
+        "scene_block": block,
+        "scene_markdown": markdown,
+        "scene_name": scene_name_from_text(block) or scene_name_from_text(markdown),
+        "called_subskills": called,
+        "current_step": str(meta.get("current_step") or ""),
+        "has_staging_import_body": bool(
+            node_name_text == "scene_subskill_scene"
+            and str(status or "").strip().lower() == "success"
+            and staging_import_ready(block, called)
+        ),
     }
 
 

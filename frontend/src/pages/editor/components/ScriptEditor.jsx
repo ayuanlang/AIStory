@@ -168,6 +168,8 @@ import {
     resetSceneOrchestrationProgress,
     resetEpisodeAnalysisProgress,
     getEpisodeProgressSnapshot,
+    fetchEpisodeProgressNodeBody,
+    fetchEpisodeStageSlots,
     cancelRunningSceneAnalysis,
     reportStoryboardGenerationApplied,
     reportStoryboardGenerationFailed,
@@ -2587,12 +2589,53 @@ const pipelineNodeHasStagingImportBody = (node) => {
     if (String(node?.node_name || '').trim() !== 'scene_subskill_scene') return false;
     if (String(node?.status || '').trim() !== 'success') return false;
     const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
-    if (!sceneBlock) return false;
+    if (!sceneBlock) return node?.runtime_meta?.has_staging_import_body === true;
     const called = Array.isArray(node?.runtime_meta?.called_subskills)
         ? node.runtime_meta.called_subskills.map((item) => String(item || '').trim())
         : [];
     if (called.length > 0 && !called.includes('staging')) return false;
     return /【\s*建置\s*】/.test(sceneBlock) && /【\s*入戏\s*】/.test(sceneBlock);
+};
+
+const progressNodeBodyCache = new Map();
+
+const fetchSceneBlockForNode = async (episodeId, node) => {
+    const existing = String(node?.runtime_meta?.scene_block || '').trim();
+    if (existing) return existing;
+    const sceneId = String(node?.scene_id || '').trim();
+    if (!episodeId || !sceneId) return '';
+    if (!node?.runtime_meta?.has_scene_block && !node?.runtime_meta?.has_staging_import_body) return '';
+    const cacheKey = `${episodeId}:${sceneId}:${String(node?.updated_at || '')}`;
+    if (progressNodeBodyCache.has(cacheKey)) return progressNodeBodyCache.get(cacheKey);
+    try {
+        const body = await fetchEpisodeProgressNodeBody(episodeId, {
+            sceneId,
+            nodeName: String(node?.node_name || 'scene_subskill_scene'),
+        });
+        const block = String(body?.scene_block || '').trim();
+        progressNodeBodyCache.set(cacheKey, block);
+        return block;
+    } catch (_) {
+        return '';
+    }
+};
+
+const collectStagingScenePatchMap = async (episodeId, nodes, wantedSceneIds = null) => {
+    const patchMap = {};
+    for (const node of (Array.isArray(nodes) ? nodes : [])) {
+        const sceneId = String(node?.scene_id || '').trim();
+        if (!pipelineNodeHasStagingImportBody(node) || !sceneId) continue;
+        if (wantedSceneIds && wantedSceneIds.size > 0 && !wantedSceneIds.has(sceneId)) continue;
+        const sceneBlock = await fetchSceneBlockForNode(episodeId, node);
+        if (!sceneBlock) continue;
+        const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
+        patchMap[sceneId] = {
+            scene_id: sceneId,
+            scene_order: sceneOrder,
+            markdown: buildSceneTableMarkdownFromStaging(sceneId, sceneBlock, sceneOrder),
+        };
+    }
+    return patchMap;
 };
 
 /**
@@ -2642,7 +2685,15 @@ const createSceneOrchestrationProgressPoller = ({
     const trySceneReady = async (sceneId, row, unitHint) => {
         const stableSceneId = String(sceneId || '').trim();
         if (!stableSceneId || readyScenes.has(stableSceneId)) return;
-        const sceneMarkdown = String(row?.scene_markdown || '').trim();
+        let sceneMarkdown = String(row?.scene_markdown || '').trim();
+        if (!sceneMarkdown && row?.has_scene_markdown && episodeId) {
+            try {
+                const body = await fetchEpisodeProgressNodeBody(episodeId, { sceneId: stableSceneId });
+                sceneMarkdown = String(body?.scene_markdown || '').trim();
+            } catch (_) {
+                sceneMarkdown = '';
+            }
+        }
         if (!sceneMarkdown) return;
         const phase = deriveSceneOrchestrationPhase(row);
         if (phase !== 'llm_returned' && phase !== 'importing' && phase !== 'imported') return;
@@ -17153,27 +17204,62 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const stableKind = String(kind || '').trim();
         const requestedSceneId = String(options?.sceneId || '').trim();
         const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
-        if (activeEpisode?.id) {
+        const mergeClickedSlots = (slots) => {
+            if (!slots || typeof slots !== 'object') return;
+            latestStage1NodeOutputsRef.current = mergeStage1NodeOutputsPreferringFresh(
+                latestStage1NodeOutputsRef.current,
+                slots
+            );
+            const pins = pinnedStage1NodeOutputsRef.current;
+            if (pins && typeof pins === 'object') {
+                latestStage1NodeOutputsRef.current = {
+                    ...latestStage1NodeOutputsRef.current,
+                    ...(String(pins.scene_split || '').trim() ? { scene_split: pins.scene_split } : {}),
+                    ...(String(pins.environment_plan || '').trim() ? { environment_plan: pins.environment_plan } : {}),
+                };
+            }
+        };
+        const loadClickedStageSlots = async (keys, sceneId = '') => {
+            if (!activeEpisode?.id || !Array.isArray(keys) || keys.length <= 0) return;
             try {
-                const freshEpisode = await fetchEpisode(activeEpisode.id);
-                const freshNodeOutputs = collectStage1NodeOutputsFromSlotMap(
-                    parseStageOutputsObject(freshEpisode?.ai_stage_outputs || '')?.stages?.stage1?.outputs
-                );
-                latestStage1NodeOutputsRef.current = mergeStage1NodeOutputsPreferringFresh(
-                    latestStage1NodeOutputsRef.current,
-                    freshNodeOutputs
-                );
-                const pins = pinnedStage1NodeOutputsRef.current;
-                if (pins && typeof pins === 'object') {
-                    latestStage1NodeOutputsRef.current = {
-                        ...latestStage1NodeOutputsRef.current,
-                        ...(String(pins.scene_split || '').trim() ? { scene_split: pins.scene_split } : {}),
-                        ...(String(pins.environment_plan || '').trim() ? { environment_plan: pins.environment_plan } : {}),
-                    };
-                }
+                const payload = await fetchEpisodeStageSlots(activeEpisode.id, keys.join(','), sceneId);
+                mergeClickedSlots(payload?.slots || {});
             } catch (_) {}
-        }
-        if (SCENE_SUBSKILL_EDIT_KINDS.has(stableKind)) {
+        };
+        const pinClickedSceneBlock = (sceneId, block) => {
+            const text = String(block || '').trim();
+            const target = String(sceneId || '').trim();
+            if (!text || !target) return;
+            const nodes = Array.isArray(diagnosticsPipelineNodesRef.current)
+                ? diagnosticsPipelineNodesRef.current.slice()
+                : [];
+            const index = nodes.findIndex((node) => (
+                String(node?.node_name || '').trim() === 'scene_subskill_scene'
+                && sceneUnitIdsMatch(
+                    String(node?.scene_id || '').trim(),
+                    target,
+                    deriveSceneOrderFromSceneId(target),
+                    episodePrefix
+                )
+            ));
+            const nextMeta = {
+                ...(index >= 0 ? (nodes[index].runtime_meta || {}) : {}),
+                scene_block: text,
+                has_scene_block: true,
+            };
+            if (index >= 0) {
+                nodes[index] = { ...nodes[index], runtime_meta: nextMeta };
+            } else {
+                nodes.push({
+                    node_name: 'scene_subskill_scene',
+                    scene_id: target,
+                    status: 'success',
+                    runtime_meta: nextMeta,
+                });
+            }
+            diagnosticsPipelineNodesRef.current = nodes;
+        };
+        const resolveClickedSubskillDraft = () => {
             const stage1Outputs = currentStageOutputs?.stages?.stage1?.outputs || {};
             const stepKey = SCENE_SUBSKILL_RESULT_KEYS[stableKind];
             const storedMap = parseSceneSubskillResultsMap(
@@ -17188,7 +17274,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || activeEpisode?.ai_scene_analysis_adaptation
                 || ''
             ).trim();
-            const content = resolveCurrentSceneStage1Body({
+            return resolveCurrentSceneStage1Body({
                 resultsMap: storedMap,
                 sceneId: requestedSceneId,
                 stepKey,
@@ -17200,6 +17286,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ),
                 scriptText: source,
             });
+        };
+        if (SCENE_SUBSKILL_EDIT_KINDS.has(stableKind)) {
+            let content = resolveClickedSubskillDraft();
+            if (!content && activeEpisode?.id && requestedSceneId) {
+                await loadClickedStageSlots(['scene_subskill_results'], requestedSceneId);
+                content = resolveClickedSubskillDraft();
+            }
+            if (!content && activeEpisode?.id && requestedSceneId) {
+                try {
+                    const body = await fetchEpisodeProgressNodeBody(activeEpisode.id, { sceneId: requestedSceneId });
+                    pinClickedSceneBlock(requestedSceneId, body?.scene_block);
+                } catch (_) {}
+                content = resolveClickedSubskillDraft();
+            }
             if (!content) {
                 reportAnalysisPanelNotice(t('暂无该场逐场优化内容可编辑。', 'No per-scene refinement content is available to edit.'), 'warning');
                 return;
@@ -17231,7 +17331,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         if (stableKind === 'char_extract' || stableKind === 'prop_extract') {
             const tag = stableKind === 'char_extract' ? 'CHAR' : 'PROP';
-            const source = String(
+            let source = String(
                 pinnedStage1NodeOutputsRef.current?.scene_split
                 || latestStage1NodeOutputsRef.current?.scene_split
                 || currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content
@@ -17239,6 +17339,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || adaptationText
                 || ''
             ).trim();
+            if (!takeTaggedExtractBlock(source, tag)) {
+                await loadClickedStageSlots(['scene_split']);
+                source = String(
+                    pinnedStage1NodeOutputsRef.current?.scene_split
+                    || latestStage1NodeOutputsRef.current?.scene_split
+                    || source
+                ).trim();
+            }
             const content = takeTaggedExtractBlock(source, tag)
                 || `[${tag}_EXTRACT_START]\n无\n[${tag}_EXTRACT_END]`;
             setStageArtifactEditModal({
@@ -17259,13 +17367,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         if (['scene_split', 'environment_plan', 'scene_subskills'].includes(stableKind)) {
-            const content = String(
+            const readNodeDraft = () => String(
                 pinnedStage1NodeOutputsRef.current?.[stableKind]
                 || latestStage1NodeOutputsRef.current?.[stableKind]
                 || currentStageOutputs?.stages?.stage1?.outputs?.[stableKind]?.content
                 || (stableKind === 'scene_subskills' ? resolveScriptOptBeatsContent() : '')
                 || ''
             ).trim();
+            let content = readNodeDraft();
+            if (!content) {
+                await loadClickedStageSlots([stableKind]);
+                content = readNodeDraft();
+            }
             if (!content) {
                 reportAnalysisPanelNotice(t('暂无该节点内容可编辑。', 'No editable output is available for this node.'), 'warning');
                 return;
@@ -26931,19 +27044,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const runSceneOrchestrationResumeBranch = async () => {
                 const snapshot = await getEpisodeProgressSnapshot(activeEpisode?.id);
                 const nodes = Array.isArray(snapshot?.pipeline_nodes) ? snapshot.pipeline_nodes : [];
-                const restartScenePatchMap = {};
-                nodes.forEach((node) => {
-                    const sceneId = String(node?.scene_id || '').trim();
-                    const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
-                    if (pipelineNodeHasStagingImportBody(node) && sceneId) {
-                        const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
-                        restartScenePatchMap[sceneId] = {
-                            scene_id: sceneId,
-                            scene_order: sceneOrder,
-                            markdown: buildSceneTableMarkdownFromStaging(sceneId, sceneBlock, sceneOrder),
-                        };
-                    }
-                });
+                const restartScenePatchMap = await collectStagingScenePatchMap(activeEpisode?.id, nodes);
                 if (Object.keys(restartScenePatchMap).length <= 0) {
                     const sceneSplitText = String(
                         latestStage1RawTextRef.current
@@ -26997,18 +27098,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     );
                     const snapshotAfter = await getEpisodeProgressSnapshot(activeEpisode?.id).catch(() => null);
                     const nodesAfter = Array.isArray(snapshotAfter?.pipeline_nodes) ? snapshotAfter.pipeline_nodes : [];
-                    nodesAfter.forEach((node) => {
-                        const sceneId = String(node?.scene_id || '').trim();
-                        const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
-                    if (pipelineNodeHasStagingImportBody(node) && sceneId) {
-                        const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
-                        restartScenePatchMap[sceneId] = {
-                            scene_id: sceneId,
-                            scene_order: sceneOrder,
-                            markdown: buildSceneTableMarkdownFromStaging(sceneId, sceneBlock, sceneOrder),
-                        };
-                    }
-                    });
+                    Object.assign(
+                        restartScenePatchMap,
+                        await collectStagingScenePatchMap(activeEpisode?.id, nodesAfter)
+                    );
                     if (Object.keys(restartScenePatchMap).length <= 0) {
                         return { importedSceneRows: [] };
                     }
@@ -28751,17 +28844,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 `Scene ${failedNode.scene_id} refinement failed.`
                             ));
                         }
-                        nodes.forEach((node) => {
+                        for (const node of nodes) {
                             const sceneId = resolveExpectedSceneId(node?.scene_id);
-                            const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
                             if (
-                                pipelineNodeHasStagingImportBody(node)
-                                && sceneId
-                                && !launchedSceneIds.has(sceneId)
-                            ) {
-                                launchScene(sceneId, sceneBlock);
-                            }
-                        });
+                                !pipelineNodeHasStagingImportBody(node)
+                                || !sceneId
+                                || launchedSceneIds.has(sceneId)
+                            ) continue;
+                            const sceneBlock = await fetchSceneBlockForNode(activeEpisode?.id, node);
+                            if (sceneBlock) launchScene(sceneId, sceneBlock);
+                        }
                         if (launchedSceneIds.size < expectedSceneIds.size) {
                             await new Promise((resolve) => setTimeout(resolve, 800));
                         }
@@ -29533,7 +29625,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const nodes = Array.isArray(diagnosticsPipelineNodes) ? diagnosticsPipelineNodes : [];
         return nodes.some((node) => (
             String(node?.node_name || '').trim() === 'scene_subskill_scene'
-            && textHasDerivedEnvSignals(node?.runtime_meta?.scene_block)
+            && (
+                node?.runtime_meta?.has_derived_env_signals === true
+                || textHasDerivedEnvSignals(node?.runtime_meta?.scene_block)
+            )
         ));
     }, [diagnosticsPipelineNodes, getStageOutputContent]);
 
@@ -30242,19 +30337,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const runSceneOrchestrationRestartBranch = async () => {
                 const snapshot = await getEpisodeProgressSnapshot(activeEpisode?.id);
                 const nodes = Array.isArray(snapshot?.pipeline_nodes) ? snapshot.pipeline_nodes : [];
-                const restartScenePatchMap = {};
-                nodes.forEach((node) => {
-                    const sceneId = String(node?.scene_id || '').trim();
-                    const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
-                    if (pipelineNodeHasStagingImportBody(node) && sceneId) {
-                        const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
-                        restartScenePatchMap[sceneId] = {
-                            scene_id: sceneId,
-                            scene_order: sceneOrder,
-                            markdown: buildSceneTableMarkdownFromStaging(sceneId, sceneBlock, sceneOrder),
-                        };
-                    }
-                });
+                const restartScenePatchMap = await collectStagingScenePatchMap(activeEpisode?.id, nodes);
                 if (Object.keys(restartScenePatchMap).length <= 0) {
                     throw new Error(t(
                         '没有可用的逐场建置稿，无法直接入场景表。请先重跑逐场优化。',
@@ -30721,23 +30804,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     .map((unit) => String(unit?.sceneId || unit?.scene_id || '').trim())
                     .filter(Boolean)
             );
-            const sceneMarkdownPatchMap = {};
-            nodes.forEach((node) => {
-                const sceneId = String(node?.scene_id || '').trim();
-                const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
-                if (
-                    pipelineNodeHasStagingImportBody(node)
-                    && sceneId
-                    && (wantedSceneIds.size <= 0 || wantedSceneIds.has(sceneId))
-                ) {
-                    const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
-                    sceneMarkdownPatchMap[sceneId] = {
-                        scene_id: sceneId,
-                        scene_order: sceneOrder,
-                        markdown: buildSceneTableMarkdownFromStaging(sceneId, sceneBlock, sceneOrder),
-                    };
-                }
-            });
+            const sceneMarkdownPatchMap = await collectStagingScenePatchMap(
+                activeEpisode?.id,
+                nodes,
+                wantedSceneIds
+            );
             if (Object.keys(sceneMarkdownPatchMap).length <= 0) {
                 throw new Error(t(
                     '没有可用的逐场建置稿，无法重排入表。请先重跑逐场优化。',
@@ -31943,9 +32014,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const importStagingSceneForStoryboardRerun = useCallback(async (targetSceneId, node = null) => {
         const marker = String(targetSceneId || '').trim();
-        const stagingNode = node || null;
+        let stagingNode = node || null;
         if (!marker || !pipelineNodeHasStagingImportBody(stagingNode)) return null;
-        const sceneBlock = String(stagingNode?.runtime_meta?.scene_block || '').trim();
+        let sceneBlock = String(stagingNode?.runtime_meta?.scene_block || '').trim();
+        if (!sceneBlock) {
+            sceneBlock = await fetchSceneBlockForNode(activeEpisode?.id, stagingNode);
+            stagingNode = {
+                ...stagingNode,
+                runtime_meta: { ...(stagingNode?.runtime_meta || {}), scene_block: sceneBlock },
+            };
+        }
         if (!sceneBlock) return null;
         const sceneOrder = Number(stagingNode?.scene_order || stagingNode?.runtime_meta?.scene_order || 0)
             || deriveSceneOrderFromSceneId(marker);
@@ -31974,7 +32052,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             importReport,
             dbSceneId: dbSceneId > 0 ? dbSceneId : 0,
         };
-    }, [importScenesFromPerScenePatchMap, persistSceneMarkdownPatch]);
+    }, [activeEpisode?.id, importScenesFromPerScenePatchMap, persistSceneMarkdownPatch]);
 
     const resolveWorkspaceSceneForStoryboardRerun = useCallback(async (targetSceneId, {
         retries = 4,
@@ -32533,18 +32611,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             staging_opt: 'staging',
         }[stableKind];
         const label = getAnalysisStageLabel(stableKind, t);
-        const sceneSplitText = String(
+        let sceneSplitText = String(
             getStageOutputContent('stage1', 'scene_split')
+            || latestStage1NodeOutputsRef.current?.scene_split
             || ''
         ).trim();
-        const adaptedText = String(
+        let adaptedText = String(
             resolveScriptOptBeatsContent()
             || getStageOutputContent('stage1', 'scene_subskills')
             || getStageOutputContent('stage1', 'adapted_script')
+            || latestStage1NodeOutputsRef.current?.scene_subskills
             || activeEpisode?.ai_scene_analysis_adaptation
             || ''
         ).trim();
-        const source = (startFrom === 'drama' ? (sceneSplitText || adaptedText) : (adaptedText || sceneSplitText)).trim();
+        let source = (startFrom === 'drama' ? (sceneSplitText || adaptedText) : (adaptedText || sceneSplitText)).trim();
+        if (!source) {
+            try {
+                const payload = await fetchEpisodeStageSlots(
+                    activeEpisode.id,
+                    'scene_split,scene_subskills,adapted_script'
+                );
+                const slots = payload?.slots || {};
+                if (!sceneSplitText) sceneSplitText = String(slots.scene_split || '').trim();
+                if (!adaptedText) {
+                    adaptedText = String(slots.scene_subskills || slots.adapted_script || '').trim();
+                }
+                latestStage1NodeOutputsRef.current = mergeStage1NodeOutputsPreferringFresh(
+                    latestStage1NodeOutputsRef.current,
+                    slots
+                );
+                source = (startFrom === 'drama' ? (sceneSplitText || adaptedText) : (adaptedText || sceneSplitText)).trim();
+            } catch (_) {}
+        }
         const resolvedStartFrom = (startFrom === 'combat' && !adaptedText) ? 'drama' : startFrom;
         if (!source) {
             reportAnalysisPanelNotice(t('缺少该节点的上游输入，无法重跑。', 'This node’s upstream input is missing.'), 'warning');
@@ -34780,19 +34878,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (!didWork || Number((await fetchScenes(activeEpisode.id).catch(() => []))?.length || 0) < Math.max(1, Number(expectedSceneCount || 0))) {
                     const snapshot = await getEpisodeProgressSnapshot(activeEpisode.id).catch(() => null);
                     const nodes = Array.isArray(snapshot?.pipeline_nodes) ? snapshot.pipeline_nodes : [];
-                    const stagingPatchMap = {};
-                    nodes.forEach((node) => {
-                        const sceneId = String(node?.scene_id || '').trim();
-                        const sceneBlock = String(node?.runtime_meta?.scene_block || '').trim();
-                        if (pipelineNodeHasStagingImportBody(node) && sceneId) {
-                            const sceneOrder = Number(node?.scene_order) || deriveSceneOrderFromSceneId(sceneId);
-                            stagingPatchMap[sceneId] = {
-                                scene_id: sceneId,
-                                scene_order: sceneOrder,
-                                markdown: buildSceneTableMarkdownFromStaging(sceneId, sceneBlock, sceneOrder),
-                            };
-                        }
-                    });
+                    const stagingPatchMap = await collectStagingScenePatchMap(activeEpisode.id, nodes);
                     if (Object.keys(stagingPatchMap).length > 0) {
                         onLog?.('[Pipeline Supervisor] Importing workspace scenes from staging output...', 'process');
                         await persistSceneMarkdownPatch(stagingPatchMap, {
@@ -37937,10 +38023,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 if (['SCENE_MARKER_NOT_FOUND_IN_LATEST_SCRIPT', 'SCENE_ID_SUPERSEDED_BY_CANONICAL'].includes(err)) {
                                     return;
                                 }
-                                addFromText(unit?.scene_id, unit?.scene_order, unit?.scene_markdown);
+                                addFromText(
+                                    unit?.scene_id,
+                                    unit?.scene_order,
+                                    unit?.scene_markdown || (unit?.scene_name ? `【场景名称】${unit.scene_name}` : '')
+                                );
                             });
                             (diagnosticsPipelineNodes || []).forEach((node) => {
-                                addFromText(node?.scene_id, null, node?.runtime_meta?.scene_block);
+                                addFromText(
+                                    node?.scene_id,
+                                    null,
+                                    node?.runtime_meta?.scene_block
+                                        || (node?.runtime_meta?.scene_name ? `【场景名称】${node.runtime_meta.scene_name}` : '')
+                                );
                             });
                             Object.entries(stage2SceneMarkdownByScene || {}).forEach(([id, entry]) => {
                                 const text = typeof entry === 'string'

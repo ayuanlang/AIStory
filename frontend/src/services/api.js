@@ -4590,7 +4590,28 @@ export const reportStoryboardGenerationFailed = async (payload = {}) => (await a
 export const reportStoryboardGenerationStarted = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/storyboard-started', payload || {})).data;
 export const reportStoryboardGenerationApplied = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/storyboard-applied', payload || {})).data;
 export const resetStoryboardGenerationProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/storyboard-reset', payload || {})).data;
-export const getEpisodeProgressSnapshot = async (episodeId) => (await api.get(`/prompts/scene-analysis/progress/episodes/${episodeId}`)).data;
+export const getEpisodeProgressSnapshot = async (episodeId, options = {}) => {
+    const params = {};
+    if (options?.includeBodies) params.include_bodies = true;
+    return (await api.get(`/prompts/scene-analysis/progress/episodes/${episodeId}`, {
+        params: Object.keys(params).length ? params : undefined,
+    })).data;
+};
+export const fetchEpisodeProgressNodeBody = async (episodeId, { sceneId = '', nodeName = 'scene_subskill_scene' } = {}) => (
+    await api.get(`/prompts/scene-analysis/progress/episodes/${episodeId}/node-body`, {
+        params: {
+            scene_id: String(sceneId || ''),
+            node_name: String(nodeName || 'scene_subskill_scene'),
+        },
+    })
+).data;
+export const fetchEpisodeStageSlots = async (episodeId, keys, sceneId = '') => {
+    const keyText = Array.isArray(keys) ? keys.join(',') : String(keys || '');
+    const params = { keys: keyText };
+    const scene = String(sceneId || '').trim();
+    if (scene) params.scene_id = scene;
+    return (await api.get(`/episodes/${episodeId}/stage-slots`, { params })).data;
+};
 export const cancelRunningSceneAnalysis = async (payload = {}) => (
     await api.post('/prompts/scene-analysis/progress/cancel-running', payload || {})
 ).data;

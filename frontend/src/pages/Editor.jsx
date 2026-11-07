@@ -3796,6 +3796,7 @@ const Editor = ({
         if (!activeEpisodeId) return 'idle';
         const ep = episodes.find((e) => String(e.id) === String(activeEpisodeId));
         if (!ep) return 'missing';
+        if (activeTab === 'script') return (ep._scriptPageLoaded || ep._fullLoaded) ? 'loaded' : 'pending';
         return ep._fullLoaded ? 'loaded' : 'pending';
     })();
     useEffect(() => {
@@ -3829,14 +3830,26 @@ const Editor = ({
             console.error('Failed to fetch script episode', err);
         }).finally(() => {
             if (!stillCurrent()) return;
-            fetchEpisode(activeEpisodeId).then((fullEp) => {
+            const request = activeTab === 'script'
+                ? fetchEpisode(activeEpisodeId, { view: 'script_page' })
+                : fetchEpisode(activeEpisodeId);
+            request.then((fullEp) => {
                 if (episodeFullLoadInflightRef.current === key) {
                     episodeFullLoadInflightRef.current = '';
                 }
-                if (!stillCurrent()) return;
+                if (!stillCurrent() || !fullEp) return;
                 episodeFullLoadFailedRef.current = '';
+                const patch = { ...fullEp, _scriptLoaded: true };
+                if (activeTab === 'script') {
+                    // Null means "not selected", not an empty draft. Keep any draft already in memory.
+                    if (patch.ai_stage_outputs == null) delete patch.ai_stage_outputs;
+                    if (patch.ai_scene_analysis_scene_markdown == null) delete patch.ai_scene_analysis_scene_markdown;
+                    patch._scriptPageLoaded = true;
+                } else {
+                    patch._fullLoaded = true;
+                }
                 startTransition(() => {
-                    applyEpisodePatch({ ...fullEp, _scriptLoaded: true, _fullLoaded: true });
+                    applyEpisodePatch(patch);
                 });
             }).catch((err) => {
                 if (episodeFullLoadInflightRef.current === key) {

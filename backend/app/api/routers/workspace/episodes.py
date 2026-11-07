@@ -60,7 +60,10 @@ def read_episode(
     current_user: User = Depends(get_current_user)
 ):
     from sqlalchemy.orm import load_only, noload
-    script_only = str(view or "").strip().lower() == "script"
+    view_name = str(view or "").strip().lower()
+    script_only = view_name == "script"
+    # Script page status and the saved script. Per-node edit drafts stay out until a node is opened.
+    script_page = view_name == "script_page"
     loaders = [noload(Episode.script_segments)]
     if script_only:
         # Script tab paints from script_content. Analysis blobs load on the follow-up full read.
@@ -71,6 +74,19 @@ def read_episode(
             Episode.script_content,
             Episode.episode_info,
             Episode.character_profiles,
+        ))
+    elif script_page:
+        loaders.append(load_only(
+            Episode.id,
+            Episode.project_id,
+            Episode.title,
+            Episode.script_content,
+            Episode.episode_info,
+            Episode.character_profiles,
+            Episode.ai_scene_analysis_result,
+            Episode.ai_scene_analysis_subject_index,
+            Episode.ai_scene_analysis_adaptation,
+            Episode.ai_entity_design_result,
         ))
     episode = db.query(Episode).options(*loaders).filter(
         Episode.id == episode_id,
@@ -88,7 +104,97 @@ def read_episode(
             "episode_info": episode.episode_info or {},
             "character_profiles": episode.character_profiles or [],
         }
+    if script_page:
+        return {
+            "id": episode.id,
+            "project_id": episode.project_id,
+            "title": episode.title,
+            "script_content": episode.script_content or "",
+            "episode_info": episode.episode_info or {},
+            "character_profiles": episode.character_profiles or [],
+            "ai_scene_analysis_result": episode.ai_scene_analysis_result or "",
+            "ai_scene_analysis_subject_index": episode.ai_scene_analysis_subject_index or "",
+            "ai_scene_analysis_adaptation": episode.ai_scene_analysis_adaptation or "",
+            "ai_entity_design_result": episode.ai_entity_design_result or "",
+        }
     return episode
+
+
+_STAGE_SLOT_KEYS = {
+    "scene_split",
+    "environment_plan",
+    "scene_subskills",
+    "scene_subskill_results",
+    "adapted_script",
+    "raw_text",
+    "project_visual_backfill",
+}
+
+
+@router.get("/episodes/{episode_id}/stage-slots")
+def read_episode_stage_slots(
+    episode_id: int,
+    keys: str = Query(""),
+    scene_id: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """One clicked node's draft. The script page does not preload these bodies."""
+    import json
+
+    from sqlalchemy.orm import load_only
+
+    from app.services.script_analysis_flow.analyze_scene_stages import (
+        _stage1_slot_content,
+        same_scene_result_keys,
+    )
+
+    episode = (
+        db.query(Episode)
+        .options(load_only(Episode.id, Episode.project_id, Episode.ai_stage_outputs))
+        .filter(Episode.id == episode_id, _active_episode_clause())
+        .first()
+    )
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+
+    requested = []
+    for raw in str(keys or "").split(","):
+        key = str(raw or "").strip()
+        if key in _STAGE_SLOT_KEYS and key not in requested:
+            requested.append(key)
+    if not requested:
+        requested = ["scene_split", "environment_plan"]
+
+    raw_outputs = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
+    try:
+        outputs_obj = json.loads(raw_outputs) if raw_outputs else {}
+    except Exception:
+        outputs_obj = {}
+    if not isinstance(outputs_obj, dict):
+        outputs_obj = {}
+
+    wanted_scene = str(scene_id or "").strip()
+    slots = {}
+    for key in requested:
+        content = _stage1_slot_content(outputs_obj, key)
+        text = content if isinstance(content, str) else ""
+        if key == "scene_subskill_results" and wanted_scene and text.strip():
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = {}
+            if isinstance(parsed, dict):
+                keep = set(same_scene_result_keys(parsed, wanted_scene))
+                parsed = {item_key: item_value for item_key, item_value in parsed.items() if item_key in keep}
+                text = json.dumps(parsed, ensure_ascii=False)
+        slots[key] = text or ""
+    return {
+        "episode_id": int(episode.id),
+        "scene_id": wanted_scene,
+        "slots": slots,
+    }
 
 @router.put("/episodes/{episode_id}/segments", response_model=List[ScriptSegmentOut])
 def update_episode_segments(
