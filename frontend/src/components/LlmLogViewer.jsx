@@ -41,7 +41,7 @@ function attachmentRawUrl(part) {
 const MEDIA_FIELD_KEYS = new Set(['image_url', 'video_url', 'audio_url', 'file_url']);
 
 function isMediaHref(href) {
-  return /(\.(png|jpe?g|gif|webp|bmp|avif|svg|mp4|webm|mov|m4v|mp3|wav|m4a)(\?|#|$))|(?:qn\.woola\.fun|clouddn\.com|qiniucs\.com|aliyuncs\.com|myqcloud\.com|volces\.com)/i.test(href);
+  return /(\.(png|jpe?g|gif|webp|bmp|avif|svg|mp4|webm|mov|m4v|mp3|wav|m4a)(\?|#|$))|(?:qn\.woola\.fun|clouddn\.com|qiniucs\.com|aliyuncs\.com|myqcloud\.com|volces\.com|r2\.cloudflarestorage\.com|r2\.dev)/i.test(href);
 }
 
 function collectAttachmentUrls(value, acc, keyName = '') {
@@ -123,7 +123,7 @@ function LinkifiedPre({ text, className, onLinkClick }) {
 function toOpenableUrl(raw) {
   let url = String(raw || '').trim();
   if (!url || url.includes('BASE64_STRIPPED')) return '';
-  if (/^(?:[a-z0-9.-]+\.)?(?:woola\.fun|clouddn\.com|qiniucs\.com|aliyuncs\.com|myqcloud\.com|volces\.com)\//i.test(url)) {
+  if (/^(?:[a-z0-9.-]+\.)?(?:woola\.fun|clouddn\.com|qiniucs\.com|aliyuncs\.com|myqcloud\.com|volces\.com|r2\.cloudflarestorage\.com|r2\.dev)\//i.test(url)) {
     url = `https://${url}`;
   }
   if (/^https?:\/\//i.test(url) || url.startsWith('blob:') || url.startsWith('data:')) return url;

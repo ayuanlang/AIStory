@@ -385,6 +385,7 @@ const UserAdmin = () => {
         default_storage_class: '',
         retention_days: '',
         force_path_style: false,
+        grsai_oss_id: '',
         is_active: true,
     });
     const [taskDefaultApiRows, setTaskDefaultApiRows] = useState([]);
@@ -3470,6 +3471,7 @@ const UserAdmin = () => {
                 default_storage_class: '',
                 retention_days: '',
                 force_path_style: false,
+                grsai_oss_id: '',
                 is_active: true,
             });
             return;
@@ -3489,7 +3491,8 @@ const UserAdmin = () => {
             weights_text: JSON.stringify(Array.isArray(row.weights) ? row.weights : [], null, 2),
             default_storage_class: row.default_storage_class || '',
             retention_days: row.retention_days === null || row.retention_days === undefined ? '' : String(row.retention_days),
-            force_path_style: !!row.force_path_style,
+            force_path_style: !!row.force_path_style || /^(cloudflare|r2|cloudflare-r2|cf-r2)$/i.test(String(row.provider || '').trim()),
+            grsai_oss_id: row.grsai_oss_id || '',
             is_active: row.is_active !== false,
         });
     }, [selectedOssProviderPoolId, ossProviderPoolRows]);
@@ -3627,6 +3630,7 @@ const UserAdmin = () => {
             default_storage_class: String(ossProviderPoolForm.default_storage_class || '').trim() || undefined,
             retention_days: String(ossProviderPoolForm.retention_days || '').trim() ? Number(ossProviderPoolForm.retention_days) : undefined,
             force_path_style: !!ossProviderPoolForm.force_path_style,
+            grsai_oss_id: String(ossProviderPoolForm.grsai_oss_id || '').trim() || undefined,
             is_active: !!ossProviderPoolForm.is_active,
         };
     };
@@ -9146,7 +9150,17 @@ const UserAdmin = () => {
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Provider</label>
-                                                    <input value={ossProviderPoolForm.provider} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, provider: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono" placeholder="qiniu / tos / s3 / minio" />
+                                                    <input value={ossProviderPoolForm.provider} onChange={(e) => {
+                                                        const provider = e.target.value;
+                                                        setOssProviderPoolForm((f) => {
+                                                            const next = { ...f, provider };
+                                                            if (/^(cloudflare|r2|cloudflare-r2|cf-r2)$/i.test(String(provider || '').trim())) {
+                                                                if (!String(f.region || '').trim()) next.region = 'auto';
+                                                                next.force_path_style = true;
+                                                            }
+                                                            return next;
+                                                        });
+                                                    }} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono" placeholder="qiniu / tos / s3 / cloudflare" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Alias</label>
@@ -9154,11 +9168,11 @@ const UserAdmin = () => {
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Endpoint</label>
-                                                    <input value={ossProviderPoolForm.endpoint} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, endpoint: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="https://s3.cn-south-1.qiniucs.com 或 https://tos-cn-beijing.volces.com" />
+                                                    <input value={ossProviderPoolForm.endpoint} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, endpoint: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="https://<account_id>.r2.cloudflarestorage.com 或 https://s3.cn-south-1.qiniucs.com" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Region</label>
-                                                    <input value={ossProviderPoolForm.region} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, region: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="cn-south-1 / cn-beijing" />
+                                                    <input value={ossProviderPoolForm.region} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, region: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="auto / cn-south-1 / cn-beijing" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Bucket</label>
@@ -9166,7 +9180,7 @@ const UserAdmin = () => {
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Public Base URL</label>
-                                                    <input value={ossProviderPoolForm.public_base_url} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, public_base_url: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="https://cdn.example.com" />
+                                                    <input value={ossProviderPoolForm.public_base_url} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, public_base_url: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="https://cdn.example.com 或 https://pub-xxxx.r2.dev" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Root Prefix</label>
@@ -9187,6 +9201,11 @@ const UserAdmin = () => {
                                                 <div>
                                                     <label className="block text-xs uppercase text-gray-400 mb-1">Retention Days</label>
                                                     <input value={ossProviderPoolForm.retention_days} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, retention_days: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="30" />
+                                                </div>
+                                                <div className="md:col-span-2">
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">Grsai OSS ID</label>
+                                                    <input value={ossProviderPoolForm.grsai_oss_id || ''} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, grsai_oss_id: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono" placeholder={t('Cloudflare 存储库在 Grsai 控制台的 ID', 'Cloudflare repository id from the Grsai console')} />
+                                                    <p className="mt-1 text-[11px] text-gray-500">{t('填在 Cloudflare 池上。Grsai 图片和视频直传使用这个 oss-id，写进该 R2 桶。', 'Set this on the Cloudflare pool. Grsai image and video direct upload uses this oss-id and writes into that R2 bucket.')}</p>
                                                 </div>
                                                 <label className="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" checked={!!ossProviderPoolForm.force_path_style} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, force_path_style: e.target.checked }))} /> force_path_style</label>
                                                 <label className="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" checked={!!ossProviderPoolForm.is_active} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, is_active: e.target.checked }))} /> {t('启用该池', 'Pool Active')}</label>

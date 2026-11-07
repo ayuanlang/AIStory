@@ -2253,6 +2253,15 @@ def init_system_api_settings(db):
     grsai_minimax_h3_endpoint = "https://grsai.dakka.com.cn/v1/api/generate"
     grsai_minimax_h3_result_endpoint = "https://grsai.dakka.com.cn/v1/api/result"
     grsai_provider = "grsai"
+    from app.services.oss_storage_service import (
+        DEFAULT_GRSAI_DIRECT_OSS_ID,
+        LEGACY_GRSAI_DIRECT_OSS_ID,
+        oss_storage_service,
+    )
+    try:
+        grsai_direct_oss_id = oss_storage_service.resolve_grsai_direct_oss_id("")
+    except Exception:
+        grsai_direct_oss_id = DEFAULT_GRSAI_DIRECT_OSS_ID
 
     # Source list requested by user (from Grsai model catalog page).
     grsai_models = [
@@ -2376,12 +2385,19 @@ def init_system_api_settings(db):
                 if row_category == "video"
                 else {"file/images", "file/images/{user_id}"}
             )
-            has_oss_id = bool(str(cfg.get("oss-id") or cfg.get("oss_id") or cfg.get("ossId") or "").strip())
+            current_oss_id = str(cfg.get("oss-id") or cfg.get("oss_id") or cfg.get("ossId") or "").strip()
+            has_oss_id = bool(current_oss_id)
             current_oss_path = str(cfg.get("oss-path") or cfg.get("oss_path") or cfg.get("ossPath") or "").strip()
             has_oss_path = bool(current_oss_path)
             oss_path_changed = False
-            if not has_oss_id:
-                cfg["oss-id"] = "69c890a3a0a438550965e9ff"
+            oss_id_changed = False
+            # Old repository 69c890a3a0a438550965e9ff is rewritten to the Cloudflare repository.
+            if (not current_oss_id) or (
+                current_oss_id == LEGACY_GRSAI_DIRECT_OSS_ID
+                and grsai_direct_oss_id != LEGACY_GRSAI_DIRECT_OSS_ID
+            ):
+                cfg["oss-id"] = grsai_direct_oss_id
+                oss_id_changed = current_oss_id != grsai_direct_oss_id
             if not has_oss_path:
                 cfg["oss-path"] = default_oss_path
                 oss_path_changed = True
@@ -2389,7 +2405,7 @@ def init_system_api_settings(db):
                 # Align legacy grsai direct-write paths with OSS yyyymm layout.
                 cfg["oss-path"] = default_oss_path
                 oss_path_changed = True
-            if (not has_oss_id) or oss_path_changed:
+            if (not has_oss_id) or oss_path_changed or oss_id_changed:
                 row.config = cfg
                 updated_existing += 1
 
@@ -2430,7 +2446,7 @@ def init_system_api_settings(db):
                     if "nano-banana" in item["name"]
                     else grsai_gpt_image_endpoint
                 ),
-                "oss-id": "69c890a3a0a438550965e9ff",
+                "oss-id": grsai_direct_oss_id,
                 "oss-path": "file/images/{yyyymm}/{user_id}",
             }
         elif item["category"] == "Video" and (
@@ -2439,7 +2455,7 @@ def init_system_api_settings(db):
             config_payload = {
                 "endpoint": grsai_minimax_h3_endpoint,
                 "query_endpoint": grsai_minimax_h3_result_endpoint,
-                "oss-id": "69c890a3a0a438550965e9ff",
+                "oss-id": grsai_direct_oss_id,
                 "oss-path": "file/videos/{yyyymm}/{user_id}",
                 "enum_catalog": {
                     "resolution": ["480p", "768p", "1080p"],
@@ -2494,8 +2510,12 @@ def init_system_api_settings(db):
         if h3_cfg.get("query_endpoint") != grsai_minimax_h3_result_endpoint:
             h3_cfg["query_endpoint"] = grsai_minimax_h3_result_endpoint
             h3_enum_updated = True
-        if not str(h3_cfg.get("oss-id") or h3_cfg.get("oss_id") or "").strip():
-            h3_cfg["oss-id"] = "69c890a3a0a438550965e9ff"
+        current_h3_oss_id = str(h3_cfg.get("oss-id") or h3_cfg.get("oss_id") or "").strip()
+        if (not current_h3_oss_id) or (
+            current_h3_oss_id == LEGACY_GRSAI_DIRECT_OSS_ID
+            and grsai_direct_oss_id != LEGACY_GRSAI_DIRECT_OSS_ID
+        ):
+            h3_cfg["oss-id"] = grsai_direct_oss_id
             h3_enum_updated = True
         if not str(h3_cfg.get("oss-path") or h3_cfg.get("oss_path") or "").strip():
             h3_cfg["oss-path"] = "file/videos/{yyyymm}/{user_id}"

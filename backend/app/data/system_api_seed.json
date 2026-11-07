@@ -188,7 +188,7 @@
         "deprecated": false,
         "is_deprecated": false,
         "disable_api": false,
-        "oss-id": "69c890a3a0a438550965e9ff",
+        "oss-id": "6aef48974bf26bda0f7fbde5",
         "oss-path": "file/images/{user_id}"
       },
       "deprecated": false,
@@ -2627,7 +2627,7 @@
       "config": {
         "endpoint": "https://grsai.dakka.com.cn/v1/api/generate",
         "query_endpoint": "https://grsai.dakka.com.cn/v1/api/result",
-        "oss-id": "69c890a3a0a438550965e9ff",
+        "oss-id": "6aef48974bf26bda0f7fbde5",
         "oss-path": "file/videos/{yyyymm}/{user_id}",
         "deprecated": false,
         "provider_api_key_strategy": "random",

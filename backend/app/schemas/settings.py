@@ -1106,6 +1106,7 @@ class OSSProviderPoolCreate(BaseModel):
     default_storage_class: Optional[str] = None
     retention_days: Optional[int] = None
     force_path_style: Optional[bool] = False
+    grsai_oss_id: Optional[str] = None
     is_active: Optional[bool] = True
 
 
@@ -1123,6 +1124,7 @@ class OSSProviderPoolUpdate(BaseModel):
     default_storage_class: Optional[str] = None
     retention_days: Optional[int] = None
     force_path_style: Optional[bool] = None
+    grsai_oss_id: Optional[str] = None
     is_active: Optional[bool] = None
 
 
@@ -1141,6 +1143,7 @@ class OSSProviderPoolOut(BaseModel):
     default_storage_class: Optional[str] = None
     retention_days: Optional[int] = None
     force_path_style: Optional[bool] = False
+    grsai_oss_id: Optional[str] = None
     is_active: Optional[bool] = True
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

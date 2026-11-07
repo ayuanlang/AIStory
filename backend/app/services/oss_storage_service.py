@@ -45,6 +45,17 @@ activity_logger = logging.getLogger("functional_activity")
 # The load lock collapses a miss burst into one checkout.
 _DB_POOL_CACHE_TTL_SECONDS = 20.0
 _DB_POOL_CACHE_FAIL_TTL_SECONDS = 2.0
+# Previous Grsai repository. Direct upload now uses the Cloudflare R2 repository.
+LEGACY_GRSAI_DIRECT_OSS_ID = "69c890a3a0a438550965e9ff"
+DEFAULT_GRSAI_DIRECT_OSS_ID = "6aef48974bf26bda0f7fbde5"
+_CLOUDFLARE_PROVIDER_NAMES = {
+    "cloudflare",
+    "cloudflare-r2",
+    "cloudflare_r2",
+    "cf-r2",
+    "cf_r2",
+    "r2",
+}
 _db_pool_cache_lock = threading.Lock()
 _db_pool_load_lock = threading.Lock()
 _db_pool_cache: Dict[str, Tuple[float, Optional[List[SimpleNamespace]]]] = {}
@@ -172,6 +183,32 @@ class OSSStorageService:
             return True
         return self._is_qiniu_cdn_host(self._pool_public_host(pool))
 
+    @staticmethod
+    def _is_cloudflare_provider_name(provider: Any) -> bool:
+        return str(provider or "").strip().lower() in _CLOUDFLARE_PROVIDER_NAMES
+
+    @staticmethod
+    def _is_cloudflare_object_host(host: str) -> bool:
+        hostname = str(host or "").strip().lower().split(":", 1)[0]
+        if not hostname:
+            return False
+        return (
+            hostname == "r2.cloudflarestorage.com"
+            or hostname.endswith(".r2.cloudflarestorage.com")
+            or hostname == "r2.dev"
+            or hostname.endswith(".r2.dev")
+        )
+
+    def _is_cloudflare_provider(self, pool) -> bool:
+        if self._is_qiniu_cdn_host(self._pool_public_host(pool)) and not self._is_cloudflare_object_host(
+            self._pool_public_host(pool)
+        ):
+            return False
+        if self._is_cloudflare_provider_name(getattr(pool, "provider", None)):
+            return True
+        haystack = self._pool_identity_text(pool)
+        return "r2.cloudflarestorage.com" in haystack or haystack.endswith("r2.dev") or ".r2.dev" in haystack
+
     def _is_tos_provider(self, pool) -> bool:
         # Qiniu CDN hosts (qn.woola.fun / clouddn / qiniucs) must never be treated as TOS.
         # A TOS pool that reuses the Qiniu public domain would otherwise emit TOS4
@@ -190,7 +227,8 @@ class OSSStorageService:
         )
 
     def _is_s3_compat_unsigned_payload(self, pool) -> bool:
-        return self._is_qiniu_provider(pool) or self._is_tos_provider(pool)
+        # R2 rejects boto3 flexible checksums and aws-chunked the same way Qiniu/TOS do.
+        return self._is_qiniu_provider(pool) or self._is_tos_provider(pool) or self._is_cloudflare_provider(pool)
 
     @staticmethod
     def _is_tos_object_host(host: str) -> bool:
@@ -231,7 +269,11 @@ class OSSStorageService:
         if not public_base_url:
             return ""
 
-        force_https = self._is_qiniu_provider(pool) or self._is_tos_provider(pool)
+        force_https = (
+            self._is_qiniu_provider(pool)
+            or self._is_tos_provider(pool)
+            or self._is_cloudflare_provider(pool)
+        )
 
         if "://" in public_base_url:
             if force_https and public_base_url.lower().startswith("http://"):
@@ -641,6 +683,17 @@ class OSSStorageService:
             "is_active": self._as_bool(item.get("is_active"), default=True),
         }
 
+    def _default_region_name(self, provider: Any, endpoint: str, region: Any) -> str:
+        explicit = str(region or "").strip()
+        if explicit:
+            return explicit
+        endpoint_lower = str(endpoint or "").lower()
+        if self._is_cloudflare_provider_name(provider) or "r2.cloudflarestorage.com" in endpoint_lower:
+            return "auto"
+        if any(marker in endpoint_lower for marker in ("volces.com", "ivolces.com", "tos-")):
+            return self._infer_tos_region(endpoint, "cn-beijing")
+        return "us-east-1"
+
     def _normalize_pool_row(self, row: Dict[str, Any]) -> Optional[SimpleNamespace]:
         endpoint = str(row.get("endpoint") or "").strip().rstrip("/")
         bucket = str(row.get("bucket") or "").strip()
@@ -654,22 +707,17 @@ class OSSStorageService:
             if normalized and normalized.get("is_active", True):
                 credentials.append(normalized)
 
+        provider_name = str(row.get("provider") or "").strip() or "s3"
         return SimpleNamespace(
             id=int(row.get("id") or 0),
-            provider=str(row.get("provider") or "").strip() or "s3",
+            provider=provider_name,
             provider_alias=str(row.get("provider_alias") or "").strip() or None,
             endpoint=endpoint,
             bucket=bucket,
             public_base_url=str(row.get("public_base_url") or "").strip().rstrip("/"),
             root_prefix=str(row.get("root_prefix") or "").strip().strip("/"),
-            region_name=(
-                str(row.get("region") or "").strip()
-                or (
-                    self._infer_tos_region(endpoint, "cn-beijing")
-                    if any(marker in endpoint.lower() for marker in ("volces.com", "ivolces.com", "tos-"))
-                    else "us-east-1"
-                )
-            ),
+            region_name=self._default_region_name(provider_name, endpoint, row.get("region")),
+            grsai_oss_id=str(row.get("grsai_oss_id") or "").strip() or None,
             force_path_style=self._as_bool(row.get("force_path_style"), default=False),
             presign_expires_seconds=max(
                 300,
@@ -730,6 +778,29 @@ class OSSStorageService:
         self._load_db_pools(db, active_only=False)
         self._load_db_pools(db, active_only=True)
 
+    def invalidate_pool_cache(self) -> None:
+        with _db_pool_cache_lock:
+            _db_pool_cache.clear()
+
+    def active_cloudflare_grsai_oss_id(self, db=None) -> str:
+        """Grsai repository id of the active Cloudflare R2 pool, if one is configured."""
+        for pool in self._get_active_pools(db):
+            if not self._is_cloudflare_provider(pool):
+                continue
+            oss_id = str(getattr(pool, "grsai_oss_id", "") or "").strip()
+            if oss_id:
+                return oss_id
+        return ""
+
+    def resolve_grsai_direct_oss_id(self, explicit: Any = "", db=None) -> str:
+        """Pick the Grsai oss-id. A configured Cloudflare repository replaces the legacy id."""
+        explicit_id = str(explicit or "").strip()
+        if explicit_id and explicit_id != LEGACY_GRSAI_DIRECT_OSS_ID:
+            return explicit_id
+        cloudflare_id = self.active_cloudflare_grsai_oss_id(db)
+        env_id = _env_first("GRSAI_CLOUDFLARE_OSS_ID", "GRSAI_OSS_ID")
+        return cloudflare_id or env_id or DEFAULT_GRSAI_DIRECT_OSS_ID
+
     def _query_db_pools(self, db=None, *, active_only: bool = True) -> Optional[List[SimpleNamespace]]:
         owned_session = None
         try:
@@ -738,15 +809,30 @@ class OSSStorageService:
                 owned_session = SessionLocal()
                 session = owned_session
 
-            result = session.execute(text(
-                """
+            select_with_grsai = """
+                SELECT id, provider, provider_alias, endpoint, region, bucket,
+                       public_base_url, root_prefix, credentials, strategy, weights,
+                       default_storage_class, retention_days, force_path_style, grsai_oss_id,
+                       is_active, created_at, updated_at
+                FROM oss_provider_pools
+            """
+            select_without_grsai = """
                 SELECT id, provider, provider_alias, endpoint, region, bucket,
                        public_base_url, root_prefix, credentials, strategy, weights,
                        default_storage_class, retention_days, force_path_style, is_active,
                        created_at, updated_at
                 FROM oss_provider_pools
-                """
-            ))
+            """
+            try:
+                result = session.execute(text(select_with_grsai))
+            except Exception as exc:
+                if "grsai_oss_id" not in str(exc).lower():
+                    raise
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+                result = session.execute(text(select_without_grsai))
             pools: List[SimpleNamespace] = []
             for row in result.mappings().all():
                 normalized = self._normalize_pool_row(dict(row))
@@ -768,14 +854,22 @@ class OSSStorageService:
     def _pick_env_pool(self):
         endpoint = _env_first(
             "OSS_ENDPOINT",
+            "R2_ENDPOINT",
+            "CLOUDFLARE_R2_ENDPOINT",
             "QINIU_ENDPOINT",
             "TOS_ENDPOINT",
             "VOLC_TOS_ENDPOINT",
             "S3_ENDPOINT",
             "AWS_S3_ENDPOINT",
         )
+        if not endpoint:
+            account_id = _env_first("R2_ACCOUNT_ID", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_R2_ACCOUNT_ID")
+            if account_id:
+                endpoint = f"https://{account_id}.r2.cloudflarestorage.com"
         bucket = _env_first(
             "OSS_BUCKET",
+            "R2_BUCKET",
+            "CLOUDFLARE_R2_BUCKET",
             "QINIU_BUCKET",
             "TOS_BUCKET",
             "VOLC_TOS_BUCKET",
@@ -791,17 +885,23 @@ class OSSStorageService:
             inferred_provider = "tos"
         elif "qiniu" in endpoint_lower:
             inferred_provider = "qiniu"
+        elif "r2.cloudflarestorage.com" in endpoint_lower or endpoint_lower.endswith(".r2.dev"):
+            inferred_provider = "cloudflare"
         else:
             inferred_provider = "s3"
         # A Qiniu endpoint always stays Qiniu so TOS_PROVIDER / TOS_* cannot hijack it.
         if inferred_provider == "qiniu":
             provider = "qiniu"
+        elif inferred_provider == "cloudflare" or self._is_cloudflare_provider_name(explicit_provider):
+            provider = "cloudflare"
         elif explicit_provider in {"tos", "qiniu", "s3", "minio", "backblaze"}:
             provider = explicit_provider
         else:
             provider = inferred_provider
         public_base_url = _env_first(
             "OSS_PUBLIC_BASE_URL",
+            "R2_PUBLIC_BASE_URL",
+            "CLOUDFLARE_R2_PUBLIC_BASE_URL",
             "QINIU_PUBLIC_BASE_URL",
             "TOS_PUBLIC_BASE_URL",
             "VOLC_TOS_PUBLIC_BASE_URL",
@@ -813,20 +913,25 @@ class OSSStorageService:
             "TOS_ROOT_PREFIX",
             default="aistory/upload",
         ).strip().strip("/")
-        default_region = (
-            self._infer_tos_region(endpoint, "cn-beijing")
-            if inferred_provider == "tos"
-            else "us-east-1"
-        )
+        if provider == "cloudflare":
+            default_region = "auto"
+        elif inferred_provider == "tos":
+            default_region = self._infer_tos_region(endpoint, "cn-beijing")
+        else:
+            default_region = "us-east-1"
         region_name = _env_first(
             "OSS_REGION",
+            "R2_REGION",
+            "CLOUDFLARE_R2_REGION",
             "TOS_REGION",
             "VOLC_TOS_REGION",
             "AWS_REGION",
             "AWS_DEFAULT_REGION",
             default=default_region,
         )
-        force_path_style = _env_bool("OSS_FORCE_PATH_STYLE", "S3_FORCE_PATH_STYLE", default=False)
+        # R2 account endpoints are stored path-style. The client also forces path-style for Cloudflare.
+        path_style_default = provider == "cloudflare"
+        force_path_style = _env_bool("OSS_FORCE_PATH_STYLE", "S3_FORCE_PATH_STYLE", default=path_style_default)
         presign_expires_seconds = max(
             300,
             _env_int(
@@ -846,6 +951,11 @@ class OSSStorageService:
             public_base_url=public_base_url.rstrip("/"),
             root_prefix=root_prefix,
             region_name=region_name,
+            grsai_oss_id=(
+                _env_first("GRSAI_CLOUDFLARE_OSS_ID", "GRSAI_OSS_ID") or None
+                if provider == "cloudflare"
+                else None
+            ),
             force_path_style=force_path_style,
             presign_expires_seconds=presign_expires_seconds,
             strategy="random",
@@ -930,6 +1040,19 @@ class OSSStorageService:
                 "OSS_SECRET_KEY",
                 "AWS_SECRET_ACCESS_KEY",
             )
+        elif self._is_cloudflare_provider(pool):
+            access_key = _env_first(
+                "R2_ACCESS_KEY_ID",
+                "CLOUDFLARE_R2_ACCESS_KEY_ID",
+                "OSS_ACCESS_KEY",
+                "AWS_ACCESS_KEY_ID",
+            )
+            secret_key = _env_first(
+                "R2_SECRET_ACCESS_KEY",
+                "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+                "OSS_SECRET_KEY",
+                "AWS_SECRET_ACCESS_KEY",
+            )
         else:
             access_key = _env_first("OSS_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "QINIU_ACCESS_KEY")
             secret_key = _env_first("OSS_SECRET_KEY", "AWS_SECRET_ACCESS_KEY", "QINIU_SECRET_KEY")
@@ -950,7 +1073,7 @@ class OSSStorageService:
         is_s3_compat = self._is_s3_compat_unsigned_payload(pool)
         cache_key = (
             f"{getattr(pool, 'endpoint', '')}_{getattr(cred, 'access_key', '')}"
-            f"_{int(self._is_qiniu_provider(pool))}_{int(self._is_tos_provider(pool))}"
+            f"_{int(self._is_qiniu_provider(pool))}_{int(self._is_tos_provider(pool))}_{int(self._is_cloudflare_provider(pool))}"
         )
         if cache_key in self._boto3_clients_cache:
             return self._boto3_clients_cache[cache_key]
@@ -961,7 +1084,11 @@ class OSSStorageService:
         s3_config: Dict[str, Any] = {
             "addressing_style": (
                 "path"
-                if self._is_qiniu_provider(pool) or getattr(pool, "force_path_style", False)
+                if (
+                    self._is_qiniu_provider(pool)
+                    or self._is_cloudflare_provider(pool)
+                    or getattr(pool, "force_path_style", False)
+                )
                 else "virtual"
             )
         }
@@ -1175,8 +1302,8 @@ class OSSStorageService:
         if getattr(pool, "default_storage_class", None):
             st_class = str(pool.default_storage_class)
             provider_nm = str(getattr(pool, "provider", "")).lower()
-            if self._is_qiniu_provider(pool) or self._is_tos_provider(pool):
-                # Qiniu / TOS S3-compatible endpoints may reject AWS StorageClass values.
+            if self._is_qiniu_provider(pool) or self._is_tos_provider(pool) or self._is_cloudflare_provider(pool):
+                # Qiniu / TOS / R2 reject or ignore AWS StorageClass values.
                 pass
             elif provider_nm == "backblaze" and st_class == "STANDARD_IA":
                 pass
@@ -1794,6 +1921,16 @@ class OSSStorageService:
             if host_matches_pool and (not root_prefix or path == root_prefix or path.startswith(f"{root_prefix}/")):
                 return path
 
+        if self._is_cloudflare_provider(pool) and self._is_cloudflare_object_host(host):
+            bucket_name = str(getattr(pool, "bucket", "") or "").strip()
+            object_key = path
+            endpoint_host = urllib.parse.urlparse(str(getattr(pool, "endpoint", "") or "")).netloc.lower()
+            # Path-style: https://<account>.r2.cloudflarestorage.com/<bucket>/<key>
+            if bucket_name and host == endpoint_host and object_key.startswith(f"{bucket_name}/"):
+                object_key = object_key[len(bucket_name) + 1 :]
+            if object_key and (not root_prefix or object_key == root_prefix or object_key.startswith(f"{root_prefix}/")):
+                return object_key
+
         endpoint_host = urllib.parse.urlparse(str(getattr(pool, "endpoint", "") or "")).netloc.lower()
         bucket = str(getattr(pool, "bucket", "") or "").strip()
         if bucket and path.startswith(f"{bucket}/") and host == endpoint_host:
@@ -1819,6 +1956,8 @@ class OSSStorageService:
                 score -= 120
         if self._is_tos_object_host(host) and self._is_tos_provider(pool):
             score += 80
+        if self._is_cloudflare_object_host(host) and self._is_cloudflare_provider(pool):
+            score += 80
         return score
 
     def _extract_managed_target_from_pools(
@@ -1833,7 +1972,11 @@ class OSSStorageService:
         candidate_raw = raw
         if "://" not in candidate_raw and "/" in candidate_raw:
             host_part = candidate_raw.split("/", 1)[0].strip().lower()
-            if self._is_qiniu_cdn_host(host_part) or self._is_tos_object_host(host_part):
+            if (
+                self._is_qiniu_cdn_host(host_part)
+                or self._is_tos_object_host(host_part)
+                or self._is_cloudflare_object_host(host_part)
+            ):
                 candidate_raw = f"https://{candidate_raw}"
 
         try:

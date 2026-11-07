@@ -8885,15 +8885,15 @@ class MediaGenerationService:
             request_user_id = 1
 
         oss_config = tool_conf.get("oss") if isinstance(tool_conf.get("oss"), dict) else {}
-        oss_id = str(
+        explicit_oss_id = str(
             tool_conf.get("oss-id")
             or tool_conf.get("oss_id")
             or tool_conf.get("ossId")
             or (oss_config.get("id") if isinstance(oss_config, dict) else "")
-            or os.getenv("GRSAI_OSS_ID")
-            or "69c890a3a0a438550965e9ff"
             or ""
         ).strip()
+        # A Cloudflare R2 pool's grsai_oss_id replaces the legacy repository.
+        oss_id = oss_storage_service.resolve_grsai_direct_oss_id(explicit_oss_id)
 
         kind = "videos" if str(asset_kind or "").strip().lower() == "video" else "images"
         env_path = os.getenv("GRSAI_OSS_VIDEO_PATH") if kind == "videos" else os.getenv("GRSAI_OSS_PATH")

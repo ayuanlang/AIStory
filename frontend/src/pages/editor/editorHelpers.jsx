@@ -3438,7 +3438,7 @@ export const preloadOssActiveUrlSignatures = async (fetcher) => {
 
 const legacyDurableMediaUrl = (raw) => {
     const lower = String(raw || '').trim().toLowerCase();
-    return /qiniu|clouddn\.com|backblaze|\.bkt\.|aistory|woola\.fun|qiniucs\.com/.test(lower);
+    return /qiniu|clouddn\.com|backblaze|\.bkt\.|aistory|woola\.fun|qiniucs\.com|r2\.cloudflarestorage\.com|r2\.dev/.test(lower);
 };
 
 export const urlMatchesConfiguredOss = (url, metadata = null, signatures = null) => {

@@ -725,6 +725,10 @@ async def proxy_asset(url: str, request: Request):
         or host.endswith(".qiniu.com")
         or host.endswith(".volces.com")
         or host.endswith(".ivolces.com")
+        or host.endswith(".r2.cloudflarestorage.com")
+        or host == "r2.cloudflarestorage.com"
+        or host.endswith(".r2.dev")
+        or host == "r2.dev"
         or oss_storage_service.is_managed_url(fetch_url)
     )
 

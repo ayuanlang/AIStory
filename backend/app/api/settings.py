@@ -1783,6 +1783,25 @@ def _normalize_oss_credential_items(values: Any) -> List[Dict[str, Any]]:
     return normalized
 
 
+def _normalize_oss_storage_provider_name(provider: Any) -> str:
+    raw = _normalize_system_provider_name(provider)
+    if raw in {"cloudflare", "cloudflare-r2", "cloudflare_r2", "cf-r2", "cf_r2", "r2"}:
+        return "cloudflare"
+    return raw
+
+
+def _is_cloudflare_oss_provider_name(provider: Any) -> bool:
+    return _normalize_oss_storage_provider_name(provider) == "cloudflare"
+
+
+def _invalidate_oss_pool_cache() -> None:
+    try:
+        from app.services.oss_storage_service import oss_storage_service
+        oss_storage_service.invalidate_pool_cache()
+    except Exception:
+        logger.warning("Failed to invalidate OSS pool cache", exc_info=True)
+
+
 def _serialize_oss_provider_pool_row(row: OSSProviderPool) -> OSSProviderPoolOut:
     credentials = [OSSProviderPoolCredential(**item) for item in _normalize_oss_credential_items(getattr(row, "credentials", None))]
     return OSSProviderPoolOut(
@@ -1800,6 +1819,7 @@ def _serialize_oss_provider_pool_row(row: OSSProviderPool) -> OSSProviderPoolOut
         default_storage_class=str(getattr(row, "default_storage_class", "") or "").strip() or None,
         retention_days=int(getattr(row, "retention_days", 0)) if getattr(row, "retention_days", None) not in (None, "") else None,
         force_path_style=bool(getattr(row, "force_path_style", False)),
+        grsai_oss_id=str(getattr(row, "grsai_oss_id", "") or "").strip() or None,
         is_active=bool(getattr(row, "is_active", False)),
         created_at=getattr(row, "created_at", None),
         updated_at=getattr(row, "updated_at", None),
@@ -9177,6 +9197,7 @@ def export_system_config_sync_bundle_for_manage(
                 "default_storage_class": row.default_storage_class,
                 "retention_days": row.retention_days,
                 "force_path_style": row.force_path_style,
+                "grsai_oss_id": str(getattr(row, "grsai_oss_id", "") or "").strip() or None,
                 "is_active": row.is_active,
                 "created_at": getattr(row, "created_at", None),
                 "updated_at": getattr(row, "updated_at", None),
@@ -9738,7 +9759,7 @@ def import_system_config_sync_bundle_for_manage(
                 for raw_pool in oss_provider_pools:
                     if not isinstance(raw_pool, dict):
                         continue
-                    provider_name = str(raw_pool.get("provider") or "").strip()
+                    provider_name = _normalize_oss_storage_provider_name(raw_pool.get("provider"))
                     if not provider_name:
                         continue
                     record = db.query(OSSProviderPool).filter(OSSProviderPool.provider == provider_name).first()
@@ -9761,6 +9782,7 @@ def import_system_config_sync_bundle_for_manage(
                     ret_days = raw_pool.get("retention_days")
                     record.retention_days = int(ret_days) if ret_days is not None else None
                     record.force_path_style = bool(raw_pool.get("force_path_style", False))
+                    record.grsai_oss_id = str(raw_pool.get("grsai_oss_id") or "").strip() or None
                     record.is_active = bool(raw_pool.get("is_active", True))
                     
                     updated_at = str(raw_pool.get("updated_at") or now_bj_iso())
@@ -10483,7 +10505,7 @@ def create_oss_provider_pool(
     if not _ensure_oss_provider_pools_table(db):
         raise HTTPException(status_code=503, detail="oss_provider_pools table not found")
 
-    provider_name = _normalize_system_provider_name(payload.provider)
+    provider_name = _normalize_oss_storage_provider_name(payload.provider)
     endpoint = str(payload.endpoint or "").strip().rstrip("/")
     bucket = str(payload.bucket or "").strip()
     if not provider_name:
@@ -10492,6 +10514,9 @@ def create_oss_provider_pool(
         raise HTTPException(status_code=400, detail="endpoint is required")
     if not bucket:
         raise HTTPException(status_code=400, detail="bucket is required")
+    region = str(payload.region or "").strip() or None
+    if _is_cloudflare_oss_provider_name(provider_name) and not region:
+        region = "auto"
 
     credential_payloads = [item.model_dump() if hasattr(item, "model_dump") else item.dict() for item in (payload.credentials or [])]
     credentials = _normalize_oss_credential_items(credential_payloads)
@@ -10500,7 +10525,7 @@ def create_oss_provider_pool(
         provider=provider_name,
         provider_alias=str(payload.provider_alias or "").strip() or None,
         endpoint=endpoint,
-        region=str(payload.region or "").strip() or None,
+        region=region,
         bucket=bucket,
         public_base_url=_normalize_optional_http_url(payload.public_base_url),
         root_prefix=str(payload.root_prefix or "").strip().strip("/") or None,
@@ -10509,7 +10534,8 @@ def create_oss_provider_pool(
         weights=_normalize_key_weights(payload.weights, [item.get("access_key") or str(idx) for idx, item in enumerate(credentials)]),
         default_storage_class=str(payload.default_storage_class or "").strip() or None,
         retention_days=int(payload.retention_days) if payload.retention_days is not None else None,
-        force_path_style=bool(payload.force_path_style),
+        force_path_style=bool(payload.force_path_style) or _is_cloudflare_oss_provider_name(provider_name),
+        grsai_oss_id=str(payload.grsai_oss_id or "").strip() or None,
         is_active=True if payload.is_active is None else bool(payload.is_active),
         created_at=now,
         updated_at=now,
@@ -10517,6 +10543,7 @@ def create_oss_provider_pool(
     db.add(record)
     db.commit()
     db.refresh(record)
+    _invalidate_oss_pool_cache()
     return _serialize_oss_provider_pool_row(record)
 
 
@@ -10538,7 +10565,7 @@ def update_oss_provider_pool(
 
     patch = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
     if "provider" in patch:
-        provider_name = _normalize_system_provider_name(patch.get("provider"))
+        provider_name = _normalize_oss_storage_provider_name(patch.get("provider"))
         if not provider_name:
             raise HTTPException(status_code=400, detail="provider cannot be empty")
         record.provider = provider_name
@@ -10573,11 +10600,18 @@ def update_oss_provider_pool(
         record.retention_days = int(patch.get("retention_days")) if patch.get("retention_days") not in (None, "") else None
     if "force_path_style" in patch:
         record.force_path_style = bool(patch.get("force_path_style"))
+    if _is_cloudflare_oss_provider_name(getattr(record, "provider", None)) and not str(getattr(record, "region", "") or "").strip():
+        record.region = "auto"
+    if _is_cloudflare_oss_provider_name(getattr(record, "provider", None)):
+        record.force_path_style = True
+    if "grsai_oss_id" in patch:
+        record.grsai_oss_id = str(patch.get("grsai_oss_id") or "").strip() or None
     if "is_active" in patch:
         record.is_active = bool(patch.get("is_active"))
     record.updated_at = now_bj_iso()
     db.commit()
     db.refresh(record)
+    _invalidate_oss_pool_cache()
     return _serialize_oss_provider_pool_row(record)
 
 
@@ -10598,6 +10632,7 @@ def delete_oss_provider_pool(
 
     db.delete(record)
     db.commit()
+    _invalidate_oss_pool_cache()
     return {"ok": True}
 
 

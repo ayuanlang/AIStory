@@ -888,6 +888,8 @@ class OSSProviderPool(Base):
     default_storage_class = Column(String, nullable=True)
     retention_days = Column(Integer, nullable=True)
     force_path_style = Column(Boolean, default=False)
+    # Grsai dashboard repository id (oss-id) when this pool is the direct-write target.
+    grsai_oss_id = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(String, default=now_bj_iso)
     updated_at = Column(String, default=now_bj_iso)
