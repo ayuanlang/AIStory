@@ -371,7 +371,6 @@ def _character_label_style(record_text: str, field_name: str, base_text: str = "
 
 
 _NAMEPLATE_STYLE_KEYS = ("字体", "样式", "字色", "字级", "出字")
-_NAMEPLATE_BURN_TOKENS = {"烧制", "后期烧录", "烧录"}
 
 
 def _parse_nameplate_style_text(raw: str) -> Dict[str, str]:
@@ -390,8 +389,8 @@ def _parse_nameplate_style_text(raw: str) -> Dict[str, str]:
         return {}
     found.setdefault("样式", "无衬细字")
     found.setdefault("字级", "中")
-    mode = found.get("出字") or "模型直出"
-    found["出字"] = "烧制" if mode in _NAMEPLATE_BURN_TOKENS else "模型直出"
+    mode = found.get("出字") or ""
+    found["出字"] = "模型直出" if mode == "模型直出" else "烧制"
     return found
 
 
@@ -670,7 +669,8 @@ def build_scene_entity_token_brief(
         "复用场景（复用=是｜来源=项目库|上集|本集）禁止打环境名牌，回切已见空间也不打。"
         "未列入【本场环境名牌】的主环境禁止打。同主切角/仅状态衍生不打。"
         "挂入戏起笔（新环境落定后、角色主动作前）；不算动作；禁挂建置、禁画幅底部。"
-        "出字从【名牌展现】抄，角色与环境同一套。未写默认模型直出。"
+        "出字从【名牌展现】抄，角色与环境同一套。未写默认烧制。未点名也写烧制。"
+        "只有已经写成出字=模型直出才进视频。"
         "【名牌标签】是可抽取的名牌行：种类=角色|环境|道具，对象、主标、副标、落位、字体、样式、字色、字级、出字、上屏、进视频都在这一行。"
         "主标是前标签，副标是后标签，两键都要在。副标为无就写无。"
         "文戏把上屏=待落或首见的行抄进【名牌前后标签】。上屏=已过|无不打。"
@@ -701,7 +701,7 @@ def build_scene_entity_token_brief(
             "落位仍是角色在人物下方、环境在顶部中央、道具在该件下方。"
             "禁止按场、按人另选书体、样式、字色或出字。"
         )
-    output_mode = presentation["出字"] if presentation else "模型直出"
+    output_mode = presentation["出字"] if presentation else "烧制"
     enters_video = "否" if output_mode in {"烧制", "后期烧录"} else "是"
     scene_char_names = set(cast_names.get("characters") or [])
     voice_rows = []
@@ -860,7 +860,8 @@ def build_scene_entity_token_brief(
         body = (
             f"{body}\n\n【名牌标签】\n"
             + "\n".join(plate_rows)
-            + "\n这一块供抽取。上屏=待落或首见才抄进【名牌前后标签】。出字=模型直出则进视频=是，由视频模型画字。"
+            + "\n这一块供抽取。上屏=待落或首见才抄进【名牌前后标签】。未写和未点名按烧制，进视频=否。"
+            "出字=模型直出则进视频=是，由视频模型画字。"
             "出字=烧制则进视频=否，名牌出字=后期烧录，前后标签不进视频提示词。"
         )
     return wrap_injection_section("本场角色道具白名单", body)

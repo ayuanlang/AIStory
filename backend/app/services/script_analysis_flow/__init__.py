@@ -3044,26 +3044,6 @@ def mark_storyboard_generation_applied(
                 "with_shots": with_shots,
             },
         )
-    else:
-        progress = 0.0
-        if scene_count > 0:
-            progress = min(99.0, max(5.0, (with_shots / scene_count) * 100.0))
-        upsert_pipeline_node_status(
-            db,
-            project_id=pid,
-            episode_id=eid,
-            script_id=script_id,
-            node_name="storyboard_generation",
-            status="running",
-            progress_percent=progress,
-            runtime_meta={
-                **meta,
-                "business_event": "started",
-                "business_reason": "分镜尚未齐套",
-                "scene_count": scene_count,
-                "with_shots": with_shots,
-            },
-        )
 
 
 def mark_storyboard_generation_started(
@@ -3126,32 +3106,6 @@ def mark_storyboard_generation_started(
         error_message=None,
         runtime_meta=meta,
     )
-    try:
-        coverage = _episode_workspace_storyboard_coverage(db, eid)
-    except Exception:
-        coverage = {"ok": False, "scene_count": 0, "with_shots": 0}
-    if not coverage.get("ok"):
-        scene_count = int(coverage.get("scene_count") or 0)
-        with_shots = int(coverage.get("with_shots") or 0)
-        progress = 15.0
-        if scene_count > 0:
-            progress = min(99.0, max(15.0, (with_shots / scene_count) * 100.0))
-        upsert_pipeline_node_status(
-            db,
-            project_id=pid,
-            episode_id=eid,
-            script_id=script_id,
-            node_name="storyboard_generation",
-            status="running",
-            progress_percent=progress,
-            error_code=None,
-            error_message=None,
-            runtime_meta={
-                **meta,
-                "scene_count": scene_count,
-                "with_shots": with_shots,
-            },
-        )
 
 
 def mark_storyboard_generation_failed(

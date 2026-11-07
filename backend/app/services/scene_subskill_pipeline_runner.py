@@ -1341,6 +1341,125 @@ def _framing_has_plan_and_extract(source: str) -> bool:
     return has_plan and has_extract
 
 
+_FRONT_SHOT_DEGREE = {"南": "0", "西": "90", "北": "180", "东": "270"}
+_FRONT_SHOT_METHOD_RE = re.compile(r"拍法\s*[=＝]\s*(正面|过肩|侧面|背面|双人同框)")
+_FRONT_ENV_DEGREE_RE = re.compile(r"当前环境\s*[=＝]\s*(?:ENV:\s*\[)?(\d+)\s*度")
+_FRONT_COMPASS_RE = re.compile(r"罗盘朝向\s*[=＝]\s*(东|南|西|北)")
+_FRONT_LEAD_RE = re.compile(r"主拍对象\s*[=＝]\s*CHAR:\[@([^\]]+)\]")
+
+
+def _compass_for_front_lead(text: str, lead: str) -> str:
+    """Opening compass of the lead only. A neighbor's facing is not guessed."""
+    token = f"CHAR:[@{lead}]"
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if token not in line:
+            continue
+        found = _FRONT_COMPASS_RE.search(line)
+        if found:
+            return found.group(1)
+        for follow in lines[index + 1 : index + 4]:
+            if "CHAR:[@" in follow and token not in follow:
+                break
+            found = _FRONT_COMPASS_RE.search(follow)
+            if found:
+                return found.group(1)
+    return ""
+
+
+def _front_degree_mismatch(body: str) -> str:
+    """Front and over-shoulder shots must look toward the lead's back.
+
+    South faces 0, west faces 90, north faces 180, east faces 270.
+    Side, back, and two-shots are left alone. A missing compass is not guessed.
+    """
+    text = str(body or "").replace("＝", "=")
+    env_matches = list(_FRONT_ENV_DEGREE_RE.finditer(text))
+    if not env_matches:
+        return ""
+    env = env_matches[-1]
+    line_start = text.rfind("\n", 0, env.start()) + 1
+    line_end = text.find("\n", env.end())
+    if line_end < 0:
+        line_end = len(text)
+    methods = list(_FRONT_SHOT_METHOD_RE.finditer(text[line_start:line_end]))
+    if not methods:
+        methods = list(_FRONT_SHOT_METHOD_RE.finditer(text))
+    if not methods or methods[-1].group(1) not in {"正面", "过肩"}:
+        return ""
+    leads = list(_FRONT_LEAD_RE.finditer(text))
+    if leads:
+        facing = _compass_for_front_lead(text, leads[-1].group(1))
+    else:
+        compasses = list(_FRONT_COMPASS_RE.finditer(text))
+        facing = compasses[0].group(1) if len(compasses) == 1 else ""
+    if not facing:
+        return ""
+    degree = env.group(1)
+    if degree == _FRONT_SHOT_DEGREE[facing]:
+        return ""
+    return f"罗盘朝向={facing}当前环境={degree}度"
+
+
+_AXIS_LOOK_DEGREE = {"北": "0", "东": "90", "南": "180", "西": "270"}
+_AXIS_DEGREE_LOOK = {degree: look for look, degree in _AXIS_LOOK_DEGREE.items()}
+_AXIS_LOOK_CAMERA = {"北": "南", "东": "西", "南": "北", "西": "东"}
+_AXIS_LOOK_RE = re.compile(r"望\s*[=＝]\s*(东|南|西|北)")
+_AXIS_CAMERA_RE = re.compile(r"机位侧\s*[=＝]\s*(东|南|西|北)")
+
+
+def _line_around(text: str, index: int) -> str:
+    line_start = text.rfind("\n", 0, index) + 1
+    line_end = text.find("\n", index)
+    if line_end < 0:
+        line_end = len(text)
+    return text[line_start:line_end]
+
+
+def _last_captured(pattern: re.Pattern, text: str) -> str:
+    found = list(pattern.finditer(text))
+    return found[-1].group(1) if found else ""
+
+
+def _axis_degree_mismatch(body: str) -> str:
+    """Look direction, camera side, and the environment degree are one axis.
+
+    North is 0 and the camera stands south. East is 90 and the camera stands west.
+    South is 180 and the camera stands north. West is 270 and the camera stands east.
+    A missing look or camera side is not guessed.
+    """
+    text = str(body or "").replace("＝", "=")
+    env_matches = list(_FRONT_ENV_DEGREE_RE.finditer(text))
+    if not env_matches:
+        return ""
+    env = env_matches[-1]
+    line = _line_around(text, env.start())
+    degree = env.group(1)
+    look = _last_captured(_AXIS_LOOK_RE, line) or _last_captured(_AXIS_LOOK_RE, text)
+    if look and _AXIS_LOOK_DEGREE[look] != degree:
+        return f"望={look}当前环境={degree}度"
+    implied = look or _AXIS_DEGREE_LOOK.get(degree, "")
+    camera = _last_captured(_AXIS_CAMERA_RE, line) or _last_captured(_AXIS_CAMERA_RE, text)
+    if implied and camera and camera != _AXIS_LOOK_CAMERA[implied]:
+        return f"机位侧={camera}望={implied}当前环境={degree}度"
+    return ""
+
+
+_FACE_TO_CAMERA_RE = re.compile(r"正面朝着镜头")
+_FACE_TO_SCREEN_SIDE_RE = re.compile(r"面朝着?画面[左右]")
+
+
+def _front_face_written_to_screen_side(body: str) -> str:
+    """A front-facing face looks at the camera, not at screen left or screen right."""
+    text = re.sub(r"眼睛看着画面[左右][^，。；\n]*", "", str(body or ""))
+    for sentence in re.split(r"[。\n]", text):
+        if _FACE_TO_CAMERA_RE.search(sentence) and (
+            side := _FACE_TO_SCREEN_SIDE_RE.search(sentence)
+        ):
+            return side.group(0)
+    return ""
+
+
 def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> str:
     """Hard gate: staging must not start unless framing output is extractable.
 
@@ -1373,6 +1492,26 @@ def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> s
         raise HTTPException(
             status_code=422,
             detail=f"STAGING_BLOCKED_ILLEGAL_DERIVED_ENV:{sid}",
+        )
+    degree_mismatches = [
+        f"{beat_id}:{reason}"
+        for beat_id, body in _iter_beat_bodies(source)
+        if (reason := _front_degree_mismatch(body))
+    ]
+    if degree_mismatches:
+        raise HTTPException(
+            status_code=422,
+            detail=f"STAGING_BLOCKED_FRONT_DEGREE:{sid}:{','.join(degree_mismatches)}",
+        )
+    axis_mismatches = [
+        f"{beat_id}:{reason}"
+        for beat_id, body in _iter_beat_bodies(source)
+        if (reason := _axis_degree_mismatch(body))
+    ]
+    if axis_mismatches:
+        raise HTTPException(
+            status_code=422,
+            detail=f"STAGING_BLOCKED_LOOK_DEGREE:{sid}:{','.join(axis_mismatches)}",
         )
     return source
 
@@ -1489,6 +1628,17 @@ def assert_staging_output_complete(text: str, scene_id: str = "") -> str:
     sid = str(scene_id or "").strip() or "-"
     if "【建置】" not in body or "【入戏】" not in body:
         raise HTTPException(status_code=422, detail=f"STAGING_OUTPUT_INCOMPLETE:{sid}")
+    face_chunks = _iter_beat_bodies(body) or [("-", body)]
+    face_mismatches = [
+        f"{beat_id}:{reason}"
+        for beat_id, chunk in face_chunks
+        if (reason := _front_face_written_to_screen_side(chunk))
+    ]
+    if face_mismatches:
+        raise HTTPException(
+            status_code=422,
+            detail=f"STAGING_BLOCKED_FRONT_FACE:{sid}:{','.join(face_mismatches)}",
+        )
     return body
 
 
@@ -2041,6 +2191,12 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
         return "场景现场编排已返回，但缺少主体定位或衍生环境提取，不能进入建置与入戏"
     if "STAGING_BLOCKED_ILLEGAL_DERIVED_ENV" in text:
         return "场景现场编排衍生环境名不合法，不能进入建置与入戏"
+    if "STAGING_BLOCKED_FRONT_DEGREE" in text:
+        return "场景现场编排的正脸度数和面朝对不上，不能进入建置与入戏"
+    if "STAGING_BLOCKED_LOOK_DEGREE" in text:
+        return "场景现场编排的望向和当前环境度数对不上，不能进入建置与入戏"
+    if "STAGING_BLOCKED_FRONT_FACE" in text:
+        return "建置把正脸写成了面朝画面左或画面右，不能进入分镜"
     if "STAGING_OUTPUT_INCOMPLETE" in text:
         return "建置与入戏未完整返回，已中断，未进入分镜"
     if "STAGING_BLOCKED_FRAMING" in text:

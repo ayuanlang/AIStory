@@ -363,10 +363,9 @@ def test_mark_storyboard_generation_applied_demotes_episode_when_coverage_incomp
         scene=SimpleNamespace(id=11, scene_no="EP01_SC02"),
         shot_count=8,
     )
-    assert [row.get("scene_id") for row in calls] == ["EP01_SC02", None]
+    assert [row.get("scene_id") for row in calls] == ["EP01_SC02"]
     assert calls[0]["status"] == "success"
-    assert calls[1]["status"] == "running"
-    assert calls[1]["runtime_meta"]["business_event"] == "started"
+    assert calls[0]["runtime_meta"]["business_event"] == "applied_from_workspace"
 
 
 def test_mark_storyboard_generation_applied_accepts_frontend_scene_marker(monkeypatch):
@@ -446,7 +445,7 @@ def test_mark_storyboard_generation_applied_keeps_positive_shot_count_when_repor
     assert calls[0]["runtime_meta"]["shot_count"] == 6
 
 
-def test_mark_storyboard_generation_started_writes_scene_and_episode_running(monkeypatch):
+def test_mark_storyboard_generation_started_writes_scene_running_only(monkeypatch):
     from types import SimpleNamespace
     from app.services import script_analysis_flow as flow
 
@@ -468,9 +467,9 @@ def test_mark_storyboard_generation_started_writes_scene_and_episode_running(mon
         episode_id=3,
         scene_marker="EP01_SC02",
     )
-    assert [row.get("scene_id") for row in calls] == ["EP01_SC02", None]
-    assert all(row["status"] == "running" for row in calls)
-    assert all(row["node_name"] == "storyboard_generation" for row in calls)
+    assert [row.get("scene_id") for row in calls] == ["EP01_SC02"]
+    assert calls[0]["status"] == "running"
+    assert calls[0]["node_name"] == "storyboard_generation"
 
 
 def test_reset_storyboard_generation_nodes_queues_existing_and_episode(monkeypatch):

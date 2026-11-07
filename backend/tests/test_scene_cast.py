@@ -85,7 +85,7 @@ def test_build_scene_entity_token_brief():
     assert "名牌出字=后期烧录" in brief
     assert "【名牌标签】" in brief
     assert "种类=角色｜对象=CHAR:[@沈青]｜主标=沈青｜副标=江湖侠客｜" in brief
-    assert "出字=模型直出｜上屏=待落" in brief
+    assert "出字=烧制｜上屏=待落｜进视频=否" in brief
     assert "进视频=是" in brief
     assert "【名牌前后标签】" in brief
     assert "不是对白硬字幕" in brief
@@ -538,7 +538,7 @@ def test_uncommon_and_promo_props_get_nameplates_like_characters():
     later = second.split("\n【名牌标签】\n", 1)[-1]
     assert "种类=道具｜对象=PROP:[玄铁剑]｜主标=玄铁剑｜副标=法器｜落位=道具下方｜" in plates
     assert "种类=道具｜对象=PROP:[清露]｜主标=清露｜副标=饮品｜落位=道具下方｜" in plates
-    assert "出字=模型直出｜上屏=待落" in plates
+    assert "出字=烧制｜上屏=待落｜进视频=否" in plates
     assert "对象=PROP:[银打火机]" not in plates
     broken = plates.split("PROP:[玄铁剑_折断态]", 1)[1].split("\n", 1)[0]
     assert "上屏=无" in broken

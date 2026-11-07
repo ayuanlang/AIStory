@@ -1272,6 +1272,128 @@ def test_staging_gate_uses_rewritten_beat_lock():
     assert "【取景锁定】当前环境=0度客栈大堂" in ready
 
 
+def test_front_shot_degree_must_follow_the_back():
+    from fastapi import HTTPException
+    from app.services.scene_subskill_pipeline_runner import (
+        assert_derived_framing_ready_for_staging,
+    )
+
+    def framed(body: str) -> str:
+        return (
+            "[BEAT_START:1]\n"
+            "【角色道具世界分布图】\n"
+            f"{body}\n"
+            "[BEAT_END:1]\n"
+            "[DERIVED_ENV_EXTRACT_START]\n"
+            "[DERIVED_ENV] 名称=0度总裁办公室｜所属主环境=总裁办公室｜view_angle_from_main=0\n"
+            "[DERIVED_ENV_EXTRACT_END]\n"
+        )
+
+    wrong = framed(
+        "CHAR:[@顾沉舟]｜罗盘朝向=南\n"
+        "拍法=正面｜主拍对象=CHAR:[@顾沉舟]｜当前环境=90度总裁办公室｜景别=MCU"
+    )
+    try:
+        assert_derived_framing_ready_for_staging(wrong, "EP01_SC01")
+        raise AssertionError("expected front degree to block staging")
+    except HTTPException as exc:
+        assert "STAGING_BLOCKED_FRONT_DEGREE" in str(exc.detail)
+        assert "罗盘朝向=南当前环境=90度" in str(exc.detail)
+
+    south_front = framed(
+        "CHAR:[@顾沉舟]｜罗盘朝向=南\n"
+        "拍法=正面｜主拍对象=CHAR:[@顾沉舟]｜当前环境=0度总裁办公室｜景别=MCU"
+    )
+    assert "0度总裁办公室" in assert_derived_framing_ready_for_staging(
+        south_front, "EP01_SC01"
+    )
+    west_front = framed(
+        "CHAR:[@顾沉舟]｜罗盘朝向=西\n"
+        "拍法=正面｜主拍对象=CHAR:[@顾沉舟]｜当前环境=ENV:[90度总裁办公室]｜景别=MCU"
+    )
+    assert_derived_framing_ready_for_staging(west_front, "EP01_SC01")
+    missing_compass = framed(
+        "拍法=正面｜主拍对象=CHAR:[@顾沉舟]｜当前环境=90度总裁办公室｜景别=MCU"
+    )
+    assert_derived_framing_ready_for_staging(missing_compass, "EP01_SC01")
+    side_shot = framed(
+        "CHAR:[@顾沉舟]｜罗盘朝向=南\n"
+        "拍法=侧面｜主拍对象=CHAR:[@顾沉舟]｜当前环境=90度总裁办公室｜景别=MCU"
+    )
+    assert_derived_framing_ready_for_staging(side_shot, "EP01_SC01")
+    two_shot = framed(
+        "CHAR:[@顾沉舟]｜罗盘朝向=南\n"
+        "拍法=双人同框｜主拍对象=CHAR:[@顾沉舟]｜当前环境=90度总裁办公室｜景别=MCU"
+    )
+    assert_derived_framing_ready_for_staging(two_shot, "EP01_SC01")
+    two_people = framed(
+        "CHAR:[@甲]｜罗盘朝向=南\n"
+        "CHAR:[@顾沉舟]｜罗盘朝向=西\n"
+        "拍法=过肩｜主拍对象=CHAR:[@顾沉舟]｜当前环境=90度总裁办公室｜景别=MCU"
+    )
+    assert_derived_framing_ready_for_staging(two_people, "EP01_SC01")
+    over_shoulder = framed(
+        "CHAR:[@顾沉舟]\n"
+        "罗盘朝向=东\n"
+        "拍法=过肩｜主拍对象=CHAR:[@顾沉舟]｜当前环境=90度总裁办公室｜景别=MCU"
+    )
+    try:
+        assert_derived_framing_ready_for_staging(over_shoulder, "EP01_SC01")
+        raise AssertionError("expected over-shoulder degree to block staging")
+    except HTTPException as exc:
+        assert "罗盘朝向=东当前环境=90度" in str(exc.detail)
+    look_mismatch = framed(
+        "CHAR:[@顾沉舟]｜罗盘朝向=南｜座朝向=南\n"
+        "拍法=侧面｜望=北｜机位侧=南｜当前环境=90度总裁办公室｜景别=MCU"
+    )
+    try:
+        assert_derived_framing_ready_for_staging(look_mismatch, "EP01_SC01")
+        raise AssertionError("expected look and degree to block staging")
+    except HTTPException as exc:
+        assert "STAGING_BLOCKED_LOOK_DEGREE" in str(exc.detail)
+        assert "望=北当前环境=90度" in str(exc.detail)
+    camera_mismatch = framed(
+        "CHAR:[@顾沉舟]｜罗盘朝向=西\n"
+        "拍法=正面｜望=东｜机位侧=南｜主拍对象=CHAR:[@顾沉舟]｜"
+        "当前环境=90度总裁办公室｜景别=MCU"
+    )
+    try:
+        assert_derived_framing_ready_for_staging(camera_mismatch, "EP01_SC01")
+        raise AssertionError("expected camera side to block staging")
+    except HTTPException as exc:
+        assert "机位侧=南望=东当前环境=90度" in str(exc.detail)
+    aligned = framed(
+        "CHAR:[@顾沉舟]｜罗盘朝向=西｜座朝向=西\n"
+        "拍法=正面｜望=东｜机位侧=西｜主拍对象=CHAR:[@顾沉舟]｜"
+        "当前环境=90度总裁办公室｜景别=MCU"
+    )
+    assert_derived_framing_ready_for_staging(aligned, "EP01_SC01")
+
+
+def test_front_face_cannot_also_point_screen_side():
+    from fastapi import HTTPException
+    from app.services.scene_subskill_pipeline_runner import assert_staging_output_complete
+
+    contradicted = (
+        "【建置】\n【入戏】\n"
+        "[BEAT_START:1]\n"
+        "CHAR:[@顾沉舟] 正面朝着镜头，面朝着画面左边。\n"
+        "[BEAT_END:1]\n"
+    )
+    try:
+        assert_staging_output_complete(contradicted, "EP01_SC01")
+        raise AssertionError("expected front face toward screen left to block")
+    except HTTPException as exc:
+        assert "STAGING_BLOCKED_FRONT_FACE" in str(exc.detail)
+    gaze_only = (
+        "【建置】\n【入戏】\n"
+        "[BEAT_START:1]\n"
+        "CHAR:[@顾沉舟] 正面朝着镜头，眼睛看着画面左边的书架。\n"
+        "[BEAT_END:1]\n"
+    )
+    assert "眼睛看着画面左边" in assert_staging_output_complete(gaze_only, "EP01_SC01")
+
+
 def test_extract_keeps_framing_payload_after_scene_end():
     from app.services.scene_subskill_pipeline_runner import (
         _extract_single_scene_block,

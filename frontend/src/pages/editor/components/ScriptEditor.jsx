@@ -929,7 +929,10 @@ const storyboardProgressToNodeStatus = (itemStatus) => {
 };
 
 /** Drop leftover storyboard success that this run has not completed. Keep this-run persist. */
-const filterLeftoverStoryboardPipelineNodes = (nodes, progress) => {
+const filterLeftoverStoryboardPipelineNodes = (nodes, progress, {
+    sceneScope = null,
+    episodePrefix = 'EP01',
+} = {}) => {
     const list = Array.isArray(nodes) ? nodes : [];
     const normalized = normalizeStoryboardTaskProgress(progress);
     const items = Object.values(normalized.items || {});
@@ -942,6 +945,7 @@ const filterLeftoverStoryboardPipelineNodes = (nodes, progress) => {
         const status = String(node?.status || '').trim().toLowerCase();
         if (!['success', 'warning'].includes(status)) return true;
         const sceneId = String(node?.scene_id || '').trim();
+        if (sceneId && !storyboardNodeInSceneScope(sceneId, sceneScope, episodePrefix)) return true;
         if (!sceneId) return allThisRunCompleted;
         const item = findStoryboardProgressItem(normalized, sceneId);
         const itemStatus = String(item?.status || '').toLowerCase();
@@ -1039,8 +1043,18 @@ const applyStoryboardProgressToNode = (node, item) => {
     };
 };
 
+const storyboardNodeInSceneScope = (sceneId, sceneScope, episodePrefix = 'EP01') => {
+    if (!(sceneScope instanceof Set) || sceneScope.size <= 0) return true;
+    const id = String(sceneId || '').trim();
+    if (!id) return false;
+    return isSceneIdInAllowlist(id, sceneScope, episodePrefix);
+};
+
 /** Frontend owns shot generation — map local progress onto leftover backend placeholders. */
-const overlayStoryboardPipelineNodesFromProgress = (nodes, progress) => {
+const overlayStoryboardPipelineNodesFromProgress = (nodes, progress, {
+    sceneScope = null,
+    episodePrefix = 'EP01',
+} = {}) => {
     const list = Array.isArray(nodes) ? nodes : [];
     const normalized = normalizeStoryboardTaskProgress(progress);
     let changed = false;
@@ -1051,6 +1065,7 @@ const overlayStoryboardPipelineNodesFromProgress = (nodes, progress) => {
         if (['canceled', 'blocked'].includes(current)) return node;
         const sceneId = String(node?.scene_id || '').trim();
         if (sceneId) {
+            if (!storyboardNodeInSceneScope(sceneId, sceneScope, episodePrefix)) return node;
             seenIdentities.add(storyboardProgressIdentityKey(sceneId, node));
             const item = findStoryboardProgressItem(normalized, sceneId, {
                 sceneOrder: deriveSceneOrderFromSceneId(sceneId),
@@ -1078,9 +1093,9 @@ const overlayStoryboardPipelineNodesFromProgress = (nodes, progress) => {
         const running = Number(normalized.running || 0);
         const waiting = Number(normalized.waiting || 0);
         const finished = Number(normalized.completed || 0) + Number(normalized.failed || 0);
-        // No scene_id: this row is shared by the episode. One scene's in-flight
-        // storyboard must not flip it to running, or every reader of the shared
-        // node looks like the other 分场 started too.
+        // No scene_id: this row is shared by the episode. A single-scene rerun
+        // must not rewrite it, and one scene in flight must not mark it running.
+        if (sceneScope instanceof Set && sceneScope.size > 0) return node;
         if (started > 0 && running <= 0 && waiting <= 0 && finished >= started) {
             const nextStatus = Number(normalized.failed || 0) > 0 ? 'warning' : 'success';
             if (current !== nextStatus) {
@@ -1097,6 +1112,7 @@ const overlayStoryboardPipelineNodesFromProgress = (nodes, progress) => {
         if (seenIdentities.has(identity)) return;
         const sceneId = String(item?.markerSceneId || marker || '').trim();
         if (!sceneId) return;
+        if (!storyboardNodeInSceneScope(sceneId, sceneScope, episodePrefix)) return;
         changed = true;
         seenIdentities.add(identity);
         next.push(applyStoryboardProgressToNode({
@@ -1113,10 +1129,15 @@ const overlayStoryboardPipelineNodesFromProgress = (nodes, progress) => {
     return changed ? next : list;
 };
 
-const applyThisRunStoryboardPipelineNodes = (nodes, progress, { filterLeftover = false } = {}) => {
-    const overlaid = overlayStoryboardPipelineNodesFromProgress(nodes, progress);
+const applyThisRunStoryboardPipelineNodes = (nodes, progress, {
+    filterLeftover = false,
+    sceneScope = null,
+    episodePrefix = 'EP01',
+} = {}) => {
+    const scopeOptions = { sceneScope, episodePrefix };
+    const overlaid = overlayStoryboardPipelineNodesFromProgress(nodes, progress, scopeOptions);
     return filterLeftover
-        ? filterLeftoverStoryboardPipelineNodes(overlaid, progress)
+        ? filterLeftoverStoryboardPipelineNodes(overlaid, progress, scopeOptions)
         : overlaid;
 };
 
@@ -1297,6 +1318,22 @@ const countDistinctScenesInAllowlist = (allowlist) => {
 
 const isSceneIdInAllowlist = (marker, allowlist, episodePrefix = 'EP01') => {
     if (!(allowlist instanceof Set) || allowlist.size <= 0) return true;
+    const markerText = String(marker || '').trim();
+    const markerOrder = deriveSceneOrderFromSceneId(markerText);
+    if (
+        markerText
+        && Number.isFinite(markerOrder) && markerOrder > 0
+        && !sceneIdHasLetterSuffix(markerText)
+    ) {
+        const allowOrders = new Set();
+        for (const raw of allowlist) {
+            const text = String(raw || '').trim();
+            if (!text || sceneIdHasLetterSuffix(text)) continue;
+            const order = deriveSceneOrderFromSceneId(text);
+            if (Number.isFinite(order) && order > 0) allowOrders.add(order);
+        }
+        if (allowOrders.size > 0 && !allowOrders.has(markerOrder)) return false;
+    }
     const expanded = expandSceneIdAllowlist(allowlist, episodePrefix);
     const candidates = expandSceneIdAllowlist([marker], episodePrefix);
     for (const id of candidates) {
@@ -4819,6 +4856,25 @@ const takeTaggedExtractInner = (text, tag) => {
     return source.slice(afterStart, endMatch.index).trim();
 };
 
+// Environment planning often carries the script it was given, including the
+// extract block from that moment. Asset generation must not read that copy
+// ahead of the scene_split block the editor actually saves.
+const stripTaggedExtractBlocks = (text) => {
+    let out = String(text || '');
+    ['CHAR', 'PROP'].forEach((tag) => {
+        const startRe = new RegExp(`\\[${tag}_EXTRACT_START[^\\]]*\\]`, 'i');
+        const endRe = new RegExp(`\\[${tag}_EXTRACT_END[^\\]]*\\]`, 'i');
+        const startMatch = startRe.exec(out);
+        if (!startMatch) return;
+        const afterStart = startMatch.index + startMatch[0].length;
+        endRe.lastIndex = afterStart;
+        const endMatch = endRe.exec(out);
+        if (!endMatch) return;
+        out = `${out.slice(0, startMatch.index)}${out.slice(endMatch.index + endMatch[0].length)}`;
+    });
+    return out.replace(/\n{3,}/g, '\n\n').trim();
+};
+
 const nextTaggedExtractItemEnd = (source, fromIndex, tag) => {
     const text = String(source || '');
     if (!text || fromIndex >= text.length) return text.length;
@@ -5000,6 +5056,16 @@ const resolveCategoryAssetBriefText = (sourceText, category) => {
     if (key === 'characters') return takeTaggedExtractBlock(source, 'CHAR') || source;
     if (key === 'props') return takeTaggedExtractBlock(source, 'PROP') || source;
     return source;
+};
+
+// A completed edit is the saved slot that matches the live ref. The pin only
+// covers a node result that has not landed in that pair yet.
+const preferFreshStage1Slot = (saved, live, pinned) => {
+    const savedText = String(saved || '').trim();
+    const liveText = String(live || '').trim();
+    const pinnedText = String(pinned || '').trim();
+    if (savedText && liveText && savedText === liveText) return savedText;
+    return pinnedText || liveText || savedText;
 };
 
 // Prop / character editor shows the saved scene_split. The in-memory ref is only a gap-fill.
@@ -7140,6 +7206,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!slotKey || !value) return;
         latestStage1NodeOutputsRef.current = {
             ...(latestStage1NodeOutputsRef.current || {}),
+            [slotKey]: value,
+        };
+        pinnedStage1NodeOutputsRef.current = {
+            ...(pinnedStage1NodeOutputsRef.current && typeof pinnedStage1NodeOutputsRef.current === 'object'
+                ? pinnedStage1NodeOutputsRef.current
+                : {}),
             [slotKey]: value,
         };
         setPinnedStage1NodeOutputs((prev) => {
@@ -11674,7 +11746,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const overlaidNodes = applyThisRunStoryboardPipelineNodes(
             diagnosticsPipelineNodesRef.current,
             nextProgress,
-            { filterLeftover: Boolean(analysisTrustLiveDownstreamOnlyRef.current) },
+            {
+                filterLeftover: Boolean(analysisTrustLiveDownstreamOnlyRef.current),
+                sceneScope: storyboardSingleRerunScopeRef.current,
+                episodePrefix: resolveEpisodeSceneIdPrefix(activeEpisode),
+            },
         );
         if (overlaidNodes !== diagnosticsPipelineNodesRef.current) {
             diagnosticsPipelineNodesRef.current = overlaidNodes;
@@ -12851,6 +12927,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const sceneId = String(node?.scene_id || '').trim();
             if (!sceneId) continue;
             const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+            const rerunScope = storyboardSingleRerunScopeRef.current;
+            if (
+                rerunScope instanceof Set
+                && rerunScope.size > 0
+                && !isSceneIdInAllowlist(sceneId, rerunScope, episodePrefix)
+            ) {
+                continue;
+            }
             const canonical = orchestrationCanonicalSceneIdsRef.current;
             const liveImported = orchestrationLiveImportedScenesRef.current;
             const allowlistActive = (
@@ -12988,9 +13072,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
             });
         }
-        const queued = Array.isArray(pendingStoryboardKickoffsRef.current)
+        const queuedAll = Array.isArray(pendingStoryboardKickoffsRef.current)
             ? pendingStoryboardKickoffsRef.current.splice(0)
             : [];
+        const heldOutsideRerun = [];
+        const queued = [];
+        const flushScope = storyboardSingleRerunScopeRef.current;
+        const flushPrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+        queuedAll.forEach((item) => {
+            const marker = String(item?.markerSceneId || '').trim();
+            if (
+                flushScope instanceof Set
+                && flushScope.size > 0
+                && marker
+                && !isSceneIdInAllowlist(marker, flushScope, flushPrefix)
+            ) {
+                heldOutsideRerun.push(item);
+                return;
+            }
+            queued.push(item);
+        });
+        if (heldOutsideRerun.length) {
+            pendingStoryboardKickoffsRef.current = heldOutsideRerun.concat(
+                pendingStoryboardKickoffsRef.current || []
+            );
+        }
         if (!queued.length) return { started: 0, total: 0, reason };
         let started = 0;
         const dropStaleHint = /stranded|env-ready|env-subtask|failed-route|retry/i.test(String(reason || ''));
@@ -13062,6 +13168,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const enqueue = (markerSceneId, dbSceneIdHint = null) => {
             const rawMarker = String(markerSceneId || '').trim();
             if (!rawMarker) return;
+            const rerunScope = storyboardSingleRerunScopeRef.current;
+            if (rerunScope instanceof Set && rerunScope.size > 0) {
+                const scopePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+                if (!isSceneIdInAllowlist(rawMarker, rerunScope, scopePrefix)) return;
+            }
             const marker = canonicalizeSceneUnitId(
                 rawMarker,
                 deriveSceneOrderFromSceneId(rawMarker),
@@ -13246,14 +13357,36 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ensureResidual = true,
         scopedRerun = false,
     } = {}) => {
+        const markerInActiveStoryboardRerun = (marker) => {
+            const scope = storyboardSingleRerunScopeRef.current;
+            if (!(scope instanceof Set) || scope.size <= 0) return true;
+            return isSceneIdInAllowlist(
+                String(marker || '').trim(),
+                scope,
+                resolveEpisodeSceneIdPrefix(activeEpisode)
+            );
+        };
+        const progressForWait = () => {
+            const progress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
+            const scope = storyboardSingleRerunScopeRef.current;
+            if (!(scope instanceof Set) || scope.size <= 0) return progress;
+            const items = {};
+            Object.entries(progress.items || {}).forEach(([marker, item]) => {
+                if (markerInActiveStoryboardRerun(marker)) items[marker] = item;
+            });
+            return normalizeStoryboardTaskProgress({ items });
+        };
         const pendingQueueCount = () => (
             Array.isArray(pendingStoryboardKickoffsRef.current)
-                ? pendingStoryboardKickoffsRef.current.length
+                ? pendingStoryboardKickoffsRef.current.filter((item) => (
+                    markerInActiveStoryboardRerun(item?.markerSceneId)
+                )).length
                 : 0
         );
         const strandedWaitingEnvCount = () => {
             const items = storyboardTaskProgressRef.current?.items || {};
-            return Object.values(items).filter((item) => {
+            return Object.entries(items).filter(([marker, item]) => {
+                if (!markerInActiveStoryboardRerun(marker)) return false;
                 const status = String(item?.status || '').trim().toLowerCase();
                 if (isStoryboardWaitingStatus(status)) return true;
                 return status === 'failed' && isStoryboardRetryableKickoffError(item?.error);
@@ -13276,6 +13409,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let count = 0;
             const items = storyboardTaskProgressRef.current?.items || {};
             for (const marker of storyboardKickoffByMarkerRef.current || []) {
+                if (!markerInActiveStoryboardRerun(marker)) continue;
                 if (storyboardKickoffPromisesRef.current?.has(marker)) continue;
                 const status = String(items[marker]?.status || '').trim().toLowerCase();
                 if (status === 'completed' || status === 'failed') continue;
@@ -13398,7 +13532,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         const publishWaitingStatus = () => {
-            const progress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
+            const progress = progressForWait();
             const waiting = Number(progress.waiting || 0);
             const queued = pendingQueueCount();
             setAnalysisFlowStatus({
@@ -13431,7 +13565,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             'process'
         );
 
-        const pending = Array.from(storyboardKickoffPromisesRef.current?.values() || []);
+        const pending = Array.from(storyboardKickoffPromisesRef.current?.entries() || [])
+            .filter(([marker]) => markerInActiveStoryboardRerun(marker))
+            .map(([, promise]) => promise);
         if (pending.length > 0) {
             await Promise.allSettled(pending);
         }
@@ -13507,8 +13643,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            const progress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
-            const promiseCount = storyboardKickoffPromisesRef.current?.size || 0;
+            const progress = progressForWait();
+            const promiseCount = [...(storyboardKickoffPromisesRef.current?.keys() || [])]
+                .filter((marker) => markerInActiveStoryboardRerun(marker))
+                .length;
             const queued = pendingQueueCount();
             const missingExpected = missingExpectedStoryboardCount();
             if (ensureResidual && missingExpected > 0) {
@@ -13619,8 +13757,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ],
                     expectedSceneCount: expectedStoryboardSceneCount(),
                 });
-                if (coverage.ok) {
+                const singleSceneRerun = storyboardSingleRerunScopeRef.current instanceof Set
+                    && storyboardSingleRerunScopeRef.current.size > 0;
+                if (coverage.ok && !singleSceneRerun) {
                     Object.entries(storyboardTaskProgressRef.current?.items || {}).forEach(([marker, item]) => {
+                        if (!markerInActiveStoryboardRerun(marker)) return;
                         const status = String(item?.status || '').trim().toLowerCase();
                         if (!['starting', 'generating', 'importing', 'waiting_env', 'waiting_import'].includes(status)) {
                             return;
@@ -13654,7 +13795,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 publishWaitingStatus();
             }
             if (promiseCount > 0) {
-                await Promise.allSettled(Array.from(storyboardKickoffPromisesRef.current.values()));
+                await Promise.allSettled(
+                    Array.from(storyboardKickoffPromisesRef.current?.entries() || [])
+                        .filter(([marker]) => markerInActiveStoryboardRerun(marker))
+                        .map(([, promise]) => promise)
+                );
                 continue;
             }
             await new Promise((resolve) => setTimeout(resolve, pollMs));
@@ -13665,7 +13810,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const leftoverItems = storyboardTaskProgressRef.current?.items || {};
         Object.entries(leftoverItems).forEach(([marker, item]) => {
             const stableMarker = String(marker || '').trim();
-            if (!stableMarker) return;
+            if (!stableMarker || !markerInActiveStoryboardRerun(stableMarker)) return;
             const leftoverStatus = String(item?.status || '').trim().toLowerCase();
             if (!isStoryboardWaitingStatus(leftoverStatus)) return;
             storyboardKickoffByMarkerRef.current.delete(stableMarker);
@@ -13691,7 +13836,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
         });
 
-        const finalProgress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
+        const finalProgress = progressForWait();
         onLog?.(
             t(
                 `分镜生成等待结束：完成 ${finalProgress.completed}/${finalProgress.started}${finalProgress.failed > 0 ? `，失败 ${finalProgress.failed}` : ''}。`,
@@ -14720,13 +14865,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 ['scene_split', 'environment_plan'].forEach((slotKey) => {
                     const pinned = String(pinnedStage1NodeOutputs?.[slotKey] || '').trim();
-                    if (!pinned) return;
+                    const slot = outputs[slotKey];
+                    const saved = String(
+                        slot && typeof slot === 'object' && !Array.isArray(slot)
+                            ? slot.content
+                            : slot || ''
+                    ).trim();
+                    const chosen = preferFreshStage1Slot(
+                        saved,
+                        latestStage1NodeOutputsRef.current?.[slotKey],
+                        pinned
+                    );
+                    if (!chosen || chosen === saved) return;
                     outputs[slotKey] = {
-                        ...(outputs[slotKey] && typeof outputs[slotKey] === 'object' ? outputs[slotKey] : {}),
+                        ...(slot && typeof slot === 'object' ? slot : {}),
                         key: slotKey,
                         kind: 'markdown',
-                        title: outputs[slotKey]?.title || slotKey,
-                        content: pinned,
+                        title: slot?.title || slotKey,
+                        content: chosen,
                     };
                 });
             }
@@ -15389,7 +15545,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const filteredNodes = applyThisRunStoryboardPipelineNodes(
                 nextNodes,
                 storyboardTaskProgressRef.current,
-                { filterLeftover: Boolean(analysisTrustLiveDownstreamOnlyRef.current) },
+                {
+                    filterLeftover: Boolean(analysisTrustLiveDownstreamOnlyRef.current),
+                    sceneScope: storyboardSingleRerunScopeRef.current,
+                    episodePrefix: resolveEpisodeSceneIdPrefix(activeEpisode),
+                },
             );
             diagnosticsPipelineNodesRef.current = filteredNodes;
             diagnosticsSceneUnitsRef.current = liveUnits;
@@ -16003,16 +16163,41 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 };
             } catch (_) {}
             if (options?.stage1NodeOutputs && typeof options.stage1NodeOutputs === 'object') {
+                const incomingSlots = collectStage1NodeOutputsFromSlotMap(options.stage1NodeOutputs);
+                const liveSlots = collectStage1NodeOutputsFromSlotMap(latestStage1NodeOutputsRef.current);
+                const freshSlots = collectStage1NodeOutputsFromSlotMap(freshStage1Outputs);
+                const accepted = {};
+                Object.entries(incomingSlots).forEach(([key, incomingText]) => {
+                    const incomingValue = String(incomingText || '').trim();
+                    if (!incomingValue) return;
+                    if (key === 'scene_split' || key === 'environment_plan') {
+                        const fresh = String(freshSlots[key] || '').trim();
+                        const live = String(liveSlots[key] || '').trim();
+                        if (fresh && live && fresh === live && incomingValue !== fresh) return;
+                    }
+                    accepted[key] = incomingValue;
+                });
                 mergedNodeOutputs = {
                     ...mergedNodeOutputs,
-                    ...collectStage1NodeOutputsFromSlotMap(options.stage1NodeOutputs),
+                    ...accepted,
                 };
             }
             const pinnedNodes = pinnedStage1NodeOutputsRef.current;
             if (pinnedNodes && typeof pinnedNodes === 'object') {
+                const pinnedSlots = collectStage1NodeOutputsFromSlotMap(pinnedNodes);
+                const liveSlots = collectStage1NodeOutputsFromSlotMap(latestStage1NodeOutputsRef.current);
+                const freshSlots = collectStage1NodeOutputsFromSlotMap(freshStage1Outputs);
+                const pinApply = {};
+                Object.entries(pinnedSlots).forEach(([key, pinnedText]) => {
+                    const fresh = String(freshSlots[key] || '').trim();
+                    const live = String(liveSlots[key] || '').trim();
+                    const pinnedValue = String(pinnedText || '').trim();
+                    if (fresh && live && fresh === live && fresh !== pinnedValue) return;
+                    if (pinnedValue) pinApply[key] = pinnedValue;
+                });
                 mergedNodeOutputs = {
                     ...mergedNodeOutputs,
-                    ...collectStage1NodeOutputsFromSlotMap(pinnedNodes),
+                    ...pinApply,
                 };
             }
             latestStage1NodeOutputsRef.current = mergedNodeOutputs;
@@ -16884,10 +17069,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         stages.stage1 = stage1;
         stageOutputs.stages = stages;
 
-        latestStage1NodeOutputsRef.current = {
-            ...latestStage1NodeOutputsRef.current,
-            scene_split: next,
-        };
+        pinStage1NodeOutput('scene_split', next);
 
         const patchExtractsInText = (text) => {
             let out = String(text || '');
@@ -16961,6 +17143,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         onLog,
         onUpdateEpisodeInfo,
         parseStageOutputsObject,
+        pinStage1NodeOutput,
         t,
     ]);
 
@@ -16997,10 +17180,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         stage1.outputs = outputs;
         stages.stage1 = stage1;
         stageOutputs.stages = stages;
-        latestStage1NodeOutputsRef.current = {
-            ...latestStage1NodeOutputsRef.current,
-            environment_plan: next,
-        };
+        pinStage1NodeOutput('environment_plan', next);
         await onUpdateEpisodeInfo(activeEpisode.id, {
             ai_stage_outputs: JSON.stringify(stageOutputs, null, 2),
         });
@@ -17013,6 +17193,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         onLog,
         onUpdateEpisodeInfo,
         parseStageOutputsObject,
+        pinStage1NodeOutput,
         t,
     ]);
 
@@ -17212,11 +17393,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             const pins = pinnedStage1NodeOutputsRef.current;
             if (pins && typeof pins === 'object') {
-                latestStage1NodeOutputsRef.current = {
-                    ...latestStage1NodeOutputsRef.current,
-                    ...(String(pins.scene_split || '').trim() ? { scene_split: pins.scene_split } : {}),
-                    ...(String(pins.environment_plan || '').trim() ? { environment_plan: pins.environment_plan } : {}),
-                };
+                const next = { ...latestStage1NodeOutputsRef.current };
+                ['scene_split', 'environment_plan'].forEach((key) => {
+                    const pinned = String(pins[key] || '').trim();
+                    if (!pinned) return;
+                    const live = String(next[key] || '').trim();
+                    const saved = String(slots?.[key] || '').trim();
+                    if (live && pinned !== live && saved === live) return;
+                    next[key] = pinned;
+                });
+                latestStage1NodeOutputsRef.current = next;
             }
         };
         const loadClickedStageSlots = async (keys, sceneId = '') => {
@@ -17331,9 +17517,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         if (stableKind === 'char_extract' || stableKind === 'prop_extract') {
             const tag = stableKind === 'char_extract' ? 'CHAR' : 'PROP';
+            const readSceneSplitDraft = () => preferFreshStage1Slot(
+                readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
+                latestStage1NodeOutputsRef.current?.scene_split,
+                pinnedStage1NodeOutputsRef.current?.scene_split,
+            );
             let source = String(
-                pinnedStage1NodeOutputsRef.current?.scene_split
-                || latestStage1NodeOutputsRef.current?.scene_split
+                readSceneSplitDraft()
                 || currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content
                 || activeEpisode?.ai_scene_analysis_result
                 || adaptationText
@@ -17342,8 +17532,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!takeTaggedExtractBlock(source, tag)) {
                 await loadClickedStageSlots(['scene_split']);
                 source = String(
-                    pinnedStage1NodeOutputsRef.current?.scene_split
-                    || latestStage1NodeOutputsRef.current?.scene_split
+                    readSceneSplitDraft()
                     || source
                 ).trim();
             }
@@ -17368,9 +17557,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         if (['scene_split', 'environment_plan', 'scene_subskills'].includes(stableKind)) {
             const readNodeDraft = () => String(
-                pinnedStage1NodeOutputsRef.current?.[stableKind]
-                || latestStage1NodeOutputsRef.current?.[stableKind]
-                || currentStageOutputs?.stages?.stage1?.outputs?.[stableKind]?.content
+                (stableKind === 'scene_split' || stableKind === 'environment_plan')
+                    ? preferFreshStage1Slot(
+                        readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, stableKind),
+                        latestStage1NodeOutputsRef.current?.[stableKind],
+                        pinnedStage1NodeOutputsRef.current?.[stableKind],
+                    )
+                    : (
+                        latestStage1NodeOutputsRef.current?.[stableKind]
+                        || currentStageOutputs?.stages?.stage1?.outputs?.[stableKind]?.content
+                    )
                 || (stableKind === 'scene_subskills' ? resolveScriptOptBeatsContent() : '')
                 || ''
             ).trim();
@@ -17562,8 +17758,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } else if (kind === 'char_extract' || kind === 'prop_extract') {
                 const tag = kind === 'char_extract' ? 'CHAR' : 'PROP';
                 const base = preferEditorSceneSplitText(
-                    pinnedStage1NodeOutputsRef.current?.scene_split
-                    || latestStage1NodeOutputsRef.current?.scene_split,
+                    preferFreshStage1Slot(
+                        readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
+                        latestStage1NodeOutputsRef.current?.scene_split,
+                        pinnedStage1NodeOutputsRef.current?.scene_split,
+                    ),
                     currentStageOutputs?.stages?.stage1?.outputs?.scene_split?.content,
                     activeEpisode?.ai_scene_analysis_result,
                     adaptationText || content
@@ -17600,10 +17799,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 stage1.outputs = outputs;
                 stages.stage1 = stage1;
                 stageOutputs.stages = stages;
-                latestStage1NodeOutputsRef.current = {
-                    ...latestStage1NodeOutputsRef.current,
-                    [kind]: content.trim(),
-                };
+                if (kind === 'scene_split' || kind === 'environment_plan') {
+                    pinStage1NodeOutput(kind, content.trim());
+                } else {
+                    latestStage1NodeOutputsRef.current = {
+                        ...latestStage1NodeOutputsRef.current,
+                        [kind]: content.trim(),
+                    };
+                }
                 await onUpdateEpisodeInfo(activeEpisode.id, {
                     ai_scene_analysis_adaptation: content.trim(),
                     ai_stage_outputs: JSON.stringify(stageOutputs, null, 2),
@@ -17719,6 +17922,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         persistSceneMarkdownPatch,
         persistSceneSplitExtractSource,
         persistSubjectIndexEdit,
+        pinStage1NodeOutput,
         onUpdateEpisodeInfo,
         resolveScriptOptBeatsContent,
         stageArtifactEditModal.content,
@@ -18448,7 +18652,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const nextNodes = applyThisRunStoryboardPipelineNodes(
                     snapshot.pipelineNodes,
                     storyboardTaskProgressRef.current,
-                    { filterLeftover: Boolean(analysisTrustLiveDownstreamOnlyRef.current) },
+                    {
+                        filterLeftover: Boolean(analysisTrustLiveDownstreamOnlyRef.current),
+                        sceneScope: storyboardSingleRerunScopeRef.current,
+                        episodePrefix: resolveEpisodeSceneIdPrefix(activeEpisode),
+                    },
                 );
                 diagnosticsPipelineNodesRef.current = nextNodes;
                 setDiagnosticsPipelineNodes(nextNodes);
@@ -20653,7 +20861,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ? options.targetEntityTypes.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
                     : [];
                 const extractSourceCandidates = [
-                    readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                    preferFreshStage1Slot(
+                        readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                        latestStage1NodeOutputsRef.current?.environment_plan,
+                        pinnedStage1NodeOutputsRef.current?.environment_plan,
+                    ),
                     readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'adapted_script'),
                     readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'raw_text'),
                     activeEpisode?.ai_scene_analysis_adaptation,
@@ -20665,9 +20877,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...collectStage1SlotTexts(activeEpisode?.ai_stage_outputs),
                 ];
                 const editorSceneSplitForProbe = preferEditorSceneSplitText(
-                    typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : '',
-                    readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
-                    latestStage1NodeOutputsRef.current?.scene_split
+                    preferFreshStage1Slot(
+                        readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
+                        latestStage1NodeOutputsRef.current?.scene_split,
+                        pinnedStage1NodeOutputsRef.current?.scene_split,
+                    ),
+                    '',
+                    activeEpisode?.ai_scene_analysis_result
                 );
                 const propCharCandidates = [
                     editorSceneSplitForProbe,
@@ -21395,9 +21611,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     // Skip empty category (no rows of this type, or all already in DB).
                     // Environment design no longer requires Index ENV rows — the environment plan is enough.
                     const editorSceneSplit = preferEditorSceneSplitText(
-                        (typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : ''),
-                        readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
-                        latestStage1NodeOutputsRef.current?.scene_split,
+                        preferFreshStage1Slot(
+                            readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
+                            latestStage1NodeOutputsRef.current?.scene_split,
+                            pinnedStage1NodeOutputsRef.current?.scene_split,
+                        ),
+                        '',
                         activeEpisode?.ai_scene_analysis_result || adaptationText
                     );
                     const singleEntityNames = collectEntityPurgeNameCandidates(
@@ -21416,18 +21635,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     let explicitExtract = unscopedExtract;
                     if (isolateThisEntity && (pData.key === 'characters' || pData.key === 'props')) {
                         const tag = pData.key === 'characters' ? 'CHAR' : 'PROP';
+                        const charPropSource = textHasTaggedExtractItems(editorSceneSplit, tag)
+                            ? editorSceneSplit
+                            : (unscopedExtract || editorSceneSplit);
                         explicitExtract = filterTaggedExtractByNames(
-                            unscopedExtract || editorSceneSplit,
+                            charPropSource,
                             tag,
                             singleEntityNames,
                         );
                     } else if (isolateThisEntity && pData.key === 'environments') {
-                        const planBase = String(
-                            readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs)
-                            || unscopedExtract
-                            || editorSceneSplit
-                            || ''
-                        ).trim();
+                        const planBase = preferFreshStage1Slot(
+                            readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                            latestStage1NodeOutputsRef.current?.environment_plan,
+                            pinnedStage1NodeOutputsRef.current?.environment_plan,
+                        ) || String(unscopedExtract || editorSceneSplit || '').trim();
                         explicitExtract = singleEntityNames
                             .map((name) => String(sliceEnvironmentEditorText(planBase, name)?.text || '').trim())
                             .filter(Boolean)
@@ -21437,8 +21658,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const sceneSplitSource = editorSceneSplit;
                     const extractSourceCandidates = (pData.key === 'characters' || pData.key === 'props')
                         ? [
-                            explicitExtract,
-                            ...(isolateThisEntity ? [] : [editorSceneSplit]),
+                            ...(isolateThisEntity ? [explicitExtract] : [editorSceneSplit, explicitExtract]),
                             ...((explicitExtract || editorSceneSplit || isolateThisEntity) ? [] : [
                                 latestStage1RawTextRef.current,
                                 adaptationText,
@@ -26272,6 +26492,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
+        // A single-scene storyboard rerun must not drop the other 分场's
+        // finished storyboard nodes. The live-only flag makes the poller
+        // treat those success rows as leftovers.
+        if (!storyboardPartial) {
+            analysisTrustLiveDownstreamOnlyRef.current = true;
+        }
         const resolvedEnvScope = String(envScope || '').trim().toLowerCase()
             || (stage === 'assets_gen' ? 'main' : 'all');
         const normalizedPurgeTypes = normalizeEntityPurgeTypes(targetEntityTypes);
@@ -26292,7 +26518,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 'process'
             );
         }
-        analysisTrustLiveDownstreamOnlyRef.current = true;
 
         if (resetRuntimePanels) {
             if (scopedSceneClear) {
@@ -29633,11 +29858,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [diagnosticsPipelineNodes, getStageOutputContent]);
 
     const resolveSceneSplitSourceText = useCallback(() => {
-        const liveSplit = String(
-            latestStage1NodeOutputsRef.current?.scene_split
-            || getStageOutputContent('stage1', 'scene_split')
-            || ''
-        ).trim();
+        const liveSplit = preferFreshStage1Slot(
+            readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
+            latestStage1NodeOutputsRef.current?.scene_split,
+            pinnedStage1NodeOutputsRef.current?.scene_split,
+        );
         if (analysisTrustLiveDownstreamOnlyRef.current) {
             return withPersistedVisualBackfill(liveSplit);
         }
@@ -29650,7 +29875,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return withPersistedVisualBackfill(raw);
     }, [
         activeEpisode?.ai_scene_analysis_adaptation,
-        getStageOutputContent,
+        activeEpisode?.ai_stage_outputs,
         readPersistedStage1Slot,
         withPersistedVisualBackfill,
     ]);
@@ -30304,8 +30529,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             if (restartPlanTargets.length > 0) {
                 const restartExtractSource = preferEditorSceneSplitText(
-                    (typeof getStageOutputContent === 'function' ? getStageOutputContent('stage1', 'scene_split') : ''),
-                    latestStage1NodeOutputsRef.current?.scene_split,
+                    preferFreshStage1Slot(
+                        readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
+                        latestStage1NodeOutputsRef.current?.scene_split,
+                        pinnedStage1NodeOutputsRef.current?.scene_split,
+                    ),
                     stage1SourceText,
                     latestStage1RawTextRef.current
                 );
@@ -31306,11 +31534,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ));
             }
             if (importedSplit !== source) {
-                latestStage1NodeOutputsRef.current = {
-                    ...latestStage1NodeOutputsRef.current,
-                    scene_split: importedSplit,
-                };
                 if (serverHasNewList && importedSplit === savedSplit) {
+                    pinStage1NodeOutput('scene_split', importedSplit);
                     const stageOutputs = freshEpisode?.ai_stage_outputs;
                     if (stageOutputs && onUpdateEpisodeInfo) {
                         await onUpdateEpisodeInfo(activeEpisode.id, {
@@ -31323,10 +31548,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     await persistSceneSplitExtractSource(importedSplit);
                 }
             } else if (serverHasNewList) {
-                latestStage1NodeOutputsRef.current = {
-                    ...latestStage1NodeOutputsRef.current,
-                    scene_split: savedSplit,
-                };
+                pinStage1NodeOutput('scene_split', savedSplit);
             }
             setAnalysisFlowStatus({
                 phase: 'completed',
@@ -32173,6 +32395,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         const rerunStartedAt = Date.now();
+        const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+        const scopeMarkers = expandSceneIdAllowlist(
+            targets.map((item) => String(item?.sceneId || '').trim()).filter(Boolean),
+            episodePrefix,
+        );
+        if (rerunMode === 'single') {
+            storyboardSingleRerunScopeRef.current = scopeMarkers;
+        }
         setIsRerunningStoryboard(true);
         beginStageRerunUi({
             phase: 'storyboard',
@@ -32186,14 +32416,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         latestIsAnalyzingRef.current = false;
 
         let started = 0;
-        const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
-        const scopeMarkers = expandSceneIdAllowlist(
-            targets.map((item) => String(item?.sceneId || '').trim()).filter(Boolean),
-            episodePrefix,
-        );
-        if (rerunMode === 'single') {
-            storyboardSingleRerunScopeRef.current = scopeMarkers;
-        }
         try {
             if (rerunMode === 'single') {
                 orchestrationCanonicalSceneIdsRef.current = mergeSceneIdAllowlist(
@@ -32201,18 +32423,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     targets.map((item) => String(item?.sceneId || '').trim()).filter(Boolean),
                     episodePrefix
                 );
-                const prevProgress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
-                const nextItems = {};
-                Object.entries(prevProgress.items || {}).forEach(([marker, item]) => {
-                    if (!isSceneIdInAllowlist(marker, scopeMarkers, episodePrefix)) return;
-                    nextItems[marker] = item;
-                });
-                const scopedProgress = normalizeStoryboardTaskProgress({
-                    ...prevProgress,
-                    items: nextItems,
-                });
-                storyboardTaskProgressRef.current = scopedProgress;
-                setStoryboardTaskProgress(scopedProgress);
             }
             // A finished environment-asset node must open the gate before this
             // rerun. Otherwise a name mismatch blocks kickoff, and the reset
@@ -33252,24 +33462,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const resolveAssetRerunSourceText = useCallback(() => {
         const liveRaw = String(latestStage1RawTextRef.current || '').trim();
-        const sceneSplit = preferSupersetExtractText(
-            preferEditorSceneSplitText(
-                getStageOutputContent('stage1', 'scene_split') || readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
-                '',
-                activeEpisode?.ai_scene_analysis_result,
-                (textHasTaggedExtractItems(liveRaw, 'CHAR') || textHasTaggedExtractItems(liveRaw, 'PROP') ? liveRaw : '')
-            ),
+        const sceneSplit = preferFreshStage1Slot(
+            readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
             latestStage1NodeOutputsRef.current?.scene_split,
+            pinnedStage1NodeOutputsRef.current?.scene_split,
+        ) || preferEditorSceneSplitText(
+            '',
+            '',
+            activeEpisode?.ai_scene_analysis_result,
+            (textHasTaggedExtractItems(liveRaw, 'CHAR') || textHasTaggedExtractItems(liveRaw, 'PROP') ? liveRaw : '')
         );
         const envPlan = pickFirstMatchingText([
-            readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+            preferFreshStage1Slot(
+                readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                latestStage1NodeOutputsRef.current?.environment_plan,
+                pinnedStage1NodeOutputsRef.current?.environment_plan,
+            ),
             readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'adapted_script'),
             readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'raw_text'),
             activeEpisode?.ai_scene_analysis_adaptation,
         ], (text) => textHasMainEnvironmentSkeleton(text) || textHasEnvironmentPlanSignals(text) || collectMainEnvironmentNames(text).length > 0);
+        const sceneSplitHasExtracts = textHasTaggedExtractItems(sceneSplit, 'CHAR')
+            || textHasTaggedExtractItems(sceneSplit, 'PROP');
         const parts = [];
-        if (envPlan) parts.push(envPlan);
-        if (sceneSplit && sceneSplit !== envPlan) parts.push(sceneSplit);
+        const envForAssets = sceneSplitHasExtracts ? stripTaggedExtractBlocks(envPlan) : envPlan;
+        if (envForAssets) parts.push(envForAssets);
+        if (sceneSplit && sceneSplit !== envForAssets) parts.push(sceneSplit);
         if (!envPlan) {
             collectStage1SlotTexts(activeEpisode?.ai_stage_outputs).forEach((text) => {
                 const slot = String(text || '').trim();
@@ -35468,11 +35686,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }));
                 setIsSavingPhase2RerunSubjectIndex(true);
                 try {
-                    const envBase = String(
-                        latestStage1NodeOutputsRef.current?.environment_plan
-                        || getStageOutputContent('stage1', 'environment_plan')
-                        || ''
-                    ).trim();
+                    const envBase = preferFreshStage1Slot(
+                        readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                        latestStage1NodeOutputsRef.current?.environment_plan,
+                        pinnedStage1NodeOutputsRef.current?.environment_plan,
+                    ) || String(getStageOutputContent('stage1', 'environment_plan') || '').trim();
                     const patched = applyEnvironmentPlanEntryPatches(
                         envBase,
                         [{
@@ -35506,11 +35724,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }));
             setIsSavingPhase2RerunSubjectIndex(true);
             try {
-                const sceneSplitBase = preferEditorSceneSplitText(
-                    getStageOutputContent('stage1', 'scene_split'),
+                const sceneSplitBase = preferFreshStage1Slot(
+                    readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
                     latestStage1NodeOutputsRef.current?.scene_split,
-                    resolveAssetRerunSourceText()
-                );
+                    pinnedStage1NodeOutputsRef.current?.scene_split,
+                ) || String(resolveAssetRerunSourceText() || '').trim();
                 const newBlock = serializeTaggedExtractItem(tag, fields, draft.fieldOrder || displayEntry?.fieldOrder);
                 const patched = replaceTaggedExtractItemInSource(
                     sceneSplitBase,
@@ -35797,11 +36015,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const resolvedEditedText = editedSubjectIndexText || legacyIndexText;
 
         if (isExtractDriven && (hasEdits || hasDeletions)) {
-            const sceneSplitBase = preferEditorSceneSplitText(
-                getStageOutputContent('stage1', 'scene_split'),
+            const sceneSplitBase = preferFreshStage1Slot(
+                readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_split'),
                 latestStage1NodeOutputsRef.current?.scene_split,
-                extractSourceText
-            );
+                pinnedStage1NodeOutputsRef.current?.scene_split,
+            ) || String(extractSourceText || '').trim();
             const patchedSplit = applyExtractEntryPatchesToSource(
                 sceneSplitBase,
                 phase2RerunDisplayEntries,
@@ -35820,11 +36038,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 console.warn('Failed to persist extract edits before asset rerun:', error);
                 onLog?.(t(`保存提取描述失败：${error?.message || error}`, `Failed to save extract descriptions: ${error?.message || error}`), 'warning');
             }
-            const envBase = String(
-                latestStage1NodeOutputsRef.current?.environment_plan
-                || getStageOutputContent('stage1', 'environment_plan')
-                || ''
-            ).trim();
+            const envBase = preferFreshStage1Slot(
+                readStage1EnvironmentPlanContent(activeEpisode?.ai_stage_outputs),
+                latestStage1NodeOutputsRef.current?.environment_plan,
+                pinnedStage1NodeOutputsRef.current?.environment_plan,
+            ) || String(getStageOutputContent('stage1', 'environment_plan') || '').trim();
             const patchedEnv = applyEnvironmentPlanEntryPatches(
                 envBase,
                 phase2RerunDisplayEntries,
@@ -38175,10 +38393,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 if (String(node?.node_name || '').trim() !== nodeName) return false;
                                 const nodeSceneId = String(node?.scene_id || '').trim();
                                 if (!nodeSceneId) return false;
+                                const nodeOrder = deriveSceneOrderFromSceneId(nodeSceneId);
+                                const rowOrder = deriveSceneOrderFromSceneId(sceneId);
+                                if (
+                                    Number.isFinite(nodeOrder) && nodeOrder > 0
+                                    && Number.isFinite(rowOrder) && rowOrder > 0
+                                    && nodeOrder !== rowOrder
+                                    && !sceneIdHasLetterSuffix(nodeSceneId)
+                                    && !sceneIdHasLetterSuffix(sceneId)
+                                ) {
+                                    return false;
+                                }
                                 return sceneUnitIdsMatch(
                                     nodeSceneId,
                                     sceneId,
-                                    deriveSceneOrderFromSceneId(sceneId),
+                                    rowOrder,
                                     episodePrefix
                                 ) || isSceneIdInAllowlist(
                                     nodeSceneId,
@@ -38458,6 +38687,59 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const subskillStillOpen = subskillActive
                                 && !['completed', 'storyboard'].includes(subskillStep);
                             const shotsLanded = storyboardShotsLanded(node);
+                            const singleStoryboardScope = storyboardSingleRerunScopeRef.current;
+                            const outsideSingleStoryboardRerun = singleStoryboardScope instanceof Set
+                                && singleStoryboardScope.size > 0
+                                && !isSceneIdInAllowlist(sceneId, singleStoryboardScope, episodePrefix);
+                            if (outsideSingleStoryboardRerun) {
+                                const markerIsThisScene = (row) => {
+                                    const marker = String(row?.markerSceneId || '').trim();
+                                    if (!marker) return false;
+                                    return isSceneIdInAllowlist(
+                                        marker,
+                                        expandSceneIdAllowlist([sceneId], episodePrefix),
+                                        episodePrefix
+                                    );
+                                };
+                                const ownItem = markerIsThisScene(item)
+                                    ? item
+                                    : (markerIsThisScene(refItem) ? refItem : null);
+                                const ownStatus = String(ownItem?.status || '').trim().toLowerCase();
+                                if (fromNode.ready || ownStatus === 'completed') {
+                                    return { ready: true, active: false, failed: false, detail: '' };
+                                }
+                                if ((fromNode.failed || ownStatus === 'failed') && !nodeTimedOut) {
+                                    return {
+                                        ready: false,
+                                        active: false,
+                                        failed: true,
+                                        detail: String(ownItem?.error || node?.last_error_message || ''),
+                                        errorCode: String(node?.last_error_code || '').trim(),
+                                        errorMessage: String(ownItem?.error || node?.last_error_message || '').trim(),
+                                        businessReason: String(node?.runtime_meta?.business_reason || '').trim(),
+                                        status: ownStatus || 'failed',
+                                    };
+                                }
+                                if (shotsLanded && !STORYBOARD_IN_FLIGHT_STATUSES.includes(ownStatus)) {
+                                    return { ready: true, active: false, failed: false, detail: '' };
+                                }
+                                if (STORYBOARD_IN_FLIGHT_STATUSES.includes(ownStatus)) {
+                                    return { ready: false, active: true, failed: false, detail: '' };
+                                }
+                                if (ownStatus === 'waiting_env' || ownStatus === 'waiting_import') {
+                                    return {
+                                        ready: false,
+                                        active: true,
+                                        parked: true,
+                                        failed: false,
+                                        detail: ownStatus === 'waiting_env'
+                                            ? t('等待环境', 'Wait ENV')
+                                            : t('等待入库', 'Wait import'),
+                                        errorMessage: String(ownItem?.error || '').trim(),
+                                    };
+                                }
+                                return { ready: false, active: false, failed: false, detail: '' };
+                            }
                             const thisRunGeneratingStatus = ['starting', 'generating', 'importing'].includes(status)
                                 || ['starting', 'generating', 'importing'].includes(refStatus);
                             const thisRunItem = isThisRunStoryboardProgressItem(
