@@ -84,6 +84,8 @@ def test_search_emphasis_differs_by_stage():
     framework = format_reference_plot_block(keywords, stage="framework")
     outline = format_reference_plot_block(keywords, stage="outline")
     episode = format_reference_plot_block(keywords, stage="episode")
+    assert "搜索保持开放" in framework
+    assert "训练集" in framework and "训练集" in outline and "训练集" in episode
     assert "整体架构" in framework
     assert "不要用这次搜索去找对白原句" in framework
     assert "分成连续的集" in outline

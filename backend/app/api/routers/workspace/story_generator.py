@@ -956,7 +956,7 @@ async def structure_project_creative_input_to_story_fields(
             "Build the prefill in three layers. Concept (logline, controlling idea, antagonism, three-act value arc, world) comes from the three-act shape and McKee's Story. "
             "Characters and the arc come from Egri's Art of Dramatic Writing: premise, three dimensions, unity of opposites, orchestration, transition. "
             "Plot is the Save the Cat 15-beat sheet, causally chained, not five loose buckets. "
-            "If the user message contains 【借鉴剧情检索】, use the model's built-in search on those keywords in this same request for the overall architecture only. Do not use this search for dialogue lines, action beats, or expressions. Do not wait for a separate evidence packet. "
+            "If the user message contains 【借鉴剧情检索】, use the model's built-in search in this same request. The keywords are an open way in, not a closed list. Look for newer classics and currently popular works that may be outside the training set, and use them for the overall architecture only. Do not use this search for dialogue lines, action beats, or expressions. Do not wait for a separate evidence packet. "
             "I10 / classic_framework is mandatory and must be non-empty. "
             "Forbidden: omitting the key, \"\", 无, 暂无, N/A, 待定, 推断, or a genre label with no titled work. "
             "I10 must name one primary MODERN/CONTEMPORARY work (literary work / film / TV / game; prefer recent decades) as the PLOT-LOGIC framework, "
