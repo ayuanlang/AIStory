@@ -9181,6 +9181,9 @@ def export_system_config_sync_bundle_for_manage(
 
     oss_provider_pools_payload = []
     if _db_has_table(db, "oss_provider_pools"):
+        # create_all does not add columns to an existing table. Export selects the
+        # full ORM row, so a missing grsai_oss_id would 500 the whole bundle.
+        _ensure_oss_provider_pools_table(db)
         oss_rows = db.query(OSSProviderPool).order_by(OSSProviderPool.provider.asc(), OSSProviderPool.id.asc()).all()
         oss_provider_pools_payload = [
             {
@@ -9572,6 +9575,8 @@ def import_system_config_sync_bundle_for_manage(
                 return int(default_value)
 
         has_billing_rules_table = _db_has_table(db, "system_api_billing_rules")
+        if _db_has_table(db, "oss_provider_pools") or oss_provider_pools:
+            _ensure_oss_provider_pools_table(db)
         has_oss_provider_pool_table = _db_has_table(db, "oss_provider_pools")
         has_provider_key_pool_table = _db_has_table(db, "provider_key_pool")
         has_smtp_table = _db_has_table(db, "smtp_system_configs")

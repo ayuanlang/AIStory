@@ -335,6 +335,16 @@ def _persist_remote_image_result(
     hostname = str(parsed.hostname or "").strip().lower()
     if hostname in {"localhost", "127.0.0.1"}:
         return media_url, metadata
+    if oss_storage_service.grsai_direct_cloudflare_object_key(raw):
+        updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        updated_metadata["provider_direct_oss_url"] = True
+        updated_metadata.setdefault("provider", "grsai")
+        logger.info(
+            "[ImageResultNormalize] skip localization for grsai cloudflare object | user_id=%s url=%s",
+            getattr(current_user, "id", None),
+            raw,
+        )
+        return raw, updated_metadata
     if oss_storage_service.is_active_managed_url(raw, db) or _url_is_configured_oss_object(raw, metadata, db):
         logger.info(
             "[ImageResultNormalize] skip remote localization for managed oss url | user_id=%s url=%s",
@@ -676,6 +686,8 @@ def _is_provider_direct_oss_url(
         return False
     if _is_ephemeral_provider_media_url(raw):
         return False
+    if oss_storage_service.grsai_direct_cloudflare_object_key(raw):
+        return True
     meta = metadata if isinstance(metadata, dict) else {}
     if bool(meta.get("provider_direct_oss_url")):
         return True
@@ -766,6 +778,15 @@ def _persist_remote_video_result(
     if not raw.lower().startswith(("http://", "https://")):
         return media_url, updated_metadata or metadata, False
 
+    if oss_storage_service.grsai_direct_cloudflare_object_key(raw):
+        updated_metadata["provider"] = str(updated_metadata.get("provider") or "grsai").strip() or "grsai"
+        updated_metadata["provider_direct_oss_url"] = True
+        logger.info(
+            "[VideoResultNormalize] skip copy for grsai cloudflare object | user_id=%s url=%s",
+            getattr(current_user, "id", None),
+            raw,
+        )
+        return raw, updated_metadata, True
     if oss_storage_service.is_active_managed_url(raw, db) or _url_is_configured_oss_object(raw, updated_metadata, db):
         updated_metadata = _attach_oss_metadata_from_managed_url(updated_metadata, raw)
         logger.info(
@@ -2679,7 +2700,12 @@ def _persist_entity_image(
     else:
         final_url = normalized_url or source_url
 
-    if oss_storage_service.is_enabled(db):
+    if oss_storage_service.grsai_direct_cloudflare_object_key(final_url) or oss_storage_service.grsai_direct_cloudflare_object_key(source_url):
+        signed = _refresh_managed_media_url(source_url or final_url, db)
+        if signed:
+            final_url = signed
+        durable_ok = True
+    elif oss_storage_service.is_enabled(db):
         durable_ok = _url_is_configured_oss_object(final_url, normalized_meta, db) or bool(
             oss_uploaded and not _is_ephemeral_provider_media_url(final_url)
         )

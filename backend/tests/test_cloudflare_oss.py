@@ -140,6 +140,83 @@ def test_resolve_grsai_oss_id_replaces_legacy_with_cloudflare(monkeypatch):
     assert oss_storage_service.resolve_grsai_direct_oss_id("custom-oss") == "custom-oss"
 
 
+def test_auto_host_grsai_object_maps_to_cloudflare_and_presigns(monkeypatch):
+    from app.services.oss_storage_service import OSSStorageService
+
+    service = OSSStorageService()
+    cloudflare = SimpleNamespace(
+        provider="cloudflare",
+        endpoint="https://acct.r2.cloudflarestorage.com",
+        bucket="media",
+        public_base_url="https://cdn.example.com",
+        root_prefix="",
+        is_active=True,
+        grsai_oss_id="6aef48974bf26bda0f7fbde5",
+        presign_expires_seconds=3600,
+    )
+    qiniu = SimpleNamespace(
+        provider="qiniu",
+        endpoint="https://s3.cn-south-1.qiniucs.com",
+        bucket="qiniu-bucket",
+        public_base_url="https://qn.woola.fun",
+        root_prefix="",
+        is_active=True,
+    )
+    image_url = "https://auto/file/images/202611/3/ac3ba61bf2944d67ad458c92d471df17.png"
+    pool, key = service._extract_managed_target_from_pools(image_url, [qiniu, cloudflare])
+    assert pool is cloudflare
+    assert key == "file/images/202611/3/ac3ba61bf2944d67ad458c92d471df17.png"
+    assert service.grsai_direct_cloudflare_object_key(image_url) == key
+
+    video_url = "https://auto/file/videos/202611/3/clip.mp4"
+    video_pool, video_key = service._extract_managed_target_from_pools(video_url, [cloudflare])
+    assert video_pool is cloudflare
+    assert video_key == "file/videos/202611/3/clip.mp4"
+
+    qiniu_url = "https://qn.woola.fun/aistory/upload/a.jpg"
+    kept_pool, kept_key = service._extract_managed_target_from_pools(qiniu_url, [qiniu, cloudflare])
+    assert kept_pool is qiniu
+    assert kept_key == "aistory/upload/a.jpg"
+
+    monkeypatch.setattr(service, "_extract_managed_target", lambda url: (cloudflare, key))
+    monkeypatch.setattr(service, "_pick_credential", lambda pool: (SimpleNamespace(access_key="ak", secret_key="sk"), None))
+
+    class FakeClient:
+        def generate_presigned_url(self, op, Params, ExpiresIn):
+            assert op == "get_object"
+            assert Params["Bucket"] == "media"
+            assert Params["Key"] == key
+            assert ExpiresIn == 3600
+            return "https://acct.r2.cloudflarestorage.com/media/" + key + "?X-Amz-Signature=abc"
+
+    monkeypatch.setattr(service, "_build_client", lambda pool, cred: FakeClient())
+    signed = service.refresh_url(image_url)
+    assert signed.startswith("https://acct.r2.cloudflarestorage.com/")
+    assert "X-Amz-Signature=abc" in signed
+
+
+def test_grsai_cloudflare_object_skips_redownload(monkeypatch):
+    from types import SimpleNamespace as NS
+    from app.services.generation_runtime import media_persist as mp
+
+    image_url = "https://auto/file/images/202611/3/ac3ba61bf2944d67ad458c92d471df17.png"
+
+    def boom(*args, **kwargs):
+        raise AssertionError("should not download")
+
+    monkeypatch.setattr(mp.requests, "get", boom)
+    out, meta = mp._persist_remote_image_result(
+        NS(id=3),
+        image_url,
+        {},
+        force_configured_oss=True,
+    )
+    assert out == image_url
+    assert meta["provider_direct_oss_url"] is True
+    assert mp._is_provider_direct_oss_url(image_url, {}) is True
+    assert mp._is_durable_persisted_media_url(image_url, meta) is True
+
+
 def test_grsai_direct_headers_use_cloudflare_repository(monkeypatch):
     from app.services.media_service import MediaGenerationService
     from app.services.oss_storage_service import LEGACY_GRSAI_DIRECT_OSS_ID, oss_storage_service

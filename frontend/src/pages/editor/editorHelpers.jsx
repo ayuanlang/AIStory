@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Loader2, Video, RefreshCw } from 'lucide-react';
-import { BASE_URL, ASSET_BASE_URL } from '../../config';
+import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../config';
 import { createEntity, regenerateScene, batchSupplementMissingEntities } from '../../services/api';
 import { normalizeEntityToken, entityTokenMatchesName, extractEntityRawNamesFromPrompt } from '../../lib/entityToken';
 
@@ -30,10 +30,50 @@ const normalizeExternalMediaUrl = (rawUrl) => {
 
 const shouldProxyExternalMediaUrl = () => false;
 
+const GRSAI_DIRECT_OBJECT_PATH_RE = /^\/file\/(?:images|videos)\/\d{6}\//i;
+
+const isGrsaiDirectObjectPath = (pathname) => GRSAI_DIRECT_OBJECT_PATH_RE.test(String(pathname || ''));
+
+// Grsai writes file/images|videos/{yyyymm}/{user} straight into Cloudflare.
+// Host `auto` is the R2 region placeholder, not a temporary provider CDN.
+export const isGrsaiDirectCloudflareMediaUrl = (url) => {
+    const raw = String(url || '').trim();
+    if (!/^https?:\/\//i.test(raw)) return false;
+    try {
+        const parsed = new URL(raw);
+        const host = String(parsed.hostname || '').trim().toLowerCase();
+        if (!isGrsaiDirectObjectPath(parsed.pathname)) return false;
+        if (host === 'auto') return true;
+        return host === 'r2.cloudflarestorage.com'
+            || host.endsWith('.r2.cloudflarestorage.com')
+            || host === 'r2.dev'
+            || host.endsWith('.r2.dev');
+    } catch {
+        return false;
+    }
+};
+
+const buildGrsaiDirectAccessUrl = (rawUrl) => {
+    const stable = String(rawUrl || '').trim();
+    if (!stable || stable.includes('/assets/proxy?url=')) return stable;
+    const resolvedBase = String(API_URL || BASE_URL || '').trim().replace(/\/+$/, '');
+    if (!resolvedBase) return stable;
+    return `${resolvedBase}/assets/proxy?url=${encodeURIComponent(stable)}`;
+};
+
 // Helper to handle relative URLs
 export const getFullUrl = (url) => {
     if (!url) return '';
     const normalizedExternal = normalizeExternalMediaUrl(url);
+    if (isGrsaiDirectCloudflareMediaUrl(normalizedExternal)) {
+        try {
+            if (String(new URL(normalizedExternal).hostname || '').trim().toLowerCase() === 'auto') {
+                return buildGrsaiDirectAccessUrl(normalizedExternal);
+            }
+        } catch {
+            return buildGrsaiDirectAccessUrl(normalizedExternal);
+        }
+    }
     if (normalizedExternal.startsWith('http') || normalizedExternal.startsWith('blob:') || normalizedExternal.startsWith('data:')) return normalizedExternal;
     // If it's a relative path starting with /, append BASE_URL
     if (normalizedExternal.startsWith('/')) {
@@ -3444,6 +3484,7 @@ const legacyDurableMediaUrl = (raw) => {
 export const urlMatchesConfiguredOss = (url, metadata = null, signatures = null) => {
     const raw = String(url || '').trim();
     if (!raw) return false;
+    if (isGrsaiDirectCloudflareMediaUrl(raw)) return true;
 
     const meta = metadata && typeof metadata === 'object' ? metadata : {};
     const activeSignatures = signatures || ossActiveUrlSignaturesCache;
@@ -3501,6 +3542,7 @@ export const urlMatchesConfiguredOss = (url, metadata = null, signatures = null)
 export const isEphemeralProviderMediaUrl = (url) => {
     const raw = String(url || '').trim();
     if (!raw || raw.startsWith('/') || raw.startsWith('data:')) return false;
+    if (isGrsaiDirectCloudflareMediaUrl(raw)) return false;
     try {
         const parsed = new URL(raw, window.location.origin);
         const host = String(parsed.hostname || '').trim().toLowerCase();
@@ -3531,6 +3573,7 @@ export const isEphemeralProviderMediaUrl = (url) => {
 export const isDurablePersistedMediaUrl = (url, metadata = null) => {
     const raw = String(url || '').trim();
     if (!raw) return false;
+    if (isGrsaiDirectCloudflareMediaUrl(raw)) return true;
     if (isEphemeralProviderMediaUrl(raw)) return false;
     if (urlMatchesConfiguredOss(raw, metadata)) return true;
     // With OSS enabled, only backend-configured storage URLs are safe to PUT.

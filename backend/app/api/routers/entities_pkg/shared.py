@@ -147,7 +147,12 @@ def read_entities(
         else:
             query = query.filter(Entity.episode_id == episode_id)
     if str(view or "").strip().lower() in {"card", "summary"}:
-        return _serialize_entity_cards(query)
+        cards = _serialize_entity_cards(query)
+        if oss_storage_service.is_enabled(db):
+            for card in cards or []:
+                if isinstance(card, dict) and card.get("image_url"):
+                    card["image_url"] = _refresh_managed_media_url(card.get("image_url"), db)
+        return cards
     entities = query.all()
     repaired_entities = _repair_entities_image_urls_from_assets(db, current_user, project, entities)
 

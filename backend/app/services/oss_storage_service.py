@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import os
 import random
+import re
 import threading
 import time
 import urllib.parse
@@ -56,6 +57,10 @@ _CLOUDFLARE_PROVIDER_NAMES = {
     "cf_r2",
     "r2",
 }
+# Grsai direct-write layout: file/images|videos/{yyyymm}/{user_id}/...
+# Host `auto` is the placeholder Grsai returns when the repository domain is the R2 region name.
+_GRSAI_DIRECT_OBJECT_KEY_RE = re.compile(r"^file/(?:images|videos)/\d{6}/.+", re.IGNORECASE)
+_GRSAI_DIRECT_PLACEHOLDER_HOSTS = {"auto"}
 _db_pool_cache_lock = threading.Lock()
 _db_pool_load_lock = threading.Lock()
 _db_pool_cache: Dict[str, Tuple[float, Optional[List[SimpleNamespace]]]] = {}
@@ -781,6 +786,41 @@ class OSSStorageService:
     def invalidate_pool_cache(self) -> None:
         with _db_pool_cache_lock:
             _db_pool_cache.clear()
+
+    def _grsai_direct_object_key_from_path(self, path: str) -> Optional[str]:
+        key = urllib.parse.unquote(str(path or "")).strip().lstrip("/")
+        if key and _GRSAI_DIRECT_OBJECT_KEY_RE.match(key):
+            return key
+        return None
+
+    def grsai_direct_cloudflare_object_key(self, url: str) -> Optional[str]:
+        """Object key for a Grsai direct-write URL whose host is the R2 placeholder `auto`."""
+        raw = str(url or "").strip()
+        if not raw:
+            return None
+        candidate = raw if "://" in raw else f"https://{raw}"
+        try:
+            parsed = urllib.parse.urlparse(candidate)
+        except Exception:
+            return None
+        host = str(parsed.hostname or "").strip().lower()
+        if host not in _GRSAI_DIRECT_PLACEHOLDER_HOSTS:
+            return None
+        return self._grsai_direct_object_key_from_path(str(parsed.path or ""))
+
+    def _pick_grsai_cloudflare_pool(self, pools: Optional[List[SimpleNamespace]]):
+        chosen = None
+        chosen_rank = (-1, -1)
+        for pool in pools or []:
+            if not self._is_cloudflare_provider(pool):
+                continue
+            active = 1 if bool(getattr(pool, "is_active", True)) else 0
+            has_repo = 1 if str(getattr(pool, "grsai_oss_id", "") or "").strip() else 0
+            rank = (active, has_repo)
+            if chosen is None or rank > chosen_rank:
+                chosen = pool
+                chosen_rank = rank
+        return chosen
 
     def active_cloudflare_grsai_oss_id(self, db=None) -> str:
         """Grsai repository id of the active Cloudflare R2 pool, if one is configured."""
@@ -1988,6 +2028,15 @@ class OSSStorageService:
         if not path:
             return None, None
 
+        direct_key = self._grsai_direct_object_key_from_path(path)
+        host = str(parsed.hostname or "").strip().lower()
+        # Grsai writes this key straight into the Cloudflare bucket. Host `auto`
+        # is not a CDN; always authorize it against the Cloudflare pool.
+        if direct_key and host in _GRSAI_DIRECT_PLACEHOLDER_HOSTS:
+            cloudflare_pool = self._pick_grsai_cloudflare_pool(pools)
+            if cloudflare_pool is not None:
+                return cloudflare_pool, direct_key
+
         best: Optional[Tuple[int, SimpleNamespace, str]] = None
         for pool in pools:
             extracted_key = self._extract_key_for_pool(
@@ -2001,6 +2050,10 @@ class OSSStorageService:
             score = self._score_pool_for_url(pool, parsed)
             if best is None or score > best[0]:
                 best = (score, pool, extracted_key)
+        if best is None and direct_key:
+            cloudflare_pool = self._pick_grsai_cloudflare_pool(pools)
+            if cloudflare_pool is not None:
+                return cloudflare_pool, direct_key
         if best is None:
             return None, None
         return best[1], best[2]
@@ -2127,11 +2180,29 @@ class OSSStorageService:
 
         try:
             client = self._build_client(pool, cred)
+            # Grsai already stored this object on Cloudflare. Sign it; do not
+            # treat the placeholder host as a file that still needs uploading.
+            if self._is_cloudflare_provider(pool) and self._grsai_direct_object_key_from_path(key):
+                signed = self._presign_get_url(client, pool, key)
+                return str(signed or raw)
             refreshed = self._build_public_url(client, pool, key, cred)
             return str(refreshed or raw)
         except Exception as exc:
             logger.warning("OSS refresh_url failed | key=%s err=%s", key, exc)
             return raw
+
+    def _presign_get_url(self, client, pool, key: str) -> str:
+        try:
+            expires = int(getattr(pool, "presign_expires_seconds", 7 * 24 * 3600) or (7 * 24 * 3600))
+            signed = client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": pool.bucket, "Key": key},
+                ExpiresIn=expires,
+            )
+            return str(signed or "")
+        except Exception as exc:
+            logger.warning("OSS presign failed | key=%s err=%s", key, exc)
+            return ""
 
     def delete_url(self, url: str) -> bool:
         pool, key = self._extract_managed_target(url)
