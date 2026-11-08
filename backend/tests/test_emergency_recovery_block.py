@@ -108,6 +108,9 @@ def test_handoff_prompt_includes_scene_env_and_strips_block_from_tail():
     assert "#当前主环境=星澜电梯间" in handoff["prompt_block"]
     assert "#剧情一句话与交接" in handoff["prompt_block"]
     assert "#下集开局=开新场景" in handoff["prompt_block"]
+    assert "### 上一集正文" in handoff["prompt_block"]
+    assert "scene" in handoff["prompt_block"]
+    assert handoff["has_plot_body"] is True
     assert "复场续完" in handoff["prompt_block"]
     tail = extract_previous_episode_tail_context(script)
     assert "[EMERGENCY_RECOVERY_BLOCK_START]" not in tail

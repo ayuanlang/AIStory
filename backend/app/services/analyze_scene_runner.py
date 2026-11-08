@@ -1615,6 +1615,15 @@ async def execute_analyze_scene(
             # Scene analysis expects strict final-format output, not thought traces.
             if "include_thoughts" in cfg_obj:
                 cfg_obj["include_thoughts"] = False
+            if (
+                is_derived_framing_stage
+                and provider_name == "kie"
+                and llm_service._is_kie_native_gemini(model)
+            ):
+                # gemini-3-8-flash thinks for tens of seconds, then the visible
+                # answer is only the required end tags. Ask for the thought
+                # text so a shell can be replaced by the draft.
+                cfg_obj["include_thoughts"] = True
 
             # Do not force an output cap for KIE scene analysis.
             # Leave max token policy to the upstream model/provider unless user explicitly set one.

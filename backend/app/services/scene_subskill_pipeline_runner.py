@@ -4230,6 +4230,20 @@ async def _resume_incomplete_beats(
     return current
 
 
+def _with_framing_visible_opening(prompt_file: str, scene_input: str) -> str:
+    if prompt_file != FRAMING_PROMPT:
+        return scene_input
+    text = str(scene_input or "").strip()
+    opening = (
+        "可见回答从第一行 [SCENES_BLOCK_START] 写起。"
+        "思考不算成稿。先写 [DERIVED_ENV_EXTRACT_START] 和【全场调度】，再写每一拍 [BEAT_START]。"
+        "没有这些正文时，不要写 [BEAT_STREAM_END]、[SCENE_END]、[SCENES_BLOCK_END]、[DERIVED_FRAMING_OUTPUT_END]。"
+    )
+    if text.startswith("可见回答从第一行"):
+        return text
+    return f"{opening}\n\n{text}" if text else opening
+
+
 def _prepare_subskill_llm_text(text: str) -> str:
     from app.services.llm_service import (
         promote_think_draft_when_visible_is_end_shell,
@@ -4345,7 +4359,7 @@ async def _call_scene_subskill(
     )
     retry_note = ""
     for attempt, api_id in enumerate(api_attempts, start=1):
-        request_input = scene_input
+        request_input = _with_framing_visible_opening(prompt_file, scene_input)
         if retry_note:
             request_input = f"{scene_input.rstrip()}\n\n{retry_note}"
         request = _build_subskill_request(

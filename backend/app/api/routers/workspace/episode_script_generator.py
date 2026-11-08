@@ -1593,6 +1593,7 @@ async def generate_project_episode_scripts_from_global_framework(
                     str(p_text),
                     previous_episode_number=int(idx - 1),
                     current_episode_number=int(idx),
+                    include_plot_body=not call_is_trailer,
                 )
                 prev_episode_block = str(handoff.get("prompt_block") or "")
                 logger.info(

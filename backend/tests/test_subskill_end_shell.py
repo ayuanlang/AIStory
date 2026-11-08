@@ -118,6 +118,54 @@ def test_prepare_drops_reasoning_and_leaves_the_closer_shell():
     assert "<thinking>" not in recovered
 
 
+def test_gemini_thought_draft_replaces_end_shell():
+    from app.services.llm_service import LLMService
+
+    svc = LLMService()
+    payload = {
+        "candidates": [{
+            "content": {
+                "parts": [
+                    {"text": DRAFT, "thought": True},
+                    {"text": SHELL},
+                ],
+            },
+            "finishReason": "STOP",
+        }],
+    }
+    visible, thought, finish = svc._gemini_visible_and_thought(payload)
+    assert visible == SHELL
+    assert "[BEAT_START:1]" in thought
+    assert finish == "stop"
+    answer = svc._extract_text_from_response(payload)
+    assert "[BEAT_START:1]" in answer
+    assert answer.endswith("[DERIVED_FRAMING_OUTPUT_END]")
+
+    ordinary = svc._extract_text_from_response({
+        "candidates": [{
+            "content": {
+                "parts": [
+                    {"text": "Beijing is clear.", "thought": True},
+                    {"text": "Beijing is sunny."},
+                ],
+            },
+        }],
+    })
+    assert ordinary == "Beijing is sunny."
+
+
+def test_framing_opening_is_prefixed_once():
+    from app.services.scene_subskill_pipeline_runner import (
+        FRAMING_PROMPT,
+        _with_framing_visible_opening,
+    )
+
+    once = _with_framing_visible_opening(FRAMING_PROMPT, "[SCENES_BLOCK_START]")
+    assert once.startswith("可见回答从第一行")
+    assert _with_framing_visible_opening(FRAMING_PROMPT, once) == once
+    assert _with_framing_visible_opening("other.md", "正文") == "正文"
+
+
 def test_framing_retry_note_names_the_missing_body():
     from app.services.scene_subskill_pipeline_runner import (
         FRAMING_PROMPT,

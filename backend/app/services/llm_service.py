@@ -1994,14 +1994,20 @@ class LLMService:
             "total_tokens": total_tokens,
         }
 
-    def _gemini_candidate_text_and_finish(self, payload: Any) -> Tuple[str, Optional[str]]:
-        """Read Gemini streamGenerateContent candidates. Skip thought-only parts."""
+    @staticmethod
+    def _gemini_part_is_thought(part: Dict[str, Any]) -> bool:
+        flag = part.get("thought")
+        return flag is True or str(flag or "").strip().lower() == "true"
+
+    def _gemini_visible_and_thought(self, payload: Any) -> Tuple[str, str, Optional[str]]:
+        """Split Gemini candidates into visible text and thought text."""
         if not isinstance(payload, dict):
-            return "", None
+            return "", "", None
         candidates = payload.get("candidates")
         if not isinstance(candidates, list) or not candidates:
-            return "", None
+            return "", "", None
         texts: List[str] = []
+        thoughts: List[str] = []
         finish_reason = None
         for candidate in candidates:
             if not isinstance(candidate, dict):
@@ -2012,9 +2018,13 @@ class LLMService:
             content = candidate.get("content") if isinstance(candidate.get("content"), dict) else {}
             parts = content.get("parts") if isinstance(content.get("parts"), list) else []
             for part in parts:
-                if not isinstance(part, dict) or part.get("thought") is True:
+                if not isinstance(part, dict):
                     continue
                 text = str(part.get("text") or "").strip()
+                if self._gemini_part_is_thought(part):
+                    if text:
+                        thoughts.append(text)
+                    continue
                 if text:
                     texts.append(text)
                     continue
@@ -2025,7 +2035,34 @@ class LLMService:
                     except Exception:
                         args = str(function_call.get("args") or "")
                     texts.append(f"[TOOL_USE: {function_call.get('name')}] {args}")
-        return "\n".join(texts).strip(), finish_reason
+        return "\n".join(texts).strip(), "\n".join(thoughts).strip(), finish_reason
+
+    def _gemini_candidate_text_and_finish(self, payload: Any) -> Tuple[str, Optional[str]]:
+        """Read Gemini streamGenerateContent candidates. Skip thought-only parts."""
+        visible, _thought, finish_reason = self._gemini_visible_and_thought(payload)
+        return visible, finish_reason
+
+    def _gemini_joined_answer(self, payload: Any) -> str:
+        """Use a thought draft only when the visible Gemini answer is an end-tag shell."""
+        items = payload if isinstance(payload, list) else [payload]
+        visibles: List[str] = []
+        thoughts: List[str] = []
+        saw_candidate = False
+        for item in items:
+            visible, thought, _finish = self._gemini_visible_and_thought(item)
+            if visible or thought:
+                saw_candidate = True
+            if visible:
+                visibles.append(visible)
+            if thought:
+                thoughts.append(thought)
+        if not saw_candidate:
+            return ""
+        visible_text = "\n".join(visibles).strip()
+        thought_text = "\n".join(thoughts).strip()
+        if any(marker in thought_text for marker in _STRUCTURAL_DRAFT_MARKERS):
+            return merge_reasoning_when_visible_is_end_shell(visible_text, thought_text)
+        return visible_text
 
     def _build_kie_gemini_contents(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Chat messages → Gemini contents. Roles are only user and model."""
@@ -2390,7 +2427,7 @@ class LLMService:
         }
 
     def _extract_text_from_response(self, full_response: Dict[str, Any]) -> str:
-        gemini_text, _gemini_finish = self._gemini_candidate_text_and_finish(full_response)
+        gemini_text = self._gemini_joined_answer(full_response)
         if gemini_text:
             return gemini_text
 
@@ -3440,6 +3477,7 @@ class LLMService:
     ) -> Dict[str, Any]:
         """Collect OpenAI-compatible output with streaming to expose generic text response fields and bypass gateway timeouts."""
         raw_content = ""
+        thought_content = ""
         usage: Dict[str, Any] = {}
         finish_reason = "stop"
         parts_count = 0
@@ -3465,6 +3503,8 @@ class LLMService:
                         raw_content = self._coalesce_streamed_assistant_text(
                             raw_content, str(chunk.get("content", ""))
                         )
+                    elif chunk.get("type") == "thought":
+                        thought_content += str(chunk.get("content") or "")
                     elif chunk.get("type") == "done":
                         if chunk.get("usage"):
                             usage = self._normalize_provider_llm_usage(chunk.get("usage"))
@@ -3499,6 +3539,8 @@ class LLMService:
                 finish_reason = "incomplete"
                 stream_error = str(_collect_exc or "").strip()
 
+            if any(marker in thought_content for marker in _STRUCTURAL_DRAFT_MARKERS):
+                raw_content = merge_reasoning_when_visible_is_end_shell(raw_content, thought_content)
             content = self._sanitize_response_content(raw_content)
             usage = self._normalize_provider_llm_usage(usage)
             if stream_error and not str(content or "").strip():
@@ -4745,7 +4787,11 @@ class LLMService:
                                 raise ImmediateLLMFallbackError(
                                     self._vendor_failed_message(provider, f"API Error: {error_text[:500]}")
                                 )
-                        text = self._extract_text_from_response(full_json) if full_json else ""
+                        text = ""
+                        if isinstance(full_json, list):
+                            text = self._gemini_joined_answer(full_json)
+                        elif full_json:
+                            text = self._extract_text_from_response(full_json)
                         if not text:
                             text = body_text.strip()
                         if not text:
@@ -4762,7 +4808,9 @@ class LLMService:
                         if not usage_source and isinstance(full_json, dict):
                             usage_source = self._kie_usage_from_gemini_metadata(full_json.get("usageMetadata"))
                         usage_res = self._normalize_provider_llm_usage(usage_source or {})
-                        finish_res = (self._extract_finish_reason_from_response(full_json) if full_json else None) or "stop"
+                        finish_res = "stop"
+                        if isinstance(full_json, dict):
+                            finish_res = (self._extract_finish_reason_from_response(full_json) or "stop")
                         yield {"type": "done", "usage": usage_res, "finish_reason": finish_res}
                         return
 
@@ -4828,7 +4876,13 @@ class LLMService:
                                 if response_obj.get("usage"):
                                     usage = self._normalize_provider_llm_usage(response_obj.get("usage")) or usage
 
-                            content, chunk_finish_reason = self._extract_stream_chunk_text_and_finish(chunk)
+                            content = ""
+                            chunk_finish_reason = None
+                            thought_piece = ""
+                            if isinstance(chunk, dict) and isinstance(chunk.get("candidates"), list):
+                                content, thought_piece, chunk_finish_reason = self._gemini_visible_and_thought(chunk)
+                            else:
+                                content, chunk_finish_reason = self._extract_stream_chunk_text_and_finish(chunk)
                             if chunk_finish_reason:
                                 finish_reason = chunk_finish_reason
                             event_type = str(chunk.get("type") or "").strip().lower()
@@ -4843,6 +4897,8 @@ class LLMService:
                                     )
                                     content = ""
                             events: List[Dict[str, Any]] = []
+                            if thought_piece:
+                                events.append({"type": "thought", "content": thought_piece})
                             if content:
                                 saw_streamed_text = True
                                 if use_claude_api:

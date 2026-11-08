@@ -84,6 +84,37 @@ def extract_bridge_block(text: str, *, include_markers: bool = False) -> Optiona
     return _extract_marked_span(text, _BRIDGE_START_RE, _BRIDGE_END_RE, include_markers=include_markers)
 
 
+_SCENES_START_RE = re.compile(r"\[\s*SCENES_BLOCK_START\s*\]", re.IGNORECASE)
+_SCENES_END_RE = re.compile(r"\[\s*SCENES_BLOCK_END\s*\]", re.IGNORECASE)
+_PREVIOUS_EPISODE_BODY_LIMIT = 16000
+
+
+def extract_previous_episode_plot_body(text: str, *, max_chars: int = _PREVIOUS_EPISODE_BODY_LIMIT) -> str:
+    """Scene text of the previous episode. The next episode continues from this."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    start = _SCENES_START_RE.search(raw)
+    end = _SCENES_END_RE.search(raw, start.end()) if start else None
+    if start and end and end.start() > start.end():
+        body = raw[start.end() : end.start()].strip()
+    else:
+        body = raw
+        for full in (
+            extract_emergency_recovery_block(body, include_markers=True),
+            extract_bridge_block(body, include_markers=True),
+        ):
+            if full:
+                body = body.replace(full, "")
+        body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    if not body:
+        return ""
+    limit = max(1, int(max_chars or _PREVIOUS_EPISODE_BODY_LIMIT))
+    if len(body) <= limit:
+        return body
+    return "（上集正文较长，这里从靠近结尾处接上。）\n" + body[-limit:]
+
+
 def extract_previous_episode_tail_context(text: str, *, max_chars: int = 1200) -> str:
     """Prefer ending-hook / handoff sections; fall back to script tail."""
     raw = str(text or "").strip()
@@ -116,6 +147,7 @@ def build_previous_episode_handoff_prompt_block(
     *,
     previous_episode_number: int,
     current_episode_number: int,
+    include_plot_body: bool = True,
 ) -> Dict[str, Any]:
     """
     Build user-prompt handoff from previous episode footer blocks.
@@ -177,6 +209,20 @@ def build_previous_episode_handoff_prompt_block(
     else:
         parts.append("(missing)\n")
 
+    plot_body = extract_previous_episode_plot_body(previous_script) if include_plot_body else ""
+    parts.append(
+        f"\n### 上一集正文（Episode {prev_n}）\n"
+        "本集剧情必须接上这一集已经演完的事。"
+        "开场的人、地点、正在做的事、已经说出的话、没做完的事，从这段正文的结尾接着写。"
+        "不得跳开，不得改写已经发生的事。要换地方，先写离开和到达。\n"
+    )
+    if plot_body:
+        parts.append("```markdown\n")
+        parts.append(plot_body)
+        parts.append("\n```\n")
+    else:
+        parts.append("（上一集正文为空。按上面的交接块续写，不要另编上集已经发生的事。）\n")
+
     parts.append(
         "\n### Previous Ending Tail (legacy standalone 剧情一句话 / 结尾钩子 if still outside the block)\n"
     )
@@ -192,6 +238,7 @@ def build_previous_episode_handoff_prompt_block(
         "has_emergency_recovery_block": bool(recovery),
         "has_bridge_block": bool(bridge),
         "has_ending_tail": bool(tail),
+        "has_plot_body": bool(plot_body),
         "missing_blocks": missing,
     }
 
