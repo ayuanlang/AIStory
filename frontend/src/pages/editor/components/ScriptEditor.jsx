@@ -18084,6 +18084,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const phase2AutoCompletedEpisodeRef = useRef(null);
     const sceneBeatsOnlyRerunInFlightRef = useRef(false);
     const sceneMatrixRerunInFlightRef = useRef(false);
+    const sceneMatrixRerunDepthRef = useRef(0);
     const artDirectionRerunInFlightRef = useRef(false);
     const sceneMatrixLiveSeenRef = useRef(new Set());
     const orchestrationLiveImportedScenesRef = useRef(new Set());
@@ -18096,6 +18097,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const storyboardKickoffPromisesRef = useRef(new Map());
     /** While a single-scene storyboard rerun is active, automatic kickoffs stay inside this set. */
     const storyboardSingleRerunScopeRef = useRef(null);
+    /** One entry per in-flight single-scene storyboard rerun. The scope ref is their union. */
+    const storyboardSingleRerunOwnersRef = useRef(new Map());
     /** Pending storyboard kickoffs waiting for environment visual assets. */
     const pendingStoryboardKickoffsRef = useRef([]);
     /** Short-lived cache of ENV entities for storyboard gate checks (rerun / kickoff). */
@@ -32400,8 +32403,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             targets.map((item) => String(item?.sceneId || '').trim()).filter(Boolean),
             episodePrefix,
         );
-        if (rerunMode === 'single') {
-            storyboardSingleRerunScopeRef.current = scopeMarkers;
+        const storyboardScopeOwnerKey = rerunMode === 'single'
+            ? `storyboard:${targetSceneId}:${rerunStartedAt}`
+            : '';
+        const publishStoryboardSingleRerunScope = () => {
+            const union = new Set();
+            storyboardSingleRerunOwnersRef.current.forEach((markers) => {
+                if (!(markers instanceof Set)) return;
+                markers.forEach((id) => {
+                    const text = String(id || '').trim();
+                    if (text) union.add(text);
+                });
+            });
+            storyboardSingleRerunScopeRef.current = union.size > 0 ? union : null;
+            return union.size > 0;
+        };
+        if (storyboardScopeOwnerKey) {
+            storyboardSingleRerunOwnersRef.current.set(storyboardScopeOwnerKey, scopeMarkers);
+            publishStoryboardSingleRerunScope();
         }
         setIsRerunningStoryboard(true);
         beginStageRerunUi({
@@ -32603,11 +32622,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 error: '',
             }));
         } finally {
-            if (rerunMode === 'single') {
-                storyboardSingleRerunScopeRef.current = null;
+            if (storyboardScopeOwnerKey) {
+                storyboardSingleRerunOwnersRef.current.delete(storyboardScopeOwnerKey);
             }
-            setIsRerunningStoryboard(false);
-            if (!sceneMatrixRerunInFlightRef.current) {
+            const storyboardStillScoped = publishStoryboardSingleRerunScope();
+            setIsRerunningStoryboard(storyboardStillScoped);
+            if (!storyboardStillScoped && !sceneMatrixRerunInFlightRef.current) {
                 analysisRunInFlightRef.current = false;
             }
         }
@@ -32813,7 +32833,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         if (!SCENE_SUBSKILL_EDIT_KINDS.has(stableKind)) return;
-        if (isAnalyzing) return;
+        const matrixEpisodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+        const matrixSceneId = String(sceneMatrixRerun?.sceneId || '').trim();
+        const thisSceneMatrixBusy = Boolean(
+            matrixSceneId
+            && sceneUnitIdsMatch(
+                matrixSceneId,
+                targetSceneId,
+                deriveSceneOrderFromSceneId(targetSceneId),
+                matrixEpisodePrefix
+            )
+        );
+        if (thisSceneMatrixBusy) return;
+        // A full-episode run locks every 分场. Another scene's own rerun does not.
+        if ((isAnalyzing || isRetryingPhase2) && !sceneMatrixRerunInFlightRef.current) return;
         const startFrom = {
             drama_opt: 'drama',
             combat_opt: 'combat',
@@ -32866,6 +32899,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const startedAt = Date.now();
         const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+        sceneMatrixRerunDepthRef.current += 1;
         sceneMatrixRerunInFlightRef.current = true;
         sceneMatrixLiveSeenRef.current = new Set();
         analysisRunInFlightRef.current = true;
@@ -33202,8 +33236,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const freshNodeOutputs = collectStage1NodeOutputsFromSlotMap(
                     parseStageOutputsObject(freshEpisode?.ai_stage_outputs || '')?.stages?.stage1?.outputs
                 );
-                sceneMatrixClearedStepsRef.current = null;
-                setSceneMatrixClearedSteps(null);
                 latestStage1NodeOutputsRef.current = mergeStage1NodeOutputsPreferringFresh(
                     latestStage1NodeOutputsRef.current,
                     freshNodeOutputs
@@ -33214,17 +33246,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (freshResults) setPinnedSubskillResults(freshResults);
                 setDiagnosticsRefreshNonce((value) => value + 1);
             } catch (_) {}
-            latestIsAnalyzingRef.current = false;
-            setIsAnalyzing(false);
-            analysisRunInFlightRef.current = false;
-            sceneMatrixRerunInFlightRef.current = false;
-            setSceneMatrixRerun(null);
-            setActiveAnalysisTaskId('');
-            if (!isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
-                localStopRequested: analysisStopRequestedRef.current,
-                localStopReason: analysisStopReasonRef.current,
-            })) {
-                analysisStopRequestedRef.current = false;
+            sceneMatrixRerunDepthRef.current = Math.max(0, sceneMatrixRerunDepthRef.current - 1);
+            const matrixStillRunning = sceneMatrixRerunDepthRef.current > 0;
+            if (!matrixStillRunning) {
+                sceneMatrixRerunInFlightRef.current = false;
+                setSceneMatrixRerun(null);
+                sceneMatrixClearedStepsRef.current = null;
+                setSceneMatrixClearedSteps(null);
+            }
+            const storyboardStillScoped = storyboardSingleRerunScopeRef.current instanceof Set
+                && storyboardSingleRerunScopeRef.current.size > 0;
+            if (!matrixStillRunning && !storyboardStillScoped) {
+                latestIsAnalyzingRef.current = false;
+                setIsAnalyzing(false);
+                analysisRunInFlightRef.current = false;
+            }
+            if (!matrixStillRunning) {
+                setActiveAnalysisTaskId('');
+                if (!isEpisodeAnalysisUserStopRequested(activeEpisode?.id, {
+                    localStopRequested: analysisStopRequestedRef.current,
+                    localStopReason: analysisStopReasonRef.current,
+                })) {
+                    analysisStopRequestedRef.current = false;
+                }
+                clearAnalysisTaskMarker(activeEpisode?.id);
             }
             storyboardPendingAfterSubskillRef.current = new Set(
                 [...(storyboardPendingAfterSubskillRef.current || [])].filter((id) => (
@@ -33235,7 +33280,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     )
                 ))
             );
-            clearAnalysisTaskMarker(activeEpisode?.id);
         }
     };
 
@@ -39096,13 +39140,36 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 const shotState = resolveSceneStoryboardState(row.sceneId);
                                 const sceneBusy = (state) => Boolean(state?.active);
                                 const canEditSceneDraft = (state) => Boolean(state?.ready && !state?.active);
+                                const thisSceneMatrixRerun = Boolean(
+                                    sceneMatrixRerun?.sceneId
+                                    && sceneUnitIdsMatch(
+                                        sceneMatrixRerun.sceneId,
+                                        row.sceneId,
+                                        deriveSceneOrderFromSceneId(row.sceneId),
+                                        episodePrefix
+                                    )
+                                );
+                                const storyboardRerunScope = storyboardSingleRerunScopeRef.current;
+                                const scopedStoryboardRerun = storyboardRerunScope instanceof Set && storyboardRerunScope.size > 0;
+                                const thisSceneStoryboardRerun = scopedStoryboardRerun
+                                    && isSceneIdInAllowlist(row.sceneId, storyboardRerunScope, episodePrefix);
+                                const allScenesStoryboardRerun = Boolean(isRerunningStoryboard) && !scopedStoryboardRerun;
+                                // Another 分场 running must not lock this row. Only a full-episode run does.
+                                const fullEpisodeAnalysisLive = Boolean(
+                                    (isAnalyzing || isRetryingPhase2)
+                                    && !sceneMatrixRerun?.sceneId
+                                );
                                 const canRerunSubskill = (state) => Boolean(
-                                    !analysisLive
+                                    !fullEpisodeAnalysisLive
+                                    && !thisSceneMatrixRerun
+                                    && !thisSceneStoryboardRerun
                                     && !state?.active
                                     && activeEpisode?.id
                                 );
                                 const canRerunSceneFromDrama = Boolean(
-                                    !analysisLive
+                                    !fullEpisodeAnalysisLive
+                                    && !thisSceneMatrixRerun
+                                    && !thisSceneStoryboardRerun
                                     && activeEpisode?.id
                                     && getStageOutputContent('stage1', 'scene_split')
                                 );
@@ -39224,7 +39291,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         <div className="border-t border-white/5">{renderSceneNodeCell(shotState, cellProps('storyboard', shotState, {
                                             canEdit: Boolean((shotState.ready || shotState.failed) && !sceneBusy(shotState)),
                                             canRerun: Boolean(
-                                                !isRerunningStoryboard
+                                                !fullEpisodeAnalysisLive
+                                                && !allScenesStoryboardRerun
+                                                && !thisSceneMatrixRerun
+                                                && !thisSceneStoryboardRerun
                                                 && activeEpisode?.id
                                                 && (!sceneBusy(shotState) || shotState.parked)
                                             ),

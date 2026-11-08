@@ -263,6 +263,41 @@ def _select_script_analysis_api_order(ordered_ids: List[int], selected_system_ap
     return primary_id, fallback_ids
 
 
+def _attach_model_search_capability(db: Session, llm_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy the admin search flag onto the runtime config used at submit time."""
+    if not isinstance(llm_config, dict):
+        return llm_config
+    cfg = llm_config.get("config") if isinstance(llm_config.get("config"), dict) else {}
+    try:
+        setting_id = int(cfg.get("__resolved_setting_id") or 0)
+    except Exception:
+        setting_id = 0
+    if setting_id <= 0:
+        llm_config["config"] = cfg
+        return llm_config
+    try:
+        row = db.query(models.SystemAPISetting).filter(models.SystemAPISetting.id == setting_id).first()
+    except Exception:
+        logger.warning("[script_analysis] search capability lookup failed", exc_info=True)
+        return llm_config
+    if row is None:
+        return llm_config
+    modality = row.modality if isinstance(row.modality, dict) else {}
+    row_config = row.config if isinstance(row.config, dict) else {}
+    flag = modality.get("has_google_search")
+    if flag is None:
+        flag = row_config.get("has_google_search")
+    text_caps = modality.get("text_capabilities") if isinstance(modality.get("text_capabilities"), dict) else {}
+    if any(bool(text_caps.get(key)) for key in ("web_search", "google_search", "has_google_search")):
+        flag = True
+    if flag is not None:
+        cfg["has_google_search"] = bool(flag)
+    if text_caps:
+        cfg["text_capabilities"] = text_caps
+    llm_config["config"] = cfg
+    return llm_config
+
+
 def _resolve_script_analysis_dropdown_llm_config(
     db: Session,
     current_user_id: int,
@@ -292,6 +327,7 @@ def _resolve_script_analysis_dropdown_llm_config(
     cfg_for_route["__dropdown_order_ids"] = dropdown_order_ids
     cfg_for_route["__active_retry_attempts"] = 1
     config["config"] = cfg_for_route
+    _attach_model_search_capability(db, config)
 
     logger.info(
         "[%s][routing] source=dropdown_priority function_name=%s requested_system_api_id=%s selected_system_api_id=%s fallback_ids=%s provider=%s model=%s",

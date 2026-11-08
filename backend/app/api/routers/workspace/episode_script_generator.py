@@ -1697,6 +1697,30 @@ async def generate_project_episode_scripts_from_global_framework(
             f"Character Canon (Markdown):\n{character_canon_md}\n\n"
             f"{relationships_block}"
         )
+        from app.services.episode_script_reference_service import (  # noqa: E402
+            extract_episode_block_from_global_framework,
+        )
+        from app.services.reference_plot_keywords import prepare_reference_plot_submission  # noqa: E402
+
+        episode_source = ""
+        if not call_is_trailer:
+            episode_source = extract_episode_block_from_global_framework(global_md, int(idx))
+        if not str(episode_source or "").strip():
+            episode_source = framework_block or global_md
+        if call_is_trailer:
+            episode_source = "这一次写预告片。\n" + str(episode_source or "")
+        reference_plot_block, episode_llm_config, _episode_keywords = await prepare_reference_plot_submission(
+            db=db,
+            user_id=user_id,
+            llm_config=llm_config,
+            stage="episode",
+            source_text=episode_source,
+            billing_item="generate_episode_script_reference_keywords",
+        )
+        if reference_plot_block:
+            user_prompt += reference_plot_block + "\n"
+        else:
+            episode_llm_config = llm_config
         user_prompt += "Write the episode script draft now."
 
         try:
@@ -1739,7 +1763,8 @@ async def generate_project_episode_scripts_from_global_framework(
                 f"[generate_episode_scripts] REQUEST_PAYLOAD episode_number={idx} episode_id={ep_id} "
                 f"user_prompt_len={len(user_prompt)} sys_prompt_len={len(sys_prompt_episode)} "
                 f"has_constraints_block={bool(constraints_block)} has_relationships_block={bool(relationships_block)} "
-                f"has_reference_search_block=False reference_search_block_len=0 "
+                f"has_reference_search_block={bool(reference_plot_block)} "
+                f"reference_search_block_len={len(reference_plot_block)} "
                 f"has_episode_generation_guidance={bool(episode_generation_guidance_block)} "
                 f"episode_generation_guidance_len={len(episode_generation_guidance_block)}"
             )
@@ -1748,7 +1773,7 @@ async def generate_project_episode_scripts_from_global_framework(
             generated_payload = await generate_markdown_with_retry(
                 user_prompt=user_prompt,
                 sys_prompt=sys_prompt_episode,
-                llm_config=sanitize_script_generation_llm_config_text_only(llm_config),
+                llm_config=sanitize_script_generation_llm_config_text_only(episode_llm_config),
                 strict_markdown=(req.strict_markdown is not False),
                 require_h1=True,
                 return_meta=True,

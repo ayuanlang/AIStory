@@ -169,6 +169,24 @@ async def generate_project_story_dna_global(
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
 
+    reference_plot_block = ""
+    if generator_kind != "promo":
+        from app.services.reference_plot_keywords import prepare_reference_plot_submission
+
+        outline_keyword_source = format_story_creative_input_block(outline_source)
+        if series_ip:
+            outline_keyword_source = "这一次写全剧信息，不拆成各集。关键字服务整体逻辑。\n" + outline_keyword_source
+        reference_plot_block, llm_config, _outline_keywords = await prepare_reference_plot_submission(
+            db=db,
+            user_id=user_id,
+            llm_config=llm_config,
+            stage="outline",
+            source_text=outline_keyword_source,
+            billing_item="story_dna_reference_keywords",
+        )
+        if reference_plot_block:
+            user_prompt = f"{user_prompt.rstrip()}\n\n{reference_plot_block}\n"
+
     resume_md = None
     if getattr(req, "resume_episode_outlines", False) and generator_kind != "promo" and not series_ip:
         from app.services.story_episode_coverage import (  # noqa: E402
@@ -226,6 +244,7 @@ async def generate_project_story_dna_global(
                 user_id=user_id,
                 fill_system=emotion_driven_episode_fill_system() if emotion_driven else None,
                 registry_block=registry_block,
+                reference_block=reference_plot_block,
             )
             generated_payload = {"content": generated_md, "usage": fill_usage}
             fill_usage = merge_usage({}, fill_usage)
@@ -254,6 +273,7 @@ async def generate_project_story_dna_global(
                 user_id=user_id,
                 fill_system=emotion_driven_episode_fill_system() if emotion_driven else None,
                 registry_block=registry_block,
+                reference_block=reference_plot_block,
             )
             fill_usage = merge_usage({}, fill_usage)
     except Exception as e:
@@ -808,7 +828,6 @@ from app.services.story_generator_llm import (  # noqa: E402,F401
     _normalize_llm_json_object_with_repair,
     _normalize_story_field_map,
     _run_structure_llm_call,
-    _prepare_episode_script_reference_block,
 )
 
 def _persist_structure_prefill(db, project, normalized, creative_text: str) -> None:
@@ -937,7 +956,7 @@ async def structure_project_creative_input_to_story_fields(
             "Build the prefill in three layers. Concept (logline, controlling idea, antagonism, three-act value arc, world) comes from the three-act shape and McKee's Story. "
             "Characters and the arc come from Egri's Art of Dramatic Writing: premise, three dimensions, unity of opposites, orchestration, transition. "
             "Plot is the Save the Cat 15-beat sheet, causally chained, not five loose buckets. "
-            "Do not wait for or assume web-search evidence. "
+            "If the user message contains 【借鉴剧情检索】, use the model's built-in search on those keywords in this same request for the overall architecture only. Do not use this search for dialogue lines, action beats, or expressions. Do not wait for a separate evidence packet. "
             "I10 / classic_framework is mandatory and must be non-empty. "
             "Forbidden: omitting the key, \"\", 无, 暂无, N/A, 待定, 推断, or a genre label with no titled work. "
             "I10 must name one primary MODERN/CONTEMPORARY work (literary work / film / TV / game; prefer recent decades) as the PLOT-LOGIC framework, "
@@ -979,6 +998,28 @@ async def structure_project_creative_input_to_story_fields(
             "救猫咪 15 拍若写，只作为全剧走向，每拍一句方向，禁止写成某一集的场表或分集情节。"
             "不要输出 EP01–EPN。\n"
         )
+    framework_llm_config = _resolve_story_generator_script_analysis_llm_config(
+        db,
+        user_id,
+        function_name=(getattr(req, "function_name", None) or "script_analysis"),
+        system_api_id=getattr(req, "system_api_id", None),
+        context="structure_creative_input",
+        project_global_info=project_global_info,
+        user_name=user_name,
+        project_id=project_id,
+    )
+    from app.services.reference_plot_keywords import prepare_reference_plot_submission
+
+    reference_block, framework_llm_config, reference_keywords = await prepare_reference_plot_submission(
+        db=db,
+        user_id=user_id,
+        llm_config=framework_llm_config,
+        stage="framework",
+        source_text=creative_text,
+        billing_item="structure_creative_input_reference_keywords",
+    )
+    if reference_block:
+        user_prompt = f"{user_prompt.rstrip()}\n\n{reference_block}\n"
     raw = await _run_structure_llm_call(
         db=db,
         user_id=user_id,
@@ -990,6 +1031,7 @@ async def structure_project_creative_input_to_story_fields(
         llm_context="structure_creative_input",
         user_name=user_name,
         project_id=project_id,
+        llm_config=framework_llm_config,
     )
 
     structure_llm_config = _resolve_story_generator_script_analysis_llm_config(
@@ -1060,9 +1102,12 @@ async def structure_project_creative_input_to_story_fields(
     )
     normalized["prefill_meta"] = {
         "pipeline": "emotion_driven_structure" if emotion_driven else "structure_fill",
-        "key_elements": {},
+        "key_elements": reference_keywords,
         "search_meta": {
-            "query_count": 0,
+            "mode": "model_search",
+            "query_count": len((reference_keywords or {}).get("queries") or []),
+            "work_count": len((reference_keywords or {}).get("works") or []),
+            "plot_keyword_count": len((reference_keywords or {}).get("plot_keywords") or []),
             "snippet_count": 0,
             "instant_note_count": 0,
             "source_stats": {},

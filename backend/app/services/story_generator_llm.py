@@ -1271,19 +1271,23 @@ async def _run_structure_llm_call(
     llm_context: str,
     user_name: Optional[str] = None,
     project_id: Optional[int] = None,
+    llm_config: Optional[Dict[str, Any]] = None,
 ) -> str:
-    function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
-    system_api_id = getattr(req, "system_api_id", None) if req else None
-    llm_config = _resolve_story_generator_script_analysis_llm_config(
-        db,
-        user_id,
-        function_name=function_name,
-        system_api_id=system_api_id,
-        context=llm_context,
-        project_global_info=project_global_info,
-        user_name=user_name,
-        project_id=project_id,
-    )
+    if llm_config is None:
+        function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
+        system_api_id = getattr(req, "system_api_id", None) if req else None
+        llm_config = _resolve_story_generator_script_analysis_llm_config(
+            db,
+            user_id,
+            function_name=function_name,
+            system_api_id=system_api_id,
+            context=llm_context,
+            project_global_info=project_global_info,
+            user_name=user_name,
+            project_id=project_id,
+        )
+    else:
+        llm_config = sanitize_script_generation_llm_config_text_only(llm_config)
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
     provider = llm_config.get("provider") if llm_config else None
@@ -1369,17 +1373,34 @@ async def _run_structure_llm_call(
 
 async def _prepare_episode_script_reference_block(
     *,
+    db: Session,
     user_id: int,
-    project_global_info: Optional[Dict[str, Any]],
     llm_config: Dict[str, Any],
-    global_md: str,
-    episode_number: int,
+    source_text: str,
+    episode_number: int = 0,
+    project_global_info: Optional[Dict[str, Any]] = None,
+    global_md: str = "",
     project_title: str = "",
     language: str = "",
 ) -> str:
-    """Episode writing no longer runs web search; submit the framework to the LLM directly."""
-    logger.info(
-        "[generate_episode_scripts] REFERENCE_SEARCH_SKIP episode_number=%s reason=disabled",
-        episode_number,
+    """Extract this episode's reference-plot keywords and return the prompt block.
+
+    Search itself is attached to the generation config by prepare_reference_plot_submission.
+    """
+    del project_global_info, global_md, project_title, language
+    from app.services.reference_plot_keywords import prepare_reference_plot_submission
+
+    block, _bound, _keywords = await prepare_reference_plot_submission(
+        db=db,
+        user_id=user_id,
+        llm_config=llm_config,
+        stage="episode",
+        source_text=source_text,
+        billing_item="generate_episode_script_reference_keywords",
     )
-    return ""
+    logger.info(
+        "[generate_episode_scripts] REFERENCE_KEYWORDS episode_number=%s block_chars=%s",
+        episode_number,
+        len(block),
+    )
+    return block

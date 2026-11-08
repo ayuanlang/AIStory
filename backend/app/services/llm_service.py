@@ -54,6 +54,11 @@ def _copy_llm_log_trace_fields(
         value = source_cfg.get(key)
         if value not in (None, ""):
             dest_cfg[key] = value
+    for key in ("__reference_plot_search", "__reference_plot_queries"):
+        if key in dest_cfg:
+            continue
+        if key in source_cfg:
+            dest_cfg[key] = source_cfg[key]
     dest["config"] = dest_cfg
     return dest
 
@@ -381,6 +386,89 @@ Example Response:
 If the user's request is not clear or does not require a tool, return an empty plan.
 """
 
+_BRACKET_TAG_RE = re.compile(r"`?\[[A-Za-z0-9_:-]+\]`?")
+_THINK_BLOCK_RE = re.compile(
+    r"<(?:think|thinking)\b[^>]*>([\s\S]*?)</(?:think|thinking)>",
+    re.IGNORECASE,
+)
+_THINK_TAG_RE = re.compile(r"</?(?:think|thinking)\b[^>]*>", re.IGNORECASE)
+_STRUCTURAL_DRAFT_MARKERS = (
+    "[BEAT_START",
+    "[DERIVED_ENV",
+    "[SCENES_BLOCK_START]",
+    "[SCENE_START:",
+    "【建置】",
+    "【入戏】",
+    "[CHAR_EXTRACT",
+    "[PROP_EXTRACT",
+    "[DRAMA_STANDARDIZATION",
+)
+
+
+def visible_text_is_end_shell(text: str) -> bool:
+    """True when the visible answer is empty or only closing tags."""
+    source = str(text or "").strip()
+    if not source:
+        return True
+    if not _BRACKET_TAG_RE.search(source):
+        return False
+    residue = _BRACKET_TAG_RE.sub("", source)
+    residue = re.sub(r"[\s`，。、；：！？,.|:;!\-—_]+", "", residue)
+    return len(residue) == 0
+
+
+def merge_reasoning_when_visible_is_end_shell(content: str, reasoning: str) -> str:
+    """Use reasoning only when the visible answer is an end-tag shell.
+
+    Providers sometimes put the scene draft in ``reasoning_content`` and the
+    required closing tags in ``content``. Prefer content whenever it already
+    holds the draft.
+    """
+    visible = str(content or "")
+    hidden = str(reasoning or "").strip()
+    if not hidden:
+        return visible
+    if not visible_text_is_end_shell(visible):
+        return visible
+    if not any(marker in hidden for marker in _STRUCTURAL_DRAFT_MARKERS):
+        return visible if visible.strip() else hidden
+    visible_stripped = visible.strip()
+    if visible_stripped and visible_stripped not in hidden:
+        return f"{hidden}\n{visible_stripped}".strip()
+    return hidden
+
+
+def promote_think_draft_when_visible_is_end_shell(text: str) -> str:
+    """Keep a structural draft that a model hid inside think tags.
+
+    Some models put the scene in ``<think>`` and emit only the required end
+    markers as the visible answer. Stripping think then leaves an empty shell.
+    """
+    source = str(text or "")
+    if not source.strip():
+        return source
+    bodies = [
+        match.group(1).strip()
+        for match in _THINK_BLOCK_RE.finditer(source)
+        if str(match.group(1) or "").strip()
+    ]
+    drafts = [body for body in bodies if any(marker in body for marker in _STRUCTURAL_DRAFT_MARKERS)]
+    if not drafts:
+        return source
+    visible = _THINK_TAG_RE.sub("", _THINK_BLOCK_RE.sub("", source)).strip()
+    if not visible_text_is_end_shell(visible):
+        return source
+    draft = max(drafts, key=len)
+    if visible and visible not in draft:
+        return f"{draft}\n{visible}".strip()
+    return draft
+
+
+def strip_closed_think_blocks(text: str) -> str:
+    cleaned = _THINK_BLOCK_RE.sub("", str(text or ""))
+    return _THINK_TAG_RE.sub("", cleaned)
+
+
 class LLMService:
     @contextmanager
     def _llm_log_trace(self, extra_config: Optional[Dict[str, Any]]):
@@ -560,6 +648,9 @@ class LLMService:
         "负载过高",
         "稍后再试",
         "系统繁忙",
+        "model is not supported",
+        "model name you specified is not supported",
+        "unsupported model",
     )
 
     def _is_immediate_provider_fallback_error(self, error: Any, *, status_code: Any = None) -> bool:
@@ -1147,6 +1238,10 @@ class LLMService:
         return acc + part
 
     def _extract_stream_chunk_text_and_finish(self, chunk: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+        gemini_text, gemini_finish = self._gemini_candidate_text_and_finish(chunk)
+        if gemini_text or gemini_finish:
+            return gemini_text, gemini_finish
+
         choices = chunk.get("choices") or []
         if isinstance(choices, list) and choices:
             first = choices[0] if isinstance(choices[0], dict) else {}
@@ -1154,9 +1249,10 @@ class LLMService:
             delta = first.get("delta") if isinstance(first.get("delta"), dict) else {}
             content = ""
             if isinstance(delta, dict):
-                content = str(delta.get("content") or "")
-                if not content:
-                    content = str(delta.get("reasoning_content") or "")
+                content = merge_reasoning_when_visible_is_end_shell(
+                    str(delta.get("content") or ""),
+                    str(delta.get("reasoning_content") or ""),
+                )
             if content or finish_reason:
                 return content, finish_reason
 
@@ -1210,13 +1306,23 @@ class LLMService:
         if not isinstance(text, str) or not text:
             return text
 
-        cleaned = text
+        cleaned = promote_think_draft_when_visible_is_end_shell(text)
         # Strip closed <think>...</think> blocks.
-        cleaned = re.sub(r"<think\b[^>]*>[\s\S]*?</think>", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r"<(?:think|thinking)\b[^>]*>[\s\S]*?</(?:think|thinking)>",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
         # Strip orphan think tags without removing normal text characters.
-        cleaned = re.sub(r"</?think\b[^>]*>", "", cleaned, flags=re.IGNORECASE)
+        cleaned = _THINK_TAG_RE.sub("", cleaned)
         # Strip unclosed <think... blocks — consume content up to JSON ({) or markdown (```), or end of string.
-        cleaned = re.sub(r"<think\b[^>]*>(?:(?!\{|```)[\s\S])*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r"<(?:think|thinking)\b[^>]*>(?:(?!\{|```)[\s\S])*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
 
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
@@ -1388,7 +1494,10 @@ class LLMService:
         cfg = dict(extra_config or {})
 
         _, resolved_model, url, transport_kind = self._resolve_kie_llm_url(base_url, model)
-        endpoint_label = "responses" if transport_kind == "responses" else "chat/completions"
+        endpoint_label = {
+            "responses": "responses",
+            "gemini": "streamGenerateContent",
+        }.get(transport_kind, "chat/completions")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -1405,6 +1514,12 @@ class LLMService:
             if instructions:
                 payload["instructions"] = instructions
             payload.update(self._extract_kie_responses_options(cfg))
+        elif transport_kind == "gemini":
+            payload = {
+                "stream": False,
+                "contents": self._build_kie_gemini_contents(messages),
+            }
+            payload.update(self._extract_kie_gemini_options(cfg))
         else:
             payload = {
                 "model": resolved_model,
@@ -1421,6 +1536,13 @@ class LLMService:
         ):
             cap_source = "user_configured"
 
+        self._apply_reference_plot_search_tools(
+            payload,
+            provider="kie",
+            model=resolved_model,
+            extra_config=cfg,
+            transport=transport_kind,
+        )
         prompt_chars = sum(len(str(m.get("content", ""))) for m in (messages or []))
         _debug_log(
             "[DEBUG][LLM][KIE] Request | "
@@ -1511,11 +1633,15 @@ class LLMService:
 
         data = resp.json()
 
-        # KIE may return HTTP 200 with an error payload like {"code":500,"msg":"..."}
-        kie_code = data.get("code")
-        if kie_code is not None and str(kie_code) != "200" and "choices" not in data:
-            err_msg = data.get("msg") or data.get("message") or data.get("error") or str(data)
-            raise Exception(f"KIE {endpoint_label} error code={kie_code}: {err_msg}")
+        # KIE may return HTTP 200 with an error payload like {"code":422,"msg":"..."}.
+        envelope_error = self._kie_error_envelope_message(data)
+        if envelope_error:
+            raise Exception(f"KIE {endpoint_label} {envelope_error}")
+
+        if isinstance(data, dict) and not data.get("usage"):
+            gemini_usage = self._kie_usage_from_gemini_metadata(data.get("usageMetadata"))
+            if gemini_usage:
+                data["usage"] = gemini_usage
 
         # KIE usage occasionally under-reports token counts for large prompts.
         # Normalize with local rough estimates to keep diagnostics/billing consistent.
@@ -1590,6 +1716,7 @@ class LLMService:
             "tool_choice",
             "metadata",
             "reasoning",
+            "text",
             "stop",
             "seed",
         }
@@ -1615,7 +1742,7 @@ class LLMService:
 
         if "reasoning" not in out:
             effort = str(safe_cfg.get("reasoning_effort") or "").strip().lower()
-            if effort in {"low", "medium", "high"}:
+            if effort in {"low", "medium", "high", "xhigh"}:
                 out["reasoning"] = {"effort": effort}
 
         tools = out.get("tools")
@@ -1784,11 +1911,317 @@ class LLMService:
         instructions = "\n\n".join(chunk for chunk in instructions_parts if chunk).strip()
         return instructions, response_input
 
+    @staticmethod
+    def _kie_llm_responses_family(model: Any) -> str:
+        """KIE chat family that must use a Responses endpoint, not /{model}/v1/chat/completions."""
+        key = str(model or "").strip().lower()
+        if key.startswith("gpt-"):
+            return "codex"
+        # grok-imagine is an image/video market model, not this chat transport.
+        if key.startswith("grok-") and not key.startswith("grok-imagine"):
+            return "grok"
+        return ""
+
+    @staticmethod
+    def _kie_error_envelope_message(data: Any) -> str:
+        """KIE often returns HTTP 200 with {"code":422,"msg":"...","data":null}."""
+        if not isinstance(data, dict):
+            return ""
+        if "choices" in data or "output" in data:
+            return ""
+        code = data.get("code")
+        if code is None:
+            return ""
+        if str(code).strip() in {"200", "0"}:
+            return ""
+        msg = data.get("msg") or data.get("message") or data.get("error") or data
+        return f"error code={code}: {msg}"
+
+    _KIE_OPENAI_GEMINI_MODELS = {
+        "gemini-3-pro",
+        "gemini-3-pro-preview",
+        "gemini-2.5-pro",
+        "gemini-2-5-pro",
+        "gemini-2.5-flash",
+        "gemini-2-5-flash",
+        "gemini-3.1-pro",
+        "gemini-3-1-pro",
+    }
+
+    @classmethod
+    def _canonicalize_kie_gemini_model(cls, model: Any) -> str:
+        """gemini-3.8-flash → gemini-3-8-flash. Leave documented dotted OpenAI ids alone."""
+        text = str(model or "").strip()
+        if text.lower() in cls._KIE_OPENAI_GEMINI_MODELS:
+            return text
+        match = re.fullmatch(r"(?i)gemini-(\d+)\.(\d+)(-[A-Za-z0-9].*)", text)
+        if not match:
+            return text
+        return f"gemini-{match.group(1)}-{match.group(2)}{match.group(3)}".lower()
+
+    @classmethod
+    def _is_kie_native_gemini(cls, model: Any) -> bool:
+        """Gemini chat models served at /gemini/v1/models/{model}:streamGenerateContent.
+
+        gemini-3-pro / gemini-2.5-* and *-openai stay on /{model}/v1/chat/completions.
+        """
+        key = str(model or "").strip().lower()
+        if not key.startswith("gemini"):
+            return False
+        if key.endswith("-openai") or key in cls._KIE_OPENAI_GEMINI_MODELS:
+            return False
+        if any(token in key for token in ("image", "omni", "tts", "video", "audio")):
+            return False
+        return True
+
+    @staticmethod
+    def _kie_usage_from_gemini_metadata(metadata: Any) -> Dict[str, int]:
+        if not isinstance(metadata, dict):
+            return {}
+        try:
+            prompt_tokens = int(metadata.get("promptTokenCount") or 0)
+            completion_tokens = int(metadata.get("candidatesTokenCount") or 0)
+            total_tokens = int(metadata.get("totalTokenCount") or 0)
+        except Exception:
+            return {}
+        if prompt_tokens <= 0 and completion_tokens <= 0 and total_tokens <= 0:
+            return {}
+        if total_tokens <= 0:
+            total_tokens = prompt_tokens + completion_tokens
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    def _gemini_candidate_text_and_finish(self, payload: Any) -> Tuple[str, Optional[str]]:
+        """Read Gemini streamGenerateContent candidates. Skip thought-only parts."""
+        if not isinstance(payload, dict):
+            return "", None
+        candidates = payload.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            return "", None
+        texts: List[str] = []
+        finish_reason = None
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            reason = str(candidate.get("finishReason") or candidate.get("finish_reason") or "").strip()
+            if reason and not finish_reason:
+                finish_reason = reason.lower()
+            content = candidate.get("content") if isinstance(candidate.get("content"), dict) else {}
+            parts = content.get("parts") if isinstance(content.get("parts"), list) else []
+            for part in parts:
+                if not isinstance(part, dict) or part.get("thought") is True:
+                    continue
+                text = str(part.get("text") or "").strip()
+                if text:
+                    texts.append(text)
+                    continue
+                function_call = part.get("functionCall") if isinstance(part.get("functionCall"), dict) else None
+                if function_call:
+                    try:
+                        args = json.dumps(function_call.get("args") or {}, ensure_ascii=False)
+                    except Exception:
+                        args = str(function_call.get("args") or "")
+                    texts.append(f"[TOOL_USE: {function_call.get('name')}] {args}")
+        return "\n".join(texts).strip(), finish_reason
+
+    def _build_kie_gemini_contents(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Chat messages → Gemini contents. Roles are only user and model."""
+        contents: List[Dict[str, Any]] = []
+
+        def _append(role: str, parts: List[Dict[str, Any]]) -> None:
+            if not parts:
+                return
+            if contents and contents[-1].get("role") == role:
+                contents[-1]["parts"].extend(parts)
+                return
+            contents.append({"role": role, "parts": parts})
+
+        for message in messages or []:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "user").strip().lower() or "user"
+            gemini_role = "model" if role == "assistant" else "user"
+            _append(gemini_role, self._kie_gemini_parts(message.get("content")))
+        if not contents:
+            contents.append({"role": "user", "parts": [{"text": ""}]})
+        return contents
+
+    def _kie_gemini_parts(self, raw_content: Any) -> List[Dict[str, Any]]:
+        parts: List[Dict[str, Any]] = []
+
+        def _append_text(value: Any) -> None:
+            text = str(value or "").strip()
+            if text:
+                parts.append({"text": text})
+
+        def _append_media(url: str) -> None:
+            media_url = str(url or "").strip()
+            if not media_url:
+                return
+            if media_url.startswith("data:"):
+                header, _, data = media_url.partition(",")
+                mime = "image/jpeg"
+                if header.startswith("data:"):
+                    mime = header[5:].split(";", 1)[0] or mime
+                if data:
+                    parts.append({"inline_data": {"mime_type": mime, "data": data}})
+                return
+            lower = media_url.lower()
+            mime = "image/jpeg"
+            if ".png" in lower:
+                mime = "image/png"
+            elif ".webp" in lower:
+                mime = "image/webp"
+            elif ".gif" in lower:
+                mime = "image/gif"
+            parts.append({"file_data": {"mime_type": mime, "file_uri": media_url}})
+
+        if isinstance(raw_content, list):
+            for item in raw_content:
+                if isinstance(item, str):
+                    _append_text(item)
+                    continue
+                if not isinstance(item, dict):
+                    _append_text(self._extract_text_from_content(item))
+                    continue
+                part_type = str(item.get("type") or "").strip().lower()
+                if part_type in {"text", "input_text", "output_text"}:
+                    _append_text(item.get("text"))
+                    continue
+                if part_type in {"image_url", "input_image"}:
+                    image_value = item.get("image_url")
+                    if isinstance(image_value, dict):
+                        _append_media(str(image_value.get("url") or ""))
+                    else:
+                        _append_media(str(image_value or item.get("url") or ""))
+                    continue
+                if item.get("text"):
+                    _append_text(item.get("text"))
+            return parts
+
+        if isinstance(raw_content, str):
+            _append_text(raw_content)
+            return parts
+        _append_text(self._extract_text_from_content(raw_content))
+        return parts
+
+    @staticmethod
+    def _uppercase_gemini_schema(node: Any) -> Any:
+        if isinstance(node, list):
+            return [LLMService._uppercase_gemini_schema(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        copied: Dict[str, Any] = {}
+        for key, value in node.items():
+            if key == "type" and isinstance(value, str):
+                copied[key] = value.upper()
+            else:
+                copied[key] = LLMService._uppercase_gemini_schema(value)
+        return copied
+
+    def _apply_reference_plot_search_tools(
+        self,
+        payload: Dict[str, Any],
+        *,
+        provider: Any,
+        model: Any,
+        extra_config: Optional[Dict[str, Any]],
+        transport: str = "",
+    ) -> Dict[str, Any]:
+        from app.services.reference_plot_keywords import apply_reference_plot_search_tools
+
+        return apply_reference_plot_search_tools(
+            payload,
+            provider=provider,
+            model=model,
+            extra_config=extra_config,
+            transport=transport,
+        )
+
+    @staticmethod
+    def _response_rejects_reference_search(response: Any) -> bool:
+        from app.services.reference_plot_keywords import search_tool_was_rejected
+
+        if not isinstance(response, dict):
+            return False
+        blob = " ".join(
+            str(response.get(key) or "")
+            for key in ("stream_error", "reply", "content", "error")
+        )
+        if not search_tool_was_rejected(Exception(blob)):
+            return False
+        reply = str(response.get("reply") or response.get("content") or "").strip()
+        if response.get("_immediate_fallback") or response.get("finish_reason") == "error":
+            return True
+        return (not reply) or reply.lower().startswith("error:")
+
+    def _kie_gemini_tools(self, tools: Any) -> List[Dict[str, Any]]:
+        if not isinstance(tools, list):
+            return []
+        declarations: List[Dict[str, Any]] = []
+        passthrough: List[Dict[str, Any]] = []
+        for item in tools:
+            if not isinstance(item, dict):
+                continue
+            if "google_search" in item and "googleSearch" not in item:
+                raw_search = item.get("google_search")
+                passthrough.append({"googleSearch": raw_search if isinstance(raw_search, dict) else {}})
+                continue
+            if "functionDeclarations" in item or "googleSearch" in item:
+                passthrough.append(item)
+                continue
+            function = item.get("function") if isinstance(item.get("function"), dict) else None
+            if str(item.get("type") or "").strip().lower() == "function" and function:
+                name = str(function.get("name") or "").strip()
+                if not name:
+                    continue
+                declaration: Dict[str, Any] = {"name": name}
+                description = str(function.get("description") or "").strip()
+                if description:
+                    declaration["description"] = description
+                parameters = function.get("parameters")
+                if isinstance(parameters, dict):
+                    declaration["parameters"] = self._uppercase_gemini_schema(parameters)
+                declarations.append(declaration)
+        if declarations:
+            passthrough.append({"functionDeclarations": declarations})
+        return passthrough
+
+    def _extract_kie_gemini_options(self, cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """Map configured thinking/tools onto the native Gemini body. Do not invent the sample tool."""
+        safe_cfg = dict(cfg or {})
+        out: Dict[str, Any] = {}
+        thinking: Dict[str, Any] = {}
+        include = safe_cfg.get("includeThoughts")
+        if include is None:
+            include = safe_cfg.get("include_thoughts")
+        if include is True:
+            thinking["includeThoughts"] = True
+        level = str(safe_cfg.get("thinkingLevel") or safe_cfg.get("reasoning_effort") or "").strip().lower()
+        if level in {"medium", "xhigh"}:
+            level = "high"
+        if level in {"low", "high"}:
+            thinking["thinkingLevel"] = level
+        if thinking:
+            out["generationConfig"] = {"thinkingConfig": thinking}
+        tools = self._kie_gemini_tools(safe_cfg.get("tools"))
+        if tools:
+            out["tools"] = tools
+        return out
+
     def _resolve_kie_llm_url(self, base_url: str, model: str) -> Tuple[str, str, str, str]:
         """Normalize KIE URL and resolve transport endpoint.
 
         Returns: (root, resolved_model, url, transport_kind)
         transport_kind is either "chat_completions" or "responses".
+
+        Grok chat models (grok-4-7 and the same family) are served at
+        POST /grok/v1/responses. GPT stays on /codex/v1/responses.
+        Sending grok-4-7 to /{model}/v1/chat/completions returns
+        {"code":422,"msg":"The model is not supported"}.
         """
         root = (base_url or "https://api.kie.ai").strip().rstrip("/")
         lower_root = root.lower()
@@ -1799,32 +2232,52 @@ class LLMService:
             "claude-sonnet-4.5": "claude-sonnet-4-5",
         }
         resolved_model = kie_llm_alias.get(model, model)
+        grok_dot = re.fullmatch(r"(?i)(grok-\d+)\.(\d+)", str(resolved_model or "").strip())
+        if grok_dot:
+            resolved_model = f"{grok_dot.group(1)}-{grok_dot.group(2)}".lower()
+        resolved_model = self._canonicalize_kie_gemini_model(resolved_model)
         if resolved_model != model:
             logger.info("KIE LLM model remapped | from=%s to=%s", model, resolved_model)
 
-        # Responses transport (e.g. https://api.kie.ai/codex/v1/responses)
-        responses_match = re.search(r"/(?:codex/)?v1/responses(?:/|$)", lower_root)
+        def _responses_url(provider_root: str, family: str) -> str:
+            cleaned = re.sub(r"/(?:codex|grok)$", "", str(provider_root or "").rstrip("/"), flags=re.IGNORECASE).rstrip("/")
+            if not cleaned:
+                cleaned = "https://api.kie.ai"
+            return f"{cleaned}/{family}/v1/responses"
+
+        # Responses transport already present on the saved base URL.
+        responses_match = re.search(r"/(?:(?:codex|grok)/)?v1/responses(?:/|$)", lower_root)
         if responses_match:
             match_end = responses_match.end()
             canonical_endpoint = root[:match_end].rstrip("/")
             canonical_root = root[:responses_match.start()].rstrip("/")
             if not canonical_root:
                 canonical_root = "https://api.kie.ai"
-
+            family = self._kie_llm_responses_family(resolved_model)
+            if family:
+                return canonical_root, resolved_model, _responses_url(canonical_root, family), "responses"
+            if self._is_kie_native_gemini(resolved_model):
+                host = re.sub(r"/(?:codex|grok)$", "", canonical_root, flags=re.IGNORECASE).rstrip("/") or "https://api.kie.ai"
+                return host, resolved_model, f"{host}/gemini/v1/models/{resolved_model}:streamGenerateContent", "gemini"
             return canonical_root, resolved_model, canonical_endpoint, "responses"
 
         # If a full endpoint was saved (including model path), collapse back to provider root.
+        root = re.sub(r"/gemini/v1/models/[^/]+:streamGenerateContent/?$", "", root, flags=re.IGNORECASE)
         root = re.sub(r"/[^/]+/v1/chat/completions/?$", "", root, flags=re.IGNORECASE)
 
         # Strip other legacy fragments if present.
-        for suffix in ("/api/v1/jobs", "/v1/chat/completions", "/v1", "/responses"):
-            if root.endswith(suffix):
+        for suffix in ("/api/v1/jobs", "/v1/chat/completions", "/codex/v1", "/grok/v1", "/v1", "/responses"):
+            if root.lower().endswith(suffix):
                 root = root[: -len(suffix)].rstrip("/")
 
-        # For KIE GPT family, prefer canonical responses endpoint by default.
-        if str(resolved_model or "").strip().lower().startswith("gpt-"):
-            url = f"{root}/codex/v1/responses"
+        family = self._kie_llm_responses_family(resolved_model)
+        if family:
+            url = _responses_url(root, family)
             return root, resolved_model, url, "responses"
+
+        if self._is_kie_native_gemini(resolved_model):
+            url = f"{root}/gemini/v1/models/{resolved_model}:streamGenerateContent"
+            return root, resolved_model, url, "gemini"
 
         url = f"{root}/{resolved_model}/v1/chat/completions"
         return root, resolved_model, url, "chat_completions"
@@ -1843,6 +2296,10 @@ class LLMService:
             reason = choice.get("finish_reason")
             if reason is not None and str(reason).strip() != "":
                 return reason
+
+        _, gemini_finish = self._gemini_candidate_text_and_finish(full_response)
+        if gemini_finish:
+            return gemini_finish
 
         # KIE responses API often reports terminal status at top-level.
         status = full_response.get("status")
@@ -1916,6 +2373,10 @@ class LLMService:
         }
 
     def _extract_text_from_response(self, full_response: Dict[str, Any]) -> str:
+        gemini_text, _gemini_finish = self._gemini_candidate_text_and_finish(full_response)
+        if gemini_text:
+            return gemini_text
+
         # KIE responses API shape:
         # {"output":[{"type":"message","content":[{"type":"output_text","text":"..."}]}], ...}
         output_items = full_response.get("output") or []
@@ -1942,13 +2403,10 @@ class LLMService:
                 message = choice.get("message") or {}
                 if isinstance(message, dict):
                     text = self._extract_text_from_content(message.get("content"))
-                    if text:
-                        all_choice_chunks.append(text)
-                        continue
-
                     reasoning_text = self._extract_text_from_content(message.get("reasoning_content"))
-                    if reasoning_text:
-                        all_choice_chunks.append(reasoning_text)
+                    merged = merge_reasoning_when_visible_is_end_shell(text, reasoning_text)
+                    if merged.strip():
+                        all_choice_chunks.append(merged)
                         continue
 
                     refusal = message.get("refusal")
@@ -3026,6 +3484,26 @@ class LLMService:
 
             content = self._sanitize_response_content(raw_content)
             usage = self._normalize_provider_llm_usage(usage)
+            if stream_error and not str(content or "").strip():
+                provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
+                self._safe_log_json("LLM_RESPONSE_ERROR", {
+                    "request_id": extra_config.get("request_id") if extra_config else None,
+                    "provider": provider,
+                    "category": str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper(),
+                    "model": model,
+                    "status_code": None,
+                    "response_text": stream_error[:500],
+                    "human_summary": stream_error[:500],
+                    "stream": True,
+                })
+                return {
+                    "raw_content": "",
+                    "content": "",
+                    "usage": usage,
+                    "finish_reason": "error",
+                    "request_id": extra_config.get("request_id"),
+                    "stream_error": stream_error,
+                }
             logger.info(
                 "[COLLECT] parts=%d raw_len=%d content_len=%d finish_reason=%s usage=%s snippet=%r",
                 parts_count, len(raw_content), len(content or ""), finish_reason, usage, (content or "")[:120],
@@ -3235,44 +3713,74 @@ class LLMService:
              # If provider is Doubao/Grsai Video, we might need specific payload.
              pass
 
+        def _error_payload(exc: Exception) -> Dict[str, Any]:
+            logger.error(f"Generate Content Error: {exc}")
+            provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
+            message = self._vendor_failed_message(provider, exc)
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
+                "provider": provider,
+                "model": model,
+                "error": str(exc),
+                "human_summary": message
+            })
+            return {
+                "content": f"Error: {message}",
+                "usage": {},
+                "finish_reason": "error" if self._is_immediate_provider_fallback_error(exc) else None,
+                "stream_error": str(exc),
+                "_immediate_fallback": self._is_immediate_provider_fallback_error(exc),
+            }
+
         with self._llm_log_trace(extra_config):
             try:
                  # Using the generic call which handles standard messages
                  response = await self._call_openai_compatible(base_url, api_key, model, messages, extra_config)
-                 
-                 # Unpack
-                 content = response.get("reply", "")
-                 usage = response.get("usage", {})
-                 finish_reason = response.get("finish_reason")
-                 if not content and "content" in response:
-                     content = response["content"] # fallback if _call_openai_compatible returns typical dict
-                 
-                 return {
-                     "content": content,
-                     "usage": usage,
-                     "finish_reason": finish_reason,
-                     "request_id": response.get("request_id"),
-                     "stream_error": response.get("stream_error"),
-                     "_immediate_fallback": bool(response.get("_immediate_fallback")),
-                 }
+            except Exception as first_error:
+                 from app.services.reference_plot_keywords import search_tool_was_rejected
 
-            except Exception as e:
-                 logger.error(f"Generate Content Error: {e}")
-                 provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
-                 message = self._vendor_failed_message(provider, e)
-                 self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
-                     "provider": provider,
-                     "model": model,
-                     "error": str(e),
-                     "human_summary": message
-                 })
-                 return {
-                     "content": f"Error: {message}",
-                     "usage": {},
-                     "finish_reason": "error" if self._is_immediate_provider_fallback_error(e) else None,
-                     "stream_error": str(e),
-                     "_immediate_fallback": self._is_immediate_provider_fallback_error(e),
-                 }
+                 if extra_config.get("__reference_plot_search") and search_tool_was_rejected(first_error):
+                     logger.warning(
+                         "reference plot search tool rejected, retry without search | provider=%s model=%s err=%s",
+                         extra_config.get("__provider"),
+                         model,
+                         str(first_error)[:300],
+                     )
+                     extra_config["__reference_plot_search"] = False
+                     retry_config = dict(extra_config)
+                     try:
+                         response = await self._call_openai_compatible(base_url, api_key, model, messages, retry_config)
+                     except Exception as retry_error:
+                         return _error_payload(retry_error)
+                 else:
+                     return _error_payload(first_error)
+
+            if extra_config.get("__reference_plot_search") and self._response_rejects_reference_search(response):
+                logger.warning(
+                    "reference plot search tool rejected, retry without search | provider=%s model=%s err=%s",
+                    extra_config.get("__provider"),
+                    model,
+                    str((response or {}).get("stream_error") or (response or {}).get("reply") or "")[:300],
+                )
+                retry_config = dict(extra_config)
+                retry_config["__reference_plot_search"] = False
+                try:
+                    response = await self._call_openai_compatible(base_url, api_key, model, messages, retry_config)
+                except Exception as retry_error:
+                    return _error_payload(retry_error)
+
+            content = response.get("reply", "")
+            usage = response.get("usage", {})
+            finish_reason = response.get("finish_reason")
+            if not content and "content" in response:
+                content = response["content"]
+            return {
+                "content": content,
+                "usage": usage,
+                "finish_reason": finish_reason,
+                "request_id": response.get("request_id"),
+                "stream_error": response.get("stream_error"),
+                "_immediate_fallback": bool(response.get("_immediate_fallback")),
+            }
 
     async def _raw_llm_request(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> str:
         data = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
@@ -3469,6 +3977,14 @@ class LLMService:
                         total += len(str(part))
                 return total
             return len(str(content))
+
+        self._apply_reference_plot_search_tools(
+            payload,
+            provider=provider,
+            model=model,
+            extra_config=extra_config,
+            transport="claude" if use_claude_api else ("responses" if n1n_use_responses else "chat"),
+        )
 
         roles = {}
         prompt_chars = 0
@@ -3976,6 +4492,11 @@ class LLMService:
             }
             if instructions:
                 payload["instructions"] = instructions
+        elif provider == "kie" and resolved_category == "LLM" and kie_transport_kind == "gemini":
+            payload = {
+                "stream": (extra_config or {}).get("stream", True),
+                "contents": self._build_kie_gemini_contents(messages),
+            }
         else:
             payload = {
                 "model": resolved_model if (provider == "kie" and resolved_category == "LLM") else model,
@@ -3987,6 +4508,8 @@ class LLMService:
         if provider == "kie" and resolved_category == "LLM":
             if kie_transport_kind == "responses":
                 payload.update(self._extract_kie_responses_options(extra_config or {}))
+            elif kie_transport_kind == "gemini":
+                payload.update(self._extract_kie_gemini_options(extra_config or {}))
             else:
                 payload.update(self._extract_kie_chat_options(extra_config or {}))
         elif n1n_use_responses:
@@ -4002,7 +4525,7 @@ class LLMService:
             payload.get("stream")
             and not use_claude_api
             and not n1n_use_responses
-            and not (provider == "kie" and kie_transport_kind == "responses")
+            and not (provider == "kie" and kie_transport_kind in {"responses", "gemini"})
         ):
             stream_options = payload.get("stream_options")
             if not isinstance(stream_options, dict):
@@ -4011,6 +4534,22 @@ class LLMService:
                 stream_options = dict(stream_options)
             stream_options.setdefault("include_usage", True)
             payload["stream_options"] = stream_options
+
+        if use_claude_api and resolved_category == "LLM":
+            search_transport = "claude"
+        elif provider == "kie" and kie_transport_kind == "gemini":
+            search_transport = "gemini"
+        elif n1n_use_responses or (provider == "kie" and kie_transport_kind == "responses"):
+            search_transport = "responses"
+        else:
+            search_transport = "chat"
+        self._apply_reference_plot_search_tools(
+            payload,
+            provider=provider,
+            model=payload.get("model") or model,
+            extra_config=extra_config,
+            transport=search_transport,
+        )
 
         self._safe_log_json("LLM_REQUEST", { "request_id": extra_config.get("request_id") if extra_config else None,
             "provider": provider,
@@ -4146,6 +4685,33 @@ class LLMService:
                             full_json = _json.loads(body_bytes)
                         except Exception:
                             full_json = {}
+                        envelope_error = self._kie_error_envelope_message(full_json)
+                        if envelope_error and str(provider or "").strip().lower() == "kie":
+                            human_summary = self._build_human_readable_http_error_summary(
+                                provider=provider,
+                                model=payload.get("model") or model,
+                                status_code=response.status_code,
+                                response_text=envelope_error,
+                            )
+                            logger.warning("%s", human_summary)
+                            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                                "request_id": extra_config.get("request_id") if extra_config else None,
+                                "provider": provider,
+                                "category": resolved_category,
+                                "request": {"url": url, "model": payload.get("model") or model, "messages": messages, "config": extra_config},
+                                "model": payload.get("model") or model,
+                                "status_code": response.status_code,
+                                "response_text": body_text[:500],
+                                "human_summary": human_summary,
+                                "resolved_source": (extra_config or {}).get("__resolved_source"),
+                                "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+                                "stream": True,
+                            })
+                            wrapped = self._vendor_failed_message(provider, envelope_error)
+                            self._abandon_open_stream(response)
+                            if self._is_immediate_provider_fallback_error(wrapped, status_code=response.status_code):
+                                raise ImmediateLLMFallbackError(wrapped)
+                            raise Exception(wrapped)
                         error_obj = full_json.get("error") if isinstance(full_json, dict) else None
                         if error_obj:
                             if isinstance(error_obj, str):
@@ -4173,9 +4739,10 @@ class LLMService:
                             )
                         if text:
                             yield {"type": "token", "content": text}
-                        usage_res = self._normalize_provider_llm_usage(
-                            full_json.get("usage", {}) if full_json else {}
-                        )
+                        usage_source = full_json.get("usage") if isinstance(full_json, dict) else {}
+                        if not usage_source and isinstance(full_json, dict):
+                            usage_source = self._kie_usage_from_gemini_metadata(full_json.get("usageMetadata"))
+                        usage_res = self._normalize_provider_llm_usage(usage_source or {})
                         finish_res = (self._extract_finish_reason_from_response(full_json) if full_json else None) or "stop"
                         yield {"type": "done", "usage": usage_res, "finish_reason": finish_res}
                         return
@@ -4206,6 +4773,14 @@ class LLMService:
                             except json.JSONDecodeError:
                                 return [], False, False
 
+                            envelope_error = self._kie_error_envelope_message(chunk)
+                            if envelope_error and str(provider or "").strip().lower() == "kie":
+                                wrapped = self._vendor_failed_message(provider, envelope_error)
+                                self._abandon_open_stream(response)
+                                if self._is_immediate_provider_fallback_error(wrapped):
+                                    raise ImmediateLLMFallbackError(wrapped)
+                                raise Exception(wrapped)
+
                             error_obj = chunk.get("error") if isinstance(chunk, dict) else None
                             if error_obj:
                                 if isinstance(error_obj, str):
@@ -4225,6 +4800,10 @@ class LLMService:
                             # (with stream_options.include_usage, final chunk often has usage + empty choices)
                             if chunk.get("usage"):
                                 usage = self._normalize_provider_llm_usage(chunk.get("usage")) or usage
+                            elif self._kie_usage_from_gemini_metadata(chunk.get("usageMetadata")):
+                                usage = self._normalize_provider_llm_usage(
+                                    self._kie_usage_from_gemini_metadata(chunk.get("usageMetadata"))
+                                ) or usage
                             else:
                                 response_obj = chunk.get("response") if isinstance(chunk.get("response"), dict) else {}
                                 if response_obj.get("usage"):

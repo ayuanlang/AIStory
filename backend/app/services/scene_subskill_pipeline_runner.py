@@ -4216,6 +4216,7 @@ async def _resume_incomplete_beats(
             _extract_analysis_text_from_result(result)
         ).strip()
         continued = strip_injection_section(continued, "项目视觉回填")
+        continued = _prepare_subskill_llm_text(continued)
         merged = merge_beat_continuation(current, continued, prompt_file)
         if not beat_continuation_progressed(current, merged, prompt_file):
             logger.info(
@@ -4227,6 +4228,44 @@ async def _resume_incomplete_beats(
             return current
         current = merged
     return current
+
+
+def _prepare_subskill_llm_text(text: str) -> str:
+    from app.services.llm_service import (
+        promote_think_draft_when_visible_is_end_shell,
+        strip_closed_think_blocks,
+    )
+
+    promoted = promote_think_draft_when_visible_is_end_shell(str(text or ""))
+    return strip_closed_think_blocks(promoted).strip()
+
+
+def _subskill_output_is_end_shell(text: str) -> bool:
+    from app.services.llm_service import visible_text_is_end_shell
+
+    source = str(text or "").strip()
+    if not source:
+        return False
+    return visible_text_is_end_shell(source)
+
+
+def _end_shell_retry_note(prompt_file: str, scene_id: str) -> str:
+    marker = _SUBSKILL_COMPLETION_MARKERS.get(prompt_file) or ""
+    label = _subskill_action_label(prompt_file)
+    scene = str(scene_id or "").strip()
+    if prompt_file == FRAMING_PROMPT:
+        return (
+            f"上一次{label}只返回了结束标签，没有衍生环境、全场调度和节拍。"
+            f"这次从 [SCENES_BLOCK_START] 写起，先写 [DERIVED_ENV_EXTRACT_START] 和【全场调度】，"
+            f"再按输入逐拍写 [BEAT_START]。场号用 {scene}。"
+            "禁止只输出 [BEAT_STREAM_END]、[SCENE_END]、[SCENES_BLOCK_END]、"
+            f"{marker}。"
+        )
+    return (
+        f"上一次{label}没有正文，只返回了结束标签。"
+        f"这次按原格式写完整正文，写完再补 {marker}。"
+        "禁止只输出结束标签。"
+    )
 
 
 def _build_subskill_request(
@@ -4304,11 +4343,15 @@ async def _call_scene_subskill(
         prompt_file,
         scene_id,
     )
+    retry_note = ""
     for attempt, api_id in enumerate(api_attempts, start=1):
+        request_input = scene_input
+        if retry_note:
+            request_input = f"{scene_input.rstrip()}\n\n{retry_note}"
         request = _build_subskill_request(
             base_payload,
             prompt_file=prompt_file,
-            scene_input=scene_input,
+            scene_input=request_input,
             scene_id=scene_id,
             system_api_id=api_id or base_payload.get("system_api_id"),
             node_advanced_spec=node_advanced_spec,
@@ -4383,12 +4426,13 @@ async def _call_scene_subskill(
             _extract_analysis_text_from_result(result)
         ).strip()
         text = strip_injection_section(text, "项目视觉回填")
+        text = _prepare_subskill_llm_text(text)
         text = await _resume_incomplete_beats(
             task_db=task_db,
             current_user=current_user,
             base_payload=base_payload,
             prompt_file=prompt_file,
-            scene_input=scene_input,
+            scene_input=request_input,
             scene_id=scene_id,
             text=text,
             system_api_id=api_id or base_payload.get("system_api_id"),
@@ -4441,6 +4485,13 @@ async def _call_scene_subskill(
                     raise
             else:
                 failure_code = "SCENE_SUBSKILL_OUTPUT_INVALID"
+        end_shell = (not text) or _subskill_output_is_end_shell(text)
+        retry_note = _end_shell_retry_note(prompt_file, scene_id) if end_shell else ""
+        retry_reason = (
+            f"{_subskill_action_label(prompt_file)}只返回了结束标签"
+            if end_shell
+            else f"{_subskill_action_label(prompt_file)}返回不完整"
+        )
         logger.warning(
             "[scene_subskill_pipeline] incomplete output scene=%s prompt=%s attempt=%s/%s code=%s body_chars=%s expected_marker=%s",
             scene_id,
@@ -4465,7 +4516,7 @@ async def _call_scene_subskill(
                 retry_count=attempt,
                 runtime_meta={
                     "business_event": "retry",
-                    "business_reason": f"{_subskill_action_label(prompt_file)}返回不完整",
+                    "business_reason": retry_reason,
                     "scene_id": scene_id,
                 },
                 error_code=failure_code,

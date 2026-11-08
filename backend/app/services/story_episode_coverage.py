@@ -187,12 +187,16 @@ def _fill_user_prompt(
     batch: List[int],
     planned: int,
     registry_block: str = "",
+    reference_block: str = "",
 ) -> str:
     labels = ", ".join(f"EP{number:02d}" for number in batch)
     head = str(registry_block or "").strip()
     prefix = f"{head}\n\n" if head else ""
+    reference = str(reference_block or "").strip()
+    reference_prefix = f"{reference}\n\n" if reference else ""
     return (
         f"{prefix}"
+        f"{reference_prefix}"
         f"计划集数 = {planned}。这次只补：{labels}。\n"
         "每集单独成块，含本集冲突、转折、Continuity 和集末钩子。不要用总述代替。\n"
         "时间、在场名、专业、故事线切场沿用上面的剧本框架五栏，不另起一套。\n\n"
@@ -210,6 +214,7 @@ async def ensure_story_episode_blocks(
     max_rounds: int = 8,
     fill_system: Optional[str] = None,
     registry_block: str = "",
+    reference_block: str = "",
 ) -> Tuple[str, Dict[str, Any]]:
     """Append any missing EP01–EPN blocks. Raises if they are still missing after the fill rounds."""
     current = str(markdown or "")
@@ -235,7 +240,7 @@ async def ensure_story_episode_blocks(
         batch = missing[: max(1, int(batch_size))]
         context = framework_context_for_fill(current, batch)
         response = await llm_service.generate_content_with_fallback(
-            _fill_user_prompt(context, batch, planned, registry_block),
+            _fill_user_prompt(context, batch, planned, registry_block, reference_block),
             fill_system or _FILL_SYSTEM,
             llm_config or {},
             image_urls=None,
