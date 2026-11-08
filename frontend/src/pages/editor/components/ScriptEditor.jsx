@@ -32845,8 +32845,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             )
         );
         if (thisSceneMatrixBusy) return;
-        // A full-episode run locks every 分场. Another scene's own rerun does not.
-        if ((isAnalyzing || isRetryingPhase2) && !sceneMatrixRerunInFlightRef.current) return;
+        // Only this scene's own running row blocks a start. A finished or failed
+        // row must still start: the script page does not keep 全局统筹 in memory,
+        // and a stuck episode flag must not swallow the click.
+        const thisSceneNodeRunning = (Array.isArray(diagnosticsPipelineNodes) ? diagnosticsPipelineNodes : []).some((node) => {
+            const name = String(node?.node_name || '').trim();
+            if (name !== 'scene_subskill_scene' && name !== 'storyboard_generation') return false;
+            const status = String(node?.status || '').trim().toLowerCase();
+            if (!['running', 'queued'].includes(status)) return false;
+            const nodeSceneId = String(node?.scene_id || '').trim();
+            if (!nodeSceneId) return false;
+            return sceneUnitIdsMatch(
+                nodeSceneId,
+                targetSceneId,
+                deriveSceneOrderFromSceneId(targetSceneId),
+                matrixEpisodePrefix
+            );
+        });
+        if (thisSceneNodeRunning) return;
         const startFrom = {
             drama_opt: 'drama',
             combat_opt: 'combat',
@@ -36844,8 +36860,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         label: t('重跑该场', 'Rerun This Scene'),
                         icon: 'refresh',
                         onClick: () => handleRerunSceneMatrixNode('drama_opt', sceneId),
-                        disabled: isAnalyzing || !getStageOutputContent('stage1', 'scene_split'),
-                        loading: isAnalyzing,
+                        disabled: !activeEpisode?.id,
+                        loading: false,
                     },
                 ],
                 placeholder: t('该场尚未生成场景 Markdown。', 'No scene markdown for this scene yet.'),
@@ -39160,18 +39176,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     && !sceneMatrixRerun?.sceneId
                                 );
                                 const canRerunSubskill = (state) => Boolean(
-                                    !fullEpisodeAnalysisLive
-                                    && !thisSceneMatrixRerun
+                                    !thisSceneMatrixRerun
                                     && !thisSceneStoryboardRerun
                                     && !state?.active
                                     && activeEpisode?.id
                                 );
+                                const thisSceneActivelyRunning = [dramaState, combatState, framingState, stagingState, shotState]
+                                    .some((state) => Boolean(state?.active) && !state?.parked);
                                 const canRerunSceneFromDrama = Boolean(
-                                    !fullEpisodeAnalysisLive
-                                    && !thisSceneMatrixRerun
+                                    !thisSceneMatrixRerun
                                     && !thisSceneStoryboardRerun
+                                    && !thisSceneActivelyRunning
                                     && activeEpisode?.id
-                                    && getStageOutputContent('stage1', 'scene_split')
                                 );
                                 const cellProps = (stepKey, state, extra = {}) => ({
                                     stepKey,
@@ -39196,13 +39212,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             <button
                                                 type="button"
                                                 onClick={() => handleRerunSceneMatrixNode('drama_opt', row.sceneId)}
-                                                disabled={!canRerunSceneFromDrama || Boolean(sceneBusy(dramaState))}
+                                                disabled={!canRerunSceneFromDrama}
                                                 className={diagnosticBtnClass}
-                                                title={sceneBusy(dramaState)
+                                                title={thisSceneActivelyRunning
                                                     ? t('该场已开始运行', 'This scene has already started')
                                                     : t('只从文戏优化重跑该场后续节点，不跑美术指导与其他分场', 'Rerun this scene from drama only; skip art direction and other scenes')}
                                             >
-                                                {sceneBusy(dramaState)
+                                                {thisSceneActivelyRunning
                                                     ? (
                                                         <span className="inline-flex items-center gap-1">
                                                             <Loader2 className="w-3 h-3 animate-spin" />
