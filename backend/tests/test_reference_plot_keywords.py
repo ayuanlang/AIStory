@@ -4,7 +4,9 @@ from app.services.reference_plot_keywords import (
     apply_reference_plot_search_tools,
     attach_reference_plot_search,
     format_reference_plot_block,
+    gateway_closed_before_model_body,
     parse_reference_plot_keywords,
+    reference_search_should_drop,
     search_tool_was_rejected,
     search_tools_for_submission,
 )
@@ -78,6 +80,19 @@ def test_search_tool_was_rejected():
     assert search_tool_was_rejected(Exception("422 google_search is not supported"))
     assert not search_tool_was_rejected(Exception("HTTP 500 internal error"))
     assert not search_tool_was_rejected(Exception("400 rate limit"))
+
+
+def test_gateway_524_drops_search_once():
+    message = (
+        "kie 上游连接在响应前中断，无法确认请求是否已被受理；系统已停止自动重试以避免重复生成或重复扣费。"
+        " model=gemini-4-argon-openai 原始错误: HTTP 524: <!DOCTYPE html>"
+    )
+    assert gateway_closed_before_model_body(Exception(message))
+    assert reference_search_should_drop(Exception(message))
+    assert not gateway_closed_before_model_body(Exception("HTTP 500 internal error"))
+    assert LLMService._response_should_drop_reference_search(
+        {"finish_reason": "error", "reply": "", "stream_error": message}
+    )
 
 
 def test_kie_gemini_normalizes_google_search_and_response_rejection():

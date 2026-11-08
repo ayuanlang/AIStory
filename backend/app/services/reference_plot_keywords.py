@@ -303,6 +303,20 @@ def apply_reference_plot_search_tools(
     return payload
 
 
+def gateway_closed_before_model_body(error: BaseException) -> bool:
+    """Cloudflare 524: the edge gave up before KIE returned any model text."""
+    text = str(error or "")
+    lowered = text.lower()
+    if not lowered:
+        return False
+    return "524" in lowered or "无法确认请求是否已被受理" in text
+
+
+def reference_search_should_drop(error: BaseException) -> bool:
+    """Retry the same prompt once without tools. Search was rejected, or the gateway died before any body."""
+    return search_tool_was_rejected(error) or gateway_closed_before_model_body(error)
+
+
 def search_tool_was_rejected(error: BaseException) -> bool:
     text = str(error or "").lower()
     if not text:

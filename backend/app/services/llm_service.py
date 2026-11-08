@@ -2158,6 +2158,23 @@ class LLMService:
             return True
         return (not reply) or reply.lower().startswith("error:")
 
+    @staticmethod
+    def _response_should_drop_reference_search(response: Any) -> bool:
+        from app.services.reference_plot_keywords import gateway_closed_before_model_body
+
+        if LLMService._response_rejects_reference_search(response):
+            return True
+        if not isinstance(response, dict):
+            return False
+        blob = " ".join(
+            str(response.get(key) or "")
+            for key in ("stream_error", "reply", "content", "error")
+        )
+        if not gateway_closed_before_model_body(Exception(blob)):
+            return False
+        reply = str(response.get("reply") or response.get("content") or "").strip()
+        return (not reply) or reply.lower().startswith("error:") or response.get("finish_reason") == "error"
+
     def _kie_gemini_tools(self, tools: Any) -> List[Dict[str, Any]]:
         if not isinstance(tools, list):
             return []
@@ -3736,11 +3753,11 @@ class LLMService:
                  # Using the generic call which handles standard messages
                  response = await self._call_openai_compatible(base_url, api_key, model, messages, extra_config)
             except Exception as first_error:
-                 from app.services.reference_plot_keywords import search_tool_was_rejected
+                 from app.services.reference_plot_keywords import reference_search_should_drop
 
-                 if extra_config.get("__reference_plot_search") and search_tool_was_rejected(first_error):
+                 if extra_config.get("__reference_plot_search") and reference_search_should_drop(first_error):
                      logger.warning(
-                         "reference plot search tool rejected, retry without search | provider=%s model=%s err=%s",
+                         "reference plot search dropped after upstream refusal, retry without search | provider=%s model=%s err=%s",
                          extra_config.get("__provider"),
                          model,
                          str(first_error)[:300],
@@ -3755,9 +3772,9 @@ class LLMService:
                  else:
                      return _error_payload(first_error)
 
-            if extra_config.get("__reference_plot_search") and self._response_rejects_reference_search(response):
+            if extra_config.get("__reference_plot_search") and self._response_should_drop_reference_search(response):
                 logger.warning(
-                    "reference plot search tool rejected, retry without search | provider=%s model=%s err=%s",
+                    "reference plot search dropped after upstream refusal, retry without search | provider=%s model=%s err=%s",
                     extra_config.get("__provider"),
                     model,
                     str((response or {}).get("stream_error") or (response or {}).get("reply") or "")[:300],
