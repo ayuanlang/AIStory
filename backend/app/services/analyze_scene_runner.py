@@ -47,6 +47,7 @@ from app.services.analyze_scene_subject_checks import (
 )
 from app.services.analyze_scene_text_ops import (
     _build_script_to_analyze_block,
+    prepend_derived_framing_task,
     _extract_embedded_subject_index_from_stage_text,
     _filter_subject_index_text_by_types,
     _infer_subject_index_allowed_types_for_request,
@@ -594,7 +595,7 @@ async def execute_analyze_scene(
                 getattr(request, "prompt_file", None),
             )
         elif is_derived_framing_stage:
-            user_content = str(request.text or "").strip()
+            user_content = prepend_derived_framing_task(str(request.text or "").strip())
         elif persisted_subject_index_for_prompt:
             index_for_prompt = persisted_subject_index_for_prompt
             saved_subject_index_block = (

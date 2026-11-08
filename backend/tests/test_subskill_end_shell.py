@@ -1,5 +1,16 @@
 """现场编排只交结束标签时，要把藏起来的正文捞回来，并在下一次点明上次是空壳。"""
 
+from app.services.analyze_scene_text_ops import prepend_derived_framing_task
+
+
+def test_framing_user_message_names_the_only_task():
+    framed = prepend_derived_framing_task("[SCENES_BLOCK_START]\n场次素材\n[SCENES_BLOCK_END]")
+    assert framed.startswith("【本次任务】按场景现场编排规范")
+    assert "不要请用户选择是生成还是检查" in framed
+    assert framed.index("【本次任务】") < framed.index("[SCENES_BLOCK_START]")
+    continued = prepend_derived_framing_task("【上次输出】\n已写到一半")
+    assert not continued.startswith("【本次任务】")
+
 SHELL = (
     "[BEAT_STREAM_END] [SCENE_END:EP01_SC01] "
     "[SCENES_BLOCK_END] [DERIVED_FRAMING_OUTPUT_END]"

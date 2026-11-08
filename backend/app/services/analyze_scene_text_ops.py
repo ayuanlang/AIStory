@@ -177,6 +177,24 @@ def _sanitize_scene_beats_stage_text(raw_text: Any) -> str:
     text = _collapse_exact_duplicated_text(text)
     return text.strip()
 
+DERIVED_FRAMING_TASK = (
+    "【本次任务】按场景现场编排规范，把下面这一场写成成稿。"
+    "直接输出衍生环境、【全场调度】和逐拍分布图，"
+    "从 [SCENES_BLOCK_START] 写到 [DERIVED_FRAMING_OUTPUT_END]。"
+    "不要检查素材，不要提问，不要请用户选择是生成还是检查。"
+)
+
+
+def prepend_derived_framing_task(text: str) -> str:
+    """User message for 现场编排 must name the one operation: write the draft."""
+    body = str(text or "").strip()
+    if "【本次任务】" in body or "【上次输出】" in body:
+        return body
+    if not body:
+        return DERIVED_FRAMING_TASK
+    return f"{DERIVED_FRAMING_TASK}\n\n{body}"
+
+
 def _build_script_to_analyze_block(script_body: Any) -> str:
     text = str(script_body or "").strip()
     if not text:
