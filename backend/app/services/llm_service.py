@@ -3746,6 +3746,7 @@ class LLMService:
                          str(first_error)[:300],
                      )
                      extra_config["__reference_plot_search"] = False
+                     extra_config.pop("tools", None)
                      retry_config = dict(extra_config)
                      try:
                          response = await self._call_openai_compatible(base_url, api_key, model, messages, retry_config)
@@ -3763,6 +3764,7 @@ class LLMService:
                 )
                 retry_config = dict(extra_config)
                 retry_config["__reference_plot_search"] = False
+                retry_config.pop("tools", None)
                 try:
                     response = await self._call_openai_compatible(base_url, api_key, model, messages, retry_config)
                 except Exception as retry_error:

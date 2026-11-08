@@ -247,12 +247,15 @@ def search_tools_for_submission(
     if not gemini and not _explicit_search_enabled(cfg):
         return []
     transport_text = str(transport or "").strip().lower()
-    if gemini and transport_text == "gemini":
-        return [{"googleSearch": {}}]
-    if gemini:
-        return [{"google_search": {}}]
     provider_text = str(provider or "").strip().lower()
     model_text = str(model or "").strip().lower()
+    if gemini and transport_text == "gemini":
+        return [{"googleSearch": {}}]
+    # KIE *-openai chat models reject {"google_search": {}} as an empty Tool.
+    if gemini and (provider_text == "kie" or model_text.endswith("-openai")):
+        return [{"type": "function", "function": {"name": "googleSearch"}}]
+    if gemini:
+        return [{"google_search": {}}]
     if "claude" in model_text or provider_text in {"anthropic", "claude"} or transport_text == "claude":
         return [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
     return [{"type": "web_search"}]
@@ -270,7 +273,20 @@ def apply_reference_plot_search_tools(
     if not tools or not isinstance(payload, dict):
         return payload
     existing = payload.get("tools")
-    merged: List[Any] = list(existing) if isinstance(existing, list) else []
+    merged: List[Any] = []
+    kie_openai_search = any(
+        isinstance(tool, dict)
+        and str(tool.get("type") or "").strip().lower() == "function"
+        and isinstance(tool.get("function"), dict)
+        and str(tool["function"].get("name") or "") == "googleSearch"
+        for tool in tools
+    )
+    for item in existing if isinstance(existing, list) else []:
+        if not isinstance(item, dict) or not item:
+            continue
+        if kie_openai_search and set(item.keys()) <= {"googleSearch", "google_search"}:
+            continue
+        merged.append(item)
     blob = json.dumps(merged, ensure_ascii=False).lower()
     for tool in tools:
         if not isinstance(tool, dict):

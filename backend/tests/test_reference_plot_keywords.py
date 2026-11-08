@@ -30,6 +30,9 @@ def test_search_tool_shapes():
     assert search_tools_for_submission("kie", "gemini-2.5-pro", {"__reference_plot_search": True}, transport="gemini") == [
         {"googleSearch": {}}
     ]
+    assert search_tools_for_submission(
+        "kie", "gemini-4-argon-openai", {"__reference_plot_search": True}, transport="chat"
+    ) == [{"type": "function", "function": {"name": "googleSearch"}}]
     assert search_tools_for_submission("google", "gemini-2.5-flash", {"__reference_plot_search": True}, transport="chat") == [
         {"google_search": {}}
     ]
@@ -59,6 +62,15 @@ def test_attach_only_when_terms_exist_and_apply_does_not_duplicate():
         transport="chat",
     )
     assert payload["tools"] == [{"google_search": {}}]
+    kie_payload = {"tools": [{"googleSearch": {}}]}
+    apply_reference_plot_search_tools(
+        kie_payload,
+        provider="kie",
+        model="gemini-4-argon-openai",
+        extra_config=bound["config"],
+        transport="chat",
+    )
+    assert kie_payload["tools"] == [{"type": "function", "function": {"name": "googleSearch"}}]
 
 
 def test_search_tool_was_rejected():
