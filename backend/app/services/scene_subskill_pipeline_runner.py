@@ -3977,6 +3977,27 @@ def _resume_beat_id(pieces: List[Tuple[str, str, bool]]) -> str:
     return "下一拍"
 
 
+def append_missing_beat_envelope(text: str, prompt_file: str, scene_id: str) -> str:
+    """Close a finished beat stream locally. Do not ask the model for only the end tags."""
+    source = str(text or "").rstrip()
+    if not source:
+        return source
+    lines: List[str] = []
+    if _BEAT_STREAM_START_RE.search(source) and not _BEAT_STREAM_END_RE.search(source):
+        lines.append(_BEAT_STREAM_END_TOKEN)
+    if "[SCENE_START:" in source and not _SCENE_END_RE.search(source):
+        scene = str(scene_id or "").strip()
+        lines.append(f"[SCENE_END:{scene}]" if scene else "[SCENE_END]")
+    if "[SCENES_BLOCK_START]" in source and not _SCENES_BLOCK_END_RE.search(source):
+        lines.append("[SCENES_BLOCK_END]")
+    marker = _SUBSKILL_COMPLETION_MARKERS.get(prompt_file) or ""
+    if marker and not _completion_marker_pattern(marker).search(source):
+        lines.append(marker)
+    if not lines:
+        return source
+    return f"{source}\n" + "\n".join(lines)
+
+
 def _continuation_closers(text: str, prompt_file: str) -> str:
     source = str(text or "")
     chunks: List[str] = []
@@ -4051,24 +4072,16 @@ def build_beat_continuation_input(
     kept: List[Tuple[str, str]],
     resume_beat_id: str,
     prompt_file: str,
-    *,
-    beats_already_closed: bool,
 ) -> str:
     label = _subskill_action_label(prompt_file)
     marker = _SUBSKILL_COMPLETION_MARKERS[prompt_file]
     tail = kept[-_BEAT_CONTINUATION_TAIL:]
     shown = "\n\n".join(raw for _beat_id, raw in tail)
-    if beats_already_closed:
-        task = (
-            f"已完成的 Beat 都已写完，不要再写新拍。"
-            f"只补上结束标签 {marker}。"
-        )
-    else:
-        task = (
-            f"从 Beat {resume_beat_id} 接着写，不要重复下面这几拍，也不要改写已经完成的拍。"
-            f"按原格式只返回后续 Beat，每拍用 [BEAT_START:n] 到 [BEAT_END:n]。"
-            f"本场写完后补上结束标签 {marker}。"
-        )
+    task = (
+        f"从 Beat {resume_beat_id} 接着写，不要重复下面这几拍，也不要改写已经完成的拍。"
+        f"按原格式只返回后续 Beat，每拍用 [BEAT_START:n] 到 [BEAT_END:n]。"
+        f"本场写完后补上结束标签 {marker}。"
+    )
     from app.services.continuation_prompt import append_previous_output
 
     return append_previous_output(
@@ -4154,13 +4167,13 @@ async def _resume_incomplete_beats(
         if not kept:
             return current
         resume_id = _resume_beat_id(pieces)
-        closed = len(kept) == len(pieces)
+        if len(kept) == len(pieces):
+            return append_missing_beat_envelope(current, prompt_file, scene_id)
         continuation_input = build_beat_continuation_input(
             scene_input,
             kept,
             resume_id,
             prompt_file,
-            beats_already_closed=closed,
         )
         logger.info(
             "[scene_subskill_pipeline] beat continuation scene=%s prompt=%s round=%s resume_beat=%s kept=%s",
@@ -4446,7 +4459,7 @@ async def _call_scene_subskill(
             current_user=current_user,
             base_payload=base_payload,
             prompt_file=prompt_file,
-            scene_input=request_input,
+            scene_input=scene_input,
             scene_id=scene_id,
             text=text,
             system_api_id=api_id or base_payload.get("system_api_id"),

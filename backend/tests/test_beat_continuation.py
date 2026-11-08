@@ -3,6 +3,7 @@
 from app.services.scene_subskill_pipeline_runner import (
     FRAMING_PROMPT,
     STAGING_PROMPT,
+    append_missing_beat_envelope,
     beat_continuation_progressed,
     build_beat_continuation_input,
     merge_beat_continuation,
@@ -90,7 +91,6 @@ def test_continuation_input_uses_only_the_last_three_finished_beats():
         kept,
         "6",
         FRAMING_PROMPT,
-        beats_already_closed=False,
     )
     assert "[BEAT_START:1]" not in text
     assert "[BEAT_START:2]" not in text
@@ -103,18 +103,24 @@ def test_continuation_input_uses_only_the_last_three_finished_beats():
     assert "上次输出：" in text
 
 
-def test_closed_stream_asks_only_for_the_end_marker():
-    kept = [(str(index), _staging_beat(index)) for index in (1, 2, 3)]
-    text = build_beat_continuation_input(
-        "场头",
-        kept,
-        "4",
-        STAGING_PROMPT,
-        beats_already_closed=True,
+def test_closed_stream_seals_the_envelope_without_asking_for_only_the_end_tag():
+    base = "\n".join(
+        [
+            "[SCENES_BLOCK_START]",
+            "[SCENE_START:EP01_SC02]",
+            "[BEAT_STREAM_START]",
+            _framing_beat(16),
+            _framing_beat(17),
+        ]
     )
-    assert "不要再写新拍" in text
-    assert "[STAGING_ENV_OUTPUT_END]" in text
-    assert "从 Beat 4 接着写" not in text
+    sealed = append_missing_beat_envelope(base, FRAMING_PROMPT, "EP01_SC02")
+    assert "只补上结束标签" not in sealed
+    assert sealed.count("[BEAT_START:17]") == 1
+    assert "[BEAT_STREAM_END]" in sealed
+    assert "[SCENE_END:EP01_SC02]" in sealed
+    assert "[SCENES_BLOCK_END]" in sealed
+    assert sealed.strip().endswith("[DERIVED_FRAMING_OUTPUT_END]")
+    assert append_missing_beat_envelope(sealed, FRAMING_PROMPT, "EP01_SC02") == sealed
 
 
 def test_same_beats_do_not_count_as_progress():
