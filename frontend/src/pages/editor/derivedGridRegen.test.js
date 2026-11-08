@@ -12,6 +12,7 @@ import {
     derivedMainRegenHint,
     omitsProjectStyleInjection,
     quadNamesMissingFromResult,
+    assetProxyFetchUrl,
     readQuadCellImages,
     quadSheetImageUrl,
     entityImageMatchesQuadCell,
@@ -424,6 +425,21 @@ describe('derived main regen hint', () => {
             delta: '南壁破了一个洞',
         });
         assert.equal(derivedMainRegenHint(source, [source, wiped, child]), null);
+    });
+});
+
+describe('asset proxy fetch url', () => {
+    it('routes remote sheets through the API proxy and leaves local paths alone', () => {
+        assert.equal(
+            assetProxyFetchUrl('https://cdn.example/sheet.png?token=a b', '/api/v1'),
+            '/api/v1/assets/proxy?url=https%3A%2F%2Fcdn.example%2Fsheet.png%3Ftoken%3Da%20b'
+        );
+        assert.equal(assetProxyFetchUrl('/uploads/3/sheet.jpg', '/api/v1'), '');
+        assert.equal(assetProxyFetchUrl('blob:http://127.0.0.1/abc', '/api/v1'), '');
+        assert.equal(
+            assetProxyFetchUrl('/api/v1/assets/proxy?url=https%3A%2F%2Fcdn.example%2Fa.jpg', '/api/v1'),
+            '/api/v1/assets/proxy?url=https%3A%2F%2Fcdn.example%2Fa.jpg'
+        );
     });
 });
 

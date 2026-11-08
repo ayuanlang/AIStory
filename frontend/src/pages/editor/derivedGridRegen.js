@@ -329,6 +329,17 @@ export function sameMediaUrl(left, right) {
     return Boolean(leftPath) && leftPath === rightPath;
 }
 
+/** Remote sheets must be fetched through the API proxy. A direct browser fetch is blocked before the crop starts. */
+export function assetProxyFetchUrl(rawUrl, apiBase = '') {
+    const stable = String(rawUrl || '').trim();
+    if (!stable || stable.startsWith('blob:') || stable.startsWith('data:')) return '';
+    if (stable.includes('/assets/proxy?url=')) return stable;
+    if (!/^https?:\/\//i.test(stable)) return '';
+    const base = String(apiBase || '').trim().replace(/\/+$/, '');
+    if (!base) return '';
+    return `${base}/assets/proxy?url=${encodeURIComponent(stable)}`;
+}
+
 export function quadSheetImageUrl(entity) {
     const attrs = readAttrs(entity);
     const record = parseJsonRecord(attrs[QUAD_CELL_IMAGES_ATTR]);

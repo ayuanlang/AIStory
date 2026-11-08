@@ -41,6 +41,7 @@ import {
     planDerivedGridRegen,
     resolveDerivedViewAngle,
     resolveGridForAngle,
+    assetProxyFetchUrl,
     sameMediaUrl,
     usesCroppedCellReference,
     QUAD_CELL_POSITIONS,
@@ -553,6 +554,47 @@ const sortEntitiesForBatchGeneration = (entities, sceneRankMap, allEntities, nam
     return topoSortEntitiesByVisualDependencies(sceneThenLocal, allEntities, nameMap);
 };
 
+const downloadMainEnvironmentImage = async (imageUrl) => {
+    const stable = String(imageUrl || '').trim();
+    if (!stable) throw new Error('main environment image url missing');
+    const proxyUrl = assetProxyFetchUrl(stable, API_URL);
+    const target = proxyUrl || getFullUrl(stable);
+    const headers = {};
+    try {
+        const token = localStorage.getItem('token');
+        if (token && proxyUrl) headers.Authorization = `Bearer ${token}`;
+    } catch {
+        /* ignore unavailable localStorage */
+    }
+    let response;
+    try {
+        response = await fetch(target, { headers });
+    } catch (error) {
+        const detail = String(error?.message || 'Failed to fetch').trim();
+        throw new Error(`主环境四宫格下载失败：${detail}`);
+    }
+    if (!response.ok) {
+        throw new Error(`主环境四宫格下载失败（${response.status}）`);
+    }
+    const blob = await response.blob();
+    if (!blob?.size) throw new Error('主环境四宫格下载失败（空文件）');
+    return blob;
+};
+
+const decodeImageBlob = (blob) => new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const element = new Image();
+    element.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(element);
+    };
+    element.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('主环境四宫格图片无法解码'));
+    };
+    element.src = objectUrl;
+});
+
 export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = [], uiLang = 'zh', userBatchParallelLimit = 3, onImportText = null, tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
     // Bump to one-shot clear stale local subject/shot job caches (ghost "persisting" loops).
@@ -839,6 +881,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     };
 
     const [viewingEntityTab, setViewingEntityTab] = useState('generate');
+    const [quadSplitEntityId, setQuadSplitEntityId] = useState('');
     const [entityMediaRefTab, setEntityMediaRefTab] = useState('video');
     const [entityMediaRefUploading, setEntityMediaRefUploading] = useState(false);
     const [materialSourceBusy, setMaterialSourceBusy] = useState(false);
@@ -7157,25 +7200,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return t('暂时不能按宫格重生。', 'Grid regen is unavailable right now.');
     };
 
-    const cropMainEnvironmentGridCell = useCallback(async (imageUrl, position) => {
-        const response = await fetch(getFullUrl(imageUrl));
-        if (!response.ok) {
-            throw new Error(`failed to download main environment image (${response.status})`);
-        }
-        const blob = await response.blob();
-        const image = await new Promise((resolve, reject) => {
-            const objectUrl = URL.createObjectURL(blob);
-            const element = new Image();
-            element.onload = () => {
-                URL.revokeObjectURL(objectUrl);
-                resolve(element);
-            };
-            element.onerror = () => {
-                URL.revokeObjectURL(objectUrl);
-                reject(new Error('failed to decode main environment image'));
-            };
-            element.src = objectUrl;
-        });
+    const cropMainEnvironmentGridCell = useCallback(async (image, imageUrl, position) => {
         const sourceWidth = Number(image.naturalWidth || image.width || 0);
         const sourceHeight = Number(image.naturalHeight || image.height || 0);
         if (!sourceWidth || !sourceHeight) {
@@ -7210,7 +7235,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return url;
     }, [uploadAsset]);
 
-    const persistMainEnvironmentQuadCells = useCallback(async (mainEntity, imageUrl) => {
+    const persistMainEnvironmentQuadCells = useCallback(async (mainEntity, imageUrl, options = null) => {
+        const force = Boolean(options?.force);
         let sourceUrl = String(imageUrl || mainEntity?.image_url || '').trim();
         const storedSheet = quadSheetImageUrl(mainEntity);
         if (storedSheet && entityImageMatchesQuadCell(mainEntity, sourceUrl) && !sameMediaUrl(storedSheet, sourceUrl)) {
@@ -7250,9 +7276,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 return url && !isCollidingGridCellUrl(url);
             });
             if (!cachedReady && cached) quadCellStoreRef.current.delete(cacheKey);
-            if (cachedReady) return cached;
+            if (!force && cachedReady) return cached;
             const stored = readQuadCellImages(mainEntity, sourceUrl);
-            if (stored && QUAD_CELL_POSITIONS.every((position) => stored[position])) {
+            if (!force && stored && QUAD_CELL_POSITIONS.every((position) => stored[position])) {
                 quadCellStoreRef.current.set(cacheKey, stored);
                 return stored;
             }
@@ -7264,8 +7290,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 ),
                 'process'
             );
+            const sheetImage = await decodeImageBlob(await downloadMainEnvironmentImage(sourceUrl));
             const entries = await Promise.all(QUAD_CELL_POSITIONS.map(async (position) => {
-                const url = await cropMainEnvironmentGridCell(sourceUrl, position);
+                const url = await cropMainEnvironmentGridCell(sheetImage, sourceUrl, position);
                 return [position, url];
             }));
             const cells = Object.fromEntries(entries);
@@ -7314,6 +7341,28 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             }
         }
     }, [applyEntityLocalPatch, cropMainEnvironmentGridCell, onLog, t]);
+
+    const splitMainEnvironmentQuad = useCallback(async (entity) => {
+        const entityId = String(entity?.id || '').trim();
+        if (!entityId || entityId === 'new' || quadSplitEntityId) return;
+        setQuadSplitEntityId(entityId);
+        try {
+            const cells = await persistMainEnvironmentQuadCells(entity, entity?.image_url, { force: true });
+            if (!cells || !QUAD_CELL_POSITIONS.every((position) => String(cells[position] || '').trim())) {
+                const message = t('四宫格没有裁成四张。', 'The four-grid was not cropped into four images.');
+                showSubjectNotification(message, 'warning');
+                return;
+            }
+            showSubjectNotification(t('四张宫格已保存，可在主体信息里打开。', 'The four grid cells are saved and can be opened from subject info.'), 'success');
+        } catch (error) {
+            const detail = String(error?.response?.data?.detail || error?.message || t('未知错误', 'Unknown error')).trim();
+            const message = t(`拆切四宫格失败：${detail}`, `Four-grid split failed: ${detail}`);
+            showSubjectNotification(message, 'error');
+            onLog?.(message, 'error');
+        } finally {
+            setQuadSplitEntityId('');
+        }
+    }, [onLog, persistMainEnvironmentQuadCells, quadSplitEntityId, showSubjectNotification, t]);
 
     const ensureMainQuadCellUrl = useCallback(async (mainEntity, position, sourceUrl) => {
         const stablePosition = String(position || '').trim();
@@ -10557,41 +10606,64 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
                                     {isMainEnvironmentEntity(viewingEntity) && (() => {
                                         const cellRows = mainQuadCellAddresses(viewingEntity);
-                                        if (!cellRows.length) return null;
+                                        const hasImage = Boolean(String(viewingEntity?.image_url || '').trim());
+                                        if (!cellRows.length && !hasImage) return null;
+                                        const splitting = quadSplitEntityId === String(viewingEntity?.id || '');
                                         return (
                                             <div className="space-y-2">
-                                                <h4 className="text-xs font-bold uppercase text-muted-foreground flex items-center gap-2">
-                                                    <LinkIcon size={12} /> {t('四宫分图', 'Four-grid cells')}
-                                                </h4>
-                                                <div className="bg-black/20 rounded-lg border border-white/5 divide-y divide-white/5">
-                                                    {cellRows.map((row) => {
-                                                        const displayUrl = getFullUrl(row.url);
-                                                        const label = `${row.position}${row.degree != null ? ` ${row.degree}°` : ''}`;
-                                                        return (
-                                                            <div key={row.position} className="p-3 space-y-1.5">
-                                                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
-                                                                <div className="text-[11px] font-mono text-white/75 break-all leading-relaxed select-all">{displayUrl}</div>
-                                                                <div className="flex flex-wrap gap-2 pt-0.5">
-                                                                    <a
-                                                                        href={displayUrl}
-                                                                        target="_blank"
-                                                                        rel="noreferrer"
-                                                                        className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-white/80 hover:bg-white/10"
-                                                                    >
-                                                                        <Maximize2 size={10} /> {t('打开', 'Open')}
-                                                                    </a>
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => void copyEntityDetailUrl(row.url, label)}
-                                                                        className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-white/80 hover:bg-white/10"
-                                                                    >
-                                                                        <Copy size={10} /> {t('复制', 'Copy')}
-                                                                    </button>
-                                                                </div>
-                                                            </div>
-                                                        );
-                                                    })}
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <h4 className="text-xs font-bold uppercase text-muted-foreground flex items-center gap-2">
+                                                        <LinkIcon size={12} /> {t('四宫分图', 'Four-grid cells')}
+                                                    </h4>
+                                                    {hasImage && viewingEntity.id !== 'new' ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => { void splitMainEnvironmentQuad(viewingEntity); }}
+                                                            disabled={splitting}
+                                                            className="inline-flex items-center gap-1 rounded bg-white/10 px-2 py-1 text-[10px] font-bold text-white/80 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        >
+                                                            {splitting ? <Loader2 className="animate-spin" size={10} /> : <Crop size={10} />}
+                                                            {splitting
+                                                                ? t('拆切中...', 'Splitting...')
+                                                                : (cellRows.length ? t('重新拆切', 'Split again') : t('拆切四宫格', 'Split four-grid'))}
+                                                        </button>
+                                                    ) : null}
                                                 </div>
+                                                {cellRows.length ? (
+                                                    <div className="bg-black/20 rounded-lg border border-white/5 divide-y divide-white/5">
+                                                        {cellRows.map((row) => {
+                                                            const displayUrl = getFullUrl(row.url);
+                                                            const label = `${row.position}${row.degree != null ? ` ${row.degree}°` : ''}`;
+                                                            return (
+                                                                <div key={row.position} className="p-3 space-y-1.5">
+                                                                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
+                                                                    <div className="text-[11px] font-mono text-white/75 break-all leading-relaxed select-all">{displayUrl}</div>
+                                                                    <div className="flex flex-wrap gap-2 pt-0.5">
+                                                                        <a
+                                                                            href={displayUrl}
+                                                                            target="_blank"
+                                                                            rel="noreferrer"
+                                                                            className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-white/80 hover:bg-white/10"
+                                                                        >
+                                                                            <Maximize2 size={10} /> {t('打开', 'Open')}
+                                                                        </a>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => void copyEntityDetailUrl(row.url, label)}
+                                                                            className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-white/80 hover:bg-white/10"
+                                                                        >
+                                                                            <Copy size={10} /> {t('复制', 'Copy')}
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-[11px] leading-relaxed text-white/35">
+                                                        {t('四张分图还没保存。拆切后可以在这里打开或复制每一格。', 'The four cells are not saved yet. After the split, each one can be opened or copied here.')}
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })()}
