@@ -491,7 +491,12 @@ export const normalizeAnchorDescription = (value) => {
 };
 
 export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...imgProps }) => {
-    const rawSrc = String(src || '').trim();
+    const incomingSrc = String(src || '').trim();
+    const latestSrcRef = useRef(incomingSrc);
+    latestSrcRef.current = incomingSrc;
+    // Signed OSS/CDN links rotate the query on every list refresh. Keep the URL
+    // already on screen when only the signature changed, otherwise every card reloads.
+    const [rawSrc, setRawSrc] = useState(incomingSrc);
     const containerRef = useRef(null);
     const requestedLoading = String(imgProps.loading || '').trim().toLowerCase();
     const eagerLoad = requestedLoading === 'eager' || requestedLoading === 'auto';
@@ -522,6 +527,10 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
     // retries before caching it as "broken" — a single transient miss right after upload should
     // not poison the shared broken-URL cache for every other component rendering the same URL.
     const baselineRetryDelays = [700, 1800];
+
+    useEffect(() => {
+        setRawSrc((current) => (mediaUrlsMatch(current, incomingSrc) ? current : incomingSrc));
+    }, [incomingSrc]);
 
     useEffect(() => {
         if (retryTimerRef.current) {
@@ -653,6 +662,13 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                 onError={() => {
                     if (!shouldLoad) {
                         setShouldLoad(true);
+                        if (typeof userOnError === 'function') userOnError();
+                        return;
+                    }
+                    const newest = String(latestSrcRef.current || '').trim();
+                    if (newest && newest !== rawSrc && mediaUrlsMatch(rawSrc, newest)) {
+                        clearBrokenMediaUrl(newest);
+                        setRawSrc(newest);
                         if (typeof userOnError === 'function') userOnError();
                         return;
                     }
@@ -3814,8 +3830,18 @@ const pickShotImageUrl = (prevUrl, nextUrl, nextDefined) => {
     const nextTrim = String(nextUrl || '').trim();
     if (!nextTrim) return prevTrim;
     if (!prevTrim) return nextTrim;
+    if (prevTrim === nextTrim) return prevTrim;
+    const prevToken = normalizeMediaUrlPathToken(prevTrim);
+    const nextToken = normalizeMediaUrlPathToken(nextTrim);
+    const sameAsset = Boolean(prevToken && nextToken && prevToken === nextToken);
     const nextDurable = isDurablePersistedMediaUrl(nextTrim);
     const prevDurable = isDurablePersistedMediaUrl(prevTrim);
+    if (sameAsset) {
+        // List refresh re-signs the same object. A new query must not replace the URL on screen.
+        if (nextDurable && !prevDurable) return nextTrim;
+        if (prevDurable && !nextDurable) return prevTrim;
+        return prevTrim;
+    }
     if (nextDurable && !prevDurable) return nextTrim;
     if (prevDurable && !nextDurable) return prevTrim;
     return nextTrim;
@@ -3843,7 +3869,7 @@ const pickShotVideoUrl = (prevUrl, nextUrl, nextDefined, options = {}) => {
     if (sameAsset) {
         if (nextDurable && !prevDurable) return nextTrim;
         if (prevDurable && !nextDurable) return prevTrim;
-        return nextTrim;
+        return prevTrim;
     }
 
     const prevMeta = options.prevMeta && typeof options.prevMeta === 'object' ? options.prevMeta : {};
@@ -3919,6 +3945,15 @@ export const mergeShotPreservingLocalMedia = (prevShot, incomingShot, options = 
     const nextImageDefined = Object.prototype.hasOwnProperty.call(incoming, 'image_url');
     const nextVideoDefined = Object.prototype.hasOwnProperty.call(incoming, 'video_url');
     merged.image_url = pickShotImageUrl(prev.image_url, incoming.image_url, nextImageDefined);
+    const nextEndDefined = Object.prototype.hasOwnProperty.call(incoming, 'end_frame_url');
+    const nextEndUrl = String(incoming.end_frame_url || '').trim();
+    if (!nextEndDefined) {
+        merged.end_frame_url = prev.end_frame_url;
+    } else if (!nextEndUrl) {
+        merged.end_frame_url = incoming.end_frame_url;
+    } else {
+        merged.end_frame_url = pickShotImageUrl(prev.end_frame_url, incoming.end_frame_url, true);
+    }
     const regenStartedAtMs = Date.parse(String(prevTech?.video_regen_started_at || ''));
     merged.video_url = pickShotVideoUrl(prev.video_url, incoming.video_url, nextVideoDefined, {
         incomingIsCompact,

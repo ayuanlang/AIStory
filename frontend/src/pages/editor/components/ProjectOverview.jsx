@@ -185,7 +185,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 
 // Character Canon (Authoritative) generator (shared)
 
-import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint, resolveProjectVideoSoundEnabled, DEFAULT_MAX_SHOT_SECONDS, resolveMaxShotSeconds } from '../editorConstants';
+import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint, resolveProjectVideoSoundEnabled, DEFAULT_MAX_SHOT_SECONDS, resolveMaxShotSeconds, sanitizeMaxShotSecondsDraft } from '../editorConstants';
 
 /** Collapse buggy stacked production motifs: 天逆·实拍（真人剧·实拍（真人剧… → 天逆 */
 const stripStackedProductionScriptTitleSuffixes = (title) => {
@@ -419,6 +419,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const skipNextPromoAutosaveRef = useRef(true);
     const generatorResultAutosaveTimerRef = useRef(null);
     const skipNextGeneratorResultAutosaveRef = useRef(true);
+    const maxShotSecondsDraftRef = useRef('');
     const autosaveFeedbackTimerRef = useRef(null);
     const [generatorAutosaveFeedback, setGeneratorAutosaveFeedback] = useState({
         phase: 'idle',
@@ -1411,18 +1412,23 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             clearTimeout(generatorResultAutosaveTimerRef.current);
         }
 
+        maxShotSecondsDraftRef.current = info.max_shot_seconds;
         generatorResultAutosaveTimerRef.current = setTimeout(async () => {
             setGeneratorAutosaveState('saving', t('自动保存中...', 'Auto-saving...'));
             try {
                 const baseGlobalInfo = (project?.global_info && typeof project.global_info === 'object')
                     ? project.global_info
                     : {};
+                const shotDraft = sanitizeMaxShotSecondsDraft(maxShotSecondsDraftRef.current);
                 const global_info = {
                     ...baseGlobalInfo,
                     story_dna_global_md: info.story_dna_global_md || '',
                     promo_dna_global_md: info.promo_dna_global_md || '',
                     character_relationships: info.character_relationships || '',
                 };
+                if (shotDraft) {
+                    global_info.max_shot_seconds = String(resolveMaxShotSeconds(shotDraft));
+                }
                 await updateProject(id, { global_info });
                 setGeneratorAutosaveState('saved', t('生成结果已自动保存', 'Generated content auto-saved'));
             } catch (e) {
@@ -1456,10 +1462,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 ? Math.trunc(seedParsed)
                 : null;
 
+            const resolvedMaxShotSeconds = String(resolveMaxShotSeconds(info.max_shot_seconds));
             const global_info = {
                 ...info,
                 script_title: stripStackedProductionScriptTitleSuffixes(info.script_title),
-                max_shot_seconds: String(resolveMaxShotSeconds(info.max_shot_seconds)),
+                max_shot_seconds: resolvedMaxShotSeconds,
                 project_share_users: normalizeUserListValues(info.project_share_users),
                 project_reviewer_users: normalizeUserListValues(info.project_reviewer_users),
                 video_sound: resolvedVideoSound,
@@ -1508,11 +1515,27 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             if (resolvedSeed !== null) {
                 global_info.generation_seed = resolvedSeed;
             }
-            await updateProject(id, {
+            const savedProject = await updateProject(id, {
                 global_info,
                 share_users: global_info.project_share_users,
                 reviewer_users: global_info.project_reviewer_users,
             });
+            const savedGlobalInfo = (savedProject?.global_info && typeof savedProject.global_info === 'object')
+                ? savedProject.global_info
+                : global_info;
+            const savedMaxShotSeconds = String(savedGlobalInfo.max_shot_seconds ?? resolvedMaxShotSeconds);
+            setInfo((prev) => ({ ...prev, max_shot_seconds: savedMaxShotSeconds }));
+            if (mode === 'generator') {
+                skipNextGeneratorResultAutosaveRef.current = true;
+            }
+            setProject((prev) => ({
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                ...(savedProject && typeof savedProject === 'object' ? savedProject : {}),
+                global_info: {
+                    ...savedGlobalInfo,
+                    max_shot_seconds: savedMaxShotSeconds,
+                },
+            }));
             await loadProjectCost({ forceRecompute: true });
             alert("Project info saved!");
             if (onProjectUpdate) onProjectUpdate();
@@ -1615,15 +1638,18 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
             setPromoFrameworkViewMode('preview');
 
-            await updateProject(id, {
-                global_info: {
-                    ...(updated?.global_info || info || {}),
-                    promo_generator_input: {
-                        ...promoInput,
-                        episodes_count: episodesCount,
-                    },
-                }
-            });
+            const promoGlobalInfo = {
+                ...(updated?.global_info || info || {}),
+                promo_generator_input: {
+                    ...promoInput,
+                    episodes_count: episodesCount,
+                },
+            };
+            const shotDraft = sanitizeMaxShotSecondsDraft(info.max_shot_seconds);
+            if (shotDraft) {
+                promoGlobalInfo.max_shot_seconds = String(resolveMaxShotSeconds(shotDraft));
+            }
+            await updateProject(id, { global_info: promoGlobalInfo });
 
             alert('Promo framework generated and saved. You can now generate episode scripts.');
         } catch (e) {
@@ -2913,7 +2939,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     <div className="grid grid-cols-1 gap-4">
                                         <InputGroup idPrefix={prefix} label={t('剧本标题', 'Script Title')} value={info.script_title} onChange={v => updateField('script_title', v)} placeholder={t('例如：我的科幻史诗', 'e.g. My Sci-Fi Epic')} />
                                         <InputGroup idPrefix={prefix} label={t('预期时长(秒)', 'Expected Duration (s)')} type="number" min="1" value={info.expected_duration || ''} onChange={v => updateField('expected_duration', v)} placeholder="60" />
-                                        <InputGroup idPrefix={prefix} label={t('分镜最长秒数', 'Max Shot Seconds')} type="number" min="4" value={info.max_shot_seconds || String(DEFAULT_MAX_SHOT_SECONDS)} onChange={v => updateField('max_shot_seconds', v)} placeholder={String(DEFAULT_MAX_SHOT_SECONDS)} />
+                                        <InputGroup idPrefix={prefix} label={t('分镜最长秒数', 'Max Shot Seconds')} type="text" inputMode="numeric" value={sanitizeMaxShotSecondsDraft(info.max_shot_seconds)} onChange={v => updateField('max_shot_seconds', sanitizeMaxShotSecondsDraft(v))} placeholder={String(DEFAULT_MAX_SHOT_SECONDS)} />
                                     </div>
 
 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

@@ -31,8 +31,11 @@ export const PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS = [
 
 export const DEFAULT_MAX_SHOT_SECONDS = 15;
 
+/** Digits only. Empty stays empty so the field can be cleared and retyped. */
+export const sanitizeMaxShotSecondsDraft = (value) => String(value ?? '').replace(/\D/g, '');
+
 export const resolveMaxShotSeconds = (value, fallback = DEFAULT_MAX_SHOT_SECONDS) => {
-    const parsed = Number.parseInt(String(value ?? '').replace(/[^\d.]/g, ''), 10);
+    const parsed = Number.parseInt(sanitizeMaxShotSecondsDraft(value), 10);
     if (Number.isFinite(parsed) && parsed > 0) return Math.max(4, parsed);
     return fallback;
 };
