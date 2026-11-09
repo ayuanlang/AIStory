@@ -1397,6 +1397,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
     // Promo planner draft autosave lives in PromoPlanner (structured enterprise + assets + demand).
 
+    maxShotSecondsDraftRef.current = info.max_shot_seconds;
+
     // Auto-save editable generator results (framework markdown + relationships) (debounced)
     useEffect(() => {
         if (!id) return;
@@ -1412,7 +1414,6 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             clearTimeout(generatorResultAutosaveTimerRef.current);
         }
 
-        maxShotSecondsDraftRef.current = info.max_shot_seconds;
         generatorResultAutosaveTimerRef.current = setTimeout(async () => {
             setGeneratorAutosaveState('saving', t('自动保存中...', 'Auto-saving...'));
             try {
@@ -1420,14 +1421,15 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     ? project.global_info
                     : {};
                 const shotDraft = sanitizeMaxShotSecondsDraft(maxShotSecondsDraftRef.current);
+                const shotParsed = Number.parseInt(shotDraft, 10);
                 const global_info = {
                     ...baseGlobalInfo,
                     story_dna_global_md: info.story_dna_global_md || '',
                     promo_dna_global_md: info.promo_dna_global_md || '',
                     character_relationships: info.character_relationships || '',
                 };
-                if (shotDraft) {
-                    global_info.max_shot_seconds = String(resolveMaxShotSeconds(shotDraft));
+                if (Number.isFinite(shotParsed) && shotParsed >= 4) {
+                    global_info.max_shot_seconds = String(shotParsed);
                 }
                 await updateProject(id, { global_info });
                 setGeneratorAutosaveState('saved', t('生成结果已自动保存', 'Generated content auto-saved'));

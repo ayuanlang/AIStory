@@ -826,6 +826,95 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (current !== '-1') return;
         restoreEditingShotDurationFromTable();
     }, [editingShot?.id, editingShot?.duration, isSd2AutoDurationActive, restoreEditingShotDurationFromTable]);
+
+    // Duration text is edited locally. Server/list refreshes merge the saved value
+    // back onto editingShot and were snapping the box (e.g. 25 -> 26) mid-keystroke.
+    const [durationDraft, setDurationDraft] = useState('');
+    const [durationDraftShotId, setDurationDraftShotId] = useState('');
+    const [durationDirty, setDurationDirty] = useState(false);
+    const durationEditLockRef = useRef({ shotId: '', value: '', dirty: false });
+    const durationHoldRef = useRef({ shotId: '', value: '' });
+    const durationOpenShotIdRef = useRef('');
+    const durationDraftRef = useRef('');
+    durationDraftRef.current = durationDraft;
+    durationEditLockRef.current = {
+        shotId: durationDraftShotId,
+        value: durationDraft,
+        dirty: durationDirty,
+    };
+
+    const applyLockedDuration = useCallback((shot) => {
+        if (!shot?.id) return shot;
+        const id = String(shot.id);
+        const lock = durationEditLockRef.current;
+        if (lock?.dirty && String(lock.shotId || '') === id) {
+            return String(shot.duration ?? '') === String(lock.value ?? '')
+                ? shot
+                : { ...shot, duration: lock.value };
+        }
+        const hold = durationHoldRef.current;
+        if (!hold?.shotId || String(hold.shotId) !== id) return shot;
+        if (String(shot.duration ?? '').trim() === String(hold.value ?? '').trim()) {
+            durationHoldRef.current = { shotId: '', value: '' };
+            return shot;
+        }
+        return { ...shot, duration: hold.value };
+    }, []);
+
+    const keepDirtyShotDuration = useCallback((prevShot, nextShot) => {
+        if (!nextShot || !prevShot) return nextShot;
+        if (String(prevShot.id || '') !== String(nextShot.id || '')) return nextShot;
+        return applyLockedDuration(nextShot);
+    }, [applyLockedDuration]);
+
+    const rememberSavedDuration = useCallback((shotId, value) => {
+        const id = String(shotId || '').trim();
+        if (!id) return;
+        durationHoldRef.current = { shotId: id, value: String(value ?? '') };
+    }, []);
+
+    useEffect(() => {
+        const id = String(editingShot?.id || '');
+        if (!id) return;
+        if (durationOpenShotIdRef.current === id) return;
+        if (durationOpenShotIdRef.current) {
+            durationHoldRef.current = { shotId: '', value: '' };
+        }
+        durationOpenShotIdRef.current = id;
+        setDurationDraftShotId(id);
+        setDurationDirty(false);
+        setDurationDraft(isSd2AutoDurationActive ? '-1' : getShotDurationDisplayValue(editingShot?.duration));
+    }, [editingShot?.id, getShotDurationDisplayValue, isSd2AutoDurationActive]);
+
+    useEffect(() => {
+        if (!editingShot?.id) return;
+        if (isSd2AutoDurationActive) {
+            if (durationDirty) setDurationDirty(false);
+            setDurationDraft((prev) => (prev === '-1' ? prev : '-1'));
+            return;
+        }
+        if (durationDirty) return;
+        const next = getShotDurationDisplayValue(editingShot?.duration);
+        setDurationDraft((prev) => (prev === next ? prev : next));
+    }, [durationDirty, editingShot?.duration, editingShot?.id, getShotDurationDisplayValue, isSd2AutoDurationActive]);
+
+    useEffect(() => {
+        if (isSd2AutoDurationActive) return;
+        const id = String(editingShot?.id || '');
+        if (!id) return;
+        const lock = durationEditLockRef.current;
+        const hold = durationHoldRef.current;
+        const desired = (lock?.dirty && String(lock.shotId || '') === id)
+            ? String(lock.value ?? '')
+            : (hold?.shotId && String(hold.shotId) === id ? String(hold.value ?? '') : null);
+        if (desired == null) return;
+        if (String(editingShot?.duration ?? '') === desired) return;
+        setEditingShot((prev) => {
+            if (!prev || String(prev.id || '') !== id) return prev;
+            if (String(prev.duration ?? '') === desired) return prev;
+            return { ...prev, duration: desired };
+        });
+    }, [durationDirty, durationDraft, durationDraftShotId, editingShot?.duration, editingShot?.id, isSd2AutoDurationActive, setEditingShot]);
     const [isShotsLoading, setIsShotsLoading] = useState(false);
     const [hasShotInitialLoadCompleted, setHasShotInitialLoadCompleted] = useState(false);
     const [selectedShotIds, setSelectedShotIds] = useState([]);
@@ -2199,7 +2288,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     if (!prev || String(prev?.id || '') !== String(fullShot.id)) {
                         return prev;
                     }
-                    return mergeShotPreservingLocalMedia(prev, fullShot, { markHydrated: true });
+                    return keepDirtyShotDuration(prev, mergeShotPreservingLocalMedia(prev, fullShot, { markHydrated: true }));
                 });
             } catch (e) {
                 console.error('Failed to hydrate shot detail', e);
@@ -2210,7 +2299,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return () => {
             cancelled = true;
         };
-    }, [editingShot?.id, editingShot?.is_compact, setEditingShot]);
+    }, [editingShot?.id, editingShot?.is_compact, keepDirtyShotDuration, setEditingShot]);
 
     useEffect(() => {
         selectedSceneIdRef.current = String(selectedSceneId || 'all');
@@ -3392,7 +3481,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     if (!fullShot?.id) return;
                     setEditingShot((prev) => {
                         if (!prev || String(prev?.id || '') !== String(fullShot.id)) return prev;
-                        return mergeShotPreservingLocalMedia(prev, fullShot, { markHydrated: true });
+                        return keepDirtyShotDuration(prev, mergeShotPreservingLocalMedia(prev, fullShot, { markHydrated: true }));
                     });
                 }) : Promise.resolve(),
             ]);
@@ -3404,7 +3493,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             editShotRefreshingRef.current = false;
             setEditShotRefreshing(false);
         }
-    }, [loadEntities, refreshShotAssetsMeta, setEditingShot]);
+    }, [keepDirtyShotDuration, loadEntities, refreshShotAssetsMeta, setEditingShot]);
 
     // Entering the edit-shot drawer: refresh entity refs + force image reload so reference thumbnails are current.
     useEffect(() => {
@@ -4463,6 +4552,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     // Never re-compact a hydrated drawer after a partial/list-based merge.
                     if (prev.is_compact === false || changes?.technical_notes != null) {
                         merged.is_compact = false;
+                    }
+                    const lock = durationEditLockRef.current;
+                    const lockMatches = Boolean(
+                        lock?.dirty
+                        && String(lock.shotId || '') === stableShotId
+                    );
+                    if (lockMatches && String(lock.value ?? '').trim() !== String(merged.duration ?? '').trim()) {
+                        merged.duration = lock.value;
+                    } else if (!lockMatches) {
+                        const held = applyLockedDuration(merged);
+                        if (held !== merged) {
+                            merged.duration = held.duration;
+                        }
                     }
                     return merged;
                 }
@@ -5950,7 +6052,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     const prevById = new Map((Array.isArray(prev) ? prev : []).map((shot) => [String(shot?.id || ''), shot]));
                     return filtered.map((shot) => {
                         const local = prevById.get(String(shot?.id || ''));
-                        return local ? mergeShotPreservingLocalMedia(local, shot) : shot;
+                        const merged = local ? mergeShotPreservingLocalMedia(local, shot) : shot;
+                        return applyLockedDuration(merged);
                     });
                 });
                 setHasShotInitialLoadCompleted(true);
@@ -5960,7 +6063,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     if (!prev) return prev;
                     const updated = filtered.find(s => String(s.id) === String(prev.id));
                     if (!updated) return prev;
-                    return mergeShotPreservingLocalMedia(prev, updated);
+                    return keepDirtyShotDuration(prev, mergeShotPreservingLocalMedia(prev, updated));
                 });
             }
 
@@ -5983,7 +6086,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 setIsShotsLoading(false);
             }
         }
-    }, [activeEpisode?.id, selectedSceneId, sceneCodeFilter, shotIdFilter, normalizeShotPromptDefaults]);
+    }, [activeEpisode?.id, applyLockedDuration, keepDirtyShotDuration, selectedSceneId, sceneCodeFilter, shotIdFilter, normalizeShotPromptDefaults]);
 
     const syncShotVideoAfterOssPersist = useCallback(async ({
         shotId,
@@ -12791,6 +12894,52 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     };
 
+    const durationInputValue = (
+        isSd2AutoDurationActive
+            ? '-1'
+            : (
+                durationDirty && String(durationDraftShotId || '') === String(editingShot?.id || '')
+                    ? durationDraft
+                    : getShotDurationDisplayValue(editingShot?.duration)
+            )
+    );
+
+    const handleDurationDraftChange = (rawValue) => {
+        if (isSd2AutoDurationActive) return;
+        const next = String(rawValue ?? '');
+        const shotId = String(editingShot?.id || '');
+        durationDraftRef.current = next;
+        durationEditLockRef.current = { shotId, value: next, dirty: true };
+        setDurationDraftShotId(shotId);
+        setDurationDraft(next);
+        setDurationDirty(true);
+        setEditingShot((prev) => (
+            prev && String(prev.id || '') === shotId ? { ...prev, duration: next } : prev
+        ));
+    };
+
+    const commitEditingShotDuration = async () => {
+        if (isSd2AutoDurationActive) return;
+        const shotId = String(editingShot?.id || '').trim();
+        if (!shotId || !durationDirty || String(durationDraftShotId || '') !== shotId) return;
+        const next = String(durationDraft ?? '').trim();
+        try {
+            await onUpdateShot(shotId, { duration: next });
+            if (String(durationDraftRef.current ?? '').trim() === next) {
+                rememberSavedDuration(shotId, next);
+                setDurationDirty(false);
+            }
+        } catch (error) {
+            const detail = error?.response?.data?.detail || error?.message || '';
+            showNotification(
+                detail
+                    ? `${t('时长保存失败', 'Failed to save duration')}: ${detail}`
+                    : t('时长保存失败', 'Failed to save duration'),
+                'error'
+            );
+        }
+    };
+
     const totalShotDurationSeconds = Math.round(
         (Array.isArray(shots) ? shots : []).reduce((sum, shot) => {
             const dur = Number.parseFloat(String(shot?.duration ?? shot?.['Duration (s)'] ?? '').trim());
@@ -13395,10 +13544,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     <label className="text-xs font-normal text-muted-foreground">Duration(s):</label>
                                     <input 
                                         className={`bg-black/30 border border-white/10 rounded px-2 py-1 text-sm font-normal text-white focus:border-primary/50 focus:outline-none w-16 ${isSd2AutoDurationActive ? 'text-primary border-primary/40' : ''}`}
-                                        value={getShotDurationDisplayValue(editingShot.duration)}
-                                        onChange={e => {
-                                            if (isSd2AutoDurationActive) return;
-                                            setEditingShot({...editingShot, duration: e.target.value});
+                                        value={durationInputValue}
+                                        onChange={(e) => handleDurationDraftChange(e.target.value)}
+                                        onBlur={() => { void commitEditingShotDuration(); }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') e.currentTarget.blur();
                                         }}
                                         readOnly={isSd2AutoDurationActive}
                                         placeholder="e.g. 5"
@@ -13456,7 +13606,39 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     uiLang={uiLang}
                                     compact
                                 />
-                                <button onClick={() => setEditingShot(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
+                                <button
+                                    onClick={() => {
+                                        const shotId = String(editingShot?.id || '').trim();
+                                        const shouldSave = Boolean(
+                                            shotId
+                                            && durationDirty
+                                            && !isSd2AutoDurationActive
+                                            && String(durationDraftShotId || '') === shotId
+                                        );
+                                        const next = String(durationDraft ?? '').trim();
+                                        if (shouldSave) rememberSavedDuration(shotId, next);
+                                        setEditingShot(null);
+                                        if (!shouldSave) return;
+                                        void onUpdateShot(shotId, { duration: next }).catch((error) => {
+                                            if (
+                                                String(durationHoldRef.current?.shotId || '') === shotId
+                                                && String(durationHoldRef.current?.value ?? '') === next
+                                            ) {
+                                                durationHoldRef.current = { shotId: '', value: '' };
+                                            }
+                                            const detail = error?.response?.data?.detail || error?.message || '';
+                                            showNotification(
+                                                detail
+                                                    ? `${t('时长保存失败', 'Failed to save duration')}: ${detail}`
+                                                    : t('时长保存失败', 'Failed to save duration'),
+                                                'error'
+                                            );
+                                        });
+                                    }}
+                                    className="p-2 hover:bg-white/10 rounded-full"
+                                >
+                                    <X className="w-5 h-5"/>
+                                </button>
                             </div>
                         </div>
                         <div className="p-4 sm:p-6 space-y-6">
@@ -15076,8 +15258,21 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             <button
                                 onClick={async () => {
                                     try {
-                                        await updateShot(editingShot.id, editingShot);
-                                        setShots(shots.map(s => s.id === editingShot.id ? editingShot : s));
+                                        const shotId = String(editingShot?.id || '');
+                                        const useDraft = Boolean(
+                                            !isSd2AutoDurationActive
+                                            && durationDirty
+                                            && String(durationDraftShotId || '') === shotId
+                                        );
+                                        const payload = useDraft
+                                            ? { ...editingShot, duration: String(durationDraft ?? '').trim() }
+                                            : editingShot;
+                                        await updateShot(editingShot.id, payload);
+                                        setShots(shots.map(s => s.id === editingShot.id ? payload : s));
+                                        if (useDraft) {
+                                            rememberSavedDuration(shotId, payload.duration);
+                                            setDurationDirty(false);
+                                        }
                                         setEditingShot(null);
                                         onLog?.("Shot updated.", "success");
                                     } catch(e) {
@@ -15199,7 +15394,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         : (modalType === 'end'
                                                             ? persistedEndMeta
                                                             : (modalType === 'video' ? persistedVideoMeta : null)));
-                                                const shotConfiguredDuration = getShotDurationDisplayValue(editingShot?.duration);
 
                                                 const effectiveAssetDetail = (() => {
                                                     const hasBuiltDetail = Boolean(
@@ -15950,10 +16144,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         type="number"
                                                                         min="0"
                                                                         step="0.1"
-                                                                        value={shotConfiguredDuration}
-                                                                        onChange={(e) => {
-                                                                            if (isSd2AutoDurationActive) return;
-                                                                            setEditingShot(prev => ({ ...(prev || {}), duration: e.target.value }));
+                                                                        value={durationInputValue}
+                                                                        onChange={(e) => handleDurationDraftChange(e.target.value)}
+                                                                        onBlur={() => { void commitEditingShotDuration(); }}
+                                                                        onKeyDown={(e) => {
+                                                                            if (e.key === 'Enter') e.currentTarget.blur();
                                                                         }}
                                                                         readOnly={isSd2AutoDurationActive}
                                                                         className={`w-full bg-black/30 border border-white/10 rounded p-2 text-sm text-white ${isSd2AutoDurationActive ? 'text-primary border-primary/40' : ''}`}
@@ -16239,9 +16434,25 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         if (assetDetailModal.type === 'keyframe') {
                                                             await reconstructKeyframes(localKeyframes);
                                                         } else {
-                                                            const patch = buildAssetDetailSavePatch(editingShot, assetDetailModal.type);
+                                                            const useDraft = Boolean(
+                                                                !isSd2AutoDurationActive
+                                                                && durationDirty
+                                                                && String(durationDraftShotId || '') === String(editingShot?.id || '')
+                                                            );
+                                                            const shotForPatch = useDraft
+                                                                ? { ...editingShot, duration: String(durationDraft ?? '').trim() }
+                                                                : editingShot;
+                                                            const patch = buildAssetDetailSavePatch(shotForPatch, assetDetailModal.type);
                                                             if (Object.keys(patch).length > 0) {
                                                                 await onUpdateShot(editingShot.id, patch);
+                                                                if (
+                                                                    useDraft
+                                                                    && Object.prototype.hasOwnProperty.call(patch, 'duration')
+                                                                    && String(durationDraftRef.current ?? '').trim() === String(patch.duration ?? '').trim()
+                                                                ) {
+                                                                    rememberSavedDuration(editingShot.id, patch.duration);
+                                                                    setDurationDirty(false);
+                                                                }
                                                             }
                                                         }
                                                         onLog?.(t('详情修改已保存', 'Detail changes saved'), 'success');

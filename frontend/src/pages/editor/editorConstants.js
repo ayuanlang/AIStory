@@ -35,7 +35,8 @@ export const DEFAULT_MAX_SHOT_SECONDS = 15;
 export const sanitizeMaxShotSecondsDraft = (value) => String(value ?? '').replace(/\D/g, '');
 
 export const resolveMaxShotSeconds = (value, fallback = DEFAULT_MAX_SHOT_SECONDS) => {
-    const parsed = Number.parseInt(sanitizeMaxShotSecondsDraft(value), 10);
+    const match = String(value ?? '').match(/\d+(?:\.\d+)?/);
+    const parsed = match ? Number.parseInt(match[0], 10) : NaN;
     if (Number.isFinite(parsed) && parsed > 0) return Math.max(4, parsed);
     return fallback;
 };
