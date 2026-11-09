@@ -1685,6 +1685,7 @@ async def generate_project_episode_scripts_from_global_framework(
             f"{episode_generation_guidance_block}"
             f"{prefill_block}"
             f"Project Title: {project_title}\n"
+            f"Base Positioning: {str(gi_basic_info.get('base_positioning') or project_global_info.get('base_positioning') or '').strip()}\n"
             f"{format_project_season_prompt(getattr(req, 'season_occurrence', None), gi)}\n"
             f"Episode Number: {'预告片' if call_is_trailer else idx}\n"
             f"Episode Title (current DB value): {ep_title}\n"

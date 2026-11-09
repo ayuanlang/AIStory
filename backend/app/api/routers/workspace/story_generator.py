@@ -892,6 +892,10 @@ async def structure_project_creative_input_to_story_fields(
     language = (getattr(req, "language", None) or gi_existing.get("language") or "").strip()
     script_mode = (getattr(req, "script_mode", None) or "").strip()
     target_audience = (getattr(req, "target_audience", None) or "").strip()
+    basic_information = gi_existing.get("basic_information") if isinstance(gi_existing.get("basic_information"), dict) else {}
+    base_positioning = (
+        str(basic_information.get("base_positioning") or gi_existing.get("base_positioning") or "").strip()
+    )
 
     from app.services.project_season import format_project_season_prompt
 
@@ -900,6 +904,7 @@ async def structure_project_creative_input_to_story_fields(
         f"Type: {project_type}\n"
         f"Language: {language}\n"
         f"Script Mode: {script_mode}\n"
+        f"Base Positioning: {base_positioning}\n"
         f"Target Audience: {target_audience}\n"
         f"{format_project_season_prompt(getattr(req, 'season_occurrence', None), gi_existing)}\n"
     )
@@ -946,7 +951,7 @@ async def structure_project_creative_input_to_story_fields(
             "故事线至少两条改写同一冲突；只有整剧是单一封闭空间才写线数=1。"
             "时间节点至少写开篇的季节、昼夜、气候。"
             "专业领域写触因、做法和错法；情节不靠规程就写领域=无。"
-            "场景与道具只登记离了就做不成的空间和物件。空间名是能站进去的地方，功能另写一句。一处一个名字，可以登记多处。同一处不堆主体。一处装不下就另登记一个地方。主体复用和换地方由分集大纲规划。不写陈设和材质。"
+            "场景与道具只登记离了就做不成的空间和物件。空间名是能站进去的地方，功能另写一句。一处一个名字，可以登记多处。同一处不堆主体。一处装不下就另登记一个地方。主体复用和换地方由分集大纲规划。不写陈设和材质。跟上面的 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。"
             "这次返回的 JSON 必须包含 plot_background、story_lines、time_nodes、professional_domains、places_and_props。少一个键就是无效回答，不要留到后一阶段。\n"
         )
     else:
@@ -986,6 +991,7 @@ async def structure_project_creative_input_to_story_fields(
             "professional_domains names the trigger, the right step, and the amateur mistake, or 领域=无. "
             "places_and_props registers only spaces and objects the plot fails without. "
             "A space name is a place you can stand in; write the function separately. Register each distinct place. Do not stack extra subjects into one place; if it cannot hold the next beat, register another place. Reuse and switching places are planned in the episode outline. No furnishings or materials. "
+            "The whole text follows Base Positioning first, then Script Mode. Short drama, feature film, and general series do not change the world. Places, arrivals, how a line crosses distance, reading, reveals, and strikes use what that mode and era would have. High tech reads on a 全息屏. Xianxia uses a 法宝, and that action is 粒子. Period drama uses that era, with no computer, hologram, or phone unless the plot says so. An ordinary era uses what that place would have. Do not add one when the beat does not use it. "
             "The JSON you return must contain plot_background, story_lines, time_nodes, professional_domains, and places_and_props. "
             "A response missing any of these keys is invalid. Do not leave them for a later stage."
         )
