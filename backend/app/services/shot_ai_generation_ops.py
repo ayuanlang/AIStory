@@ -1158,6 +1158,9 @@ async def execute_regenerate_one_shot_for_subjects(
         logic_text = stabilize_shot_logic_merged_beats(logic_text)
         shot.shot_logic_cn = logic_text
     if video_text:
+        from app.services.flower_text_ass import strip_burn_nameplates_from_video_prompt
+
+        video_text = strip_burn_nameplates_from_video_prompt(video_text)
         shot.video_content = video_text
         shot.prompt = video_text
     duration_text = _pick_generated_shot_cell(chosen, ["Duration (s)", "Duration", "duration", "时长"])

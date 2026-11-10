@@ -8,10 +8,14 @@ import {
     isStateDerivedEntity,
     mainQuadCellAddresses,
     planDerivedGridCell,
+    resolveShotReferenceImageUrl,
     quadFailureEnvironmentNames,
     derivedMainRegenHint,
     omitsProjectStyleInjection,
     quadNamesMissingFromResult,
+    assembleQuadRerunCandidates,
+    mainEnvironmentOpeningDraft,
+    extractWrappedDesignDrafts,
     assetProxyFetchUrl,
     readQuadCellImages,
     quadSheetImageUrl,
@@ -345,6 +349,63 @@ describe('saved quad cells', () => {
         assert.equal(specialPlan.position, '左上');
     });
 
+    it('uses the current four-grid cell and drops a portrait from the previous sheet', () => {
+        const main = {
+            id: 1,
+            type: 'environment',
+            name: '城门大街',
+            image_url: 'https://cdn.example/main.jpg',
+            generation_prompt_cn: '四宫度数=左上0度｜右上90度｜左下180度｜右下270度',
+            custom_attributes: {
+                quad_cell_images: {
+                    source_url: 'https://cdn.example/main.jpg',
+                    cells: { 右上: 'https://cdn.example/tr.jpg' },
+                },
+            },
+        };
+        const derived = {
+            id: 2,
+            type: 'environment',
+            name: '90度城门大街',
+            image_url: 'https://cdn.example/derived-old.jpg',
+            generation_prompt_cn: '只切割。所属主环境=城门大街。angle_key=城门大街|90。',
+            custom_attributes: { derived_kind: 'first_cut', main_environment: '城门大街', view_angle_from_main: 90 },
+            visual_dependencies: ['ENV:[城门大街]'],
+        };
+        const character = {
+            id: 9,
+            type: 'character',
+            name: '陆青',
+            image_url: 'https://cdn.example/face.jpg',
+        };
+        assert.equal(resolveShotReferenceImageUrl(derived, [main, derived]), 'https://cdn.example/tr.jpg');
+        assert.equal(resolveShotReferenceImageUrl(character, [character]), 'https://cdn.example/face.jpg');
+
+        const rerunMain = {
+            ...main,
+            image_url: 'https://cdn.example/main-new.jpg',
+            custom_attributes: {
+                quad_cell_images: {
+                    source_url: 'https://cdn.example/main.jpg',
+                    cells: { 右上: 'https://cdn.example/tr-old.jpg' },
+                },
+            },
+        };
+        const staleDerived = { ...derived, image_url: 'https://cdn.example/tr-old.jpg' };
+        assert.equal(resolveShotReferenceImageUrl(staleDerived, [rerunMain, staleDerived]), '');
+
+        const special = {
+            id: 3,
+            type: 'environment',
+            name: '90度城门大街_仰天',
+            image_url: 'https://cdn.example/up.jpg',
+            generation_prompt_cn: '所属主环境=城门大街。angle_key=城门大街|90。禁止只做平视宫格原样切割。特别表述=仰天。',
+            custom_attributes: { derived_kind: 'special', main_environment: '城门大街', view_angle_from_main: 90 },
+            visual_dependencies: ['ENV:[城门大街]'],
+        };
+        assert.equal(resolveShotReferenceImageUrl(special, [main, special]), 'https://cdn.example/up.jpg');
+    });
+
     it('reads named four-grid gaps and leaves library misses out of the rerun list', () => {
         const detail = (
             'ENVIRONMENT_QUAD_NOT_APPLIED: 四宫格未写回全部主环境。主环境6条，提示词合格5条，已写入0条。'
@@ -425,6 +486,78 @@ describe('derived main regen hint', () => {
             delta: '南壁破了一个洞',
         });
         assert.equal(derivedMainRegenHint(source, [source, wiped, child]), null);
+    });
+});
+
+describe('main environment quad rerun drafts', () => {
+    const opening = '【定位】\n总裁室。\n【六面一次】\n原点=中心。\n【构图】\n平视。';
+
+    it('uses the saved opening when the library card has no prompt body', () => {
+        const card = {
+            name: '总裁室',
+            type: 'environment',
+            generation_prompt_cn: null,
+            description: opening,
+            custom_attributes: { main_environment_opening: opening },
+        };
+        assert.equal(mainEnvironmentOpeningDraft(card), opening);
+        const candidates = assembleQuadRerunCandidates({
+            entities: [{
+                name: '总裁室',
+                prompt: '',
+                opening,
+                fromDesign: true,
+                hasQuad: false,
+            }],
+            planRows: [{
+                name: '总裁室',
+                prompt: '',
+                opening: '【主环境】总裁室\n【活动空间】出入画口=大门',
+                fromDesign: false,
+            }],
+        });
+        assert.equal(candidates.length, 1);
+        assert.equal(candidates[0].fromDesign, true);
+        assert.equal(candidates[0].opening, opening);
+    });
+
+    it('joins a design whose name has a bar suffix to the plan name', () => {
+        const candidates = assembleQuadRerunCandidates({
+            designRows: [{
+                name: '总裁室｜奢华',
+                prompt: opening,
+                opening,
+                fromDesign: true,
+                hasQuad: false,
+            }],
+            planRows: [{
+                name: '总裁室',
+                prompt: '',
+                opening: '【主环境】总裁室',
+                fromDesign: false,
+            }],
+        });
+        assert.equal(candidates.length, 1);
+        assert.match(candidates[0].opening, /【六面一次】/);
+    });
+
+    it('does not offer a plan outline that has no design draft', () => {
+        const candidates = assembleQuadRerunCandidates({
+            planRows: [{
+                name: '总裁室',
+                prompt: '',
+                opening: '【主环境】总裁室\n【活动空间】出入画口=大门',
+                fromDesign: false,
+            }],
+        });
+        assert.deepEqual(candidates, []);
+    });
+
+    it('reads a wrapped design block', () => {
+        const drafts = extractWrappedDesignDrafts(`【主环境设计稿】总裁室\n${opening}\n【/主环境设计稿】`);
+        assert.equal(drafts.length, 1);
+        assert.equal(drafts[0].name, '总裁室');
+        assert.match(drafts[0].generation_prompt_cn, /【六面一次】/);
     });
 });
 

@@ -48,6 +48,19 @@ _NAMEPLATE_PAINT_RE = re.compile(
 )
 _NAMEPLATE_MAIN_RE = re.compile(r"主标\s*[=＝]\s*([^｜|\n；;]+)")
 _NAMEPLATE_SUB_RE = re.compile(r"副标\s*[=＝]\s*([^｜|\n；;]+)")
+_NAMEPLATE_BAN_RE = re.compile(r"本P禁止生成角色名牌与环境名牌字形，字由后期烧录。\s*")
+_NAMEPLATE_COPY_SPAN_RE = re.compile(
+    r"名牌字样\s*[=＝]\s*「[^」]*」"
+    r"(?:[^。\n]*?名牌出字=(?:后期烧录|烧制|后期烧制))?"
+)
+_BURN_PAINT_SPAN_RE = re.compile(
+    r"(?:画幅顶部中央叠出片内图形名牌|画幅在(?:人物|道具)下方叠出片内图形名牌|"
+    r"画幅叠出片内图形名牌|画面打出物理文字标签：)\s*"
+    r"【[^】]*】(?:[^。\n]*】)?"
+    r"[^。\n]*?名牌出字=(?:后期烧录|烧制|后期烧制)"
+)
+_BEAT_START_RE = re.compile(r"\[BEAT_START:(\d+)\]")
+_SHOT_BEATS_RE = re.compile(r"合镜Beat=([^<\n｜|]*)")
 _INLINE_P_RE = re.compile(
     r"P\d+\s*\(\s*(\d+(?:\.\d+)?)s\s*[–—\-]\s*(\d+(?:\.\d+)?)s\s*\)"
 )
@@ -128,8 +141,35 @@ def _row_enters_video(row: str) -> bool:
     return "进视频=是" in text
 
 
+def _iter_nameplate_label_lines(text: str):
+    """【名牌前后标签】 data lines. This block is the extractable source from 文戏."""
+    in_block = False
+    for line in str(text or "").splitlines():
+        if "【名牌前后标签】" in line:
+            in_block = True
+            rest = line.split("【名牌前后标签】", 1)[1].strip()
+            if rest.startswith("无"):
+                in_block = False
+                continue
+            if "主标=" in rest:
+                yield rest
+            continue
+        if not in_block:
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("【") or stripped.startswith("["):
+            in_block = False
+            continue
+        if "主标=" in stripped:
+            yield stripped
+            continue
+        in_block = False
+
+
 def _iter_structured_nameplate_rows(text: str):
     source = str(text or "")
+    for row in _iter_nameplate_label_lines(source):
+        yield row
     for match in re.finditer(r"【名牌挂位】[^\n]*", source):
         yield match.group(0)
     for match in re.finditer(r"(?:^|\n)\s*名牌\s*[:：]([^\n]*)", source):
@@ -265,39 +305,109 @@ def _nameplate_burn_events(block: str, start: float, stop: float) -> List[Dict[s
     return events
 
 
+def _is_burn_nameplate_row(row: str) -> bool:
+    text = str(row or "")
+    if _row_enters_video(text):
+        return False
+    if "进视频=否" in text:
+        return True
+    return re.search(r"(?:名牌)?出字=(?:后期烧录|烧制|后期烧制)(?!时)", text) is not None
+
+
 def _drop_burn_nameplate_rows(text: str) -> str:
-    def drop_hang(match: re.Match) -> str:
-        row = match.group(0)
-        if _row_enters_video(row):
-            return row
-        if "进视频=否" in row or re.search(r"出字=(?:后期烧录|烧制)(?!时)", row):
-            return ""
-        return row
+    """Remove burn-side nameplate rows. Model-painted rows stay."""
+    source = str(text or "")
+    lines = source.splitlines(keepends=True)
+    kept: List[str] = []
+    in_labels = False
+    label_header = ""
+    label_body: List[str] = []
 
-    cleaned = re.sub(r"【名牌挂位】[^\n]*\n?", drop_hang, str(text or ""))
+    def flush_labels() -> None:
+        nonlocal label_header, label_body, in_labels
+        surviving = [row for row in label_body if not _is_burn_nameplate_row(row)]
+        if surviving:
+            kept.append(label_header)
+            kept.extend(surviving)
+        label_header = ""
+        label_body = []
+        in_labels = False
 
-    def drop_logic(match: re.Match) -> str:
-        row = match.group(0)
-        if _row_enters_video(row):
-            return row
-        if "进视频=否" in row or re.search(r"出字=(?:后期烧录|烧制)(?!时)", row):
-            return "\n" if row.startswith("\n") else ""
-        return row
-
-    return re.sub(r"(?:^|\n)\s*名牌\s*[:：][^\n]*", drop_logic, cleaned)
+    for line in lines:
+        if "【名牌前后标签】" in line and "主标=" not in line.split("【名牌前后标签】", 1)[-1]:
+            if in_labels:
+                flush_labels()
+            rest = line.split("【名牌前后标签】", 1)[1].strip()
+            if rest.startswith("无"):
+                continue
+            in_labels = True
+            label_header = line
+            continue
+        if "【名牌前后标签】" in line and "主标=" in line.split("【名牌前后标签】", 1)[-1]:
+            rest = line.split("【名牌前后标签】", 1)[1]
+            if _is_burn_nameplate_row(rest):
+                continue
+            kept.append(line)
+            continue
+        if in_labels:
+            stripped = line.strip()
+            if not stripped:
+                flush_labels()
+                kept.append(line)
+                continue
+            if stripped.startswith("【") or stripped.startswith("["):
+                flush_labels()
+            elif "主标=" in stripped:
+                label_body.append(line)
+                continue
+            else:
+                flush_labels()
+        if "【名牌挂位】" in line and _is_burn_nameplate_row(line):
+            continue
+        if re.match(r"\s*名牌\s*[:：]", line) and _is_burn_nameplate_row(line):
+            continue
+        kept.append(line)
+    if in_labels:
+        flush_labels()
+    return "".join(kept)
 
 
 def _strip_nameplates(block: str) -> str:
+    """Drop burn nameplates from text sent to a model. Do not leave a nameplate sentence."""
     mode = _nameplate_output_mode(block)
     text = _drop_burn_nameplate_rows(block)
+    text = _NAMEPLATE_BAN_RE.sub("", text)
+    text = _BURN_PAINT_SPAN_RE.sub("", text)
     if mode != "burn":
         return text
     text = _NAMEPLATE_PAINT_RE.sub("", text)
-    text = _NAMEPLATE_COPY_RE.sub("名牌字样=「」", text)
-    note = "本P禁止生成角色名牌与环境名牌字形，字由后期烧录。"
-    if note not in text:
-        text = f"{text.rstrip()}{note}\n"
+    text = _NAMEPLATE_COPY_SPAN_RE.sub("", text)
+    text = _NAMEPLATE_BAN_RE.sub("", text)
     return text
+
+
+def strip_burn_nameplates_for_llm(script: str) -> str:
+    """Remove later-burn nameplate rows before an LLM sees the scene or the prompt."""
+    text = _drop_burn_nameplate_rows(str(script or ""))
+    text = _BURN_PAINT_SPAN_RE.sub("", text)
+    text = _NAMEPLATE_COPY_SPAN_RE.sub("", text)
+    return _NAMEPLATE_BAN_RE.sub("", text)
+
+
+def strip_burn_nameplates_from_video_prompt(script: str) -> str:
+    """Video prompt text. Burn nameplates are absent; model-painted nameplates stay."""
+    text = str(script or "")
+    if not text:
+        return text
+    matches = list(_P_HEAD_RE.finditer(text))
+    if not matches:
+        return _strip_nameplates(text)
+    parts = [_strip_nameplates(text[:matches[0].start()])]
+    for index, match in enumerate(matches):
+        body_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        parts.append(text[match.start():match.end()])
+        parts.append(_strip_nameplates(text[match.end():body_end]))
+    return "".join(parts)
 
 
 def _block_needs_libass(block: str) -> bool:
@@ -1852,12 +1962,147 @@ def _shot_copy_texts(shot: Any) -> List[str]:
     return texts
 
 
+def _shot_beat_numbers(*texts: str) -> set:
+    beats = set()
+    for text in texts:
+        for match in _SHOT_BEATS_RE.finditer(str(text or "")):
+            beats.update(int(number) for number in re.findall(r"Beat\s*(\d+)", match.group(1)))
+    return beats
+
+
+def _scene_placed_nameplates(scene_text: str) -> List[Tuple[Optional[int], str]]:
+    """Burn rows from 文戏【名牌前后标签】 and the beat that 【名牌挂位】 sits on."""
+    beat: Optional[int] = None
+    in_labels = False
+    placed: List[Tuple[Optional[int], str]] = []
+    for raw in str(scene_text or "").splitlines():
+        found = _BEAT_START_RE.search(raw)
+        if found:
+            beat = int(found.group(1))
+            in_labels = False
+        if "【名牌前后标签】" in raw:
+            in_labels = True
+            rest = raw.split("【名牌前后标签】", 1)[1].strip()
+            if rest.startswith("无"):
+                in_labels = False
+            elif "主标=" in rest:
+                placed.append((None, rest))
+            continue
+        if in_labels:
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("【") or stripped.startswith("["):
+                in_labels = False
+            elif "主标=" in stripped:
+                placed.append((None, stripped))
+                continue
+            else:
+                in_labels = False
+        if "【名牌挂位】" in raw and "主标=" in raw:
+            placed.append((beat, raw.strip()))
+    return placed
+
+
+def _model_painted_nameplates(*texts: str) -> set:
+    painted = set()
+    for text in texts:
+        for match in re.finditer(r"【([^】]+)】[^。\n]{0,160}名牌出字=模型直出", str(text or "")):
+            main = str(match.group(1) or "").strip()
+            if main:
+                painted.add(main)
+    return painted
+
+
+def _persisted_nameplate_source(shot: Any) -> str:
+    """文戏 / 建置原文。名牌标准行在这里，不在发给模型的视频提示词里。"""
+    try:
+        from sqlalchemy.orm import object_session
+
+        session = object_session(shot)
+    except Exception:
+        return ""
+    if session is None:
+        return ""
+    try:
+        episode_id = int(getattr(shot, "episode_id", 0) or 0)
+    except (TypeError, ValueError):
+        return ""
+    if episode_id <= 0:
+        return ""
+    scene = getattr(shot, "scene", None)
+    candidates = []
+    for value in (
+        getattr(shot, "scene_code", None),
+        getattr(scene, "scene_no", None),
+    ):
+        text = str(value or "").strip()
+        if text and text not in candidates:
+            candidates.append(text)
+    if not candidates:
+        return ""
+    try:
+        from app.services.script_analysis_flow.analyze_scene_stages import (
+            load_scene_subskill_results_map,
+            lookup_persisted_scene_subskill_steps,
+        )
+
+        result_map = load_scene_subskill_results_map(session, episode_id)
+    except Exception:
+        logger.debug("[Nameplate] persisted source unavailable", exc_info=True)
+        return ""
+    for scene_id in candidates:
+        steps = lookup_persisted_scene_subskill_steps(result_map, scene_id)
+        chunks = [
+            str(steps.get(key) or "").strip()
+            for key in ("drama", "staging", "combat")
+            if str(steps.get(key) or "").strip()
+        ]
+        if chunks:
+            return "\n".join(chunks)
+    return ""
+
+
 def extract_shot_libass_events(shot: Any) -> List[Dict[str, Any]]:
-    """Merge burn copy from the video prompt and Logic. A flower line must not hide nameplates."""
+    """Merge burn copy from the video prompt, Logic, and the scene's nameplate rows.
+
+    Later-burn rows live in 文戏【名牌前后标签】. A 【名牌挂位】 row places that
+    plate on its beat. Plates with no hang line land on the shot that covers Beat 1.
+    """
     duration = getattr(shot, "duration", None)
     events: List[Dict[str, Any]] = []
-    for text in _shot_copy_texts(shot):
+    texts = _shot_copy_texts(shot)
+    for text in texts:
         events.extend(extract_libass_events(text, duration))
+    scene = getattr(shot, "scene", None)
+    scene_text = "\n".join(
+        part for part in (
+            str(getattr(scene, "core_scene_info", None) or "").strip(),
+            _persisted_nameplate_source(shot),
+        ) if part
+    )
+    if not scene_text:
+        return _dedupe_burn_events(events)
+    span = _parse_duration(duration, 4.0)
+    beats = _shot_beat_numbers(*texts)
+    rows = _scene_placed_nameplates(scene_text)
+    painted = _model_painted_nameplates(*texts)
+    hung_anywhere = set()
+    for beat, row in rows:
+        if beat is None or _row_enters_video(row):
+            continue
+        for event in _structured_nameplate_events(row, 0.0, span):
+            main = str(event.get("text") or "").strip()
+            if main:
+                hung_anywhere.add(main)
+            if beat in beats and main not in painted:
+                events.append(event)
+    if 1 in beats:
+        for beat, row in rows:
+            if beat is not None or _row_enters_video(row):
+                continue
+            for event in _structured_nameplate_events(row, 0.0, span):
+                main = str(event.get("text") or "").strip()
+                if main and main not in hung_anywhere and main not in painted:
+                    events.append(event)
     return _dedupe_burn_events(events)
 
 

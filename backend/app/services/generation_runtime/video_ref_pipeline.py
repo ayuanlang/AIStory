@@ -22,6 +22,17 @@ from app.db.session import SessionLocal
 from app.models.all_models import Entity, Episode, Shot
 from app.services.effective_api_setting import _safe_json_dict
 from app.services.generation_runtime.api_capabilities import _resolve_video_submit_image_urls
+from app.services.script_analysis_flow.derived_env_ingest import (
+    _same_media_url,
+    resolve_grid_for_angle,
+)
+from app.services.script_analysis_flow.environment_consistency import (
+    attrs_of,
+    derived_view_angle,
+    is_derived_main_environment_entity,
+    is_environment_entity,
+    is_main_environment_entity,
+)
 from app.services.soft_delete import _active_entity_clause
 from app.services.system_api_lookup import get_system_api_setting
 
@@ -129,6 +140,7 @@ def _build_project_entity_lookup(
             "anchor": anchor,
             "description": str(row.description or row.narrative_description or anchor or "").strip(),
             "image_url": image_url,
+            "generation_prompt_cn": str(getattr(row, "generation_prompt_cn", None) or "").strip(),
             "entity_id": row.id,
             "entity_type": entity_type,
             "episode_id": getattr(row, "episode_id", None),
@@ -359,26 +371,253 @@ def _inject_shot_prompt_anchors(
     return regex.sub(_replace, text)
 
 
+def _row_namespace(row: Dict[str, Any]) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=row.get("entity_id"),
+        name=str(row.get("name") or ""),
+        name_en=str(row.get("name_en") or ""),
+        type=str(row.get("entity_type") or ""),
+        image_url=str(row.get("image_url") or ""),
+        generation_prompt_cn=str(row.get("generation_prompt_cn") or ""),
+        custom_attributes=row.get("custom_attributes"),
+        episode_id=row.get("episode_id"),
+    )
+
+
+def _clean_env_name(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^(?:ENV|CHAR|PROP)\s*[:：]\s*", "", text, flags=re.IGNORECASE)
+    return text.strip("[]").strip()
+
+
+def _is_state_derived_ns(entity: Any) -> bool:
+    if not is_environment_entity(entity):
+        return False
+    if str(attrs_of(entity).get("derived_kind") or "").strip() == "state":
+        return True
+    prompt = str(getattr(entity, "generation_prompt_cn", "") or "")
+    return "以已切割的同角衍生" in prompt or "以同角衍生「" in prompt or "不要重切宫格" in prompt
+
+
+def _is_special_cut_ns(entity: Any) -> bool:
+    if not is_environment_entity(entity) or _is_state_derived_ns(entity) or is_derived_main_environment_entity(entity):
+        return False
+    if str(attrs_of(entity).get("derived_kind") or "").strip() == "special":
+        return True
+    prompt = str(getattr(entity, "generation_prompt_cn", "") or "")
+    return "禁止只做平视宫格原样切割" in prompt or "特别表述=" in prompt
+
+
+def _is_plain_grid_crop_ns(entity: Any) -> bool:
+    """Angle crop whose shot reference is one cell of the current four-grid."""
+    if not is_environment_entity(entity) or _is_state_derived_ns(entity) or _is_special_cut_ns(entity):
+        return False
+    if is_derived_main_environment_entity(entity) or is_main_environment_entity(entity):
+        return False
+    if str(attrs_of(entity).get("derived_kind") or "").strip() == "first_cut":
+        return True
+    prompt = str(getattr(entity, "generation_prompt_cn", "") or "")
+    if "只切割" in prompt or "截取宫格=" in prompt or "angle_key=" in prompt:
+        return True
+    return derived_view_angle(entity) is not None
+
+
+def _quad_cell_urls(row: Dict[str, Any], source_url: str = "", *, allow_stale: bool = False) -> Dict[str, str]:
+    attrs = _row_custom_attributes(row)
+    record = attrs.get("quad_cell_images")
+    if isinstance(record, str) and record.strip():
+        record = _safe_json_dict(record)
+    if not isinstance(record, dict):
+        return {}
+    stored = str(record.get("source_url") or record.get("sourceUrl") or "").strip()
+    wanted = str(source_url or "").strip()
+    if not allow_stale and wanted and stored and not _same_media_url(stored, wanted):
+        return {}
+    cells = record.get("cells")
+    if isinstance(cells, str) and cells.strip():
+        cells = _safe_json_dict(cells)
+    if not isinstance(cells, dict):
+        return {}
+    saved: Dict[str, str] = {}
+    for position in ("左上", "右上", "左下", "右下"):
+        value = cells.get(position)
+        if isinstance(value, dict):
+            value = value.get("url") or value.get("image_url") or value.get("href")
+        text = str(value or "").strip()
+        if text:
+            saved[position] = text
+    return saved
+
+
+def _score_main_row(candidate: Dict[str, Any], episode_id: Any) -> int:
+    score = 0
+    if episode_id is not None and str(candidate.get("episode_id") or "") == str(episode_id):
+        score += 4
+    if str(candidate.get("generation_prompt_cn") or "").strip():
+        score += 2
+    if str(candidate.get("image_url") or "").strip():
+        score += 1
+    return score
+
+
+def _find_owning_main_row(row: Dict[str, Any], pool: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    name = str(row.get("name") or "").strip()
+    stripped = re.sub(r"^(?:\d+)\s*度\s*", "", name).strip()
+    self_id = row.get("entity_id")
+
+    def _is_other_environment(candidate: Dict[str, Any]) -> bool:
+        if candidate.get("entity_id") == self_id and self_id is not None:
+            return False
+        if _is_angle_derivative_name(candidate.get("name")) or _is_angle_derivative_name(candidate.get("name_en")):
+            return False
+        return is_environment_entity(_row_namespace(candidate))
+
+    if stripped and stripped != name:
+        exact = [
+            candidate for candidate in pool
+            if _is_other_environment(candidate)
+            and stripped in {
+                str(candidate.get("name") or "").strip(),
+                str(candidate.get("name_en") or "").strip(),
+            }
+        ]
+        if exact:
+            exact.sort(key=lambda candidate: _score_main_row(candidate, row.get("episode_id")), reverse=True)
+            return exact[0]
+        suffix = stripped.rsplit("_", 1)[-1] if "_" in stripped else ""
+        if suffix and suffix not in {"仰天", "变形", "屋顶"}:
+            return None
+
+    wanted = set()
+    attrs = _row_custom_attributes(row)
+    for key in ("main_environment", "main_environment_name", "所属主环境", "owning_main_environment"):
+        value = _clean_env_name(attrs.get(key))
+        if value:
+            wanted.add(value)
+    prompt = str(row.get("generation_prompt_cn") or "")
+    match = re.search(r"所属主环境\s*=\s*([^。\n｜|]+)", prompt)
+    if match:
+        value = _clean_env_name(match.group(1))
+        if value:
+            wanted.add(value)
+    if stripped and stripped != name:
+        wanted.add(stripped)
+    for dep in _visual_dependency_names(row):
+        value = _clean_env_name(dep)
+        if value:
+            wanted.add(value)
+    wanted_lower = {item.lower() for item in wanted if item}
+    if not wanted_lower:
+        return None
+    matches = []
+    for candidate in pool:
+        if candidate.get("entity_id") == self_id and self_id is not None:
+            continue
+        if not is_main_environment_entity(_row_namespace(candidate)):
+            continue
+        names = {
+            _clean_env_name(candidate.get("name")).lower(),
+            _clean_env_name(candidate.get("name_en")).lower(),
+        }
+        names.discard("")
+        if names & wanted_lower:
+            matches.append(candidate)
+    if not matches:
+        return None
+    matches.sort(key=lambda candidate: _score_main_row(candidate, row.get("episode_id")), reverse=True)
+    return matches[0]
+
+
+def _resolve_shot_reference_image_url(
+    row: Optional[Dict[str, Any]],
+    entity_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> str:
+    """Current four-grid cell for a plain angle crop; omit a cell from the previous sheet."""
+    own = str((row or {}).get("image_url") or "").strip()
+    if not isinstance(row, dict):
+        return own
+    entity = _row_namespace(row)
+    if not _is_plain_grid_crop_ns(entity):
+        return own
+    main = _find_owning_main_row(row, _iter_unique_entity_rows(entity_lookup))
+    if not main:
+        return own
+    angle = derived_view_angle(entity)
+    if angle is None:
+        return own
+    crop = resolve_grid_for_angle(int(angle), str(main.get("generation_prompt_cn") or ""))
+    position = str(crop.get("position") or "")
+    source = str(main.get("image_url") or "").strip()
+    current = str(_quad_cell_urls(main, source).get(position) or "").strip()
+    if current:
+        return current
+    stale = _quad_cell_urls(main, "", allow_stale=True)
+    if own and any(_same_media_url(own, url) for url in stale.values()):
+        return ""
+    return own
+
+
+def _omit_main_rows_covered_by_derivatives(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    derived = [row for row in rows if _is_derived_environment_row(row)]
+    if not derived:
+        return rows
+    covered: set = set()
+    for row in derived:
+        covered.update(_owning_main_name_keys(row))
+    if not covered:
+        return rows
+    kept: List[Dict[str, Any]] = []
+    for row in rows:
+        if not _is_main_environment_row(row):
+            kept.append(row)
+            continue
+        name_keys = {_env_name_key(row.get("name")), _env_name_key(row.get("name_en"))}
+        name_keys.discard("")
+        if name_keys.intersection(covered):
+            continue
+        kept.append(row)
+    return kept
+
+
+def _matched_entity_rows(raw_names: List[str], entity_lookup: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen: set = set()
+    for raw_name in raw_names or []:
+        normalized = _normalize_entity_anchor_token(raw_name)
+        if not normalized:
+            continue
+        row = (entity_lookup or {}).get(normalized)
+        if not isinstance(row, dict):
+            continue
+        entity_id = row.get("entity_id")
+        key = f"id:{entity_id}" if entity_id is not None else f"name:{normalized}"
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    return _omit_main_rows_covered_by_derivatives(rows)
+
+
+def _reference_urls_for_rows(
+    rows: List[Dict[str, Any]],
+    entity_lookup: Dict[str, Dict[str, Any]],
+) -> List[str]:
+    refs: List[str] = []
+    for row in rows:
+        url = _resolve_shot_reference_image_url(row, entity_lookup)
+        if url and url not in refs:
+            refs.append(url)
+    return refs
+
+
 def _collect_associated_entities_refs(associated_entities_str: Optional[str], entity_lookup: Dict[str, Dict[str, Any]]) -> List[str]:
     if not isinstance(associated_entities_str, str) or not associated_entities_str.strip():
         return []
 
-    refs: List[str] = []
     names = extract_entity_raw_names_from_prompt(associated_entities_str)
     if not names:
         names = [x.strip() for x in re.split(r"[,，]", associated_entities_str) if x.strip()]
-
-    for name in names:
-        norm_name = _normalize_entity_anchor_token(name)
-        if not norm_name:
-            continue
-        row = entity_lookup.get(norm_name)
-        if row:
-            image_url = str((row or {}).get("image_url") or "").strip()
-            if image_url:
-                refs.append(image_url)
-
-    return [x for x in dict.fromkeys(refs) if x]
+    return _reference_urls_for_rows(_matched_entity_rows(names, entity_lookup), entity_lookup)
 
 
 def _extract_frontend_aligned_entity_raw_names(text: str) -> list[str]:
@@ -388,18 +627,8 @@ def _collect_prompt_entity_ref_images(prompt: str, entity_lookup: Dict[str, Dict
     text = str(prompt or "")
     if not text:
         return []
-
-    refs: List[str] = []
-    raw_names = _extract_frontend_aligned_entity_raw_names(text)
-    for raw_name in raw_names:
-        normalized = _normalize_entity_anchor_token(raw_name)
-        if not normalized:
-            continue
-        row = entity_lookup.get(normalized)
-        image_url = str((row or {}).get("image_url") or "").strip()
-        if image_url:
-            refs.append(image_url)
-    return [x for x in dict.fromkeys(refs) if x]
+    rows = _matched_entity_rows(_extract_frontend_aligned_entity_raw_names(text), entity_lookup)
+    return _reference_urls_for_rows(rows, entity_lookup)
 
 
 def _collect_prompt_entity_ref_images_relaxed(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> List[str]:
@@ -426,7 +655,7 @@ def _collect_prompt_entity_ref_images_relaxed(prompt: str, entity_lookup: Dict[s
         if entity_type and entity_type not in allowed_types:
             continue
 
-        image_url = str((row or {}).get("image_url") or "").strip()
+        image_url = _resolve_shot_reference_image_url(row, entity_lookup)
         if not image_url:
             continue
 
@@ -929,9 +1158,11 @@ def _drop_main_environment_urls_covered_by_derivatives(
         return urls
     url_to_row: Dict[str, Dict[str, Any]] = {}
     for row in _iter_unique_entity_rows(entity_lookup):
-        image_url = str(row.get("image_url") or "").strip()
-        if image_url and image_url not in url_to_row:
-            url_to_row[image_url] = row
+        own_url = str(row.get("image_url") or "").strip()
+        resolved_url = _resolve_shot_reference_image_url(row, entity_lookup)
+        for image_url in (own_url, resolved_url):
+            if image_url and image_url not in url_to_row:
+                url_to_row[image_url] = row
     ordered_rows = [url_to_row[url] for url in urls if url in url_to_row]
     derived_rows = [row for row in ordered_rows if _is_derived_environment_row(row)]
     if not derived_rows:
@@ -1128,16 +1359,8 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
 
     refs: List[str] = []
     index_map: Dict[str, int] = {}
-    raw_names = _extract_frontend_aligned_entity_raw_names(text)
-    for raw_name in raw_names:
-        normalized = _normalize_entity_anchor_token(raw_name)
-        if not normalized:
-            continue
-
-        row = entity_lookup.get(normalized)
-        if not row:
-            continue
-
+    rows = _matched_entity_rows(_extract_frontend_aligned_entity_raw_names(text), entity_lookup)
+    for row in rows:
         entity_type = str(row.get("entity_type") or "").strip().lower() if row else ""
         if entity_type and entity_type not in {
             "subject",
@@ -1150,7 +1373,7 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
         }:
             continue
 
-        image_url = str(row.get("image_url") or "").strip()
+        image_url = _resolve_shot_reference_image_url(row, entity_lookup)
         if not image_url:
             continue
 
@@ -1204,9 +1427,10 @@ def _pick_submitted_ref_for_entity(
     entity_row: Dict[str, Any],
     available_refs: List[str],
     used_keys: set,
+    entity_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> str:
-    """Bind a submitted ref URL to an entity by verifying image_url (name→URL audit)."""
-    preferred = str((entity_row or {}).get("image_url") or "").strip()
+    """Bind a submitted ref URL to an entity by its current reference image."""
+    preferred = _resolve_shot_reference_image_url(entity_row, entity_lookup)
     preferred_key = _normalize_media_ref_key(preferred)
     preferred_base = _media_ref_basename(preferred)
     if not preferred_key and not preferred_base:
@@ -1245,16 +1469,20 @@ def _build_url_to_entity_rows(
 ) -> Dict[str, Dict[str, Any]]:
     mapping: Dict[str, Dict[str, Any]] = {}
     for row in _iter_unique_entity_rows(entity_lookup):
-        image_url = str(row.get("image_url") or "").strip()
-        if not image_url:
-            continue
-        for key in (
-            image_url,
-            _normalize_media_ref_key(image_url),
-            _media_ref_basename(image_url),
-        ):
-            if key and key not in mapping:
-                mapping[key] = row
+        own_url = str(row.get("image_url") or "").strip()
+        resolved_url = _resolve_shot_reference_image_url(row, entity_lookup)
+        seen_urls: set = set()
+        for image_url in (own_url, resolved_url):
+            if not image_url or image_url in seen_urls:
+                continue
+            seen_urls.add(image_url)
+            for key in (
+                image_url,
+                _normalize_media_ref_key(image_url),
+                _media_ref_basename(image_url),
+            ):
+                if key and key not in mapping:
+                    mapping[key] = row
     return mapping
 
 
@@ -1423,6 +1651,7 @@ def _reconcile_video_refs_by_entity_names(
             entity_row=row,
             available_refs=refs,
             used_keys=used_keys,
+            entity_lookup=entity_lookup,
         )
         if not matched_url:
             unbound.append((display_name, row))
@@ -1477,7 +1706,7 @@ def _reconcile_video_refs_by_entity_names(
     # Name fallback: inject official entity image when submitted list missed it.
     # Never blind-zip leftover URLs to leftover names (that caused Image1↔Image3 swaps).
     for display_name, row in unbound:
-        preferred = str((row or {}).get("image_url") or "").strip()
+        preferred = _resolve_shot_reference_image_url(row, entity_lookup)
         preferred_key = _normalize_media_ref_key(preferred)
         if not preferred or not preferred_key or preferred_key in used_keys:
             audit.append(f"missing_image:{display_name}")

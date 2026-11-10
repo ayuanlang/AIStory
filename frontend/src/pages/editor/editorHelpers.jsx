@@ -3,6 +3,7 @@ import { Loader2, Video, RefreshCw } from 'lucide-react';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../config';
 import { createEntity, regenerateScene, batchSupplementMissingEntities } from '../../services/api';
 import { normalizeEntityToken, entityTokenMatchesName, extractEntityRawNamesFromPrompt } from '../../lib/entityToken';
+import { resolveShotReferenceImageUrl, sameMediaUrl } from './derivedGridRegen';
 
 const TOS_OBJECT_HOST_RE = /(?:^|\.)tos-(?:s3-)?[a-z0-9-]+\.(volces|ivolces)\.com(?:[/:?]|$)/i;
 
@@ -838,14 +839,15 @@ export const collectMatchedEntityImageUrlsFromPrompt = ({
     includeAssociatedEntities = true,
     preferredEpisodeId = null,
 }) => {
+    const pool = Array.isArray(entityPool) ? entityPool : [];
     return normalizeMediaRefList(
         omitMainEnvironmentsCoveredByDerivatives(collectMatchedEntitiesFromPrompt({
             promptText,
             associatedEntities,
-            entityPool,
+            entityPool: pool,
             includeAssociatedEntities,
             preferredEpisodeId,
-        })).map((entity) => entity?.image_url)
+        })).map((entity) => resolveShotReferenceImageUrl(entity, pool))
     );
 };
 
@@ -863,7 +865,7 @@ export const buildShotVideoEntityRefSlots = ({
         includeAssociatedEntities,
         preferredEpisodeId,
     })).map((entity) => {
-        const imageUrl = String(entity?.image_url || '').trim();
+        const imageUrl = String(resolveShotReferenceImageUrl(entity, entityPool) || '').trim();
         return {
             entityId: entity?.id,
             name: String(entity?.name || entity?.name_en || '').trim(),
@@ -896,9 +898,11 @@ export const buildShotVideoRefDisplayItems = ({
     const entityPoolArr = Array.isArray(entityPool) ? entityPool : [];
     const preferred = String(preferredEpisodeId || '').trim();
     const findEntityByUrl = (url) => {
-        const matches = entityPoolArr.filter(
-            (entity) => String(entity?.image_url || '').trim() === String(url || '').trim()
-        );
+        const matches = entityPoolArr.filter((entity) => {
+            const own = String(entity?.image_url || '').trim();
+            const resolved = String(resolveShotReferenceImageUrl(entity, entityPoolArr) || '').trim();
+            return sameMediaUrl(own, url) || sameMediaUrl(resolved, url);
+        });
         if (!matches.length) return null;
         if (preferred) {
             const episodeMatch = matches.find((entity) => String(entity?.episode_id || '').trim() === preferred);
@@ -933,7 +937,7 @@ export const buildShotVideoRefDisplayItems = ({
     const usedUrls = new Set();
 
     matchedEntities.forEach((entity) => {
-        const imageUrl = String(entity?.image_url || '').trim();
+        const imageUrl = String(resolveShotReferenceImageUrl(entity, entityPool) || '').trim();
         if (imageUrl) {
             if (deletedSet.has(imageUrl)) return;
             usedUrls.add(imageUrl);

@@ -492,6 +492,24 @@ export function derivedCellReference(entity, entities) {
     };
 }
 
+/**
+ * Shot reference for one entity.
+ * A plain angle crop uses the cell cut from the current four-grid.
+ * A portrait that only exists on the previous sheet is omitted.
+ * Special cuts, state derivatives, and other entities keep their own image.
+ */
+export function resolveShotReferenceImageUrl(entity, entities) {
+    const own = String(entity?.image_url || '').trim();
+    if (!isGridCropDerivedEntity(entity) || isSpecialCutDerivedEntity(entity)) return own;
+    const current = String(derivedCellReference(entity, entities)?.url || '').trim();
+    if (current) return current;
+    const main = planDerivedGridCell(entity, entities)?.mainEntity;
+    if (!main || !own) return own;
+    const stale = readQuadCellImages(main, '', { allowStale: true }) || {};
+    if (Object.values(stale).some((url) => sameMediaUrl(url, own))) return '';
+    return own;
+}
+
 function savedQuadCellUrl(quad, position) {
     const sourceUrl = String(quad?.image_url || '').trim();
     const cells = readQuadCellImages(quad, sourceUrl) || {};
@@ -839,14 +857,116 @@ export function quadFailureEnvironmentNames(detail) {
     return { names, unmatched, truncated };
 }
 
+export function isFullEnvironmentDesignOpening(text) {
+    return looksLikeFullDesignOpening(text);
+}
+
 export function mainEnvironmentOpeningDraft(entity) {
     const attrs = readAttrs(entity);
-    const fromPrompt = openingBeforeQuad(entity?.generation_prompt_cn || entity?.prompt || '');
+    const fromPrompt = openingBeforeQuad(
+        entity?.generation_prompt_cn || entity?.prompt || entity?.prompt_cn || ''
+    );
     const fromAttr = openingBeforeQuad(attrs.main_environment_opening || '');
+    const fromDescription = openingBeforeQuad(
+        entity?.description || entity?.description_cn || entity?.narrative_description || ''
+    );
     // A new environment design writes the full opening into the prompt.
-    // The saved attribute is the opening frozen by the previous four-grid.
+    // After the four-grid, that opening stays on the attribute and the description.
+    // A short 定位 prefix must not hide it. Card reads omit the prompt body.
     if (looksLikeFullDesignOpening(fromPrompt)) return fromPrompt;
-    return fromAttr || fromPrompt;
+    if (looksLikeFullDesignOpening(fromAttr)) return fromAttr;
+    if (looksLikeFullDesignOpening(fromDescription)) return fromDescription;
+    return fromAttr || fromDescription || fromPrompt;
+}
+
+export function extractWrappedDesignDrafts(text) {
+    const found = [];
+    const source = String(text || '');
+    const blockRe = /【主环境设计稿】([^\n]+)\n([\s\S]*?)【\/主环境设计稿】/g;
+    for (const match of source.matchAll(blockRe)) {
+        const name = String(match[1] || '').trim();
+        const body = openingBeforeQuad(match[2] || '');
+        if (!name || !body) continue;
+        found.push({
+            name,
+            type: 'environment',
+            generation_prompt_cn: body,
+        });
+    }
+    return found;
+}
+
+function quadRerunRank(row) {
+    const opening = String(row?.opening || '');
+    const prompt = String(row?.prompt || '');
+    return (isFullEnvironmentDesignOpening(opening) || isFullEnvironmentDesignOpening(prompt) ? 4 : 0)
+        + (row?.fromDesign ? 2 : 0)
+        + (prompt.trim() ? 1 : 0);
+}
+
+function mergeQuadRerunCandidate(previous, incoming) {
+    if (!previous) return { ...incoming };
+    const primary = quadRerunRank(incoming) >= quadRerunRank(previous) ? incoming : previous;
+    const secondary = primary === incoming ? previous : incoming;
+    const opening = [primary.opening, secondary.opening, primary.prompt, secondary.prompt]
+        .map((value) => String(value || '').trim())
+        .find((value) => isFullEnvironmentDesignOpening(value))
+        || String(primary.opening || secondary.opening || '').trim();
+    return {
+        name: String(primary.name || secondary.name || '').trim(),
+        prompt: String(primary.prompt || '').trim() || String(secondary.prompt || '').trim(),
+        opening,
+        hasQuad: Boolean(primary.hasQuad || secondary.hasQuad),
+        fromDesign: Boolean(primary.fromDesign || secondary.fromDesign),
+    };
+}
+
+export function quadRerunCandidateIsDraft(item) {
+    if (!item) return false;
+    const opening = String(item.opening || '').trim();
+    const prompt = String(item.prompt || '').trim();
+    if (!opening && !prompt) return false;
+    if (item.fromDesign) return true;
+    return isFullEnvironmentDesignOpening(opening) || isFullEnvironmentDesignOpening(prompt);
+}
+
+/**
+ * One row per environment. A saved entity or design JSON wins over the plan outline.
+ * Names join across a fullwidth bar and ignored spaces, so the plan name still
+ * finds the design the library is showing.
+ */
+export function assembleQuadRerunCandidates({ entities = [], designRows = [], planRows = [] } = {}) {
+    const byFold = new Map();
+    const consider = (row) => {
+        const name = String(row?.name || '').trim();
+        const fold = foldEnvironmentName(name);
+        if (!name || !fold) return;
+        const incoming = {
+            name,
+            prompt: String(row?.prompt || '').trim(),
+            opening: String(row?.opening || '').trim(),
+            hasQuad: Boolean(row?.hasQuad),
+            fromDesign: Boolean(row?.fromDesign),
+        };
+        if (!incoming.prompt && !incoming.opening) return;
+        byFold.set(fold, mergeQuadRerunCandidate(byFold.get(fold), incoming));
+    };
+    (Array.isArray(entities) ? entities : []).forEach(consider);
+    (Array.isArray(designRows) ? designRows : []).forEach(consider);
+    (Array.isArray(planRows) ? planRows : []).forEach(consider);
+    const planNames = (Array.isArray(planRows) ? planRows : [])
+        .map((row) => String(row?.name || '').trim())
+        .filter(Boolean);
+    const ordered = planNames.length
+        ? planNames.map((name) => byFold.get(foldEnvironmentName(name))).filter(Boolean)
+        : Array.from(byFold.values());
+    const seen = new Set();
+    return ordered.filter((item) => {
+        const fold = foldEnvironmentName(item?.name);
+        if (!fold || seen.has(fold) || !quadRerunCandidateIsDraft(item)) return false;
+        seen.add(fold);
+        return true;
+    });
 }
 
 export function withMainEnvironmentOpening(entity, opening) {

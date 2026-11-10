@@ -996,15 +996,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const awaitShotGenerationEntities = useCallback(async () => {
         const resolvedProjectId = projectId || activeEpisode?.project_id;
         if (!resolvedProjectId) return Array.isArray(entities) ? entities : [];
-        if (Array.isArray(entities) && entities.length > 0 && !entityListLoading) {
-            return entities;
-        }
         const loaded = await loadEntities();
-        if (Array.isArray(loaded) && loaded.length > 0) {
-            return loaded.filter(e => !e?.episode_id || String(e.episode_id) === String(activeEpisode?.id));
-        }
-        return Array.isArray(entities) ? entities : [];
-    }, [activeEpisode?.id, activeEpisode?.project_id, entities, entityListLoading, loadEntities, projectId]);
+        const source = Array.isArray(loaded) && loaded.length > 0
+            ? loaded
+            : (Array.isArray(entities) ? entities : []);
+        return source.filter((item) => !item?.episode_id || String(item.episode_id) === String(activeEpisode?.id));
+    }, [activeEpisode?.id, activeEpisode?.project_id, entities, loadEntities, projectId]);
 
     // Note: Provider selection functionality removed (defaults to Backend Active Settings)
 
@@ -6000,7 +5997,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }, [closeMediaPicker]);
 
     const refreshShots = useCallback(async () => {
-        if (!selectedSceneId || !activeEpisode?.id) return;
+        if (!selectedSceneId || !activeEpisode?.id) return null;
         const requestSeq = ++shotsRefreshRequestSeqRef.current;
         setIsShotsLoading(true);
 
@@ -6046,6 +6043,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 sceneId: selectedSceneId === 'all' ? null : selectedSceneId,
             });
 
+            const snapshots = filtered.map((shot) => applyLockedDuration(shot));
             if (requestSeq === shotsRefreshRequestSeqRef.current) {
                 // Keep just-generated local media when compact list briefly returns empty URLs
                 // (common before OSS bind lands).
@@ -6077,17 +6075,27 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                      // But if user relies on auto-generation... 
                      // Let's assume 'remove sync logic' refers to the strict scene_code matching.
                 }
+            return snapshots;
         } catch (e) {
             console.error("Failed to refresh shots", e);
             if (requestSeq === shotsRefreshRequestSeqRef.current) {
                 setHasShotInitialLoadCompleted(true);
             }
+            return null;
         } finally {
             if (requestSeq === shotsRefreshRequestSeqRef.current) {
                 setIsShotsLoading(false);
             }
         }
     }, [activeEpisode?.id, applyLockedDuration, keepDirtyShotDuration, selectedSceneId, sceneCodeFilter, shotIdFilter, normalizeShotPromptDefaults]);
+
+    const loadBatchShotSnapshots = useCallback(async () => {
+        const fresh = await refreshShots();
+        if (Array.isArray(fresh)) {
+            return fresh.filter((shot) => Boolean(shot?.id));
+        }
+        return (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
+    }, [refreshShots, shots]);
 
     const syncShotVideoAfterOssPersist = useCallback(async ({
         shotId,
@@ -11534,7 +11542,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, buildShotFramePromptFromVideoBase, clearPendingImageJob, clearPendingJointDiptychImageJob, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, project?.global_info, projectId, resolveDefaultShotImageGenerationRefs, resolveJointShotDiptychRefs, resolveShotPanelExportResolution, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
 
     const runLocalKeyframeBatch = useCallback(async () => {
-        const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
+        const orderedShots = await loadBatchShotSnapshots();
         const targetShots = orderedShots.filter((shot) => {
             const currentStartUrl = String(shot?.image_url || '').trim();
             const currentEndUrl = String(getShotEndFrameUrl(shot) || '').trim();
@@ -11741,10 +11749,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             refreshShots();
             refreshShotAssetsMeta();
         }
-    }, [SHOT_BATCH_PARALLEL_LIMIT, activeEpisode?.episode_info, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotKeyframesBatchItem, getShotEndFrameUrl, isPersistentLocalShotBatchStopRequested, isStartFrameInheritPrompt, onLog, refreshShotAssetsMeta, refreshShots, shots, syncLocalShotBatchRuntime, t]);
+    }, [SHOT_BATCH_PARALLEL_LIMIT, activeEpisode?.episode_info, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotKeyframesBatchItem, getShotEndFrameUrl, isPersistentLocalShotBatchStopRequested, isStartFrameInheritPrompt, loadBatchShotSnapshots, onLog, refreshShotAssetsMeta, refreshShots, syncLocalShotBatchRuntime, t]);
 
     const runLocalJointDiptychBatch = useCallback(async () => {
-        const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
+        const orderedShots = await loadBatchShotSnapshots();
         const targetShots = orderedShots.filter((shot) => {
             const currentStartUrl = String(shot?.image_url || '').trim();
             const currentEndUrl = String(getShotEndFrameUrl(shot) || '').trim();
@@ -11910,7 +11918,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             refreshShots();
             refreshShotAssetsMeta();
         }
-    }, [SHOT_BATCH_PARALLEL_LIMIT, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotDiptychBatchItem, getShotEndFrameUrl, isPersistentLocalShotBatchStopRequested, onLog, refreshShotAssetsMeta, refreshShots, shots, syncLocalShotBatchRuntime, t]);
+    }, [SHOT_BATCH_PARALLEL_LIMIT, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotDiptychBatchItem, getShotEndFrameUrl, isPersistentLocalShotBatchStopRequested, loadBatchShotSnapshots, onLog, refreshShotAssetsMeta, refreshShots, syncLocalShotBatchRuntime, t]);
 
     const loadShotsWithGeneratedFrameAssets = useCallback(async (shotList) => {
         const wanted = new Set((Array.isArray(shotList) ? shotList : []).map((shot) => String(shot?.id || '').trim()).filter(Boolean));
@@ -11960,7 +11968,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }, [activeEpisode?.id, activeEpisode?.project_id, projectId]);
 
     const runLocalMultiPanelPreviewBatch = useCallback(async () => {
-        const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
+        const orderedShots = await loadBatchShotSnapshots();
         if (orderedShots.length === 0) {
             alert(t('当前没有可批量处理的镜头。', 'No shots available for batch processing.'));
             return;
@@ -12209,9 +12217,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         loadShotsWithGeneratedFrameAssets,
         onLog,
         refreshShotAssetsMeta,
+        loadBatchShotSnapshots,
         refreshShots,
         resolvedPromptSubmitLang,
-        shots,
         syncLocalShotBatchRuntime,
         t,
     ]);
@@ -12417,20 +12425,21 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             return;
         }
 
-        if (!Array.isArray(shots) || shots.length === 0) {
-            const msg = t('当前没有可批量处理的镜头。请先在 Scenes 中生成并应用镜头，或选择包含镜头的场景。', 'No shots available for batch processing. Generate/apply shots from Scenes first, or select a scene that has shots.');
-            onLog?.(msg, 'warning');
-            alert(msg);
-            return;
-        }
-
         const latest = mode === 'videos' ? await pollShotBatchStatus() : null;
         if (latest?.running) {
             alert('A batch task is already running. Please stop it first.');
             return;
         }
 
-        const targetShots = mode === 'videos' ? getBatchVideoEligibleShots(shots) : shots;
+        const workingShots = await loadBatchShotSnapshots();
+        if (!workingShots.length) {
+            const msg = t('当前没有可批量处理的镜头。请先在 Scenes 中生成并应用镜头，或选择包含镜头的场景。', 'No shots available for batch processing. Generate/apply shots from Scenes first, or select a scene that has shots.');
+            onLog?.(msg, 'warning');
+            alert(msg);
+            return;
+        }
+
+        const targetShots = mode === 'videos' ? getBatchVideoEligibleShots(workingShots) : workingShots;
         if (mode === 'videos' && targetShots.length === 0) {
             const msg = t('当前没有可批量生成视频的镜头。需要有视频提示词，且当前没有视频。', 'No eligible shots for batch video generation. Each shot needs a video prompt and must not already have a video.');
             onLog?.(msg, 'warning');

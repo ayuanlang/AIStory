@@ -136,8 +136,8 @@ def test_nameplate_burn_is_separate_from_flower_text():
     assert events[0]["place"] == "名牌"
     stripped = strip_libass_glyphs_from_prompt(character)
     assert "客栈掌柜" not in stripped
-    assert "名牌字样=「」" in stripped
-    assert "禁止生成角色名牌与环境名牌字形" in stripped
+    assert "名牌字样" not in stripped
+    assert "禁止生成角色名牌" not in stripped
     painted = strip_libass_glyphs_from_prompt(
         "画幅叠出片内图形名牌【陈】客栈掌柜】，字体=魏碑，字色=鎏金，字级=中｜名牌出字=模型直出"
     )
@@ -202,6 +202,66 @@ def test_logic_nameplate_burns_without_entering_the_video_prompt():
     assert place_events[0]["place"] == "顶"
 
 
+def test_drama_nameplate_block_is_extracted_and_not_sent():
+    from app.services.flower_text_ass import strip_burn_nameplates_for_llm
+
+    block = (
+        "【名牌前后标签】\n"
+        "种类=角色｜对象=CHAR:[@陈]｜主标=陈｜副标=客栈掌柜｜落位=人物下方｜"
+        "字体=魏碑｜样式=暗底横牌｜字色=鎏金｜字级=中｜出字=后期烧录｜上屏=待落｜进视频=否\n"
+        "CHAR:[@陈] 右手推开木门。\n"
+    )
+    events = extract_libass_events(block, duration=4)
+    assert events[0]["text"] == "陈"
+    assert events[0]["companion"] == "客栈掌柜"
+    sent = strip_burn_nameplates_for_llm(block)
+    assert "客栈掌柜" not in sent
+    assert "魏碑" not in sent
+    assert "右手推开木门" in sent
+    assert "禁止生成角色名牌" not in sent
+    assert "【名牌前后标签】" not in sent
+    painted = (
+        "【名牌前后标签】\n"
+        "种类=角色｜对象=CHAR:[@陈]｜主标=陈｜副标=客栈掌柜｜落位=人物下方｜"
+        "字体=魏碑｜样式=暗底横牌｜字色=鎏金｜字级=中｜出字=模型直出｜上屏=待落｜进视频=是\n"
+    )
+    assert "客栈掌柜" in strip_burn_nameplates_for_llm(painted)
+
+
+def test_scene_nameplate_lands_on_the_beat_that_hangs_it():
+    from types import SimpleNamespace
+
+    scene = SimpleNamespace(core_scene_info=(
+        "【名牌前后标签】\n"
+        "种类=角色｜对象=CHAR:[@陈]｜主标=陈｜副标=客栈掌柜｜落位=人物下方｜"
+        "字体=魏碑｜样式=暗底横牌｜字色=鎏金｜字级=中｜出字=后期烧录｜进视频=否\n"
+        "[BEAT_START:3]\n"
+        "【名牌挂位】对象=CHAR:[@陈]｜主标=陈｜副标=客栈掌柜｜落位=人物下方｜"
+        "字体=魏碑｜样式=暗底横牌｜字色=鎏金｜字级=中｜出字=后期烧录｜进视频=否\n"
+    ))
+    early = SimpleNamespace(
+        video_content="(P1 0s–4s) CHAR:[@陈] 坐着。",
+        prompt="",
+        duration=4,
+        shot_logic_cn="合镜Beat=Beat1",
+        technical_notes="{}",
+        scene=scene,
+    )
+    late = SimpleNamespace(
+        video_content="(P1 0s–4s) CHAR:[@陈] 推门。",
+        prompt="",
+        duration=4,
+        shot_logic_cn="合镜Beat=Beat3",
+        technical_notes="{}",
+        scene=scene,
+    )
+    assert [event["text"] for event in extract_shot_libass_events(early)] == []
+    late_events = extract_shot_libass_events(late)
+    assert late_events[0]["text"] == "陈"
+    assert late_events[0]["companion"] == "客栈掌柜"
+    assert "客栈掌柜" not in strip_libass_glyphs_from_prompt(late.video_content)
+
+
 def test_shot_logic_nameplate_is_not_hidden_by_video_flower_text():
     from types import SimpleNamespace
 
@@ -248,7 +308,7 @@ def test_quality_footer_does_not_flip_nameplate_mode():
     assert "客栈掌柜" not in stripped
     assert "龙门风月客栈" not in stripped
     assert "早上9点" not in stripped
-    assert stripped.count("禁止生成角色名牌与环境名牌字形") == 2
+    assert "禁止生成角色名牌" not in stripped
     flower = (
         "(P1 0s–4s) 画幅叠出片内图形花字「何以安康，家和人乐」｜出字=模型直出。\n"
         + _QUALITY_FOOTER

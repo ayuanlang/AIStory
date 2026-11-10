@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.time_utils import now_bj_iso
+from app.services.flower_text_ass import strip_burn_nameplates_from_video_prompt
 from app.models.all_models import Entity, Episode, Project, Scene, Shot
 from app.services.deletion_ops import _soft_delete_shots
 from app.services.shot_markdown import (
@@ -268,7 +269,9 @@ def _import_scene_shot_rows_to_db(
 
         start_frame_text = _pick_shot_cell(s_data, ["Start Frame", "start_frame", "起始帧"], "")
         end_frame_text = _pick_shot_cell(s_data, ["End Frame", "end_frame", "结束帧"], "")
-        video_content_text = _pick_shot_cell(s_data, ["Video Content", "video_content", "视频内容"], "")
+        video_content_text = strip_burn_nameplates_from_video_prompt(
+            _pick_shot_cell(s_data, ["Video Content", "video_content", "视频内容"], "")
+        )
         associated_entities_text = _pick_shot_cell(s_data, ["Associated Entities", "associated_entities", "关联实体"], "")
         shot_logic_cn_text = stabilize_shot_logic_merged_beats(
             _pick_shot_cell(s_data, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"], "")
@@ -298,6 +301,8 @@ def _import_scene_shot_rows_to_db(
                 end_frame_cn_text = end_cn_fallback
             if not video_prompt_cn_text:
                 video_prompt_cn_text = video_cn_fallback
+        if video_prompt_cn_text:
+            video_prompt_cn_text = strip_burn_nameplates_from_video_prompt(video_prompt_cn_text)
             if not keyframes_cn_text:
                 keyframes_cn_text = keyframes_cn_fallback
 

@@ -14,7 +14,17 @@ import { BookOpen, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users,
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
-import { derivedMainRegenHint, mainEnvironmentOpeningDraft, quadFailureEnvironmentNames, quadNamesMissingFromResult } from '../derivedGridRegen';
+import {
+    assembleQuadRerunCandidates,
+    derivedMainRegenHint,
+    extractWrappedDesignDrafts,
+    isFullEnvironmentDesignOpening,
+    mainEnvironmentOpeningDraft,
+    quadFailureEnvironmentNames,
+    quadNamesMissingFromResult,
+    quadRerunCandidateIsDraft,
+    foldEnvironmentName,
+} from '../derivedGridRegen';
 import {
     getEpisodeAnalysisRun,
     releaseEpisodeAnalysisRun,
@@ -34161,75 +34171,103 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
-    const collectRerunnableMainEnvironments = (entities) => (
-        (Array.isArray(entities) ? entities : []).filter((item) => (
-            isMainEnvironmentCompletenessAsset(item)
-            && String(item?.name || '').trim()
-            && String(item?.generation_prompt_cn || '').trim()
-        )).map((item) => ({
-            name: String(item.name).trim(),
-            hasQuad: mainEnvironmentPromptHasQuad(item.generation_prompt_cn),
-            prompt: String(item.generation_prompt_cn || ''),
-            opening: mainEnvironmentOpeningDraft(item),
-        }))
-    );
+    const environmentRecordToQuadCandidate = (item) => {
+        if (!item || typeof item !== 'object') return null;
+        const named = { ...item, type: item.type || 'environment' };
+        const name = String(named.name || '').trim();
+        if (!name || isCoverPosterAsset(named) || isDerivedEnvironmentName(name)) return null;
+        const prompt = String(
+            named.generation_prompt_cn || named.prompt || named.prompt_cn || ''
+        ).trim();
+        const opening = String(mainEnvironmentOpeningDraft(named) || '').trim();
+        const hasPromptBody = Boolean(prompt);
+        const hasFullOpening = isFullEnvironmentDesignOpening(opening) || isFullEnvironmentDesignOpening(prompt);
+        const savedRecord = isMainEnvironmentCompletenessAsset(named) || hasFullOpening;
+        if (!savedRecord || (!hasPromptBody && !hasFullOpening)) return null;
+        return {
+            name,
+            hasQuad: named.has_environment_quad === true || mainEnvironmentPromptHasQuad(prompt),
+            prompt,
+            opening: opening || prompt,
+            fromDesign: true,
+        };
+    };
+
+    const collectParsedEnvironmentRows = (text) => {
+        const source = String(text || '').trim();
+        if (!source) return [];
+        const rows = [];
+        const pushPayload = (payload) => {
+            const list = Array.isArray(payload?.environments) ? payload.environments : [];
+            list.forEach((item) => rows.push(item));
+        };
+        const objects = extractJsonObjectsFromText(source);
+        if (objects.length) {
+            objects.forEach((obj) => {
+                try {
+                    pushPayload(getAnalysisEntitiesPayloadFromJsonText(JSON.stringify(obj)));
+                } catch (_) {}
+            });
+        } else {
+            pushPayload(getAnalysisEntitiesPayloadFromJsonText(source));
+        }
+        extractWrappedDesignDrafts(source).forEach((item) => rows.push(item));
+        return rows;
+    };
 
     const loadLatestEnvironmentDesignRows = async () => {
-        let designText = String(llmAssetRawResultContent || '').trim();
+        const texts = [
+            getStageOutputContent('stage3', 'asset_design_json'),
+            llmAssetRawResultContent,
+            activeEpisode?.ai_entity_design_result,
+        ];
         if (activeEpisode?.id) {
             try {
                 const episode = await fetchEpisode(activeEpisode.id);
                 const persisted = String(episode?.ai_entity_design_result || '').trim();
-                if (persisted) designText = persisted;
+                if (persisted) texts.unshift(persisted);
             } catch (_) {}
         }
-        const payload = getAnalysisEntitiesPayloadFromJsonText(designText) || {};
-        return Array.isArray(payload.environments) ? payload.environments : [];
+        const rows = [];
+        const seenText = new Set();
+        texts.forEach((value) => {
+            const text = String(value || '').trim();
+            if (!text || seenText.has(text)) return;
+            seenText.add(text);
+            collectParsedEnvironmentRows(text).forEach((item) => rows.push(item));
+        });
+        return rows;
     };
 
-    const collectQuadRerunCandidates = (entities, designRows, planText = '') => {
-        const byName = new Map();
-        collectRerunnableMainEnvironments(entities).forEach((item) => {
-            byName.set(item.name, item);
-        });
+    const collectQuadRerunCandidates = (entities, designRows, planText = '', screenEntities = []) => {
+        const entitiesForDraft = [];
+        const pushEntity = (item) => {
+            const candidate = environmentRecordToQuadCandidate(item);
+            if (candidate) entitiesForDraft.push(candidate);
+        };
+        (Array.isArray(entities) ? entities : []).forEach(pushEntity);
+        (Array.isArray(screenEntities) ? screenEntities : []).forEach(pushEntity);
+        const designForDraft = [];
         (Array.isArray(designRows) ? designRows : []).forEach((item) => {
-            const named = { ...item, type: item?.type || 'environment' };
-            if (!isMainEnvironmentCompletenessAsset(named)) return;
-            const name = String(item?.name || '').trim();
-            const prompt = String(item?.generation_prompt_cn || '').trim();
-            if (!name || !prompt) return;
-            const opening = mainEnvironmentOpeningDraft(named);
-            const previous = byName.get(name);
-            byName.set(name, {
-                name,
-                hasQuad: Boolean(previous?.hasQuad) || mainEnvironmentPromptHasQuad(prompt),
-                prompt,
-                opening: opening || previous?.opening || '',
-                fromDesign: true,
-            });
+            const candidate = environmentRecordToQuadCandidate(item);
+            if (candidate) designForDraft.push(candidate);
         });
-        collectMainEnvironmentNames(planText).forEach((name) => {
+        const planRows = collectMainEnvironmentNames(planText).map((name) => {
             const stableName = String(name || '').trim();
-            if (!stableName || byName.has(stableName)) return;
             const plan = sliceEnvironmentEditorText(planText, stableName);
-            const planBody = String(plan?.text || '').trim();
-            byName.set(stableName, {
+            return {
                 name: stableName,
-                hasQuad: false,
                 prompt: '',
-                opening: planBody,
+                opening: String(plan?.text || '').trim(),
+                hasQuad: false,
                 fromDesign: false,
-            });
+            };
+        }).filter((item) => item.name);
+        return assembleQuadRerunCandidates({
+            entities: entitiesForDraft,
+            designRows: designForDraft,
+            planRows,
         });
-        const planNames = collectMainEnvironmentNames(planText)
-            .map((name) => String(name || '').trim())
-            .filter(Boolean);
-        if (planNames.length) {
-            return planNames.map((name) => byName.get(name)).filter((item) => (
-                item && String(item.opening || item.prompt || '').trim()
-            ));
-        }
-        return Array.from(byName.values()).filter((item) => String(item.opening || item.prompt || '').trim());
     };
 
     const openEnvironmentQuadRerunModal = async () => {
@@ -34245,7 +34283,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             refreshEpisodeOwnedEntities(),
             loadLatestEnvironmentDesignRows(),
         ]);
-        const candidates = collectQuadRerunCandidates(owned, designRows, resolveAssetRerunSourceText());
+        const candidates = collectQuadRerunCandidates(
+            owned,
+            designRows,
+            resolveAssetRerunSourceText(),
+            episodeOwnedEntities,
+        );
         if (!candidates.length) {
             reportAnalysisPanelNotice(t(
                 '没有可重跑的主环境设计稿。',
@@ -34284,9 +34327,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 refreshEpisodeOwnedEntities(),
                 loadLatestEnvironmentDesignRows(),
             ]);
-            const mains = collectQuadRerunCandidates(owned, designRows, resolveAssetRerunSourceText()).filter((item) => (
-                !wantedName || item.name === wantedName
-            )).filter((item) => item.fromDesign !== false || String(item.prompt || '').trim());
+            const wantedFold = foldEnvironmentName(wantedName);
+            const nameMatches = (item) => (
+                !wantedName
+                || item?.name === wantedName
+                || foldEnvironmentName(item?.name) === wantedFold
+            );
+            let mains = collectQuadRerunCandidates(
+                owned,
+                designRows,
+                resolveAssetRerunSourceText(),
+                episodeOwnedEntities,
+            ).filter((item) => nameMatches(item) && quadRerunCandidateIsDraft(item));
+            if (!mains.length) {
+                const shown = (environmentQuadRerunModal.candidates || [])
+                    .filter((item) => nameMatches(item) && quadRerunCandidateIsDraft(item));
+                if (shown.length) mains = shown;
+            }
             if (!mains.length) {
                 reportAnalysisPanelNotice(t(
                     '没有可重跑的主环境设计稿。',
