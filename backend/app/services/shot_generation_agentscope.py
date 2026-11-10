@@ -19,8 +19,15 @@ EventCallback = Optional[Callable[[Dict[str, Any]], Any]]
 from app.services.llm_service import llm_service
 from app.services.prompt_resolve import _resolve_prompt_text
 from app.services.shot_markdown import (
+    build_shot_markdown_continuation_user_prompt,
+    build_shot_markdown_row_format_repair_prompt,
+    inspect_complete_shot_markdown_return,
+    merge_shot_markdown_continuation,
     parse_shots_markdown_table,
+    plan_shot_markdown_row_format_repair,
     sanitize_shots_markdown_table_text,
+    shot_markdown_needs_continuation,
+    splice_shot_markdown_row_format_repair,
 )
 
 logger = logging.getLogger("api_logger")
@@ -431,6 +438,168 @@ async def _iter_video_optimize_agent(
     yield result
 
 
+def _abort_shot_row_format_repair(
+    result: Dict[str, Any],
+    validation_error: str,
+    usage: Any = None,
+) -> Dict[str, Any]:
+    detail = str(validation_error or "").strip() or "shot markdown row format repair failed"
+    content = detail if detail.lower().startswith("error:") else f"Error: {detail}"
+    payload = dict(result or {})
+    payload["content"] = content
+    payload["usage"] = _merge_usage((result or {}).get("usage"), usage)
+    payload["_postprocess_validation_failed"] = True
+    payload["_abort_full_retry"] = True
+    payload["_shot_row_format_repair"] = "failed"
+    return payload
+
+
+def _shot_continuation_segment_limit(candidate_config: Dict[str, Any]) -> int:
+    cfg = candidate_config or {}
+    nested = cfg.get("config") if isinstance(cfg.get("config"), dict) else {}
+    raw = (nested or {}).get("continuation_max_segments", cfg.get("continuation_max_segments", 4))
+    try:
+        total = int(raw)
+    except (TypeError, ValueError):
+        total = 4
+    return min(20, max(1, total))
+
+
+async def _continue_incomplete_shot_markdown(
+    result_dict: Dict[str, Any],
+    candidate_config: Dict[str, Any],
+    validation_error: str,
+    *,
+    user_prompt: str = "",
+    system_prompt: str = "",
+) -> Dict[str, Any]:
+    """Ask the same model to continue a cut-off shot table from its own last output."""
+    text = str((result_dict or {}).get("content") or "")
+    usage = (result_dict or {}).get("usage")
+    limit = _shot_continuation_segment_limit(candidate_config)
+    if limit <= 1:
+        skipped = dict(result_dict or {})
+        skipped["_skip_continuation"] = True
+        return skipped
+    for segment in range(2, limit + 1):
+        if not shot_markdown_needs_continuation(text):
+            break
+        logger.warning(
+            "[shot_continuation] continue incomplete table segment=%s/%s chars=%s",
+            segment,
+            limit,
+            len(text),
+        )
+        messages: List[Dict[str, Any]] = []
+        if str(system_prompt or "").strip():
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({
+            "role": "user",
+            "content": build_shot_markdown_continuation_user_prompt(user_prompt, text),
+        })
+        try:
+            response = await llm_service.chat_completion(messages, candidate_config or {})
+        except Exception as exc:
+            logger.warning("[shot_continuation] llm failed: %s", exc)
+            failed = dict(result_dict or {})
+            failed["content"] = text
+            failed["usage"] = usage
+            return _abort_shot_row_format_repair(failed, validation_error)
+        piece = str((response or {}).get("content") or "")
+        usage = _merge_usage(usage, (response or {}).get("usage"))
+        if not piece.strip() or piece.strip().startswith("Error:"):
+            logger.warning("[shot_continuation] empty or error continuation")
+            failed = dict(result_dict or {})
+            failed["content"] = text
+            failed["usage"] = usage
+            return _abort_shot_row_format_repair(failed, validation_error)
+        merged_text = merge_shot_markdown_continuation(text, piece)
+        if merged_text.strip() == text.strip():
+            logger.warning("[shot_continuation] continuation repeated existing text")
+            failed = dict(result_dict or {})
+            failed["content"] = text
+            failed["usage"] = usage
+            return _abort_shot_row_format_repair(failed, validation_error)
+        text = merged_text
+    current = dict(result_dict or {})
+    current["content"] = text
+    current["usage"] = usage
+    current.pop("_abort_full_retry", None)
+    if shot_markdown_needs_continuation(text):
+        logger.warning("[shot_continuation] table still unclosed after continuation")
+        return _abort_shot_row_format_repair(current, validation_error)
+    current["_shot_row_format_repair"] = "continued"
+    logger.info("[shot_continuation] incomplete table continued chars=%s", len(text))
+    return current
+
+
+async def repair_shot_markdown_cell_count_rows(
+    result_dict: Dict[str, Any],
+    candidate_config: Dict[str, Any],
+    validation_error: str,
+    *,
+    user_prompt: str = "",
+    system_prompt: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Fix a known-bad shot table without generating it again from scratch.
+
+    Closed rows with the wrong column count are rewritten alone. A cut-off row
+    is continued from the previous output.
+    """
+    current = dict(result_dict or {})
+    if shot_markdown_needs_continuation(str(current.get("content") or "")):
+        continued = await _continue_incomplete_shot_markdown(
+            current,
+            candidate_config,
+            validation_error,
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+        )
+        if continued.get("_skip_continuation"):
+            return None
+        if continued.get("_abort_full_retry"):
+            return continued
+        current = continued
+    text = str(current.get("content") or "")
+    plan = plan_shot_markdown_row_format_repair(text)
+    if not plan:
+        if current.get("_shot_row_format_repair") == "continued" and not inspect_complete_shot_markdown_return(text):
+            return current
+        if current.get("_shot_row_format_repair") == "continued":
+            return _abort_shot_row_format_repair(current, validation_error)
+        return None
+    indexes = [int(row.get("index") or 0) for row in (plan.get("rows") or [])]
+    logger.warning("[shot_format_repair] rewrite format rows only indexes=%s", indexes)
+    repair_system, repair_user = build_shot_markdown_row_format_repair_prompt(plan)
+    try:
+        response = await llm_service.chat_completion(
+            [
+                {"role": "system", "content": repair_system},
+                {"role": "user", "content": repair_user},
+            ],
+            candidate_config or {},
+        )
+    except Exception as exc:
+        logger.warning("[shot_format_repair] llm failed: %s", exc)
+        return _abort_shot_row_format_repair(current, validation_error)
+    repaired_text = str((response or {}).get("content") or "")
+    usage = (response or {}).get("usage")
+    if not repaired_text.strip() or repaired_text.strip().startswith("Error:"):
+        logger.warning("[shot_format_repair] empty or error repair output")
+        return _abort_shot_row_format_repair(current, validation_error, usage)
+    spliced = splice_shot_markdown_row_format_repair(text, repaired_text)
+    if not spliced:
+        logger.warning("[shot_format_repair] repaired rows still do not fit the 14-column table")
+        return _abort_shot_row_format_repair(current, validation_error, usage)
+    merged = dict(current)
+    merged["content"] = spliced
+    merged["usage"] = _merge_usage(current.get("usage"), usage)
+    merged["_shot_row_format_repair"] = "ok"
+    merged.pop("_abort_full_retry", None)
+    logger.info("[shot_format_repair] spliced rows=%s", indexes)
+    return merged
+
+
 async def generate_shots_content(
     user_input: str,
     system_prompt: str,
@@ -447,12 +616,22 @@ async def generate_shots_content(
         "phase": "drafting",
         "message": "主分镜生成中（shot_generation.md）…",
     })
+    async def _repair_shot_return(result_dict, candidate_config, validation_error):
+        return await repair_shot_markdown_cell_count_rows(
+            result_dict,
+            candidate_config,
+            validation_error,
+            user_prompt=user_input,
+            system_prompt=system_prompt,
+        )
+
     draft = await llm_service.generate_content_with_fallback(
         user_input,
         system_prompt,
         llm_config,
         response_validator=response_validator,
         before_attempt=before_attempt,
+        validation_repair=_repair_shot_return,
     )
     draft_content = str((draft or {}).get("content") or "").strip()
     if not draft_content or draft_content.startswith("Error:"):

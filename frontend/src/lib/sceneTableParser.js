@@ -395,6 +395,10 @@ const SHOT_LOGIC_ANCHOR_RE = /Beat-Shot映射|节奏需求|镜头逻辑总规划
 
 const ENTITY_TOKEN_RE = /(?:(?:CHAR|ENV|PROP)\s*:\s*\[[^\]]+\]|\[@[^\]]+\])/g;
 
+export function formatVideoPromptForEditor(text) {
+    return stripVideoSubmitInjection(text).replace(/<br\s*\/?>/gi, '\n');
+}
+
 export function stripVideoSubmitInjection(text) {
     let value = String(text || '');
     if (!value.trim()) return '';
@@ -460,11 +464,44 @@ export function findShotPipeMergeColumnIndices(headers) {
     return indices.length > 0 ? indices : [3];
 }
 
+const SHOT_ID_CELL_RE = /^EP\d+_SC\d+(?:_SH\d+)?$/i;
+
+function isVideoFragmentBoundary(cell) {
+    const text = String(cell || '').trim();
+    if (!text) return true;
+    if (/^\d+(\.\d+)?$/.test(text)) {
+        const parsed = Number(text);
+        if (parsed >= 1 && parsed <= 30) return true;
+    }
+    if (SHOT_ID_CELL_RE.test(text)) return true;
+    if (SHOT_LOGIC_ANCHOR_RE.test(text.slice(0, 200)) && !/\(P\d+/.test(text) && !SHOT_VIDEO_ANCHOR_RE.test(text)) return true;
+    if (/(?:CHAR|ENV|PROP)\s*:\s*\[/.test(text) && text.length <= 800 && !SHOT_VIDEO_ANCHOR_RE.test(text) && !/\(P\d+/.test(text)) return true;
+    return false;
+}
+
+function stitchSplitVideoCells(cells) {
+    const row = Array.isArray(cells) ? cells.map((cell) => String(cell || '').trim()) : [];
+    let start = -1;
+    for (let index = 0; index < row.length; index += 1) {
+        const text = row[index];
+        if (/\(P1\b/.test(text) || SHOT_VIDEO_ANCHOR_RE.test(text.slice(0, 40))) {
+            start = index;
+            break;
+        }
+    }
+    if (start < 0) return row;
+    let end = start + 1;
+    while (end < row.length && !isVideoFragmentBoundary(row[end])) end += 1;
+    if (end === start + 1) return row;
+    const joined = row.slice(start, end).filter(Boolean).join('|');
+    return [...row.slice(0, start), joined, ...row.slice(end)];
+}
+
 export function reconcileShotTableRowCells(cells, headers) {
     const headerCount = Array.isArray(headers) ? headers.length : 0;
     if (!headerCount) return Array.isArray(cells) ? [...cells] : [];
 
-    let row = Array.isArray(cells) ? cells.map((cell) => String(cell || '').trim()) : [];
+    let row = stitchSplitVideoCells(cells);
     const mergeIndices = findShotPipeMergeColumnIndices(headers);
 
     while (row.length > headerCount) {

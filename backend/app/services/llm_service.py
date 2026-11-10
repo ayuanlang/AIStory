@@ -5352,8 +5352,14 @@ class LLMService:
         modality: Optional[str] = None,
         response_validator: Any = None,
         before_attempt: Any = None,
+        validation_repair: Any = None,
     ) -> Dict[str, Any]:
-        """generate_content with active-config×2 retry + 3 fallback candidates."""
+        """generate_content with active-config×2 retry + 3 fallback candidates.
+
+        validation_repair, when set, may rewrite a failed result before another
+        full generation starts. A repaired dict that validates is returned as-is.
+        A dict with ``_abort_full_retry`` stops the chain.
+        """
         from app.services.agent_service import agent_service
 
         def _is_empty_success(result_dict: Dict[str, Any]) -> bool:
@@ -5386,6 +5392,46 @@ class LLMService:
                 return False, reason or "response postprocess validation failed"
             except Exception as exc:
                 return False, str(exc) or "response postprocess validation failed"
+
+        async def _resolve_validation_repair(
+            result_dict: Dict[str, Any],
+            candidate_config: Dict[str, Any],
+            validation_error: str,
+        ) -> Optional[Dict[str, Any]]:
+            if validation_repair is None:
+                return None
+            try:
+                repaired = validation_repair(result_dict, candidate_config, validation_error)
+                if hasattr(repaired, "__await__"):
+                    repaired = await repaired
+            except Exception:
+                logger.warning("[llm_fallback] validation repair raised", exc_info=True)
+                return None
+            if not isinstance(repaired, dict):
+                return None
+            if repaired.get("_abort_full_retry"):
+                self._note_postprocess_rejection(result_dict, validation_error, candidate_config)
+                logger.info(
+                    "[llm_fallback] format repair declined a full regeneration | provider=%s model=%s",
+                    (candidate_config or {}).get("provider"),
+                    (candidate_config or {}).get("model"),
+                )
+                return self._attach_routing_metadata(repaired, candidate_config)
+            ok, err = _validate_response(repaired, candidate_config)
+            if ok:
+                logger.info(
+                    "[llm_fallback] format repair accepted without full regeneration | provider=%s model=%s",
+                    (candidate_config or {}).get("provider"),
+                    (candidate_config or {}).get("model"),
+                )
+                return self._attach_routing_metadata(repaired, candidate_config)
+            logger.warning(
+                "[llm_fallback] format repair still failed validation | provider=%s model=%s err=%s",
+                (candidate_config or {}).get("provider"),
+                (candidate_config or {}).get("model"),
+                str(err)[:400],
+            )
+            return None
 
         active_cfg_obj = dict((config.get('config') or {}))
         active_setting_id = active_cfg_obj.get("__resolved_setting_id")
@@ -5455,6 +5501,9 @@ class LLMService:
                     validation_ok, validation_error = _validate_response(result, config)
                     if validation_ok:
                         return self._attach_routing_metadata(result, config)
+                    repaired = await _resolve_validation_repair(result, config, validation_error)
+                    if repaired is not None:
+                        return repaired
                     validation_error = self._note_postprocess_rejection(result, validation_error, config)
                     content = f"Error: {validation_error}"
                     last_failure_kind = "postprocess"
@@ -5505,6 +5554,9 @@ class LLMService:
                     validation_ok, validation_error = _validate_response(result, fb_cfg)
                     if validation_ok:
                         return self._attach_routing_metadata(result, fb_cfg)
+                    repaired = await _resolve_validation_repair(result, fb_cfg, validation_error)
+                    if repaired is not None:
+                        return repaired
                     validation_error = self._note_postprocess_rejection(result, validation_error, fb_cfg)
                     content = f"Error: {validation_error}"
                     last_failure_kind = "postprocess"

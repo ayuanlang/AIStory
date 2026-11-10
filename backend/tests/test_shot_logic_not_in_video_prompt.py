@@ -197,3 +197,35 @@ def test_page_prompt_drops_quad_direction_badges():
     assert "ENV:[90度停机坪]" in cleaned
     assert "47°" in cleaned
     assert "本格X线从靠近镜头到远离镜头" in cleaned
+
+
+def test_ascii_pipe_in_pause_keeps_later_p_segments_in_video():
+    p1 = (
+        "(P1 0s–7s) MCU。CHAR:[@林薇薇] 站在全息屏办公台远离镜头一侧。"
+        "Dialogue (CHAR:[@林薇薇]) pause=短停|长停｜闭嘴=其他人均闭嘴 : {沉舟。}"
+    )
+    p2 = (
+        "(P2 7s–15s) CHAR:[@林薇薇] 双手托着 PROP:[热饮杯] 沿办公台上方递到靠近镜头一侧上方。"
+        "pause=短停|长停｜闭嘴=其他人均闭嘴 : {先喝口热饮。}"
+        "动态连续光影·焦点：Key 主照面。人物面部稳定不变形，无背景音乐，无字幕。"
+    )
+    markdown = (
+        "| Shot ID | Shot Name | Scene ID | Shot Logic (CN) | Start Frame | Video Content | "
+        "Duration (s) | Keyframes | End Frame | Start Frame (CN) | Video Content (CN) | "
+        "Keyframes (CN) | End Frame (CN) | Associated Entities |\n"
+        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+        "| EP01_SC02_SH02 | 递杯 | EP01_SC02 | 合镜Beat=Beat3｜取景:MCU |  |  | 15 |  |  |  | "
+        f"{p1}|{p2} |  |  | "
+        "CHAR:[@林薇薇],CHAR:[@顾沉舟_重生后],PROP:[热饮杯],ENV:[180度总裁室] |\n"
+    )
+    _headers, rows, _count = parse_shots_markdown_table(markdown)
+    assert len(rows) == 1
+    video = rows[0]["Video Content (CN)"]
+    assert "(P1" in video
+    assert "(P2" in video
+    assert "动态连续光影" in video
+    assert "沿办公台上方" in video
+    assert "EP01_SC02_SH03" not in video
+    assert rows[0]["Duration (s)"] == "15"
+    assert "合镜Beat=Beat3" in rows[0]["Shot Logic (CN)"]
+    assert "CHAR:[@林薇薇]" in rows[0]["Associated Entities"]

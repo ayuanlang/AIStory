@@ -375,6 +375,58 @@ def _looks_like_entities_cell(text: Any) -> bool:
     return bool(_SHOT_ENTITY_TOKEN_RE.search(value))
 
 
+_SHOT_ID_CELL_RE = re.compile(r"^EP\d+_SC\d+(?:_SH\d+)?$", re.IGNORECASE)
+
+
+def _is_video_fragment_boundary(cell: Any) -> bool:
+    """A later table cell that must not be glued back onto the video prompt."""
+    text = str(cell or "").strip()
+    if not text:
+        return True
+    if re.search(r"\(P\d+", text) or _SHOT_VIDEO_ANCHOR_RE.search(text):
+        return False
+    if _looks_like_duration_cell(text):
+        return True
+    if _SHOT_ID_CELL_RE.match(text):
+        return True
+    if _looks_like_entities_cell(text):
+        return True
+    if (
+        _looks_like_shot_logic_prefix(text)
+        and not re.search(r"\(P\d+", text)
+        and not _SHOT_VIDEO_ANCHOR_RE.search(text)
+    ):
+        return True
+    return False
+
+
+def _stitch_split_video_cells(cells: List[str]) -> List[str]:
+    """Join a video prompt that an unescaped ``|`` split across later cells.
+
+    ``pause=短停|长停`` cuts the cell. The tail still holds ``(P2)`` and the
+    lighting closer. Those tails belong in the same video prompt.
+    """
+    start: Optional[int] = None
+    for index, cell in enumerate(cells):
+        text = str(cell or "")
+        if re.search(r"\(P1\b", text) or _starts_like_shot_video_prompt(text):
+            start = index
+            break
+    if start is None:
+        return cells
+    end = start + 1
+    while end < len(cells) and not _is_video_fragment_boundary(cells[end]):
+        end += 1
+    if end == start + 1:
+        return cells
+    joined = "|".join(
+        str(cells[index] or "").strip()
+        for index in range(start, end)
+        if str(cells[index] or "").strip()
+    )
+    return cells[:start] + [joined] + cells[end:]
+
+
 def _try_realign_shot_row_by_anchors(vals: List[str], header_count: int) -> Optional[List[str]]:
     """Rebuild a canonical 14-col shot row from Duration / Video / Entities anchors.
 
@@ -384,7 +436,7 @@ def _try_realign_shot_row_by_anchors(vals: List[str], header_count: int) -> Opti
     if header_count < 14 or not vals:
         return None
 
-    cells = [str(c or "").strip() for c in vals]
+    cells = _stitch_split_video_cells([str(c or "").strip() for c in vals])
     while len(cells) < 4:
         cells.append("")
 
@@ -668,7 +720,14 @@ def _shot_id_cell_looks_real(cell: Any) -> bool:
 
 def _extract_shot_markdown_table_blocks(lines: List[str]) -> List[List[str]]:
     """Split LLM output into discrete markdown table blocks (header+sep+data)."""
-    blocks: List[List[str]] = []
+    return [block for block, _indexes in _extract_shot_markdown_table_blocks_located(lines)]
+
+
+def _extract_shot_markdown_table_blocks_located(
+    lines: List[str],
+) -> List[Tuple[List[str], List[int]]]:
+    """Same blocks as the table extractor, plus each kept line's source index."""
+    located: List[Tuple[List[str], List[int]]] = []
     i = 0
     total = len(lines)
     while i < total - 1:
@@ -683,6 +742,7 @@ def _extract_shot_markdown_table_blocks(lines: List[str]) -> List[List[str]]:
             continue
 
         kept_lines: List[str] = [str(lines[i]), str(lines[i + 1])]
+        kept_indexes: List[int] = [i, i + 1]
         data_row_count = 0
         j = i + 2
         while j < total:
@@ -703,6 +763,7 @@ def _extract_shot_markdown_table_blocks(lines: List[str]) -> List[List[str]]:
                 if data_row_count > 0 and _is_shot_markdown_header_row(stripped):
                     break
                 kept_lines.append(stripped)
+                kept_indexes.append(j)
                 data_row_count += 1
                 j += 1
                 continue
@@ -711,10 +772,23 @@ def _extract_shot_markdown_table_blocks(lines: List[str]) -> List[List[str]]:
             j += 1
 
         if data_row_count > 0:
-            blocks.append(kept_lines)
+            located.append((kept_lines, kept_indexes))
         i = max(j, i + 2)
 
-    return blocks
+    return located
+
+
+def _select_shot_markdown_table_block_located(
+    text: str,
+) -> Optional[Tuple[List[str], List[int]]]:
+    lines = [str(line or "") for line in str(text or "").splitlines()]
+    located = _extract_shot_markdown_table_blocks_located(lines)
+    if not located:
+        return None
+    return max(
+        located,
+        key=lambda item: (_score_shot_markdown_table_block(item[0]), len(item[0])),
+    )
 
 
 def _score_shot_markdown_table_block(block_lines: List[str]) -> int:
@@ -1421,6 +1495,314 @@ def collect_shot_generation_completeness_errors(
     if continuation_stopped_by_max_segments:
         errors.insert(0, "continuation_stopped_by_max_segments")
     return errors
+
+
+_SHOT_CELL_COUNT_ERROR_RE = re.compile(
+    r"^markdown data row (\d+) has (\d+) cells, need (\d+)$"
+)
+_SHOT_ENTITIES_COLUMN_ERROR_RE = re.compile(
+    r"^markdown data row (\d+) is missing the Associated Entities column$"
+)
+_SHOT_UNCLOSED_ROW_ERROR_RE = re.compile(
+    r"^markdown data row \d+ is not a closed \| \.\.\. \| row$"
+)
+_SHOT_FORMAT_REPAIR_IGNORABLE_RE = re.compile(
+    r"^(?:finish_reason=\S+|continuation_stopped_by_max_segments)$"
+)
+_SHOT_REPAIR_FENCE_RE = re.compile(r"^```[^\n]*\n(.*)\n```$", re.DOTALL)
+_SHOT_REPAIR_ROW_PREFIX_RE = re.compile(
+    r"^(?:[-*]\s+|第\s*\d+\s*行\s*[:：]\s*|\d+\s*[\.\)、:：]\s*)"
+)
+_SHOT_ROW_FORMAT_REPAIR_SYSTEM = (
+    "你是分镜表格式修复器。只重写点名的数据行。\n"
+    "每一行必须是闭合的 markdown 行，正好 14 列，列序与给出的表头一致。\n"
+    "已有文字按列义放回原列。镜头编号、镜头名、场号、镜头逻辑、时长、视频提示词、关联实体不要串列。\n"
+    "缺的列留空。列与列之间只用半角 |。格子内部的竖线写成 \\| ，格子里的全角｜保持原样。\n"
+    "不要改剧情，不要增删行，不要输出表头、分隔行、解释或代码围栏。\n"
+    "按原顺序逐行返回，一行一条。"
+)
+
+
+def shot_markdown_row_format_repair_targets(errors: List[str]) -> Optional[Dict[int, str]]:
+    """Map data-row index to a format problem when every content error is one.
+
+    Cell-count and misplaced Associated Entities rows are closed lines with the
+    wrong columns. Unclosed rows, broken headers, and cut-off continuations are
+    not this case.
+    """
+    found: Dict[int, str] = {}
+    for item in errors or []:
+        text = str(item or "").strip()
+        if not text or _SHOT_FORMAT_REPAIR_IGNORABLE_RE.match(text):
+            continue
+        cell_match = _SHOT_CELL_COUNT_ERROR_RE.match(text)
+        if cell_match:
+            have = int(cell_match.group(2))
+            need = int(cell_match.group(3))
+            if need != _SHOT_MARKDOWN_REQUIRED_COLUMNS or have >= need:
+                return None
+            found[int(cell_match.group(1))] = "cell_count"
+            continue
+        entity_match = _SHOT_ENTITIES_COLUMN_ERROR_RE.match(text)
+        if entity_match:
+            found[int(entity_match.group(1))] = "entities"
+            continue
+        return None
+    return found or None
+
+
+def plan_shot_markdown_row_format_repair(text: str) -> Optional[Dict[str, Any]]:
+    """Describe the closed rows whose columns can be rewritten without a new table."""
+    raw = str(text or "")
+    targets = shot_markdown_row_format_repair_targets(inspect_complete_shot_markdown_return(raw))
+    if not targets:
+        return None
+    located = _select_shot_markdown_table_block_located(raw)
+    if not located:
+        return None
+    block, indexes = located
+    if len(block) != len(indexes) or len(block) < 3:
+        return None
+    header = str(block[0] or "").strip()
+    header_cells = _split_markdown_row_escaped(header)
+    if len(header_cells) != _SHOT_MARKDOWN_REQUIRED_COLUMNS:
+        return None
+    header_norms = {_normalize_shot_markdown_col_key(cell) for cell in header_cells}
+    if "shotid" not in header_norms or "associatedentities" not in header_norms:
+        return None
+    data_lines = [str(line or "").strip() for line in block[2:] if str(line or "").strip()]
+    data_indexes = indexes[2:]
+    if len(data_lines) != len(data_indexes):
+        return None
+    rows: List[Dict[str, Any]] = []
+    for idx, line in enumerate(data_lines, start=1):
+        if idx not in targets:
+            continue
+        if _is_shot_markdown_header_row(line) or _is_markdown_table_separator(line):
+            return None
+        if not _markdown_table_row_is_closed(line):
+            return None
+        cells = _split_markdown_row_escaped(line)
+        kind = targets[idx]
+        if kind == "cell_count" and len(cells) >= _SHOT_MARKDOWN_REQUIRED_COLUMNS:
+            return None
+        if kind == "entities" and _shot_markdown_last_cell_is_entities(cells[-1] if cells else ""):
+            return None
+        rows.append({
+            "index": idx,
+            "line": line,
+            "kind": kind,
+            "cell_count": len(cells),
+            "source_line": data_indexes[idx - 1],
+            "shot_id": str(cells[0] or "").strip() if cells else "",
+        })
+    if len(rows) != len(targets):
+        return None
+    return {"header": header, "header_cells": header_cells, "rows": rows}
+
+
+def build_shot_markdown_row_format_repair_prompt(plan: Dict[str, Any]) -> Tuple[str, str]:
+    header = str((plan or {}).get("header") or "").strip()
+    header_cells = list((plan or {}).get("header_cells") or [])
+    numbered = "\n".join(f"{i}. {name}" for i, name in enumerate(header_cells, start=1))
+    chunks = [
+        "表头（14列，不要改，不要输出）：",
+        header,
+        "",
+        "列序：",
+        numbered,
+        "",
+        "下面这些行格式不对。按表头重写成正好 14 列，已有文字留在对应列，缺列留空。只返回这些行。",
+    ]
+    for row in (plan or {}).get("rows") or []:
+        index = row.get("index")
+        if row.get("kind") == "entities":
+            label = f"第{index}行，最后一列不是 Associated Entities，需要重排成 14 列："
+        else:
+            label = f"第{index}行，现有{row.get('cell_count')}列，需要 14 列："
+        chunks.extend(["", label, str(row.get("line") or "")])
+    return _SHOT_ROW_FORMAT_REPAIR_SYSTEM, "\n".join(chunks)
+
+
+def _unwrap_shot_markdown_repair_fence(text: str) -> str:
+    stripped = str(text or "").strip()
+    match = _SHOT_REPAIR_FENCE_RE.match(stripped)
+    if match:
+        return str(match.group(1) or "").strip()
+    return stripped
+
+
+def _shot_markdown_repair_candidate_lines(text: str) -> List[str]:
+    lines: List[str] = []
+    for raw in _unwrap_shot_markdown_repair_fence(text).splitlines():
+        line = _SHOT_REPAIR_ROW_PREFIX_RE.sub("", str(raw or "").strip()).strip()
+        if not line or line.startswith("```"):
+            continue
+        if _is_markdown_table_separator(line) or _is_shot_markdown_header_row(line):
+            continue
+        if line.startswith("|") or line.count("|") >= 2:
+            lines.append(line)
+    return lines
+
+
+def _repaired_shot_markdown_row_is_ready(line: str) -> bool:
+    if not _markdown_table_row_is_closed(line):
+        return False
+    cells = _split_markdown_row_escaped(line)
+    if len(cells) != _SHOT_MARKDOWN_REQUIRED_COLUMNS:
+        return False
+    return _shot_markdown_last_cell_is_entities(cells[-1])
+
+
+def _shot_markdown_repair_ids_compatible(original_id: str, repaired_line: str) -> bool:
+    cells = _split_markdown_row_escaped(repaired_line)
+    new_id = str(cells[0] or "").strip() if cells else ""
+    old = str(original_id or "").strip()
+    if not old or not new_id:
+        return True
+    return _normalize_shot_business_id(old) == _normalize_shot_business_id(new_id)
+
+
+def match_repaired_shot_markdown_rows(
+    bad_rows: List[Dict[str, Any]],
+    repaired_text: str,
+) -> Optional[Dict[int, str]]:
+    """Map source line index to a closed 14-column replacement."""
+    candidates = _shot_markdown_repair_candidate_lines(repaired_text)
+    rows = [row for row in (bad_rows or []) if isinstance(row, dict)]
+    if not rows or not candidates:
+        return None
+
+    def _accept(pairs: List[Tuple[Dict[str, Any], str]]) -> Optional[Dict[int, str]]:
+        out: Dict[int, str] = {}
+        for row, line in pairs:
+            if not _repaired_shot_markdown_row_is_ready(line):
+                return None
+            if not _shot_markdown_repair_ids_compatible(str(row.get("shot_id") or ""), line):
+                return None
+            out[int(row["source_line"])] = line.strip()
+        return out
+
+    if len(candidates) == len(rows):
+        zipped = _accept(list(zip(rows, candidates)))
+        if zipped:
+            return zipped
+
+    by_id: Dict[str, str] = {}
+    for line in candidates:
+        if not _repaired_shot_markdown_row_is_ready(line):
+            continue
+        cells = _split_markdown_row_escaped(line)
+        key = _normalize_shot_business_id(cells[0] if cells else "")
+        if not key or key in by_id:
+            continue
+        by_id[key] = line
+    pairs: List[Tuple[Dict[str, Any], str]] = []
+    for row in rows:
+        key = _normalize_shot_business_id(row.get("shot_id"))
+        line = by_id.get(key or "")
+        if not line:
+            return None
+        pairs.append((row, line))
+    return _accept(pairs)
+
+
+def apply_shot_markdown_row_replacements(text: str, source_line_to_row: Dict[int, str]) -> str:
+    lines = str(text or "").splitlines()
+    for index, new_line in (source_line_to_row or {}).items():
+        if not isinstance(index, int) or index < 0 or index >= len(lines):
+            continue
+        lines[index] = str(new_line or "").strip()
+    return "\n".join(lines)
+
+
+def splice_shot_markdown_row_format_repair(text: str, repaired_text: str) -> Optional[str]:
+    """Replace only the bad rows. Return the full text when the table then closes."""
+    plan = plan_shot_markdown_row_format_repair(text)
+    if not plan:
+        return None
+    replacements = match_repaired_shot_markdown_rows(plan.get("rows") or [], repaired_text)
+    if not replacements or len(replacements) != len(plan.get("rows") or []):
+        return None
+    spliced = apply_shot_markdown_row_replacements(text, replacements)
+    if inspect_complete_shot_markdown_return(spliced):
+        return None
+    return spliced
+
+
+def shot_markdown_needs_continuation(text: str) -> bool:
+    """True when a row was cut off and the previous output can be continued."""
+    for item in inspect_complete_shot_markdown_return(text):
+        message = str(item or "").strip()
+        if not message or _SHOT_FORMAT_REPAIR_IGNORABLE_RE.match(message):
+            continue
+        if _SHOT_UNCLOSED_ROW_ERROR_RE.match(message):
+            return True
+        if message.startswith("markdown table row continues after a line break"):
+            return True
+    return False
+
+
+def _shot_markdown_continuation_overlap(existing: str, incoming: str, limit: int = 8000) -> int:
+    tail = existing[-limit:]
+    head = incoming[:limit]
+    if head.startswith(tail):
+        return len(tail)
+    needle = head + "\0" + tail
+    borders = [0] * len(needle)
+    for index in range(1, len(needle)):
+        length = borders[index - 1]
+        while length > 0 and needle[index] != needle[length]:
+            length = borders[length - 1]
+        if needle[index] == needle[length]:
+            length += 1
+        borders[index] = length
+    overlap = borders[-1]
+    if overlap > len(head):
+        return 0
+    return overlap
+
+
+def _shot_markdown_tail_is_unclosed_row(text: str) -> bool:
+    last = ""
+    for line in str(text or "").splitlines():
+        stripped = str(line or "").strip()
+        if stripped:
+            last = stripped
+    return bool(last.startswith("|") and not last.endswith("|"))
+
+
+def merge_shot_markdown_continuation(existing: str, incoming: str) -> str:
+    """Append a continuation, joining an unclosed row on the same line."""
+    prior = str(existing or "").rstrip()
+    extra = _unwrap_shot_markdown_repair_fence(incoming).strip()
+    if not extra:
+        return prior
+    if not prior:
+        return extra
+    if extra.startswith(prior):
+        return extra
+    overlap = _shot_markdown_continuation_overlap(prior, extra)
+    rest = extra[overlap:]
+    if not rest:
+        return prior
+    if overlap or _shot_markdown_tail_is_unclosed_row(prior):
+        return prior + rest
+    return prior + "\n" + rest
+
+
+def build_shot_markdown_continuation_user_prompt(user_prompt: str, previous_output: str) -> str:
+    from app.services.continuation_prompt import append_previous_output
+
+    return append_previous_output(
+        user_prompt,
+        previous_output,
+        detail=(
+            "上一次分镜表没有写完，有一行没有以 | 闭合。"
+            "从上次输出的最后一个字接着写，把没写完的那一行补成闭合的 14 列，再写后面的镜头。"
+            "列序与已有表头一致。只返回续写，不要重写已经完整的行。"
+        ),
+    )
 
 
 def _normalize_shot_business_id(value: Any) -> str:
