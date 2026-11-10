@@ -301,10 +301,10 @@ def _import_scene_shot_rows_to_db(
                 end_frame_cn_text = end_cn_fallback
             if not video_prompt_cn_text:
                 video_prompt_cn_text = video_cn_fallback
-        if video_prompt_cn_text:
-            video_prompt_cn_text = strip_burn_nameplates_from_video_prompt(video_prompt_cn_text)
             if not keyframes_cn_text:
                 keyframes_cn_text = keyframes_cn_fallback
+        if video_prompt_cn_text:
+            video_prompt_cn_text = strip_burn_nameplates_from_video_prompt(video_prompt_cn_text)
 
         technical_notes_payload: Dict[str, Any] = {}
         merged_beat_ids = extract_merged_beat_ids(shot_logic_cn_text)
