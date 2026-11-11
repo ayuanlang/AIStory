@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Layers, X } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Check, ChevronLeft, ChevronRight, Copy, Layers, X } from 'lucide-react';
 import {
     BEAT_VIEWER_NODES,
     WHOLE_NODE_BEAT_ID,
@@ -24,6 +24,79 @@ const ReadBlock = ({ text }) => (
         {text}
     </div>
 );
+
+const writeClipboard = async (text) => {
+    try {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            return;
+        }
+    } catch {
+        // Fall through to the textarea path when the async clipboard is blocked.
+    }
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.left = '-9999px';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(area);
+    if (!ok) throw new Error('copy failed');
+};
+
+const nodeCopyText = (entries) => {
+    const found = (entries || []).filter((entry) => String(entry.beat?.body || '').trim());
+    return found.map((entry) => {
+        const body = String(entry.beat.body).trim();
+        return found.length > 1 ? `Beat ${entry.id}\n${body}` : body;
+    }).join('\n\n');
+};
+
+const storyboardCopyText = (shots, t) => (shots || [])
+    .map((shot) => {
+        const blocks = [];
+        if (shot.logic) blocks.push(`${t('镜头逻辑', 'Shot logic')}\n${shot.logic}`);
+        if (shot.video) blocks.push(`${t('中文视频提示词', 'Chinese video prompt')}\n${shot.video}`);
+        if (!blocks.length) return '';
+        return `${shot.shotId}\n${blocks.join('\n\n')}`;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+
+const CopyContentButton = ({ text, t }) => {
+    const [copied, setCopied] = useState(false);
+    const timerRef = useRef(null);
+    const value = String(text || '');
+    useEffect(() => () => {
+        if (timerRef.current) window.clearTimeout(timerRef.current);
+    }, []);
+    const onCopy = async () => {
+        if (!value.trim()) return;
+        try {
+            await writeClipboard(value);
+            setCopied(true);
+            if (timerRef.current) window.clearTimeout(timerRef.current);
+            timerRef.current = window.setTimeout(() => setCopied(false), 1600);
+        } catch {
+            setCopied(false);
+        }
+    };
+    return (
+        <button
+            type="button"
+            onClick={onCopy}
+            disabled={!value.trim()}
+            title={copied ? t('已复制', 'Copied') : t('复制', 'Copy')}
+            aria-label={copied ? t('已复制', 'Copied') : t('复制节点内容', 'Copy node content')}
+            className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 text-[11px] font-semibold text-white/75 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35"
+        >
+            {copied ? <Check className="h-3 w-3 text-emerald-300" /> : <Copy className="h-3 w-3" />}
+            {copied ? t('已复制', 'Copied') : t('复制', 'Copy')}
+        </button>
+    );
+};
 
 const StagingBeatBody = ({ beat, t }) => {
     const parts = splitStagingBeat(beat?.body || '');
@@ -113,9 +186,14 @@ const NodeColumn = ({ node, entries, sceneHasText, shotWithoutBeat, t }) => {
                         <div className="text-[10px] text-white/40">{t('含场记分析', 'Includes continuity notes')}</div>
                     ) : null}
                 </div>
-                <span className="shrink-0 text-[10px] text-white/35">
-                    {chars ? t(`${chars} 字`, `${chars} chars`) : ''}
-                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                    {chars ? (
+                        <span className="text-[10px] text-white/35">
+                            {t(`${chars} 字`, `${chars} chars`)}
+                        </span>
+                    ) : null}
+                    <CopyContentButton text={nodeCopyText(entries)} t={t} />
+                </div>
             </header>
             <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 custom-scrollbar">
                 {body}
@@ -177,6 +255,7 @@ const StoryboardColumn = ({ shots, status, t }) => {
                     <div className="truncate text-sm font-bold text-white">{t('分镜生成', 'Storyboard')}</div>
                     <div className="text-[10px] text-white/40">{t('按合镜Beat回看上一拍', 'Trace back through 合镜Beat')}</div>
                 </div>
+                <CopyContentButton text={storyboardCopyText(shots, t)} t={t} />
             </header>
             <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 custom-scrollbar">
                 {body}
