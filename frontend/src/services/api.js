@@ -3127,6 +3127,13 @@ export const fetchSceneScores = async (episodeId) => {
     return response.data;
 };
 
+export const fetchSceneAudiovisual = async (episodeId, sceneMarker) => {
+    const response = await api.get(`/episodes/${episodeId}/scene-audiovisual`, {
+        params: { scene_marker: sceneMarker },
+    });
+    return response.data;
+};
+
 export const generateSceneScore = async (episodeId, payload) => {
     const response = await api.post(`/episodes/${episodeId}/scene-scores`, payload, {
         timeout: 600000,

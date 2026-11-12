@@ -195,6 +195,49 @@ def test_auto_host_grsai_object_maps_to_cloudflare_and_presigns(monkeypatch):
     assert "X-Amz-Signature=abc" in signed
 
 
+def test_path_style_r2_grsai_url_is_durable_oss_not_temp():
+    from app.services.oss_storage_service import OSSStorageService
+    from app.services.generation_runtime.media_persist import (
+        _is_durable_persisted_media_url,
+        _is_ephemeral_provider_media_url,
+        _is_provider_direct_oss_url,
+    )
+
+    service = OSSStorageService()
+    cloudflare = SimpleNamespace(
+        provider="cloudflare",
+        endpoint="https://bd9e93e4d77bddd376c40ad2f75d1f26.r2.cloudflarestorage.com",
+        bucket="woolastory",
+        public_base_url="https://cdn.example.com",
+        root_prefix="aistory/upload",
+        is_active=True,
+        grsai_oss_id="6aef48974bf26bda0f7fbde5",
+    )
+    qiniu = SimpleNamespace(
+        provider="qiniu",
+        endpoint="https://s3.cn-south-1.qiniucs.com",
+        bucket="qiniu-bucket",
+        public_base_url="https://qn.woola.fun",
+        root_prefix="aistory/upload",
+        is_active=True,
+    )
+    image_url = (
+        "https://bd9e93e4d77bddd376c40ad2f75d1f26.r2.cloudflarestorage.com/"
+        "woolastory/file/images/202611/3/7fccd92013ac4a56b71499dd78eba94f.png"
+        "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=ak%2F20261112%2Fauto%2Fs3%2Faws4_request"
+        "&X-Amz-Date=20261112T103507Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host"
+        "&X-Amz-Signature=140d4c07f4770724f285f6c4c9bf7c76682d3f25dc87c5ea503246c0d89e0431"
+    )
+    key = "file/images/202611/3/7fccd92013ac4a56b71499dd78eba94f.png"
+    assert service.grsai_direct_cloudflare_object_key(image_url) == key
+    pool, extracted = service._extract_managed_target_from_pools(image_url, [qiniu, cloudflare])
+    assert pool is cloudflare
+    assert extracted == key
+    assert _is_ephemeral_provider_media_url(image_url) is False
+    assert _is_provider_direct_oss_url(image_url, {}) is True
+    assert _is_durable_persisted_media_url(image_url, {"provider_direct_oss_url": True}) is True
+
+
 def test_grsai_cloudflare_object_skips_redownload(monkeypatch):
     from types import SimpleNamespace as NS
     from app.services.generation_runtime import media_persist as mp

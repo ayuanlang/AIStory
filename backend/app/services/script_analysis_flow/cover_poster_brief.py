@@ -111,13 +111,7 @@ def build_cover_poster_brief(script_text: str) -> str:
         return ""
     char_line = "，".join(chars) if chars else "无"
     env_line = "，".join(envs) if envs else "无"
-    preface = (
-        "封面海报构图简报。环境规划完成后由程序汇总，不再经过资产清单节点。"
-        "只服务 `posters[]`：选 1–2 个主环境气质与 1–3 个主角做宣发构图；"
-        "禁止另起角色/道具/环境资产行；无简报则 posters=[]。"
-    )
     body = (
-        f"{preface}\n\n"
         f"主角候选：{char_line}\n"
         f"主环境气质：{env_line}"
     )

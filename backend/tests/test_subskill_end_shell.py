@@ -3,13 +3,13 @@
 from app.services.analyze_scene_text_ops import prepend_derived_framing_task
 
 
-def test_framing_user_message_names_the_only_task():
+def test_framing_user_message_keeps_the_scene_body():
     framed = prepend_derived_framing_task("[SCENES_BLOCK_START]\n场次素材\n[SCENES_BLOCK_END]")
-    assert framed.startswith("【本次任务】按场景现场编排规范")
-    assert "不要请用户选择是生成还是检查" in framed
-    assert framed.index("【本次任务】") < framed.index("[SCENES_BLOCK_START]")
+    assert framed.startswith("[SCENES_BLOCK_START]")
+    assert "【本次任务】" not in framed
     continued = prepend_derived_framing_task("【上次输出】\n已写到一半")
-    assert not continued.startswith("【本次任务】")
+    assert continued.startswith("【上次输出】")
+
 
 SHELL = (
     "[BEAT_STREAM_END] [SCENE_END:EP01_SC01] "
@@ -154,15 +154,15 @@ def test_gemini_thought_draft_replaces_end_shell():
     assert ordinary == "Beijing is sunny."
 
 
-def test_framing_opening_is_prefixed_once():
+def test_framing_opening_stays_in_the_skill():
     from app.services.scene_subskill_pipeline_runner import (
         FRAMING_PROMPT,
         _with_framing_visible_opening,
     )
 
     once = _with_framing_visible_opening(FRAMING_PROMPT, "[SCENES_BLOCK_START]")
-    assert once.startswith("可见回答从第一行")
-    assert _with_framing_visible_opening(FRAMING_PROMPT, once) == once
+    assert once == "[SCENES_BLOCK_START]"
+    assert "可见回答从第一行" not in once
     assert _with_framing_visible_opening("other.md", "正文") == "正文"
 
 

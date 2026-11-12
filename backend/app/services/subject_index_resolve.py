@@ -405,7 +405,19 @@ def strip_project_visual_backfill_sections(result_text: Any) -> str:
     )
 
 
-def build_project_visual_backfill_readonly_injection(backfill_obj: Any) -> str:
+# Style, tone, lighting, color and music already travel in 项目信息.
+SUBSKILL_BACKFILL_KEYS = (
+    "nameplate_style",
+    "comprehensive_plot",
+    "comprehensive_assets",
+)
+
+
+def build_project_visual_backfill_readonly_injection(
+    backfill_obj: Any,
+    *,
+    keys: Any = None,
+) -> str:
     """Compact read-only context. Downstream LLMs must not rewrite or re-emit the JSON."""
     from app.core.prompt_injection import wrap_injection_section
 
@@ -414,19 +426,9 @@ def build_project_visual_backfill_readonly_injection(backfill_obj: Any) -> str:
         obj = backfill_obj
     if not obj:
         return ""
+    chosen = tuple(keys) if keys else SUBSKILL_BACKFILL_KEYS
     lines: List[str] = []
-    for key in (
-        "Global_Style",
-        "tone",
-        "lighting",
-        "borrowed_films",
-        "color_palette",
-        "color_spectrum",
-        "nameplate_style",
-        "music_recommendation",
-        "comprehensive_plot",
-        "comprehensive_assets",
-    ):
+    for key in chosen:
         value = obj.get(key)
         if value is None or value == "":
             continue

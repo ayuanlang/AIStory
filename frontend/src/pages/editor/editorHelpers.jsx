@@ -31,7 +31,8 @@ const normalizeExternalMediaUrl = (rawUrl) => {
 
 const shouldProxyExternalMediaUrl = () => false;
 
-const GRSAI_DIRECT_OBJECT_PATH_RE = /^\/file\/(?:images|videos)\/\d{6}\//i;
+// Path-style R2 puts the bucket in front: /<bucket>/file/images|videos/{yyyymm}/...
+const GRSAI_DIRECT_OBJECT_PATH_RE = /^(?:\/[^/]+)?\/file\/(?:images|videos)\/\d{6}\//i;
 
 const isGrsaiDirectObjectPath = (pathname) => GRSAI_DIRECT_OBJECT_PATH_RE.test(String(pathname || ''));
 

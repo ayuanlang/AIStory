@@ -315,6 +315,16 @@ def _music_recommendation(project: Optional[Project], episode: Episode) -> str:
     return ""
 
 
+def _score_source_text(db: Session, episode_id: int, scene_marker: str) -> str:
+    """配乐提示词读文戏。建置成稿不再带着【配乐】。"""
+    from app.services.audiovisual_ledger import drama_text_for_scene
+
+    drama = drama_text_for_scene(db, episode_id, scene_marker)
+    if "【配乐】" in drama or "【声画综合】" in drama:
+        return drama
+    return _scene_block_for_marker(db, episode_id, scene_marker)
+
+
 def _scene_block_for_marker(db: Session, episode_id: int, scene_marker: str) -> str:
     rows = (
         db.query(ScriptProgressPipelineNode)
@@ -571,7 +581,7 @@ async def generate_scene_score(
 
     project = db.query(Project).filter(Project.id == int(episode.project_id)).first() if episode.project_id else None
     music = _music_recommendation(project, episode)
-    scene_block = _scene_block_for_marker(db, int(episode.id), marker)
+    scene_block = _score_source_text(db, int(episode.id), marker)
     cue = extract_score_cue(scene_block)
     score_lines = extract_score_lines(scene_block)
     listen_parts = (music, cue, "\n".join(score_lines))

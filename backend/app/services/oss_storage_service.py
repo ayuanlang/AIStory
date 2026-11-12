@@ -794,7 +794,11 @@ class OSSStorageService:
         return None
 
     def grsai_direct_cloudflare_object_key(self, url: str) -> Optional[str]:
-        """Object key for a Grsai direct-write URL whose host is the R2 placeholder `auto`."""
+        """Object key for a Grsai direct-write object on Cloudflare R2.
+
+        Host `auto` is the region placeholder. A presigned read uses the account
+        endpoint and puts the bucket in front of `file/images|videos/{yyyymm}/`.
+        """
         raw = str(url or "").strip()
         if not raw:
             return None
@@ -804,9 +808,19 @@ class OSSStorageService:
         except Exception:
             return None
         host = str(parsed.hostname or "").strip().lower()
-        if host not in _GRSAI_DIRECT_PLACEHOLDER_HOSTS:
+        path = str(parsed.path or "")
+        if host in _GRSAI_DIRECT_PLACEHOLDER_HOSTS:
+            return self._grsai_direct_object_key_from_path(path)
+        if not self._is_cloudflare_object_host(host):
             return None
-        return self._grsai_direct_object_key_from_path(str(parsed.path or ""))
+        key = self._grsai_direct_object_key_from_path(path)
+        if key:
+            return key
+        stripped = urllib.parse.unquote(path).strip().lstrip("/")
+        slash = stripped.find("/")
+        if slash <= 0:
+            return None
+        return self._grsai_direct_object_key_from_path(stripped[slash + 1 :])
 
     def _pick_grsai_cloudflare_pool(self, pools: Optional[List[SimpleNamespace]]):
         chosen = None
@@ -2028,7 +2042,7 @@ class OSSStorageService:
         if not path:
             return None, None
 
-        direct_key = self._grsai_direct_object_key_from_path(path)
+        direct_key = self.grsai_direct_cloudflare_object_key(candidate_raw)
         host = str(parsed.hostname or "").strip().lower()
         # Grsai writes this key straight into the Cloudflare bucket. Host `auto`
         # is not a CDN; always authorize it against the Cloudflare pool.

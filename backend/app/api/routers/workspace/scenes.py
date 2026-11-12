@@ -998,6 +998,29 @@ def list_episode_scene_scores(
     return list_scene_scores(db, episode_id)
 
 
+@router.get("/episodes/{episode_id}/scene-audiovisual")
+def get_episode_scene_audiovisual(
+    episode_id: int,
+    scene_marker: str = Query(""),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from sqlalchemy.orm import load_only
+
+    from app.services.audiovisual_ledger import audiovisual_public
+
+    episode = (
+        db.query(Episode)
+        .options(load_only(Episode.id, Episode.project_id))
+        .filter(Episode.id == episode_id, _active_episode_clause())
+        .first()
+    )
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    return audiovisual_public(db, episode_id, scene_marker)
+
+
 @router.post("/episodes/{episode_id}/scene-scores")
 async def generate_episode_scene_score(
     episode_id: int,

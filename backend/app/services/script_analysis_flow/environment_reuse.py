@@ -1245,7 +1245,11 @@ def collect_selected_global_environment_catalog(
     return catalog
 
 
-def format_selected_global_environment_injection(catalog: Sequence[Dict[str, Any]]) -> str:
+def format_selected_global_environment_injection(
+    catalog: Sequence[Dict[str, Any]],
+    *,
+    include_definitions: bool = True,
+) -> str:
     usable = [item for item in (catalog or []) if _clean_env_name(item.get("name"))]
     if not usable:
         return wrap_injection_section(
@@ -1254,6 +1258,18 @@ def format_selected_global_environment_injection(catalog: Sequence[Dict[str, Any
                 (
                     "用户选定全局环境=无",
                     "剧本页「全局资产」未勾选可用主环境（已删除的不计入）。规划时不得把未勾选资产当成用户指定复用源。",
+                )
+            ),
+        )
+    if not include_definitions:
+        names = [_clean_env_name(item.get("name")) for item in usable]
+        return wrap_injection_section(
+            SELECTED_GLOBAL_ENV_LABEL,
+            "\n".join(
+                (
+                    "用户指定优先复用：" + "、".join(names),
+                    "开篇与原定义在项目主环境清单里，这里不重复。",
+                    "只把这些名字当作用户勾选的复用源。",
                 )
             ),
         )

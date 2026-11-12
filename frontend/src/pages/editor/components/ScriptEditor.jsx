@@ -110,6 +110,7 @@ import {
     generateVideo,
     generateVoice,
     fetchSceneScores,
+    fetchSceneAudiovisual,
     generateSceneScore,
     fetchAssets, 
     generateSceneShots,
@@ -5680,7 +5681,8 @@ const sceneScoreMediaSrc = (url) => {
     return raw.startsWith('http') ? raw : `${ASSET_BASE_URL}${raw}`;
 };
 
-const sceneScoreViewerFromRow = (label, row) => ({
+const sceneScoreViewerFromRow = (label, row, sceneId) => ({
+    sceneId: String(sceneId || row?.scene_marker || row?.scene_no || '').trim(),
     label: String(label || '').trim(),
     prompt: String(row?.prompt || '').trim(),
     style: String(row?.style || '').trim(),
@@ -5711,6 +5713,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [sceneScoreErrorById, setSceneScoreErrorById] = useState({});
     const [sceneScoreViewer, setSceneScoreViewer] = useState(null);
     const [sceneScoreCopied, setSceneScoreCopied] = useState(false);
+    const [scenePlateViewer, setScenePlateViewer] = useState(null);
     useEffect(() => {
         const episodeId = Number(activeEpisode?.id || 0);
         if (!episodeId) {
@@ -5756,7 +5759,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return [...list, result];
             });
             setSceneScoreCopied(false);
-            setSceneScoreViewer(sceneScoreViewerFromRow(sceneLabel, result));
+            setSceneScoreViewer(sceneScoreViewerFromRow(sceneLabel, result, marker));
         } catch (error) {
             const detail = error?.response?.data?.detail || error?.message || String(error);
             const text = typeof detail === 'string' ? detail : JSON.stringify(detail);
@@ -39179,7 +39182,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <div className="text-xs font-bold text-white/85">{t('分场节点', 'Per-scene nodes')}</div>
                                     <div className="text-[10px] text-white/35">
-                                        {t('每场一行：文戏、武戏增强、场景现场编排、建置入戏、分镜生成。左侧「重跑该场」从文戏优化重跑该场，不跑美术指导与其他分场。单节点重跑仍会按序带起该场后续节点。场次列的「本场配乐」按这一场当前分镜、声画综合和各拍配乐重写提示词，并可查看。', 'One row per scene: drama, action enhancement, floor staging, blocking, and storyboards. “Rerun This Scene” starts that scene from drama and skips art direction and other scenes. A single-node rerun still continues through later nodes for that scene. “Scene Score” on the scene column rewrites a viewable prompt from that scene’s current storyboard, sound-picture cue, and per-beat score lines.')}
+                                        {t('每场一行：文戏、武戏增强、场景现场编排、建置入戏、分镜生成。左侧「重跑该场」从文戏优化重跑该场，不跑美术指导与其他分场。单节点重跑仍会按序带起该场后续节点。音效、配乐和名牌在文戏生成，分镜按拍恢复，配乐与烧录再注入。场次列可查看配乐提示词和名牌。', 'One row per scene: drama, action enhancement, floor staging, blocking, and storyboards. “Rerun This Scene” starts that scene from drama and skips art direction and other scenes. A single-node rerun still continues through later nodes for that scene. Sound effects, score, and nameplates are written in drama, restored by beat for storyboards, then injected again for the score and burn-in. The scene column can view the score prompt and nameplates.')}
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">
@@ -39329,7 +39332,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                                 type="button"
                                                                 onClick={() => {
                                                                     setSceneScoreCopied(false);
-                                                                    setSceneScoreViewer(sceneScoreViewerFromRow(sceneLabel, scoreRow));
+                                                                    setSceneScoreViewer(sceneScoreViewerFromRow(sceneLabel, scoreRow, row.sceneId));
                                                                 }}
                                                                 className={diagnosticBtnClass}
                                                                 title={t('查看这一场当前的配乐提示词', 'View this scene’s current score prompt')}
@@ -39337,6 +39340,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                                 {t('查看', 'View')}
                                                             </button>
                                                         ) : null}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                const episodeId = Number(activeEpisode?.id || 0);
+                                                                if (!episodeId || !row.sceneId) return;
+                                                                fetchSceneAudiovisual(episodeId, row.sceneId)
+                                                                    .then((data) => {
+                                                                        setScenePlateViewer({
+                                                                            label: sceneLabel,
+                                                                            sceneId: row.sceneId,
+                                                                            plates: Array.isArray(data?.nameplates) ? data.nameplates : [],
+                                                                        });
+                                                                    })
+                                                                    .catch(() => {
+                                                                        setScenePlateViewer({
+                                                                            label: sceneLabel,
+                                                                            sceneId: row.sceneId,
+                                                                            plates: [],
+                                                                            error: true,
+                                                                        });
+                                                                    });
+                                                            }}
+                                                            className={diagnosticBtnClass}
+                                                            title={t('查看文戏里这一场的名牌和落拍', 'View this scene’s nameplates and beats from drama')}
+                                                        >
+                                                            {t('查看名牌', 'Nameplates')}
+                                                        </button>
                                                         {targetSeconds > 0 ? (
                                                             <span className="text-[10px] text-white/45">
                                                                 {t(`${Math.round(targetSeconds)}秒`, `${Math.round(targetSeconds)}s`)}
@@ -39781,6 +39811,80 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 </div>
             </div>
 
+            {scenePlateViewer ? (
+                <div
+                    className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                    onClick={() => setScenePlateViewer(null)}
+                >
+                    <div
+                        className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-2xl max-h-[88vh] shadow-2xl overflow-hidden flex flex-col"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
+                            <h3 className="text-lg font-bold">
+                                {t('名牌', 'Nameplates')}
+                                {scenePlateViewer.label ? ` · ${scenePlateViewer.label}` : ''}
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setScenePlateViewer(null)}
+                                className="text-white/50 hover:text-white"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-4 flex flex-col gap-2 overflow-auto">
+                            <p className="text-xs text-white/45 leading-relaxed">
+                                {t('这些行来自文戏。重新读取会再取文戏原文。要改名牌，从文戏重跑这一场。', 'These rows come from drama. Refresh reads that text again. To change them, rerun this scene from drama.')}
+                            </p>
+                            {scenePlateViewer.error ? (
+                                <p className="text-xs text-red-300">{t('名牌没有读到。', 'Nameplates could not be loaded.')}</p>
+                            ) : null}
+                            {(scenePlateViewer.plates || []).length ? (
+                                scenePlateViewer.plates.map((plate, index) => (
+                                    <p key={`${plate.beat || 'none'}-${index}`} className="text-sm text-white/85 whitespace-pre-wrap">
+                                        {plate.beat ? `B${plate.beat} · ` : ''}
+                                        {plate.row}
+                                    </p>
+                                ))
+                            ) : (
+                                <p className="text-sm text-white/50">{t('文戏还没有名牌。', 'Drama has no nameplates yet.')}</p>
+                            )}
+                        </div>
+                        <div className="flex items-center justify-end gap-2 p-4 border-t border-white/10">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const episodeId = Number(activeEpisode?.id || 0);
+                                    if (!episodeId || !scenePlateViewer.sceneId) return;
+                                    fetchSceneAudiovisual(episodeId, scenePlateViewer.sceneId)
+                                        .then((data) => {
+                                            setScenePlateViewer((prev) => ({
+                                                ...(prev || {}),
+                                                plates: Array.isArray(data?.nameplates) ? data.nameplates : [],
+                                                error: false,
+                                            }));
+                                        })
+                                        .catch(() => {
+                                            setScenePlateViewer((prev) => ({ ...(prev || {}), error: true }));
+                                        });
+                                }}
+                                className="text-sm px-3 py-1.5 rounded border border-white/10 text-white/80 hover:bg-white/5"
+                            >
+                                {t('重新读取', 'Refresh')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setScenePlateViewer(null)}
+                                className="text-sm px-3 py-1.5 rounded bg-white text-black font-medium"
+                            >
+                                {t('关闭', 'Close')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+
             {sceneScoreViewer ? (
                 <div
                     className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
@@ -39852,6 +39956,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 className="text-sm px-3 py-1.5 rounded border border-white/10 text-white/80 hover:bg-white/5"
                             >
                                 {sceneScoreCopied ? t('已复制', 'Copied') : t('复制', 'Copy')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleGenerateSceneScore(sceneScoreViewer.sceneId, sceneScoreViewer.label)}
+                                disabled={!sceneScoreViewer.sceneId || sceneScoreBusyId === sceneScoreViewer.sceneId}
+                                className="text-sm px-3 py-1.5 rounded border border-white/10 text-white/80 hover:bg-white/5 disabled:opacity-40"
+                            >
+                                {sceneScoreBusyId === sceneScoreViewer.sceneId
+                                    ? t('生成中', 'Generating')
+                                    : t('重新生成提示词', 'Regenerate prompt')}
                             </button>
                             <button
                                 type="button"

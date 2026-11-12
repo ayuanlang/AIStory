@@ -290,7 +290,10 @@ async def run_environment_plan(
     instruction = "\n\n".join(
         (
             build_project_main_environment_injection(catalog, for_planning=True),
-            format_selected_global_environment_injection(selected_catalog),
+            format_selected_global_environment_injection(
+                selected_catalog,
+                include_definitions=False,
+            ),
         )
     )
     episode_input = f"{instruction}\n\n{scene_split_text}"

@@ -74,7 +74,7 @@ def test_environment_brief_uses_plan_only_and_excludes_scene_analysis():
     assert "[环境规划开始]" in brief
     assert "[环境规划结束]" in brief
     assert "客栈大堂" in brief
-    assert "environments[].name 必须与 IDENT [ENV] 名称= / name 逐字符完全一致" in brief
+    assert "environments[].name 必须与 IDENT" not in brief
     assert "定位=夜内对峙大厅" in brief
     assert "[ENV_BLOCK_START]" in brief
     assert "────【主环境】────" in brief

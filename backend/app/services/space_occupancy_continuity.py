@@ -503,15 +503,7 @@ def render_occupancy_reference(
         usage = "同一主环境只读最近一条。未结束时开场锚、X、Y、Z、朝向、姿态、手持照抄仍在的人和独立道具。不抄机位、景别、望向。"
     else:
         usage = "每一场只读同一地点、早于本场的最近一条。空间占用写入【场景衔接】。"
-    intro = (
-        "先判这一处环境是否已经结束。角色已离场，或再开始已经是另一个时间段，就是已结束："
-        "重新初始化，或让人重新入场，不抄坐标。"
-        "未结束才用下面最近一集、最近一场、最后一个 beat 的【角色道具世界分布图】，开场站位与仍在的人、独立道具连续。"
-        "判定=待判时先按本场时间判完：判成已结束就当这张图不存在。"
-        "大纲和剧本不把坐标写进正文。"
-        f"{usage}"
-    )
-    return wrap_injection_section(OCCUPANCY_LABEL, intro + "\n\n" + "\n\n".join(sections))
+    return wrap_injection_section(OCCUPANCY_LABEL, usage + "\n\n" + "\n\n".join(sections))
 
 
 def _windows_for_place(text: str, place_key: str) -> List[str]:

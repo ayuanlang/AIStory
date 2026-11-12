@@ -1970,6 +1970,16 @@ def _shot_beat_numbers(*texts: str) -> set:
     return beats
 
 
+def _hang_beat(row: str) -> Optional[int]:
+    found = re.search(r"挂拍\s*=\s*B(\d+)", str(row or ""), flags=re.IGNORECASE)
+    if not found:
+        return None
+    try:
+        return int(found.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
 def _scene_placed_nameplates(scene_text: str) -> List[Tuple[Optional[int], str]]:
     """Burn rows from 文戏【名牌前后标签】 and the beat that 【名牌挂位】 sits on."""
     beat: Optional[int] = None
@@ -1986,14 +1996,14 @@ def _scene_placed_nameplates(scene_text: str) -> List[Tuple[Optional[int], str]]
             if rest.startswith("无"):
                 in_labels = False
             elif "主标=" in rest:
-                placed.append((None, rest))
+                placed.append((_hang_beat(rest), rest))
             continue
         if in_labels:
             stripped = raw.strip()
             if not stripped or stripped.startswith("【") or stripped.startswith("["):
                 in_labels = False
             elif "主标=" in stripped:
-                placed.append((None, stripped))
+                placed.append((_hang_beat(stripped), stripped))
                 continue
             else:
                 in_labels = False

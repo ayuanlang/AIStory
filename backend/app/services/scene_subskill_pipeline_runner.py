@@ -2300,6 +2300,8 @@ def _subskill_visual_backfill_injection(
     script_text: str,
     db: Optional[Session] = None,
     episode_id: int = 0,
+    *,
+    keys: Optional[tuple] = None,
 ) -> str:
     persisted = ""
     if db is not None and int(episode_id or 0) > 0:
@@ -2310,7 +2312,39 @@ def _subskill_visual_backfill_injection(
     obj = extract_project_visual_backfill_object(persisted) or extract_project_visual_backfill_object(
         script_text
     )
-    return build_project_visual_backfill_readonly_injection(obj)
+    return build_project_visual_backfill_readonly_injection(obj, keys=keys)
+
+
+def _scene_has_comprehensive(scene_block: str) -> bool:
+    return "【场景综合】" in str(scene_block or "")
+
+
+def _comprehensive_for_scene(scene_block: str, comprehensive_info: str) -> str:
+    if _scene_has_comprehensive(scene_block):
+        return ""
+    return str(comprehensive_info or "").strip()
+
+
+def _downstream_project_tail(
+    scene_block: str,
+    brief: str,
+    tail_parts: Dict[str, str],
+    *,
+    keep_nameplate: bool = True,
+) -> str:
+    """Nameplate and episode summary only when this scene does not already carry them."""
+    parts: List[str] = []
+    blob = f"{brief}\n{scene_block}"
+    nameplate = str((tail_parts or {}).get("nameplate") or "").strip()
+    comprehensive = str((tail_parts or {}).get("comprehensive") or "").strip()
+    leftover = str((tail_parts or {}).get("leftover") or "").strip()
+    if keep_nameplate and nameplate and "【名牌展现】" not in blob:
+        parts.append(nameplate)
+    if comprehensive and not _scene_has_comprehensive(scene_block):
+        parts.append(comprehensive)
+    if leftover:
+        parts.append(leftover)
+    return "\n\n".join(parts)
 
 
 def _framing_only_tail(project_tail: str) -> str:
@@ -2437,13 +2471,25 @@ def _wrap_single_scene_input(
     comprehensive_info: str,
     project_tail: str,
     entity_token_brief: str = "",
+    *,
+    keep_audiovisual: bool = False,
 ) -> str:
+    from app.services.audiovisual_ledger import (
+        strip_audiovisual_passthrough,
+        strip_nameplate_instructions,
+    )
+
+    block = str(scene_block or "").strip()
+    brief = str(entity_token_brief or "").strip()
+    if not keep_audiovisual:
+        block = strip_audiovisual_passthrough(block)
+        brief = strip_nameplate_instructions(brief)
     parts = [SCENES_BLOCK_START_TOKEN]
-    if str(entity_token_brief or "").strip():
-        parts.append(str(entity_token_brief).strip())
+    if brief:
+        parts.append(brief)
     if str(comprehensive_info or "").strip():
         parts.append(str(comprehensive_info).strip())
-    parts.append(str(scene_block or "").strip())
+    parts.append(block)
     parts.append(SCENES_BLOCK_END_TOKEN)
     if str(project_tail or "").strip():
         parts.append(str(project_tail).strip())
@@ -3375,16 +3421,12 @@ def build_environment_asset_quad_injection(prompts_by_name: Dict[str, str]) -> s
         return ""
     intro = (
         "以下是环境资产设计已锁定的主环境【四向拼图】。"
-        "每个 Beat 只读本拍当前环境所属主环境里、度数与本拍望向相同的那一格："
-        "0度=[0度格-左上·北]，90度=[90度格-右上·东]，180度=[180度格-左下·南]，270度=[270度格-右下·西]。"
-        "每格三面的方向："
+        "每个 Beat 只读本拍望向那一格。"
         "0度望北，正面是北，左侧面是西，右侧面是东；"
         "90度望东，正面是东，左侧面是北，右侧面是南；"
         "180度望南，正面是南，左侧面是东，右侧面是西；"
         "270度望西，正面是西，左侧面是南，右侧面是北。"
-        "左侧面在画面左，右侧面在画面右，正面是远离镜头的那一面，中部是舞台中部。"
-        "角色与道具的开拍定位和本拍走位，按这一格这三面和中部已经写出的环境主体画面位置来转换。"
-        "落点必须落在这一格已经写好的件旁。禁止改用邻格。禁止把格内环境句子抄进建置或入戏。"
+        "落点落在这一格已经写好的件旁。禁止改用邻格。禁止把格内环境句子抄进建置或入戏。"
     )
     return wrap_injection_section("环境资产四宫格", intro + "\n\n" + "\n\n".join(blocks))
 
@@ -4118,17 +4160,8 @@ async def _resume_incomplete_beats(
 
 
 def _with_framing_visible_opening(prompt_file: str, scene_input: str) -> str:
-    if prompt_file != FRAMING_PROMPT:
-        return scene_input
-    text = str(scene_input or "").strip()
-    opening = (
-        "可见回答从第一行 [SCENES_BLOCK_START] 写起。"
-        "思考不算成稿。先写 [DERIVED_ENV_EXTRACT_START] 和【全场调度】，再写每一拍 [BEAT_START]。"
-        "没有这些正文时，不要写 [BEAT_STREAM_END]、[SCENE_END]、[SCENES_BLOCK_END]、[DERIVED_FRAMING_OUTPUT_END]。"
-    )
-    if text.startswith("可见回答从第一行"):
-        return text
-    return f"{opening}\n\n{text}" if text else opening
+    """输出起笔合同在现场编排技能里，用户消息不再重复。"""
+    return str(scene_input or "")
 
 
 def _prepare_subskill_llm_text(text: str) -> str:
@@ -4443,6 +4476,7 @@ async def _run_derived_framing_then_staging(
     special: str,
     comprehensive_info: str,
     project_tail: str,
+    tail_parts: Optional[Dict[str, str]] = None,
     env_script: str,
     env_scene: str,
     enhance_block: str,
@@ -4453,6 +4487,19 @@ async def _run_derived_framing_then_staging(
     reused_character_names: Optional[List[str]] = None,
 ) -> str:
     """Framing LLM must succeed before staging LLM is allowed to start."""
+    parts = tail_parts or {}
+    aspect_tail = str(parts.get("aspect") or "").strip() or _framing_only_tail(project_tail)
+
+    def _scene_tail(scene_block: str, brief: str) -> str:
+        if parts:
+            return _downstream_project_tail(
+                scene_block,
+                brief,
+                parts,
+                keep_nameplate=False,
+            )
+        return str(project_tail or "")
+
     if str(env_script or "").strip():
         refreshed = build_scene_entity_token_brief(
             env_script,
@@ -4471,8 +4518,8 @@ async def _run_derived_framing_then_staging(
             _with_derived_env_frame_anchors(
                 _wrap_single_scene_input(
                     staging_scene,
-                    comprehensive_info,
-                    project_tail,
+                    _comprehensive_for_scene(staging_scene, comprehensive_info),
+                    _scene_tail(staging_scene, entity_token_brief),
                     entity_token_brief,
                 ),
                 current_block,
@@ -4511,6 +4558,9 @@ async def _run_derived_framing_then_staging(
             ),
             scene_id,
         )
+        from app.services.audiovisual_ledger import strip_audiovisual_passthrough
+
+        current_block = strip_audiovisual_passthrough(current_block)
         called.append("staging")
         persist_scene_subskill_named_step(
             db=task_db,
@@ -4562,8 +4612,8 @@ async def _run_derived_framing_then_staging(
     )
     framing_input = _wrap_single_scene_input(
         framing_block,
-        "" if "【场景综合】" in framing_block else comprehensive_info,
-        _framing_only_tail(project_tail),
+        _comprehensive_for_scene(framing_block, comprehensive_info),
+        aspect_tail,
         framing_token_brief,
     )
     if main_env_block:
@@ -4615,8 +4665,8 @@ async def _run_derived_framing_then_staging(
                 _with_derived_env_frame_anchors(
                     _wrap_single_scene_input(
                         staging_scene,
-                        comprehensive_info,
-                        project_tail,
+                        _comprehensive_for_scene(staging_scene, comprehensive_info),
+                        _scene_tail(staging_scene, entity_token_brief),
                         entity_token_brief,
                     ),
                     current_block,
@@ -4673,15 +4723,22 @@ async def _run_derived_framing_then_staging(
                     step_label=_subskill_action_label(FRAMING_PROMPT),
                     extra_meta={"derived_env_ingest": _slim_derived_env_ingest_meta(ingest_meta)},
                 )
+            from app.services.audiovisual_ledger import strip_audiovisual_passthrough
+
+            current_block = strip_audiovisual_passthrough(current_block)
             current_input = _with_derived_env_frame_anchors(
                 _wrap_single_scene_input(
                     current_block,
-                    comprehensive_info,
-                    project_tail,
+                    _comprehensive_for_scene(current_block, comprehensive_info),
+                    _scene_tail(current_block, entity_token_brief),
                     entity_token_brief,
                 ),
                 current_block,
             )
+        if step_name == "staging":
+            from app.services.audiovisual_ledger import strip_audiovisual_passthrough
+
+            current_block = strip_audiovisual_passthrough(current_block)
         persist_scene_subskill_named_step(
             db=task_db,
             episode_id=episode_id,
@@ -4730,6 +4787,14 @@ async def _run_scene_storyboard_step(
     from app.services.shot_ai_generation_ops import _count_active_shots, execute_ai_generate_shots
     from app.services.shot_import_ops import _import_scene_shot_rows_to_db
 
+    from app.services.audiovisual_ledger import restore_audiovisual_for_storyboard
+
+    staging_text = restore_audiovisual_for_storyboard(
+        task_db,
+        episode_id=int(episode_id),
+        scene_id=scene_id,
+        staging_text=staging_text,
+    )
     if staging_import_body_ready(staging_text):
         upsert_workspace_scene_from_staging(
             task_db,
@@ -5129,15 +5194,22 @@ async def run_scene_subskill_pipeline(
         )
     semaphore = asyncio.Semaphore(max(1, int(max_concurrency or 1)))
     leftover_tail = _extract_project_tail(script_text)
-    project_tail = "\n\n".join(
-        part
-        for part in (
-            _subskill_aspect_ratio_injection(script_text, db, project_id),
-            _subskill_visual_backfill_injection(script_text, db, node_episode_id),
-            leftover_tail,
-        )
-        if part
-    )
+    tail_parts = {
+        "aspect": _subskill_aspect_ratio_injection(script_text, db, project_id),
+        "nameplate": _subskill_visual_backfill_injection(
+            script_text,
+            db,
+            node_episode_id,
+            keys=("nameplate_style",),
+        ),
+        "comprehensive": _subskill_visual_backfill_injection(
+            script_text,
+            db,
+            node_episode_id,
+            keys=("comprehensive_plot", "comprehensive_assets"),
+        ),
+        "leftover": leftover_tail,
+    }
     user_principal = _snapshot_user_principal(current_user)
     env_catalog = []
     if project_id > 0:
@@ -5308,11 +5380,22 @@ async def run_scene_subskill_pipeline(
                         step_name=step_name,
                         step_label=_subskill_action_label(prompt_file),
                     )
+                    entity_brief = str(task.get("entity_token_brief") or "")
+                    keep_audiovisual = step_name == "drama"
                     scene_input = _wrap_single_scene_input(
                         current_block,
-                        str(task.get("comprehensive_info") or ""),
-                        project_tail,
-                        str(task.get("entity_token_brief") or ""),
+                        _comprehensive_for_scene(
+                            current_block,
+                            str(task.get("comprehensive_info") or ""),
+                        ),
+                        _downstream_project_tail(
+                            current_block,
+                            entity_brief,
+                            tail_parts,
+                            keep_nameplate=keep_audiovisual,
+                        ),
+                        entity_brief,
+                        keep_audiovisual=keep_audiovisual,
                     )
                     current_block = await _call_scene_subskill(
                         task_db=task_db,
@@ -5326,6 +5409,10 @@ async def run_scene_subskill_pipeline(
                     )
                     if step_name in {"drama", "combat"}:
                         current_block = strip_prior_derived_environment_sections(current_block)
+                    if step_name != "drama":
+                        from app.services.audiovisual_ledger import strip_audiovisual_passthrough
+
+                        current_block = strip_audiovisual_passthrough(current_block)
                     called.append(step_name)
                     persist_scene_subskill_named_step(
                         db=task_db,
@@ -5431,7 +5518,8 @@ async def run_scene_subskill_pipeline(
                     scene_id=scene_id,
                     special=special,
                     comprehensive_info=str(task.get("comprehensive_info") or ""),
-                    project_tail=project_tail,
+                    project_tail="",
+                    tail_parts=tail_parts,
                     env_script=env_script,
                     env_scene=env_scene,
                     enhance_block=current_block,

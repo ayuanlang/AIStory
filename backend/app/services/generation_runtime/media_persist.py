@@ -1053,7 +1053,10 @@ def _is_ephemeral_provider_media_url(value: Any) -> bool:
 
     # Configured Volcengine TOS buckets reuse *.volces.com / TOS4 query params.
     # Those durable OSS URLs must not be treated as Ark/Seedance delivery links.
+    # Grsai direct-write objects are already on R2; the presign query is access, not a temp CDN.
     try:
+        if oss_storage_service.grsai_direct_cloudflare_object_key(raw):
+            return False
         if oss_storage_service.is_managed_url(raw) or oss_storage_service.is_active_managed_url(raw):
             return False
     except Exception:

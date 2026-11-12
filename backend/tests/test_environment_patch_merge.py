@@ -368,8 +368,8 @@ def test_reused_environment_opening_is_rewritten_for_downstream():
     assert "青衫" not in appearance
     block = format_reused_character_appearance_block([{"name": "林晚晚", "appearance": appearance}])
     assert "[复用角色相貌开始]" in block
-    assert "重新写成" in block
-    assert "禁止成稿只写继承" in block
+    assert "窄长脸" in block
+    assert "禁止成稿只写继承" not in block
 
 
 def test_missing_env_ident_defaults_to_new_planning():

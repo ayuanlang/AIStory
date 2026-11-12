@@ -71,34 +71,20 @@ def test_build_scene_entity_token_brief():
     assert "CHAR: 沈青，林岳" in brief
     assert "PROP: 银打火机" in brief
     assert "CHAR:[@沈青]" in brief
-    assert "禁止 `ENV:`" in brief
+    assert "不写 `ENV:`" in brief
     assert "【本场对白声线】" in brief
     assert "CHAR:[@沈青]｜对白声线=江湖黑话夹杂霸气直球" in brief
-    assert "voice_identity" in brief
+    assert "声线、标签和名牌行只供本技能抄写" in brief
     assert "【本场角色标签】" in brief
     assert "CHAR:[@沈青]｜标签=江湖侠客｜标签_en=Jianghu Knight｜标签字体=魏碑｜标签字色=鎏金｜裸名=沈青｜裸名_en=Shen Qing｜字幕=待落" in brief
     assert "CHAR:[@林岳]｜标签=客栈掌柜｜标签_en=Innkeeper｜标签字体=魏碑｜标签字色=朱红｜裸名=林岳｜裸名_en=Lin Yue｜字幕=待落" in brief
     assert "CHAR:[@围观百姓]｜标签=无｜标签_en=无｜标签字体=无｜标签字色=无｜裸名=围观百姓｜裸名_en=Onlookers｜字幕=无" in brief
-    assert "中文项目用 裸名+标签" in brief
-    assert "物理文字标签" in brief
-    assert "名牌出字=模型直出" in brief
-    assert "名牌出字=后期烧录" in brief
     assert "【名牌标签】" in brief
     assert "种类=角色｜对象=CHAR:[@沈青]｜主标=沈青｜副标=江湖侠客｜" in brief
     assert "出字=烧制｜上屏=待落｜进视频=否" in brief
-    assert "进视频=是" in brief
-    assert "【名牌前后标签】" in brief
-    assert "不是对白硬字幕" in brief
-    assert "只有字幕=待落的本集新角色" in brief
-    assert "禁把多名牌攒到建置段末或入戏一起写" in brief
-    assert "复用场景（复用=是｜来源=项目库|上集|本集）禁止打环境名牌" in brief
-    assert "复用角色（上集或项目库已有）禁止打角色名牌" in brief
-    assert "落位=顶部中央" in brief
-    assert "时间可空" in brief
-    assert "禁止套成【名】日】" in brief
-    assert "剧本已经写明的公开社会身份" in brief
-    assert "禁透露剧情" in brief
-    assert "禁推理" in brief
+    assert "中文项目用 裸名+标签" not in brief
+    assert "名牌出字=模型直出" not in brief
+    assert "【名牌前后标签】" not in brief
 
 
 def test_build_scene_entity_token_brief_empty():
@@ -284,7 +270,6 @@ def test_nameplate_blocked_when_masked():
     assert "CHAR:[@沈青]" in tag_section
     assert "字幕=无" in tag_section
     assert "字幕=待落" not in tag_section
-    assert "蒙面/易容" in brief
 
 
 def test_nameplate_blocked_when_field_says_no():
@@ -353,7 +338,6 @@ def test_env_nameplate_injection_has_no_day_night_tag():
     assert "【本场环境名牌】" in brief
     assert "ENV:[龙门风月客栈]｜字样=【龙门风月客栈】｜时间=无｜标签=无｜落位=顶部中央" in brief
     assert "字样=【龙门风月客栈】日" not in brief
-    assert "禁止写成【名】日】或【名】外】" in brief
 
 
 def test_env_nameplate_time_label_explicit_only():

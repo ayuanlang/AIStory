@@ -368,12 +368,7 @@ def format_reused_character_appearance_block(rows: List[Dict[str, str]]) -> str:
     if not usable:
         return ""
     lines = [
-        "以下是已有角色资产的原相貌，从定妆提示词的【相貌】裁出。",
-        "必须在这段相貌上复用生成。对照本次提取与剧本，把相貌重新写成【相貌】正文。",
-        "只改剧本明确要求的差异，例如年龄、伤痕、妆面；这些变化仍要从原相貌演化。",
-        "禁止抛开原相貌全新画一张脸。",
-        "禁止成稿只写继承、复用、同貌或见参考图。下游必须读到五官、骨相、肤质等可画句子。",
-        "衣着与光线不在本块，按提取块另写。",
+        "以下是已有角色资产的【相貌】。",
     ]
     for row in usable:
         lines.append(f"- CHAR:[@{_clean(row.get('name'))}]")

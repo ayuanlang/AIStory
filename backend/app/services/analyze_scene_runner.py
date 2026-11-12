@@ -315,23 +315,24 @@ async def execute_analyze_scene(
                 "and avoid 'DemonSlayerCaptain', 'Demon_Slayer_Captain', 'demon-slayer-captain', or 'HarborOffice_Front_Mid_Night'."
             )
 
-        # Inject authoritative character canon (if provided via episode_id).
-        # 现场编排不写外形，也不消费定妆正文。
+        # 角色定妆档案只给角色设计，作为用户数据。其它节点不画外形。
+        canon_text = ""
         try:
             ep_id = getattr(request, "episode_id", None)
             _canon_prompt = str(getattr(request, "prompt_file", "") or "").lower()
             _canon_function = str(getattr(request, "function_name", "") or "").lower()
-            _skip_canon_for_framing = (
-                "derived_framing" in _canon_prompt or "derived_framing" in _canon_function
+            _canon_for_character_design = (
+                "entity_design_character" in _canon_prompt
+                or "2_pass_generate_assets_characters" in _canon_prompt
+                or "2_pass_generate_assets_characters" in _canon_function
             )
-            if ep_id and not _skip_canon_for_framing:
+            if ep_id and _canon_for_character_design:
                 episode = (
                     db.query(Episode)
                     .filter(Episode.id == ep_id, _active_episode_clause())
                     .first()
                 )
                 if episode:
-                    # Prefer project-level canon (Overview) and merge episode-specific overrides.
                     project_profiles = []
                     try:
                         project = db.query(Project).filter(Project.id == episode.project_id).first()
@@ -373,22 +374,16 @@ async def execute_analyze_scene(
                         if md:
                             canon_blocks.append(md)
                         else:
-                            canon_blocks.append(f"### {nm} (Canonical)\n- Identity: {p.get('identity') or ''}\n- Body Features: {p.get('body_features') or ''}\n- Style Tags: {', '.join(p.get('style_tags') or [])}\n")
+                            canon_blocks.append(
+                                f"### {nm}\n"
+                                f"- Identity: {p.get('identity') or ''}\n"
+                                f"- Body Features: {p.get('body_features') or ''}\n"
+                                f"- Style Tags: {', '.join(p.get('style_tags') or [])}\n"
+                            )
 
-                    canon_text = "\n\n".join(canon_blocks).strip()
-                    if canon_text:
-                        # Keep the injection bounded to avoid blowing prompt size.
-                        canon_text = canon_text[:8000]
-                        system_instruction += (
-                            "\n\n"
-                            "# Character Canon (Authoritative)\n"
-                            "The following character profiles are AUTHORITATIVE for this script. "
-                            "You MUST use them as the single source of truth for character identity and appearance, "
-                            "and IGNORE conflicting character descriptions found elsewhere in the script.\n\n"
-                            + canon_text
-                        )
+                    canon_text = "\n\n".join(canon_blocks).strip()[:8000]
         except Exception as e:
-            logger.warning(f"[analyze_scene] failed to inject character canon: {e}")
+            logger.warning(f"[analyze_scene] failed to load character canon: {e}")
         
         # Prepare user content with optional project metadata
         prompt_file_lower = str(getattr(request, "prompt_file", "") or "").strip().lower()
@@ -954,7 +949,12 @@ async def execute_analyze_scene(
                     "[analyze_scene] failed to inject reused character appearance: %s",
                     appearance_exc,
                 )
-            user_content = assemble_character_asset_design_user_content(appearance_block, char_brief)
+            canon_block = wrap_injection_section("角色定妆档案", canon_text) if canon_text else ""
+            user_content = assemble_character_asset_design_user_content(
+                appearance_block,
+                canon_block,
+                char_brief,
+            )
             logger.info(
                 "[analyze_scene] character asset design user seed episode_id=%s char_brief=%s script_block=omitted prop_brief=omitted request_has_block=%s",
                 getattr(request, "episode_id", None),
@@ -977,23 +977,27 @@ async def execute_analyze_scene(
                     len(str(user_content or "")),
                 )
             else:
-                project_context = _build_project_prompt_context(request.project_metadata)
+                project_context = _build_project_prompt_context(
+                    request.project_metadata,
+                    shot_controls=False,
+                    image_runtime=is_entity_design_phase,
+                )
                 meta_str = str(project_context.get("project_context_section") or "").strip()
 
                 metadata = project_context.get("metadata") if isinstance(project_context.get("metadata"), dict) else {}
                 project_language = str(metadata.get("project_language") or "").strip()
                 extra_rules: List[str] = []
-                if project_language:
-                    if any(tag in project_language.lower() for tag in ["zh", "cn", "中文", "chinese"]):
+                if is_entity_design_phase:
+                    if project_language and any(tag in project_language.lower() for tag in ["zh", "cn", "中文", "chinese"]):
                         extra_rules.extend([
                             "Subject Naming Rule: For this project, subject 'name' must be Chinese by default. Use English in 'name' only for explicit proper nouns that are canonically English.",
                             "Subject Naming Rule (EN): Use spaces between English words in name_en and keep it as a readable Title Case phrase (e.g., 'Demon Slayer Captain', 'Harbor Office Front Mid Night'). Do NOT use snake_case, kebab-case, camelCase, or concatenated forms like 'DemonSlayerCaptain' or 'HarborOffice_Front_Mid_Night'.",
                             "Subject Prompt Rule: Every subject JSON item must include BOTH generation_prompt_cn and generation_prompt_en, and the two prompts must be semantically aligned.",
                         ])
-                else:
-                    extra_rules.append(
-                        "Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language."
-                    )
+                    elif not project_language:
+                        extra_rules.append(
+                            "Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language."
+                        )
 
                 if extra_rules:
                     if meta_str:
@@ -1091,15 +1095,21 @@ async def execute_analyze_scene(
             except Exception as occupancy_exc:
                 logger.warning("[analyze_scene] occupancy reference skipped: %s", occupancy_exc)
 
+        # stage1 on 全局统筹 / 环境规划 is a persist mode, not a request for script-optimization RAG.
+        script_opt_for_side_injection = (
+            is_script_optimization_stage
+            and not is_scene_split_stage
+            and not is_environment_plan_stage
+        )
         # Optional platform knowledge-base RAG (reference-only; never mutates Subject Index names).
-        if (is_script_optimization_stage or is_entity_design_phase) and not is_scoped_asset_design:
+        if (script_opt_for_side_injection or is_entity_design_phase) and not is_scoped_asset_design:
             try:
                 kb_query_source = str(getattr(request, "text", "") or "")
                 kb_inject = build_kb_rag_injection_for_analyze(
                     db,
                     project_metadata=request.project_metadata if isinstance(request.project_metadata, dict) else {},
                     request_text=kb_query_source,
-                    is_script_optimization_stage=is_script_optimization_stage,
+                    is_script_optimization_stage=script_opt_for_side_injection,
                     is_entity_design_phase=is_entity_design_phase,
                     prompt_file=getattr(request, "prompt_file", ""),
                 )
@@ -1115,7 +1125,7 @@ async def execute_analyze_scene(
             except Exception as kb_exc:
                 logger.warning("[analyze_scene] KB RAG injection skipped: %s", kb_exc)
 
-        if is_script_optimization_stage and getattr(request, "project_id", None):
+        if script_opt_for_side_injection and getattr(request, "project_id", None):
             try:
                 from app.api.routers.entities_pkg.analyze import _entity_analysis_is_main_environment
                 
@@ -1346,10 +1356,7 @@ async def execute_analyze_scene(
                     ]
                 if normalized_assets:
                     lines = [
-                        "Reusable Subject Assets (High Priority):",
-                        "The following assets are MUST-REUSE subjects for this analysis.",
-                        "Do NOT regenerate or rename them. Keep their identity and anchor traits consistent.",
-                        "When referencing these assets in Scene Subjects / Beats / JSON, use canonical syntax: CHAR:[@Name], PROP:[Name], ENV:[Name].",
+                        "已登记资产。引用用已有标准名，不另起同义名。",
                     ]
                     for asset in normalized_assets:
                         detail_parts = []

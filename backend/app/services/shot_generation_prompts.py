@@ -323,7 +323,12 @@ def _resolve_effective_shot_generation_mode(
     return None
 
 
-def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
+def _build_project_prompt_context(
+    project_info_input: Any,
+    *,
+    shot_controls: bool = True,
+    image_runtime: bool = True,
+) -> Dict[str, Any]:
     project_info = project_info_input or {}
     if isinstance(project_info, str):
         try:
@@ -490,7 +495,6 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
 
     project_context_lines = [
         "# Project Context",
-        "Treat this project metadata as first-class constraints when generating outputs.",
         "[Basic Info]",
     ]
     if title:
@@ -538,8 +542,9 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         project_context_lines.append(f"Region / Country (国家地域): {region_culture}")
     if not shot_preference:
         shot_preference = DEFAULT_SHOT_PREFERENCE
-    project_context_lines.append(f"Shot / Lens Preference (镜头偏好): {shot_preference}")
-    project_context_lines.append(f"Max Shot Seconds (分镜最长秒数): {max_shot_seconds}")
+    if shot_controls:
+        project_context_lines.append(f"Shot / Lens Preference (镜头偏好): {shot_preference}")
+        project_context_lines.append(f"Max Shot Seconds (分镜最长秒数): {max_shot_seconds}")
     if broadcast_security_level:
         project_context_lines.append(f"Broadcast Safety Level (播出安全等级): {broadcast_security_level}")
     if borrowed_films:
@@ -564,34 +569,35 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     except Exception:
         pass
 
-    project_context_lines.append("[Technical & Visual Parameters]")
     aspect_ratio = get_visual_val(["aspect_ratio", "aspectRatio"])
     image_size = get_visual_val(["image_size", "imageSize"])
     horizontal_resolution = get_visual_val(["horizontal_resolution", "horizontalResolution", "h_resolution", "width"])
     vertical_resolution = get_visual_val(["vertical_resolution", "verticalResolution", "v_resolution", "height"])
     frame_rate = get_visual_val(["frame_rate", "frameRate", "fps"])
     quality = get_visual_val(["quality"])
-
+    technical_lines = []
     if aspect_ratio:
-        project_context_lines.append(f"Aspect Ratio: {aspect_ratio}")
-    if image_size:
-        project_context_lines.append(f"Image Size: {image_size}")
-    if horizontal_resolution:
-        project_context_lines.append(f"Horizontal Resolution: {horizontal_resolution}")
-    if vertical_resolution:
-        project_context_lines.append(f"Vertical Resolution: {vertical_resolution}")
-    if frame_rate:
-        project_context_lines.append(f"Frame Rate: {frame_rate}")
-    if quality:
-        project_context_lines.append(f"Quality: {quality}")
-    if expected_model_family:
-        project_context_lines.append(f"Expected Model Family: {expected_model_family}")
-    if generation_workflow:
-        project_context_lines.append(f"Generation Workflow: {generation_workflow}")
-    if continuity_priority:
-        project_context_lines.append(f"Continuity Priority: {continuity_priority}")
-
-    project_context_lines.append("Use this project context as first-class constraints before analyzing the script.")
+        technical_lines.append(f"Aspect Ratio: {aspect_ratio}")
+    if image_runtime:
+        if image_size:
+            technical_lines.append(f"Image Size: {image_size}")
+        if horizontal_resolution:
+            technical_lines.append(f"Horizontal Resolution: {horizontal_resolution}")
+        if vertical_resolution:
+            technical_lines.append(f"Vertical Resolution: {vertical_resolution}")
+        if frame_rate:
+            technical_lines.append(f"Frame Rate: {frame_rate}")
+        if quality:
+            technical_lines.append(f"Quality: {quality}")
+        if expected_model_family:
+            technical_lines.append(f"Expected Model Family: {expected_model_family}")
+        if generation_workflow:
+            technical_lines.append(f"Generation Workflow: {generation_workflow}")
+        if continuity_priority:
+            technical_lines.append(f"Continuity Priority: {continuity_priority}")
+    if technical_lines:
+        project_context_lines.append("[Technical & Visual Parameters]")
+        project_context_lines.extend(technical_lines)
     project_context_section = wrap_injection_section("项目信息", "\n".join(project_context_lines))
 
     metadata = {
@@ -1517,18 +1523,15 @@ def _build_shot_prompts(
 本次只重写一镜，只覆盖 {beat_label}。Core Scene Info 里只有这些拍。项目信息、分镜锁定里的场级条目、Subject Index、衍生环境宫格与整场分镜生成相同。
 1. Output exactly one Shot List markdown table row. Shot ID is fixed as `{shot_id_label}`. Scene ID is `{scene_public_id}`.
 2. Beat-Shot映射 first segment must be `合镜Beat={beat_label}`. Do not add other beats. Do not write `单Beat=` or `合镜=`.
-3. The matching cell and 卖点, plot, and character traits are equal and must be used together to choose Key and light direction. Named lights, windows, and walls must already be in that cell; direction is that fixture's direction in the cell. This pair outranks 色光规划= and project Lighting.
 """
     else:
         instruction = f"""# Instruction
 1. Analyze `# Core Scene Info` Beats and break them down into shots per §三.3.
-2. After shot boundaries are locked, evaluate every adjacent pair per §三.3B: split transition camera moves and other cut requirements into outgoing (previous-shot last P) and incoming (next-shot P1).
-3. For character entry/exit beats, land reactions + locked shot-size change + complementary camera per §二.3B; do not flatten to one enter/exit sentence.
-4. Output exactly one Shot List markdown table. Do not copy prompt example/template rows (e.g. `{{Scene ID}}_SHzz` or a second header).
-5. Scene opening / OT- / 吸睛 must be P segments inside the Shot that covers Beat 1 — never an extra Shot outside Beat-Shot mapping.
-6. Every Beat must appear in some row's `Beat-Shot映射`; do not invent unmapped opening shots. The first segment of that field is always `合镜Beat=BeatN` or `合镜Beat=BeatN+BeatM+...` (no spaces, narrative order, same n as upstream `[BEAT_START:n]`). Single-beat shots use the same key. Do not write `单Beat=` or `合镜=蒙太奇链` in place of the beat list. Montage may add `｜链=蒙太奇` after the list.
-7. Episode ID and Scene ID in `# Core Scene Info` are authoritative. Copy Scene ID `{scene_public_id}` onto every row. Shot ID is `{scene_public_id}_SHzz` (zz zero-padded from 01). Do not refuse because Scene No is numeric, and do not invent a different EP/SC from Scene No.
-8. Every named environment subject, opening, wall, door, window, and light in Video or Logic must already appear in the matching derived-environment cell under 【衍生环境信息】. A name that is not in that cell is an error. CHAR and PROP tags are not environment subjects. That cell and 卖点, plot, and character traits are equal: together they choose which existing source is Key and from which of its sides the light comes. This pair outranks 色光规划= and project Lighting. Do not invent a window.
+2. Output exactly one Shot List markdown table. Do not copy prompt example/template rows (e.g. `{{Scene ID}}_SHzz` or a second header).
+3. Scene opening / OT- / 吸睛 must be P segments inside the Shot that covers Beat 1 — never an extra Shot outside Beat-Shot mapping.
+4. Every Beat must appear in some row's `Beat-Shot映射`; do not invent unmapped opening shots. The first segment of that field is always `合镜Beat=BeatN` or `合镜Beat=BeatN+BeatM+...` (no spaces, narrative order, same n as upstream `[BEAT_START:n]`). Single-beat shots use the same key. Do not write `单Beat=` or `合镜=蒙太奇链` in place of the beat list. Montage may add `｜链=蒙太奇` after the list.
+5. Episode ID and Scene ID in `# Core Scene Info` are authoritative. Copy Scene ID `{scene_public_id}` onto every row. Shot ID is `{scene_public_id}_SHzz` (zz zero-padded from 01). Do not refuse because Scene No is numeric, and do not invent a different EP/SC from Scene No.
+6. Every named environment subject, opening, wall, door, window, and light in Video or Logic must already appear in the matching derived-environment cell under 【衍生环境信息】. A name that is not in that cell is an error. CHAR and PROP tags are not environment subjects. Do not invent a window.
 """
     user_input = f"""{project_context_section}
 

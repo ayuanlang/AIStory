@@ -106,9 +106,20 @@ def test_readonly_injection_is_compact_and_not_json_dump():
         }
     )
     assert "项目视觉回填" in injection
-    assert "Global_Style=古典/古装" in injection
-    assert "color_palette=对标片=英雄｜主色=朱红｜辅色=墨黑" in injection
+    assert "comprehensive_plot=主线=对质" in injection
+    assert "Global_Style=" not in injection
+    assert "color_palette=" not in injection
+    assert "music_recommendation=" not in injection
     assert '"project_visual_backfill"' not in injection
+    named = build_project_visual_backfill_readonly_injection(
+        {
+            "Global_Style": "古典/古装",
+            "color_palette": "对标片=英雄｜主色=朱红｜辅色=墨黑",
+        },
+        keys=("Global_Style", "color_palette"),
+    )
+    assert "Global_Style=古典/古装" in named
+    assert "color_palette=对标片=英雄｜主色=朱红｜辅色=墨黑" in named
 
 
 def test_framing_gate_accepts_scene_after_stripping_leading_backfill():

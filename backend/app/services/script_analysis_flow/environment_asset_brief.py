@@ -361,19 +361,7 @@ def build_environment_asset_design_brief(adapted_script: str) -> str:
         return ""
 
     body = "\n\n".join(scene_chunks).strip()
-    preface = (
-        "主环境资产设计真源。按场覆盖 IDENT 已识别主环境 +【主环境】/【未落清单】骨架。"
-        "本轮用户侧只注入项目信息 + 本块 + 封面海报简报；禁止把待分析剧本当输入。"
-        "本轮只设计主环境开篇，止于【构图】；禁止输出【四向拼图】和宫格画面句；禁止输出视角衍生或状态衍生。"
-        "禁止重做场景勘探；禁止另起同义主环境名；"
-        "environments[].name 必须与 IDENT [ENV] 名称= / name 逐字符完全一致；"
-        "定位/目标/情绪表达原样写入开篇。"
-        "定位里的气质=原样用于四壁和上下的材质、纹样、颜色、收边，不另判格调。"
-        "严格遵守【主环境】对表演区/活动空间的空间要求：四面只深化规划已列围合；"
-        "规划已有的床、窗、桌留在原位，动线中间不加障碍，不另起未列主体。"
-        "不要等待逐场分析。Subject Index 若仍含 environment 行只作旧稿兼容，不得压过本块。"
-    )
-    return wrap_injection_section("环境规划", f"{preface}\n\n{body}")
+    return wrap_injection_section("环境规划", body)
 
 
 def assemble_environment_asset_design_user_content(*parts: object) -> str:
