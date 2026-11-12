@@ -187,6 +187,23 @@ async def generate_project_story_dna_global(
         if reference_plot_block:
             user_prompt = f"{user_prompt.rstrip()}\n\n{reference_plot_block}\n"
 
+    occupancy_block = ""
+    if generator_kind != "promo":
+        try:
+            from app.services.space_occupancy_continuity import (  # noqa: E402
+                build_outline_occupancy_injection,
+            )
+
+            occupancy_block = build_outline_occupancy_injection(db, int(project_id))
+        except Exception as occupancy_exc:
+            logger.warning("[story_generator] occupancy reference skipped: %s", occupancy_exc)
+            occupancy_block = ""
+    if occupancy_block:
+        user_prompt = f"{user_prompt.rstrip()}\n\n{occupancy_block}\n"
+    fill_reference_block = "\n\n".join(
+        part for part in (reference_plot_block, occupancy_block) if str(part or "").strip()
+    )
+
     resume_md = None
     if getattr(req, "resume_episode_outlines", False) and generator_kind != "promo" and not series_ip:
         from app.services.story_episode_coverage import (  # noqa: E402
@@ -244,7 +261,7 @@ async def generate_project_story_dna_global(
                 user_id=user_id,
                 fill_system=emotion_driven_episode_fill_system() if emotion_driven else None,
                 registry_block=registry_block,
-                reference_block=reference_plot_block,
+                reference_block=fill_reference_block,
             )
             generated_payload = {"content": generated_md, "usage": fill_usage}
             fill_usage = merge_usage({}, fill_usage)
@@ -273,7 +290,7 @@ async def generate_project_story_dna_global(
                 user_id=user_id,
                 fill_system=emotion_driven_episode_fill_system() if emotion_driven else None,
                 registry_block=registry_block,
-                reference_block=reference_plot_block,
+                reference_block=fill_reference_block,
             )
             fill_usage = merge_usage({}, fill_usage)
     except Exception as e:

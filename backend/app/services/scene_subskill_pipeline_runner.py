@@ -1393,6 +1393,7 @@ def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> s
 
 
 _CHAR_REF_RE = re.compile(r"CHAR:\[@[^\]]+\]")
+_SUBJECT_REF_RE = re.compile(r"(?:CHAR:\[@[^\]]+\])|(?:PROP:\[[^\]]+\])")
 _INVISIBLE_CHAR_RE = re.compile(
     r"本拍主体=((?:CHAR:\[@[^\]]+\])|(?:PROP:\[[^\]]+\]))[^\n]*可见=暂不可见"
 )
@@ -1471,6 +1472,7 @@ def _rewrite_beat_silence(beat: str) -> str:
     ledger = tail or beat
     invisible = set(_INVISIBLE_CHAR_RE.findall(ledger))
     visible = set(_VISIBLE_SUBJECT_RE.findall(ledger))
+    visible |= set(_SUBJECT_REF_RE.findall(prose)) - invisible
     if not invisible:
         return beat
     prose = _rewrite_offscreen_gaze(prose, visible)
@@ -4566,6 +4568,32 @@ async def _run_derived_framing_then_staging(
     )
     if main_env_block:
         framing_input = f"{main_env_block}\n\n{framing_input}"
+    if "空间占用参考" not in framing_input:
+        try:
+            from app.services.space_occupancy_continuity import (
+                build_framing_occupancy_injection,
+            )
+
+            occupancy_block = build_framing_occupancy_injection(
+                task_db,
+                project_id=int(project_id or 0),
+                episode_id=int(episode_id or 0),
+                scene_id=str(scene_id or ""),
+                scene_text="\n".join(
+                    part
+                    for part in (main_env_block, framing_block)
+                    if str(part or "").strip()
+                ),
+            )
+        except Exception as occupancy_exc:
+            logger.warning(
+                "[scene_subskill_pipeline] occupancy reference skipped scene=%s: %s",
+                scene_id,
+                occupancy_exc,
+            )
+            occupancy_block = ""
+        if occupancy_block:
+            framing_input = f"{occupancy_block}\n\n{framing_input}"
     first_step, first_prompt = SCENE_SUBSKILL_POST_ENV_STEPS[0]
     if first_step != "derived_framing" or first_prompt != FRAMING_PROMPT:
         raise HTTPException(status_code=500, detail="SCENE_SUBSKILL_CONTRACT_INVALID")

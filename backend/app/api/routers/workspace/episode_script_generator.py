@@ -1709,6 +1709,27 @@ async def generate_project_episode_scripts_from_global_framework(
             episode_source = extract_episode_block_from_global_framework(global_md, int(idx))
         if not str(episode_source or "").strip():
             episode_source = framework_block or global_md
+        if not call_is_trailer:
+            try:
+                from app.services.space_occupancy_continuity import (  # noqa: E402
+                    build_episode_script_occupancy_injection,
+                )
+
+                occupancy_block = build_episode_script_occupancy_injection(
+                    db,
+                    int(project_id),
+                    int(idx),
+                    str(episode_source or ""),
+                )
+            except Exception as occupancy_exc:
+                logger.warning(
+                    "[generate_episode_scripts] occupancy reference skipped episode=%s: %s",
+                    idx,
+                    occupancy_exc,
+                )
+                occupancy_block = ""
+            if occupancy_block:
+                user_prompt += occupancy_block + "\n"
         if call_is_trailer:
             episode_source = "这一次写预告片。\n" + str(episode_source or "")
         reference_plot_block, episode_llm_config, _episode_keywords = await prepare_reference_plot_submission(

@@ -1070,6 +1070,26 @@ async def execute_analyze_scene(
                         )
             except Exception as env_catalog_exc:
                 logger.warning("[analyze_scene] failed to inject project main env catalog: %s", env_catalog_exc)
+        if is_scene_split_stage and catalog_project_id > 0 and "空间占用参考" not in str(user_content or ""):
+            try:
+                from app.services.space_occupancy_continuity import (
+                    build_scene_split_occupancy_injection,
+                )
+
+                occupancy_block = build_scene_split_occupancy_injection(
+                    db,
+                    project_id=int(catalog_project_id),
+                    episode_id=int(getattr(request, "episode_id", 0) or 0),
+                    script_text=str(getattr(request, "text", "") or user_content or ""),
+                )
+                if occupancy_block:
+                    user_content = f"{occupancy_block}\n\n{user_content}"
+                    logger.info(
+                        "[analyze_scene] injected space occupancy reference chars=%s",
+                        len(occupancy_block),
+                    )
+            except Exception as occupancy_exc:
+                logger.warning("[analyze_scene] occupancy reference skipped: %s", occupancy_exc)
 
         # Optional platform knowledge-base RAG (reference-only; never mutates Subject Index names).
         if (is_script_optimization_stage or is_entity_design_phase) and not is_scoped_asset_design:

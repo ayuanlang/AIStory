@@ -364,6 +364,31 @@ def test_staging_rewrites_invisible_facing_and_gaze():
     assert "CHAR:[@赵桂芬]" in note
 
 
+def test_staging_slim_ledger_keeps_gaze_at_person_named_in_prose():
+    from app.services.scene_subskill_pipeline_runner import assert_staging_output_complete
+
+    beat = """
+────【建置】────
+CHAR:[@赵桂香] 面朝着 CHAR:[@林知夏]，眼睛看着 CHAR:[@林知夏]。
+眼神在 CHAR:[@林知夏] 脸上。
+眼神在散落衣物上。
+────【入戏】────
+开口 | CHAR:[@赵桂香] | voice_type=对白 | {哟} | 闭嘴 | CHAR:[@赵桂芬]
+────【场记分析】────
+本拍主体=CHAR:[@赵桂芬]|可见=暂不可见|因=镜头后
+────【场记分析结束】────
+"""
+    fixed = assert_staging_output_complete(beat, "EP01_SC01")
+    prose, note = fixed.split("────【场记分析】────", 1)
+    assert "面朝着 CHAR:[@林知夏]" in prose
+    assert "眼神在 CHAR:[@林知夏] 脸上" in prose
+    assert "眼神看向镜头" in prose
+    assert "散落衣物" not in prose
+    assert "CHAR:[@赵桂芬]" not in prose
+    assert "| 闭嘴 | 其他人均闭嘴" in prose
+    assert "CHAR:[@赵桂芬]" in note
+
+
 def test_staging_beat_stream_only_is_usable_without_scene_wrappers():
     assert persisted_subskill_step_usable("staging", STAGING_BEAT_STREAM_ONLY)
     assert not persisted_subskill_step_usable("framing", STAGING_BEAT_STREAM_ONLY)
