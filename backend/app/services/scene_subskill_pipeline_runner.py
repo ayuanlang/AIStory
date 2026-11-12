@@ -2936,11 +2936,16 @@ def _main_env_for_staging(env_scene_block: str) -> str:
     sections = extract_environment_planning_sections(env_scene_block)
     if not sections:
         return ""
+    from app.services.script_analysis_flow.environment_plan_crop import (
+        crop_environment_plan_text,
+    )
+
     cleaned = _DERIVED_ENV_IN_ENV_BLOCK.sub("", sections)
     cleaned = _DERIVED_ENV_EXTRACT_ANY.sub("", cleaned)
     cleaned = _DERIVED_ENV_EXTRACT_UNCLOSED.sub("", cleaned)
     cleaned = _COVERAGE_AFTER_ENV.sub("", cleaned)
-    return strip_prior_derived_environment_sections(cleaned)
+    cleaned = strip_prior_derived_environment_sections(cleaned)
+    return crop_environment_plan_text(cleaned, "staging")
 
 
 def strip_env_block_sections(scene_text: str) -> str:

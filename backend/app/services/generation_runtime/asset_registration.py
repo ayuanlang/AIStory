@@ -6,10 +6,10 @@ import json
 import logging
 import os
 import urllib.parse
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from sqlalchemy import or_, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -218,14 +218,73 @@ def _find_existing_asset_for_registration(
     return None
 
 
+_ENTITY_TYPE_QUERY_VALUES = {
+    "character": ("character", "char", "role", "人物", "角色"),
+    "environment": ("environment", "env", "scene", "场景", "环境"),
+    "prop": ("prop", "props", "道具", "物件"),
+}
+
+
+def _entity_type_query_values(normalized: Optional[str]) -> Tuple[str, ...]:
+    if not normalized:
+        return ()
+    return _ENTITY_TYPE_QUERY_VALUES.get(normalized, (normalized,))
+
+
+def select_prior_same_name_entity(
+    entities: List[Any],
+    requested_type: Optional[str],
+    requested_names: Any,
+    prior_episode_numbers: Dict[int, int],
+) -> Optional[Any]:
+    """Nearest earlier entity with the same type and the same name.
+
+    The image is that entity's current image_url. Callers must not scan the asset library.
+    """
+    wanted_type = _normalize_entity_type(requested_type)
+    wanted_names = {
+        str(name or "").strip().lower()
+        for name in (requested_names or [])
+        if str(name or "").strip()
+    }
+    if not wanted_type or not wanted_names:
+        return None
+
+    best = None
+    best_key: Optional[Tuple[int, int]] = None
+    for entity in entities or []:
+        if getattr(entity, "is_deleted", False):
+            continue
+        if _normalize_entity_type(getattr(entity, "type", None)) != wanted_type:
+            continue
+        names = {
+            str(getattr(entity, "name", None) or "").strip().lower(),
+            str(getattr(entity, "name_en", None) or "").strip().lower(),
+        }
+        names.discard("")
+        if not names.intersection(wanted_names):
+            continue
+        if not str(getattr(entity, "image_url", None) or "").strip():
+            continue
+        episode_id = _asset_optional_int(getattr(entity, "episode_id", None))
+        episode_number = int((prior_episode_numbers or {}).get(int(episode_id or 0), 0) or 0)
+        if episode_number <= 0:
+            continue
+        key = (episode_number, int(getattr(entity, "id", 0) or 0))
+        if best is None or best_key is None or key > best_key:
+            best = entity
+            best_key = key
+    return best
+
+
 def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Auto-pick a prior-episode same-name subject image as source_asset_url.
+    """Auto-pick a prior-episode same-type, same-name subject image as source_asset_url.
 
     Hard rules:
-    - same subject name (exact, case-insensitive trim)
+    - same entity type and same entity name (case-insensitive trim)
     - source episode is not soft-deleted
     - source episode number must be strictly smaller than the current episode
-    - asset / linked entity must not be soft-deleted
+    - the source is that entity's current image, not a scan of project images
 
     Returns provenance dict: url, asset_id, episode_id/title, entity_id/name, subject_type.
     """
@@ -264,7 +323,7 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
             if not requested_name_tokens:
                 return None
 
-    if not requested_name_tokens:
+    if not requested_name_tokens or not requested_subject_type:
         return None
     # Cross-episode reuse requires knowing the current episode so we can compare episode numbers.
     if not current_episode_id:
@@ -307,124 +366,73 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
     if not prior_episode_number_map:
         return None
 
-    candidates = (
-        db.query(Asset)
+    prior_ids = list(prior_episode_number_map.keys())
+    type_values = [str(value or "").strip().lower() for value in _entity_type_query_values(requested_subject_type)]
+    name_values = [str(value or "").strip().lower() for value in requested_name_tokens if str(value or "").strip()]
+    if not type_values or not name_values:
+        return None
+    entity_rows = (
+        db.query(Entity)
         .filter(
-            Asset.user_id == user_id,
-            Asset.type == "image",
-            Asset.project_id == project_id,
-            _active_asset_clause(),
+            Entity.project_id == int(project_id),
+            Entity.episode_id.in_(prior_ids),
+            _active_entity_clause(),
+            func.lower(func.trim(Entity.type)).in_(type_values),
+            or_(
+                func.lower(func.trim(Entity.name)).in_(name_values),
+                func.lower(func.trim(Entity.name_en)).in_(name_values),
+            ),
         )
-        .order_by(Asset.id.desc())
-        .limit(5000)
         .all()
     )
-    if not candidates:
+    chosen_entity = select_prior_same_name_entity(
+        entity_rows,
+        requested_subject_type,
+        requested_name_tokens,
+        prior_episode_number_map,
+    )
+    if not chosen_entity:
         return None
 
-    matched: List[Asset] = []
-    matched_entity_ids: Set[int] = set()
-    for candidate in candidates:
-        _sync_asset_denormalized_fields(candidate)
-        candidate_meta = _asset_meta_dict(getattr(candidate, "meta_info", None))
-        if _asset_optional_int(candidate.project_id or candidate_meta.get("project_id")) != project_id:
-            continue
-
-        candidate_episode_id = _asset_optional_int(
-            getattr(candidate, "episode_id", None) or candidate_meta.get("episode_id")
-        )
-        # Must belong to a prior non-deleted episode with a smaller episode number.
-        if not candidate_episode_id or int(candidate_episode_id) not in prior_episode_number_map:
-            continue
-
-        candidate_subject_type = _normalize_entity_type(
-            candidate_meta.get("subject_type") or candidate_meta.get("entity_type")
-        )
-        # Keep type-consistent dependency reuse except for poster assets.
-        if (
-            requested_subject_type
-            and requested_subject_type != "poster"
-            and candidate_subject_type
-            and candidate_subject_type != requested_subject_type
-        ):
-            continue
-
-        candidate_subject_name = str(candidate_meta.get("subject_name") or "").strip().lower()
-        candidate_entity_name = str(candidate_meta.get("entity_name") or "").strip().lower()
-        candidate_name_tokens = {
-            token for token in (candidate_subject_name, candidate_entity_name) if token
-        }
-        # Same name only — do not reuse by entity_id alone (that hits same-card regenerations).
-        if not candidate_name_tokens or not requested_name_tokens.intersection(candidate_name_tokens):
-            continue
-
-        matched.append(candidate)
-        candidate_entity_id = _asset_optional_int(candidate_meta.get("entity_id"))
-        if candidate_entity_id:
-            matched_entity_ids.add(int(candidate_entity_id))
-
-    if not matched:
-        return None
-
-    active_entity_ids: Set[int] = set()
-    if matched_entity_ids:
-        active_entity_ids = {
-            int(row_id)
-            for (row_id,) in db.query(Entity.id)
-            .filter(Entity.id.in_(matched_entity_ids), _active_entity_clause())
-            .all()
-        }
-
-    filtered_matched: List[Asset] = []
-    for row in matched:
-        row_meta = _asset_meta_dict(getattr(row, "meta_info", None))
-        episode_id = _asset_optional_int(getattr(row, "episode_id", None) or row_meta.get("episode_id"))
-        if not episode_id or int(episode_id) not in prior_episode_number_map:
-            continue
-        entity_id = _asset_optional_int(row_meta.get("entity_id"))
-        if entity_id and int(entity_id) not in active_entity_ids:
-            continue
-        filtered_matched.append(row)
-
-    if not filtered_matched:
-        return None
-
-    episode_title_map: Dict[int, str] = {
-        int(row_id): str(row_title or "")
-        for row_id, row_title in db.query(Episode.id, Episode.title)
-        .filter(Episode.id.in_(list(prior_episode_number_map.keys())))
-        .all()
-    }
-
-    def _candidate_rank(asset: Asset) -> Tuple[int, int, str, int]:
-        candidate_meta = _asset_meta_dict(getattr(asset, "meta_info", None))
-        episode_id = _asset_optional_int(getattr(asset, "episode_id", None) or candidate_meta.get("episode_id"))
-        # Prefer the nearest prior episode (largest episode number still < current).
-        episode_rank = int(prior_episode_number_map.get(int(episode_id or 0), 0) or 0)
-        is_current = 1 if bool(getattr(asset, "is_current_project_asset", False)) else 0
-        created_at = str(getattr(asset, "created_at", "") or "")
-        return (episode_rank, is_current, created_at, int(getattr(asset, "id", 0) or 0))
-
-    chosen = max(filtered_matched, key=_candidate_rank)
-    chosen_url = str(getattr(chosen, "url", "") or "").strip()
+    chosen_url = str(getattr(chosen_entity, "image_url", None) or "").strip()
     if not chosen_url:
         return None
-
-    chosen_meta = _asset_meta_dict(getattr(chosen, "meta_info", None))
-    chosen_episode_id = _asset_optional_int(
-        getattr(chosen, "episode_id", None) or chosen_meta.get("episode_id")
-    )
-    chosen_entity_id = _asset_optional_int(chosen_meta.get("entity_id"))
-    chosen_entity_name = str(
-        chosen_meta.get("entity_name")
-        or chosen_meta.get("subject_name")
-        or ""
-    ).strip()
-    chosen_subject_type = _normalize_entity_type(
-        chosen_meta.get("subject_type") or chosen_meta.get("entity_type")
-    )
+    chosen_episode_id = _asset_optional_int(getattr(chosen_entity, "episode_id", None))
+    chosen_entity_id = _asset_optional_int(getattr(chosen_entity, "id", None))
+    chosen_entity_name = str(getattr(chosen_entity, "name", None) or "").strip()
+    chosen_subject_type = _normalize_entity_type(getattr(chosen_entity, "type", None))
+    normalized_url = _normalize_asset_url_for_dedup(chosen_url)
+    chosen_asset = None
+    if normalized_url:
+        try:
+            chosen_asset = (
+                db.query(Asset)
+                .filter(
+                    Asset.user_id == user_id,
+                    Asset.type == "image",
+                    Asset.project_id == int(project_id),
+                    Asset.url_normalized == normalized_url,
+                    _active_asset_clause(),
+                )
+                .order_by(Asset.id.desc())
+                .first()
+            )
+        except Exception:
+            chosen_asset = None
+    if chosen_asset is None:
+        chosen_asset = (
+            db.query(Asset)
+            .filter(
+                Asset.user_id == user_id,
+                Asset.type == "image",
+                Asset.url == chosen_url,
+                _active_asset_clause(),
+            )
+            .order_by(Asset.id.desc())
+            .first()
+        )
     # Prefer script_title (分集名) over bare Episode.title ("Episode 1").
-    chosen_episode_title = str(episode_title_map.get(int(chosen_episode_id or 0), "") or "").strip()
+    chosen_episode_title = ""
     if chosen_episode_id:
         try:
             ep_row = (
@@ -442,13 +450,13 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
                 ).strip()
                 if script_title:
                     chosen_episode_title = script_title
-                elif not chosen_episode_title:
-                    chosen_episode_title = str(getattr(ep_row, "title", "") or "").strip()
+            if ep_row and not chosen_episode_title:
+                chosen_episode_title = str(getattr(ep_row, "title", "") or "").strip()
         except Exception:
             pass
     return {
         "url": chosen_url,
-        "asset_id": int(getattr(chosen, "id", 0) or 0) or None,
+        "asset_id": int(getattr(chosen_asset, "id", 0) or 0) or None,
         "episode_id": int(chosen_episode_id) if chosen_episode_id else None,
         "episode_title": chosen_episode_title or None,
         "entity_id": int(chosen_entity_id) if chosen_entity_id else None,

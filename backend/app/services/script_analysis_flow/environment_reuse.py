@@ -632,7 +632,12 @@ def _catalog_item_injection_lines(
     item: Dict[str, Any],
     *,
     include_asset_opening: bool = False,
+    crop_profile: str = "",
 ) -> List[str]:
+    from app.services.script_analysis_flow.environment_plan_crop import (
+        crop_environment_plan_text,
+    )
+
     name = _clean_env_name(item.get("name"))
     if not name:
         return []
@@ -642,6 +647,8 @@ def _catalog_item_injection_lines(
     lines = [f"- {name}｜来源={source_label}{extra}"]
     opening = catalog_item_asset_opening(item) if include_asset_opening else ""
     definition = _original_definition_excerpt(item)
+    if crop_profile and definition:
+        definition = crop_environment_plan_text(definition, crop_profile)
     if opening and not str(item.get("env_block") or "").strip():
         prompt_flat = re.sub(r"\s+", " ", str(item.get("generation_prompt_cn") or "")).strip()
         if definition and definition.rstrip("…") and definition.rstrip("…") in prompt_flat:
@@ -702,7 +709,13 @@ def build_project_main_environment_injection(
             "复用只对照下列清单。日夜/时段/时辰/天气/季节不同不另起名。禁止同空间另起近义名。本场时地写在 IDENT。",
         ]
     for item in usable:
-        lines.extend(_catalog_item_injection_lines(item, include_asset_opening=for_planning))
+        lines.extend(
+            _catalog_item_injection_lines(
+                item,
+                include_asset_opening=for_planning,
+                crop_profile="asset" if for_planning else "orchestration",
+            )
+        )
     return wrap_injection_section(PROJECT_MAIN_ENV_LABEL, "\n".join(lines))
 
 

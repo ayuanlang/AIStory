@@ -4274,14 +4274,29 @@ Output ONLY the JSON object now."""
                              # If reference_image_url is None, init as list
                              if reference_image_url is None: reference_image_url = []
                              elif isinstance(reference_image_url, str): reference_image_url = [reference_image_url]
-                             
+
                              deps = _coerce_visual_dependencies(entity.visual_dependencies)
                              if isinstance(deps, list):
+                                 from app.services.project_episode_utils import (
+                                     _resolve_episode_sort_number,
+                                     pick_nearest_prior_match,
+                                 )
+                                 from app.services.soft_delete import _active_episode_clause
+
                                  preferred_episode_id = getattr(entity, "episode_id", None)
                                  project_rows = session.query(Entity).filter(
                                      Entity.project_id == int(project_id),
                                      Entity.is_deleted == False,  # noqa: E712
                                  ).all()
+                                 episode_rows = session.query(Episode).filter(
+                                     Episode.project_id == int(project_id),
+                                     _active_episode_clause(),
+                                 ).all()
+                                 episode_numbers = {}
+                                 for episode_row in episode_rows or []:
+                                     episode_row_id = int(getattr(episode_row, "id", 0) or 0)
+                                     if episode_row_id:
+                                         episode_numbers[episode_row_id] = _resolve_episode_sort_number(episode_row)
                                  for dep_name in deps:
                                      dep_key = normalize_entity_token(dep_name)
                                      dep_entity = None
@@ -4309,7 +4324,11 @@ Output ONLY the JSON object now."""
                                                  None,
                                              )
                                          if dep_entity is None and matches:
-                                             dep_entity = matches[0]
+                                             dep_entity = pick_nearest_prior_match(
+                                                 matches,
+                                                 preferred_episode_id,
+                                                 episode_numbers,
+                                             )
 
                                      if dep_entity and dep_entity.image_url:
                                          print(f"DEBUG: Found dependency image for {dep_name}: {dep_entity.image_url}")

@@ -413,6 +413,11 @@ async def execute_analyze_scene(
             or "derived_framing" in function_name_lower
             or mode_lower in {"derived_framing"}
         )
+        # Quad only rotates the locked design onto the four canvas cells.
+        is_environment_quad_stage = bool(
+            "environment_quad_prompt" in prompt_file_lower
+            or mode_lower in {"environment_quad"}
+        )
         is_subject_index_consumer_stage = bool(
             "scene_planning_2_2" in prompt_file_lower
             or "entity_design" in prompt_file_lower
@@ -963,7 +968,11 @@ async def execute_analyze_scene(
             )
 
         
-        if request.project_metadata and not is_derived_framing_stage:
+        if is_environment_quad_stage and request.project_metadata:
+            logger.info(
+                "[analyze_scene] skipped Project Context injection: environment quad is canvas conversion only"
+            )
+        if request.project_metadata and not is_derived_framing_stage and not is_environment_quad_stage:
             # Frontend Stage 1/2.1 may already bake [项目信息…] into request text
             # (skipMetadata=true). Do not prepend a second copy from DB auto-fill.
             user_content_has_project_info = (
@@ -2596,7 +2605,6 @@ async def execute_analyze_scene(
                 prompt_check_sections = ["environments"]
             # Quad output is only name + generation_prompt_cn. The full asset schema
             # would warn on every row and hide the real write-back failure.
-            is_environment_quad_stage = "environment_quad_prompt" in prompt_file_lower
             if is_environment_quad_stage:
                 prompt_check_sections = ["environments"]
 

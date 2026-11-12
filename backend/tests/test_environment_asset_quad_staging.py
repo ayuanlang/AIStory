@@ -263,6 +263,8 @@ def test_injection_keeps_grid_cells_readable():
 
 
 def test_pipeline_contract_injects_quad_before_staging():
+    from pathlib import Path
+
     assert PIPELINE_CONTRACT_VERSION == "asset-quad-before-staging-v5"
     registry = get_script_analysis_flow_registry()
     nodes = {str(node.get("key")): node for node in (registry.get("nodes") or [])}
@@ -273,6 +275,10 @@ def test_pipeline_contract_injects_quad_before_staging():
     assert nodes["asset_design_environment_quad"].get("prompt_file") == (
         "skills/scene_analysis_feature_stack/environment_quad_prompt.md"
     )
+    assert "project_metadata" not in (nodes["asset_design_environment_quad"].get("injection_chain") or [])
+    runner = Path(__file__).resolve().parents[1] / "app" / "services" / "analyze_scene_runner.py"
+    runner_src = runner.read_text(encoding="utf-8")
+    assert "not is_derived_framing_stage and not is_environment_quad_stage" in runner_src
     assert "asset_design_environment_quad" in (nodes["storyboard_generation"].get("depends_on") or [])
 
 

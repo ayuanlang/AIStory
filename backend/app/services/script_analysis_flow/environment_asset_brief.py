@@ -360,7 +360,11 @@ def build_environment_asset_design_brief(adapted_script: str) -> str:
     if not scene_chunks:
         return ""
 
-    body = "\n\n".join(scene_chunks).strip()
+    from app.services.script_analysis_flow.environment_plan_crop import (
+        crop_environment_plan_text,
+    )
+
+    body = crop_environment_plan_text("\n\n".join(scene_chunks).strip(), "asset")
     return wrap_injection_section("环境规划", body)
 
 
