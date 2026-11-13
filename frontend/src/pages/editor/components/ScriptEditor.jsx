@@ -21342,6 +21342,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 '[Subject Index Name Lock - ABSOLUTE]',
                 'Output name / name_en / base_name_en and every CHAR:/ENV:/PROP: name inside visual_dependencies MUST be character-identical to Subject Index subject_name_zh / subject_name_en.',
                 'Forbidden: any rename, polish, normalize, translate, abbreviate, synonym, punctuation/space/case fix, merge, split, or invent. Mismatch = discard and rewrite the entity.',
+                'Exception: character asset design may create a shared-uniform clothing prop that is not in the Index. That prop name may appear in props[] and in wearers\' visual_dependencies as PROP:[exact name]. Do not invent any other name.',
             ].join('\n');
 
             const finalSubjectIndexText = [
@@ -21380,6 +21381,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const payload = { characters: [], environments: [], props: [], posters: [], covers: [] };
                 if (key === 'characters') {
                     payload.characters = Array.isArray(input.characters) ? input.characters : [];
+                    payload.props = uniformClothingPropsOf(input.props);
                 } else if (key === 'props') {
                     payload.props = Array.isArray(input.props) ? input.props : [];
                 } else if (key === 'environments') {
@@ -21406,6 +21408,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const filtered = { characters: [], environments: [], props: [], posters: [], covers: [] };
                     if (payloadTargetFilters.includes('characters')) filtered.characters = payload.characters;
                     if (payloadTargetFilters.includes('props')) filtered.props = payload.props;
+                    else filtered.props = uniformClothingPropsOf(payload.props);
                     if (payloadTargetFilters.includes('environments') || payloadTargetFilters.some(isEnvPosterTargetKey)) {
                         filtered.environments = payload.environments;
                     }
@@ -21995,7 +21998,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         if (subtaskHasImportableSubjects) {
                             throwIfAnalysisStopped();
                             const subtaskTargetTypes = (() => {
-                                if (pData.key === 'characters') return ['characters'];
+                                if (pData.key === 'characters') {
+                                    return uniformClothingPropsOf(subtaskPayload.props).length
+                                        ? ['characters', 'props']
+                                        : ['characters'];
+                                }
                                 if (pData.key === 'props') return ['props'];
                                 if (pData.key === 'environments' && Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0) {
                                     return coupleEnvPosterTargetFilters(
@@ -22229,7 +22236,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const subtaskTraceId = `${phase2BatchTraceId}-${key}${roundTag}-importonly`;
                 const subtaskImportSessionId = `import-${subtaskTraceId}`;
                 const subtaskTargetTypes = (() => {
-                    if (key === 'characters') return ['characters'];
+                    if (key === 'characters') {
+                        return uniformClothingPropsOf(subtaskPayload.props).length
+                            ? ['characters', 'props']
+                            : ['characters'];
+                    }
                     if (key === 'props') return ['props'];
                     if (key === 'environments' && Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0) {
                         return coupleEnvPosterTargetFilters(
@@ -22711,6 +22722,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 mergedBackendSubjectsJson.environments = existingEntities.environments;
             }
             let rawTextParts = [];
+            const uniformClothingProps = [];
             
             for (let idx = 0; idx < results.length; idx += 1) {
                 const r = results[idx];
@@ -22726,6 +22738,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                               mergedBackendSubjectsJson.characters = isSingleSubjectRerun
                                   ? upsertEntityDesignItemsByName(mergedBackendSubjectsJson.characters, bJson.characters)
                                   : bJson.characters;
+                              uniformClothingProps.push(...uniformClothingPropsOf(bJson.props));
                           }
                           if (r.value.key === 'environments') {
                               if (Array.isArray(bJson.environments) && bJson.environments.length > 0 && (!options.targetEntityTypes || options.targetEntityTypes.includes('environments'))) {
@@ -22780,7 +22793,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 extractedArr = bJson.covers;
                             }
                             if (extractedArr && extractedArr.length > 0) {
-                                rawTextParts.push(`\n\n\`\`\`json\n${JSON.stringify({[r.value.key]: extractedArr}, null, 2)}\n\`\`\`\n\n`);
+                                const wrap = { [r.value.key]: extractedArr };
+                                if (r.value.key === 'characters') {
+                                    const uniforms = uniformClothingPropsOf(bJson?.props);
+                                    if (uniforms.length) wrap.props = uniforms;
+                                }
+                                rawTextParts.push(`\n\n\`\`\`json\n${JSON.stringify(wrap, null, 2)}\n\`\`\`\n\n`);
                             } else {
                                 rawTextParts.push(`\n\n${aText}\n\n`);
                             }
@@ -22791,6 +22809,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const failedTraceId = `${phase2BatchTraceId}-${failedKey}`;
                     onLog?.(`[Stage 3 Asset Design] Warning: task ${failedKey} failed (trace_id=${failedTraceId}): ${r.reason}`, "warning");
                 }
+            }
+
+            if (uniformClothingProps.length) {
+                mergedBackendSubjectsJson.props = upsertEntityDesignItemsByName(
+                    mergedBackendSubjectsJson.props,
+                    uniformClothingProps,
+                );
             }
 
             const canonicalAssetDesignText = String(
@@ -26123,6 +26148,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 normalizeEntityToken(candidate) === normalizeEntityToken(name)
             ))
         ));
+    }
+
+    function isUniformClothingProp(item) {
+        if (!item || typeof item !== 'object') return false;
+        const logic = String(item?.dependency_strategy?.logic || '');
+        const prompt = String(item?.generation_prompt_cn || '');
+        const type = String(item?.type || '').trim();
+        return logic.includes('服饰道具=是') || prompt.includes('服饰道具=是') || type === '服饰';
+    }
+
+    function uniformClothingPropsOf(list) {
+        return (Array.isArray(list) ? list : []).filter(isUniformClothingProp);
     }
 
     function upsertEntityDesignItemsByName(existingItems, incomingItems) {

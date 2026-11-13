@@ -844,6 +844,22 @@ def collect_scene_table_name_mismatches(
     return mismatches
 
 
+def _is_uniform_clothing_prop(item: Dict[str, Any]) -> bool:
+    """Character design may invent a shared-uniform clothing prop that is not in the Index."""
+    if not isinstance(item, dict):
+        return False
+    strategy = item.get("dependency_strategy")
+    logic = ""
+    if isinstance(strategy, dict):
+        logic = str(strategy.get("logic") or "")
+    blob = " ".join([
+        logic,
+        str(item.get("generation_prompt_cn") or ""),
+        str(item.get("type") or ""),
+    ])
+    return "服饰道具=是" in blob or str(item.get("type") or "").strip() == "服饰"
+
+
 def collect_subjects_json_name_mismatches(
     subjects_json: Any,
     subject_index_text: Any,
@@ -863,6 +879,8 @@ def collect_subjects_json_name_mismatches(
             continue
         for item in items:
             if not isinstance(item, dict):
+                continue
+            if bucket == "props" and _is_uniform_clothing_prop(item):
                 continue
             name = _normalize_display_name(item.get("name"))
             name_en = _normalize_display_name(item.get("name_en"))

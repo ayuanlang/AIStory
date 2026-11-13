@@ -2598,7 +2598,7 @@ async def execute_analyze_scene(
             prompt_syntax_rules = ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES
             prompt_check_sections = ["characters", "props", "environments", "posters"]
             if is_character_asset_design:
-                prompt_check_sections = ["characters"]
+                prompt_check_sections = ["characters", "props"]
             elif is_prop_asset_design:
                 prompt_check_sections = ["props"]
             elif is_environment_asset_design:

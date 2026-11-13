@@ -170,3 +170,31 @@ def test_subjects_json_derived_env_is_not_remapped_to_main():
     assert aligned["environments"][1]["name"] == "客栈废墟外"
     mismatches = collect_subjects_json_name_mismatches(payload, MAIN_ONLY_INDEX)
     assert any(item.get("name") == "0度客栈废墟外" for item in mismatches)
+
+
+def test_uniform_clothing_prop_is_not_remapped_onto_the_index():
+    index = """
+| subject_no | subject_type | subject_name_zh | subject_name_en |
+|---|---|---|---|
+| S001 | character | 林月 | Lin Yue |
+| S002 | prop | 短刀 | Dagger |
+"""
+    payload = {
+        "characters": [{"name": "林月", "name_en": "Lin Yue"}],
+        "props": [
+            {
+                "name": "青藤中学校服",
+                "name_en": "Qingteng High School Uniform",
+                "type": "服饰",
+                "dependency_strategy": {
+                    "type": "Original",
+                    "logic": "服饰道具=是｜穿着角色=林月",
+                },
+            },
+            {"name": "没见过的杯子", "name_en": "Unknown Cup", "type": "held"},
+        ],
+    }
+    mismatches = collect_subjects_json_name_mismatches(payload, index)
+    names = [item.get("name") for item in mismatches]
+    assert "青藤中学校服" not in names
+    assert "没见过的杯子" in names
