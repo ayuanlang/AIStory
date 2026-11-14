@@ -4,6 +4,7 @@ import { getUiLang, tUI } from '../lib/uiLang';
 import { useLog } from '../context/LogContext';
 import { ASSET_BASE_URL, BASE_URL } from '../config';
 import { X, Copy } from 'lucide-react';
+import { extractLogMessages } from './llmLogMessages';
 
 const MEDIA_PART_TYPES = new Set([
   'image_url', 'input_image', 'image',
@@ -148,6 +149,12 @@ class LogBodyBoundary extends React.Component {
     return { failed: true };
   }
 
+  componentDidUpdate(prevProps) {
+    if (this.state.failed && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ failed: false });
+    }
+  }
+
   render() {
     if (this.state.failed) {
       return this.props.fallback;
@@ -205,40 +212,7 @@ export default function LlmLogViewer({ log, onClose }) {
   let messages = [];
   let completionContent = '';
 
-  const normalizeResponsesInput = (input, instructions) => {
-    const rows = [];
-    if (Array.isArray(input)) {
-      for (const item of input) {
-        if (!item || typeof item !== 'object') continue;
-        const role = String(item.role || 'user').toLowerCase() || 'user';
-        rows.push({ role, content: item.content });
-      }
-    }
-    const instr = typeof instructions === 'string' ? instructions.trim() : '';
-    const hasSystem = rows.some((r) => r.role === 'system' || r.role === 'developer');
-    // Legacy KIE payloads put system text only in top-level instructions.
-    if (instr && !hasSystem) {
-      rows.unshift({ role: 'system', content: instr });
-    }
-    return rows.length ? rows : null;
-  };
-
-  const getMsgs = (obj) => {
-    if (!obj) return null;
-    if (Array.isArray(obj)) return obj;
-    if (obj.messages && Array.isArray(obj.messages)) return obj.messages;
-    if (obj.payload && obj.payload.messages && Array.isArray(obj.payload.messages)) return obj.payload.messages;
-    if (obj.request && obj.request.messages && Array.isArray(obj.request.messages)) return obj.request.messages;
-    // KIE / OpenAI Responses API: prompts live in payload.input (+ optional instructions).
-    const responsesMsgs =
-      normalizeResponsesInput(obj.input, obj.instructions)
-      || normalizeResponsesInput(obj.payload?.input, obj.payload?.instructions)
-      || normalizeResponsesInput(obj.request?.input, obj.request?.instructions);
-    if (responsesMsgs) return responsesMsgs;
-    return null;
-  };
-
-  messages = getMsgs(payload) || getMsgs(response) || [];
+  messages = extractLogMessages(payload) || extractLogMessages(response) || [];
 
   // extract response text
   let responseObj = response;
@@ -329,7 +303,7 @@ export default function LlmLogViewer({ log, onClose }) {
       return content.map((c, i) => {
         if (!c || typeof c !== 'object') return <div key={i}>{String(c ?? '')}</div>;
         const type = String(c.type || '').toLowerCase();
-        if (type === 'text' || type === 'input_text' || type === 'output_text') {
+        if (type === 'text' || type === 'input_text' || type === 'output_text' || (!type && typeof c.text === 'string')) {
           return <div key={i} className="prose prose-invert max-w-full min-w-0 prose-sm overflow-x-hidden break-words"><Markdown components={markdownComponents}>{typeof c.text === 'string' ? c.text : ''}</Markdown></div>;
         }
         if (MEDIA_PART_TYPES.has(type) || (!type && attachmentRawUrl(c))) {
@@ -387,6 +361,20 @@ export default function LlmLogViewer({ log, onClose }) {
     collectAttachmentUrls(content, found);
     return found.size > 0;
   };
+  const promptRole = (role) => {
+    const value = String(role || '').toLowerCase();
+    if (value === 'system' || value === 'developer') return 'system';
+    if (value === 'user') return 'user';
+    if (value === 'assistant' || value === 'model') return 'assistant';
+    return 'assistant';
+  };
+  const promptRoleLabel = (role) => {
+    const kind = promptRole(role);
+    if (kind === 'system') return t('System 提示词', 'System Prompt');
+    if (kind === 'user') return t('User 提示词', 'User Prompt');
+    return t('Assistant 助手', 'Assistant');
+  };
+  const promptPlainText = (content) => (typeof content === 'string' ? content : JSON.stringify(content, null, 2));
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50" onClick={onClose}>
@@ -406,6 +394,7 @@ export default function LlmLogViewer({ log, onClose }) {
         </div>
 
         <LogBodyBoundary
+          resetKey={log.id}
           fallback={(
             <LinkifiedPre text={displayPayloadJson || displayResponseJson || t('（空）', '(Empty)')} className="max-w-full overflow-auto whitespace-pre-wrap break-all text-xs text-gray-300" onLinkClick={debugAttachmentClick} />
           )}
@@ -434,22 +423,37 @@ export default function LlmLogViewer({ log, onClose }) {
               {String(log.error_msg)}
             </div>
           ) : null}
-          {messages.length > 0 ? messages.map((m, i) => (
-            <details key={i} open={contentHasAttachment(m.content) ? true : undefined} className={`rounded-xl border ${m.role === 'system' ? 'bg-purple-500/10 border-purple-500/20' : m.role === 'user' ? 'bg-blue-500/10 border-blue-500/20' : 'bg-emerald-500/10 border-emerald-500/20'} relative group`}>
+          {messages.length > 0 ? messages.map((m, i) => {
+            const kind = promptRole(m.role);
+            const tone = kind === 'system'
+              ? 'bg-purple-500/10 border-purple-500/20'
+              : kind === 'user'
+                ? 'bg-blue-500/10 border-blue-500/20'
+                : 'bg-emerald-500/10 border-emerald-500/20';
+            return (
+            <details key={i} open={contentHasAttachment(m.content) ? true : undefined} className={`rounded-xl border ${tone} relative group`}>
               <summary className="flex justify-between items-center p-4 cursor-pointer outline-none select-none list-none [&::-webkit-details-marker]:hidden">
                   <div className="text-xs font-bold uppercase tracking-wider opacity-60 flex items-center space-x-2">
                      <span className="text-gray-500 transition-transform group-open:rotate-90">▶</span>
-                     <span>{m.role === 'system' ? t('System 提示词', 'System Prompt') : m.role === 'user' ? t('User 提示词', 'User Prompt') : m.role === 'assistant' ? t('Assistant 助手', 'Assistant') : m.role}</span>
+                     <span>{promptRoleLabel(m.role)}</span>
                   </div>
                   <button onClick={(e) => handleCopy(e, m.content)} className="text-gray-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Copy">
                      <Copy size={14} />
                   </button>
               </summary>
               <div className="px-4 pb-4 min-w-0 max-w-full overflow-x-hidden break-words border-t border-white/10 pt-4">
-                {renderMessageContent(m.content)}
+                <LogBodyBoundary
+                  resetKey={`${log.id || ''}-${i}`}
+                  fallback={(
+                    <LinkifiedPre text={promptPlainText(m.content)} className="whitespace-pre-wrap break-all [overflow-wrap:anywhere] text-xs text-gray-300" onLinkClick={debugAttachmentClick} />
+                  )}
+                >
+                  {renderMessageContent(m.content)}
+                </LogBodyBoundary>
               </div>
             </details>
-          )) : (
+            );
+          }) : (
              <details className="rounded-xl border bg-gray-500/10 border-gray-500/20 relative group">
                <summary className="flex justify-between items-center p-4 cursor-pointer outline-none select-none list-none [&::-webkit-details-marker]:hidden">
                  <div className="text-xs font-bold uppercase tracking-wider opacity-60 flex items-center space-x-2">

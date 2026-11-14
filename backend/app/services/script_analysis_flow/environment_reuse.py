@@ -768,11 +768,10 @@ def synthesize_reused_env_block(
     return "\n".join(
         [
             "[ENV_BLOCK_START]",
-            "────【主环境】────",
             f"【主环境】{main_name}｜日夜内外=见下方重新描述｜主环境角色=当下主线",
             "【活动空间】",
             source,
-            "────【未落环境实体清单】────",
+            "【未落环境实体清单】",
             f"- 无｜依据={basis}｜归属主环境={main_name}",
             "[ENV_BLOCK_END]",
         ]
