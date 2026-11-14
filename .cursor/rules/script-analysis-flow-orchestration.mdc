@@ -108,7 +108,7 @@ Storyboard 只等待当前 Scene 的工作区导入与 `asset_design_environment
 - `tryResumeAnalysisFromExistingArtifacts`：缺 scenes 时从 staging 入表；仅 subjects JSON 不完整时只补 assets。
 - Scene 导入成功：queue/kick `kickoffStoryboardForImportedScene`，并更新 `storyboardTaskProgress`。
 - 环境规划必须注入待分析剧本（全局统筹成稿）。禁止把 `环境规划` 误判成环境资产设计而剥掉剧本。角色/道具/主环境**设计**才不注入待分析剧本。
-- 环境规划与所有分场子技能（文戏/武戏/现场编排/建置）除结束标志外，截取正文长度必须大于 100 字；只有结束标志或空壳视为不完整，自动换接口重试。
+- 环境规划与所有分场子技能（文戏/武戏/现场编排/建置）除结束标志外，截取正文长度必须大于 100 字；只有结束标志或空壳视为不完整，自动换接口重试。环境规划这一稿的世界键、档、朝向、开闭、复用措辞、识别块和主环境块不由程序打回或改判；缺补丁才无法拼进剧本。
 - `run_scene_analysis_flow_node`：单节点执行；`scene_subskill_pipeline` 节点内部负责按场并发及场内串行，并在 staging 后 upsert 工作区 Scene。
 - API：`POST /prompts/scene-analysis/flow/run-node`；重生衍生环境：`POST /prompts/scene-analysis/flow/ingest-derived-environments`。
 

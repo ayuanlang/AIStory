@@ -27,7 +27,6 @@ from app.services.script_analysis_flow.environment_reuse import (
     extract_scene_env_ident_block,
     find_catalog_environment,
     format_selected_global_environment_injection,
-    ident_still_defers_reuse,
     merge_reused_and_new_env_blocks,
     parse_scene_env_ident_items,
     reused_items_needing_description,
@@ -320,33 +319,18 @@ async def run_environment_plan(
         ident = extract_scene_env_ident_block(body, scene_id)
         items = parse_scene_env_ident_items(body, scene_id)
         if not ident or not items:
-            logger.error(
-                "[environment_plan] ident missing scene=%s ident=%s items=%s start=%s end=%s head=%r",
-                scene_id,
-                bool(ident),
-                len(items),
-                "[SCENE_ENV_IDENT_START" in body.upper(),
-                "[SCENE_ENV_IDENT_END" in body.upper(),
-                body[:240],
-            )
-            raise HTTPException(status_code=422, detail=f"ENVIRONMENT_PLAN_ENV_IDENT_MISSING:{scene_id}")
+            planned_patches[scene_id] = _wrap_scene_patch(scene_id, body)
+            continue
         ident = rewrite_reused_ident_positioning(
             ident,
             items,
             catalog,
             episode_blocks,
         )
-        if ident_still_defers_reuse(ident):
-            raise HTTPException(
-                status_code=422,
-                detail=f"ENVIRONMENT_PLAN_REUSE_DESCRIPTION_MISSING:{scene_id}",
-            )
         has_new = scene_has_new_environments(items)
         reused_items = [item for item in items if item.get("reuse")]
         if has_new:
             planned_scene_ids.append(scene_id)
-            if "[ENV_BLOCK_START" not in body.upper():
-                raise HTTPException(status_code=422, detail=f"ENVIRONMENT_PLAN_NEW_ENV_BLOCK_MISSING:{scene_id}")
         else:
             reuse_only_ids.append(scene_id)
         needing_description = reused_items_needing_description(body, reused_items)
@@ -360,21 +344,9 @@ async def run_environment_plan(
             if needing_description
             else ""
         )
-        if needing_description and not reused_patch:
-            raise HTTPException(
-                status_code=422,
-                detail=f"ENVIRONMENT_PLAN_REUSE_DESCRIPTION_MISSING:{scene_id}",
-            )
         body_for_merge = strip_placeholder_reused_sections(body, needing_description)
         env_material = merge_reused_and_new_env_blocks(reused_patch, body_for_merge)
-        if (has_new or reused_items) and "[ENV_BLOCK_START" not in str(env_material or "").upper():
-            if has_new:
-                raise HTTPException(status_code=422, detail=f"ENVIRONMENT_PLAN_NEW_ENV_BLOCK_MISSING:{scene_id}")
-            raise HTTPException(
-                status_code=422,
-                detail=f"ENVIRONMENT_PLAN_REUSE_DESCRIPTION_MISSING:{scene_id}",
-            )
-        composed = "\n".join(part for part in (ident, env_material) if str(part or "").strip())
+        composed = "\n".join(part for part in (ident, env_material) if str(part or "").strip()) or body
         planned_patches[scene_id] = _wrap_scene_patch(scene_id, composed)
         if reused_items:
             logger.info(

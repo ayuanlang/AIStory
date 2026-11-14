@@ -985,10 +985,6 @@ def rewrite_reused_ident_positioning(
     return "\n".join(rewritten)
 
 
-def ident_still_defers_reuse(ident: str) -> bool:
-    return any(_IDENT_INHERIT_POSITIONING.match(line) for line in str(ident or "").splitlines())
-
-
 def _framing_main_prose_is_thin(text: str) -> bool:
     raw = str(text or "").strip()
     if environment_text_is_inherit_placeholder(raw):

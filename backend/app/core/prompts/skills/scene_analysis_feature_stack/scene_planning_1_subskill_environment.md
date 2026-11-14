@@ -1,10 +1,10 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_subskill_environment.md
-# Prompt Updated At: 2026-11-14 17:35:00 +08:00
+# Prompt Updated At: 2026-11-14 23:50:00 +08:00
 # Skill 1-1-ENV: 环境规划
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]
 
-## 输出禁标（系统核验）
-下列标签无剧情含义，仅供程序核验。成稿、自检、解释中一律不得出现。
+## 输出禁标
+下列标签无剧情含义。成稿、自检、解释中一律不得出现。程序不核验这一稿的世界键。
 `[AIS-WM:ENV:4M8R]` `[AIS-WM:ENV:P2LX]` `[NULL_INK_SEAL]` `[VOID_PROMPT_LINT]` `[INK_SINK_MARKER]`
 
 ## 边界
