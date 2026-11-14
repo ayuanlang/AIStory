@@ -96,7 +96,7 @@ COMBAT_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_c
 FRAMING_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_derived_framing.md"
 STAGING_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_staging_env.md"
 # Hard contract: after enhance + main-env splice, these LLM steps are serial and complete.
-PIPELINE_CONTRACT_VERSION = "asset-quad-before-staging-v5"
+PIPELINE_CONTRACT_VERSION = "staging-without-quad-v6"
 SCENE_SUBSKILL_POST_ENV_STEPS: Tuple[Tuple[str, str], ...] = (
     ("derived_framing", FRAMING_PROMPT),
     ("staging", STAGING_PROMPT),
@@ -4519,22 +4519,14 @@ async def _run_derived_framing_then_staging(
         if "derived_framing" not in called:
             called.append("derived_framing")
         staging_scene = compose_staging_scene_text(current_block, env_scene)
-        current_input = await _attach_environment_asset_quads(
-            _with_derived_env_frame_anchors(
-                _wrap_single_scene_input(
-                    staging_scene,
-                    _comprehensive_for_scene(staging_scene, comprehensive_info),
-                    _scene_tail(staging_scene, entity_token_brief),
-                    entity_token_brief,
-                ),
-                current_block,
+        current_input = _with_derived_env_frame_anchors(
+            _wrap_single_scene_input(
+                staging_scene,
+                _comprehensive_for_scene(staging_scene, comprehensive_info),
+                _scene_tail(staging_scene, entity_token_brief),
+                entity_token_brief,
             ),
-            task_db=task_db,
-            project_id=project_id,
-            episode_id=episode_id,
-            scene_id=scene_id,
-            env_scene=env_scene or current_block,
-            explicit_text=str(raw_payload.get("environment_asset_quad_text") or ""),
+            current_block,
         )
         prompt_file = STAGING_PROMPT
         _mark_scene_subskill_step(
@@ -4666,22 +4658,14 @@ async def _run_derived_framing_then_staging(
                 current_block,
                 env_scene or framing_block,
             )
-            current_input = await _attach_environment_asset_quads(
-                _with_derived_env_frame_anchors(
-                    _wrap_single_scene_input(
-                        staging_scene,
-                        _comprehensive_for_scene(staging_scene, comprehensive_info),
-                        _scene_tail(staging_scene, entity_token_brief),
-                        entity_token_brief,
-                    ),
-                    current_block,
+            current_input = _with_derived_env_frame_anchors(
+                _wrap_single_scene_input(
+                    staging_scene,
+                    _comprehensive_for_scene(staging_scene, comprehensive_info),
+                    _scene_tail(staging_scene, entity_token_brief),
+                    entity_token_brief,
                 ),
-                task_db=task_db,
-                project_id=project_id,
-                episode_id=episode_id,
-                scene_id=scene_id,
-                env_scene=env_scene or framing_block or current_block,
-                explicit_text=str(raw_payload.get("environment_asset_quad_text") or ""),
+                current_block,
             )
         _mark_scene_subskill_step(
             task_db,

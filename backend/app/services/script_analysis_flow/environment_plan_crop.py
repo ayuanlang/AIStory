@@ -5,6 +5,7 @@ The plan itself stays complete. Copies are trimmed by who reads them:
 - 依据 is planning reasoning and is not injected further.
 - Shape, size, direction and distance stay for staging and asset design.
 - Lighting stays for asset design. Staging and global orchestration do not get it.
+- Standing anchors (挂靠锚点, 戏用标识, 空镜) stay for staging. Asset design does not get them.
 """
 from __future__ import annotations
 
@@ -29,6 +30,17 @@ _LIGHT_INNER_KEYS = {
     "依据",
 }
 _PROFILES_DROP_LIGHT = {"staging", "orchestration"}
+# Staging uses these to place people. Asset design does not.
+_ASSET_ONLY_DROP_KEYS = {
+    "挂靠锚点",
+    "锚点落",
+    "醒目光",
+    "识别",
+    "戏用标识",
+    "站位承载",
+    "参照物",
+    "空镜",
+}
 
 
 def _field_key(part: str) -> str:
@@ -38,7 +50,9 @@ def _field_key(part: str) -> str:
     return head.split("=", 1)[0].strip()
 
 
-def _crop_line(line: str, *, drop_light: bool) -> str:
+def _crop_line(line: str, *, drop_light: bool, drop_keys: set) -> str:
+    if drop_keys and "【空镜规划】" in line:
+        return ""
     parts = _SPLIT.split(line)
     if len(parts) == 1 and not _field_key(parts[0]):
         return line
@@ -53,7 +67,7 @@ def _crop_line(line: str, *, drop_light: bool) -> str:
         if drop_light and key in _LIGHT_LINE_KEYS:
             dropping_light = True
             continue
-        if key in _BASIS_KEYS:
+        if key in _BASIS_KEYS or key in drop_keys:
             continue
         if drop_light and key == "光色倾向":
             continue
@@ -70,6 +84,10 @@ def crop_environment_plan_text(text: str, profile: str) -> str:
     if kind not in {"asset", "staging", "orchestration"}:
         return source.strip()
     drop_light = kind in _PROFILES_DROP_LIGHT
-    lines = [_crop_line(line, drop_light=drop_light) for line in source.split("\n")]
+    drop_keys = _ASSET_ONLY_DROP_KEYS if kind == "asset" else set()
+    lines = [
+        _crop_line(line, drop_light=drop_light, drop_keys=drop_keys)
+        for line in source.split("\n")
+    ]
     cropped = "\n".join(line for line in lines if line.strip())
     return re.sub(r"\n{3,}", "\n\n", cropped).strip()

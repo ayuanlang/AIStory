@@ -65,6 +65,7 @@ class StoryGeneratorRequest(BaseModel):
     time_nodes: Optional[str] = None
     professional_domains: Optional[str] = None
     places_and_props: Optional[str] = None
+    macguffin: Optional[str] = None
     stc_01_opening_image: Optional[str] = None
     stc_02_theme_stated: Optional[str] = None
     stc_03_setup: Optional[str] = None

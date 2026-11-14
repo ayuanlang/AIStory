@@ -312,6 +312,7 @@ export const STORY_PREFILL_KEYS = [
     'time_nodes',
     'professional_domains',
     'places_and_props',
+    'macguffin',
     'characters',
     ...BEAT_IDS,
     'suspense',
@@ -397,6 +398,7 @@ const REGISTRY_FIELD_ALIASES = {
     time_nodes: ['time_nodes', '时间节点'],
     professional_domains: ['professional_domains', '专业领域'],
     places_and_props: ['places_and_props', '场景与道具'],
+    macguffin: ['macguffin', '麦格芬', 'MacGuffin'],
 };
 
 function registryText(value) {

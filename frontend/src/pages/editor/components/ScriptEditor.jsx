@@ -4909,21 +4909,28 @@ const nextTaggedExtractItemEnd = (source, fromIndex, tag) => {
 const splitTaggedExtractItems = (text, tag) => {
     const raw = String(text || '');
     if (!raw || !tag) return [];
+    const parseSource = (source) => {
+        const startRe = new RegExp(`\\[${tag}\\](?!_)`, 'gi');
+        const starts = [];
+        let match = startRe.exec(source);
+        while (match) {
+            starts.push(match.index);
+            match = startRe.exec(source);
+        }
+        return starts.map((start) => {
+            const end = nextTaggedExtractItemEnd(source, start + 1, tag);
+            const block = source.slice(start, end).trim();
+            const name = extractTaggedItemName(block, tag);
+            return { name, block };
+        }).filter((item) => item.name);
+    };
     const inner = takeTaggedExtractInner(raw, tag);
-    const source = inner || raw;
-    const startRe = new RegExp(`\\[${tag}\\](?!_)`, 'gi');
-    const starts = [];
-    let match = startRe.exec(source);
-    while (match) {
-        starts.push(match.index);
-        match = startRe.exec(source);
+    // A leading 「无」 block must not hide later blocks or loose [CHAR]/[PROP] rows.
+    if (inner && !/^\s*无\s*$/.test(inner)) {
+        const fromInner = parseSource(inner);
+        if (fromInner.length) return fromInner;
     }
-    return starts.map((start) => {
-        const end = nextTaggedExtractItemEnd(source, start + 1, tag);
-        const block = source.slice(start, end).trim();
-        const name = extractTaggedItemName(block, tag);
-        return { name, block };
-    }).filter((item) => item.name);
+    return parseSource(raw);
 };
 
 const collectStage1SlotTexts = (stageOutputsRaw) => {
@@ -5042,20 +5049,19 @@ const pickFirstMatchingText = (candidates, predicate) => {
 
 const resolveCategoryAssetSourceText = (candidates, category) => {
     const key = String(category || '').trim().toLowerCase();
-    if (key === 'characters') {
-        const withStart = pickFirstMatchingText(candidates, (text) => taggedExtractHasStart(text, 'CHAR'));
-        if (withStart) return withStart;
-        return pickFirstMatchingText(candidates, (text) => textHasTaggedExtractItems(text, 'CHAR'));
-    }
-    if (key === 'props') {
-        const withStart = pickFirstMatchingText(candidates, (text) => taggedExtractHasStart(text, 'PROP'));
-        if (withStart) return withStart;
-        return pickFirstMatchingText(candidates, (text) => textHasTaggedExtractItems(text, 'PROP'));
+    if (key === 'characters' || key === 'props') {
+        const tag = key === 'characters' ? 'CHAR' : 'PROP';
+        // An explicit 「无」 block must not beat a later candidate that still has rows.
+        const withItems = pickFirstMatchingText(candidates, (text) => textHasTaggedExtractItems(text, tag));
+        if (withItems) return withItems;
+        return pickFirstMatchingText(candidates, (text) => taggedExtractHasStart(text, tag));
     }
     if (key === 'environments') {
+        const withNames = pickFirstMatchingText(candidates, (text) => collectMainEnvironmentNames(text).length > 0);
+        if (withNames) return withNames;
         const withSkeleton = pickFirstMatchingText(candidates, textHasMainEnvironmentSkeleton);
         if (withSkeleton) return withSkeleton;
-        return pickFirstMatchingText(candidates, (text) => textHasEnvironmentPlanSignals(text) || collectMainEnvironmentNames(text).length > 0);
+        return pickFirstMatchingText(candidates, textHasEnvironmentPlanSignals);
     }
     return pickFirstMatchingText(candidates, hasAssetRerunExtractSignals);
 };
@@ -5144,9 +5150,13 @@ const takeTaggedExtractBlock = (text, tag) => {
         return '';
     }
     const inner = takeTaggedExtractInner(source, tag);
-    if (inner) return `[${tag}_EXTRACT_START]\n${inner}\n[${tag}_EXTRACT_END]`;
+    const innerIsNone = !String(inner || '').trim() || /^\s*无\s*$/.test(String(inner || '').trim());
+    if (inner && !innerIsNone) return `[${tag}_EXTRACT_START]\n${inner}\n[${tag}_EXTRACT_END]`;
     const items = splitTaggedExtractItems(source, tag);
-    if (!items.length) return '';
+    if (!items.length) {
+        if (inner) return `[${tag}_EXTRACT_START]\n${inner}\n[${tag}_EXTRACT_END]`;
+        return '';
+    }
     return `[${tag}_EXTRACT_START]\n${items.map((item) => item.block).join('\n\n')}\n[${tag}_EXTRACT_END]`;
 };
 
@@ -11218,16 +11228,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const hasPropExtractForAssetDesign = useCallback((extraText = '') => {
         const liveSources = [
             extraText,
-            readPersistedStage1Slot('scene_split'),
             latestStage1NodeOutputsRef.current?.scene_split,
+            pinnedStage1NodeOutputsRef.current?.scene_split,
+            readPersistedStage1Slot('scene_split'),
             adaptationText,
             latestStage1RawTextRef.current,
         ];
-        for (const text of liveSources) {
-            if (taggedExtractHasStart(text, 'PROP')) {
-                return textHasTaggedExtractItems(text, 'PROP');
-            }
-        }
+        if (liveSources.some((text) => textHasTaggedExtractItems(text, 'PROP'))) return true;
+        if (liveSources.some((text) => taggedExtractHasStart(text, 'PROP'))) return false;
         if (analysisTrustLiveDownstreamOnlyRef.current) return false;
         const leftovers = [
             activeEpisode?.ai_scene_analysis_adaptation,
@@ -11240,16 +11248,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const hasCharExtractForAssetDesign = useCallback((extraText = '') => {
         const liveSources = [
             extraText,
-            readPersistedStage1Slot('scene_split'),
             latestStage1NodeOutputsRef.current?.scene_split,
+            pinnedStage1NodeOutputsRef.current?.scene_split,
+            readPersistedStage1Slot('scene_split'),
             adaptationText,
             latestStage1RawTextRef.current,
         ];
-        for (const text of liveSources) {
-            if (taggedExtractHasStart(text, 'CHAR')) {
-                return textHasTaggedExtractItems(text, 'CHAR');
-            }
-        }
+        if (liveSources.some((text) => textHasTaggedExtractItems(text, 'CHAR'))) return true;
+        if (liveSources.some((text) => taggedExtractHasStart(text, 'CHAR'))) return false;
         if (analysisTrustLiveDownstreamOnlyRef.current) return false;
         const leftovers = [
             activeEpisode?.ai_scene_analysis_adaptation,
@@ -21010,6 +21016,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 [/No supported format detected/i, t('未识别到可导入的资产格式', 'no importable asset format detected')],
                 [/missing_result/i, t('未收到分类结果', 'missing category result')],
                 [/not_persisted/i, t('未写入实体库', 'not persisted to entity library')],
+                [/environments_not_parsed/i, t('没有解析到主环境', 'no main environment parsed')],
+                [/empty extract/i, t('提取为无', 'extract is none')],
                 [/llm_failed/i, t('AI任务失败', 'AI task failed')],
             ];
             for (const [pattern, label] of map) {
@@ -21677,7 +21685,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const sceneSplitSource = editorSceneSplit;
                     const extractSourceCandidates = (pData.key === 'characters' || pData.key === 'props')
                         ? [
-                            ...(isolateThisEntity ? [explicitExtract] : [editorSceneSplit, explicitExtract]),
+                            ...(isolateThisEntity ? [explicitExtract] : [explicitExtract, editorSceneSplit]),
                             ...((explicitExtract || editorSceneSplit || isolateThisEntity) ? [] : [
                                 latestStage1RawTextRef.current,
                                 adaptationText,
@@ -21847,6 +21855,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 ),
                                 'warning'
                             );
+                            return {
+                                key: pData.key,
+                                traceId: subtaskTraceId,
+                                importSessionId: subtaskImportSessionId,
+                                result: null,
+                                analysisText: '',
+                                subjectsJson: null,
+                                hasImportableSubjects: false,
+                                subtaskImportReport: null,
+                                subtaskImportError: 'environments_not_parsed',
+                                skippedExisting: false,
+                            };
                         }
                         return {
                             key: pData.key,
@@ -22706,7 +22726,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             const scopedEnvMerge = ['main', 'derived'].includes(String(options.envScope || '').trim().toLowerCase());
             const existingEntities = getAnalysisEntitiesPayloadFromJsonText(
-                activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || ''
+                latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || ''
             ) || {};
             if (options.targetEntityTypes && Array.isArray(options.targetEntityTypes)) {
                 ['characters', 'environments', 'props', 'posters', 'covers'].forEach(k => {
@@ -26419,7 +26439,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const outputs = ensureOutputs('stage3');
             const designSlot = outputs.asset_design_json || outputs.entity_design || outputs.raw_text;
             const currentDesign = String(
-                designSlot?.content
+                latestAssetRawTextRef.current
+                || designSlot?.content
                 || activeEpisode?.ai_entity_design_result
                 || llmAssetRawResultContent
                 || ''
@@ -26770,7 +26791,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 episodePatch.shot_content = '';
             } else if (stage === 'assets_gen') {
                 const filteredDesign = filterEntityDesignTextByKeys(
-                    activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
+                    latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
                     assetDesignKeys,
                     scopedEntityNames.length > 0 ? scopedEntityNames : null,
                     resolvedEnvScope,
@@ -32016,6 +32037,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             setDiagnosticsRefreshNonce((value) => value + 1);
 
+            const charPropReport = await charPropPromise;
             armEnvironmentAssetDesignGate('art-direction-rerun');
             await clearAnalysisArtifactsFromStage('assets_gen', {
                 preserveProgressUi: true,
@@ -32029,9 +32051,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             setAnalysisFlowStatus({
                 phase: 'assets_gen',
-                message: t('环境规划已完成，正在重跑主环境设计；角色/道具设计并行中…', 'Environment plan finished; regenerating main environments while character / prop design continues...'),
+                message: t('角色/道具设计已结束，正在重跑主环境设计…', 'Character / prop design finished; regenerating main environments...'),
             });
-            const envPromise = runPostImportSceneSubjectPipeline(
+            const envReport = await runPostImportSceneSubjectPipeline(
                 null,
                 environmentPlanText,
                 {
@@ -32047,18 +32069,104 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             );
 
-            await Promise.all([charPropPromise, envPromise]);
+            let owned = await refreshEpisodeOwnedEntities();
+            const characterCount = countDbEntitiesByType('character', owned);
+            const propCount = countDbEntitiesByType('prop', owned);
+            const mainEnvironmentCount = countDbMainEnvironmentEntities(owned);
+            const missingLabels = [];
+            if (textHasTaggedExtractItems(sceneSplitText, 'CHAR') && characterCount <= 0) {
+                missingLabels.push(t('角色', 'characters'));
+            }
+            if (textHasTaggedExtractItems(sceneSplitText, 'PROP') && propCount <= 0) {
+                missingLabels.push(t('道具', 'props'));
+            }
+            if (collectMainEnvironmentNames(environmentPlanText).length > 0 && mainEnvironmentCount <= 0) {
+                missingLabels.push(t('环境', 'environments'));
+            }
+            let derivedNote = '';
+            if (mainEnvironmentCount > 0) {
+                setAnalysisFlowStatus({
+                    phase: 'assets_gen',
+                    message: t('主环境已入库，正在从现场编排重生衍生环境…', 'Main environments are in the library; rebuilding derived environments from floor staging...'),
+                });
+                try {
+                    const derived = await ingestDerivedEnvironmentsFromFraming({
+                        project_id: Number(projectId),
+                        episode_id: Number(activeEpisode.id),
+                        purge_existing: true,
+                    });
+                    derivedNote = t(
+                        `衍生环境已按现场编排重生：新建 ${Number(derived?.created || 0)}，更新 ${Number(derived?.updated || 0)}。`,
+                        `Derived environments were rebuilt from floor staging: created ${Number(derived?.created || 0)}, updated ${Number(derived?.updated || 0)}.`
+                    );
+                    onLog?.(derivedNote, 'success');
+                } catch (derivedError) {
+                    const detail = String(derivedError?.response?.data?.detail || derivedError?.message || derivedError || '');
+                    if (/DERIVED_ENV_NO_FRAMING_OUTPUT/i.test(detail)) {
+                        derivedNote = t('没有现场编排成稿，衍生环境未重生。', 'No floor-staging output; derived environments were not rebuilt.');
+                        onLog?.(derivedNote, 'warning');
+                    } else {
+                        throw derivedError;
+                    }
+                }
+            } else {
+                await clearAnalysisArtifactsFromStage('assets_gen', {
+                    preserveProgressUi: true,
+                    targetEntityTypes: ['environments'],
+                    purgeStoryboard: false,
+                    environmentNamesToPurge: [],
+                    entityNamesToPurge: null,
+                    envScope: 'derived',
+                    reason: 'rerun-art-direction-derived-orphan-clear',
+                    refreshEpisode: true,
+                });
+                derivedNote = t(
+                    '这次没有主环境入库，已清掉残留的衍生环境。',
+                    'No main environment was saved this run, so leftover derived environments were removed.'
+                );
+                onLog?.(derivedNote, 'warning');
+            }
+            await refreshEpisodeOwnedEntities();
+            if (typeof onRefreshEpisodes === 'function') {
+                await onRefreshEpisodes();
+            }
+            if (missingLabels.length) {
+                const readableReason = (raw) => {
+                    const text = String(raw || '').trim();
+                    if (!text) return '';
+                    if (/empty extract/i.test(text)) return t('提取为无', 'extract is none');
+                    if (/environments_not_parsed/i.test(text)) return t('没有解析到主环境', 'no main environment parsed');
+                    if (/environments_not_imported/i.test(text)) return t('主环境未入库', 'main environment was not saved');
+                    if (/llm_json_not_parsed/i.test(text)) return t('AI已返回但未解析到可入库结果', 'AI returned but no importable result was parsed');
+                    return text;
+                };
+                const reportReasons = [charPropReport, envReport].flatMap((report) => (
+                    (Array.isArray(report?.subtaskReports) ? report.subtaskReports : [])
+                        .filter((item) => String(item?.status || '').trim().toLowerCase() !== 'ok')
+                        .map((item) => readableReason(item?.error || item?.recommendation || item?.status || ''))
+                        .filter(Boolean)
+                ));
+                const reasonText = reportReasons.length ? ` ${reportReasons.join('；')}` : '';
+                throw new Error(t(
+                    `${missingLabels.join('、')}没有写入实体库。${derivedNote}${reasonText}`,
+                    `${missingLabels.join(', ')} were not saved to the entity library. ${derivedNote}${reasonText}`
+                ));
+            }
             await triggerStageOutputsRefresh();
+            const completionMessage = t(
+                `美术指导重跑完成。分场节点未重跑。${derivedNote}`,
+                `Art direction rerun finished. Per-scene nodes were not rerun. ${derivedNote}`
+            );
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: t('美术指导重跑完成。分场节点未重跑。', 'Art direction rerun finished. Per-scene nodes were not rerun.'),
+                message: completionMessage,
             });
             setAnalysisUiReport((prev) => ({
                 ...(prev && typeof prev === 'object' ? prev : {}),
                 status: 'completed',
                 startedAt,
                 durationMs: Date.now() - startedAt,
-                message: t('美术指导重跑完成。', 'Art direction rerun finished.'),
+                message: completionMessage,
                 error: '',
             }));
         } catch (error) {

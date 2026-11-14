@@ -262,14 +262,14 @@ def test_injection_keeps_grid_cells_readable():
     assert build_environment_asset_quad_injection({"客栈大堂": "只有开篇"}) == ""
 
 
-def test_pipeline_contract_injects_quad_before_staging():
+def test_pipeline_contract_does_not_inject_quad_into_staging():
     from pathlib import Path
 
-    assert PIPELINE_CONTRACT_VERSION == "asset-quad-before-staging-v5"
+    assert PIPELINE_CONTRACT_VERSION == "staging-without-quad-v6"
     registry = get_script_analysis_flow_registry()
     nodes = {str(node.get("key")): node for node in (registry.get("nodes") or [])}
     chain = nodes["scene_subskill_pipeline"].get("injection_chain") or []
-    assert "backend.environment_asset_quad.before_staging" in chain
+    assert "backend.environment_asset_quad.before_staging" not in chain
     assert nodes["asset_design_environment"].get("depends_on") == ["environment_plan"]
     assert nodes["asset_design_environment_quad"].get("depends_on") == ["asset_design_environment"]
     assert nodes["asset_design_environment_quad"].get("prompt_file") == (

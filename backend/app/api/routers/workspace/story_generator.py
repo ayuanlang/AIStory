@@ -963,13 +963,16 @@ async def structure_project_creative_input_to_story_fields(
             "classic_framework 是经典借鉴，与 ai_vfx_strategy、story_circle 一起必填。来源是文学作品、影视、游戏。主框架是用人物冲突证明社会或人性前提的现代或当代作品，辅助至少 5 部，落阶只用 01 到 08。只写整体逻辑，含动作怎么推、对白怎么顶。可以参考原作剧情，必须符合本剧背景和主题，按本剧因果融合，不能硬拼，不抄原句。不锁每一集的基本点。分集大纲按本集场面另定一处，不抄主框架。分集生成按每一场场景再重选，不限于大纲那一部。"
             "优势行写阶=，不写救猫咪拍名。某一阶拿不准房间，就不要写进那一阶。沿用【项目季节 — 必须应用】。"
             "plot_background、story_lines、time_nodes、professional_domains、places_and_props 五键必填，禁止空字符串。"
-            "篇幅不够就缩短八阶，不许漏这五键。键名用英文。"
+            "macguffin 同样必填。全剧只锁一件，格式是 `麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜首现=｜兑现=`。"
+            "名是能交到手里的物、消息的可见载体，或人物里已经登记、正在被寻找的人。首现和兑现写阶号，兑现落在证明。"
+            "抽掉双方信念之后，这件不能单独把故事做成任务。不写外形。禁止无、暂无、待定、本剧无麦格芬。"
+            "篇幅不够就缩短八阶，不许漏这五键，也不许漏 macguffin。键名用英文。"
             "剧情背景写公开处境、关系前史、此刻为何非做不可。"
             "故事线至少两条改写同一冲突；只有整剧是单一封闭空间才写线数=1。"
             "时间节点至少写开篇的季节、昼夜、气候。"
             "专业领域写触因、做法和错法；情节不靠规程就写领域=无。"
             "场景与道具只登记离了就做不成的空间和物件。空间名是能站进去的地方，功能另写一句。一处一个名字，可以登记多处。同一处不堆主体。一处装不下就另登记一个地方。主体复用和换地方由分集大纲规划。不写陈设和材质。跟上面的 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。"
-            "这次返回的 JSON 必须包含 plot_background、story_lines、time_nodes、professional_domains、places_and_props。少一个键就是无效回答，不要留到后一阶段。\n"
+            "这次返回的 JSON 必须包含 plot_background、story_lines、time_nodes、professional_domains、places_and_props、macguffin。少一个键就是无效回答，不要留到后一阶段。\n"
         )
     else:
         user_prompt = (
@@ -1000,8 +1003,8 @@ async def structure_project_creative_input_to_story_fields(
             "Put the must-have climax inside beat 14, and rhyme beat 15 with beat 01. "
             "Apply 【项目季节 — 必须应用】 to the world and to every beat that does not state a time jump. "
             "ai_vfx_strategy is mandatory: at least two advantage lines tied to beats, plus avoidance rewrites or 劣势回避=本脑洞无高风险互动. "
-            "plot_background, story_lines, time_nodes, professional_domains, and places_and_props are mandatory non-empty strings. "
-            "Use those English JSON keys. If length is tight, shorten the beats; do not omit these five. "
+            "plot_background, story_lines, time_nodes, professional_domains, places_and_props, and macguffin are mandatory non-empty strings. "
+            "Use those English JSON keys. If length is tight, shorten the beats; do not omit these keys. "
             "plot_background is the public situation, the relationship history, and why this cannot wait. "
             "story_lines is at least two lines on the same conflict, or 线数=1 only for one closed space. "
             "time_nodes names at least the opening season, day or night, and weather. "
@@ -1009,7 +1012,11 @@ async def structure_project_creative_input_to_story_fields(
             "places_and_props registers only spaces and objects the plot fails without. "
             "A space name is a place you can stand in; write the function separately. Register each distinct place. Do not stack extra subjects into one place; if it cannot hold the next beat, register another place. Reuse and switching places are planned in the episode outline. No furnishings or materials. "
             "The whole text follows Base Positioning first, then Script Mode. Short drama, feature film, and general series do not change the world. Places, arrivals, how a line crosses distance, reading, reveals, and strikes use what that mode and era would have. High tech reads on a 全息屏. Xianxia uses a 法宝, and that action is 粒子. Period drama uses that era, with no computer, hologram, or phone unless the plot says so. An ordinary era uses what that place would have. Do not add one when the beat does not use it. "
-            "The JSON you return must contain plot_background, story_lines, time_nodes, professional_domains, and places_and_props. "
+            "macguffin is one concrete thing for the whole work: `麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜首现=｜兑现=`. "
+            "名 is the object, the visible carrier of a message, or the person already in characters who is being sought. "
+            "首现 is no later than the catalyst. 兑现 is beat 14. Do not write color, material, or size. "
+            "Never write 无, 暂无, 待定, or 本剧无麦格芬. "
+            "The JSON you return must contain plot_background, story_lines, time_nodes, professional_domains, places_and_props, and macguffin. "
             "A response missing any of these keys is invalid. Do not leave them for a later stage."
         )
     from app.services.series_ip_mode import is_series_ip_script_mode as _is_series_ip_script_mode
@@ -1019,7 +1026,7 @@ async def structure_project_creative_input_to_story_fields(
             "\n\n【系列剧 IP 模式】这次预填只服务全剧圣经，不服务逐集大纲。"
             "把笔墨放在世界观、主要角色 IP、基本故事线索，以及 I10 对整体剧本的逻辑借鉴。可以参考原作剧情，必须符合本剧背景和主题并融合，不能硬拼。不锁分集对白和桥段。"
             "救猫咪 15 拍若写，只作为全剧走向，每拍一句方向，禁止写成某一集的场表或分集情节。"
-            "不要输出 EP01–EPN。\n"
+            "不要输出 EP01–EPN。麦格芬仍是全剧一件，不按集另定。\n"
         )
     framework_llm_config = _resolve_story_generator_script_analysis_llm_config(
         db,

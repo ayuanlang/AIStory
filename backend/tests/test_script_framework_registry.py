@@ -14,6 +14,7 @@ def test_chinese_keys_fill_the_five_framework_fields():
             "time_nodes",
             "professional_domains",
             "places_and_props",
+            "macguffin",
         )},
         {
             "剧情背景": {
@@ -29,6 +30,15 @@ def test_chinese_keys_fill_the_five_framework_fields():
                 {"名": "星澜总裁电梯间", "功能": "误刷看见解雇信", "准入": "受限"},
                 {"道具": "林一的工牌", "功能": "开门并留下审计"},
             ],
+            "麦格芬": {
+                "名": "林一的工牌",
+                "类": "物",
+                "谁要": "林一",
+                "对手要": "周薇",
+                "得不到": "审计留不住",
+                "首现": "04",
+                "兑现": "14",
+            },
         },
     )
     assert normalized["plot_background"].startswith("剧情背景:")
@@ -42,6 +52,9 @@ def test_chinese_keys_fill_the_five_framework_fields():
     assert "星澜开放工位区 (Starlan Open Cubicles)｜功能=晨会看见工牌｜准入=开放" in normalized["places_and_props"]
     assert "星澜总裁电梯间｜功能=误刷看见解雇信｜准入=受限" in normalized["places_and_props"]
     assert "道具｜林一的工牌｜功能=开门并留下审计" in normalized["places_and_props"]
+    assert normalized["macguffin"] == (
+        "麦格芬｜名=林一的工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=审计留不住｜首现=04｜兑现=14"
+    )
     assert registry_fields_needing_fill(normalized) == []
 
 
@@ -119,6 +132,7 @@ def test_outline_user_prompt_injects_the_five_fields():
                 "time_nodes": "开篇｜式=相对｜季节=夏｜昼夜=夜｜气候=暴雨雷电｜说明=首日",
                 "professional_domains": "领域=战术穿梭机低空机动驾驶｜触因=围堵｜规程=侧倾｜错法=直飞",
                 "places_and_props": "总裁办公室 (Executive Office)｜功能=部署｜准入=受限",
+                "macguffin": "麦格芬｜名=解雇信｜类=物｜谁要=林一｜对手要=周薇｜得不到=留任作废｜首现=04｜兑现=14",
             }
         },
     )
@@ -129,11 +143,23 @@ def test_outline_user_prompt_injects_the_five_fields():
     assert "季节=夏" in block
     assert "领域=战术穿梭机低空机动驾驶" in block
     assert "总裁办公室 (Executive Office)" in block
+    assert "麦格芬: 麦格芬｜名=解雇信｜类=物｜谁要=林一｜对手要=周薇｜得不到=留任作废｜首现=04｜兑现=14" in block
     fill = _fill_user_prompt("已完成集", [2], 8, registry_block=block)
     assert "分集规划输入" in block
     assert "剧本框架五栏" in fill
     assert "总裁办公室 (Executive Office)" in fill
     assert "这次只补：EP02" in fill
+
+
+def test_macguffin_without_a_name_still_needs_fill():
+    assert registry_fields_needing_fill({
+        "plot_background": "剧情背景: PB01｜已经写好｜手段=对话｜禁提前=结局",
+        "story_lines": "线A=留证｜线B=收牌",
+        "time_nodes": "开篇｜式=相对｜季节=秋｜昼夜=日｜气候=阴｜说明=当日",
+        "professional_domains": "领域=无｜依据=本剧选择不依赖行业规程",
+        "places_and_props": "办公室｜功能=对质｜准入=开放",
+        "macguffin": "本剧无麦格芬",
+    }) == ["macguffin"]
 
 
 def test_existing_english_text_is_kept_and_prompts_require_the_fields():
@@ -154,6 +180,7 @@ def test_existing_english_text_is_kept_and_prompts_require_the_fields():
         "time_nodes",
         "professional_domains",
         "places_and_props",
+        "macguffin",
     ]
 
     architect = _resolve_prompt_text("master_story_architect.md")
@@ -166,3 +193,5 @@ def test_existing_english_text_is_kept_and_prompts_require_the_fields():
     assert "少一个键，这次回答无效" in emotion
     assert "地点拿不准就不写" not in emotion
     assert "永远不许空" in emotion
+    assert '"macguffin"' in structure
+    assert "`macguffin`" in emotion

@@ -1468,6 +1468,13 @@ async def execute_analyze_scene(
                     getattr(request, "episode_id", None),
                 )
 
+        if is_environment_quad_stage:
+            from app.services.script_analysis_flow.environment_quad_input import (
+                crop_quad_skill_input,
+            )
+
+            user_content = crop_quad_skill_input(str(user_content or ""))
+
         if is_scoped_asset_design:
             user_content = strip_injection_section(str(user_content or ""), "待分析剧本")
             if is_character_asset_design:

@@ -23,6 +23,8 @@ _PLAN = """
 正北=0度=封闭面=墙皮｜大门｜依据=剧情明文｜落点=北｜大小=2.0×2.4×0.1｜朝向=南
 中部相对=客椅｜参照=方桌｜沿边=长边北侧｜间距=贴身｜朝向=南｜依据=对坐
 补光源=堂灯｜补光落点=舞台北沿外
+挂靠锚点=柜台｜锚点落=南｜戏用标识=最中心｜空镜=无
+【空镜规划】资格=专境
 [ENV_BLOCK_END]
 """
 
@@ -37,6 +39,11 @@ def test_asset_keeps_light_and_geometry_and_drops_basis():
     assert "间距=贴身" in cropped
     assert "可见落点=大门" in cropped
     assert "补光源=堂灯" in cropped
+    assert "挂靠锚点=" not in cropped
+    assert "锚点落=" not in cropped
+    assert "戏用标识=" not in cropped
+    assert "空镜=" not in cropped
+    assert "【空镜规划】" not in cropped
 
 
 def test_staging_keeps_geometry_and_drops_light_and_basis():
@@ -50,6 +57,7 @@ def test_staging_keeps_geometry_and_drops_light_and_basis():
     assert "朝向=南" in staged
     assert "间距=贴身" in staged
     assert "补光源=堂灯" in staged
+    assert "挂靠锚点=柜台" in staged
     assert "客栈大堂" in staged
 
 
@@ -59,6 +67,37 @@ def test_orchestration_drops_light():
     assert "光色倾向=" not in cropped
     assert "开间=6.5米" in cropped
     assert "依据=" not in cropped
+
+
+def test_quad_input_keeps_rotatable_keys_and_drops_essays():
+    from app.services.script_analysis_flow.environment_quad_input import crop_quad_skill_input
+
+    opening = (
+        "【定位】场所风格=书斋｜术语系=无\n"
+        "【主体外形】- [@南窗]外形=裱面，材质=宣纸，纹样=竹帘，颜色=牙白。\n"
+        "【六面一次】面件数=北1｜动线=门到案｜长边平行=Y线｜交接=墙\n"
+        "【南壁】[@南窗]壁关系=窗洞｜透=透｜开闭=全关\n"
+        "【光学说明】出光口=南窗｜世界来向=南｜世界射向=北｜色温=3200K｜空气感=清透\n"
+        "【色彩说明】主冷暖=暖调主导｜主色=牙白\n"
+        "【构图】方法=纵深，倾向=三分留白\n"
+    )
+    text = f"【主环境设计稿】书斋\n{opening}【/主环境设计稿】"
+    cropped = crop_quad_skill_input(text)
+    assert "【定位】" not in cropped
+    assert "【色彩说明】" not in cropped
+    assert "纹样=" not in cropped
+    assert "颜色=" not in cropped
+    assert "动线=" not in cropped
+    assert "交接=" not in cropped
+    assert "面件数=" not in cropped
+    assert "空气感=" not in cropped
+    assert "材质=宣纸" in cropped
+    assert "长边平行=Y线" in cropped
+    assert "壁关系=窗洞" in cropped
+    assert "出光口=南窗" in cropped
+    assert "世界来向=南" in cropped
+    assert "方法=纵深" in cropped
+    assert "【主环境设计稿】书斋" in cropped
 
 
 def test_asset_brief_drops_basis_and_keeps_light():
