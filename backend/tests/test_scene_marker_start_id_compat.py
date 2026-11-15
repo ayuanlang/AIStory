@@ -191,6 +191,65 @@ def test_environment_plan_keeps_text_that_already_has_markers():
     assert resolved == script
 
 
+def _scene_block(scene_id: str, body: str) -> str:
+    return f"[SCENE_START:{scene_id}]\n{body}\n[SCENE_END:{scene_id}]"
+
+
+def test_environment_plan_prefers_saved_split_over_stale_request():
+    from app.services.environment_plan_runner import choose_environment_plan_scene_text
+
+    current = _scene_block("EP03_SC01", "总裁室。")
+    stale = _scene_block("EP01_SC01", "山顶广场。")
+    resolved = choose_environment_plan_scene_text(
+        stale,
+        scene_split=current,
+        script_text=current,
+        stale_texts=[stale],
+    )
+    assert resolved == current
+
+
+def test_environment_plan_prefers_saved_split_over_same_scene_stale_echo():
+    from app.services.environment_plan_runner import choose_environment_plan_scene_text
+
+    split = _scene_block("EP03_SC01", "总裁室。")
+    echo = split + "\n【主环境】总裁室"
+    resolved = choose_environment_plan_scene_text(
+        echo,
+        scene_split=split,
+        script_text=split,
+        stale_texts=[echo],
+    )
+    assert resolved == split
+
+
+def test_environment_plan_uses_current_script_when_saved_split_is_another_story():
+    from app.services.environment_plan_runner import choose_environment_plan_scene_text
+
+    current = _scene_block("EP03_SC01", "总裁室。")
+    older = _scene_block("EP01_SC01", "山顶广场。")
+    resolved = choose_environment_plan_scene_text(
+        older,
+        scene_split=older,
+        script_text=current,
+        stale_texts=[older],
+    )
+    assert resolved == current
+
+
+def test_environment_plan_keeps_request_that_matches_saved_split():
+    from app.services.environment_plan_runner import choose_environment_plan_scene_text
+
+    split = "<!-- script_hash: abc -->\n" + _scene_block("EP03_SC01", "总裁室。")
+    resolved = choose_environment_plan_scene_text(
+        split,
+        scene_split=split,
+        script_text=_scene_block("EP03_SC01", "总裁室。"),
+        stale_texts=[_scene_block("EP01_SC01", "山顶广场。")],
+    )
+    assert resolved == split
+
+
 def test_missing_outer_wrappers_are_recovered_when_scene_pairs_exist():
     script = """
 [SCENE_START:EP01_SC02]

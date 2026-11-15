@@ -5085,6 +5085,75 @@ const preferFreshStage1Slot = (saved, live, pinned) => {
     return pinnedText || liveText || savedText;
 };
 
+const listSceneMarkerIds = (text) => {
+    const ids = [];
+    const re = /\[SCENE_START:([^\s\]]+)\]/gi;
+    const source = String(text || '');
+    let match = re.exec(source);
+    while (match) {
+        const sceneId = String(match[1] || '').trim();
+        if (sceneId) ids.push(sceneId);
+        match = re.exec(source);
+    }
+    return ids;
+};
+
+const normalizeStageEcho = (text) => String(text || '')
+    .replace(/<!--\s*script_hash:[^>]*-->/gi, '')
+    .trim();
+
+const sameSceneIdList = (left, right) => (
+    left.length > 0 && left.length === right.length && left.every((sceneId, index) => sceneId === right[index])
+);
+
+const sceneIdsDisjoint = (left, right) => {
+    if (!left.length || !right.length) return false;
+    const rightSet = new Set(right);
+    return left.every((sceneId) => !rightSet.has(sceneId));
+};
+
+// Current script names the scenes. Saved global orchestration is the plan input
+// when it is that same scene set. An older stage-1 copy must not win.
+const chooseEnvironmentPlanSourceText = ({
+    requestText = '',
+    sceneSplit = '',
+    scriptText = '',
+    staleTexts = [],
+} = {}) => {
+    const request = String(requestText || '').trim();
+    const split = String(sceneSplit || '').trim();
+    const script = String(scriptText || '').trim();
+    const requestNorm = normalizeStageEcho(request);
+    const splitNorm = normalizeStageEcho(split);
+    const stale = new Set(
+        (Array.isArray(staleTexts) ? staleTexts : [])
+            .map((item) => normalizeStageEcho(item))
+            .filter(Boolean)
+    );
+    const requestIds = listSceneMarkerIds(request);
+    const splitIds = listSceneMarkerIds(split);
+    const scriptIds = listSceneMarkerIds(script);
+    if (splitIds.length && scriptIds.length && sceneIdsDisjoint(splitIds, scriptIds)) {
+        if (requestIds.length && sameSceneIdList(requestIds, scriptIds)) return request;
+        return script;
+    }
+    if (splitIds.length && requestNorm && requestNorm === splitNorm) return request || split;
+    if (splitIds.length && requestNorm && stale.has(requestNorm) && requestNorm !== splitNorm) return split;
+    if (requestIds.length && splitIds.length && sameSceneIdList(requestIds, splitIds)) return request;
+    if (requestIds.length && splitIds.length && !sameSceneIdList(requestIds, splitIds)) {
+        if (scriptIds.length && sameSceneIdList(scriptIds, requestIds)) return request;
+        if (scriptIds.length && sameSceneIdList(scriptIds, splitIds)) return split;
+        return split;
+    }
+    if (requestIds.length) {
+        if (scriptIds.length && !sameSceneIdList(scriptIds, requestIds) && !splitIds.length) return script;
+        return request;
+    }
+    if (splitIds.length) return split;
+    if (scriptIds.length) return script;
+    return '';
+};
+
 // Prop / character editor shows the saved scene_split. The in-memory ref is only a gap-fill.
 const preferEditorSceneSplitText = (persistedSplit, liveSplit, resultText = '', adaptation = '') => String(
     persistedSplit || liveSplit || resultText || adaptation || ''
@@ -31660,8 +31729,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 labelEn: 'Environment Plan',
                 prompt: 'skills/scene_analysis_feature_stack/scene_planning_1_subskill_environment.md',
                 source: String(
-                    getStageOutputContent('stage1', 'scene_split')
-                    || resolveScriptOptBeatsContent()
+                    readPersistedStage1Slot('scene_split')
+                    || getStageOutputContent('stage1', 'scene_split')
+                    || latestStage1NodeOutputsRef.current?.scene_split
+                    || rawContent
+                    || activeEpisode?.script_content
                     || ''
                 ).trim(),
             },
@@ -31742,10 +31814,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const promptRes = await fetchPrompt(config.prompt);
                 systemPrompt = String(promptRes?.content || '').trim();
             }
+            let runSource = config.source;
+            if (stableNode === 'environment_plan') {
+                try {
+                    const freshEpisode = await fetchEpisode(activeEpisode.id);
+                    const freshSplit = readStage1OutputSlotContent(freshEpisode?.ai_stage_outputs, 'scene_split');
+                    const freshScript = String(freshEpisode?.script_content || '').trim();
+                    const chosen = chooseEnvironmentPlanSourceText({
+                        sceneSplit: freshSplit,
+                        scriptText: freshScript,
+                        staleTexts: [
+                            readStage1OutputSlotContent(freshEpisode?.ai_stage_outputs, 'raw_text'),
+                            readStage1OutputSlotContent(freshEpisode?.ai_stage_outputs, 'adapted_script'),
+                            readStage1EnvironmentPlanContent(freshEpisode?.ai_stage_outputs),
+                            freshEpisode?.ai_scene_analysis_adaptation,
+                        ],
+                    });
+                    if (chosen) runSource = chosen;
+                } catch (_) {}
+            }
+            if (!String(runSource || '').trim()) {
+                throw new Error(t('缺少该节点的上游输入，无法重跑。', 'This node’s upstream input is missing.'));
+            }
             const result = await awaitAnalyzeSceneWithRecovery(
                 () => runScriptAnalysisFlowAnalyzeNode(
                     stableNode,
-                    config.source,
+                    runSource,
                     systemPrompt,
                     null,
                     activeEpisode.id,
@@ -31766,7 +31860,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     'script_analysis',
                     resolveSelectedScriptAnalysisApiId()
                 ),
-                { startedAt, baselineText: config.source, disableEpisodeRecovery: true }
+                { startedAt, baselineText: runSource, disableEpisodeRecovery: true }
             );
             const output = String(extractAnalysisTextFromResult(result) || '').trim();
             if (!output) throw new Error(t('节点未返回内容。', 'The node returned no output.'));
@@ -35130,13 +35224,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!probe.hasEnvironmentPlan) {
                 throwIfAnalysisStopped();
                 if (!hasPersistedEnvironmentPlan()) {
-                    const sceneSplitText = String(
-                        resolveSceneSplitSourceText()
-                        || stage1SourceText
-                        || activeEpisode?.ai_scene_analysis_adaptation
-                        || activeEpisode?.ai_scene_analysis_result
-                        || ''
-                    ).trim();
+                    let freshEpisode = null;
+                    try {
+                        freshEpisode = await fetchEpisode(activeEpisode.id);
+                    } catch (_) {}
+                    const episodeForPlan = freshEpisode || activeEpisode;
+                    const sceneSplitText = String(chooseEnvironmentPlanSourceText({
+                        requestText: stage1SourceText,
+                        sceneSplit: readStage1OutputSlotContent(episodeForPlan?.ai_stage_outputs, 'scene_split'),
+                        scriptText: episodeForPlan?.script_content || activeEpisode?.script_content,
+                        staleTexts: [
+                            readStage1OutputSlotContent(episodeForPlan?.ai_stage_outputs, 'raw_text'),
+                            readStage1OutputSlotContent(episodeForPlan?.ai_stage_outputs, 'adapted_script'),
+                            readStage1EnvironmentPlanContent(episodeForPlan?.ai_stage_outputs),
+                            episodeForPlan?.ai_scene_analysis_adaptation,
+                            activeEpisode?.ai_scene_analysis_result,
+                        ],
+                    }) || '').trim();
                     if (!sceneSplitText) {
                         throw new Error(t(
                             '落库缺少资产清单，且全局统筹产物不可用，无法先补环境规划。请重新执行剧本分析。',

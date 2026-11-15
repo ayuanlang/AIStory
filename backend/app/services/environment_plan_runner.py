@@ -67,9 +67,40 @@ def _parse_scene_units_or_none(text: str):
     return units, None
 
 
-def _saved_scene_split_candidates(db: Session, episode_id: int) -> List[str]:
+_SCRIPT_HASH_COMMENT_RE = re.compile(r"<!--\s*script_hash:[^>]*-->", re.IGNORECASE)
+
+
+def _normalize_stage_echo(text: str) -> str:
+    return _SCRIPT_HASH_COMMENT_RE.sub("", str(text or "")).strip()
+
+
+def _scene_ids(units) -> Tuple[str, ...]:
+    found: List[str] = []
+    for unit in units or ():
+        scene_id = str(getattr(unit, "scene_id", "") or "").strip()
+        if scene_id:
+            found.append(scene_id)
+    return tuple(found)
+
+
+def _ids_disjoint(left: Tuple[str, ...], right: Tuple[str, ...]) -> bool:
+    return bool(left) and bool(right) and set(left).isdisjoint(right)
+
+
+def _stage1_slot_text(outputs: Dict[str, Any], key: str) -> str:
+    slot = outputs.get(key)
+    if isinstance(slot, dict):
+        return str(slot.get("content") or "")
+    if isinstance(slot, str):
+        return slot
+    return ""
+
+
+def _load_environment_plan_sources(db: Session, episode_id: int) -> Dict[str, Any]:
+    """Current script and the latest global-orchestration slot outrank older stage-1 copies."""
+    empty = {"scene_split": "", "script_text": "", "stale_texts": []}
     if int(episode_id or 0) <= 0 or db is None:
-        return []
+        return empty
     from app.models.all_models import Episode
     from app.services.soft_delete import _active_episode_clause
 
@@ -80,27 +111,106 @@ def _saved_scene_split_candidates(db: Session, episode_id: int) -> List[str]:
         .first()
     )
     if episode is None:
-        return []
-    found: List[str] = []
+        return empty
+    split = ""
+    stale: List[str] = []
     raw_outputs = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
     if raw_outputs:
         try:
             payload = json.loads(raw_outputs)
             outputs = (((payload.get("stages") or {}).get("stage1") or {}).get("outputs") or {})
-            for key in ("scene_split", "raw_text", "adapted_script"):
-                slot = outputs.get(key)
-                if isinstance(slot, dict):
-                    found.append(str(slot.get("content") or ""))
-                elif isinstance(slot, str):
-                    found.append(slot)
+            if isinstance(outputs, dict):
+                split = _stage1_slot_text(outputs, "scene_split")
+                for key in ("raw_text", "adapted_script", "environment_plan"):
+                    stale.append(_stage1_slot_text(outputs, key))
         except Exception:
             logger.warning(
                 "[environment_plan] stage outputs unreadable episode_id=%s",
                 episode_id,
             )
-    found.append(str(getattr(episode, "ai_scene_analysis_result", "") or ""))
-    found.append(str(getattr(episode, "ai_scene_analysis_adaptation", "") or ""))
-    return found
+    stale.append(str(getattr(episode, "ai_scene_analysis_adaptation", "") or ""))
+    stale.append(str(getattr(episode, "ai_scene_analysis_result", "") or ""))
+    return {
+        "scene_split": split,
+        "script_text": str(getattr(episode, "script_content", "") or ""),
+        "stale_texts": stale,
+    }
+
+
+def choose_environment_plan_scene_text(
+    payload_text: str,
+    *,
+    scene_split: str = "",
+    script_text: str = "",
+    stale_texts: List[str] | None = None,
+) -> str:
+    """Pick the scene text that belongs to the current script.
+
+    A request that still carries an older stage-1 copy is not reused when the
+    saved global orchestration, or the current script, is a different scene set.
+    """
+    payload = str(payload_text or "").strip()
+    split = str(scene_split or "").strip()
+    script = str(script_text or "").strip()
+    payload_units, payload_exc = _parse_scene_units_or_none(payload)
+    split_units, _split_exc = _parse_scene_units_or_none(split)
+    script_units, _script_exc = _parse_scene_units_or_none(script)
+    payload_ids = _scene_ids(payload_units)
+    split_ids = _scene_ids(split_units)
+    script_ids = _scene_ids(script_units)
+    payload_norm = _normalize_stage_echo(payload)
+    split_norm = _normalize_stage_echo(split)
+    stale_norms = {
+        _normalize_stage_echo(item)
+        for item in (stale_texts or [])
+        if _normalize_stage_echo(item)
+    }
+
+    def finish(chosen: str, reason: str) -> str:
+        if reason and _normalize_stage_echo(chosen) != payload_norm:
+            chosen_units, _chosen_exc = _parse_scene_units_or_none(chosen)
+            logger.warning(
+                "[environment_plan] using current scene text reason=%s request_ids=%s chosen_ids=%s chars=%s",
+                reason,
+                ",".join(payload_ids),
+                ",".join(_scene_ids(chosen_units)),
+                len(chosen or ""),
+            )
+        return chosen
+
+    if split_units and script_units and _ids_disjoint(split_ids, script_ids):
+        if payload_units and payload_ids == script_ids:
+            return finish(payload, "request_matches_current_script")
+        return finish(script, "current_script")
+
+    if split_units and payload_norm and payload_norm == split_norm:
+        return payload or split
+    request_is_stale = bool(payload_norm) and payload_norm in stale_norms and payload_norm != split_norm
+    if split_units and request_is_stale:
+        return finish(split, "saved_scene_split_over_stale_echo")
+    if payload_units and split_units and payload_ids == split_ids:
+        return payload
+    if payload_units and split_units and payload_ids != split_ids:
+        if script_ids and script_ids == payload_ids:
+            return finish(payload, "request_matches_current_script")
+        if script_ids and script_ids == split_ids:
+            return finish(split, "saved_scene_split_matches_script")
+        return finish(split, "saved_scene_split")
+    if payload_units:
+        if script_ids and script_ids != payload_ids and not split_units:
+            return finish(script, "current_script")
+        return payload
+    if split_units:
+        return finish(split, "saved_scene_split")
+    if script_units:
+        return finish(script, "current_script")
+    if payload_exc is not None and payload_exc.code not in _MARKER_MISS_CODES:
+        raise HTTPException(status_code=422, detail=f"{payload_exc.code}:{payload_exc}") from payload_exc
+    logger.error(
+        "[environment_plan] scene markers missing %s",
+        _marker_diag(payload),
+    )
+    raise HTTPException(status_code=422, detail="ENVIRONMENT_PLAN_SCENE_MARKERS_MISSING")
 
 
 def resolve_environment_plan_scene_text(
@@ -109,34 +219,9 @@ def resolve_environment_plan_scene_text(
     episode_id: int,
     payload_text: str,
 ) -> str:
-    """Use the request text when it has scene markers; otherwise the saved scene_split."""
-    payload = str(payload_text or "").strip()
-    units, exc = _parse_scene_units_or_none(payload)
-    if units:
-        return payload
-    if exc is not None and exc.code not in _MARKER_MISS_CODES:
-        raise HTTPException(status_code=422, detail=f"{exc.code}:{exc}") from exc
-    seen = {payload}
-    for index, candidate in enumerate(_saved_scene_split_candidates(db, int(episode_id or 0))):
-        body = str(candidate or "").strip()
-        if not body or body in seen:
-            continue
-        seen.add(body)
-        saved_units, _saved_exc = _parse_scene_units_or_none(body)
-        if saved_units:
-            logger.warning(
-                "[environment_plan] request text has no scene markers; using saved scene_split candidate=%s chars=%s episode_id=%s",
-                index,
-                len(body),
-                episode_id,
-            )
-            return body
-    logger.error(
-        "[environment_plan] scene markers missing episode_id=%s %s",
-        episode_id,
-        _marker_diag(payload),
-    )
-    raise HTTPException(status_code=422, detail="ENVIRONMENT_PLAN_SCENE_MARKERS_MISSING")
+    """Current script and saved global orchestration outrank a stale stage-1 request."""
+    sources = _load_environment_plan_sources(db, int(episode_id or 0))
+    return choose_environment_plan_scene_text(payload_text, **sources)
 
 
 def _patch_body_from_wrapped(patch_text: str, scene_id: str) -> str:
