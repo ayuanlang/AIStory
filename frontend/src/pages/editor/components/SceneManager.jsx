@@ -612,11 +612,19 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                                 <div
                                     key={item.key}
                                     className={`relative shrink-0 ${isPortrait ? 'w-full aspect-[4/3]' : 'w-[140px] aspect-video'} bg-amber-500/5 rounded border border-dashed border-amber-400/40 overflow-hidden flex flex-col items-center justify-center gap-2 px-2 text-center`}
-                                    title={t('该实体参考图尚未生成', 'Reference image for this entity has not been generated yet')}
+                                    title={item.unmatched
+                                        ? t('提示词点了这个名字，资产库里还没有。这一格留着，方便看出缺了哪张参考图。', 'The prompt names this asset, but it is not in the library. This slot stays so the missing reference is visible.')
+                                        : t('该实体参考图尚未生成', 'Reference image for this entity has not been generated yet')}
                                 >
                                     <AlertTriangle className="w-5 h-5 text-amber-300/80" />
                                     <div className="text-[11px] font-medium text-amber-100 line-clamp-2">{item.label || t('未命名实体', 'Unnamed Entity')}</div>
-                                    <div className="text-[10px] text-amber-200/70">{t('参考图缺失', 'Missing Ref')}</div>
+                                    <div className="text-[10px] text-amber-200/70">
+                                        {item.unmatched
+                                            ? (String(item.type || '').toLowerCase().includes('env') || item.type === 'environment'
+                                                ? t('环境资产未生成', 'Env asset missing')
+                                                : t('资产未生成', 'Asset missing'))
+                                            : t('参考图缺失', 'Missing Ref')}
+                                    </div>
                                 </div>
                             );
                         }

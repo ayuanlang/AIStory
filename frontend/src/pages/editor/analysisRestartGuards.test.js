@@ -8,6 +8,7 @@ import {
     shouldHoldStoryboardKickoffForQueuedPlaceholder,
     shouldRejectLeftoverStagingKickoff,
     storyboardShotsLanded,
+    derivedEnvironmentRegenDisabled,
 } from './analysisRestartGuards.js';
 
 describe('analysisRestartGuards', () => {
@@ -221,5 +222,22 @@ describe('asset category diagnostic cell', () => {
         ], 'asset_design_character');
         assert.equal(picked.status, 'success');
         assert.equal(picked.scene_id, undefined);
+    });
+
+    it('keeps derived-environment regen available when environment rerun is available', () => {
+        assert.equal(derivedEnvironmentRegenDisabled({
+            canRerunEnvironment: true,
+            hasLocalFraming: false,
+            regenerating: false,
+            environmentBusy: false,
+        }), false);
+        assert.equal(derivedEnvironmentRegenDisabled({
+            canRerunEnvironment: true,
+            environmentBusy: true,
+        }), true);
+        assert.equal(derivedEnvironmentRegenDisabled({
+            canRerunEnvironment: false,
+            hasLocalFraming: false,
+        }), true);
     });
 });

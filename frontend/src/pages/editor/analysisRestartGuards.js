@@ -230,3 +230,17 @@ export function resolveAssetCategoryDiagnosticState({
     );
     return { ready, active, failed, skipped, readyByData, readyByNode };
 }
+
+/**
+ * 「重生衍生环境」跟环境生成的「重跑」一起放开。
+ * 现场编排正文经常不在当前页面上，服务端会自己读已保存的成稿。
+ */
+export function derivedEnvironmentRegenDisabled({
+    canRerunEnvironment = false,
+    hasLocalFraming = false,
+    regenerating = false,
+    environmentBusy = false,
+} = {}) {
+    if (regenerating || environmentBusy) return true;
+    return !(canRerunEnvironment || hasLocalFraming);
+}

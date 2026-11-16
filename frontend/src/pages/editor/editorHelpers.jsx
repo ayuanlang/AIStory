@@ -4,6 +4,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../config';
 import { createEntity, regenerateScene, batchSupplementMissingEntities } from '../../services/api';
 import { normalizeEntityToken, entityTokenMatchesName, extractEntityRawNamesFromPrompt } from '../../lib/entityToken';
 import { resolveShotReferenceImageUrl, sameMediaUrl } from './derivedGridRegen';
+import { unmatchedTypedEntityRefs } from './shotRefSlots';
 
 const TOS_OBJECT_HOST_RE = /(?:^|\.)tos-(?:s3-)?[a-z0-9-]+\.(volces|ivolces)\.com(?:[/:?]|$)/i;
 
@@ -852,6 +853,29 @@ export const collectMatchedEntityImageUrlsFromPrompt = ({
     );
 };
 
+const unmatchedTypedRefSlots = ({
+    promptText = '',
+    associatedEntities = '',
+    entityPool = [],
+    includeAssociatedEntities = true,
+    preferredEpisodeId = null,
+} = {}) => unmatchedTypedEntityRefs({
+    promptText,
+    associatedEntities,
+    includeAssociatedEntities,
+    entityPool,
+    preferredEpisodeId,
+}).map((ref) => ({
+    entityId: null,
+    name: ref.name,
+    nameEn: '',
+    type: ref.type,
+    imageUrl: null,
+    missing: true,
+    unmatched: true,
+    entity: null,
+}));
+
 export const buildShotVideoEntityRefSlots = ({
     promptText = '',
     associatedEntities = '',
@@ -859,7 +883,7 @@ export const buildShotVideoEntityRefSlots = ({
     includeAssociatedEntities = true,
     preferredEpisodeId = null,
 } = {}) => {
-    return omitMainEnvironmentsCoveredByDerivatives(collectMatchedEntitiesFromPrompt({
+    const matched = omitMainEnvironmentsCoveredByDerivatives(collectMatchedEntitiesFromPrompt({
         promptText,
         associatedEntities,
         entityPool,
@@ -874,9 +898,17 @@ export const buildShotVideoEntityRefSlots = ({
             type: String(entity?.type || entity?.entity_type || '').trim(),
             imageUrl: imageUrl || null,
             missing: !imageUrl,
+            unmatched: false,
             entity,
         };
     });
+    return matched.concat(unmatchedTypedRefSlots({
+        promptText,
+        associatedEntities,
+        entityPool,
+        includeAssociatedEntities,
+        preferredEpisodeId,
+    }));
 };
 
 export const getMissingShotVideoEntityRefSlots = (slots = []) => (
@@ -912,6 +944,22 @@ export const buildShotVideoRefDisplayItems = ({
         return matches[0];
     };
 
+    const missingAssetItems = unmatchedTypedRefSlots({
+        promptText,
+        associatedEntities,
+        entityPool,
+        includeAssociatedEntities,
+        preferredEpisodeId,
+    }).map((slot) => ({
+        key: `entity-missing-unmatched-${normalizeEntityToken(slot.name) || slot.name}`,
+        kind: 'placeholder',
+        entity: null,
+        url: null,
+        label: slot.name,
+        type: slot.type,
+        unmatched: true,
+    }));
+
     if (manualOverride) {
         return refs
             .filter((url) => !deletedSet.has(url))
@@ -924,7 +972,8 @@ export const buildShotVideoRefDisplayItems = ({
                     url,
                     label: String(entity?.name || entity?.name_en || '').trim(),
                 };
-            });
+            })
+            .concat(missingAssetItems);
     }
 
     const matchedEntities = omitMainEnvironmentsCoveredByDerivatives(collectMatchedEntitiesFromPrompt({
@@ -958,8 +1007,12 @@ export const buildShotVideoRefDisplayItems = ({
             entity,
             url: null,
             label: String(entity?.name || entity?.name_en || '').trim(),
+            type: String(entity?.type || entity?.entity_type || '').trim(),
+            unmatched: false,
         });
     });
+
+    items.push(...missingAssetItems);
 
     refs.forEach((url, idx) => {
         if (usedUrls.has(url) || deletedSet.has(url)) return;

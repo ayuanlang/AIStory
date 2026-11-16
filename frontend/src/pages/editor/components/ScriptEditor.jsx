@@ -73,7 +73,7 @@ import {
     filterGlobalReuseDropdownAssets,
     isAssetFromEpisode,
 } from '../reuseEnvAssets';
-import { hasSuccessfulPipelineNode, isStoryboardQueuedPlaceholderNode, isThisRunPipelineNode, pickDiagnosticPipelineNode, resolveAssetCategoryDiagnosticState, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff, storyboardShotsLanded } from '../analysisRestartGuards';
+import { hasSuccessfulPipelineNode, isStoryboardQueuedPlaceholderNode, isThisRunPipelineNode, pickDiagnosticPipelineNode, resolveAssetCategoryDiagnosticState, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff, storyboardShotsLanded, derivedEnvironmentRegenDisabled } from '../analysisRestartGuards';
 
 import { 
     fetchProject, 
@@ -29981,14 +29981,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [activeEpisode?.id, onRefreshEpisodes]);
 
     const hasFramingForDerivedRegen = useMemo(() => {
-        const map = parseSceneSubskillResultsMap(
-            getStageOutputContent('stage1', 'scene_subskill_results')
+        const raw = getStageOutputContent('stage1', 'scene_subskill_results')
             || latestStage1NodeOutputsRef.current?.scene_subskill_results
-        );
+            || readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_subskill_results');
+        const map = parseSceneSubskillResultsMap(raw);
         if (Object.values(map).some((scene) => {
             if (!scene || typeof scene !== 'object') return false;
-            return textHasDerivedEnvSignals(scene.framing)
-                || textHasDerivedEnvSignals(scene.staging);
+            const framing = String(scene.framing || '').trim();
+            const staging = String(scene.staging || '').trim();
+            return Boolean(framing) || textHasDerivedEnvSignals(staging);
         })) return true;
         const nodes = Array.isArray(diagnosticsPipelineNodes) ? diagnosticsPipelineNodes : [];
         return nodes.some((node) => (
@@ -29998,7 +29999,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || textHasDerivedEnvSignals(node?.runtime_meta?.scene_block)
             )
         ));
-    }, [diagnosticsPipelineNodes, getStageOutputContent]);
+    }, [activeEpisode?.ai_stage_outputs, diagnosticsPipelineNodes, getStageOutputContent]);
 
     const resolveSceneSplitSourceText = useCallback(() => {
         const liveSplit = preferFreshStage1Slot(
@@ -38259,7 +38260,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 <button
                                                     type="button"
                                                     onClick={() => { void handleRegenDerivedEnvironments(); }}
-                                                    disabled={!hasFramingForDerivedRegen || isRegeneratingDerivedEnvs || isAssetCategoryBusy('environments')}
+                                                    disabled={derivedEnvironmentRegenDisabled({
+                                                        canRerunEnvironment: canRerunCategory,
+                                                        hasLocalFraming: hasFramingForDerivedRegen,
+                                                        regenerating: isRegeneratingDerivedEnvs,
+                                                        environmentBusy: isAssetCategoryBusy('environments'),
+                                                    })}
                                                     className={diagnosticBtnClass}
                                                     title={t('从各场场景现场编排输出程序重生衍生环境，不调用 LLM', 'Rebuild derived environments from floor-staging output; no LLM')}
                                                 >
