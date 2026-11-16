@@ -154,6 +154,120 @@ export function episodeSortNumber(episode, epIndex = -1) {
     return null;
 }
 
+/**
+ * Episode number shown in the editor dropdown.
+ * episode.episode_number, then the title. Script and story-DNA numbers are
+ * not display numbers. The editor list is newest-first, so a missing number
+ * falls back to list length minus index.
+ */
+export function episodeDisplayNumber(episode, episodes = null) {
+    if (!episode || episode.is_deleted) return null;
+    const direct = Number(episode.episode_number);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+    const fromTitle = parseEpisodeNumberFromText(episode.title);
+    if (fromTitle) return fromTitle;
+    const list = Array.isArray(episodes) ? episodes : null;
+    if (!list) return null;
+    const idx = list.findIndex((item) => String(item?.id || '').trim() === String(episode.id || '').trim());
+    if (idx < 0) return null;
+    const fallback = list.length - idx;
+    return fallback > 0 ? fallback : null;
+}
+
+const readAssetEntityId = (asset) => {
+    const meta = asset?.meta_info && typeof asset.meta_info === 'object' && !Array.isArray(asset.meta_info)
+        ? asset.meta_info
+        : {};
+    return String(meta.entity_id || meta.entityId || asset?.entity_id || '').trim();
+};
+
+const tokenSetsOverlap = (left, right) => {
+    if (!(left instanceof Set) || !(right instanceof Set) || left.size === 0 || right.size === 0) return false;
+    for (const token of left) {
+        if (token && right.has(token)) return true;
+    }
+    return false;
+};
+
+/**
+ * One picker row per live subject's current image.
+ * Deleted subjects, deleted episodes, expired temporary URLs, and images
+ * that are no longer the subject's current image are left out.
+ */
+export function buildCurrentBoundPickerRows({
+    entities,
+    assets,
+    episodes,
+    excludeEntityId = '',
+    isEphemeral = () => false,
+    collectTokens = (url) => {
+        const text = String(url || '').trim().toLowerCase();
+        return text ? new Set([text]) : new Set();
+    },
+} = {}) {
+    const episodeList = Array.isArray(episodes) ? episodes : [];
+    const episodeById = new Map();
+    episodeList.forEach((episode) => {
+        const id = String(episode?.id || '').trim();
+        if (id) episodeById.set(id, episode);
+    });
+    const assetRows = Array.isArray(assets) ? assets : [];
+    const hostId = String(excludeEntityId || '').trim();
+    const rows = [];
+
+    (Array.isArray(entities) ? entities : []).forEach((entity) => {
+        if (!entity || entity.is_deleted) return;
+        const entityId = String(entity.id || '').trim();
+        if (!entityId || entityId === 'new') return;
+        if (hostId && entityId === hostId) return;
+
+        const episodeId = String(entity.episode_id || '').trim();
+        let episode = null;
+        if (episodeId) {
+            episode = episodeById.get(episodeId) || null;
+            if (episodeList.length && (!episode || episode.is_deleted)) return;
+            if (episode?.is_deleted) return;
+        }
+
+        const imageUrl = String(entity.image_url || '').trim();
+        if (!imageUrl || isEphemeral(imageUrl)) return;
+
+        const imageTokens = collectTokens(imageUrl);
+        const matching = assetRows.filter((asset) => tokenSetsOverlap(imageTokens, collectTokens(asset?.url)));
+        const liveMatches = matching.filter((asset) => asset && !asset.is_deleted);
+        if (matching.length > 0 && liveMatches.length === 0) return;
+
+        const boundAsset = liveMatches.find((asset) => readAssetEntityId(asset) === entityId) || liveMatches[0] || null;
+        const entityType = String(entity.type || entity.entity_type || entity.subject_type || '').trim().toLowerCase();
+        rows.push({
+            id: `current:${entityId}`,
+            url: imageUrl,
+            type: 'image',
+            name: entity.name || '',
+            filename: boundAsset?.filename || '',
+            remark: boundAsset?.remark || '',
+            is_deleted: false,
+            entity_id: entityId,
+            episode_id: episodeId || null,
+            project_id: entity.project_id ?? boundAsset?.project_id ?? null,
+            bound_episode_number: episode ? episodeDisplayNumber(episode, episodeList) : null,
+            meta_info: {
+                entity_id: entityId,
+                episode_id: episodeId || undefined,
+                entity_name: entity.name || '',
+                entity_name_en: entity.name_en || '',
+                subject_name: entity.name || '',
+                subject_name_en: entity.name_en || '',
+                subject_type: entityType,
+                entity_type: entityType,
+                project_id: entity.project_id ?? undefined,
+                source: 'entity_current_image',
+            },
+        });
+    });
+    return rows;
+}
+
 export function episodeNumberFromList(episodes, episodeId) {
     const id = String(episodeId || '').trim();
     if (!id) return null;
