@@ -1305,8 +1305,7 @@ def test_shot_degree_is_not_rechecked_in_code():
         assert "【角色道具世界分布图】" in ready
 
 
-def test_front_face_cannot_also_point_screen_side():
-    from fastapi import HTTPException
+def test_front_face_screen_side_does_not_block_storyboard():
     from app.services.scene_subskill_pipeline_runner import assert_staging_output_complete
 
     contradicted = (
@@ -1315,11 +1314,9 @@ def test_front_face_cannot_also_point_screen_side():
         "CHAR:[@顾沉舟] 正面朝着镜头，面朝着画面左边。\n"
         "[BEAT_END:1]\n"
     )
-    try:
-        assert_staging_output_complete(contradicted, "EP01_SC01")
-        raise AssertionError("expected front face toward screen left to block")
-    except HTTPException as exc:
-        assert "STAGING_BLOCKED_FRONT_FACE" in str(exc.detail)
+    ready = assert_staging_output_complete(contradicted, "EP01_SC01")
+    assert "正面朝着镜头" in ready
+    assert "面朝着画面左边" in ready
     gaze_only = (
         "【建置】\n【入戏】\n"
         "[BEAT_START:1]\n"

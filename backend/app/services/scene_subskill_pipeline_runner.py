@@ -1341,21 +1341,6 @@ def _framing_has_plan_and_extract(source: str) -> bool:
     return has_plan and has_extract
 
 
-_FACE_TO_CAMERA_RE = re.compile(r"正面朝着镜头")
-_FACE_TO_SCREEN_SIDE_RE = re.compile(r"面朝着?画面[左右]")
-
-
-def _front_face_written_to_screen_side(body: str) -> str:
-    """A front-facing face looks at the camera, not at screen left or screen right."""
-    text = re.sub(r"眼睛看着画面[左右][^，。；\n]*", "", str(body or ""))
-    for sentence in re.split(r"[。\n]", text):
-        if _FACE_TO_CAMERA_RE.search(sentence) and (
-            side := _FACE_TO_SCREEN_SIDE_RE.search(sentence)
-        ):
-            return side.group(0)
-    return ""
-
-
 def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> str:
     """Hard gate: staging must not start unless framing output is extractable.
 
@@ -1506,17 +1491,6 @@ def assert_staging_output_complete(text: str, scene_id: str = "") -> str:
     sid = str(scene_id or "").strip() or "-"
     if "【建置】" not in body or "【入戏】" not in body:
         raise HTTPException(status_code=422, detail=f"STAGING_OUTPUT_INCOMPLETE:{sid}")
-    face_chunks = _iter_beat_bodies(body) or [("-", body)]
-    face_mismatches = [
-        f"{beat_id}:{reason}"
-        for beat_id, chunk in face_chunks
-        if (reason := _front_face_written_to_screen_side(chunk))
-    ]
-    if face_mismatches:
-        raise HTTPException(
-            status_code=422,
-            detail=f"STAGING_BLOCKED_FRONT_FACE:{sid}:{','.join(face_mismatches)}",
-        )
     return body
 
 
@@ -2069,8 +2043,6 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
         return "场景现场编排已返回，但缺少主体定位或衍生环境提取，不能进入建置与入戏"
     if "STAGING_BLOCKED_ILLEGAL_DERIVED_ENV" in text:
         return "场景现场编排衍生环境名不合法，不能进入建置与入戏"
-    if "STAGING_BLOCKED_FRONT_FACE" in text:
-        return "建置把正脸写成了面朝画面左或画面右，不能进入分镜"
     if "STAGING_OUTPUT_INCOMPLETE" in text:
         return "建置与入戏未完整返回，已中断，未进入分镜"
     if "STAGING_BLOCKED_FRAMING" in text:
