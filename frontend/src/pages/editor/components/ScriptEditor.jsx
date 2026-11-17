@@ -33106,6 +33106,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (name !== 'scene_subskill_scene' && name !== 'storyboard_generation') return false;
             const status = String(node?.status || '').trim().toLowerCase();
             if (!['running', 'queued'].includes(status)) return false;
+            // Explicit rerun queues storyboard before the step runs. That placeholder
+            // is not a live process, and treating it as one locks every cell after an error.
+            if (name === 'storyboard_generation' && isStoryboardQueuedPlaceholderNode(node)) return false;
             const nodeSceneId = String(node?.scene_id || '').trim();
             if (!nodeSceneId) return false;
             return sceneUnitIdsMatch(
@@ -33115,7 +33118,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 matrixEpisodePrefix
             );
         });
-        if (thisSceneNodeRunning) return;
+        const analysisStillLive = Boolean(
+            isAnalyzing
+            || isRetryingPhase2
+            || analysisProgressDisplay?.isLive
+        );
+        // A row left on running after the request already threw must not swallow
+        // the next click. A live run still blocks a second start.
+        if (thisSceneNodeRunning && analysisStillLive) return;
         const startFrom = {
             drama_opt: 'drama',
             combat_opt: 'combat',
@@ -33497,6 +33507,37 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
         } catch (error) {
             const message = error?.response?.data?.detail || error?.message || String(error);
+            const failedPrefix = resolveEpisodeSceneIdPrefix(activeEpisode);
+            setDiagnosticsPipelineNodes((prev) => (Array.isArray(prev) ? prev : []).map((node) => {
+                const name = String(node?.node_name || '').trim();
+                if (name !== 'scene_subskill_scene' && name !== 'storyboard_generation') return node;
+                const nodeSceneId = String(node?.scene_id || '').trim();
+                if (!nodeSceneId) return node;
+                if (!sceneUnitIdsMatch(
+                    nodeSceneId,
+                    targetSceneId,
+                    deriveSceneOrderFromSceneId(targetSceneId),
+                    failedPrefix
+                )) return node;
+                const status = String(node?.status || '').trim().toLowerCase();
+                if (
+                    name === 'storyboard_generation'
+                    && !['running', 'queued'].includes(status)
+                    && !isStoryboardQueuedPlaceholderNode(node)
+                ) return node;
+                const meta = node?.runtime_meta && typeof node.runtime_meta === 'object'
+                    ? { ...node.runtime_meta }
+                    : {};
+                meta.business_event = 'failed';
+                meta.business_reason = message;
+                return {
+                    ...node,
+                    status: 'failed',
+                    last_error_code: String(node?.last_error_code || 'SCENE_SUBSKILL_SCENE_FAILED'),
+                    last_error_message: message,
+                    runtime_meta: meta,
+                };
+            }));
             setAnalysisFlowStatus({ phase: 'failed', message });
             reportAnalysisPanelNotice(t(`重跑失败：${message}`, `Rerun failed: ${message}`), 'error');
         } finally {
@@ -39334,17 +39375,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     <button
                                         type="button"
                                         onClick={() => handleRerunSceneMatrixNode(stepKey, sceneId)}
-                                        disabled={!canRerun || (Boolean(state?.active) && !state?.parked)}
+                                        disabled={!canRerun}
                                         className={diagnosticBtnClass}
                                         title={state?.parked
                                             ? t('仍在等待环境或入库，可重试启动分镜', 'Still waiting for environment or import; you can retry storyboard')
-                                            : state?.active
+                                            : state?.active && !state?.failed
                                                 ? t('该节点已开始运行', 'This node has already started')
                                                 : canRerun
                                                     ? t('重跑该场该节点，并按序重跑后续节点', 'Rerun this scene node and its downstream nodes in order')
                                                     : t('当前不可重跑', 'Rerun is unavailable now')}
                                     >
-                                        {state?.active && !state?.parked
+                                        {state?.active && !state?.parked && !state?.failed
                                             ? (
                                                 <span className="inline-flex items-center gap-1">
                                                     <Loader2 className="w-3 h-3 animate-spin" />
@@ -39490,14 +39531,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     (isAnalyzing || isRetryingPhase2)
                                     && !sceneMatrixRerun?.sceneId
                                 );
+                                const cellRunLive = Boolean(
+                                    thisSceneMatrixRerun
+                                    || thisSceneStoryboardRerun
+                                    || fullEpisodeAnalysisLive
+                                    || isAnalyzing
+                                    || isRetryingPhase2
+                                    || analysisLive
+                                );
                                 const canRerunSubskill = (state) => Boolean(
                                     !thisSceneMatrixRerun
                                     && !thisSceneStoryboardRerun
-                                    && !state?.active
+                                    && !fullEpisodeAnalysisLive
+                                    && !(
+                                        state?.active
+                                        && !state?.parked
+                                        && !state?.failed
+                                        && (isAnalyzing || isRetryingPhase2 || analysisLive)
+                                    )
                                     && activeEpisode?.id
                                 );
-                                const thisSceneActivelyRunning = [dramaState, combatState, framingState, stagingState, shotState]
-                                    .some((state) => Boolean(state?.active) && !state?.parked);
+                                const thisSceneActivelyRunning = cellRunLive && [dramaState, combatState, framingState, stagingState, shotState]
+                                    .some((state) => Boolean(state?.active) && !state?.parked && !state?.failed);
                                 const canRerunSceneFromDrama = Boolean(
                                     !thisSceneMatrixRerun
                                     && !thisSceneStoryboardRerun

@@ -30,6 +30,7 @@ from app.services.scene_markdown_orchestration import (
 from app.services.scene_markdown_runner import _run_scene_markdown_node_per_scene
 from app.services.scene_subskill_pipeline_runner import (
     describe_scene_subskill_batch_failure,
+    fail_open_scene_subskill_nodes,
     run_scene_subskill_pipeline,
 )
 from app.services.script_analysis_flow import (
@@ -964,6 +965,15 @@ async def execute_scene_analysis_flow_node(
                         error_message=error_message,
                         runtime_meta={"business_reason": error_message} if credit_hit else None,
                     )
+                    if node_key == "scene_subskill_pipeline":
+                        fail_open_scene_subskill_nodes(
+                            db,
+                            project_id=node_project_id,
+                            episode_id=node_episode_id,
+                            error_code=error_code,
+                            error_message=error_message,
+                            scene_ids=target_scene_ids if scoped_rerun else None,
+                        )
                     db.commit()
                 except Exception:
                     logger.exception(

@@ -209,6 +209,30 @@ def test_resume_starts_storyboard_when_staging_ready_but_shots_missing():
     assert plan.skipped_reason == "resume_storyboard"
 
 
+def test_resume_failed_scene_does_not_skip_to_storyboard():
+    """A thrown error stores the draft on the scene row. That draft is not a finished step."""
+    saved_draft = resolve_scene_subskill_resume(
+        scene_id="EP01_SC01",
+        steps={"framing": FRAMING_STRIPPED},
+        pipeline_status="failed",
+        pipeline_scene_block=STAGING_OK,
+        failed_step="staging",
+        storyboard_ready=True,
+    )
+    assert saved_draft.start_group not in {"storyboard", "done"}
+    assert saved_draft.skipped_reason not in {"resume_storyboard", "storyboard_persisted"}
+
+    failed_staging_step = resolve_scene_subskill_resume(
+        scene_id="EP01_SC01",
+        steps={"framing": FRAMING_STRIPPED, "staging": STAGING_STRIPPED},
+        pipeline_status="failed",
+        pipeline_scene_block=STAGING_OK,
+        failed_step="staging",
+        storyboard_ready=False,
+    )
+    assert failed_staging_step.start_group not in {"storyboard", "done"}
+
+
 def test_resume_does_not_skip_success_scene_without_staging_body():
     long_scene = (
         "[SCENE_START:EP01_SC02]\n"

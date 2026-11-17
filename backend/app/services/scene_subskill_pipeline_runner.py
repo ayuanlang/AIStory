@@ -81,6 +81,81 @@ def _rollback_after_db_error(db: Session, label: str) -> None:
         logger.warning("[scene_subskill_pipeline] rollback failed after %s", label, exc_info=True)
 
 
+def _commit_scene_subskill_status(
+    task_db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene_id: str,
+    status: str,
+    progress_percent: float,
+    runtime_meta: Dict[str, Any],
+    error_code: Optional[str],
+    error_message: Optional[str],
+) -> None:
+    """Write a terminal scene status even if the raising statement aborted the transaction.
+
+    Leaving the row on running is what disables every rerun button for that scene.
+    """
+    def _write(db: Session) -> None:
+        upsert_pipeline_node_status(
+            db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            script_id=f"episode:{int(episode_id)}",
+            node_name="scene_subskill_scene",
+            scene_id=str(scene_id or ""),
+            status=status,
+            progress_percent=float(progress_percent),
+            runtime_meta=dict(runtime_meta or {}),
+            error_code=error_code,
+            error_message=error_message,
+        )
+        if str(status or "").strip().lower() == "failed":
+            _fail_open_scene_rerun_locks(
+                db,
+                project_id=int(project_id),
+                episode_id=int(episode_id),
+                scene_id=str(scene_id or ""),
+                error_code=error_code,
+                error_message=error_message,
+            )
+        db.commit()
+
+    try:
+        task_db.rollback()
+    except Exception:
+        pass
+    try:
+        _write(task_db)
+        return
+    except Exception:
+        logger.exception(
+            "[scene_subskill_pipeline] scene status write failed scene=%s status=%s",
+            scene_id,
+            status,
+        )
+        try:
+            task_db.rollback()
+        except Exception:
+            pass
+    fresh = SessionLocal()
+    try:
+        _write(fresh)
+    except Exception:
+        logger.exception(
+            "[scene_subskill_pipeline] fresh scene status write failed scene=%s status=%s",
+            scene_id,
+            status,
+        )
+        try:
+            fresh.rollback()
+        except Exception:
+            pass
+    finally:
+        _release_db_connection(fresh)
+
+
 class SceneSubskillCancelled(Exception):
     """Parent analysis task was canceled; do not start the next scene step."""
 
@@ -957,19 +1032,39 @@ def resolve_scene_subskill_resume(
     steps: Optional[Dict[str, str]] = None,
     pipeline_status: str = "",
     pipeline_scene_block: str = "",
+    failed_step: str = "",
     call_vfx: bool = False,
     call_xian: bool = False,
     storyboard_ready: bool = False,
 ) -> SceneSubskillResume:
     """Pick the first unfinished step for one scene. Completed LLM steps are reused."""
     sid = str(scene_id or "").strip()
-    scene_steps = steps if isinstance(steps, dict) else {}
+    scene_steps = dict(steps) if isinstance(steps, dict) else {}
+    status = str(pipeline_status or "").strip().lower()
+    node_block = str(pipeline_scene_block or "").strip()
+    # A thrown error saves the draft that failed. That draft must not count as
+    # finished, or the next run skips the node and the row can never be rerun.
+    if status in {"failed", "blocked"}:
+        node_block = ""
+        failed_group = failed_resume_group(failed_step)
+        if failed_group == "drama":
+            scene_steps["drama"] = ""
+            scene_steps["combat"] = ""
+            scene_steps["framing"] = ""
+            scene_steps["staging"] = ""
+        elif failed_group == "combat":
+            scene_steps["combat"] = ""
+            scene_steps["framing"] = ""
+            scene_steps["staging"] = ""
+        elif failed_group == "framing":
+            scene_steps["framing"] = ""
+            scene_steps["staging"] = ""
+        elif failed_group == "staging":
+            scene_steps["staging"] = ""
     drama = str(scene_steps.get("drama") or "").strip()
     combat = str(scene_steps.get("combat") or "").strip()
     framing = str(scene_steps.get("framing") or "").strip()
     staging = str(scene_steps.get("staging") or "").strip()
-    status = str(pipeline_status or "").strip().lower()
-    node_block = str(pipeline_scene_block or "").strip()
     # Scene-split input often has no SPECIAL_SCENE_ANALYSIS yet. After drama,
     # read the persisted block so combat is not skipped on continue/resume.
     # Staging ready is not the end of the scene. 分镜 is the same kind of step:
@@ -1069,6 +1164,7 @@ def _load_scene_pipeline_rows(
         out[sid] = {
             "status": str(getattr(row, "status", "") or "").strip().lower(),
             "scene_block": str(meta.get("scene_block") or ""),
+            "current_step": str(meta.get("current_step") or "").strip(),
         }
         out[sid.lower()] = out[sid]
     return out
@@ -1968,6 +2064,25 @@ def describe_scene_subskill_batch_failure(result: Any) -> Dict[str, str]:
         "error_code": error_code,
         "error_message": "；".join(details),
     }
+
+
+_FAILED_STEP_TO_GROUP = {
+    "drama": "drama",
+    "combat": "combat",
+    "vfx": "combat",
+    "xian": "combat",
+    "derived_framing": "framing",
+    "framing": "framing",
+    "wait_env": "framing",
+    "staging": "staging",
+    "wait_env_asset": "staging",
+    "storyboard": "storyboard",
+}
+
+
+def failed_resume_group(marked_step: str) -> str:
+    """Map a failed scene's current_step back to the group a rerun must re-enter."""
+    return _FAILED_STEP_TO_GROUP.get(str(marked_step or "").strip().lower(), "")
 
 
 def scene_failure_current_step(
@@ -3565,6 +3680,130 @@ def _load_ready_environment_asset_quads(
     return match_ready_environment_asset_quads(loaded, main_names)
 
 
+def _fail_open_scene_rerun_locks(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene_id: str,
+    error_code: Optional[str],
+    error_message: Optional[str],
+) -> None:
+    """Close alias and storyboard rows an explicit rerun left on running or queued.
+
+    prepare_explicit marks this scene running and storyboard_generation queued
+    before the step runs. A thrown error that only fails the canonical scene
+    row leaves those locks up, and every rerun click for the scene is ignored.
+    """
+    from app.services.script_analysis_flow.analyze_scene_stages import same_scene_result_keys
+
+    wanted = str(scene_id or "").strip()
+    if int(project_id or 0) <= 0 or int(episode_id or 0) <= 0 or not wanted:
+        return
+    rows = (
+        db.query(ScriptProgressPipelineNode)
+        .filter(
+            ScriptProgressPipelineNode.project_id == int(project_id),
+            ScriptProgressPipelineNode.episode_id == int(episode_id),
+            ScriptProgressPipelineNode.node_name.in_(("scene_subskill_scene", "storyboard_generation")),
+            ScriptProgressPipelineNode.status.in_(("running", "queued")),
+        )
+        .all()
+    )
+    grouped: Dict[str, List[Any]] = {}
+    for row in rows:
+        sid = str(getattr(row, "scene_id", "") or "").strip()
+        if sid:
+            grouped.setdefault(sid, []).append(row)
+    keys = {item.strip() for item in same_scene_result_keys(grouped, wanted) if str(item or "").strip()}
+    keys.add(wanted)
+    folded = {item.lower() for item in keys}
+    reason = str(error_message or "").strip() or "逐场优化中断"
+    code = str(error_code or "").strip() or "SCENE_SUBSKILL_SCENE_FAILED"
+    for row in rows:
+        sid = str(getattr(row, "scene_id", "") or "").strip()
+        if sid.lower() not in folded:
+            continue
+        name = str(getattr(row, "node_name", "") or "")
+        meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
+        meta["business_event"] = "failed"
+        meta["business_reason"] = reason
+        upsert_pipeline_node_status(
+            db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            script_id=f"episode:{int(episode_id)}",
+            node_name=name,
+            scene_id=sid,
+            status="failed",
+            progress_percent=100.0 if name == "scene_subskill_scene" else 0.0,
+            runtime_meta=meta,
+            error_code=code,
+            error_message=reason,
+        )
+
+
+def fail_open_scene_subskill_nodes(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    error_code: str,
+    error_message: str,
+    scene_ids: Optional[List[str]] = None,
+) -> int:
+    """Close scene rows still running after the pipeline itself threw.
+
+    A request that dies in the parent handler used to mark only the episode
+    node failed and leave each scene on running, which disables rerun.
+    """
+    if int(project_id or 0) <= 0 or int(episode_id or 0) <= 0:
+        return 0
+    wanted = [str(item or "").strip() for item in (scene_ids or []) if str(item or "").strip()]
+    rows = (
+        db.query(ScriptProgressPipelineNode)
+        .filter(
+            ScriptProgressPipelineNode.project_id == int(project_id),
+            ScriptProgressPipelineNode.episode_id == int(episode_id),
+            ScriptProgressPipelineNode.node_name == "scene_subskill_scene",
+            ScriptProgressPipelineNode.status.in_(("running", "queued")),
+        )
+        .all()
+    )
+    closed = 0
+    reason = str(error_message or "").strip() or "逐场优化中断"
+    for row in rows:
+        sid = str(getattr(row, "scene_id", "") or "").strip()
+        if wanted and not _task_matches_target_scene({"scene_id": sid}, wanted):
+            continue
+        meta = dict(row.runtime_meta or {}) if isinstance(getattr(row, "runtime_meta", None), dict) else {}
+        meta["business_event"] = "failed"
+        meta["business_reason"] = reason
+        upsert_pipeline_node_status(
+            db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            script_id=f"episode:{int(episode_id)}",
+            node_name="scene_subskill_scene",
+            scene_id=sid,
+            status="failed",
+            progress_percent=100.0,
+            runtime_meta=meta,
+            error_code=str(error_code or "SCENE_SUBSKILL_SCENE_FAILED"),
+            error_message=reason,
+        )
+        _fail_open_scene_rerun_locks(
+            db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            scene_id=sid,
+            error_code=error_code,
+            error_message=reason,
+        )
+        closed += 1
+    return closed
+
+
 def cancel_running_pipeline_nodes(db: Session, *, episode_id: int) -> int:
     """Close every running or queued node on this episode.
 
@@ -5059,6 +5298,7 @@ async def run_scene_subskill_pipeline(
                 steps=persist_steps,
                 pipeline_status=str(node_row.get("status") or ""),
                 pipeline_scene_block=str(node_row.get("scene_block") or ""),
+                failed_step=str(node_row.get("current_step") or ""),
                 call_vfx=needs_combat or bool(task.get("call_vfx")),
                 call_xian=bool(task.get("call_xian")),
                 storyboard_ready=scene_id in shot_markers or scene_id.lower() in shot_markers,
@@ -5537,12 +5777,10 @@ async def run_scene_subskill_pipeline(
             except (asyncio.CancelledError, SceneSubskillCancelled):
                 project_id = int(raw_payload.get("project_id") or 0)
                 if project_id > 0 and node_episode_id > 0:
-                    upsert_pipeline_node_status(
+                    _commit_scene_subskill_status(
                         task_db,
                         project_id=project_id,
                         episode_id=node_episode_id,
-                        script_id=f"episode:{node_episode_id}",
-                        node_name="scene_subskill_scene",
                         scene_id=scene_id,
                         status="failed",
                         progress_percent=100.0,
@@ -5553,9 +5791,12 @@ async def run_scene_subskill_pipeline(
                         error_code="SCENE_SUBSKILL_CANCELLED",
                         error_message="scene subskill cancelled",
                     )
-                    task_db.commit()
                 raise
             except Exception as exc:
+                try:
+                    task_db.rollback()
+                except Exception:
+                    pass
                 project_id = int(raw_payload.get("project_id") or 0)
                 timed_out = is_timeout_like_error(exc)
                 error_text = _exception_detail_text(exc).strip() or str(exc)
@@ -5566,23 +5807,33 @@ async def run_scene_subskill_pipeline(
                 # was running is the current_step written before the LLM call.
                 marked_step = ""
                 if project_id > 0 and node_episode_id > 0:
-                    existing_node = (
-                        task_db.query(ScriptProgressPipelineNode)
-                        .filter(
-                            ScriptProgressPipelineNode.project_id == project_id,
-                            ScriptProgressPipelineNode.episode_id == node_episode_id,
-                            ScriptProgressPipelineNode.node_name == "scene_subskill_scene",
-                            ScriptProgressPipelineNode.scene_id == scene_id,
+                    try:
+                        existing_node = (
+                            task_db.query(ScriptProgressPipelineNode)
+                            .filter(
+                                ScriptProgressPipelineNode.project_id == project_id,
+                                ScriptProgressPipelineNode.episode_id == node_episode_id,
+                                ScriptProgressPipelineNode.node_name == "scene_subskill_scene",
+                                ScriptProgressPipelineNode.scene_id == scene_id,
+                            )
+                            .first()
                         )
-                        .first()
-                    )
-                    existing_meta = (
-                        existing_node.runtime_meta
-                        if existing_node is not None
-                        and isinstance(getattr(existing_node, "runtime_meta", None), dict)
-                        else {}
-                    )
-                    marked_step = str(existing_meta.get("current_step") or "").strip()
+                        existing_meta = (
+                            existing_node.runtime_meta
+                            if existing_node is not None
+                            and isinstance(getattr(existing_node, "runtime_meta", None), dict)
+                            else {}
+                        )
+                        marked_step = str(existing_meta.get("current_step") or "").strip()
+                    except Exception:
+                        logger.exception(
+                            "[scene_subskill_pipeline] failed to read current step scene=%s",
+                            scene_id,
+                        )
+                        try:
+                            task_db.rollback()
+                        except Exception:
+                            pass
                 current_step = scene_failure_current_step(
                     marked_step=marked_step,
                     called=called_now,
@@ -5622,12 +5873,10 @@ async def run_scene_subskill_pipeline(
                         "error": "",
                     }
                 if project_id > 0 and node_episode_id > 0:
-                    upsert_pipeline_node_status(
+                    _commit_scene_subskill_status(
                         task_db,
                         project_id=project_id,
                         episode_id=node_episode_id,
-                        script_id=f"episode:{node_episode_id}",
-                        node_name="scene_subskill_scene",
                         scene_id=scene_id,
                         status="failed",
                         progress_percent=100.0,
@@ -5641,7 +5890,6 @@ async def run_scene_subskill_pipeline(
                         error_code="SCENE_SUBSKILL_TIMEOUT" if timed_out else "SCENE_SUBSKILL_SCENE_FAILED",
                         error_message=error_text,
                     )
-                    task_db.commit()
                 return int(task.get("scene_order") or 0), {
                     "scene_id": scene_id,
                     "scene_order": int(task.get("scene_order") or 0),
@@ -5686,6 +5934,7 @@ async def run_scene_subskill_pipeline(
                     steps=lookup_persisted_scene_subskill_steps(persist_map, scene_id),
                     pipeline_status=str(node_row.get("status") or ""),
                     pipeline_scene_block=str(node_row.get("scene_block") or ""),
+                    failed_step=str(node_row.get("current_step") or ""),
                     call_vfx=bool(task.get("call_vfx")),
                     call_xian=bool(task.get("call_xian")),
                     storyboard_ready=scene_id in shot_markers or scene_id.lower() in shot_markers,
