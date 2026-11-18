@@ -53,7 +53,8 @@ def test_prompt_locks_range_and_focus():
     assert "does not replace any earlier trailer" in block
     assert "也可以选全集高光" in block
     assert "高光部分优先选择 AI 优势" in block
-    assert "最终 Boss 的真面目不演" in block
+    assert "最终 Boss 的真面目都可以进入" in block
+    assert "由剪辑裁" in block
     assert "不把范围外的高光" not in block
     assert "侧重点不写进标题" in block
     assert "不超过 8 字" in block
@@ -69,7 +70,8 @@ def test_prompt_without_focus_stays_balanced():
     assert "建置、娱乐时间、反派逼近" in block
     assert "01–05" in block
     assert "不收成只有铺垫" in block
-    assert "不取结局" in block
+    assert "节拍都可以进入" in block
+    assert "由剪辑裁" in block
 
 
 def test_title_keeps_each_trailer_distinct():

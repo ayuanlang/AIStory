@@ -141,7 +141,7 @@ LEDGER_BODY = """- **角色**：
 """
 
 
-def test_extract_official_injects_entity_position_ledger():
+def test_extract_official_leaves_thinking_ledger_off_the_page():
     full = (
         "[EPISODE_SCRIPT_THINKING_START]\n"
         "## -1) 类型执行摘要\n"
@@ -155,35 +155,59 @@ def test_extract_official_injects_entity_position_ledger():
     official = extract_official_episode_script(full)
     assert official.startswith("# 1-工牌错位")
     assert "## 核心重点" in official
-    ledger_at = official.index("本集实体定位台账")
-    scenes_at = official.index("## 场景列表")
-    assert ledger_at < scenes_at
-    assert "CHAR|林一 (Lin Yi)" in official
-    assert "PROP|工牌 (Badge)" in official
-    assert "ENV|星澜电梯间 (Xinglan Elevator)" in official
-    assert "类型执行摘要" not in official
+    assert "本集实体定位台账" not in official
+    assert "CHAR|林一 (Lin Yi)" not in official
     assert "CHAR特质|林一" not in official
-    assert official.count("本集实体定位台账") == 1
+    assert "类型执行摘要" not in official
+    assert "[SCENES_BLOCK_START]" in official
+    assert "- Beat 1：林一刷卡进电梯。" in official
 
 
-def test_extract_official_keeps_existing_ledger_without_duplicate():
+def test_extract_official_drops_ledger_ai_and_scene_focus():
     body = (
         "# 1-工牌错位\n"
         "## 核心重点\n"
         "- **卖点**：身份错位\n"
+        "- **重要情节**：误刷工牌\n"
+        "- **本集驱动**：弧光=新人→审计\n"
+        "- **契科夫的枪**：G01｜工牌\n"
+        "## 本集时间\n"
+        "季节=秋｜昼夜=日｜气候=晴\n"
+        "## 本集AI优势应用与劣势回避\n"
+        "- **本集分析**：优势=环境奇观\n"
         "## 本集实体定位台账\n"
         "CHAR|林一 (Lin Yi)|#身份=审计员\n"
         "## 场景列表\n"
-        "[SCENES_BLOCK_START]\nscene\n[SCENES_BLOCK_END]\n"
+        "## 场景进入/退出状态总览（逐场）\n"
+        "场景 EP01_SC01: 进入状态=门外；退出状态=轿内\n"
+        "[SCENES_BLOCK_START]\n"
+        "[SCENE_START:EP01_SC01]\n"
+        "- **本场核心重点**：\n"
+        "  - **卖点**：本场卖点=身份错位\n"
+        "  - **重要情节**：本场情节=刷卡\n"
+        "[ENV_BLOCK_START]\n星澜电梯间\n[ENV_BLOCK_END]\n"
+        "[SCENES_BLOCK_END]\n"
     )
     official = extract_official_episode_script(
         "[EPISODE_SCRIPT_OUTPUT_START]\n" + body + "[EPISODE_SCRIPT_OUTPUT_END]\n"
     )
-    assert official.count("本集实体定位台账") == 1
-    assert "CHAR|林一 (Lin Yi)" in official
+    assert "卖点" in official
+    assert "契科夫的枪" in official
+    assert "本集时间" in official
+    assert "季节=秋" in official
+    assert "重要情节" not in official
+    assert "本集驱动" not in official
+    assert "本集AI优势" not in official
+    assert "本集实体定位台账" not in official
+    assert "CHAR|林一" not in official
+    assert "进入/退出" not in official
+    assert "本场核心重点" not in official
+    assert "本场卖点" not in official
+    assert "[ENV_BLOCK_START]" in official
+    assert "星澜电梯间" in official
 
 
-def test_extract_official_collapses_repeated_ledger_and_props():
+def test_extract_official_drops_repeated_ledger_rows():
     duplicated = (
         "[EPISODE_SCRIPT_OUTPUT_START]\n"
         "# 1-工牌错位\n"
@@ -207,13 +231,12 @@ def test_extract_official_collapses_repeated_ledger_and_props():
         "[EPISODE_SCRIPT_OUTPUT_END]\n"
     )
     official = extract_official_episode_script(duplicated)
-    assert official.count("本集实体定位台账") == 1
-    assert official.count("PROP|工牌") == 1
-    assert official.count("CHAR|林一") == 1
+    assert "本集实体定位台账" not in official
+    assert "PROP|工牌" not in official
+    assert "CHAR|林一" not in official
     assert "PROP特质|" not in official
     assert "全局道具特性状态表" not in official
     assert "名(EN)" not in official
-    assert official.index("本集实体定位台账") < official.index("## 场景列表")
     assert "[SCENES_BLOCK_START]" in official
 
 

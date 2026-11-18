@@ -82,7 +82,14 @@ def strip_episode_script_thinking_blocks(text: str) -> str:
 
 
 _PAGE_KEEP_HEADING = (
-    r"核心重点|核心内容纲要|本集卖点|本集实体定位台账|场景列表|场景进入|剧情一句话|结尾钩子|紧急回收"
+    r"核心重点|核心内容纲要|本集卖点|本集时间|场景列表|剧情一句话|结尾钩子|紧急回收"
+)
+_PAGE_DROP_HEADING = (
+    r"-?1\)\s*类型执行摘要|类型执行摘要|剧情连贯自检|娱乐化段子|桥段凝聚汇总|"
+    r"分集开局规划|写后核销总表|框架核销清单|大纲逐字分析台账|"
+    r"核心卖点（制作指导）|AI 视频研判|预告片框架规划落点|"
+    r"全局角色·道具特性状态表|全局角色特性状态表|全局道具特性状态表|"
+    r"本集AI优势应用与劣势回避|本集实体定位台账|场景进入/退出状态总览"
 )
 _LEDGER_STOP = (
     r"全局角色|本集场景环境名清单|身份定位|核心重点|核心内容纲要|本集卖点|"
@@ -94,12 +101,6 @@ _LEDGER_HEADING_RE = re.compile(
     rf"(?P<body>[\s\S]*?)"
     rf"(?=^(?:#{{1,6}}\s*|[-*]\s*\*{{0,2}})(?:{_LEDGER_STOP})"
     rf"|\[EPISODE_SCRIPT_|\[SCENES_BLOCK_START\]|\Z)",
-)
-_PAGE_DROP_HEADING = (
-    r"-?1\)\s*类型执行摘要|类型执行摘要|剧情连贯自检|娱乐化段子|桥段凝聚汇总|"
-    r"分集开局规划|写后核销总表|框架核销清单|大纲逐字分析台账|"
-    r"核心卖点（制作指导）|AI 视频研判|预告片框架规划落点|"
-    r"全局角色·道具特性状态表|全局角色特性状态表|全局道具特性状态表"
 )
 _ENTITY_ROW_RE = re.compile(
     r"(?<![A-Za-z])(?P<kind>CHAR|PROP|ENV)\|(?P<name>[^|\n]+)(?:\||$)"
@@ -273,38 +274,33 @@ def dedupe_entity_position_ledger(page: str) -> str:
 
 
 def inject_entity_position_ledger(official: str, source: str) -> str:
-    """Keep the ledger on the script page; insert after 核心重点 when missing."""
-    page = str(official or "").strip()
-    if not page:
-        return extract_entity_position_ledger(source)
-    if re.search(r"本集实体定位台账", page):
-        return page
-    ledger = extract_entity_position_ledger(source)
-    if not ledger:
-        return page
-    core = re.search(
-        r"(?ms)^##\s*核心重点\b.*?(?=^##\s+|\[SCENES_BLOCK_START\])",
-        page,
-    )
-    if core:
-        return f"{page[:core.end()].rstrip()}\n\n{ledger}\n\n{page[core.end():].lstrip()}".strip()
-    heading = re.search(r"(?m)^#\s+\S+.*$", page)
-    if heading:
-        return f"{page[:heading.end()]}\n\n{ledger}\n\n{page[heading.end():].lstrip()}".strip()
-    return f"{ledger}\n\n{page}".strip()
+    """Ledger stays in THINKING. Do not copy it onto the analysis script."""
+    del source
+    return str(official or "").strip()
+
+
+_SCENE_FOCUS_RE = re.compile(
+    r"(?ms)^[ \t]*[-*]?\s*\**本场核心重点\**[^\n]*\n"
+    r"(?:(?!\[ENV_BLOCK_START\]|\[BEAT_STREAM_START\]|\[SCENE_END:|\[SCENE_START:)[^\n]*\n)*"
+)
+_CORE_PROCESS_LINE_RE = re.compile(
+    r"(?m)^[ \t]*[-*]\s*\**(?:重要情节|本集驱动|重要情绪)\**[：:][^\n]*\n?"
+)
 
 
 def trim_episode_script_for_page(text: str) -> str:
     """Keep only script-page payload for scene_split / 分场.
 
-    Keeps: title, 核心重点 (or legacy 纲要/卖点), 本集实体定位台账, scenes + beats, handoff, emergency recovery.
-    Drops: entertainment ledger, BRIDGE / 桥段凝聚汇总, leftover process sections.
+    Keeps: title, 核心重点 (卖点 / 契科夫), 本集时间, scenes + beats, handoff, emergency recovery.
+    Drops: writing-logic sections, the entity ledger, AI analysis, per-scene focus repeats.
     """
     source = str(text or "").strip()
     if not source:
         return ""
 
     source = _BRIDGE_BLOCK_RE.sub("", source)
+    source = _SCENE_FOCUS_RE.sub("", source)
+    source = _CORE_PROCESS_LINE_RE.sub("", source)
     source = re.sub(
         rf"(?ms)^(?:#{{1,6}}\s*)?(?:{_PAGE_DROP_HEADING})[\s\S]*?(?=^(?:#{{1,6}}\s*)?(?:{_PAGE_KEEP_HEADING})|\[SCENES_BLOCK_START\]|\[EMERGENCY_RECOVERY_BLOCK_START\]|\Z)",
         "",
@@ -329,13 +325,11 @@ def extract_official_episode_script(text: str) -> str:
     if marked.get("found") and str(marked.get("content") or "").strip():
         cleaned = _strip_legacy_analysis_sections(str(marked.get("content") or ""))
         cleaned = trim_episode_script_for_page(cleaned)
-        cleaned = inject_entity_position_ledger(cleaned, source) or cleaned
         return dedupe_entity_position_ledger(cleaned) or cleaned
 
     cleaned = strip_episode_script_thinking_blocks(source)
     cleaned = _strip_legacy_analysis_sections(cleaned)
     cleaned = trim_episode_script_for_page(cleaned)
-    cleaned = inject_entity_position_ledger(cleaned, source) or cleaned
     cleaned = dedupe_entity_position_ledger(cleaned)
     return cleaned.strip() or dedupe_entity_position_ledger(source).strip()
 
