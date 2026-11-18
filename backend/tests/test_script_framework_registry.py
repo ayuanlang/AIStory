@@ -36,6 +36,8 @@ def test_chinese_keys_fill_the_five_framework_fields():
                 "谁要": "林一",
                 "对手要": "周薇",
                 "得不到": "审计留不住",
+                "时限": "二十四小时",
+                "过期": "审计记录清掉",
                 "首现": "04",
                 "兑现": "14",
             },
@@ -53,7 +55,7 @@ def test_chinese_keys_fill_the_five_framework_fields():
     assert "星澜总裁电梯间｜功能=误刷看见解雇信｜准入=受限" in normalized["places_and_props"]
     assert "道具｜林一的工牌｜功能=开门并留下审计" in normalized["places_and_props"]
     assert normalized["macguffin"] == (
-        "麦格芬｜名=林一的工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=审计留不住｜首现=04｜兑现=14"
+        "麦格芬｜名=林一的工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=审计留不住｜时限=二十四小时｜过期=审计记录清掉｜首现=04｜兑现=14"
     )
     assert registry_fields_needing_fill(normalized) == []
 
@@ -132,7 +134,7 @@ def test_outline_user_prompt_injects_the_five_fields():
                 "time_nodes": "开篇｜式=相对｜季节=夏｜昼夜=夜｜气候=暴雨雷电｜说明=首日",
                 "professional_domains": "领域=战术穿梭机低空机动驾驶｜触因=围堵｜规程=侧倾｜错法=直飞",
                 "places_and_props": "总裁办公室 (Executive Office)｜功能=部署｜准入=受限",
-                "macguffin": "麦格芬｜名=解雇信｜类=物｜谁要=林一｜对手要=周薇｜得不到=留任作废｜首现=04｜兑现=14",
+                "macguffin": "麦格芬｜名=解雇信｜类=物｜谁要=林一｜对手要=周薇｜得不到=留任作废｜时限=二十四小时｜过期=留任作废｜首现=04｜兑现=14",
             }
         },
     )
@@ -143,7 +145,7 @@ def test_outline_user_prompt_injects_the_five_fields():
     assert "季节=夏" in block
     assert "领域=战术穿梭机低空机动驾驶" in block
     assert "总裁办公室 (Executive Office)" in block
-    assert "麦格芬: 麦格芬｜名=解雇信｜类=物｜谁要=林一｜对手要=周薇｜得不到=留任作废｜首现=04｜兑现=14" in block
+    assert "麦格芬: 麦格芬｜名=解雇信｜类=物｜谁要=林一｜对手要=周薇｜得不到=留任作废｜时限=二十四小时｜过期=留任作废｜首现=04｜兑现=14" in block
     fill = _fill_user_prompt("已完成集", [2], 8, registry_block=block)
     assert "分集规划输入" in block
     assert "剧本框架五栏" in fill
@@ -159,6 +161,14 @@ def test_macguffin_without_a_name_still_needs_fill():
         "professional_domains": "领域=无｜依据=本剧选择不依赖行业规程",
         "places_and_props": "办公室｜功能=对质｜准入=开放",
         "macguffin": "本剧无麦格芬",
+    }) == ["macguffin"]
+    assert registry_fields_needing_fill({
+        "plot_background": "剧情背景: PB01｜已经写好｜手段=对话｜禁提前=结局",
+        "story_lines": "线A=留证｜线B=收牌",
+        "time_nodes": "开篇｜式=相对｜季节=秋｜昼夜=日｜气候=阴｜说明=当日",
+        "professional_domains": "领域=无｜依据=本剧选择不依赖行业规程",
+        "places_and_props": "办公室｜功能=对质｜准入=开放",
+        "macguffin": "麦格芬｜名=工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=留不住｜时限=尽快｜过期=记录清掉｜首现=04｜兑现=14",
     }) == ["macguffin"]
 
 

@@ -4262,27 +4262,27 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('麦格芬', 'MacGuffin')}</label>
                                 <div className="text-[11px] text-muted-foreground/80 mb-0.5">
                                     {t(
-                                        '全剧只锁一件。双方都要拿到、少了它这场冲突就没有着力点的那一件：能交到手里的物、消息的可见载体，或正在被寻找的人。真相、爱、地位要落成看得见的载体。不写外形。分集沿用这个名字。',
-                                        'One concrete thing for the whole work. Both sides must get it; without it the locked conflict has nothing to grip. An object that can be handed over, the visible carrier of a message, or a person being sought. Truth, love, and status need a visible carrier. No appearance. Later episodes keep this name.'
+                                        '全剧只锁一件。双方都要拿到、少了它这场冲突就没有着力点的那一件：能交到手里的物、消息的可见载体，或正在被寻找的人。时限是拿到它的截止，过期是窗口关上时能看见的损失。尽快、不久、随时不算时限。不写外形。分集沿用这个名字和这一截时间。',
+                                        'One concrete thing for the whole work. Both sides must get it; without it the locked conflict has nothing to grip. An object that can be handed over, the visible carrier of a message, or a person being sought. 时限 is the deadline for getting it. 过期 is the visible loss when the window closes. Soon is not a deadline. No appearance. Later episodes keep this name and this clock.'
                                     )}
                                 </div>
                                 <div className="text-[11px] text-primary/70 mb-1.5 italic">
                                     {emotionDrivenMode
                                         ? t(
-                                            '例：麦格芬｜名=家书｜类=物｜谁要=林一｜对手要=周薇｜得不到=这一次选择失去着力点｜首现=02｜兑现=07',
-                                            'e.g. 麦格芬｜名=家书｜类=物｜谁要=林一｜对手要=周薇｜得不到=这一次选择失去着力点｜首现=02｜兑现=07'
+                                            '例：麦格芬｜名=家书｜类=物｜谁要=林一｜对手要=周薇｜得不到=这一次选择失去着力点｜时限=天亮以前｜过期=家书被收走｜首现=02｜兑现=07',
+                                            'e.g. 麦格芬｜名=家书｜类=物｜谁要=林一｜对手要=周薇｜得不到=这一次选择失去着力点｜时限=天亮以前｜过期=家书被收走｜首现=02｜兑现=07'
                                         )
                                         : t(
-                                            '例：麦格芬｜名=林一的工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=审计留不住｜首现=04｜兑现=14',
-                                            'e.g. 麦格芬｜名=林一的工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=审计留不住｜首现=04｜兑现=14'
+                                            '例：麦格芬｜名=林一的工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=审计留不住｜时限=二十四小时｜过期=审计记录清掉｜首现=04｜兑现=14',
+                                            'e.g. 麦格芬｜名=林一的工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=审计留不住｜时限=二十四小时｜过期=审计记录清掉｜首现=04｜兑现=14'
                                         )}
                                 </div>
                                 <textarea
                                     className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
                                     rows={3}
                                     placeholder={t(
-                                        '麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜首现=｜兑现=',
-                                        '麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜首现=｜兑现='
+                                        '麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜时限=｜过期=｜首现=｜兑现=',
+                                        '麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜时限=｜过期=｜首现=｜兑现='
                                     )}
                                     value={globalStoryInput.macguffin || ''}
                                     onFocus={() => setStoryGenFocusStep('structure_prefill')}

@@ -260,7 +260,7 @@ def format_outline_registry_block(source: Any) -> str:
     """Five locked framework columns. §9 分集规划 reads these lines and does not invent another set."""
     return "\n".join([
         "[剧本框架五栏 — 分集规划输入]",
-        "这五栏是写 §9 分集规划的输入，原文已经在剧本框架锁好。时间行的节点、季节、昼夜、气候用时间节点。每一集用空间行写明涉及的地方，至少一处，可以多处，不并成一个名字。名字逐字用场景与道具里的空间名。场景以简单为第一优先：四壁每壁只有封闭面再加一具贴墙、嵌入或悬挂的主体，中部只有一个主体。有人坐下才把座写进主体，座不算第二主体。配套和配饰不在这一阶段写。每一处写主体、负载和复用。首现只锁这个上限。之后先用这些主体，新功能能落在已有主体上就写落在。跟 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。不写颜色、材质、纹样。做不到或超负载就另起一处并标补，不往旧处加主体。非封闭环境的远景不写入主体。专业行的领域只用专业领域里登记的名字。切场的线用故事线。EP01 摘要把剧情背景演成一件看得见的事，不把全文再贴成旁白。五栏有字时，不得另起一套领域或时间节点。空间名先用场景与道具里已有的；只有这一集离了就做不成，或这一处主体超负载，才另起一处并标补。五栏之后的麦格芬已经锁好名字。有名字时，分集碰到这件就用这个名字，不另定，不改名。写着未锁时，不在分集里补一件。",
+        "这五栏是写 §9 分集规划的输入，原文已经在剧本框架锁好。时间行的节点、季节、昼夜、气候用时间节点。每一集用空间行写明涉及的地方，至少一处，可以多处，不并成一个名字。名字逐字用场景与道具里的空间名。场景以简单为第一优先：四壁每壁只有封闭面再加一具贴墙、嵌入或悬挂的主体，中部只有一个主体。有人坐下才把座写进主体，座不算第二主体。配套和配饰不在这一阶段写。每一处写主体、负载和复用。首现只锁这个上限。之后先用这些主体，新功能能落在已有主体上就写落在。跟 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。不写颜色、材质、纹样。做不到或超负载就另起一处并标补，不往旧处加主体。非封闭环境的远景不写入主体。专业行的领域只用专业领域里登记的名字。切场的线用故事线。EP01 摘要把剧情背景演成一件看得见的事，不把全文再贴成旁白。五栏有字时，不得另起一套领域或时间节点。空间名先用场景与道具里已有的；只有这一集离了就做不成，或这一处主体超负载，才另起一处并标补。五栏之后的麦格芬已经锁好名字、时限和过期。有名字时，分集碰到这件就用这个名字和这一截时间，不另定，不改名，不另起一个截止。写着未锁时，不在分集里补一件。",
         f"剧情背景: {_field_text(source, 'plot_background')}",
         f"故事线: {_field_text(source, 'story_lines')}",
         f"时间节点: {_field_text(source, 'time_nodes')}",
@@ -938,23 +938,40 @@ _REGISTRY_HEADING_RE = re.compile(
 )
 
 
-_MACGUFFIN_NAME_RE = re.compile(r"名\s*=\s*([^｜|\n]+)")
+_MACGUFFIN_FIELD_RE = re.compile(r"(名|时限|过期)\s*=\s*([^｜|\n]+)")
+_VAGUE_MACGUFFIN_DEADLINES = frozenset({
+    "尽快",
+    "不久",
+    "随时",
+    "尽早",
+    "越快越好",
+    "有空",
+    "以后再说",
+    "soon",
+    "asap",
+    "eventually",
+})
 
 
-def _macguffin_name(text: str) -> str:
-    match = _MACGUFFIN_NAME_RE.search(str(text or ""))
-    if not match:
-        return ""
-    return match.group(1).strip()
+def _macguffin_field(text: str, key: str) -> str:
+    for match in _MACGUFFIN_FIELD_RE.finditer(str(text or "")):
+        if match.group(1) == key:
+            return match.group(2).strip()
+    return ""
 
 
 def _macguffin_blank(text: str) -> bool:
     if _registry_blank(text):
         return True
-    name = _macguffin_name(text)
-    if _registry_blank(name):
+    name = _macguffin_field(text, "名")
+    if _registry_blank(name) or name.lower() in {"麦格芬", "macguffin", "mac guffin"}:
         return True
-    return name.lower() in {"麦格芬", "macguffin", "mac guffin"}
+    limit = _macguffin_field(text, "时限")
+    expired = _macguffin_field(text, "过期")
+    if _registry_blank(limit) or _registry_blank(expired):
+        return True
+    compact_limit = _classic_framework_compact(limit).lower()
+    return compact_limit in _VAGUE_MACGUFFIN_DEADLINES
 
 
 def _registry_value_blank(key: str, text: str) -> bool:
@@ -1104,11 +1121,13 @@ def _format_macguffin_item(val: Any) -> str:
     who = _macguffin_piece(val, "谁要", "who")
     opponent = _macguffin_piece(val, "对手要", "opponent")
     lost = _macguffin_piece(val, "得不到", "lost")
+    limit = _macguffin_piece(val, "时限", "deadline")
+    expired = _macguffin_piece(val, "过期", "expired")
     first = _macguffin_piece(val, "首现", "first")
     payoff = _macguffin_piece(val, "兑现", "payoff")
     return (
         f"麦格芬｜名={name}｜类={kind}｜谁要={who}｜对手要={opponent}"
-        f"｜得不到={lost}｜首现={first}｜兑现={payoff}"
+        f"｜得不到={lost}｜时限={limit}｜过期={expired}｜首现={first}｜兑现={payoff}"
     )
 
 
@@ -1221,10 +1240,13 @@ def build_registry_fill_prompts(
         "Reuse and switching places are planned in the episode outline. "
         "Register every distinct place; one story may need several. "
         "macguffin is one concrete thing for the whole work. "
-        "Format exactly `麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜首现=｜兑现=`. "
+        "Format exactly `麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜时限=｜过期=｜首现=｜兑现=`. "
         "名 is the ordinary name of the object, the visible carrier of a message, or the person being sought. "
         "Both 谁要 and 对手要 want that same thing. "
         "得不到 says why the locked conflict loses its grip. "
+        "时限 is the deadline for getting it: a countable span or an event already in the story. "
+        "过期 is the visible loss when that window closes. "
+        "尽快, 不久, and 随时 are not a deadline. "
         "Save the Cat uses beat numbers, with 兑现 on 14. "
         "Emotion-driven stories use step numbers 01-08, with 兑现 on 07, "
         "and the thing cannot still work as a mission after both beliefs are removed. "
@@ -1234,7 +1256,9 @@ def build_registry_fill_prompts(
     if _context_is_emotion_driven(project_context):
         system += (
             " This story is emotion-driven. Do not add Save the Cat beat names. "
-            "macguffin 首现 and 兑现 are step numbers 01-08, and 兑现 is 07."
+            "macguffin 首现 and 兑现 are step numbers 01-08, and 兑现 is 07. "
+            "时限 is why this choice cannot wait. After both beliefs are removed, "
+            "neither the thing nor this clock can still work as a mission."
         )
     user = (
         f"The script framework left these fields empty: {labels}. Fill only these keys: {key_list}. "

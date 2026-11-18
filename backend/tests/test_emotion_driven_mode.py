@@ -105,7 +105,8 @@ def test_emotion_driven_skills_resolve_as_independent_prompts():
     assert "整体逻辑" in architect
     assert "从断点" in architect or "已完成的集保留" in architect
     assert "最底下一处" in writer
-    assert "可以再加借鉴点" in writer
+    assert "承=全剧|基本点|另选" in writer
+    assert "对得上就不再搜" in writer
     assert "### A)" not in framework.split("禁止输出")[0]
     assert "[EPISODE_BLOCK_START:EP01]" in framework
     default_framework = _resolve_prompt_text("master_story_architect.md")
