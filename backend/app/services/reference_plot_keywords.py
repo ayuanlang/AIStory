@@ -41,13 +41,13 @@ _STAGE_FOCUS = {
     "framework": (
         "搜索保持开放，侧重整体架构，用来补训练集里可能没有的新经典和流行作品。"
         "抽整部怎么起、怎么加压、价值怎么转到反面、危机怎么把选择逼出来、怎么收束。检索前先写一句问：这一下为什么不能再等。留下作品名、所借逻辑、触发、阻挡、停。写不出这三步就换一部。原句、人名、地名不留下。"
-        "关键字只写结构功能，不写对白原句、动作招式、表情或某一场的细节。"
+        "关键字每条只写一个短功能词，16字以内，不写冒号，不写整段剧情。不写对白原句、动作招式、表情或某一场的细节。"
         "作品种子优先近年新出现的经典和正在流行的作品，再留开放查询去搜更多新架构。"
     ),
     "outline": (
         "搜索保持开放，侧重整体架构如何分成连续的集，用来补训练集里可能没有的新经典和流行作品。"
         "抽每一段承接上一段的哪一截结构、转折落在哪一段、这一段的出怎样打开下一段。检索前先写一句问：这一集的但是为什么比上一集更难收。留下作品名、所借逻辑、触发、阻挡、停。写不出这三步就换一部。"
-        "关键字只写分集架构，不写某一场的对白、动作或表情。"
+        "关键字每条只写一个短功能词，16字以内，不写冒号，不写整段剧情。不写某一场的对白、动作或表情。"
         "不抄框架已经锁死的那一部当唯一答案。来源是近年文学作品、影视、游戏和正在流行的连续叙事。"
     ),
     "episode": (
@@ -56,24 +56,24 @@ _STAGE_FOCUS = {
         "对白写怎么顶、怎么接、怎么留白。动作写这一下怎么起、怎么落到下一状态。"
         "表情写眉、眼、嘴和微动作怎么把下一步逼出来。剧情驱动写这一下凭什么让因为、所以、但是发生。"
         "按这一场的场景留开放查询，去搜近年新片、热播和流行短剧里的同类细节。承=全剧或基本点时不再另搜。承=另选才换，并写明已锁的两部为什么对不上这场。检索前先写一句问：这一场的对白或动作怎么把剧情推下去。留下作品名、所借逻辑、触发、阻挡、停。写不出这三步就换。"
-        "不写原句，不写原招的外形。"
+        "关键字每条16字以内，不写冒号，不写整段说明。不写原句，不写原招的外形。"
     ),
 }
 _STAGE_KEYS = {
     "framework": (
-        "works：字符串数组，能对上本剧整体架构的真实作品名，最多 6 部。优先近年新经典和正在流行的作品，不要用几部老名片占满。\n"
-        "plot_keywords：字符串数组，整体架构功能，最多 8 条。只写起势、加压、价值转向、危机抉择、收束。不要对白、动作招式或表情。\n"
-        "queries：字符串数组，短查询，最多 6 条。至少 4 条不点死一部旧作，写成「近年或热播或流行 + 类型或场面 + 结构或架构」，用来搜出训练集里可能没有的新架构。其余可以带一部近年作品名。"
+        "works：字符串数组，能对上本剧整体架构的真实作品名，最多 6 部，每条 24 字以内，只写作品名。优先近年新经典和正在流行的作品，不要用几部老名片占满。\n"
+        "plot_keywords：字符串数组，整体架构功能，最多 8 条。每条一个短功能词，16字以内，不写冒号，不写冒号后的说明。只写起势、加压、价值转向、危机抉择、收束。不要对白、动作招式或表情。\n"
+        "queries：字符串数组，短查询，最多 6 条，每条 36 字以内。至少 4 条不点死一部旧作，写成「近年或热播或流行 + 类型或场面 + 结构或架构」，用来搜出训练集里可能没有的新架构。其余可以带一部近年作品名。"
     ),
     "outline": (
-        "works：字符串数组，和本剧分集架构同类的真实作品名，最多 6 部。优先近年新经典和正在流行的连续叙事，不要只重复框架主框架，也不要用老名片占满。\n"
-        "plot_keywords：字符串数组，分集架构功能，最多 8 条。只写段与段怎么接、转折落在哪一段、钩子怎么打开下一段。不要某一场的对白、动作或表情。\n"
-        "queries：字符串数组，短查询，最多 6 条。至少 4 条不点死一部旧作，写成「近年或热播或流行 + 类型 + 分集或结构」，用来搜出新的分集架构。其余可以带一部近年作品名。"
+        "works：字符串数组，和本剧分集架构同类的真实作品名，最多 6 部，每条 24 字以内，只写作品名。优先近年新经典和正在流行的连续叙事，不要只重复框架主框架，也不要用老名片占满。\n"
+        "plot_keywords：字符串数组，分集架构功能，最多 8 条。每条一个短功能词，16字以内，不写冒号，不写冒号后的说明。只写段与段怎么接、转折落在哪一段、钩子怎么打开下一段。不要某一场的对白、动作或表情。\n"
+        "queries：字符串数组，短查询，最多 6 条，每条 36 字以内。至少 4 条不点死一部旧作，写成「近年或热播或流行 + 类型 + 分集或结构」，用来搜出新的分集架构。其余可以带一部近年作品名。"
     ),
     "episode": (
-        "works：字符串数组，和这一场场面同类的真实作品名，最多 6 部。优先近年新片、热播和流行短剧。对不上这场就换。不要用老名片占满。\n"
-        "plot_keywords：字符串数组，这场的可演细节，最多 8 条。必须能分开检索这四样：对白细节、动作细节、表情驱动、具体剧情的驱动细节。不要整部架构，不要原句。\n"
-        "queries：字符串数组，短查询，最多 6 条。至少 4 条不点死一部旧作，分别落到「对白」「动作」「表情」「剧情驱动」，并带上近年、新片、热播或流行短剧，用来搜出新的可演细节。其余可以带一部近年作品名。"
+        "works：字符串数组，和这一场场面同类的真实作品名，最多 6 部，每条 24 字以内，只写作品名。优先近年新片、热播和流行短剧。对不上这场就换。不要用老名片占满。\n"
+        "plot_keywords：字符串数组，这场的可演细节，最多 8 条。每条一个短功能词，16字以内，不写冒号，不写冒号后的说明。必须能分开检索这四样：对白细节、动作细节、表情驱动、具体剧情的驱动细节。不要整部架构，不要原句。\n"
+        "queries：字符串数组，短查询，最多 6 条，每条 36 字以内。至少 4 条不点死一部旧作，分别落到「对白」「动作」「表情」「剧情驱动」，并带上近年、新片、热播或流行短剧，用来搜出新的可演细节。其余可以带一部近年作品名。"
     ),
 }
 _STAGE_SEARCH_USE = {
@@ -102,9 +102,9 @@ _STAGE_SEARCH_USE = {
 
 def _extract_system(stage: str) -> str:
     keys = _STAGE_KEYS.get(str(stage or "").strip()) or (
-        "works：字符串数组，真实作品名，最多 6 部。\n"
-        "plot_keywords：字符串数组，可检索的剧情功能，最多 8 条。不写原句。\n"
-        "queries：字符串数组，短查询，最多 6 条。每条带作品名或剧情功能。"
+        "works：字符串数组，真实作品名，最多 6 部，每条 24 字以内。\n"
+        "plot_keywords：字符串数组，可检索的剧情功能，最多 8 条。每条一个短功能词，16字以内，不写冒号，不写整段说明。不写原句。\n"
+        "queries：字符串数组，短查询，最多 6 条，每条 36 字以内。每条带作品名或剧情功能。"
     )
     return (
         "你是剧情借鉴检索员。只输出一个 JSON 对象，不要 markdown，不要解释。\n"
@@ -114,6 +114,7 @@ def _extract_system(stage: str) -> str:
         "没有把握的新名字不要编。材料里没有可借鉴的点时，三个数组都用 []。"
     )
 _LIST_LIMIT = {"works": 6, "plot_keywords": 8, "queries": 6}
+_CHAR_LIMIT = {"works": 24, "plot_keywords": 16, "queries": 36}
 _LIST_ALIASES = {
     "works": ("works", "reference_works", "作品", "作品名"),
     "plot_keywords": ("plot_keywords", "keywords", "剧情关键字", "关键字"),
@@ -132,7 +133,16 @@ def _clip_source(text: str) -> str:
     return source[:_SOURCE_CHAR_LIMIT]
 
 
-def _as_keyword_list(value: Any, *, limit: int) -> List[str]:
+def _search_term(text: str, *, max_chars: int, head_only: bool) -> str:
+    cleaned = " ".join(str(text or "").split()).strip()
+    if head_only:
+        cleaned = re.split(r"[：:]", cleaned, maxsplit=1)[0].strip()
+    if not cleaned or (max_chars and len(cleaned) > max_chars):
+        return ""
+    return cleaned
+
+
+def _as_keyword_list(value: Any, *, limit: int, max_chars: int = 0, head_only: bool = False) -> List[str]:
     if isinstance(value, str):
         parts = re.split(r"[;\n；、|]", value)
     elif isinstance(value, list):
@@ -141,7 +151,7 @@ def _as_keyword_list(value: Any, *, limit: int) -> List[str]:
         return []
     out: List[str] = []
     for item in parts:
-        text = " ".join(str(item or "").split()).strip()
+        text = _search_term(str(item or ""), max_chars=max_chars, head_only=head_only)
         if not text or text in out:
             continue
         out.append(text)
@@ -180,14 +190,32 @@ def parse_reference_plot_keywords(raw: str) -> Dict[str, List[str]]:
             if alias in data:
                 value = data.get(alias)
                 break
-        parsed[key] = _as_keyword_list(value, limit=_LIST_LIMIT[key])
+        parsed[key] = _as_keyword_list(
+            value,
+            limit=_LIST_LIMIT[key],
+            max_chars=_CHAR_LIMIT[key],
+            head_only=(key == "plot_keywords"),
+        )
     return parsed
 
 
 def format_reference_plot_block(keywords: Dict[str, Any], *, stage: str) -> str:
-    works = _as_keyword_list((keywords or {}).get("works"), limit=_LIST_LIMIT["works"])
-    plots = _as_keyword_list((keywords or {}).get("plot_keywords"), limit=_LIST_LIMIT["plot_keywords"])
-    queries = _as_keyword_list((keywords or {}).get("queries"), limit=_LIST_LIMIT["queries"])
+    works = _as_keyword_list(
+        (keywords or {}).get("works"),
+        limit=_LIST_LIMIT["works"],
+        max_chars=_CHAR_LIMIT["works"],
+    )
+    plots = _as_keyword_list(
+        (keywords or {}).get("plot_keywords"),
+        limit=_LIST_LIMIT["plot_keywords"],
+        max_chars=_CHAR_LIMIT["plot_keywords"],
+        head_only=True,
+    )
+    queries = _as_keyword_list(
+        (keywords or {}).get("queries"),
+        limit=_LIST_LIMIT["queries"],
+        max_chars=_CHAR_LIMIT["queries"],
+    )
     if not works and not plots and not queries:
         return ""
     label = _STAGE_LABEL.get(str(stage or "").strip(), str(stage or "").strip() or "本阶段")
@@ -195,7 +223,9 @@ def format_reference_plot_block(keywords: Dict[str, Any], *, stage: str) -> str:
         "【借鉴剧情检索】",
         (
             f"阶段={label}。这些关键字已经抽好。"
-            "提交这一次时，若模型带搜索，就用这些关键字同时检索，不要另等一份检索稿。"
+            "提交这一次时，若模型带搜索，就用作品名和「检索」里的短查询去搜。"
+            "剧情关键字是短功能词，用来判断从结果里取哪一种结构。"
+            "不要另等一份检索稿。"
         ),
         _SEARCH_OPEN,
         _STAGE_SEARCH_USE.get(
@@ -338,7 +368,11 @@ def attach_reference_plot_search(
 ) -> Dict[str, Any]:
     bound = copy.deepcopy(llm_config) if isinstance(llm_config, dict) else {}
     inner = dict(bound.get("config") or {}) if isinstance(bound.get("config"), dict) else {}
-    queries = _as_keyword_list((keywords or {}).get("queries"), limit=_LIST_LIMIT["queries"])
+    queries = _as_keyword_list(
+        (keywords or {}).get("queries"),
+        limit=_LIST_LIMIT["queries"],
+        max_chars=_CHAR_LIMIT["queries"],
+    )
     inner["__reference_plot_search"] = keywords_have_terms(keywords or {})
     inner["__reference_plot_queries"] = queries
     bound["config"] = inner

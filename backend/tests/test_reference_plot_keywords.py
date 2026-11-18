@@ -23,6 +23,25 @@ def test_parse_fenced_json_and_chinese_aliases_with_limits():
     assert parsed["queries"] == ["甲 剧情", "乙 plot"]
 
 
+def test_long_plot_keywords_keep_the_short_head():
+    raw = """{
+      "works": ["全知读者视角", "这不是作品名而是一整句用来解释架构的说明所以应当丢掉"],
+      "plot_keywords": [
+        "开篇倒计时锚定：首集以时空回溯抢占先知窗口切入，集尾用高维加速死线打破旧时间线预期",
+        "这是一整段没有冒号的剧情说明用来解释双线如何在集内同时加压并在集末打开下集钩子"
+      ],
+      "queries": ["近年热播末世重生剧 压缩时间线 分集结构", "这是一条远远超过三十六字的检索说明，把整段剧情重讲一遍，不该进入搜索，整段丢掉"]
+    }"""
+    parsed = parse_reference_plot_keywords(raw)
+    assert parsed["works"] == ["全知读者视角"]
+    assert parsed["plot_keywords"] == ["开篇倒计时锚定"]
+    assert parsed["queries"] == ["近年热播末世重生剧 压缩时间线 分集结构"]
+    block = format_reference_plot_block(parsed, stage="outline")
+    assert "短查询" in block
+    assert "短功能词" in block
+    assert "高维加速死线" not in block
+
+
 def test_empty_keywords_format_to_no_block():
     assert format_reference_plot_block({"works": [], "plot_keywords": [], "queries": []}, stage="framework") == ""
 
