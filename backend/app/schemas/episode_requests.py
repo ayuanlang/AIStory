@@ -36,9 +36,22 @@ class CharacterCanonCategoriesRequest(BaseModel):
     identity_categories: Optional[List[Dict[str, Any]]] = None
 
 
+def story_generator_payload(req: BaseModel) -> Dict[str, Any]:
+    """Persistable story-generator fields. Outline-check inputs stay on the request only."""
+    try:
+        data = req.model_dump()
+    except AttributeError:
+        data = req.dict()
+    data.pop("check_episode_outlines", None)
+    data.pop("existing_outline_md", None)
+    return data
+
+
 class StoryGeneratorRequest(BaseModel):
     mode: str  # 'global' | 'episode'
     resume_episode_outlines: Optional[bool] = False
+    check_episode_outlines: Optional[bool] = False
+    existing_outline_md: Optional[str] = None
     generator_kind: Optional[str] = None  # promo | story
     episodes_count: Optional[int] = None
     episode_duration_minutes: Optional[int] = 1

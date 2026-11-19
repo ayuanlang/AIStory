@@ -1170,10 +1170,9 @@ async def generate_episode_story_dna(
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
     # Persist both output and the inputs that produced it.
-    try:
-        story_input = req.model_dump()
-    except AttributeError:
-        story_input = req.dict()
+    from app.schemas.episode_requests import story_generator_payload  # noqa: E402
+
+    story_input = story_generator_payload(req)
     from app.services.story_generator_llm import keep_saved_registry_fields  # noqa: E402
 
     story_input = keep_saved_registry_fields(
@@ -1237,10 +1236,9 @@ def save_episode_story_generator_input(
     if mode not in ("global", "episode"):
         raise HTTPException(status_code=400, detail="mode must be 'global' or 'episode'")
 
-    try:
-        story_input = req.model_dump()
-    except AttributeError:
-        story_input = req.dict()
+    from app.schemas.episode_requests import story_generator_payload  # noqa: E402
+
+    story_input = story_generator_payload(req)
     from app.services.story_generator_llm import keep_saved_registry_fields  # noqa: E402
 
     story_input = keep_saved_registry_fields(

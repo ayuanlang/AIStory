@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, TrendingUp } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, ListChecks, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, TrendingUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -371,6 +371,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     }, [episodes, hasSetDefaultEp]);
 
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
+    const [outlineRunKind, setOutlineRunKind] = useState('');
     const [isStructuringCreativeInput, setIsStructuringCreativeInput] = useState(false);
     const [isStoppingStructure, setIsStoppingStructure] = useState(false);
     const [isStoppingOutline, setIsStoppingOutline] = useState(false);
@@ -1933,10 +1934,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         }
     };
 
-    const handleGenerateGlobalStory = async (resume = false) => {
+    const handleGenerateGlobalStory = async (resume = false, filledLabels = '') => {
+        const checkOutlines = resume === 'check';
         const resumeOutlines = resume === true;
         if (globalStoryGenerationInFlightRef.current || isGeneratingGlobalStory) return;
         globalStoryGenerationInFlightRef.current = true;
+        setOutlineRunKind(checkOutlines ? 'check' : (resumeOutlines ? 'resume' : 'generate'));
         setIsGeneratingGlobalStory(true);
         outlineTaskIdRef.current = '';
         outlineStopRequestedRef.current = false;
@@ -1945,6 +1948,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 mode: 'global',
                 generator_kind: 'story',
                 resume_episode_outlines: resumeOutlines,
+                check_episode_outlines: checkOutlines,
+                existing_outline_md: checkOutlines ? (info.story_dna_global_md || '') : '',
                 episodes_count: Number(globalStoryInput.episodes_count || 0),
                 episode_duration_minutes: Number(globalStoryInput.episode_duration_minutes) > 0
                     ? Number(globalStoryInput.episode_duration_minutes)
@@ -1996,7 +2001,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 setInfo(merged);
             }
             setStoryGenFocusStep('global_framework');
-            alert(resumeOutlines
+            alert(checkOutlines
+                ? t(`已补上缺失分集（${filledLabels}），并按序写入。`, `Filled the missing episodes (${filledLabels}) and inserted them in order.`)
+                : resumeOutlines
                 ? t('已从断点补全分集大纲，已完成的集没有重写。', 'Episode outlines continued from the break. Finished episodes were kept.')
                 : t('分集大纲已生成并保存。请核对每一集是否盖住剧本框架，上下集是否接上，以及本集经典基本点。', 'Episode outlines are saved. Check that every episode covers the framework, joins the previous episode, and names its classic base point.'));
         } catch (e) {
@@ -2006,14 +2013,43 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             }
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
-            alert(`${t('分集大纲生成失败', 'Failed to generate episode outlines')}:\n${readable}`);
+            alert(`${t(checkOutlines ? '分集检查失败' : '分集大纲生成失败', checkOutlines ? 'Episode check failed' : 'Failed to generate episode outlines')}:\n${readable}`);
         } finally {
             outlineStopRequestedRef.current = false;
             outlineTaskIdRef.current = '';
             setIsStoppingOutline(false);
             setIsGeneratingGlobalStory(false);
+            setOutlineRunKind('');
             globalStoryGenerationInFlightRef.current = false;
         }
+    };
+
+    const handleCheckEpisodeOutlines = async () => {
+        if (seriesIpMode || globalStoryGenerationInFlightRef.current || isGeneratingGlobalStory) return;
+        const markdown = String(info?.story_dna_global_md || '').trim();
+        if (!markdown) {
+            alert(t('请先生成分集大纲。', 'Generate the episode outlines first.'));
+            return;
+        }
+        const planned = Number(globalStoryInput.episodes_count || 0);
+        if (!planned) {
+            alert(t('请先填写集数。', 'Set the episode count first.'));
+            return;
+        }
+        const progress = episodeOutlineProgress(markdown, planned);
+        if (!progress.completeCount) {
+            alert(t('分集大纲里没有已闭合的集，请先生成分集大纲。', 'No closed episode blocks yet. Generate the outlines first.'));
+            return;
+        }
+        if (!progress.missing.length) {
+            const end = String(planned).padStart(2, '0');
+            alert(t(`分集齐全，EP01–EP${end} 都在。`, `Episode outlines are complete, EP01–EP${end}.`));
+            return;
+        }
+        const labels = progress.missing
+            .map((number) => `EP${String(number).padStart(2, '0')}`)
+            .join(uiLang === 'zh' ? '、' : ', ');
+        await handleGenerateGlobalStory('check', labels);
     };
 
     const handleStopOutline = async () => {
@@ -3864,6 +3900,17 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                                     <button type="button" onClick={() => scrollToStoryGenStep('global_framework')} className={stepBtnClass}>
                                                                         {t('编辑', 'Edit')}
                                                                     </button>
+                                                                    {!seriesIpMode && globalFrameworkReady && (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={handleCheckEpisodeOutlines}
+                                                                            disabled={isGeneratingGlobalStory || !structurePrefillReady}
+                                                                            className={stepBtnClass}
+                                                                            title={t('检查是否缺集。缺了就用原来的提示词和已有大纲补写，再按集号插回去。', 'Check for missing episodes. Missing ones are written from the original prompt and the current outline, then inserted in order.')}
+                                                                        >
+                                                                            {t('检查', 'Check')}
+                                                                        </button>
+                                                                    )}
                                                                     {!seriesIpMode && outlineProgress.canResume && (
                                                                         <button
                                                                             type="button"
@@ -4262,27 +4309,27 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('麦格芬', 'MacGuffin')}</label>
                                 <div className="text-[11px] text-muted-foreground/80 mb-0.5">
                                     {t(
-                                        '全剧只锁一件。双方都要拿到、少了它这场冲突就没有着力点的那一件：能交到手里的物、消息的可见载体，或正在被寻找的人。时限是拿到它的截止，过期是窗口关上时能看见的损失。尽快、不久、随时不算时限。不写外形。分集沿用这个名字和这一截时间。',
-                                        'One concrete thing for the whole work. Both sides must get it; without it the locked conflict has nothing to grip. An object that can be handed over, the visible carrier of a message, or a person being sought. 时限 is the deadline for getting it. 过期 is the visible loss when the window closes. Soon is not a deadline. No appearance. Later episodes keep this name and this clock.'
+                                        '全剧只锁一件。双方都要拿到、少了它这场冲突就没有着力点的那一件：能交到手里的物、消息的可见载体，或正在被寻找的人。情感是背景里已经有的那一层具体关系。真相是这件让人看见的那一个事实。时限是拿到它的截止，过期是窗口关上时能看见的损失。尽快、不久、随时不算时限。不写外形。分集沿用这个名字、这层情感、这句真相和这一截时间。',
+                                        'One concrete thing for the whole work. Both sides must get it; without it the locked conflict has nothing to grip. An object that can be handed over, the visible carrier of a message, or a person being sought. 情感 is the specific bond already in the background. 真相 is the one fact this thing makes visible. 时限 is the deadline for getting it. 过期 is the visible loss when the window closes. Soon is not a deadline. No appearance. Later episodes keep this name, this feeling, this truth, and this clock.'
                                     )}
                                 </div>
                                 <div className="text-[11px] text-primary/70 mb-1.5 italic">
                                     {emotionDrivenMode
                                         ? t(
-                                            '例：麦格芬｜名=家书｜类=物｜谁要=林一｜对手要=周薇｜得不到=这一次选择失去着力点｜时限=天亮以前｜过期=家书被收走｜首现=02｜兑现=07',
-                                            'e.g. 麦格芬｜名=家书｜类=物｜谁要=林一｜对手要=周薇｜得不到=这一次选择失去着力点｜时限=天亮以前｜过期=家书被收走｜首现=02｜兑现=07'
+                                            '例：麦格芬｜名=家书｜类=物｜谁要=林一｜对手要=周薇｜得不到=这一次选择失去着力点｜情感=这封信是父亲没当面说完的那一句｜真相=页脚不是陈建国的字｜时限=天亮以前｜过期=家书被收走｜首现=02｜兑现=07',
+                                            'e.g. 麦格芬｜名=家书｜类=物｜谁要=林一｜对手要=周薇｜得不到=这一次选择失去着力点｜情感=这封信是父亲没当面说完的那一句｜真相=页脚不是陈建国的字｜时限=天亮以前｜过期=家书被收走｜首现=02｜兑现=07'
                                         )
                                         : t(
-                                            '例：麦格芬｜名=林一的工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=审计留不住｜时限=二十四小时｜过期=审计记录清掉｜首现=04｜兑现=14',
-                                            'e.g. 麦格芬｜名=林一的工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=审计留不住｜时限=二十四小时｜过期=审计记录清掉｜首现=04｜兑现=14'
+                                            '例：麦格芬｜名=林一的工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=审计留不住｜情感=这张牌是周薇经手过的那一次留任｜真相=牌上留下的审计不是林一自己的｜时限=二十四小时｜过期=审计记录清掉｜首现=04｜兑现=14',
+                                            'e.g. 麦格芬｜名=林一的工牌｜类=物｜谁要=林一｜对手要=周薇｜得不到=审计留不住｜情感=这张牌是周薇经手过的那一次留任｜真相=牌上留下的审计不是林一自己的｜时限=二十四小时｜过期=审计记录清掉｜首现=04｜兑现=14'
                                         )}
                                 </div>
                                 <textarea
                                     className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
                                     rows={3}
                                     placeholder={t(
-                                        '麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜时限=｜过期=｜首现=｜兑现=',
-                                        '麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜时限=｜过期=｜首现=｜兑现='
+                                        '麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜情感=｜真相=｜时限=｜过期=｜首现=｜兑现=',
+                                        '麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜情感=｜真相=｜时限=｜过期=｜首现=｜兑现='
                                     )}
                                     value={globalStoryInput.macguffin || ''}
                                     onFocus={() => setStoryGenFocusStep('structure_prefill')}
@@ -4453,7 +4500,25 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${globalFrameworkReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>3</span>
                                     <label className="text-xs text-muted-foreground uppercase font-bold block">{seriesIpMode ? t('已生成全剧信息（Markdown）', 'Generated Series Bible (Markdown)') : t('分集大纲（Markdown）', 'Episode Outlines (Markdown)')}</label>
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap justify-end">
+                                    {!seriesIpMode && globalFrameworkReady && (
+                                        <button
+                                            type="button"
+                                            onClick={handleCheckEpisodeOutlines}
+                                            disabled={isGeneratingGlobalStory || !structurePrefillReady}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isGeneratingGlobalStory || !structurePrefillReady) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                            title={outlineProgress.missing.length
+                                                ? t(
+                                                    `缺 ${outlineProgress.missing.map((number) => `EP${String(number).padStart(2, '0')}`).join('、')}。用原来的提示词和已有大纲补写，再按集号插回去。`,
+                                                    `Missing ${outlineProgress.missing.map((number) => `EP${String(number).padStart(2, '0')}`).join(', ')}. Write them from the original prompt and the current outline, then insert them in order.`
+                                                )
+                                                : t('检查分集是否齐全。', 'Check whether every episode outline is present.')}
+                                        >
+                                            {(isGeneratingGlobalStory && outlineRunKind === 'check')
+                                                ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('检查中...', 'Checking...')}</>
+                                                : <><ListChecks className="w-3.5 h-3.5" /> {t('分集检查', 'Check Episodes')}</>}
+                                        </button>
+                                    )}
                                     {!seriesIpMode && outlineProgress.canResume && (
                                         <button
                                             type="button"
@@ -4531,7 +4596,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     onChange={(e) => updateField('story_dna_global_md', e.target.value)}
                                     placeholder={seriesIpMode
                                         ? t('（生成后，全剧信息会显示在这里。你可以编辑后保存修改。）', '(After generation, the series bible will appear here. You can edit it and Save Changes.)')
-                                        : t('（生成后，分集大纲会显示在这里。你可以编辑后保存修改。缺的集可以用「从断点继续」。）', '(After generation, the episode outlines will appear here. You can edit them and Save Changes. Use Resume for the missing episodes.)')}
+                                        : t('（生成后，分集大纲会显示在这里。你可以编辑后保存修改。缺的集可以用「分集检查」。）', '(After generation, the episode outlines will appear here. You can edit them and Save Changes. Use Check Episodes for the missing ones.)')}
                                 />
                             ) : (
                                 <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 min-h-[12rem] overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1">

@@ -6,6 +6,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.services.continuation_prompt import append_previous_output
 from app.services.episode_script_reference_service import extract_story_dna_delimited_block
 from app.services.llm_service import llm_service
 
@@ -18,11 +19,11 @@ _OUTPUT_END_RE = re.compile(r"\[\s*STORY_DNA_OUTPUT_END\s*\]", re.IGNORECASE)
 _FILL_SYSTEM = (
     "你在补全已经写好的分集大纲里缺掉的集。已闭合的集不要重写。只输出本次点名的集。\n"
     "每一集一对独占行 [EPISODE_BLOCK_START:EPxx] 与 [EPISODE_BLOCK_END:EPxx]，集号用两位。\n"
-    "每集只有十二行：标题、摘要（一个因为、一个所以、一个但是）、交接（入，以及出=未完谁、未完事、未完停）、观众（看因、偿=但是、再看、差=留|补|无、不知者、情绪、时限态、消耗、过期可见）、时间（绝对或相对节点的范围，含季节、昼夜、气候）、救猫咪拍（拍名、收完、但是落在）、空间（本集涉及的每一处，至少一处，可以多处）、在场名、AI（落到本集拍上的优势和回避，没有则优势=无｜回避=无）、专业（领域、动作、对白；没碰到写领域=无｜动作=无｜对白=无）、驱动（弧光和冲突是最大项；被逼的那一下写进因为或所以；落只写落=但是）、基本点（只写一处经典、一个落点，写这句如何让本集更难收场；类=文学|影视|游戏；不写流行，不写第二处；不抄原句）。\n"
+    "每集只有十一行：标题、摘要（一个因为、一个所以、一个但是）、交接（入，以及出=未完谁、未完事、未完停）、观众（看因、偿=但是、再看、差=留|补|无、不知者、情绪、时限态、消耗、过期可见）、时间（绝对或相对节点的范围，含季节、昼夜、气候）、救猫咪拍（拍名、收完、但是落在）、空间（只写地方名，至少一处，可以多处）、在场名、AI（落到本集拍上的优势和回避，没有则优势=无｜回避=无）、驱动（弧光和冲突是最大项；被逼的那一下写进因为或所以；落只写落=但是）、基本点（只写一处经典、一个落点，写这句如何让本集更难收场；类=文学|影视|游戏；不写流行，不写第二处；不抄原句）。不写专业行。专业由分集执笔分析并执行。主体和是否超载只在开头【空间主体】写一次。\n"
     "看因从观影心理写。每一集都写悬念、错位、博弈、共情、兑现、关系。只写本集这一下，能指回本集的因为、所以或但是，不写整部主旨、弧光或总目标。观众还握着、这一集没推的写留，内容留下，等后面的集再推。观众这里还没有的才写无。关系没有已锁羁绊才写无；羁绊在而没推，写留。至少一项为进。下集接留着和进过的项，留的内容相同，不把留改成无。末集把还留着的项收掉。全剧逐步释放、逐步推进：EP01 只放开场握得住的，其后每一集推进已握住的或新释放一项，末集收完。本集但是就是这一步。可以有几种配合。因驱动写它们怎么配合：同时再抛出、兑现后再入、结果带出。悬念、博弈、共情、兑现是常见几种，还有别的推动就写那种。每种都配上框架已锁的前提或主旨、冲突、弧光，或本集但是，由本集剧情演出来。没有上一集时，从开场里写这几种怎么一起被看见。有上一集时，接那一集的再看和再驱动，并可再配合新的推动。再看用再驱动，不把但是再写一遍，点名未完谁和未完事。给出了下一集时，再看和再驱动必须能交给那一集。末集再看=无、再驱动=无。偿只写偿=但是，不另写一句。差=留时不知者到本集结束仍不知道，情绪只许爽、喜剧、心疼、紧张。差=补时但是里让他知道。差=无时不知者=无、情绪=无。集数多出来的加压集，但是必须改掉已锁事实：谁站到哪边、东西到了谁手里、或时限更短。只把上一集再看再演一遍，不交。还在追麦格芬而消耗=无，不交。不另起一个截止。\n"
-    "不写故事环、卖点、金句、场表、选场逻辑、多线表、戏份。不写 §0–§8。救猫咪拍行只写拍名和收完。AI 行不写成场表或长文。专业行不写成百科。按本集剧情评估所需专业，含埋点和钩子。把可能用到、能让这一下站得住的专业知识带进来。领域必须是实际学科。举例是物理、化学、法律、哲学、机械、武器、数学、医学（含中医），以及同类已有学科，不限于这几门。可以是专业设想或科幻，设想仍守所挂那一门的基础框架。领域名写学科，不写成脱离这些框架的能力名。登记里有的用登记名。剧情必须靠一门登记里没有的，写来源=本集。剧情、埋点和钩子都不靠专业知识，才写领域=无。不把这一集用不到的门贴上。\n"
+    "不写故事环、卖点、金句、场表、选场逻辑、多线表、戏份。不写 §0–§8。救猫咪拍行只写拍名和收完。各集写 AI 行。不写专业行。各集空间行不写主体。\n"
     "不写思考过程，不写用户原文保留区，不写逐字落实映射，不回抄用户原文，不重写剧本框架，不写 Episode Coverage Audit。\n"
-    "人物和道具只用已有名字和已有功能，写在名行。空间行必写，至少一处，可以多处，不并成一个名字。环境名逐字对应剧本框架场景与道具里的空间名。没登记的才标补。不用打斗地这类事件名。场景以简单为先：四壁每壁只有封闭面再加一具贴附，中部只有一个主体。有人坐下才把座写进主体，座不算第二主体。配套和配饰不在这一阶段写。一处首现只锁这个上限，之后复用；新功能落在已有主体上。跟 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。不写颜色、材质、纹样。不够或超负载就换地方并标补，不在旧处加主体。非封闭远景不计负载。\n"
+    "人物和道具只用剧本框架已经取好的名字和已有功能，写在名行。不另取名，不改名。空间行必写，至少一处，可以多处，不并成一个名字。环境名逐字对应剧本框架场景与道具里的空间名。没登记的回流剧本框架补名。不用打斗地这类事件名。主体只在已有的【空间主体】里。补上的集只点地方名，不另写主体。跟 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。不写颜色、材质、纹样。不够或超负载就换框架里已经登记的另一处。框架没有另一处，回流剧本框架登记，不在分集里取名。不在旧处加主体。非封闭远景不计负载。\n"
     "补上的集，入必须接上给出的上一集未完谁和未完事：同一个人、同一处、同一件还在做的事。上一集未完停，本集摘要先做到可见结果，再写新的所以和但是。看因接上一集再看。上集有角色刚入场，本集先完成谁见他、他来做什么、他落到哪一步；安排写完之前不换地方、不另起无关的事、不把他写成已经就位，也不让他从名行消失。给出了下一集时，出必须交给那一集的入，并把本集没做完的事留在出里。没有给出的邻集，不要用全文最后一集来接。摘要从这态接着写。没有上一集，入写开场看见的那一态。EP01 的 Opening 保住框架开场画面的吸睛档：宏观看得见规模，两难两角已经在场。双线或蒙太奇切场必须在交接写明切=双线或切=蒙太奇，以及切到哪一条、哪些地方。上集仍保持刚入场或未做完的那一下，切回来再完成。\n"
     "项目季节是开篇。本次要补的集如果剧情时间已经走到下一季，季节按春夏秋冬顺着变，并写跨季=是。换季只改时间行的季节。不写景致、衣着、道具外形、环境实体细节。每一处再写占用=首现|未结束|已结束。角色已离场，或再开始已经是另一个时间段，占用=已结束，重新初始化或重新入场。同一时间段里人还在，占用=未结束，入接着上一场。有空间占用参考时，只用来源集小于本集的最近一条，不把坐标写进大纲。\n"
 )
@@ -183,6 +184,27 @@ def merge_usage(base: Optional[Dict[str, Any]], extra: Optional[Dict[str, Any]])
     }
 
 
+def build_gap_fill_user_prompt(
+    original_user_prompt: str,
+    existing: str,
+    batch: List[int],
+    planned: int,
+) -> str:
+    """Original outline prompt, then the outline already written, then the episodes still missing."""
+    labels = ", ".join(f"EP{number:02d}" for number in batch)
+    detail = (
+        f"计划集数 = {planned}。已闭合的集保持原样。"
+        f"这次只补缺掉的集：{labels}。"
+        "每一集一对独占行 [EPISODE_BLOCK_START:EPxx] 与 [EPISODE_BLOCK_END:EPxx]，集号用两位。"
+        "只返回这些新块。新块会按集号插回分集序列。"
+    )
+    prompted = append_previous_output(original_user_prompt, existing, detail=detail)
+    return (
+        f"{prompted.rstrip()}\n\n"
+        f"【本次只补】计划集数 = {planned}。只输出：{labels}。已闭合的集保持原样。\n"
+    )
+
+
 def _fill_user_prompt(
     context: str,
     batch: List[int],
@@ -216,6 +238,8 @@ async def ensure_story_episode_blocks(
     fill_system: Optional[str] = None,
     registry_block: str = "",
     reference_block: str = "",
+    source_user_prompt: str = "",
+    source_system: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """Append any missing EP01–EPN blocks. Raises if they are still missing after the fill rounds."""
     current = str(markdown or "")
@@ -239,10 +263,17 @@ async def ensure_story_episode_blocks(
         if not missing:
             break
         batch = missing[: max(1, int(batch_size))]
-        context = framework_context_for_fill(current, batch)
+        original_prompt = str(source_user_prompt or "").strip()
+        if original_prompt:
+            user_message = build_gap_fill_user_prompt(original_prompt, current, batch, planned)
+            system_message = source_system or fill_system or _FILL_SYSTEM
+        else:
+            context = framework_context_for_fill(current, batch)
+            user_message = _fill_user_prompt(context, batch, planned, registry_block, reference_block)
+            system_message = fill_system or _FILL_SYSTEM
         response = await llm_service.generate_content_with_fallback(
-            _fill_user_prompt(context, batch, planned, registry_block, reference_block),
-            fill_system or _FILL_SYSTEM,
+            user_message,
+            system_message,
             llm_config or {},
             image_urls=None,
             video_urls=None,

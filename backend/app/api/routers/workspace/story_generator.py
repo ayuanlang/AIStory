@@ -149,10 +149,39 @@ async def generate_project_story_dna_global(
         )
     )
 
+    if bool(getattr(req, "check_episode_outlines", False)) and (generator_kind == "promo" or series_ip):
+        raise HTTPException(status_code=400, detail="分集检查只用于分集大纲。")
+    check_outlines = bool(getattr(req, "check_episode_outlines", False))
+    outline_for_check = ""
+    if check_outlines:
+        from app.services.story_episode_coverage import (  # noqa: E402
+            complete_episode_blocks,
+            drop_incomplete_episode_tail,
+            missing_episode_numbers,
+        )
+
+        outline_for_check = drop_incomplete_episode_tail(
+            str(getattr(req, "existing_outline_md", None) or gi_existing.get("story_dna_global_md") or "")
+        )
+        if not complete_episode_blocks(outline_for_check):
+            raise HTTPException(status_code=400, detail="分集大纲里没有已闭合的集，请先生成分集大纲。")
+        if not missing_episode_numbers(outline_for_check, int(episodes_count)):
+            try:
+                project.cover_image = get_project_cover_image(db, project.id)
+            except Exception:
+                project.cover_image = None
+            try:
+                project.aspectRatio = project.global_info.get("aspectRatio") if project.global_info else None
+            except Exception:
+                project.aspectRatio = None
+            return project
+
     if generator_kind == "promo":
         story_log_action = "宣传片框架"
     elif series_ip:
         story_log_action = "全剧信息"
+    elif check_outlines:
+        story_log_action = "分集检查"
     else:
         story_log_action = "分集大纲"
     llm_config = _resolve_story_generator_script_analysis_llm_config(
@@ -205,7 +234,9 @@ async def generate_project_story_dna_global(
     )
 
     resume_md = None
-    if getattr(req, "resume_episode_outlines", False) and generator_kind != "promo" and not series_ip:
+    if check_outlines:
+        resume_md = outline_for_check
+    elif getattr(req, "resume_episode_outlines", False) and generator_kind != "promo" and not series_ip:
         from app.services.story_episode_coverage import (  # noqa: E402
             complete_episode_blocks,
             drop_incomplete_episode_tail,
@@ -259,9 +290,11 @@ async def generate_project_story_dna_global(
                 episodes_count=int(episodes_count),
                 llm_config=llm_config,
                 user_id=user_id,
-                fill_system=emotion_driven_episode_fill_system() if emotion_driven else None,
-                registry_block=registry_block,
-                reference_block=fill_reference_block,
+                fill_system=None if check_outlines else (emotion_driven_episode_fill_system() if emotion_driven else None),
+                registry_block="" if check_outlines else registry_block,
+                reference_block="" if check_outlines else fill_reference_block,
+                source_user_prompt=user_prompt if check_outlines else "",
+                source_system=sys_prompt if check_outlines else None,
             )
             generated_payload = {"content": generated_md, "usage": fill_usage}
             fill_usage = merge_usage({}, fill_usage)
@@ -382,10 +415,9 @@ async def generate_project_story_dna_global(
     # Persist both output and the inputs that produced it.
     # This ensures a successful generation is durable across refresh even
     # if the user doesn't click the separate "Save Changes" button.
-    try:
-        story_input = req.model_dump()
-    except AttributeError:
-        story_input = req.dict()
+    from app.schemas.episode_requests import story_generator_payload  # noqa: E402
+
+    story_input = story_generator_payload(req)
     from app.services.story_generator_llm import keep_saved_registry_fields  # noqa: E402
 
     fresh_project = db.query(Project).filter(Project.id == int(project_id)).first()
@@ -448,10 +480,9 @@ def save_project_story_generator_global_input(
     """Persist Story Generator (Global/Project) draft inputs without calling the LLM."""
     project = _require_project_access(db, project_id, current_user)
 
-    try:
-        story_input = req.model_dump()
-    except AttributeError:
-        story_input = req.dict()
+    from app.schemas.episode_requests import story_generator_payload  # noqa: E402
+
+    story_input = story_generator_payload(req)
     from app.services.story_generator_llm import keep_saved_registry_fields  # noqa: E402
 
     saved_story_input = (project.global_info or {}).get("story_generator_global_input")
@@ -963,17 +994,20 @@ async def structure_project_creative_input_to_story_fields(
             "classic_framework 是经典借鉴，与 ai_vfx_strategy、story_circle 一起必填。来源是文学作品、影视、游戏。主框架是用人物冲突证明社会或人性前提的现代或当代作品，辅助至少 5 部，落阶只用 01 到 08。只写整体逻辑，含动作怎么推、对白怎么顶。可以参考原作剧情，必须符合本剧背景和主题，按本剧因果融合，不能硬拼，不抄原句。不锁每一集的基本点。分集大纲按本集场面另定一处，不抄主框架。分集生成按每一场场景再重选，不限于大纲那一部。"
             "优势行写阶=，不写救猫咪拍名。某一阶拿不准房间，就不要写进那一阶。沿用【项目季节 — 必须应用】。"
             "plot_background、story_lines、time_nodes、professional_domains、places_and_props 五键必填，禁止空字符串。"
-            "macguffin 同样必填。全剧只锁一件，格式是 `麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜时限=｜过期=｜首现=｜兑现=`。"
+            "macguffin 同样必填。全剧只锁一件，格式是 `麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜情感=｜真相=｜时限=｜过期=｜首现=｜兑现=`。"
             "名是能交到手里的物、消息的可见载体，或人物里已经登记、正在被寻找的人。首现和兑现写阶号，兑现落在证明。"
+            "情感是这件对剧情背景里已经写下的人的那一层具体感受：谁对谁、哪一段关系或伤口。重要、珍贵、爱不算。"
+            "真相是这件载体让人看见的一个事实，这个事实已经在那一背景里。名仍是载体。只写秘密或真相不算。"
+            "情感从首现就能看见。整句真相到兑现才说破。"
             "时限是拿到这件的截止，写成一段能数的时间，或一个故事里已经有的事件。过期是窗口关上时观众能看见的损失。尽快、不久、随时不算时限。"
-            "抽掉双方信念之后，这件和这截时间都不能单独把故事做成任务。不写外形。禁止无、暂无、待定、本剧无麦格芬。"
+            "抽掉双方信念之后，这件、这层情感、这句真相和这截时间都不能单独把故事做成任务。不写外形。禁止无、暂无、待定、本剧无麦格芬。"
             "篇幅不够就缩短八阶，不许漏这五键，也不许漏 macguffin。键名用英文。"
             "剧情背景写公开处境、关系前史、此刻为何非做不可。"
             "故事线至少两条改写同一冲突；只有整剧是单一封闭空间才写线数=1。"
             "时间节点至少写开篇的季节、昼夜、气候。"
             "专业领域写触因、做法和错法；情节不靠规程就写领域=无。"
             "领域必须是实际学科。举例是物理、化学、法律、哲学、机械、武器、数学、医学（含中医），以及同类已有学科，不限于这几门。可以是专业设想或科幻，设想仍守所挂那一门的基础框架。领域名写学科，不写成脱离这些框架的能力名。"
-            "场景与道具只登记离了就做不成的空间和物件。空间名是能站进去的地方，功能另写一句。一处一个名字，可以登记多处。同一处不堆主体。一处装不下就另登记一个地方。主体复用和换地方由分集大纲规划。不写陈设和材质。跟上面的 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。"
+            "角色、地方、道具的名字在这一阶段取好。分集大纲只沿用这些名字，不另取名，也不改名。场景与道具只登记离了就做不成的空间和物件。空间名是能站进去的地方，功能另写一句。一处一个名字，可以登记多处。同一处不堆主体。一处装不下就另登记一个地方。主体复用和换地方由分集大纲规划。不写陈设和材质。跟上面的 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。"
             "这次返回的 JSON 必须包含 plot_background、story_lines、time_nodes、professional_domains、places_and_props、macguffin。少一个键就是无效回答，不要留到后一阶段。\n"
         )
     else:
@@ -1012,11 +1046,14 @@ async def structure_project_creative_input_to_story_fields(
             "time_nodes names at least the opening season, day or night, and weather. "
             "professional_domains names the trigger, the right step, and the amateur mistake, or 领域=无. "
             "The domain must be a real discipline. Examples include physics, chemistry, law, philosophy, mechanics, weapons, mathematics, and medicine (including traditional Chinese medicine), and other established fields. The list is not closed. Speculation and science fiction stay inside that discipline's foundational framework. The domain name is the discipline, not an ability that leaves those frameworks. "
-            "places_and_props registers only spaces and objects the plot fails without. "
+            "Names of people, places, and props are assigned in this framework. The episode outline copies them and does not assign or rename. places_and_props registers only spaces and objects the plot fails without. "
             "A space name is a place you can stand in; write the function separately. Register each distinct place. Do not stack extra subjects into one place; if it cannot hold the next beat, register another place. Reuse and switching places are planned in the episode outline. No furnishings or materials. "
             "The whole text follows Base Positioning first, then Script Mode. Short drama, feature film, and general series do not change the world. Places, arrivals, how a line crosses distance, reading, reveals, and strikes use what that mode and era would have. High tech reads on a 全息屏. Xianxia uses a 法宝, and that action is 粒子. Period drama uses that era, with no computer, hologram, or phone unless the plot says so. An ordinary era uses what that place would have. Do not add one when the beat does not use it. "
-            "macguffin is one concrete thing for the whole work: `麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜时限=｜过期=｜首现=｜兑现=`. "
+            "macguffin is one concrete thing for the whole work: `麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜情感=｜真相=｜时限=｜过期=｜首现=｜兑现=`. "
             "名 is the object, the visible carrier of a message, or the person already in characters who is being sought. "
+            "情感 is one specific feeling this thing carries for the people already in the plot background. 重要 and 爱 are not that feeling. "
+            "真相 is one concrete fact this carrier makes visible, already in that background. The name stays the carrier. "
+            "The feeling is visible from 首现. The full truth is spoken at 兑现. "
             "时限 is the deadline for getting it, a countable span or an event already in the story. "
             "过期 is the visible loss when that window closes. 尽快, 不久, and 随时 are not a deadline. "
             "首现 is no later than the catalyst. 兑现 is beat 14. Do not write color, material, or size. "

@@ -260,7 +260,7 @@ def format_outline_registry_block(source: Any) -> str:
     """Five locked framework columns. §9 分集规划 reads these lines and does not invent another set."""
     return "\n".join([
         "[剧本框架五栏 — 分集规划输入]",
-        "这五栏是写 §9 分集规划的输入，原文已经在剧本框架锁好。时间行的节点、季节、昼夜、气候用时间节点。每一集用空间行写明涉及的地方，至少一处，可以多处，不并成一个名字。名字逐字用场景与道具里的空间名。场景以简单为第一优先：四壁每壁只有封闭面再加一具贴墙、嵌入或悬挂的主体，中部只有一个主体。有人坐下才把座写进主体，座不算第二主体。配套和配饰不在这一阶段写。每一处写主体、负载和复用。首现只锁这个上限。之后先用这些主体，新功能能落在已有主体上就写落在。跟 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。不写颜色、材质、纹样。做不到或超负载就另起一处并标补，不往旧处加主体。非封闭环境的远景不写入主体。专业行按本集剧情评估所需专业，含埋点和钩子。把可能用到、能让这一下站得住的专业知识带进来。领域必须是实际学科。举例是物理、化学、法律、哲学、机械、武器、数学、医学（含中医），以及同类已有学科，不限于这几门。可以是专业设想或科幻，设想仍守所挂那一门的基础框架。领域名写学科，不写成脱离这些框架的能力名。登记里有的用登记名。剧情必须靠一门登记里没有的，写来源=本集。剧情、埋点和钩子都不靠专业知识，才写领域=无。不把这一集用不到的门贴上。切场的线用故事线。EP01 摘要把剧情背景演成一件看得见的事，不把全文再贴成旁白。五栏有字时，不得另起时间节点。空间名先用场景与道具里已有的；只有这一集离了就做不成，或这一处主体超负载，才另起一处并标补。五栏之后的麦格芬已经锁好名字、时限和过期。有名字时，分集碰到这件就用这个名字和这一截时间，不另定，不改名，不另起一个截止。写着未锁时，不在分集里补一件。",
+        "这五栏是写 §9 分集规划的输入，原文已经在剧本框架锁好。时间行的节点、季节、昼夜、气候用时间节点。每一集用空间行写明涉及的地方，至少一处，可以多处，不并成一个名字。名字逐字用场景与道具里的空间名。场景以简单为第一优先：四壁每壁只有封闭面再加一具贴墙、嵌入或悬挂的主体，中部只有一个主体。有人坐下才把座写进主体，座不算第二主体。配套和配饰不在这一阶段写。主体只在开头【空间主体】写一次，并写综合=未超|超。各集空间行只写地方名。跟 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。不写颜色、材质、纹样。做不到或超负载，换框架里已经登记的另一处。框架没有另一处，回流剧本框架登记，不在分集里取名。不往旧处加主体。非封闭环境的远景不写入主体。各集写 AI 行，写落到本集的优势和回避，没有则优势=无｜回避=无。不写专业行。专业由分集执笔分析并执行。切场的线用故事线。EP01 摘要把剧情背景演成一件看得见的事，不把全文再贴成旁白。五栏有字时，不得另起时间节点。空间名逐字用场景与道具里已有的。不另取名，不改名。这一集离了就做不成，或这一处主体超负载，而框架没有另一处，回流剧本框架补名。五栏之后的麦格芬已经锁好名字、时限和过期。有名字时，分集碰到这件就用这个名字和这一截时间，不另定，不改名，不另起一个截止。写着未锁时，不在分集里补一件。",
         f"剧情背景: {_field_text(source, 'plot_background')}",
         f"故事线: {_field_text(source, 'story_lines')}",
         f"时间节点: {_field_text(source, 'time_nodes')}",
@@ -938,7 +938,38 @@ _REGISTRY_HEADING_RE = re.compile(
 )
 
 
-_MACGUFFIN_FIELD_RE = re.compile(r"(名|时限|过期)\s*=\s*([^｜|\n]+)")
+_MACGUFFIN_FIELD_RE = re.compile(r"(情感|真相|名|时限|过期)\s*=\s*([^｜|\n]+)")
+_VAGUE_MACGUFFIN_FEELINGS = frozenset({
+    "重要",
+    "珍贵",
+    "很重要",
+    "有意义",
+    "爱",
+    "亲情",
+    "情感",
+    "感情",
+    "秘密",
+    "真相",
+    "内情",
+    "关键",
+    "特殊",
+    "特别",
+    "意义",
+    "love",
+    "emotion",
+})
+_VAGUE_MACGUFFIN_TRUTHS = frozenset({
+    "真相",
+    "秘密",
+    "内情",
+    "一切",
+    "所有",
+    "事实",
+    "真的",
+    "内幕",
+    "truth",
+    "secret",
+})
 _VAGUE_MACGUFFIN_DEADLINES = frozenset({
     "尽快",
     "不久",
@@ -968,10 +999,20 @@ def _macguffin_blank(text: str) -> bool:
         return True
     limit = _macguffin_field(text, "时限")
     expired = _macguffin_field(text, "过期")
+    feeling = _macguffin_field(text, "情感")
+    truth = _macguffin_field(text, "真相")
     if _registry_blank(limit) or _registry_blank(expired):
         return True
+    if _registry_blank(feeling) or _registry_blank(truth):
+        return True
     compact_limit = _classic_framework_compact(limit).lower()
-    return compact_limit in _VAGUE_MACGUFFIN_DEADLINES
+    if compact_limit in _VAGUE_MACGUFFIN_DEADLINES:
+        return True
+    compact_feeling = _classic_framework_compact(feeling).lower()
+    compact_truth = _classic_framework_compact(truth).lower()
+    if compact_feeling in _VAGUE_MACGUFFIN_FEELINGS or compact_truth in _VAGUE_MACGUFFIN_TRUTHS:
+        return True
+    return compact_feeling == compact_truth
 
 
 def _registry_value_blank(key: str, text: str) -> bool:
@@ -1121,13 +1162,15 @@ def _format_macguffin_item(val: Any) -> str:
     who = _macguffin_piece(val, "谁要", "who")
     opponent = _macguffin_piece(val, "对手要", "opponent")
     lost = _macguffin_piece(val, "得不到", "lost")
+    feeling = _macguffin_piece(val, "情感", "feeling")
+    truth = _macguffin_piece(val, "真相", "truth")
     limit = _macguffin_piece(val, "时限", "deadline")
     expired = _macguffin_piece(val, "过期", "expired")
     first = _macguffin_piece(val, "首现", "first")
     payoff = _macguffin_piece(val, "兑现", "payoff")
     return (
         f"麦格芬｜名={name}｜类={kind}｜谁要={who}｜对手要={opponent}"
-        f"｜得不到={lost}｜时限={limit}｜过期={expired}｜首现={first}｜兑现={payoff}"
+        f"｜得不到={lost}｜情感={feeling}｜真相={truth}｜时限={limit}｜过期={expired}｜首现={first}｜兑现={payoff}"
     )
 
 
@@ -1241,10 +1284,14 @@ def build_registry_fill_prompts(
         "Reuse and switching places are planned in the episode outline. "
         "Register every distinct place; one story may need several. "
         "macguffin is one concrete thing for the whole work. "
-        "Format exactly `麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜时限=｜过期=｜首现=｜兑现=`. "
+        "Format exactly `麦格芬｜名=｜类=物|人|消息｜谁要=｜对手要=｜得不到=｜情感=｜真相=｜时限=｜过期=｜首现=｜兑现=`. "
         "名 is the ordinary name of the object, the visible carrier of a message, or the person being sought. "
         "Both 谁要 and 对手要 want that same thing. "
         "得不到 says why the locked conflict loses its grip. "
+        "情感 is one specific feeling this thing carries for the people already in the plot background: who, toward whom, and the particular bond or wound already written there. "
+        "重要, 珍贵, and 爱 are not that feeling. "
+        "真相 is one concrete fact this carrier makes visible, already sitting in that background. "
+        "The name stays the carrier. The truth is not a second object, and 秘密 or 真相 alone is not a fact. "
         "时限 is the deadline for getting it: a countable span or an event already in the story. "
         "过期 is the visible loss when that window closes. "
         "尽快, 不久, and 随时 are not a deadline. "
@@ -1258,8 +1305,9 @@ def build_registry_fill_prompts(
         system += (
             " This story is emotion-driven. Do not add Save the Cat beat names. "
             "macguffin 首现 and 兑现 are step numbers 01-08, and 兑现 is 07. "
-            "时限 is why this choice cannot wait. After both beliefs are removed, "
-            "neither the thing nor this clock can still work as a mission."
+            "时限 is why this choice cannot wait. 情感 is why this choice hurts. "
+            "真相 is what the choice is about. After both beliefs are removed, "
+            "neither the thing, this feeling, this truth, nor this clock can still work as a mission."
         )
     user = (
         f"The script framework left these fields empty: {labels}. Fill only these keys: {key_list}. "
