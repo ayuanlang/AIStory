@@ -1006,7 +1006,7 @@ async def structure_project_creative_input_to_story_fields(
             "故事线至少两条改写同一冲突；只有整剧是单一封闭空间才写线数=1。"
             "时间节点至少写开篇的季节、昼夜、气候。"
             "专业领域写触因、做法和错法；情节不靠规程就写领域=无。"
-            "领域必须是实际学科。举例是物理、化学、法律、哲学、机械、武器、数学、医学（含中医），以及同类已有学科，不限于这几门。可以是专业设想或科幻，设想仍守所挂那一门的基础框架。领域名写学科，不写成脱离这些框架的能力名。"
+            "领域必须是实际学科，或已有的技术技巧。举例是物理、化学、法律、哲学、机械、武器、数学、医学（含中医），以及野外生存、工具制作、企业管理这类已有的技术技巧。同类已有学科和技术技巧同样可以，不限于这几门。工具制作符合本剧时代或剧情背景。可以是专业设想或科幻，设想仍守所挂那一门的基础框架。领域名写这门学科或这门技术技巧，不写成脱离这些框架的能力名。"
             "角色、地方、道具的名字在这一阶段取好。分集大纲只沿用这些名字，不另取名，也不改名。场景与道具只登记离了就做不成的空间和物件。空间名是能站进去的地方，功能另写一句。一处一个名字，可以登记多处。同一处不堆主体。一处装不下就另登记一个地方。主体复用和换地方由分集大纲规划。不写陈设和材质。跟上面的 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。"
             "这次返回的 JSON 必须包含 plot_background、story_lines、time_nodes、professional_domains、places_and_props、macguffin。少一个键就是无效回答，不要留到后一阶段。\n"
         )
@@ -1045,7 +1045,7 @@ async def structure_project_creative_input_to_story_fields(
             "story_lines is at least two lines on the same conflict, or 线数=1 only for one closed space. "
             "time_nodes names at least the opening season, day or night, and weather. "
             "professional_domains names the trigger, the right step, and the amateur mistake, or 领域=无. "
-            "The domain must be a real discipline. Examples include physics, chemistry, law, philosophy, mechanics, weapons, mathematics, and medicine (including traditional Chinese medicine), and other established fields. The list is not closed. Speculation and science fiction stay inside that discipline's foundational framework. The domain name is the discipline, not an ability that leaves those frameworks. "
+            "The domain must be a real discipline or an established technical craft. Examples include physics, chemistry, law, philosophy, mechanics, weapons, mathematics, medicine (including traditional Chinese medicine), wilderness survival, toolmaking that fits the era or the plot, and enterprise management, and other established fields and crafts. The list is not closed. Speculation and science fiction stay inside that field's foundational framework. The domain name is the discipline or the craft, not an ability that leaves those frameworks. "
             "Names of people, places, and props are assigned in this framework. The episode outline copies them and does not assign or rename. places_and_props registers only spaces and objects the plot fails without. "
             "A space name is a place you can stand in; write the function separately. Register each distinct place. Do not stack extra subjects into one place; if it cannot hold the next beat, register another place. Reuse and switching places are planned in the episode outline. No furnishings or materials. "
             "The whole text follows Base Positioning first, then Script Mode. Short drama, feature film, and general series do not change the world. Places, arrivals, how a line crosses distance, reading, reveals, and strikes use what that mode and era would have. High tech reads on a 全息屏. Xianxia uses a 法宝, and that action is 粒子. Period drama uses that era, with no computer, hologram, or phone unless the plot says so. An ordinary era uses what that place would have. Do not add one when the beat does not use it. "

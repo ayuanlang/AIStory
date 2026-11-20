@@ -1269,7 +1269,7 @@ def build_registry_fill_prompts(
         "A rebirth or return gets its own node. No episode ranges. "
         "professional_domains: `领域=｜触因=｜规程=｜错法=` for a procedure the plot actually needs, "
         "or exactly `领域=无｜依据=本剧选择不依赖行业规程`. No per-episode action. "
-        "The domain must be a real discipline. Examples include physics, chemistry, law, philosophy, mechanics, weapons, mathematics, and medicine (including traditional Chinese medicine), and other established fields. The list is not closed. Speculation and science fiction stay inside that discipline's foundational framework. The domain name is the discipline, not an ability that leaves those frameworks. "
+        "The domain must be a real discipline or an established technical craft. Examples include physics, chemistry, law, philosophy, mechanics, weapons, mathematics, medicine (including traditional Chinese medicine), wilderness survival, toolmaking that fits the era or the plot, and enterprise management, and other established fields and crafts. The list is not closed. Speculation and science fiction stay inside that field's foundational framework. The domain name is the discipline or the craft, not an ability that leaves those frameworks. "
         "places_and_props: only spaces and objects the plot fails without. "
         "A space name is a place a person can stand in, such as 办公室、大堂、街道. "
         "One line each: `名 (EN)｜功能=｜准入=开放|受限` or `道具｜名｜功能=`. "
