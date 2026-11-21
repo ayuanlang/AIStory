@@ -23,7 +23,7 @@ _PLAN = """
 正北=0度=封闭面=墙皮｜大门｜依据=剧情明文｜落点=北｜大小=2.0×2.4×0.1｜朝向=南
 中部相对=客椅｜参照=方桌｜沿边=长边北侧｜间距=贴身｜朝向=南｜依据=对坐
 补光源=堂灯｜补光落点=舞台北沿外
-挂靠锚点=柜台｜锚点落=南｜戏用标识=最中心｜空镜=无
+挂靠锚点=柜台｜锚点落=南｜戏用标识=最中心｜站位沿边=长边北侧｜空镜=无
 【空镜规划】资格=专境
 [ENV_BLOCK_END]
 """
@@ -39,9 +39,10 @@ def test_asset_keeps_light_and_geometry_and_drops_basis():
     assert "间距=贴身" in cropped
     assert "可见落点=大门" in cropped
     assert "补光源=堂灯" in cropped
-    assert "挂靠锚点=" not in cropped
-    assert "锚点落=" not in cropped
-    assert "戏用标识=" not in cropped
+    assert "挂靠锚点=柜台" in cropped
+    assert "锚点落=南" in cropped
+    assert "戏用标识=最中心" in cropped
+    assert "站位沿边=" not in cropped
     assert "空镜=" not in cropped
     assert "【空镜规划】" not in cropped
 
@@ -58,6 +59,7 @@ def test_staging_keeps_geometry_and_drops_light_and_basis():
     assert "间距=贴身" in staged
     assert "补光源=堂灯" in staged
     assert "挂靠锚点=柜台" in staged
+    assert "站位沿边=长边北侧" in staged
     assert "客栈大堂" in staged
 
 
@@ -87,9 +89,9 @@ def test_quad_input_keeps_rotatable_keys_and_drops_essays():
     assert "【色彩说明】" not in cropped
     assert "纹样=" not in cropped
     assert "颜色=" not in cropped
-    assert "动线=" not in cropped
+    assert "动线=门到案" in cropped
     assert "交接=" not in cropped
-    assert "面件数=" not in cropped
+    assert "面件数=北1" in cropped
     assert "空气感=" not in cropped
     assert "材质=宣纸" in cropped
     assert "长边平行=Y线" in cropped

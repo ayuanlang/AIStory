@@ -2414,14 +2414,19 @@ async def execute_analyze_scene(
             subject_index_reconcile_warning_codes = subject_index_reconcile_result.get("warning_codes") or []
             subject_index_reconcile_warnings = subject_index_reconcile_result.get("warnings") or []
 
-            # Subject Index name lock repair (asset design): if name/name_en are not in
-            # the Index whitelist, one LLM remap, then re-reconcile.
+            # Subject Index is not the name source for character, prop, or environment
+            # design. Those names come from the extract or the environment plan.
+            # A leftover Index must not rename them. Unscoped legacy design may still align.
             align_index_text = (
                 persisted_subject_index_for_prompt
                 if _subject_index_has_usable_content(persisted_subject_index_for_prompt)
                 else source_subject_index_text
             )
-            if is_entity_design_phase and _subject_index_has_usable_content(align_index_text):
+            if (
+                is_entity_design_phase
+                and not is_scoped_asset_design
+                and _subject_index_has_usable_content(align_index_text)
+            ):
                 try:
                     subjects_name_align = await align_subjects_json_names_with_subject_index(
                         subjects_json=subjects_json,

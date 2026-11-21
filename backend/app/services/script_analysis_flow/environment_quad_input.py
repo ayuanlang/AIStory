@@ -3,8 +3,9 @@
 
 The stored opening stays complete. The model only needs the keys it rotates:
 appearance material, the six-face lock, wall sections, light direction, and
-composition method. Place prose, color essays, path lines, and piece counts
-stay out.
+composition method, the face count, and the path line. Place prose and color
+essays stay out. The face count stays so each cell can check who is visible.
+The path edge stays so each cell can leave it clear.
 """
 from __future__ import annotations
 
@@ -17,10 +18,8 @@ _DRAFT_RE = re.compile(
 )
 _DROP_SECTIONS = {"定位", "色彩说明"}
 _DROP_KEYS = {
-    "动线",
     "交接",
     "件数",
-    "面件数",
     "依据",
     "挂靠锚点",
     "锚点落",

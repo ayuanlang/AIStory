@@ -5,7 +5,8 @@ The plan itself stays complete. Copies are trimmed by who reads them:
 - 依据 is planning reasoning and is not injected further.
 - Shape, size, direction and distance stay for staging and asset design.
 - Lighting stays for asset design. Staging and global orchestration do not get it.
-- Standing anchors (挂靠锚点, 戏用标识, 空镜) stay for staging. Asset design does not get them.
+- Asset design keeps 挂靠锚点, 锚点落, 参照物, 识别, 醒目光, 戏用标识, and 原点主体, and copies them.
+- Person placement (站位承载, 站位沿边) and 空镜 stay with staging. Asset design does not get them.
 """
 from __future__ import annotations
 
@@ -32,13 +33,8 @@ _LIGHT_INNER_KEYS = {
 _PROFILES_DROP_LIGHT = {"staging", "orchestration"}
 # Staging uses these to place people. Asset design does not.
 _ASSET_ONLY_DROP_KEYS = {
-    "挂靠锚点",
-    "锚点落",
-    "醒目光",
-    "识别",
-    "戏用标识",
     "站位承载",
-    "参照物",
+    "站位沿边",
     "空镜",
 }
 
