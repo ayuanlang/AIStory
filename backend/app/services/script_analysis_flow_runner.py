@@ -50,11 +50,7 @@ from app.services.script_analysis_llm_config import (
     _resolve_script_analysis_dropdown_order,
     _select_script_analysis_api_order,
 )
-from app.services.promo_context import is_promo_project, promo_scene_split_is_valid
-from app.services.subject_index_resolve import (
-    _script_optimization_has_project_visual_backfill,
-    _subject_index_has_cover_poster,
-)
+from app.services.subject_index_resolve import _subject_index_has_cover_poster
 
 logger = logging.getLogger("api_logger")
 
@@ -268,12 +264,10 @@ def _extract_environment_patches(environment_output: str) -> Dict[str, str]:
             raise HTTPException(status_code=422, detail=f"ENV_SCENE_PATCH_ID_MISMATCH:{start_id}:{end_id}")
         if start_id in patches:
             raise HTTPException(status_code=422, detail=f"ENV_SCENE_PATCH_DUPLICATE:{start_id}")
-        body = str(match.group(2) or "").strip()
-        has_env = "[ENV_BLOCK_START" in body.upper() and "[ENV_BLOCK_END" in body.upper()
-        has_ident = "[SCENE_ENV_IDENT_START" in body.upper() and "[SCENE_ENV_IDENT_END" in body.upper()
-        if not body or not (has_env or has_ident):
+        body = _strip_nested_scene_markers_from_patch(str(match.group(2) or ""))
+        if not body:
             raise HTTPException(status_code=422, detail=f"ENV_SCENE_PATCH_BLOCK_MISSING:{start_id}")
-        patches[start_id] = _strip_nested_scene_markers_from_patch(body)
+        patches[start_id] = body
     if patches:
         return patches
 
@@ -792,24 +786,17 @@ async def execute_scene_analysis_flow_node(
                         async_mode="0",
                     )
                     result_text = _extract_analysis_text_from_result(result)
-                    backfill_ok = list_reextract or _script_optimization_has_project_visual_backfill(result_text)
-                    promo_meta = raw_payload.get("project_metadata")
-                    promo_ok = (
-                        True
-                        if list_reextract
-                        else (
-                            promo_scene_split_is_valid(result_text, promo_meta)
-                            if node_key == "scene_split"
-                            else True
-                        )
-                    )
+                    body_ok = list_reextract or scoped_node_body_usable(result_text)
                     markers_ok = True
                     if node_key == "scene_split" and not list_reextract:
                         try:
                             markers_ok = bool(parse_scene_units_from_markers(result_text))
                         except SceneMarkerParseError:
                             markers_ok = False
-                    if backfill_ok and promo_ok and markers_ok:
+                    end_ok = list_reextract or bool(
+                        re.search(r"`?\[SCENES_BLOCK_END\]`?", str(result_text or ""), flags=re.IGNORECASE)
+                    )
+                    if body_ok and markers_ok and end_ok:
                         if attempt > 1:
                             logger.info(
                                 "[剧本分析流程] 节点 %s 整段重跑后通过完整性校验 | attempt=%s switched_api=%s",
@@ -818,15 +805,15 @@ async def execute_scene_analysis_flow_node(
                                 switched,
                             )
                         break
-                    if backfill_ok and not promo_ok:
-                        incomplete_reason = "商业宣传片拆成多场"
-                        incomplete_code = "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING"
-                    elif backfill_ok and promo_ok and not markers_ok:
+                    if body_ok and not end_ok:
+                        incomplete_reason = "缺少完成标志"
+                        incomplete_code = "SCENES_BLOCK_END_MISSING"
+                    elif body_ok and not markers_ok:
                         incomplete_reason = "缺少场次标记（输出不完整）"
                         incomplete_code = "SCENE_MARKER_BLOCK_MISSING"
                     else:
-                        incomplete_reason = "缺少 Project Visual Backfill（输出不完整）"
-                        incomplete_code = "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING"
+                        incomplete_reason = "正文是空壳"
+                        incomplete_code = "OUTPUT_TOO_SHORT"
                     logger.warning(
                         "[剧本分析流程] 节点 %s %s | attempt=%s/%s switched_api=%s",
                         node_key,

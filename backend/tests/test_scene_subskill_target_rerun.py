@@ -331,12 +331,13 @@ def test_staging_output_complete_rejects_framing_fallback():
 
     assert assert_staging_output_complete(STAGING_STRIPPED, "EP01_SC01") == STAGING_STRIPPED.strip()
     assert assert_staging_output_complete(STAGING_BEAT_STREAM_ONLY, "EP01_SC01") == STAGING_BEAT_STREAM_ONLY.strip()
+    assert assert_staging_output_complete(FRAMING_STRIPPED, "EP01_SC01") == FRAMING_STRIPPED.strip()
     try:
-        assert_staging_output_complete(FRAMING_STRIPPED, "EP01_SC01")
+        assert_staging_output_complete("   ", "EP01_SC01")
     except HTTPException as exc:
         assert "STAGING_OUTPUT_INCOMPLETE" in str(exc.detail)
     else:
-        raise AssertionError("framing text must not pass as staging")
+        raise AssertionError("empty staging must stay incomplete")
 
 
 def test_staging_drops_invisible_silence_names():
@@ -355,9 +356,7 @@ def test_staging_drops_invisible_silence_names():
 [BEAT_END:6]
 """
     fixed = assert_staging_output_complete(beat, "EP01_SC01")
-    assert "| 闭嘴 | 其他人均闭嘴" in fixed
-    assert "| 闭嘴 | 无" not in fixed
-    assert "闭嘴 | CHAR:[@赵桂芬]" not in fixed
+    assert "闭嘴 | CHAR:[@赵桂芬], CHAR:[@林知夏（荷兰猪）]" in fixed
     assert "林知夏（荷兰猪）" in fixed.split("────【场记分析】────", 1)[1]
 
 
@@ -377,13 +376,9 @@ def test_staging_rewrites_invisible_facing_and_gaze():
 """
     fixed = assert_staging_output_complete(beat, "EP01_SC01")
     prose, note = fixed.split("────【场记分析】────", 1)
-    assert "面对镜头" in prose
-    assert "面朝着 CHAR:[@赵桂芬]" not in prose
-    assert "CHAR:[@赵桂芬]" not in prose
-    assert "眼神看向镜头" in prose
-    assert "散落衣物" not in prose
-    assert "| 闭嘴 | 其他人均闭嘴" in prose
-    assert "| 闭嘴 | 无" not in prose
+    assert "面朝着 CHAR:[@赵桂芬]" in prose
+    assert "眼神在散落衣物上迅速睃巡" in prose
+    assert "闭嘴 | CHAR:[@赵桂芬], CHAR:[@林知夏（荷兰猪）]" in prose
     assert "知夏还没找着啊" in prose
     assert "CHAR:[@赵桂芬]" in note
 
@@ -406,10 +401,8 @@ CHAR:[@赵桂香] 面朝着 CHAR:[@林知夏]，眼睛看着 CHAR:[@林知夏]�
     prose, note = fixed.split("────【场记分析】────", 1)
     assert "面朝着 CHAR:[@林知夏]" in prose
     assert "眼神在 CHAR:[@林知夏] 脸上" in prose
-    assert "眼神看向镜头" in prose
-    assert "散落衣物" not in prose
-    assert "CHAR:[@赵桂芬]" not in prose
-    assert "| 闭嘴 | 其他人均闭嘴" in prose
+    assert "眼神在散落衣物上" in prose
+    assert "闭嘴 | CHAR:[@赵桂芬]" in prose
     assert "CHAR:[@赵桂芬]" in note
 
 

@@ -237,6 +237,31 @@ def _patch_body_from_wrapped(patch_text: str, scene_id: str) -> str:
     return ""
 
 
+def _scene_patch_gap(patch_text: str, scene_ids: List[str]) -> str:
+    """Empty when every scene has a spliceable patch. A broken envelope is the same gap."""
+    wanted = [str(scene_id).strip() for scene_id in scene_ids if str(scene_id).strip()]
+    if not wanted:
+        return ""
+    from app.services.script_analysis_flow_runner import _extract_environment_patches
+
+    try:
+        patches = _extract_environment_patches(patch_text)
+    except HTTPException as exc:
+        detail = str(getattr(exc, "detail", "") or "")
+        if detail.startswith("ENV_SCENE_PATCH_"):
+            return detail
+        raise
+    by_lower = {str(key).lower(): value for key, value in patches.items()}
+    missing = [
+        scene_id
+        for scene_id in wanted
+        if not str(by_lower.get(scene_id.lower()) or "").strip()
+    ]
+    if not missing:
+        return ""
+    return "ENVIRONMENT_PLAN_SCENE_PATCH_MISSING:" + ",".join(missing)
+
+
 def _wrap_scene_patch(scene_id: str, body: str) -> str:
     inner = str(body or "").strip()
     if not inner:
@@ -260,6 +285,7 @@ async def _call_environment_plan_episode(
     episode_input: str,
     node_project_id: int,
     node_episode_id: int,
+    scene_ids: List[str],
 ) -> str:
     from app.api.routers.prompts.analyze_scene import analyze_scene  # noqa: WPS433
     from app.services.script_analysis_flow_runner import (
@@ -301,9 +327,12 @@ async def _call_environment_plan_episode(
         )
         raw_text = _extract_analysis_text_from_result(result)
         patch_text = _strip_required_completion_marker(raw_text, _ENVIRONMENT_COMPLETION_MARKER)
+        gap = ""
         if scoped_node_body_usable(patch_text):
-            return patch_text
-        last_error = (
+            gap = _scene_patch_gap(patch_text, scene_ids)
+            if not gap:
+                return patch_text
+        last_error = gap or (
             "ENVIRONMENT_PLAN_OUTPUT_TOO_SHORT"
             if _ENVIRONMENT_COMPLETION_MARKER in str(raw_text or "")
             else "ENVIRONMENT_PLAN_COMPLETION_MARKER_MISSING"
@@ -333,6 +362,8 @@ async def _call_environment_plan_episode(
                 error_message=f"{last_error}; retrying environment plan like global orchestration",
             )
             db.commit()
+    if str(last_error).startswith(("ENVIRONMENT_PLAN_SCENE_PATCH_MISSING:", "ENV_SCENE_PATCH_")):
+        raise HTTPException(status_code=422, detail=last_error)
     raise HTTPException(status_code=422, detail=f"{last_error}:{_ENVIRONMENT_COMPLETION_MARKER}")
 
 
@@ -388,6 +419,7 @@ async def run_environment_plan(
         episode_input=episode_input,
         node_project_id=node_project_id,
         node_episode_id=node_episode_id,
+        scene_ids=[str(unit.scene_id) for unit in units],
     )
 
     planned_patches: Dict[str, str] = {}

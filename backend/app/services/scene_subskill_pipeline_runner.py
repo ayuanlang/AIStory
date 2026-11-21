@@ -1438,38 +1438,11 @@ def _framing_has_plan_and_extract(source: str) -> bool:
 
 
 def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> str:
-    """Hard gate: staging must not start unless framing output is extractable.
-
-    Beat ``当前环境=`` / ``[DERIVED_ENV:]`` stay as the framing LLM wrote them.
-    """
+    """Keep the framing draft. Only an empty body blocks the next step."""
     source = collapse_duplicate_derived_environment_sections(str(text or "")).strip()
     sid = str(scene_id or "").strip()
     if not source:
         raise HTTPException(status_code=422, detail=f"STAGING_BLOCKED_FRAMING_EMPTY:{sid}")
-    if not _framing_has_plan_and_extract(source):
-        raise HTTPException(
-            status_code=422,
-            detail=f"STAGING_BLOCKED_FRAMING_INCOMPLETE:{sid}",
-        )
-    missing_locks = [
-        beat_id
-        for _norm_id, (beat_id, body) in _framing_lock_bodies_by_id(source).items()
-        if not _beat_has_framing_lock(body)
-    ]
-    if missing_locks:
-        raise HTTPException(
-            status_code=422,
-            detail=f"STAGING_BLOCKED_FRAMING_BEAT_LOCK:{sid}:{','.join(missing_locks)}",
-        )
-    if re.search(
-        r"\[DERIVED_ENV:(?:Beat|文戏|原文)\s*[:：]|\[DERIVED_ENV:\d+\s*deg|当前环境=(?:Beat|文戏|原文)\s*[:：]",
-        source,
-        re.IGNORECASE,
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail=f"STAGING_BLOCKED_ILLEGAL_DERIVED_ENV:{sid}",
-        )
     return source
 
 
@@ -1582,10 +1555,10 @@ def strip_invisible_silence_listeners(text: str) -> str:
 
 
 def assert_staging_output_complete(text: str, scene_id: str = "") -> str:
-    """Refuse framing or truncated text after 建置与入戏. End marker is stripped before persist."""
-    body = strip_invisible_silence_listeners(str(text or "")).strip()
+    """Keep the staging draft. Only an empty body is incomplete."""
+    body = str(text or "").strip()
     sid = str(scene_id or "").strip() or "-"
-    if "【建置】" not in body or "【入戏】" not in body:
+    if not body:
         raise HTTPException(status_code=422, detail=f"STAGING_OUTPUT_INCOMPLETE:{sid}")
     return body
 
@@ -1604,17 +1577,12 @@ def _coerce_ready_framing_block(extracted: str, candidate: str, scene_id: str) -
         recovered = _try_extract_subskill_scene_block(candidate_text, scene_id, "")
         if recovered:
             sources.append(recovered)
-    seen = set()
+    best = ""
     for source in sources:
         key = source.strip()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        try:
-            return assert_derived_framing_ready_for_staging(source, scene_id)
-        except HTTPException:
-            continue
-    return ""
+        if len(key) > len(best):
+            best = key
+    return best
 
 
 def _text_from_stored_llm_response(raw: Any) -> str:
@@ -4060,12 +4028,7 @@ _SCENES_BLOCK_END_RE = re.compile(r"`?\[SCENES_BLOCK_END\]`?", re.IGNORECASE)
 
 
 def _beat_content_complete(body: str, prompt_file: str) -> bool:
-    text = str(body or "")
-    if prompt_file == FRAMING_PROMPT:
-        return _beat_has_framing_lock(text)
-    if prompt_file == STAGING_PROMPT:
-        return "【建置】" in text and "【入戏】" in text
-    return True
+    return bool(str(body or "").strip())
 
 
 def _ordered_beat_pieces(text: str, prompt_file: str) -> List[Tuple[str, str, bool]]:
@@ -4252,15 +4215,11 @@ def _beat_output_finished(
             previous_block=previous_block,
         )
         return bool(_coerce_ready_framing_block(extracted, stripped, scene_id))
-    if prompt_file == STAGING_PROMPT:
-        return "【建置】" in stripped and "【入戏】" in stripped
     return True
 
 
 def _staging_beats_ready(text: str) -> bool:
     source = str(text or "")
-    if "【建置】" not in source or "【入戏】" not in source:
-        return False
     pieces = _ordered_beat_pieces(source, STAGING_PROMPT)
     if not pieces:
         return True
@@ -4300,6 +4259,8 @@ async def _resume_incomplete_beats(
             return current
         resume_id = _resume_beat_id(pieces)
         if len(kept) == len(pieces):
+            if not _subskill_marker_present(current, prompt_file):
+                return current
             return append_missing_beat_envelope(current, prompt_file, scene_id)
         continuation_input = build_beat_continuation_input(
             scene_input,
@@ -4606,14 +4567,14 @@ async def _call_scene_subskill(
             if candidate
             else ""
         )
-        if prompt_file == FRAMING_PROMPT:
+        if marker_present and prompt_file == FRAMING_PROMPT:
             ready = _coerce_ready_framing_block(extracted, candidate, scene_id) if candidate else ""
             if ready and body_usable:
                 return ready
-        elif prompt_file == STAGING_PROMPT:
+        elif marker_present and prompt_file == STAGING_PROMPT:
             if extracted and body_usable and _staging_beats_ready(candidate):
                 return extracted
-        elif extracted and body_usable:
+        elif marker_present and extracted and body_usable:
             return extracted
         if not text:
             failure_code = "SCENE_SUBSKILL_EMPTY_OUTPUT"

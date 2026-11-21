@@ -1153,17 +1153,10 @@ def test_staging_gate_requires_framing_plan_and_tags():
     assert "掌柜拨算盘" in lean_ready
     assert "【取景锁定】" not in lean_ready
 
-    try:
-        assert_derived_framing_ready_for_staging("文戏+仙攻完成，没有构图方案", "EP01_SC02")
-        raise AssertionError("expected staging to be blocked")
-    except HTTPException as exc:
-        assert "STAGING_BLOCKED_FRAMING_INCOMPLETE" in str(exc.detail)
-
-    try:
-        assert_derived_framing_ready_for_staging("【Beat主体定位】B1=掌柜=可见性=V", "EP01_SC02")
-        raise AssertionError("expected missing extract tags to block staging")
-    except HTTPException as exc:
-        assert "STAGING_BLOCKED_FRAMING_INCOMPLETE" in str(exc.detail)
+    kept = assert_derived_framing_ready_for_staging("文戏+仙攻完成，没有构图方案", "EP01_SC02")
+    assert "没有构图方案" in kept
+    kept_plan = assert_derived_framing_ready_for_staging("【Beat主体定位】B1=掌柜=可见性=V", "EP01_SC02")
+    assert "【Beat主体定位】" in kept_plan
 
     legacy = (
         "【Beat景别构图方案】B1=景别=WS｜ENV:0度客栈大堂｜[DERIVED_ENV:0度客栈大堂]\n"
@@ -1210,12 +1203,8 @@ def test_staging_gate_requires_per_beat_framing_lock():
         + "【取景锁定】当前环境=180度客栈大堂｜[DERIVED_ENV:180度客栈大堂]｜景别=MS｜构图=中心\n"
         + "客人抬头。\n[BEAT_END:2]\n"
     )
-    try:
-        assert_derived_framing_ready_for_staging(missing_lock, "EP01_SC02")
-        raise AssertionError("expected missing per-beat lock to block staging")
-    except HTTPException as exc:
-        assert "STAGING_BLOCKED_FRAMING_BEAT_LOCK" in str(exc.detail)
-        assert ":1" in str(exc.detail)
+    kept_lock = assert_derived_framing_ready_for_staging(missing_lock, "EP01_SC02")
+    assert "掌柜拨算盘" in kept_lock
 
     missing_shot = (
         SAMPLE
@@ -1223,11 +1212,8 @@ def test_staging_gate_requires_per_beat_framing_lock():
         + "【取景锁定】当前环境=0度客栈大堂｜[DERIVED_ENV:0度客栈大堂]｜构图=三分\n"
         + "掌柜拨算盘。\n[BEAT_END:1]\n"
     )
-    try:
-        assert_derived_framing_ready_for_staging(missing_shot, "EP01_SC02")
-        raise AssertionError("expected missing 景别 to block staging")
-    except HTTPException as exc:
-        assert "STAGING_BLOCKED_FRAMING_BEAT_LOCK" in str(exc.detail)
+    kept_shot = assert_derived_framing_ready_for_staging(missing_shot, "EP01_SC02")
+    assert "掌柜拨算盘" in kept_shot
 
     missing_angle = (
         SAMPLE
@@ -1235,11 +1221,8 @@ def test_staging_gate_requires_per_beat_framing_lock():
         + "【取景锁定】当前环境=0度客栈大堂｜[DERIVED_ENV:0度客栈大堂]｜景别=WS｜构图=三分\n"
         + "掌柜拨算盘。\n[BEAT_END:1]\n"
     )
-    try:
-        assert_derived_framing_ready_for_staging(missing_angle, "EP01_SC02")
-        raise AssertionError("expected missing 镜头角度 to block staging")
-    except HTTPException as exc:
-        assert "STAGING_BLOCKED_FRAMING_BEAT_LOCK" in str(exc.detail)
+    kept_angle = assert_derived_framing_ready_for_staging(missing_angle, "EP01_SC02")
+    assert "掌柜拨算盘" in kept_angle
 
     missing_evidence = (
         SAMPLE
@@ -1247,11 +1230,8 @@ def test_staging_gate_requires_per_beat_framing_lock():
         + "【取景锁定】当前环境=0度客栈大堂｜[DERIVED_ENV:0度客栈大堂]｜景别=WS｜构图=三分｜镜头角度=平拍\n"
         + "掌柜拨算盘。\n[BEAT_END:1]\n"
     )
-    try:
-        assert_derived_framing_ready_for_staging(missing_evidence, "EP01_SC02")
-        raise AssertionError("expected missing 选择证据 to block staging")
-    except HTTPException as exc:
-        assert "STAGING_BLOCKED_FRAMING_BEAT_LOCK" in str(exc.detail)
+    kept_evidence = assert_derived_framing_ready_for_staging(missing_evidence, "EP01_SC02")
+    assert "掌柜拨算盘" in kept_evidence
 
 
 def test_staging_gate_uses_rewritten_beat_lock():

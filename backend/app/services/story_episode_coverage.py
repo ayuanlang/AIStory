@@ -234,14 +234,17 @@ async def ensure_story_episode_blocks(
     llm_config: Optional[Dict[str, Any]],
     user_id: Optional[int] = None,
     batch_size: int = 4,
-    max_rounds: int = 8,
     fill_system: Optional[str] = None,
     registry_block: str = "",
     reference_block: str = "",
     source_user_prompt: str = "",
     source_system: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
-    """Append any missing EP01–EPN blocks. Raises if they are still missing after the fill rounds."""
+    """Append any missing EP01–EPN blocks. Keeps filling until every planned episode is closed.
+
+    Two rounds in a row that add no block still stop and raise. A canceled task stops
+    before the next model call.
+    """
     current = str(markdown or "")
     added_usage: Dict[str, Any] = {}
     try:
@@ -258,10 +261,8 @@ async def ensure_story_episode_blocks(
     stalls = 0
     from app.services.task_manager import abort_if_current_task_canceled
 
-    for _round in range(max_rounds):
+    while missing:
         abort_if_current_task_canceled()
-        if not missing:
-            break
         batch = missing[: max(1, int(batch_size))]
         original_prompt = str(source_user_prompt or "").strip()
         if original_prompt:

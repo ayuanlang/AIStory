@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import asyncio
+import re
 
 from app.schemas.episode_requests import StoryGeneratorRequest, story_generator_payload
 from app.services.story_episode_coverage import (
@@ -88,6 +89,33 @@ def test_gap_fill_submits_original_prompt_and_inserts_in_order(monkeypatch):
     assert merged.index("EP01") < merged.index("EP02")
     assert missing_episode_numbers(merged, 2) == []
     assert usage["total_tokens"] == 8
+
+
+def test_fill_continues_until_every_episode_is_closed(monkeypatch):
+    calls = []
+
+    async def _fake(user_prompt, system_prompt, config, image_urls=None, video_urls=None, **kwargs):
+        calls.append(user_prompt)
+        labels = re.search(r"这次只补：([^。\n]+)", user_prompt).group(1)
+        blocks = []
+        for label in (part.strip() for part in labels.split(",")):
+            blocks.append(
+                f"[EPISODE_BLOCK_START:{label}]\n- {label} 正文\n[EPISODE_BLOCK_END:{label}]"
+            )
+        return {"content": "\n".join(blocks), "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    monkeypatch.setattr(
+        "app.services.story_episode_coverage.llm_service.generate_content_with_fallback",
+        _fake,
+    )
+
+    async def _run():
+        return await ensure_story_episode_blocks("", episodes_count=33, llm_config={})
+
+    merged, usage = asyncio.run(_run())
+    assert len(calls) == 9
+    assert missing_episode_numbers(merged, 33) == []
+    assert usage["total_tokens"] == 18
 
 
 def test_story_generator_payload_drops_outline_check_fields():
