@@ -76,7 +76,24 @@ B1=R:{two}｜ENV:0度room two｜W:{two}｜R−W=∅
     assert "ENV_SCENE_PATCH_START" not in merged
 
 
-def test_environment_patches_strip_nested_scene_markers():
+def test_environment_patch_lands_before_scene_end_when_content_marker_is_absent():
+    split_text = """[SCENES_BLOCK_START]
+[SCENE_START:TR01_SC01]
+【场景名称】短名=空域
+陆沉驾驶浮空飞行器掠过双子塔。
+[SCENE_END:TR01_SC01]
+[SCENES_BLOCK_END]"""
+    patch_text = """[ENV_SCENE_PATCH_START:TR01_SC01]
+[ENV_BLOCK_START]
+【主环境】双子塔高楼峡谷空域
+[ENV_BLOCK_END]
+[ENV_SCENE_PATCH_END:TR01_SC01]"""
+
+    merged = _merge_environment_patches(split_text, patch_text)
+
+    assert "陆沉驾驶浮空飞行器掠过双子塔。" in merged
+    assert merged.index("【主环境】双子塔高楼峡谷空域") < merged.index("[SCENE_END:TR01_SC01]")
+    assert "[SCENE_START:TR01_SC01]" in merged
     from app.services.script_analysis_flow import parse_scene_units_from_markers
 
     split_text = """[SCENES_BLOCK_START]

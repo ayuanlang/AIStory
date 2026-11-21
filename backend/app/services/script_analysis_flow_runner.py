@@ -330,18 +330,19 @@ def _merge_environment_patches(scene_split_text: str, environment_output: str) -
         scene_body = _ENV_BLOCK_WITH_COVERAGE_PATTERN.sub("", scene_body, count=1)
         scene_body = SCENE_ENV_IDENT_PATTERN.sub("", scene_body)
         content_marker = re.search(
-            rf"`?\[SCENE_CONTENT_START:{re.escape(scene_id)}\]`?",
+            rf"`?\[SCENE_CONTENT_START(?::{re.escape(scene_id)})?\]`?",
             scene_body,
             flags=re.IGNORECASE,
         )
-        if not content_marker:
-            raise HTTPException(status_code=422, detail=f"ENV_SCENE_CONTENT_MARKER_MISSING:{scene_id}")
         patch = patch_by_lower[scene_id.lower()].strip()
-        scene_body = (
-            f"{scene_body[:content_marker.start()].rstrip()}\n"
-            f"{patch}\n"
-            f"{scene_body[content_marker.start():].lstrip()}"
-        )
+        if content_marker:
+            scene_body = (
+                f"{scene_body[:content_marker.start()].rstrip()}\n"
+                f"{patch}\n"
+                f"{scene_body[content_marker.start():].lstrip()}"
+            )
+        else:
+            scene_body = f"{scene_body.rstrip()}\n{patch}\n"
         merged = f"{merged[:scene_match.start()]}{scene_match.group(1)}{scene_body}{scene_match.group(3)}{merged[scene_match.end():]}"
     return merged.strip()
 
