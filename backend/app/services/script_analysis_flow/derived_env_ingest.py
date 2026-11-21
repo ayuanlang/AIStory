@@ -61,13 +61,30 @@ QUAD_DEGREE_CONTRACT = "四宫度数=左上0度｜右上90度｜左下180度｜�
 QUAD_SHEET_SENTENCE = (
     "同一张16:9图，必须画成2×2四宫格，四格一样大。"
     "正中一条横线、一条竖线分成四格。"
+    "四格外缘贴着这张16:9的四边，上下左右不留黑边。"
+    "格与格之间只有正中那一条横线和一条竖线。"
     "左上、右上、左下、右下都要画满。"
     "不许只画其中一格，不许画成单张全景，不许留空格。"
     + QUAD_DEGREE_CONTRACT
     + "。左上望北，右上望东，左下望南，右下望西。"
     "四格是同一处的四个方向，材质与开闭相同。"
     "东、南、西、北和望北、望东、望南、望西不画成字，不画角标。"
+    "只画各格已经点名的主体。不另加没有点名的植物、雕塑、器物、灯、灯管或第二道门。"
 )
+_SHEET_ECHO_RE = re.compile(
+    r"同一张16:9图，必须画成2×2四宫格[\s\S]*?不画角标。"
+    r"(?:只画各格已经点名的主体。不另加没有点名的植物、雕塑、器物(?:、灯、灯管)?或第二道门。)?"
+)
+_MATERIAL_LEGEND = (
+    "外形、材质、纹样、颜色只供四格对号上色。"
+    "某一格没点到的具不画。"
+    "纹样不增加件数，也不改哪一面看得见。"
+    "格子写了只见向里的厚或见侧沿，不画这一面的门、显示面和图谱。"
+    "格子写了单扇，拼接、模块、分块仍是这一扇上的纹，中间不画对缝。"
+    "格子写了两端不到画面边缘，多门和百叶不铺满该壁。"
+    "窄面格不画台面上的图。"
+)
+_DEPTH_CLAUSE_RE = re.compile(r"(?:纵深色层|前景=|中部=|背景=)[^｜\n]*")
 QUAD_CELL_POSITIONS = ("左上", "右上", "左下", "右下")
 
 
@@ -2535,7 +2552,7 @@ _DESIGN_BLOCK_RE = re.compile(
 )
 
 
-_KEEP_IN_CHINESE_PROMPT = ("定位", "主体外形", "色彩说明")
+_KEEP_IN_CHINESE_PROMPT = ("主体外形", "色彩说明")
 _SECTION_RE = re.compile(
     r"【(定位|主体外形|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|四向拼图)】"
 )
@@ -2703,18 +2720,44 @@ def missing_requested_quad_drafts(
     ]
 
 
+def _strip_sheet_echo(text: str) -> str:
+    cleaned = _SHEET_ECHO_RE.sub("", str(text or ""))
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def _with_material_legend(section: str) -> str:
+    body = str(section or "").strip()
+    if not body or _MATERIAL_LEGEND in body:
+        return body
+    title = "【主体外形】"
+    if body.startswith(title):
+        rest = body[len(title):].lstrip("\n")
+        return f"{title}\n{_MATERIAL_LEGEND}\n{rest}".rstrip()
+    return f"{title}\n{_MATERIAL_LEGEND}\n{body}"
+
+
+def _strip_depth_clauses(section: str) -> str:
+    body = str(section or "")
+    cleaned = _DEPTH_CLAUSE_RE.sub("", body)
+    cleaned = re.sub(r"[｜]{2,}", "｜", cleaned)
+    cleaned = re.sub(r"｜\s*(?=\n|$)", "", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def compose_stored_quad_prompt(
     existing_prompt: str,
     returned_prompt: str,
     named_opening: str = "",
 ) -> str:
-    """Chinese prompt keeps 定位, the appearance sheet, and 【色彩说明】, then the four cells.
+    """Image prompt is the fill sentence, the four cells, then the material sheet and color.
 
-    Wall sections stay out. Appearance is not copied from those walls. 【色彩说明】 is copied
+    【定位】 stays in the design draft and does not enter this prompt. Depth-layer
+    clauses stay out of 【色彩说明】. Wall sections stay out. Appearance is copied
     from the design draft, not rewritten from the four cells.
     """
     draft_sources = (named_opening, existing_prompt)
-    parts: List[str] = []
+    sections: Dict[str, str] = {}
     for name in _KEEP_IN_CHINESE_PROMPT:
         section = ""
         for source in draft_sources:
@@ -2723,11 +2766,19 @@ def compose_stored_quad_prompt(
                 break
         if not section:
             section = _marked_section(returned_prompt, name)
+        if name == "主体外形":
+            section = _with_material_legend(section)
+        elif name == "色彩说明":
+            section = _strip_depth_clauses(section)
         if section:
-            parts.append(section)
-    quad = _quad_only_prompt(returned_prompt)
+            sections[name] = section
+    quad = _strip_sheet_echo(_quad_only_prompt(returned_prompt))
+    parts: List[str] = []
     if quad:
         parts.append(quad)
+    for name in _KEEP_IN_CHINESE_PROMPT:
+        if sections.get(name):
+            parts.append(sections[name])
     text = "\n\n".join(parts).strip()
     if not text:
         return ""

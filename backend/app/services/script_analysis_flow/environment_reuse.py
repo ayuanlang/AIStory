@@ -552,14 +552,54 @@ _IDENT_INHERIT_POSITIONING = re.compile(
 )
 
 
+_SHEET_PREFIX_RE = re.compile(
+    r"^同一张16:9图，必须画成2×2四宫格[\s\S]*?不画角标。"
+    r"(?:只画各格已经点名的主体。不另加没有点名的植物、雕塑、器物(?:、灯、灯管)?或第二道门。)?"
+)
+_CROP_SECTION_RE = re.compile(
+    r"【(定位|主体外形|色彩说明|六面一次)】"
+)
+
+
+def _section_outside_grid(text: str, name: str) -> str:
+    """One kept section. The four cells are not part of the opening crop."""
+    body = str(text or "")
+    grid_at = body.find(_ENV_GRID_MARK)
+    prefix = body[:grid_at] if grid_at >= 0 else body
+    tail = body[grid_at:] if grid_at >= 0 else ""
+    for chunk in (prefix, tail):
+        found = list(_CROP_SECTION_RE.finditer(chunk))
+        for index, match in enumerate(found):
+            if match.group(1) != name:
+                continue
+            end = found[index + 1].start() if index + 1 < len(found) else len(chunk)
+            return chunk[match.start():end].strip()
+    return ""
+
+
 def crop_environment_asset_opening(prompt: str) -> str:
-    """Keep the environment asset's opening world lock; drop the four-grid tail."""
+    """Keep the environment asset's opening world lock; drop the four-grid tail.
+
+    A stored image prompt leads with the fill sentence and the cells. Appearance
+    and color after the cells still belong to this crop. The fill sentence does not.
+    """
     text = str(prompt or "").strip()
     if not text:
         return ""
     grid_at = text.find(_ENV_GRID_MARK)
     if grid_at > 0:
-        return text[:grid_at].strip()
+        prefix = _SHEET_PREFIX_RE.sub("", text[:grid_at], count=1).strip()
+        extra: List[str] = []
+        for name in ("定位", "主体外形", "色彩说明", "六面一次"):
+            mark = f"【{name}】"
+            if mark in prefix:
+                continue
+            section = _section_outside_grid(text, name)
+            if section:
+                extra.append(section)
+        parts = [part for part in (prefix, *extra) if part]
+        if parts:
+            return "\n\n".join(parts)
     if any(token in text for token in _ENV_OPENING_HINTS):
         return text
     return ""

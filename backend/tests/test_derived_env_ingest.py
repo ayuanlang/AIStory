@@ -297,18 +297,22 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     )
     stored = compose_stored_quad_prompt(draft, cells)
     assert stored.startswith(QUAD_SHEET_SENTENCE)
-    assert "【定位】" in stored
+    assert stored.count("同一张16:9图") == 1
+    assert "不留黑边" in stored
+    assert "【定位】" not in stored
     assert "【主体外形】" in stored
+    assert "对号上色" in stored
     assert "黑铸铁" in stored
     assert "【色彩说明】" in stored
     assert "煤灰蓝" in stored
-    assert stored.index("【色彩说明】") < stored.index("【四向拼图】")
-    assert "【四向拼图】" in stored
+    assert stored.index("【四向拼图】") < stored.index("【主体外形】")
+    assert stored.index("【主体外形】") < stored.index("【色彩说明】")
     assert "【六面一次】" not in stored
     assert "【北壁】" not in stored
     assert "白色瓷砖" not in stored
     replaced = compose_stored_quad_prompt(draft + "【四向拼图】\n旧格\n", cells)
     assert replaced.count("【四向拼图】") == 1
+    assert replaced.count("同一张16:9图") == 1
     assert "旧格" not in replaced
     assert "[0度格-左上·北]" in replaced
     plain = compose_stored_quad_prompt("【构图】\n大厅。\n", cells)
@@ -322,7 +326,7 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
         draft,
     )
     assert echoed.startswith(QUAD_SHEET_SENTENCE)
-    assert "【定位】" in echoed
+    assert "【定位】" not in echoed
     assert "【主体外形】" in echoed
     assert "【主环境设计稿】" not in echoed
     assert "【六面一次】" not in echoed
@@ -330,16 +334,28 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     rewritten = (
         "【定位】\n改过的定位。\n"
         "【主体外形】\n[@灶台]（N-001）外形=双眼灶，材质=白瓷，纹样=无，颜色=白。\n"
-        "【色彩说明】\n主冷暖=暖，色系=改过的色。\n"
+        "【色彩说明】\n主冷暖=暖，色系=改过的色。纵深色层：前景=黑｜中部=灰｜背景=只在入画时看见天光。\n"
         + cells
     )
     copied = compose_stored_quad_prompt(draft, rewritten, draft)
-    assert "后厨" in copied
+    assert "后厨" not in copied
     assert "改过的定位" not in copied
     assert "黑铸铁" in copied
     assert "白瓷" not in copied
     assert "煤灰蓝" in copied
     assert "改过的色" not in copied
+    assert "纵深色层" not in copied
+    assert "看见天光" not in copied
+    depthy = draft.replace(
+        "色系=煤灰蓝。",
+        "色系=煤灰蓝。纵深色层：前景=黑｜中部=灰｜背景=蓝。",
+    )
+    stripped = compose_stored_quad_prompt(depthy, cells)
+    assert "煤灰蓝" in stripped
+    assert "纵深色层" not in stripped
+    assert "前景=" not in stripped
+    from app.services.script_analysis_flow.environment_reuse import crop_environment_asset_opening
+
     kept = environment_opening_to_keep(opening + cells, "", "")
     assert kept.startswith("【六面一次】")
     assert "【四向拼图】" not in kept
@@ -353,6 +369,11 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     )
     assert named["客栈大堂"].startswith("【六面一次】")
     assert environment_opening_to_keep(cells, "旧开篇", named["客栈大堂"]) == named["客栈大堂"]
+    cropped = crop_environment_asset_opening(stored)
+    assert "【四向拼图】" not in cropped
+    assert "同一张16:9图" not in cropped
+    assert "黑铸铁" in cropped
+    assert "煤灰蓝" in cropped
 
 
 def test_quad_apply_failure_names_the_gap():
