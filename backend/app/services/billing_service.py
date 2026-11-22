@@ -1238,6 +1238,7 @@ class BillingService:
         "generate_entity_reference_audio": "generate_entity_reference_audio",
         "generate_entity_reference_audio_audio": "generate_entity_reference_audio_audio",
         "generate_entity_reference_audio_video": "generate_entity_reference_audio_video",
+        "generate_scene_score": "generate_scene_score",
         "script_analysis": "script_analysis",
         "scene_analysis": "script_analysis",
         "ai_assistant": "ai_assistant",

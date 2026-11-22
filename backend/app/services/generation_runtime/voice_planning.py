@@ -53,6 +53,7 @@ def _build_voice_suno_provider_options(req: VoiceGenerationRequest) -> Dict[str,
     _set_if_present("audioWeight", "audioWeight", "audio_weight")
     _set_if_present("personaId", "personaId", "persona_id")
     _set_if_present("personaModel", "personaModel", "persona_model")
+    _set_if_present("suno_duration", "suno_duration", "sunoDuration")
 
     entity_id = _normalize_seed_value(getattr(req, "entity_id", None))
     if entity_id:

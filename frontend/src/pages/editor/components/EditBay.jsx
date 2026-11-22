@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, Scissors } from 'lucide-react';
+import FunctionApiSelector from '../../../components/FunctionApiSelector';
+import { useFunctionApis } from '../../../components/useFunctionApis';
 import { ASSET_BASE_URL } from '../../../config';
 import {
     burnShotFlowerText,
@@ -45,6 +47,8 @@ const withCues = (shot, hit) => {
     return { ...shot, technical_notes: JSON.stringify(notes) };
 };
 
+const SCORE_FUNCTION = 'generate_scene_score';
+
 const errorText = (error) => {
     const detail = error?.response?.data?.detail || error?.message || String(error || '');
     return typeof detail === 'string' ? detail : JSON.stringify(detail);
@@ -57,6 +61,10 @@ export const EditBay = ({
     isReadOnly = false,
 }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const functionApiConfigs = useFunctionApis();
+    const [scoreApiId, setScoreApiId] = useState(() => (
+        Number(localStorage.getItem(`func_api_${SCORE_FUNCTION}`) || 0) || null
+    ));
     const [shots, setShots] = useState([]);
     const [scenes, setScenes] = useState([]);
     const [scope, setScope] = useState('episode');
@@ -192,7 +200,7 @@ export const EditBay = ({
         if (!episodeId || !markers.length) {
             throw new Error(t('这一范围还没有导入场景', 'This range has no imported scene'));
         }
-        const systemApiId = Number(localStorage.getItem('func_api_generate_entity_reference_audio_audio') || 0) || null;
+        const systemApiId = Number(scoreApiId || 0) || null;
         for (let index = 0; index < markers.length; index += 1) {
             setStatus(t(
                 `正在生成${scopeLabel}配乐 ${index + 1}/${markers.length}`,
@@ -200,7 +208,8 @@ export const EditBay = ({
             ));
             await generateSceneScore(episodeId, {
                 scene_marker: markers[index],
-                ...(systemApiId ? { system_api_id: systemApiId, function_name: 'generate_entity_reference_audio_audio' } : {}),
+                function_name: SCORE_FUNCTION,
+                ...(systemApiId ? { system_api_id: systemApiId } : {}),
             });
         }
         return markers.length;
@@ -260,8 +269,21 @@ export const EditBay = ({
         setBusy('score');
         try {
             const count = await scoreList(scopedShots);
-            setStatus(t(`已生成${scopeLabel} ${count} 场配乐`, `Generated ${count} score(s) for ${scopeLabel}`));
-            onLog?.(t('配乐已生成', 'Score generated'), 'success');
+            const ready = scopedShots.filter((shot) => shot.video_url);
+            if (!ready.length) {
+                setStatus(t(
+                    `已按剧本听感生成${scopeLabel} ${count} 场配乐。这些镜还没有成片，暂时不能铺进视频。`,
+                    `Generated ${count} score(s) for ${scopeLabel} from the script cues. These shots have no video yet, so the score cannot be mixed in.`,
+                ));
+                onLog?.(t('配乐已生成', 'Score generated'), 'success');
+                return;
+            }
+            const result = await mergeList(scopedShots, true);
+            setStatus(result?.notice || t(
+                `已把${scopeLabel} ${count} 场配乐铺进成片`,
+                `Mixed ${count} score(s) into the ${scopeLabel} cut`,
+            ));
+            onLog?.(t('配乐已生成并铺进成片', 'Score generated and mixed into the cut'), 'success');
         } catch (error) {
             setStatus(errorText(error));
         } finally {
@@ -322,8 +344,8 @@ export const EditBay = ({
                     </div>
                     <div className="text-[11px] text-white/45 mt-1 max-w-3xl">
                         {t(
-                            '按整集或按一场，一次做完字幕识别、后期烧录、本场配乐和合并。识别优先走语音识别接口，没有结果时用分镜对白，再由大模型对齐到镜头时长。',
-                            'Run subtitle recognition, burn-in, scene score, and merge for the whole episode or one scene. Recognition uses a speech API when available, otherwise the storyboard dialogue, then the model times the lines to each shot.'
+                            '按整集或按一场做字幕识别和后期烧录。配乐读取剧本页已经写好的声画综合、各拍配乐和分镜时长，在这里生成一条曲子并铺进成片。',
+                            'Recognize subtitles and burn them in for the whole episode or one scene. Score uses the script page’s sound-picture cue, per-beat score lines, and shot durations, then generates one track and mixes it into the cut.'
                         )}
                     </div>
                 </div>
@@ -354,6 +376,14 @@ export const EditBay = ({
                             </span>
                         )}
                     </div>
+                    <FunctionApiSelector
+                        functionName={SCORE_FUNCTION}
+                        configs={functionApiConfigs}
+                        label={t('配乐 API', 'Score API')}
+                        value={scoreApiId}
+                        onChange={setScoreApiId}
+                        className="min-w-[220px] justify-end"
+                    />
                     <div className="flex flex-wrap justify-end gap-2">
                         <button type="button" className="px-3 py-1.5 rounded-md bg-white text-black text-xs font-semibold disabled:opacity-40" disabled={isReadOnly || !!busy || !scopedShots.length} onClick={runAll}>
                             {busy === 'all' ? <Loader2 className="w-3 h-3 animate-spin inline mr-1" /> : null}
@@ -369,7 +399,7 @@ export const EditBay = ({
                         </button>
                         <button type="button" className={buttonClass} disabled={isReadOnly || !!busy || !scopedShots.length} onClick={score}>
                             {busy === 'score' ? <Loader2 className="w-3 h-3 animate-spin inline mr-1" /> : null}
-                            {t('配乐', 'Score')}
+                            {t('生成配乐并铺进成片', 'Generate score and mix')}
                         </button>
                         <button type="button" className={buttonClass} disabled={isReadOnly || !!busy || !scopedShots.length} onClick={() => merge(false)}>
                             {busy === 'merge' ? <Loader2 className="w-3 h-3 animate-spin inline mr-1" /> : null}

@@ -1994,6 +1994,13 @@ export const updateEntity = async (entityId, data) => {
     return response.data;
 }
 
+export const generateEnvironmentLayout = async (entityId, options = {}) => {
+    const response = await api.post(`/entities/${entityId}/layout`, null, {
+        signal: options?.signal,
+    });
+    return response.data;
+}
+
 export const deleteEntity = async (entityId) => {
     const response = await api.delete(`/entities/${entityId}`);
     return response.data;

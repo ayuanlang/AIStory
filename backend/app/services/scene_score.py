@@ -626,7 +626,9 @@ async def generate_scene_score(
         db.commit()
         db.refresh(scene)
         return score_plan_public(scene)
-    resolved_api_id = int(system_api_id) if system_api_id and is_suno_system_api(db, int(system_api_id)) else None
+    if system_api_id and not is_suno_system_api(db, int(system_api_id)):
+        raise HTTPException(status_code=400, detail="剪辑页选中的接口不能生成配乐，请改选名称里带 Suno 的接口")
+    resolved_api_id = int(system_api_id) if system_api_id else None
     if not resolved_api_id:
         resolved_api_id = find_suno_system_api_id(db)
     if not resolved_api_id:
@@ -640,17 +642,21 @@ async def generate_scene_score(
 
     request = VoiceGenerationRequest(
         prompt=prompt,
-        function_name=str(function_name or "").strip() or "generate_entity_reference_audio_audio",
+        function_name=str(function_name or "").strip() or "generate_scene_score",
         system_api_id=int(resolved_api_id),
         project_id=project_id,
         asset_type="scene_score",
         customMode=True,
         custom_mode=True,
         instrumental=instrumental,
-        suno_style=style,
-        sunoStyle=style,
+        suno_model="V6",
+        sunoModel="V6",
+        suno_style=prompt[:1000],
+        sunoStyle=prompt[:1000],
         suno_title=f"{marker}配乐"[:80],
         sunoTitle=f"{marker}配乐"[:80],
+        suno_duration=max(10, min(360, int(round(total_seconds)))),
+        sunoDuration=max(10, min(360, int(round(total_seconds)))),
         negativeTags="lyrics, vocals, speech, dialogue" if instrumental else "speech, dialogue",
         negative_tags="lyrics, vocals, speech, dialogue" if instrumental else "speech, dialogue",
         use_llm_param_planning=False,

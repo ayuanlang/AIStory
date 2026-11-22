@@ -239,6 +239,10 @@ _DERIVED_ENV_EXTRACT_UNCLOSED = re.compile(
 _ENV_PLAN_WAIT_SECONDS = 1200.0
 _ENV_PLAN_POLL_SECONDS = 1.5
 _ENV_PLAN_EMPTY_GRACE_POLLS = 3
+# A previous run leaves environment_plan on failed. The next analysis marks
+# that node running a moment later. Aborting on the first poll freezes every
+# scene on STAGING_ENVIRONMENT_PLAN_FAILED and the cell never leaves it.
+_ENV_PLAN_STALE_FAILED_GRACE_POLLS = 8
 _SUBSKILL_START_ALIASES = {
     "drama": "drama",
     "drama_opt": "drama",
@@ -3240,6 +3244,11 @@ def load_environment_planned_script(db: Session, episode_id: int) -> str:
 
 
 def _environment_plan_node_status(db: Session, episode_id: int) -> str:
+    status, _updated_at = _environment_plan_node_observation(db, episode_id)
+    return status
+
+
+def _environment_plan_node_observation(db: Session, episode_id: int) -> Tuple[str, str]:
     from app.models.all_models import ScriptProgressPipelineNode
 
     row = (
@@ -3251,7 +3260,39 @@ def _environment_plan_node_status(db: Session, episode_id: int) -> str:
         )
         .first()
     )
-    return str(getattr(row, "status", "") or "").strip().lower()
+    if row is None:
+        return "", ""
+    return (
+        str(getattr(row, "status", "") or "").strip().lower(),
+        str(getattr(row, "updated_at", "") or "").strip(),
+    )
+
+
+def _pipeline_timestamp_key(value: str) -> str:
+    return str(value or "").strip().replace(" ", "T")
+
+
+def environment_plan_failure_blocks_wait(
+    status: str,
+    updated_at: str = "",
+    *,
+    wait_started_at: str = "",
+    seen_live: bool = False,
+) -> bool:
+    """True when environment_plan failed during this wait, not the previous run.
+
+    A failed row still sitting there from the last analysis must not abort
+    framing before this run marks the node queued or running. A failure
+    written after the wait started, or after this wait has already seen the
+    node live, belongs to this run.
+    """
+    if str(status or "").strip().lower() not in {"failed", "blocked"}:
+        return False
+    if seen_live:
+        return True
+    updated = _pipeline_timestamp_key(updated_at)
+    started = _pipeline_timestamp_key(wait_started_at)
+    return bool(updated and started and updated > started)
 
 
 async def await_environment_planned_script(
@@ -3300,6 +3341,9 @@ async def await_environment_planned_script(
     deadline = time.monotonic() + float(timeout_seconds)
     last_status = ""
     empty_polls = 0
+    stale_failed_polls = 0
+    seen_plan_live = False
+    wait_started_at = now_bj_iso()
     logger.info(
         "[scene_subskill_pipeline] waiting for environment_plan before framing episode_id=%s",
         episode_id,
@@ -3308,11 +3352,33 @@ async def await_environment_planned_script(
         _raise_if_parent_task_cancelled()
         poll_db = SessionLocal()
         try:
-            last_status = _environment_plan_node_status(poll_db, int(episode_id))
+            last_status, plan_updated_at = _environment_plan_node_observation(poll_db, int(episode_id))
+            if last_status in {"queued", "running", "pending"}:
+                seen_plan_live = True
+                stale_failed_polls = 0
             if last_status in {"failed", "blocked"}:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"STAGING_ENVIRONMENT_PLAN_FAILED:{last_status}",
+                if environment_plan_failure_blocks_wait(
+                    last_status,
+                    plan_updated_at,
+                    wait_started_at=wait_started_at,
+                    seen_live=seen_plan_live,
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"STAGING_ENVIRONMENT_PLAN_FAILED:{last_status}",
+                    )
+                stale_failed_polls += 1
+                if stale_failed_polls >= _ENV_PLAN_STALE_FAILED_GRACE_POLLS:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"STAGING_ENVIRONMENT_PLAN_FAILED:{last_status}",
+                    )
+                logger.info(
+                    "[scene_subskill_pipeline] ignoring stale environment_plan failure episode_id=%s status=%s updated_at=%s poll=%s",
+                    episode_id,
+                    last_status,
+                    plan_updated_at,
+                    stale_failed_polls,
                 )
             persisted = load_environment_planned_script(poll_db, int(episode_id))
             if last_status in {"success", "warning"}:

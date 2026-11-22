@@ -11,6 +11,7 @@ generate_subjects_i2i: '图生图 (角色/道具/环境)',
     generate_cover: '生成封面',
     generate_shot_images: '生成分镜图片',
     generate_videos: '生成视频',
+    generate_scene_score: '剪辑配乐',
     script_analysis: '剧本分析',
     ai_assistant: 'AI Assistant',
     ai_shot: 'AI生成分镜(脚本)'

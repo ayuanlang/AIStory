@@ -19894,8 +19894,10 @@ class MediaGenerationService:
             submit_url = (tool_conf.get("flux_kontext_endpoint") or f"{base_url}/api/v1/flux/kontext/generate").strip()
             query_url = (tool_conf.get("flux_kontext_query_endpoint") or f"{base_url}/api/v1/flux/kontext/record-info").strip()
         elif use_suno_api:
-            submit_url = (tool_conf.get("suno_endpoint") or f"{base_url}/api/v1/generate").strip()
-            query_url = (tool_conf.get("suno_query_endpoint") or f"{base_url}/api/v1/record-info").strip()  # Needs verification
+            from app.services.kie_suno_payload import SUNO_QUERY_PATH, SUNO_SUBMIT_PATH
+
+            submit_url = f"{base_url}{SUNO_SUBMIT_PATH}"
+            query_url = f"{base_url}{SUNO_QUERY_PATH}"
 
         route_mode = "market"
         if use_veo_api: route_mode = "veo"
@@ -21257,100 +21259,23 @@ class MediaGenerationService:
             
             logger.info("KIE Flux Kontext submit payload | endpoint=%s model=%s", submit_url, payload["model"])
         elif use_suno_api:
-            def _suno_conf_value(*keys: str, default: Any = None) -> Any:
-                for key in keys:
-                    if not key:
-                        continue
-                    if key in tool_conf and tool_conf.get(key) not in (None, ""):
-                        return tool_conf.get(key)
-                return default
+            from app.services.kie_suno_payload import build_suno_generate_body
 
-            def _suno_bool(*keys: str, default: bool = False) -> bool:
-                raw = _suno_conf_value(*keys, default=default)
-                if isinstance(raw, bool):
-                    return raw
-                text = str(raw or "").strip().lower()
-                if text in {"1", "true", "yes", "y", "on"}:
-                    return True
-                if text in {"0", "false", "no", "n", "off"}:
-                    return False
-                return default
-
-            def _suno_float(*keys: str, default: Optional[float] = None) -> Optional[float]:
-                raw = _suno_conf_value(*keys, default=default)
-                if raw in (None, ""):
-                    return default
-                try:
-                    return float(raw)
-                except Exception:
-                    return default
-
-            suno_model_version = str(
-                _suno_conf_value("suno_model", "sunoModel", "model_version", "modelVersion", default="")
-                or ""
-            ).strip().upper()
-            if not suno_model_version:
-                if "v5" in model_lower:
-                    suno_model_version = "V5"
-                elif "v4.5" in model_lower or "4.5" in model_lower or "v4_5" in model_lower:
-                    suno_model_version = "V4_5"
-                else:
-                    suno_model_version = "V4"
-            if suno_model_version not in {"V4", "V4_5", "V5"}:
-                suno_model_version = "V4"
-
-            custom_mode = _suno_bool("customMode", "custom_mode", default=True)
-            instrumental = _suno_bool("instrumental", default=True)
-            payload = {
-                "prompt": prompt,
-                "model": suno_model_version,
-                "customMode": custom_mode,
-                "instrumental": instrumental,
-            }
-            if custom_mode:
-                style_val = str(_suno_conf_value("suno_style", "music_style", "style", default="Classical") or "Classical").strip()
-                title_val = str(
-                    _suno_conf_value("suno_title", "music_title", "title", default="AI Generated Track")
-                    or "AI Generated Track"
-                ).strip()
-                payload["style"] = style_val or "Classical"
-                payload["title"] = title_val or "AI Generated Track"
-
-            negative_tags = str(_suno_conf_value("negativeTags", "negative_tags", default="") or "").strip()
-            if negative_tags:
-                payload["negativeTags"] = negative_tags
-
-            vocal_gender = str(_suno_conf_value("vocalGender", "vocal_gender", default="") or "").strip().lower()
-            if vocal_gender in {"m", "f", "male", "female"}:
-                payload["vocalGender"] = "m" if vocal_gender in {"m", "male"} else "f"
-
-            for target_key, source_keys in (
-                ("styleWeight", ("styleWeight", "style_weight")),
-                ("weirdnessConstraint", ("weirdnessConstraint", "weirdness_constraint")),
-                ("audioWeight", ("audioWeight", "audio_weight")),
-            ):
-                numeric_val = _suno_float(*source_keys)
-                if numeric_val is not None:
-                    payload[target_key] = max(0.0, min(1.0, float(numeric_val)))
-
-            persona_id = str(_suno_conf_value("personaId", "persona_id", default="") or "").strip()
-            if persona_id:
-                payload["personaId"] = persona_id
-            persona_model = str(_suno_conf_value("personaModel", "persona_model", default="") or "").strip()
-            if persona_model:
-                payload["personaModel"] = persona_model
-
-            if callback_url and callback_url != "-1":
-                payload["callBackUrl"] = callback_url
-
+            payload = build_suno_generate_body(
+                prompt=prompt,
+                tool_conf=tool_conf if isinstance(tool_conf, dict) else {},
+                callback_url=callback_url,
+            )
+            suno_input = payload.get("input") if isinstance(payload.get("input"), dict) else {}
             logger.info(
-                "KIE Suno submit payload | model=%s customMode=%s instrumental=%s style=%s title=%s vocalGender=%s",
+                "KIE Suno submit payload | job=%s music_model=%s custom_mode=%s instrumental=%s style_len=%s title=%s duration=%s",
                 payload.get("model"),
-                payload.get("customMode"),
-                payload.get("instrumental"),
-                payload.get("style"),
-                payload.get("title"),
-                payload.get("vocalGender"),
+                suno_input.get("model"),
+                suno_input.get("custom_mode"),
+                suno_input.get("instrumental"),
+                len(str(suno_input.get("style") or "")),
+                suno_input.get("title"),
+                suno_input.get("duration"),
             )
         elif is_kling_3_video:
             kling_model = "kling-3.0/video"
@@ -21929,6 +21854,16 @@ class MediaGenerationService:
                 "sound": input_obj.get("sound") if "sound" in input_obj else None,
             }
             return summary
+
+        if use_suno_api and isinstance(payload, dict) and isinstance(payload.get("input"), dict):
+            suno_input = payload["input"]
+            for video_key in ("mode", "aspect_ratio", "image_size", "resolution", "prompt", "text"):
+                suno_input.pop(video_key, None)
+            if suno_input.get("duration") not in (None, ""):
+                try:
+                    suno_input["duration"] = max(10, min(360, int(round(float(suno_input.get("duration"))))))
+                except Exception:
+                    suno_input.pop("duration", None)
 
         submit_payload: Dict[str, Any] = dict(payload or {})
         submitted_model = submit_payload.get("model") if isinstance(submit_payload, dict) else model
@@ -22777,7 +22712,7 @@ class MediaGenerationService:
                 )
                 last_poll_state_marker = poll_state_marker
 
-            if state in {"waiting", "queued", "queuing", "processing", "running", "generating", "pending", "submitted", "in_progress", "in-progress"}:
+            if state in {"waiting", "queued", "queuing", "processing", "running", "generating", "pending", "submitted", "in_progress", "in-progress", "text", "first"}:
                 continue
             if success_flag in {0, "0", False, "false", "failed", "error"}:
                 continue

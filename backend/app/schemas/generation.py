@@ -155,4 +155,6 @@ class VoiceGenerationRequest(BaseModel):
     personaId: Optional[str] = None
     persona_model: Optional[str] = None
     personaModel: Optional[str] = None
+    suno_duration: Optional[int] = None
+    sunoDuration: Optional[int] = None
 

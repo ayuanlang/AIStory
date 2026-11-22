@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.models.all_models import Episode, Scene, Shot, User
+from app.models.all_models import Episode, Scene, Shot, SystemAPISetting, User
 from app.schemas.generation import VoiceGenerationRequest
 from app.services.billing_service import billing_service
 from app.services.db_session_utils import _release_db_connection, _snapshot_user_principal
@@ -63,12 +63,25 @@ async def _run_generate_voice(
     db: Session,
 ):
     reservation_tx = None
-    voice_task_type = "voice_gen"
+    score_function = str(getattr(req, "function_name", None) or "").strip() == "generate_scene_score"
+    voice_task_type = "music_gen" if score_function else "voice_gen"
+    runtime_category = "Voice"
+    if score_function:
+        # 配乐走 Music，不跟 LLM / 配音 Voice 混用同一类。
+        runtime_category = "Music"
+        selected_id = getattr(req, "system_api_id", None)
+        if selected_id:
+            selected_row = db.query(SystemAPISetting).filter(
+                SystemAPISetting.id == int(selected_id)
+            ).first()
+            actual_category = str(getattr(selected_row, "category", "") or "").strip()
+            if actual_category:
+                runtime_category = actual_category
     runtime_target = _resolve_media_runtime_target(
         provider=req.provider,
         model=req.model,
         media_type="voice",
-        category="Voice",
+        category=runtime_category,
         user_id=current_user.id,
         user_credits=(current_user.credits or 0),
         function_name=getattr(req, "function_name", None),

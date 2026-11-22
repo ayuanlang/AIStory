@@ -1508,3 +1508,225 @@ async def check_environment_consistency(
         _cancel_reservation_quietly(db, reservation_tx_id, str(exc))
         raise HTTPException(status_code=502, detail="一致性检查失败，提示词没有改动。") from exc
 
+
+@router.post("/entities/{entity_id}/layout")
+async def generate_entity_layout(
+    entity_id: int,
+    system_api_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Ask the text model for one box per subject, then project a white clay model.
+
+    The image model is not called. The opening is not changed.
+    """
+    import math
+    import os
+    import uuid
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.core.config import settings
+    from app.services.oss_storage_service import oss_storage_service
+    from app.services.script_analysis_flow.environment_consistency import (
+        is_derived_environment_entity,
+        is_environment_entity,
+        main_environment_opening_text,
+    )
+    from app.services.script_analysis_flow.environment_layout import (
+        LayoutError,
+        boxes_from_layout_payload,
+        layout_box_records,
+        layout_messages,
+        parse_layout_model_text,
+        render_layout_sheet,
+        supplement_layout_boxes,
+    )
+
+    logger.info("generate_entity_layout start entity_id=%s", entity_id)
+    entity = db.query(Entity).filter(Entity.id == entity_id, _active_entity_clause()).first()
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    _require_project_access(db, entity.project_id, current_user)
+    if not is_environment_entity(entity):
+        raise HTTPException(status_code=400, detail="布局只用于环境资产。")
+    if is_derived_environment_entity(entity):
+        raise HTTPException(status_code=400, detail="这一格不单独画布局，请在主环境上生成。")
+    opening = main_environment_opening_text(entity)
+    if not str(opening or "").strip():
+        raise HTTPException(status_code=400, detail="没有开篇，不能生成布局。")
+
+    llm_config, selected_dropdown_id, _, _ = _resolve_script_analysis_dropdown_llm_config(
+        db,
+        current_user.id,
+        "script_analysis",
+        system_api_id,
+        context="environment_layout",
+    )
+    api_provider = str(llm_config.get("provider") or "").strip() or None
+    api_model = str(llm_config.get("model") or "").strip() or None
+    api_api_key = str(llm_config.get("api_key") or "").strip() or None
+    api_base_url = str(llm_config.get("base_url") or "").strip() or None
+    raw_api_config = llm_config.get("config")
+    api_config = dict(raw_api_config) if isinstance(raw_api_config, dict) else {}
+    if not api_provider or not api_model:
+        raise HTTPException(status_code=400, detail="剧本分析的模型下拉没有可用模型。")
+    messages = layout_messages(opening)
+    call_config = {
+        "provider": api_provider,
+        "api_key": api_api_key,
+        "base_url": api_base_url,
+        "model": api_model,
+        "config": {
+            **api_config,
+            "__resolved_user_id": current_user.id,
+            "__resolved_user_name": current_user.username,
+            "__resolved_project_id": entity.project_id,
+            "__resolved_action": "环境布局",
+            "__selected_system_api_id": selected_dropdown_id,
+        },
+    }
+    current_user_id = int(getattr(current_user, "id", 0) or 0)
+    project_id = int(getattr(entity, "project_id", 0) or 0)
+    reservation_tx = None
+    reservation_tx_id: Optional[int] = None
+    if billing_service.is_token_pricing(db, "analysis_character", api_provider, api_model):
+        est = billing_service.estimate_reserve_tokens_from_messages(messages)
+        est_input = int(est.get("input_tokens", 0) or 0)
+        est_output = int(math.ceil(float(est_input) * billing_service.RESERVE_OUTPUT_RATIO)) if est_input > 0 else 0
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "analysis_character",
+            api_provider,
+            api_model,
+            {
+                "item": "environment_layout",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
+                "input_tokens": est_input,
+                "output_tokens": est_output,
+                "total_tokens": int(est_input + est_output),
+            },
+        )
+        try:
+            reservation_tx_id = int(getattr(reservation_tx, "id", 0) or 0) or None
+        except Exception:
+            reservation_tx_id = None
+    else:
+        cost = billing_service.estimate_cost(db, "analysis_character", api_provider, api_model)
+        billing_service.check_can_proceed(current_user, cost)
+
+    _release_db_connection(db, "environment_layout_llm_call")
+    reservation_tx = None
+
+    try:
+        llm_response = await llm_service.chat_completion_with_fallback(messages, call_config)
+        result_content = str((llm_response or {}).get("content", "") or "")
+        usage = (llm_response or {}).get("usage", {}) if isinstance(llm_response, dict) else {}
+        try:
+            parsed = parse_layout_model_text(result_content)
+            boxes, meta = boxes_from_layout_payload(parsed)
+        except LayoutError as first_error:
+            retry = await llm_service.chat_completion_with_fallback(
+                layout_messages(opening, str(first_error)),
+                call_config,
+            )
+            retry_usage = (retry or {}).get("usage", {}) if isinstance(retry, dict) else {}
+            if isinstance(usage, dict) and isinstance(retry_usage, dict):
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens"):
+                    if key in retry_usage:
+                        try:
+                            usage[key] = int(usage.get(key, 0) or 0) + int(retry_usage.get(key, 0) or 0)
+                        except Exception:
+                            pass
+            llm_response = retry
+            parsed = parse_layout_model_text(str((retry or {}).get("content", "") or ""))
+            boxes, meta = boxes_from_layout_payload(parsed)
+        boxes = supplement_layout_boxes(opening, boxes, meta)
+        binary, count = render_layout_sheet(boxes, meta)
+        box_records = layout_box_records(boxes)
+
+        entity = db.query(Entity).filter(Entity.id == entity_id, _active_entity_clause()).first()
+        if not entity:
+            raise HTTPException(status_code=404, detail="Entity not found")
+        if current_user_id > 0:
+            reloaded_user = db.query(User).filter(User.id == current_user_id).first()
+            if reloaded_user is not None:
+                current_user = reloaded_user
+
+        filename = f"env_layout_{uuid.uuid4().hex[:16]}.png"
+        user_id = int(getattr(current_user, "id", 0) or 0)
+        uploaded = oss_storage_service.upload_bytes(
+            binary,
+            user_id=user_id,
+            filename=filename,
+            content_type="image/png",
+            category="generated",
+            cache_control="public, max-age=31536000",
+        )
+        url = str((uploaded or {}).get("url") or "").strip()
+        if not url:
+            user_dir = os.path.join(settings.UPLOAD_DIR, str(user_id))
+            if not os.path.isabs(user_dir):
+                user_dir = os.path.abspath(user_dir)
+            os.makedirs(user_dir, exist_ok=True)
+            with open(os.path.join(user_dir, filename), "wb") as handle:
+                handle.write(binary)
+            relative = f"/uploads/{user_id}/{filename}"
+            external = str(getattr(settings, "RENDER_EXTERNAL_URL", "") or "").rstrip("/")
+            url = f"{external}{relative}" if external else relative
+
+        attrs = dict(entity.custom_attributes) if isinstance(entity.custom_attributes, dict) else {}
+        previous = str(entity.image_url or "").strip()
+        if previous and previous != str(attrs.get("layout_image_url") or "").strip():
+            attrs["beauty_image_url"] = previous
+        attrs["layout_image_url"] = url
+        attrs["layout_boxes"] = box_records
+        entity.custom_attributes = attrs
+        flag_modified(entity, "custom_attributes")
+        entity.image_url = url
+        db.commit()
+        db.refresh(entity)
+        billing_details = _build_standard_billing_details(
+            item="environment_layout",
+            usage_payload=usage if isinstance(usage, dict) else None,
+            extra_details={
+                "entity_id": entity_id,
+                "project_id": project_id,
+                "request_scope": "environment_layout",
+                "box_count": count,
+            },
+            routing_payload=llm_response if isinstance(llm_response, dict) else None,
+        )
+        _finalize_model_invocation_billing(
+            db=db,
+            current_user=current_user,
+            task_type="analysis_character",
+            provider=api_provider,
+            model=api_model,
+            reservation_tx=None,
+            reservation_tx_id=reservation_tx_id,
+            item="environment_layout",
+            usage_payload=usage if isinstance(usage, dict) else None,
+            extra_details=billing_details,
+            routing_payload=llm_response if isinstance(llm_response, dict) else None,
+        )
+        logger.info("generate_entity_layout done entity_id=%s boxes=%s", entity_id, count)
+        return {
+            "image_url": url,
+            "box_count": count,
+            "boxes": box_records,
+            "entity_id": int(entity.id),
+            "custom_attributes": attrs,
+        }
+    except LayoutError as exc:
+        _cancel_reservation_quietly(db, reservation_tx_id, str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HTTPException as exc:
+        _cancel_reservation_quietly(db, reservation_tx_id, str(exc.detail))
+        raise
+    except Exception as exc:
+        logger.error("Environment layout failed: %s", exc, exc_info=True)
+        _cancel_reservation_quietly(db, reservation_tx_id, str(exc))
+        raise HTTPException(status_code=502, detail="布局生成失败，开篇没有改动。") from exc

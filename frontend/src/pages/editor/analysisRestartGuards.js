@@ -89,6 +89,18 @@ const STORYBOARD_APPLIED_EVENTS = new Set([
     'reconciled_from_workspace',
 ]);
 
+/**
+ * Page-entry auto-detect must not start generateSceneShots again when this
+ * scene's newest storyboard row is already running, already succeeded, or
+ * already has shots. An older failed or queued alias is not the row to read.
+ */
+export function storyboardAutoKickoffAlreadyCovered(storyboardNode) {
+    if (!storyboardNode) return false;
+    const status = String(storyboardNode?.status || '').trim().toLowerCase();
+    if (['running', 'success', 'warning'].includes(status)) return true;
+    return storyboardShotsLanded(storyboardNode);
+}
+
 /** Shots are in the workspace when the count is positive or the node was applied. */
 export function storyboardShotsLanded(node) {
     const shotCount = Number(node?.runtime_meta?.shot_count || 0);
@@ -120,18 +132,14 @@ const DIAGNOSTIC_NODE_STATUS_RANK = {
 };
 
 /**
- * Episode-level diagnostic cells must read the episode row, not a later
- * scene-scoped duplicate. When two episode rows exist, the newer write wins.
+ * Several rows can name one scene (EP01_SC03 and TR01_SC03). The progress
+ * list is oldest-id first, so the first match stays on a previous
+ * STAGING_ENVIRONMENT_PLAN_FAILED even after this run rewrote the other row.
+ * The newer write is the cell.
  */
-export function pickDiagnosticPipelineNode(nodes, nodeName) {
-    const wanted = String(nodeName || '').trim();
-    if (!wanted) return null;
-    const matches = (Array.isArray(nodes) ? nodes : []).filter(
-        (node) => String(node?.node_name || '').trim() === wanted
-    );
-    if (!matches.length) return null;
-    const episodeLevel = matches.filter((node) => !String(node?.scene_id || '').trim());
-    const pool = episodeLevel.length ? episodeLevel : matches;
+export function pickNewestPipelineNode(nodes) {
+    const pool = (Array.isArray(nodes) ? nodes : []).filter(Boolean);
+    if (!pool.length) return null;
     return pool.reduce((best, node) => {
         if (!best) return node;
         const bestTime = pipelineNodeInstant(best, ['updated_at', 'ended_at', 'started_at']);
@@ -144,6 +152,22 @@ export function pickDiagnosticPipelineNode(nodes, nodeName) {
         if (nextRank !== bestRank) return nextRank > bestRank ? node : best;
         return nextTime >= bestTime ? node : best;
     }, null);
+}
+
+/**
+ * Episode-level diagnostic cells must read the episode row, not a later
+ * scene-scoped duplicate. When two episode rows exist, the newer write wins.
+ */
+export function pickDiagnosticPipelineNode(nodes, nodeName) {
+    const wanted = String(nodeName || '').trim();
+    if (!wanted) return null;
+    const matches = (Array.isArray(nodes) ? nodes : []).filter(
+        (node) => String(node?.node_name || '').trim() === wanted
+    );
+    if (!matches.length) return null;
+    const episodeLevel = matches.filter((node) => !String(node?.scene_id || '').trim());
+    const pool = episodeLevel.length ? episodeLevel : matches;
+    return pickNewestPipelineNode(pool);
 }
 
 /**

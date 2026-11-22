@@ -165,6 +165,7 @@ _SUPPORTED_FUNCTION_API_NAMES = [
     "generate_entity_reference_audio",
     "generate_entity_reference_audio_audio",
     "generate_entity_reference_audio_video",
+    "generate_scene_score",
     "script_analysis",
     "ai_assistant",
     "ai_shot",

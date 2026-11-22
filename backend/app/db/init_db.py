@@ -2632,7 +2632,7 @@ def init_system_api_settings(db):
         _kie_item("Kie ElevenLabs Sound Effect v2", "Tools", "elevenlabs/sound-effect-v2", "text-to-audio"),
         _kie_item("Kie ElevenLabs Audio Isolation", "Tools", "elevenlabs/audio-isolation", "audio-to-audio"),
         
-        _kie_item("Kie Suno", "Audio", "suno", "text-to-audio"),
+        _kie_item("Kie Suno", "Music", "suno", "text-to-audio"),
         _kie_item("Kie Runway Gen3 Alpha", "Video", "runwayml/gen3a-turbo", "text-to-video"),
         _kie_item("Kie Runway Gen3 Alpha Image to Video", "Video", "runwayml/gen3a-turbo-image-to-video", "image-to-video"),
         _kie_item("Kie 4o Image", "Image", "gpt4o-image", "text-to-image,image-to-image"),
@@ -2655,6 +2655,18 @@ def init_system_api_settings(db):
         if (row.api_key or "").strip():
             kie_shared_api_key = row.api_key.strip()
             break
+
+    suno_moved = 0
+    for row in existing_kie_rows:
+        if (row.model or "").strip().lower() != "suno":
+            continue
+        if (row.category or "").strip() == "Music":
+            continue
+        row.category = "Music"
+        suno_moved += 1
+    if suno_moved:
+        db.commit()
+        logger.info("Moved %s Kie Suno system APIs to category Music", suno_moved)
 
     existing_kie_keys = {
         ((row.category or "").strip().lower(), (row.model or "").strip().lower())

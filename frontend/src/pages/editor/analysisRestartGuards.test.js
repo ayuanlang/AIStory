@@ -4,9 +4,11 @@ import {
     isThisRunPipelineNode,
     isStoryboardQueuedPlaceholderNode,
     pickDiagnosticPipelineNode,
+    pickNewestPipelineNode,
     resolveAssetCategoryDiagnosticState,
     shouldHoldStoryboardKickoffForQueuedPlaceholder,
     shouldRejectLeftoverStagingKickoff,
+    storyboardAutoKickoffAlreadyCovered,
     storyboardShotsLanded,
     derivedEnvironmentRegenDisabled,
 } from './analysisRestartGuards.js';
@@ -87,6 +89,26 @@ describe('analysisRestartGuards', () => {
             runtime_meta: { business_event: 'queued', rerun_cleared: true },
         };
         assert.equal(shouldHoldStoryboardKickoffForQueuedPlaceholder(staging, queued), true);
+    });
+
+    it('does not auto-start storyboard when the newest row is already running or has shots', () => {
+        assert.equal(storyboardAutoKickoffAlreadyCovered({ status: 'running' }), true);
+        assert.equal(storyboardAutoKickoffAlreadyCovered({ status: 'success' }), true);
+        assert.equal(storyboardAutoKickoffAlreadyCovered({
+            status: 'queued',
+            runtime_meta: { shot_count: 12 },
+        }), true);
+        assert.equal(storyboardAutoKickoffAlreadyCovered({
+            status: 'queued',
+            runtime_meta: { business_event: 'queued' },
+        }), false);
+        assert.equal(storyboardAutoKickoffAlreadyCovered({ status: 'failed' }), false);
+        assert.equal(storyboardAutoKickoffAlreadyCovered(null), false);
+        const newest = pickNewestPipelineNode([
+            { status: 'failed', updated_at: '2026-11-22T00:40:00.000000+08:00' },
+            { status: 'running', updated_at: '2026-11-22T01:07:49.000000+08:00' },
+        ]);
+        assert.equal(storyboardAutoKickoffAlreadyCovered(newest), true);
     });
 
     it('releases shot kickoff after this-run staging finishes later than the queue', () => {
@@ -204,6 +226,26 @@ describe('asset category diagnostic cell', () => {
         });
         assert.equal(state.ready, false);
         assert.equal(state.failed, true);
+    });
+
+    it('prefers the newer scene row over an older failed alias', () => {
+        const picked = pickNewestPipelineNode([
+            {
+                node_name: 'scene_subskill_scene',
+                scene_id: 'EP01_SC03',
+                status: 'failed',
+                last_error_message: 'STAGING_ENVIRONMENT_PLAN_FAILED:failed',
+                updated_at: '2026-11-22T00:40:00.000000+08:00',
+            },
+            {
+                node_name: 'scene_subskill_scene',
+                scene_id: 'TR01_SC03',
+                status: 'running',
+                updated_at: '2026-11-22T01:07:49.000000+08:00',
+            },
+        ]);
+        assert.equal(picked.scene_id, 'TR01_SC03');
+        assert.equal(picked.status, 'running');
     });
 
     it('prefers the episode-level character node over a later scene-scoped row', () => {

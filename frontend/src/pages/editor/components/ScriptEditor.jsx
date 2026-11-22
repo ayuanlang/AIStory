@@ -73,7 +73,7 @@ import {
     filterGlobalReuseDropdownAssets,
     isAssetFromEpisode,
 } from '../reuseEnvAssets';
-import { hasSuccessfulPipelineNode, isStoryboardQueuedPlaceholderNode, isThisRunPipelineNode, pickDiagnosticPipelineNode, resolveAssetCategoryDiagnosticState, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff, storyboardShotsLanded, derivedEnvironmentRegenDisabled } from '../analysisRestartGuards';
+import { hasSuccessfulPipelineNode, isStoryboardQueuedPlaceholderNode, isThisRunPipelineNode, pickDiagnosticPipelineNode, pickNewestPipelineNode, resolveAssetCategoryDiagnosticState, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff, storyboardAutoKickoffAlreadyCovered, storyboardShotsLanded, derivedEnvironmentRegenDisabled } from '../analysisRestartGuards';
 
 import { 
     fetchProject, 
@@ -12061,6 +12061,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [t]);
 
     const flushPendingStoryboardKickoffsRef = useRef(async () => ({ started: 0 }));
+    const storyboardAutoKickoffPassRef = useRef(false);
     const resumeParkedStagingAfterEnvRef = useRef(async () => {});
     const stagingResumeKickedRef = useRef(new Set());
 
@@ -12255,11 +12256,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || storyboardProgressIdentityKey(priorMarker) === storyboardProgressIdentityKey(stableMarker)
             )
         );
-        if (!force && priorIsSameScene && ['generating', 'importing'].includes(priorStatus)) {
-            if (storyboardKickoffPromisesRef.current?.has(stableMarker)) {
-                return true;
-            }
-            // Hung overlay after HMR / lost promise: fall through and actually POST.
+        // A lost promise is not a second run. Page entry polls every 2s; a 409
+        // used to clear the promise while status stayed generating, and the next
+        // poll POSTed ai_generate_shots again.
+        if (!force && priorIsSameScene && ['starting', 'generating', 'importing'].includes(priorStatus)) {
+            return true;
         }
         let resumeThis = Boolean(resumeQueued);
         // Parked waiting_env must fall through to isEnvironmentAssetDesignReady.
@@ -13001,6 +13002,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [activeEpisode, kickoffStoryboardForImportedScene]);
 
     const kickoffStoryboardsFromSuccessfulStagingNodes = useCallback(async (nodes = []) => {
+        if (storyboardAutoKickoffPassRef.current) return;
+        storyboardAutoKickoffPassRef.current = true;
+        try {
         const kickoffEpoch = analysisKickoffEpochRef.current;
         if (storyboardKickoffEpochBlocked(kickoffEpoch)) return;
         // A single 分场 node rerun must not start storyboard for the other rows.
@@ -13066,14 +13070,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const workspaceImport = (meta.workspace_import && typeof meta.workspace_import === 'object')
                 ? meta.workspace_import
                 : {};
-            const storyboardNode = list.find((row) => (
+            const storyboardNode = pickNewestPipelineNode(list.filter((row) => (
                 isStoryboardPipelineNodeName(row?.node_name)
                 && isSceneIdInAllowlist(
                     String(row?.scene_id || '').trim(),
                     expandSceneIdAllowlist([sceneId], episodePrefix),
                     episodePrefix
                 )
-            ));
+            )));
             const storyboardNodeStatus = String(storyboardNode?.status || '').trim().toLowerCase();
             const pendingAfterSubskill = storyboardPendingAfterSubskillRef.current;
             if (
@@ -13086,16 +13090,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (shouldHoldStoryboardKickoffForQueuedPlaceholder(node, storyboardNode)) {
                 continue;
             }
-            if (['success', 'warning'].includes(storyboardNodeStatus)) {
+            if (storyboardNodeStatus === 'running' || storyboardAutoKickoffAlreadyCovered(storyboardNode)) {
                 const progressStatus = String(
                     findStoryboardProgressItem(storyboardTaskProgressRef.current, sceneId, {
                         sceneOrder: Number(node?.scene_order || 0) || deriveSceneOrderFromSceneId(sceneId),
                     })?.status || ''
                 ).trim().toLowerCase();
-                const needsResume = ['waiting_env', 'waiting_import'].includes(progressStatus)
-                    || (progressStatus === 'failed' && isStoryboardRetryableKickoffError(
-                        findStoryboardProgressItem(storyboardTaskProgressRef.current, sceneId)?.error
-                    ));
+                const needsResume = storyboardNodeStatus !== 'running'
+                    && (
+                        ['waiting_env', 'waiting_import'].includes(progressStatus)
+                        || (progressStatus === 'failed' && isStoryboardRetryableKickoffError(
+                            findStoryboardProgressItem(storyboardTaskProgressRef.current, sceneId)?.error
+                        ))
+                    );
                 if (!needsResume) continue;
             }
             // Only kick storyboard after a real 建置+入戏 body. Incomplete staging
@@ -13106,6 +13113,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 sceneOrder: Number(node?.scene_order || meta.scene_order || 0) || deriveSceneOrderFromSceneId(sceneId),
                 dbSceneId: workspaceImport.workspace_scene_id,
             });
+        }
+        } finally {
+            storyboardAutoKickoffPassRef.current = false;
         }
     }, [
         activeEpisode,
@@ -38804,8 +38814,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             });
                         };
                         const diagnosticSceneRows = collectDiagnosticSceneRows();
-                        const findScenePipelineNode = (nodeName, sceneId) => (
-                            (diagnosticsPipelineNodes || []).find((node) => {
+                        const findScenePipelineNode = (nodeName, sceneId) => pickNewestPipelineNode(
+                            (diagnosticsPipelineNodes || []).filter((node) => {
                                 if (String(node?.node_name || '').trim() !== nodeName) return false;
                                 const nodeSceneId = String(node?.scene_id || '').trim();
                                 if (!nodeSceneId) return false;
@@ -38830,7 +38840,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     expandSceneIdAllowlist([sceneId], episodePrefix),
                                     episodePrefix
                                 );
-                            }) || null
+                            })
                         );
                         const stateFromPipelineNode = (node, fallback = {}) => {
                             const status = String(node?.status || '').trim().toLowerCase();

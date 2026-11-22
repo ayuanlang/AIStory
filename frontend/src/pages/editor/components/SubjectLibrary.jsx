@@ -10,7 +10,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { ImagePlus, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush, Cpu, Timer, History, RotateCcw, Stethoscope } from 'lucide-react';
+import { ImagePlus, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Box, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush, Cpu, Timer, History, RotateCcw, Stethoscope } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -82,6 +82,7 @@ import {
     fetchEntities, 
     createEntity,
     updateEntity,
+    generateEnvironmentLayout,
     deleteEntity,
     deleteAllEntities,
     generateImage,
@@ -608,6 +609,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [showImageModal, setShowImageModal] = useState(false);
     const [imageModalTab, setImageModalTab] = useState('library'); // library, upload, generate
     const [generating, setGenerating] = useState(false);
+    const [layoutBusyId, setLayoutBusyId] = useState('');
+    const layoutRunRef = useRef(null);
     const [environmentConsistency, setEnvironmentConsistency] = useState({ entityId: '', running: false, text: '', tone: '' });
     const [consistencyNotes, setConsistencyNotes] = useState({});
     const [uploadState, setUploadState] = useState('idle'); // idle, uploading, analyzing, completed
@@ -2339,6 +2342,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             const jobId = String(value?.jobId || '').trim();
             const startedAt = Number(value?.startedAt || 0) || now;
             if (!stableEntityId || !jobId) return;
+            if (value?.jobKind === 'layout' || jobId.startsWith('layout:')) return;
             if ((now - startedAt) > SUBJECT_IMAGE_JOB_TTL_MS) return;
             const jobKind = value?.jobKind === 'reconstruct' ? 'reconstruct' : 'generate';
             cleaned[stableEntityId] = {
@@ -3201,6 +3205,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 }
                 for (const [entityId, job] of jobEntries) {
                     const jobId = String(job?.jobId || '').trim();
+                    if (job?.jobKind === 'layout' || jobId.startsWith('layout:')) {
+                        continue;
+                    }
                     if (!jobId) {
                         const currentEntry = getCurrentJobEntry(entityId);
                         if (!currentEntry) {
@@ -7989,6 +7996,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const currentJob = subjectImageJobs[String(targetEntityId)];
         const jobId = String(currentJob?.jobId || '').trim();
         const entityName = currentJob?.entityName || targetEntity?.name || targetEntity?.name_en || targetEntityId;
+        if (currentJob?.jobKind === 'layout' || jobId.startsWith('layout:')) {
+            layoutRunRef.current?.controller?.abort();
+            clearLocalSubjectImageJobState(targetEntityId);
+            if (onLog) onLog(t(`已停止布局：${entityName}`, `Layout stopped: ${entityName}`), 'warning');
+            showSubjectNotification(t('已停止布局', 'Layout stopped'), 'warning');
+            return;
+        }
 
         setStoppingSubjectImageJobs(prev => ({
             ...(prev || {}),
@@ -8195,6 +8209,71 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             showSubjectNotification(`${t('绑定图片失败', 'Failed to bind image')}: ${detail}`, 'error');
             onLog?.(t(`绑定图片失败：${detail}`, `Failed to bind image: ${detail}`), 'error');
             return null;
+        }
+    };
+
+    const handleGenerateLayout = async (entity) => {
+        const target = entity && entity.id != null ? entity : selectedEntity;
+        if (!target?.id || layoutBusyId) return;
+        const stableId = String(target.id);
+        const entityName = target?.name || target?.name_en || stableId;
+        const controller = new AbortController();
+        layoutRunRef.current = { id: stableId, controller };
+        setLayoutBusyId(stableId);
+        updateSubjectImageJobsAndStorage((prev) => ({
+            ...(prev || {}),
+            [stableId]: {
+                jobId: `layout:${stableId}`,
+                jobKind: 'layout',
+                status: 'running',
+                startedAt: Date.now(),
+                entityName,
+            },
+        }));
+        onLog?.(t(`开始生成白模：${entityName}，模型读取开篇`, `White model started: ${entityName}, model reads the opening`), 'process');
+        try {
+            const res = await generateEnvironmentLayout(target.id, { signal: controller.signal });
+            if (controller.signal.aborted) return;
+            const url = String(res?.image_url || '').trim();
+            if (!url) throw new Error(t('布局没有返回图片', 'Layout returned no image'));
+            applySubjectEntityImageLocally(stableId, url);
+            const localPatch = {
+                image_url: url,
+                ...(res?.custom_attributes && typeof res.custom_attributes === 'object'
+                    ? { custom_attributes: res.custom_attributes }
+                    : {}),
+            };
+            if (selectedEntity && String(selectedEntity.id) === stableId) {
+                setSelectedEntity((prev) => ({ ...(prev || {}), ...localPatch }));
+            }
+            setViewingEntity((prev) => (String(prev?.id || '') === stableId ? { ...prev, ...localPatch } : prev));
+            setEntities((prev) => prev.map((ent) => (
+                String(ent?.id || '') === stableId ? { ...ent, ...localPatch } : ent
+            )));
+            setAllEntities((prev) => prev.map((ent) => (
+                String(ent?.id || '') === stableId ? { ...ent, ...localPatch } : ent
+            )));
+            const boxCount = Number(res?.box_count || 0) || 0;
+            onLog?.(
+                t(`白模完成：${entityName}，${boxCount} 具`, `White model finished: ${entityName}, ${boxCount} boxes`),
+                'success'
+            );
+            showSubjectNotification(
+                t(
+                    '白模已放到这张资产图上。生图不会按这张白模锁轮廓。',
+                    'The white model is now this asset image. Image generation does not lock outlines to it.'
+                ),
+                'success'
+            );
+        } catch (err) {
+            if (controller.signal.aborted) return;
+            const detail = err?.response?.data?.detail || err?.message || t('未知错误', 'Unknown error');
+            onLog?.(t(`白模失败：${entityName}：${detail}`, `White model failed: ${entityName}: ${detail}`), 'error');
+            showSubjectNotification(String(detail), 'error');
+        } finally {
+            if (layoutRunRef.current?.id === stableId) layoutRunRef.current = null;
+            clearLocalSubjectImageJobState(stableId);
+            setLayoutBusyId('');
         }
     };
 
@@ -10017,6 +10096,21 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                 >
                                     <Wand2 size={16} />
                                 </button>
+                                {isMainEnvironmentEntity(entity) && (
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleGenerateLayout(entity);
+                                        }}
+                                        disabled={imageActionLocked || layoutBusyId === String(entity.id)}
+                                        className="p-1.5 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                        title={t('生成白模', 'Generate white model')}
+                                    >
+                                        {layoutBusyId === String(entity.id)
+                                            ? <RefreshCw className="animate-spin" size={16} />
+                                            : <Box size={16} />}
+                                    </button>
+                                )}
                                 
                                 
                                 {attrs?.cloned_from_entity_id && (
@@ -11614,6 +11708,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                     >
                                         <Trash2 size={16} /> Delete
                                     </button>
+                                    {viewingEntityTab === 'generate' && isMainEnvironmentEntity(viewingEntity) && (
+                                        <button
+                                            onClick={() => { handleGenerateLayout(viewingEntity); }}
+                                            disabled={viewingEntityImageLocked || layoutBusyId === String(viewingEntity?.id || '')}
+                                            className="px-4 py-2 bg-white/10 hover:bg-white/15 text-white rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {layoutBusyId === String(viewingEntity?.id || '') ? (
+                                                <RefreshCw className="animate-spin" size={16} />
+                                            ) : (
+                                                <Box size={16} />
+                                            )}
+                                            {layoutBusyId === String(viewingEntity?.id || '')
+                                                ? t('白模中...', 'Modeling...')
+                                                : t('生成白模', 'Generate white model')}
+                                        </button>
+                                    )}
                                     {viewingEntityTab === 'generate' && (
                                         <button 
                                             onClick={() => {
@@ -12274,6 +12384,24 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                         </div>
 
                                         <div className="flex justify-end items-center gap-2">
+                                            {isMainEnvironmentEntity(selectedEntity) && (
+                                                <button
+                                                    onClick={() => { handleGenerateLayout(selectedEntity); }}
+                                                    disabled={layoutBusyId === String(selectedEntity?.id || '') || selectedEntityHasRunningImageJob}
+                                                    className="flex items-center space-x-2 bg-white/10 text-white px-4 py-2 rounded-lg font-bold hover:bg-white/15 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                                                >
+                                                    {layoutBusyId === String(selectedEntity?.id || '') ? (
+                                                        <RefreshCw className="animate-spin" size={18} />
+                                                    ) : (
+                                                        <Box size={18} />
+                                                    )}
+                                                    <span>
+                                                        {layoutBusyId === String(selectedEntity?.id || '')
+                                                            ? t('白模中...', 'Modeling...')
+                                                            : t('生成白模', 'Generate white model')}
+                                                    </span>
+                                                </button>
+                                            )}
                                             <button
                                                 onClick={handleGenerateFromPage}
                                                 disabled={

@@ -583,6 +583,38 @@ def test_framing_waits_for_environment_plan_node_success():
     assert environment_plan_terminal_without_payload("success", ident_only, "") is False
 
 
+def test_stale_environment_plan_failure_does_not_block_a_new_wait():
+    from app.services.scene_subskill_pipeline_runner import environment_plan_failure_blocks_wait
+
+    started = "2026-11-22T01:07:00.000000+08:00"
+    previous = "2026-11-22T00:40:00.000000+08:00"
+    this_run = "2026-11-22T01:07:12.000000+08:00"
+    assert environment_plan_failure_blocks_wait(
+        "failed",
+        previous,
+        wait_started_at=started,
+        seen_live=False,
+    ) is False
+    assert environment_plan_failure_blocks_wait(
+        "failed",
+        this_run,
+        wait_started_at=started,
+        seen_live=False,
+    ) is True
+    assert environment_plan_failure_blocks_wait(
+        "failed",
+        previous,
+        wait_started_at=started,
+        seen_live=True,
+    ) is True
+    assert environment_plan_failure_blocks_wait(
+        "running",
+        this_run,
+        wait_started_at=started,
+        seen_live=False,
+    ) is False
+
+
 def test_scene_rerun_reuses_saved_environment_plan_without_node_success():
     from app.services.scene_subskill_pipeline_runner import (
         persisted_environment_plan_for_scene_rerun,
