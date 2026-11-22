@@ -175,7 +175,7 @@ def _is_shot_video_batch_eligible(shot: Shot, overwrite_existing: bool = False) 
         return False
     return _shot_has_video_prompt(shot)
 
-def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int, overwrite_existing: bool = False, system_api_id: Optional[int] = None, use_prev_video: bool = False) -> Dict[str, Any]:
+def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int, overwrite_existing: bool = False, system_api_id: Optional[int] = None, use_prev_video: bool = False, inject_multi_panel_preview: bool = False) -> Dict[str, Any]:
     item_db = SessionLocal()
 
     try:
@@ -304,6 +304,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             asset_type="video",
             system_api_id=system_api_id,
             use_prev_video=bool(use_prev_video),
+            inject_multi_panel_preview=bool(inject_multi_panel_preview),
         )
         _release_batch_db(item_db, "shot_media_batch_video")
         # Generation runs on aistory-generation-worker. Running it here used to
@@ -545,6 +546,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 _release_batch_db(db, "shot_media_batch_active_video_status")
 
             use_prev_video = bool((request_payload or {}).get("use_prev_video"))
+            inject_multi_panel_preview = bool((request_payload or {}).get("inject_multi_panel_preview"))
             for shot in target_shots:
                 if _is_stop_requested():
                     _cancel_pending_video_jobs()
@@ -560,6 +562,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         overwrite_existing,
                         system_api_id,
                         use_prev_video,
+                        inject_multi_panel_preview,
                     )
                 except Exception as exc:
                     if _is_stop_requested():

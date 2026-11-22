@@ -110,6 +110,7 @@ class VideoGenerationRequest(BaseModel):
     seed: Optional[int] = None
     use_prev_video: Optional[bool] = False
     has_video_input: Optional[bool] = None
+    inject_multi_panel_preview: Optional[bool] = False
 
 
 class VoiceGenerationRequest(BaseModel):

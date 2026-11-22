@@ -1676,6 +1676,17 @@ export const collectMatchedSubjectImageUrlsFromPrompt = ({
 export const DEFAULT_SHOT_VIDEO_MODE = 'entity_refs';
 export const DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT = 9;
 
+/** Keep a storyboard-grid image inside the video reference cap, dropping other images first. */
+export const appendMultiPanelPreviewRef = (imageUrls = [], previewUrl = '', slotLimit = DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT) => {
+    const preview = String(previewUrl || '').trim();
+    const urls = normalizeMediaRefList(imageUrls);
+    if (!preview) return urls;
+    const cap = Math.max(1, Number(slotLimit) || DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT);
+    if (urls.includes(preview) && urls.length <= cap) return urls;
+    const others = urls.filter((url) => url !== preview);
+    return normalizeMediaRefList([...others.slice(0, cap - 1), preview]);
+};
+
 export const limitVideoReferenceSlots = (imageRefs = [], videoRefs = [], audioRefs = [], maxTotal = DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT) => {
     const maxSlots = Math.max(1, Number(maxTotal) || DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT);
     const images = normalizeMediaRefList(Array.isArray(imageRefs) ? imageRefs : []);

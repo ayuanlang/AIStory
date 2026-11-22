@@ -69,6 +69,12 @@ from app.services.generation_runtime.media_persist import (
     _resolve_video_bind_url,
 )
 from app.services.generation_runtime.media_runtime_target import _resolve_media_runtime_target
+from app.services.generation_runtime.multi_panel_preview_ref import (
+    append_multi_panel_order_note,
+    append_preview_ref,
+    limit_refs_keeping_preview,
+    resolve_multi_panel_preview,
+)
 from app.services.generation_runtime.project_generation_context import (
     _ensure_project_generation_seed,
     _normalize_seed_value,
@@ -1155,6 +1161,35 @@ async def _run_generate_video(
                             str(prev_video_url or "")[:300],
                         )
 
+        panel_preview_url = ""
+        panel_preview_preset = ""
+        if bool(getattr(req, "inject_multi_panel_preview", False)) and req.shot_id:
+            panel_shot = db.query(Shot).filter(Shot.id == int(req.shot_id)).first()
+            if panel_shot is not None:
+                panel_preview_url, panel_preview_preset = resolve_multi_panel_preview(
+                    _parse_shot_tech(panel_shot)
+                )
+        if panel_preview_url:
+            if uses_submit_image_urls:
+                submit_image_urls = limit_refs_keeping_preview(
+                    append_preview_ref(submit_image_urls, panel_preview_url),
+                    image_ref_limit,
+                    panel_preview_url,
+                )
+                req.image_urls = list(submit_image_urls)
+            else:
+                kept_refs = limit_refs_keeping_preview(
+                    append_preview_ref(_listify_video_ref_urls(req.ref_image_url), panel_preview_url),
+                    image_ref_limit,
+                    panel_preview_url,
+                )
+                req.ref_image_url = kept_refs
+            logger.info(
+                "[GenerateVideo] storyboard grid ref | shot_id=%s preset=%s",
+                req.shot_id,
+                panel_preview_preset or "unspecified",
+            )
+
         # ImageN numbering source = provider image list only (not last_frame/keyframes slots).
         flat_refs: List[str] = []
         if uses_submit_image_urls:
@@ -1250,6 +1285,21 @@ async def _run_generate_video(
         from app.services.shot_markdown import strip_score_cues_from_video_prompt
 
         prompt_text = strip_score_cues_from_video_prompt(strip_libass_glyphs_from_prompt(prompt_text))
+        if panel_preview_url:
+            prompt_text, panel_index = append_multi_panel_order_note(
+                prompt_text,
+                final_image_urls_for_roles,
+                panel_preview_url,
+                panel_preview_preset,
+            )
+            req.prompt = prompt_text
+            if panel_index:
+                logger.info(
+                    "[GenerateVideo] storyboard grid order | shot_id=%s image_index=%s preset=%s",
+                    req.shot_id,
+                    panel_index,
+                    panel_preview_preset or "unspecified",
+                )
         image_tag_count = len(re.findall(r"@Image\d+", str(prompt_text or ""), flags=re.IGNORECASE))
         logger.info(
             "[GenerateVideo] prompt mapping done | shot_id=%s ref_mode=%s refs=%s lookup=%s image_tags=%s prompt_len=%s",
@@ -1281,7 +1331,7 @@ async def _run_generate_video(
                         model=resolved_video_model,
                         preserve_submitted_refs=bool(uses_submit_image_urls or has_explicit_visual_refs),
                     )
-                    patched_item["prompt"] = strip_score_cues_from_video_prompt(
+                    item_text = strip_score_cues_from_video_prompt(
                         strip_libass_glyphs_from_prompt(
                             _ensure_video_frame_role_instructions(
                                 item_mapped,
@@ -1292,6 +1342,14 @@ async def _run_generate_video(
                             )
                         )
                     )
+                    if panel_preview_url:
+                        item_text, _panel_index = append_multi_panel_order_note(
+                            item_text,
+                            final_image_urls_for_roles,
+                            panel_preview_url,
+                            panel_preview_preset,
+                        )
+                    patched_item["prompt"] = item_text
                 patched_multi_prompt.append(patched_item)
             req.multi_prompt = patched_multi_prompt
             logger.info(

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Draw a four-view white clay model from locked meters.
+"""Turn a locked opening into a Blender white-model script.
 
-The image is a program projection. A text model reads the opening and returns
-one box per subject. This module does not call an image model and does not
+A text model writes the script. Blender builds the masses and renders the
+four-grid sheet. This module does not call an image model and does not
 change the opening.
 """
 from __future__ import annotations
@@ -853,34 +853,30 @@ def supplement_layout_boxes(opening: str, boxes: Sequence[LayoutBox], meta: Dict
     return kept
 
 
-_LAYOUT_SYSTEM = """你只输出投影用的 JSON。第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释，不要写画面句子。
-程序只按你交出的数投影，不再读取占地、沿墙、尺度或离平地。数必须从开篇抄出，不要改米。
-把每一件有距原点和大小的主体写成 boxes 的一条。
-east 东为正，north 北为正。距原点=北N米东E米 就是 north=N、east=E，这是这一具的中心。
-along_east 是东西向全长，along_north 是南北向全长，单位米。height 是竖直高度。bottom 是底面离地，不是中心。
-北墙或南墙：沿墙长写入 along_east，厚写入 along_north，height 用墙高，bottom=0。
-东墙或西墙：沿墙长写入 along_north，厚写入 along_east，height 用墙高，bottom=0。
-家具的三数是长×宽×高：长边平行=X线时 along_east=长、along_north=宽；长边平行=Y线时 along_north=长、along_east=宽。第三个数是 height。占地只有长×宽时也要写这一条：台、桌、案 height=0.75，床、榻 height=0.55，椅 height=0.9，凳 height=0.45。没有离平地则 bottom=0。写了离平地，bottom 就等于那个米。
-门 kind=door，窗 kind=window，灯 kind=lamp，墙皮 kind=wall，桌椅柜凳台 kind=furniture。
-地面 kind=floor，bottom=0，height=0.04。上=写了高度的帐顶、穹顶、天花、顶棚、梁架必须写成 kind=ceiling，bottom 等于这个高度，height=0.08，along_east 和 along_north 抄地面的东西长和南北长。
-楼梯写了低端和高端时 kind=ramp，并写 low_east、low_north、high_east、high_north、low_z、high_z。high_z 是高端离地。不要把楼梯写成通高的实心盒子。
-wall_h、focal_mm、span_north、span_east、span_south、span_west 从墙高、焦段、场径抄米。没有焦段就写 35。
-每一件必须写 name 和 height。height 不能省略，也不能写 null。
-每一件只一条。没有距原点、也没有大小的不写。有距原点和占地的家具、有高度的帐顶必须写。"""
+_LAYOUT_SYSTEM = """你写白模脚本。只输出 Python。不要 Markdown，不要解释。
+禁止输出 JSON。禁止写 wall_h、boxes、focal_mm、span_north。第一个字符不能是 {。
+脚本在 Blender 里执行。你只调用 mass()，并可以写一行 FOCAL_MM = 数字。不要 import，不要建相机，不要渲染，不要写 bpy。
+一行一个调用。east 东为正，north 北为正，高度向上。east 和 north 是这一具的中心。
+along_east 是东西向全长，along_north 是南北向全长，单位米。height 是竖直高度。bottom 是底面离地。
+规划锁进开篇的是白模：只搭有独立轮廓的具。名字、米、朝向、开闭从开篇抄，不要改米，不要加开篇没有的具。纹样、颜色、材质不写进脚本。
+北墙或南墙：沿墙长写入 along_east，厚写入 along_north，height 用墙高，bottom=0。东墙或西墙：沿墙长写入 along_north，厚写入 along_east。
+地面 kind="floor"，height=0.04，bottom=0。墙皮 kind="wall"。门 kind="door"，窗 kind="window"，并写 state="全关"、"半开"或"全开"，只抄开篇的开闭。灯 kind="lamp"。桌、椅、凳、床、台 kind="furniture"。
+家具占地三个数时，最后一个是 height。只有长×宽时也要写：台、桌、案 height=0.75，床、榻 height=0.55，椅 height=0.9，凳 height=0.45。写了离平地，bottom 就等于那个米。
+上=写了高度的帐顶、穹顶、天花、顶棚、梁架写成 kind="ceiling"，bottom 等于这个高度，height=0.08，along_east 和 along_north 抄地面。
+楼梯写低端和高端：kind="ramp"，再写 low_east、low_north、high_east、high_north、low_z、high_z。
+没有距原点、也没有大小的不写。有距原点和占地的家具、有高度的顶必须写。
+四宫格不由你摆：程序用同一批白模渲四格，左上望北，右上望东，左下望南，右下望西，16:9 的 2×2，不写字，不写角标。焦段从开篇抄进 FOCAL_MM，没有就写 35。
+mass("注册名", "kind", east=0, north=0, along_east=1, along_north=1, height=1, bottom=0)"""
 
 
 def layout_messages(opening: str, missing: str = "") -> List[Dict[str, str]]:
     text = str(opening or "").strip()
     if not text:
         raise LayoutError("没有开篇，不能生成布局。")
-    user = "以下是开篇原文，直接从中解析投影参数：\n" + text[:80000]
+    user = "以下是开篇原文。规划已经把白模的米、朝向和开闭写在里面。只根据这些写脚本：\n" + text[:80000]
     note = str(missing or "").strip()
     if note:
-        user += (
-            "\n\n上一份没有交全，缺的是："
-            + note[:500]
-            + "。仍只根据上面的开篇重写，每一件都写 name 和 height，不要写 null。"
-        )
+        user += "\n\n上一份脚本没有通过：" + note[:800] + "。仍只根据上面的开篇重写脚本。"
     return [
         {"role": "system", "content": _LAYOUT_SYSTEM},
         {"role": "user", "content": user},
@@ -1051,6 +1047,151 @@ def boxes_from_layout_payload(data: Dict[str, Any]) -> Tuple[List[LayoutBox], Di
         _layout_number(data.get("span_west", 4), "西场径"),
     )
     return boxes, {"wall_h": wall_h, "focal": focal, "spans": spans}
+
+
+_FOCAL_LINE = re.compile(r"^FOCAL_MM\s*=\s*(\d+(?:\.\d+)?)\s*$")
+_MASS_CALL = re.compile(
+    r"^mass\(\s*(?P<name>\"[^\"]*\"|'[^']*')\s*,\s*(?P<kind>\"[^\"]*\"|'[^']*')"
+    r"(?P<rest>(?:\s*,\s*[A-Za-z_]+\s*=\s*(?:-?\d+(?:\.\d+)?|\"[^\"]*\"|'[^']*'))*)\s*\)\s*$"
+)
+_MASS_ARG = re.compile(r"([A-Za-z_]+)\s*=\s*(-?\d+(?:\.\d+)?|\"[^\"]*\"|'[^']*')")
+_MASS_KEYS = {
+    "east",
+    "north",
+    "along_east",
+    "along_north",
+    "height",
+    "bottom",
+    "state",
+    "low_east",
+    "low_north",
+    "high_east",
+    "high_north",
+    "low_z",
+    "high_z",
+}
+
+
+def _unquote(token: str) -> str:
+    return token[1:-1] if len(token) >= 2 and token[0] == token[-1] and token[0] in {"'", '"'} else token
+
+
+def extract_layout_script(text: str) -> str:
+    """Keep the mass() calls the model wrote and drop the prose around them."""
+    cleaned = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"```(?:python)?", "", cleaned, flags=re.IGNORECASE)
+    kept: List[str] = []
+    for raw in cleaned.splitlines():
+        line = raw.strip().rstrip(",")
+        if not line or line.startswith("#"):
+            continue
+        if _FOCAL_LINE.match(line) or _MASS_CALL.match(line):
+            kept.append(line)
+            continue
+        if "mass(" in line or line.startswith("FOCAL_MM"):
+            raise LayoutError("这一行脚本读不成：" + line[:80])
+    if not any(line.startswith("mass(") for line in kept):
+        raise LayoutError("脚本里没有白模。")
+    return "\n".join(kept)
+
+
+def _script_number(value: float) -> str:
+    text = f"{float(value):.4f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def script_from_boxes(boxes: Sequence[LayoutBox], focal: float = 35) -> str:
+    """Turn the model's box list into the mass() script Blender runs."""
+    lines = [f"FOCAL_MM = {_script_number(focal if focal > 0 else 35)}"]
+    for box in boxes:
+        bottom = box.cz - box.sz / 2
+        parts = [
+            json.dumps(box.name, ensure_ascii=False),
+            json.dumps(box.kind, ensure_ascii=False),
+            f"east={_script_number(box.cx)}",
+            f"north={_script_number(box.cy)}",
+            f"along_east={_script_number(box.sx)}",
+            f"along_north={_script_number(box.sy)}",
+            f"height={_script_number(box.sz)}",
+            f"bottom={_script_number(bottom)}",
+        ]
+        if box.ramp is not None:
+            low_x, low_y, low_z, high_x, high_y, high_z, _px, _py = box.ramp
+            parts.extend(
+                [
+                    f"low_east={_script_number(low_x)}",
+                    f"low_north={_script_number(low_y)}",
+                    f"high_east={_script_number(high_x)}",
+                    f"high_north={_script_number(high_y)}",
+                    f"low_z={_script_number(low_z)}",
+                    f"high_z={_script_number(high_z)}",
+                ]
+            )
+        lines.append("mass(" + ", ".join(parts) + ")")
+    return "\n".join(lines)
+
+
+def layout_script_from_model_text(text: str) -> Tuple[str, List[LayoutBox]]:
+    """Accept a mass() script, or the box JSON the model still returns."""
+    try:
+        script = extract_layout_script(text)
+        boxes, _meta = boxes_from_layout_script(script)
+        return script, boxes
+    except LayoutError:
+        data = parse_layout_model_text(text)
+        boxes, meta = boxes_from_layout_payload(data)
+        script = script_from_boxes(boxes, float(meta.get("focal") or 35))
+        return script, boxes
+
+
+def boxes_from_layout_script(script: str) -> Tuple[List[LayoutBox], Dict[str, Any]]:
+    boxes: List[LayoutBox] = []
+    focal = 35.0
+    for line in str(script or "").splitlines():
+        focal_match = _FOCAL_LINE.match(line.strip())
+        if focal_match:
+            focal = float(focal_match.group(1))
+            continue
+        found = _MASS_CALL.match(line.strip())
+        if found is None:
+            continue
+        name = _unquote(found.group("name")).strip() or f"第{len(boxes) + 1}件"
+        kind = _KIND_WORDS.get(_unquote(found.group("kind")).strip(), "furniture")
+        values: Dict[str, Any] = {}
+        for key, raw in _MASS_ARG.findall(found.group("rest") or ""):
+            if key not in _MASS_KEYS:
+                raise LayoutError(f"{name}写了不能用的参数。")
+            values[key] = _unquote(raw) if raw[:1] in {"'", '"'} else float(raw)
+        along_east = _layout_number(values.get("along_east"), f"{name}的东西长")
+        along_north = _layout_number(values.get("along_north"), f"{name}的南北长")
+        height = _layout_number(values.get("height"), f"{name}的高")
+        if min(along_east, along_north, height) <= 0 or max(along_east, along_north, height) > 200:
+            raise LayoutError(f"{name}的大小超出这一间。")
+        east = _layout_number(values.get("east"), f"{name}的东")
+        north = _layout_number(values.get("north"), f"{name}的北")
+        bottom = _layout_number(values.get("bottom"), f"{name}的离地", 0.0)
+        ramp = None
+        if all(key in values for key in ("low_east", "low_north", "high_east", "high_north")):
+            ramp = _ramp_offset(
+                {
+                    "low_east": values["low_east"],
+                    "low_north": values["low_north"],
+                    "high_east": values["high_east"],
+                    "high_north": values["high_north"],
+                    "low_z": values.get("low_z", 0),
+                    "high_z": values.get("high_z", height),
+                },
+                along_east,
+                along_north,
+            )
+            if ramp is not None:
+                kind = "ramp"
+        boxes.append(LayoutBox(name, kind, east, north, bottom + height / 2, along_east, along_north, height, ramp=ramp))
+    if not boxes:
+        raise LayoutError("脚本里没有白模。")
+    if focal <= 0:
+        focal = 35.0
+    return boxes, {"focal": focal, "wall_h": 2.9, "spans": (4.0, 4.0, 4.0, 4.0)}
 
 
 def layout_box_records(boxes: Sequence[LayoutBox]) -> List[Dict[str, Any]]:

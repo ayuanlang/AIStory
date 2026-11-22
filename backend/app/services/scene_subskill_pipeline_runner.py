@@ -44,6 +44,7 @@ from app.services.script_analysis_flow import (
     upsert_pipeline_node_status,
     upsert_workspace_scene_from_staging,
 )
+from app.services.script_analysis_flow.framing_visibility import prepend_visibility_range
 from app.services.script_analysis_flow.derived_env_ingest import (
     DERIVED_ENV_EXTRACT_BLOCK_PATTERN,
     DERIVED_ENV_TAG_PATTERN,
@@ -3043,6 +3044,16 @@ def compose_staging_scene_text(current_block: str, env_scene: str = "") -> str:
     return scene
 
 
+def staging_scene_with_visibility(current_block: str, env_scene: str = "") -> str:
+    """Staging input plus the measured visible range. The stored framing draft stays unchanged."""
+    scene = compose_staging_scene_text(current_block, env_scene)
+    try:
+        return prepend_visibility_range(scene, current_block)
+    except Exception as exc:
+        logger.warning("[scene_subskill_pipeline] visibility range skipped: %s", exc)
+        return scene
+
+
 def strip_prior_derived_environment_sections(scene_text: str) -> str:
     """Drop leftover 现场编排 derived-env tables so this run cannot copy them."""
     stripped = _DERIVED_ENV_EXTRACT_ANY.sub("", str(scene_text or ""))
@@ -4756,7 +4767,7 @@ async def _run_derived_framing_then_staging(
         current_block = assert_derived_framing_ready_for_staging(enhance_block, scene_id)
         if "derived_framing" not in called:
             called.append("derived_framing")
-        staging_scene = compose_staging_scene_text(current_block, env_scene)
+        staging_scene = staging_scene_with_visibility(current_block, env_scene)
         current_input = _with_derived_env_frame_anchors(
             _wrap_single_scene_input(
                 staging_scene,
@@ -4892,7 +4903,7 @@ async def _run_derived_framing_then_staging(
             )
         if step_name == "staging":
             current_block = assert_derived_framing_ready_for_staging(current_block, scene_id)
-            staging_scene = compose_staging_scene_text(
+            staging_scene = staging_scene_with_visibility(
                 current_block,
                 env_scene or framing_block,
             )

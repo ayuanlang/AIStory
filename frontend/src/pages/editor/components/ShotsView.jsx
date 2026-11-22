@@ -36,7 +36,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, pickBestEntityMatch, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, collectShotVideoReferenceWarnings, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, compareShotEnvironmentChange, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, getProjectPreferredResolution, getProjectPreferredVideoResolution, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotPreservingLocalMedia, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick, triggerMediaReload
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, pickBestEntityMatch, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, collectShotVideoReferenceWarnings, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, compareShotEnvironmentChange, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, getProjectPreferredResolution, getProjectPreferredVideoResolution, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotPreservingLocalMedia, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, appendMultiPanelPreviewRef, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick, triggerMediaReload
 } from '../editorHelpers';
 
 import { 
@@ -1045,6 +1045,21 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             return false;
         }
     });
+    const [injectMultiPanelPreview, setInjectMultiPanelPreview] = useState(() => {
+        try {
+            const stored = localStorage.getItem('aiStory_injectMultiPanelPreview');
+            if (stored === null) return true;
+            return stored === 'true';
+        } catch {
+            return true;
+        }
+    });
+    const handleToggleInjectMultiPanelPreview = (checked) => {
+        setInjectMultiPanelPreview(checked);
+        try {
+            localStorage.setItem('aiStory_injectMultiPanelPreview', String(checked));
+        } catch {}
+    };
     const [isBatchMenuOpen, setIsBatchMenuOpen] = useState(false);
     const [isPlaylistModalOpen, setIsPlaylistModalOpen] = useState(false);
     const [playlistIndex, setPlaylistIndex] = useState(0);
@@ -10128,6 +10143,22 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             let apiSubmitImageUrls = normalizeMediaRefList(
                 await Promise.all(submitRefPlan.imageUrls.map(resolveBlobUrlIfAny))
             );
+            if (injectMultiPanelPreview) {
+                const panelPreviewUrl = String(tech.multi_panel_image_url || tech.storyboard_url || '').trim();
+                if (panelPreviewUrl) {
+                    const resolvedPanelUrl = await resolveBlobUrlIfAny(panelPreviewUrl);
+                    const beforeCount = apiSubmitImageUrls.length;
+                    apiSubmitImageUrls = appendMultiPanelPreviewRef(
+                        apiSubmitImageUrls,
+                        resolvedPanelUrl,
+                        DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT,
+                    );
+                    onLog?.(t(
+                        `已将分镜预览多画格图加入视频参考图（${beforeCount}→${apiSubmitImageUrls.length}）。模型会按从左到右、从上到下的格序生成这一条镜头。`,
+                        `Added the storyboard grid to the video references (${beforeCount}→${apiSubmitImageUrls.length}). The model is told to follow the panels left to right, top to bottom.`
+                    ), 'info');
+                }
+            }
             const apiRefVideoUrls = submitRefPlan.refVideoUrls.length > 0
                 ? normalizeMediaRefList(await Promise.all(submitRefPlan.refVideoUrls.map(resolveBlobUrlIfAny)))
                 : null;
@@ -10196,6 +10227,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     video_resolution: isDraftMode ? '480' : videoTierForGen,
                     ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
                     use_prev_video: shouldInjectContinuationPrompt,
+                    inject_multi_panel_preview: Boolean(injectMultiPanelPreview),
                     has_video_input: !!(shouldInjectContinuationPrompt || (Array.isArray(apiRefVideoUrls) && apiRefVideoUrls.length > 0)),
                     // KIE Seedance bills with-video as (input+output) seconds — must match estimate.
                     input_duration_seconds: (
@@ -12542,8 +12574,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const ok = mode === 'videos'
             ? await confirmUiMessage(t(
-                `将为 ${targetShots.length} 个镜头按实体参考图模式批量生成视频。会自动提交提示词里的实体参考图并注入描点；已有视频的镜头不会重复提交。是否继续？`,
-                `Generate videos for ${targetShots.length} shots in entity-reference mode. Entity reference images from each prompt will be submitted and anchors will be injected. Shots that already have a video are skipped. Continue?`
+                `将为 ${targetShots.length} 个镜头按实体参考图模式批量生成视频。会自动提交提示词里的实体参考图并注入描点；已有视频的镜头不会重复提交。${injectMultiPanelPreview ? '已开启注入多宫格：有分镜预览图的镜头会把该图作为参考图，并写明从左到右、从上到下的格序。' : ''}是否继续？`,
+                `Generate videos for ${targetShots.length} shots in entity-reference mode. Entity reference images from each prompt will be submitted and anchors will be injected. Shots that already have a video are skipped. ${injectMultiPanelPreview ? 'Multi-panel injection is on: shots that already have a storyboard grid will send that image as a reference, with the left-to-right, top-to-bottom order written into the prompt. ' : ''}Continue?`
             ))
             : true;
         if (!ok) return;
@@ -12579,6 +12611,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 draft_mode: isDraftMode,
                 use_prev_video: mode === 'videos' ? usePrevVideo : false,
                 sd2_auto_duration: mode === 'videos' ? sd2AutoDuration : false,
+                inject_multi_panel_preview: mode === 'videos' ? injectMultiPanelPreview : false,
                 overwrite_existing: false,
                 system_api_id: mode === 'videos' ? (Number(localStorage.getItem('func_api_generate_videos')) || undefined) : undefined,
             });
@@ -13212,6 +13245,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 </div>
                                 <input type="checkbox" className="hidden" checked={usePrevVideo} onChange={(e) => handleToggleUsePrevVideo(e.target.checked)} />
                                 <span className={usePrevVideo ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('上镜续写', 'Shot Continuation')}</span>
+                            </label>
+                            <div className="w-px h-3 bg-white/10 mx-1"></div>
+                            <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('开启后，镜头已有分镜预览多画格图时，生成视频会把这张图作为参考图提交，并写明从左到右、从上到下的格序。', 'When on, a shot that already has a multi-panel storyboard preview sends that image as a video reference and states the left-to-right, top-to-bottom panel order.')}>
+                                <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${injectMultiPanelPreview ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
+                                    {injectMultiPanelPreview && <Check className="w-2.5 h-2.5 text-white" />}
+                                </div>
+                                <input type="checkbox" className="hidden" checked={injectMultiPanelPreview} onChange={(e) => handleToggleInjectMultiPanelPreview(e.target.checked)} />
+                                <span className={injectMultiPanelPreview ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('注入多宫格', 'Inject Grid')}</span>
                             </label>
                             {isSelectedVideoApiSeedance2 && (
                                 <>
@@ -14146,6 +14187,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         {isDraftMode && <Check className="w-2 h-2 text-white" />}
                                                     </div>
                                                     <span className={isDraftMode ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('草稿', 'Draft')}</span>
+                                                </label>
+
+                                                <label className="flex items-center gap-1 text-[10px] text-gray-300 hover:text-white cursor-pointer select-none ml-1 mr-1" title={t('开启后，本镜头已有分镜预览多画格图时，生成视频会把这张图作为参考图提交，并写明从左到右、从上到下的格序。', 'When on, if this shot has a multi-panel storyboard preview, video generation sends that image as a reference and states the left-to-right, top-to-bottom panel order.')}>
+                                                    <input
+                                                        type="checkbox"
+                                                        className="hidden"
+                                                        checked={injectMultiPanelPreview}
+                                                        onChange={(e) => handleToggleInjectMultiPanelPreview(e.target.checked)}
+                                                    />
+                                                    <div className={`w-2.5 h-2.5 rounded-sm border flex items-center justify-center transition-colors ${injectMultiPanelPreview ? 'bg-primary border-primary' : 'border-white/30 hover:border-white/50 bg-black/20'}`}>
+                                                        {injectMultiPanelPreview && <Check className="w-2 h-2 text-white" />}
+                                                    </div>
+                                                    <span className={injectMultiPanelPreview ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('注入多宫格', 'Inject Grid')}</span>
                                                 </label>
 
                                                 <button

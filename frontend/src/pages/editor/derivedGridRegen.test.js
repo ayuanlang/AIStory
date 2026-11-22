@@ -23,6 +23,7 @@ import {
     mainEnvironmentDisplayImageUrl,
     singleCellEditInstruction,
     stripProjectStyleInjection,
+    applyWhiteModelQuadReference,
 } from './derivedGridRegen.js';
 
 describe('saved quad cells', () => {
@@ -558,6 +559,32 @@ describe('main environment quad rerun drafts', () => {
         assert.equal(drafts.length, 1);
         assert.equal(drafts[0].name, '总裁室');
         assert.match(drafts[0].generation_prompt_cn, /【六面一次】/);
+    });
+});
+
+describe('white model reference for the four-grid', () => {
+    it('puts the clay sheet first and keeps color in the written prompt', () => {
+        const entity = {
+            custom_attributes: { layout_image_url: 'https://cdn.example/clay.png' },
+        };
+        const applied = applyWhiteModelQuadReference(
+            '【主体外形】青砖墙。\n【四向拼图】左上望北。',
+            ['https://cdn.example/style.png', 'https://cdn.example/clay.png'],
+            entity
+        );
+        assert.match(applied.prompt, /^第一张参考图是同一处的白模/);
+        assert.match(applied.prompt, /颜色、材质、纹样和光只听后面的文字/);
+        assert.match(applied.prompt, /【主体外形】青砖墙/);
+        assert.deepEqual(applied.refs, [
+            'https://cdn.example/clay.png',
+            'https://cdn.example/style.png',
+        ]);
+    });
+
+    it('leaves the prompt and refs unchanged when no white model exists', () => {
+        const applied = applyWhiteModelQuadReference('【四向拼图】', ['https://cdn.example/a.png'], {});
+        assert.equal(applied.prompt, '【四向拼图】');
+        assert.deepEqual(applied.refs, ['https://cdn.example/a.png']);
     });
 });
 

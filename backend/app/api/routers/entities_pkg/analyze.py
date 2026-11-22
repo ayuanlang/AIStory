@@ -1516,7 +1516,7 @@ async def generate_entity_layout(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Ask the text model for one box per subject, then project a white clay model.
+    """Ask the text model for a Blender white-model script, then render the four-grid sheet.
 
     The image model is not called. The opening is not changed.
     """
@@ -1535,12 +1535,13 @@ async def generate_entity_layout(
     )
     from app.services.script_analysis_flow.environment_layout import (
         LayoutError,
-        boxes_from_layout_payload,
         layout_box_records,
         layout_messages,
-        parse_layout_model_text,
-        render_layout_sheet,
-        supplement_layout_boxes,
+        layout_script_from_model_text,
+    )
+    from app.services.script_analysis_flow.environment_layout_blender import (
+        LayoutRenderError,
+        render_white_model,
     )
 
     logger.info("generate_entity_layout start entity_id=%s", entity_id)
@@ -1572,6 +1573,7 @@ async def generate_entity_layout(
     if not api_provider or not api_model:
         raise HTTPException(status_code=400, detail="剧本分析的模型下拉没有可用模型。")
     messages = layout_messages(opening)
+    logger.info("environment_layout prompt=%s", str(messages[0].get("content") or "")[:80])
     call_config = {
         "provider": api_provider,
         "api_key": api_api_key,
@@ -1625,8 +1627,7 @@ async def generate_entity_layout(
         result_content = str((llm_response or {}).get("content", "") or "")
         usage = (llm_response or {}).get("usage", {}) if isinstance(llm_response, dict) else {}
         try:
-            parsed = parse_layout_model_text(result_content)
-            boxes, meta = boxes_from_layout_payload(parsed)
+            script, boxes = layout_script_from_model_text(result_content)
         except LayoutError as first_error:
             retry = await llm_service.chat_completion_with_fallback(
                 layout_messages(opening, str(first_error)),
@@ -1641,10 +1642,9 @@ async def generate_entity_layout(
                         except Exception:
                             pass
             llm_response = retry
-            parsed = parse_layout_model_text(str((retry or {}).get("content", "") or ""))
-            boxes, meta = boxes_from_layout_payload(parsed)
-        boxes = supplement_layout_boxes(opening, boxes, meta)
-        binary, count = render_layout_sheet(boxes, meta)
+            script, boxes = layout_script_from_model_text(str((retry or {}).get("content", "") or ""))
+        binary = render_white_model(script)
+        count = len(boxes)
         box_records = layout_box_records(boxes)
 
         entity = db.query(Entity).filter(Entity.id == entity_id, _active_entity_clause()).first()
@@ -1723,6 +1723,9 @@ async def generate_entity_layout(
     except LayoutError as exc:
         _cancel_reservation_quietly(db, reservation_tx_id, str(exc))
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LayoutRenderError as exc:
+        _cancel_reservation_quietly(db, reservation_tx_id, str(exc))
+        raise HTTPException(status_code=502, detail="白模渲染失败，开篇没有改动。") from exc
     except HTTPException as exc:
         _cancel_reservation_quietly(db, reservation_tx_id, str(exc.detail))
         raise

@@ -11,4 +11,5 @@ class ShotMediaBatchStartRequest(BaseModel):
     draft_mode: Optional[bool] = False
     use_prev_video: Optional[bool] = False
     sd2_auto_duration: Optional[bool] = False
+    inject_multi_panel_preview: Optional[bool] = False
 

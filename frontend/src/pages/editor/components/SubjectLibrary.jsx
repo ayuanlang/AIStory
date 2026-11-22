@@ -10,7 +10,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { ImagePlus, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Box, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush, Cpu, Timer, History, RotateCcw, Stethoscope } from 'lucide-react';
+import { ImagePlus, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Box, Eye, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush, Cpu, Timer, History, RotateCcw, Stethoscope } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -54,6 +54,8 @@ import {
     mainEnvironmentDesignDescription,
     withMainEnvironmentOpening,
     quadImagePrompt,
+    applyWhiteModelQuadReference,
+    whiteModelReferenceUrl,
     readSavedGridRegenPrompt,
     stripMainEnvironmentDraftWrapper,
     resolveSubmittedGridRegenPrompt,
@@ -6988,6 +6990,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 uniqueRefs = await applyCroppedCellReference(activeEntity, allEntities, uniqueRefs);
             }
 
+            if (!qualityRegen && !imageEditOnly && isMainEnvironmentEntity(activeEntity)) {
+                const laidOut = applyWhiteModelQuadReference('', uniqueRefs, activeEntity);
+                uniqueRefs = laidOut.refs;
+            }
+
             if (onLog) {
                 onLog(
                     `Subject generation refs: manual_ref=${refImage?.url ? 'yes' : 'no'}, dependency_refs=${depUrls.length}, excluded_deps=${excludedDepKeySet.size}, total_unique=${uniqueRefs.length}`,
@@ -6997,14 +7004,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
             let effectiveFinalPrompt = finalPrompt;
             let effectivePromptToUse = promptToUse;
-            if (inheritAppearance && uniqueRefs.length > 0 && !imageEditOnly) {
+            if (inheritAppearance && uniqueRefs.some((url) => url !== whiteModelReferenceUrl(activeEntity)) && !imageEditOnly) {
                 effectiveFinalPrompt = effectiveFinalPrompt.replace(/【相貌】[\s\S]*?【\/相貌】/g, '【相貌】根据参考图生成【/相貌】');
                 effectivePromptToUse = effectivePromptToUse.replace(/【相貌】[\s\S]*?【\/相貌】/g, '【相貌】根据参考图生成【/相貌】');
             }
 
-            const imagePrompt = (!qualityRegen && !imageEditOnly && isMainEnvironmentEntity(activeEntity))
+            let imagePrompt = (!qualityRegen && !imageEditOnly && isMainEnvironmentEntity(activeEntity))
                 ? quadImagePrompt(effectiveFinalPrompt)
                 : effectiveFinalPrompt;
+            if (!qualityRegen && !imageEditOnly && isMainEnvironmentEntity(activeEntity)) {
+                imagePrompt = applyWhiteModelQuadReference(imagePrompt, uniqueRefs, activeEntity).prompt;
+            }
             const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = imageEditOnly
                 ? { prompt: String(imagePrompt || '').trim(), negative_prompt: '' }
                 : buildEntityImageGenerationPrompts(
@@ -7026,6 +7036,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 prompt_language: effectivePromptSubmitLang,
                 asset_type: 'subject',
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                ...(!qualityRegen && !imageEditOnly && isMainEnvironmentEntity(activeEntity) && whiteModelReferenceUrl(activeEntity)
+                    ? { aspect_ratio: '16:9' }
+                    : {}),
                 negative_prompt: entityNegativePrompt,
                 ...(extraProviderOptions || {})
             });
@@ -8212,6 +8225,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
     };
 
+    const openWhiteModelPreview = (entity) => {
+        const url = whiteModelReferenceUrl(entity);
+        if (!url) return;
+        const label = String(entity?.name || entity?.name_en || '').trim();
+        openAssetRefPreview(url, label ? `${label} · ${t('白模', 'White model')}` : t('白模', 'White model'));
+    };
+
     const handleGenerateLayout = async (entity) => {
         const target = entity && entity.id != null ? entity : selectedEntity;
         if (!target?.id || layoutBusyId) return;
@@ -8230,7 +8250,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 entityName,
             },
         }));
-        onLog?.(t(`开始生成白模：${entityName}，模型读取开篇`, `White model started: ${entityName}, model reads the opening`), 'process');
+        onLog?.(t(`开始生成白模：${entityName}，模型编写脚本`, `White model started: ${entityName}, the model writes a script`), 'process');
         try {
             const res = await generateEnvironmentLayout(target.id, { signal: controller.signal });
             if (controller.signal.aborted) return;
@@ -8260,8 +8280,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             );
             showSubjectNotification(
                 t(
-                    '白模已放到这张资产图上。生图不会按这张白模锁轮廓。',
-                    'The white model is now this asset image. Image generation does not lock outlines to it.'
+                    '白模已放到这张资产图上。生成四宫格时，这张白模只锁四格和体块，颜色和光仍听提示词。',
+                    'The white model is now this asset image. Four-grid generation uses it only for the grid and the masses. Color and light still follow the prompt.'
                 ),
                 'success'
             );
@@ -8719,7 +8739,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         String(processPrompt(basePrompt, epInfo, allEntities) || '').trim(),
                         { injectIfMissing: true }
                     );
-                const finalPrompt = (!regenPlan && isMainEnvironmentEntity(entity))
+                let finalPrompt = (!regenPlan && isMainEnvironmentEntity(entity))
                     ? quadImagePrompt(styledPrompt)
                     : styledPrompt;
                 if (finalPrompt.length < MIN_BATCH_IMAGE_PROMPT_CHARS) {
@@ -8788,6 +8808,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     uniqueRefs = [cropUrl, ...uniqueRefs.filter((url) => url !== cropUrl)];
                 }
 
+                if (!regenPlan && isMainEnvironmentEntity(entity)) {
+                    const laidOut = applyWhiteModelQuadReference(finalPrompt, uniqueRefs, entity);
+                    finalPrompt = laidOut.prompt;
+                    uniqueRefs = laidOut.refs;
+                }
+
                 if (onLog) {
                     onLog(
                         `Batch subject refs: entity=${entity?.name || entity?.name_en || entity?.id}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}${regenPlan ? ', mode=grid_regen' : ''}`,
@@ -8820,7 +8846,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         prompt_language: resolvedPromptSubmitLang,
                         asset_type: 'subject',
                         ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                        ...(regenPlan ? { aspect_ratio: '16:9' } : {}),
+                        ...((regenPlan || whiteModelReferenceUrl(entity)) ? { aspect_ratio: '16:9' } : {}),
                         negative_prompt: entityNegativePrompt,
                         // When account parallel slots are full, poll-wait (1 min) and resubmit;
                         // cancel promptly if the batch is stopped.
@@ -10097,6 +10123,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                     <Wand2 size={16} />
                                 </button>
                                 {isMainEnvironmentEntity(entity) && (
+                                    <>
                                     <button
                                         onClick={(e) => {
                                             e.stopPropagation();
@@ -10110,6 +10137,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                             ? <RefreshCw className="animate-spin" size={16} />
                                             : <Box size={16} />}
                                     </button>
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            openWhiteModelPreview(entity);
+                                        }}
+                                        disabled={!whiteModelReferenceUrl(entity)}
+                                        className="p-1.5 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                        title={whiteModelReferenceUrl(entity)
+                                            ? t('查看白模', 'View white model')
+                                            : t('还没有白模', 'No white model yet')}
+                                    >
+                                        <Eye size={16} />
+                                    </button>
+                                    </>
                                 )}
                                 
                                 
@@ -11709,6 +11750,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                         <Trash2 size={16} /> Delete
                                     </button>
                                     {viewingEntityTab === 'generate' && isMainEnvironmentEntity(viewingEntity) && (
+                                        <>
                                         <button
                                             onClick={() => { handleGenerateLayout(viewingEntity); }}
                                             disabled={viewingEntityImageLocked || layoutBusyId === String(viewingEntity?.id || '')}
@@ -11723,6 +11765,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                 ? t('白模中...', 'Modeling...')
                                                 : t('生成白模', 'Generate white model')}
                                         </button>
+                                        <button
+                                            onClick={() => { openWhiteModelPreview(viewingEntity); }}
+                                            disabled={!whiteModelReferenceUrl(viewingEntity)}
+                                            className="px-4 py-2 bg-white/10 hover:bg-white/15 text-white rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            title={whiteModelReferenceUrl(viewingEntity)
+                                                ? t('查看白模', 'View white model')
+                                                : t('还没有白模', 'No white model yet')}
+                                        >
+                                            <Eye size={16} />
+                                            {t('查看白模', 'View white model')}
+                                        </button>
+                                        </>
                                     )}
                                     {viewingEntityTab === 'generate' && (
                                         <button 
@@ -12385,6 +12439,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
                                         <div className="flex justify-end items-center gap-2">
                                             {isMainEnvironmentEntity(selectedEntity) && (
+                                                <>
                                                 <button
                                                     onClick={() => { handleGenerateLayout(selectedEntity); }}
                                                     disabled={layoutBusyId === String(selectedEntity?.id || '') || selectedEntityHasRunningImageJob}
@@ -12401,6 +12456,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                             : t('生成白模', 'Generate white model')}
                                                     </span>
                                                 </button>
+                                                <button
+                                                    onClick={() => { openWhiteModelPreview(selectedEntity); }}
+                                                    disabled={!whiteModelReferenceUrl(selectedEntity)}
+                                                    className="flex items-center space-x-2 bg-white/10 text-white px-4 py-2 rounded-lg font-bold hover:bg-white/15 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                                                    title={whiteModelReferenceUrl(selectedEntity)
+                                                        ? t('查看白模', 'View white model')
+                                                        : t('还没有白模', 'No white model yet')}
+                                                >
+                                                    <Eye size={18} />
+                                                    <span>{t('查看白模', 'View white model')}</span>
+                                                </button>
+                                                </>
                                             )}
                                             <button
                                                 onClick={handleGenerateFromPage}

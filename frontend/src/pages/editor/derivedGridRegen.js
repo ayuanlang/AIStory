@@ -742,6 +742,24 @@ export function quadImagePrompt(text) {
     return kept.join('\n\n');
 }
 
+export const WHITE_MODEL_QUAD_NOTE = '第一张参考图是同一处的白模，只锁四格切分和每一具的体块、落点、宽面窄面、门洞。左上望北，右上望东，左下望南，右下望西。颜色、材质、纹样和光只听后面的文字。不要把白模的灰色和棚光画进成图。文字里点名、白模上没有的枕、杯、盏按文字补上。';
+
+export function whiteModelReferenceUrl(entity) {
+    return String(readAttrs(entity).layout_image_url || '').trim();
+}
+
+export function applyWhiteModelQuadReference(prompt, refs, entity) {
+    const url = whiteModelReferenceUrl(entity);
+    const text = String(prompt || '').trim();
+    const list = [...new Set((refs || []).map((item) => String(item || '').trim()).filter(Boolean))];
+    if (!url) return { prompt: text, refs: list };
+    const noted = text.includes(WHITE_MODEL_QUAD_NOTE) ? text : `${WHITE_MODEL_QUAD_NOTE}\n\n${text}`.trim();
+    return {
+        prompt: noted,
+        refs: [url, ...list.filter((item) => item !== url)],
+    };
+}
+
 export function stripMainEnvironmentDraftWrapper(text) {
     return String(text || '').replace(/^【\/?主环境设计稿】[^\n]*\n?/gm, '').trim();
 }

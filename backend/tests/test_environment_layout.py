@@ -6,6 +6,9 @@ from app.services.script_analysis_flow.environment_layout import (
     _box_edges,
     _cameras,
     boxes_from_layout_payload,
+    boxes_from_layout_script,
+    extract_layout_script,
+    layout_script_from_model_text,
     layout_messages,
     parse_layout_boxes,
     parse_layout_model_text,
@@ -273,3 +276,75 @@ def test_omitted_platform_stool_and_roof_are_filled_and_readable():
     image = Image.open(io.BytesIO(binary)).convert("L")
     north = image.crop((0, 0, 640, 360))
     assert ImageStat.Stat(north).stddev[0] > 18
+
+
+ROOM_SCRIPT = """
+说明先丢掉。
+```python
+FOCAL_MM = 35
+mass("地面", "floor", east=0, north=0, along_east=6, along_north=8, height=0.04, bottom=0)
+mass("北墙", "wall", east=0, north=4, along_east=6, along_north=0.2, height=2.9, bottom=0)
+mass("南墙", "wall", east=0, north=-4, along_east=6, along_north=0.2, height=2.9, bottom=0)
+mass("门", "door", east=0, north=-4, along_east=1.0, along_north=0.05, height=2.1, bottom=0, state="全关")
+mass("桌", "furniture", east=0, north=0, along_east=1.8, along_north=0.9, height=0.75, bottom=0)
+```
+"""
+
+
+def test_model_script_keeps_only_mass_calls():
+    script = extract_layout_script(ROOM_SCRIPT)
+    assert script.startswith("FOCAL_MM")
+    assert "说明" not in script
+    boxes, meta = boxes_from_layout_script(script)
+    assert meta["focal"] == 35
+    table = _named(boxes, "桌")
+    assert abs(table.sx - 1.8) < 0.01 and abs(table.sz - 0.75) < 0.01
+    door = _named(boxes, "门")
+    assert door.kind == "door"
+    try:
+        boxes_from_layout_script(extract_layout_script('mass("桌", "furniture", east=0, north=0)'))
+    except LayoutError:
+        pass
+    else:
+        raise AssertionError("expected LayoutError")
+
+
+def test_box_json_becomes_a_blender_script():
+    raw = """
+    {"wall_h":2.9,"focal_mm":35,"span_north":3.75,"span_east":3.25,"span_south":3.75,"span_west":3.25,"boxes":[
+    {"name":"穹顶毛毡帐顶","kind":"ceiling","north":0,"east":0,"along_east":6.5,"along_north":7.5,"bottom":2.9,"height":0.08},
+    {"name":"北狄王帐木台高位","kind":"furniture","north":0,"east":0,"along_east":1.8,"along_north":0.9,"bottom":0,"height":0.75},
+    {"name":"角落木框矮凳","kind":"furniture","north":-2.9,"east":-2,"along_east":0.5,"along_north":0.5,"bottom":0,"height":0.45},
+    {"name":"木框厚毡帐门","kind":"door","north":-3.75,"east":0,"along_east":1,"along_north":0.05,"bottom":0,"height":2.1}
+    ]}
+    """
+    script, boxes = layout_script_from_model_text(raw)
+    assert script.startswith("FOCAL_MM = 35")
+    assert 'mass("穹顶毛毡帐顶", "ceiling"' in script
+    assert 'mass("北狄王帐木台高位", "furniture"' in script
+    assert 'mass("角落木框矮凳", "furniture"' in script
+    roof = _named(boxes, "穹顶毛毡帐顶")
+    assert roof.kind == "ceiling" and abs((roof.cz - roof.sz / 2) - 2.9) < 0.01
+    stool = _named(boxes, "角落木框矮凳")
+    assert abs(stool.sz - 0.45) < 0.01
+    again, _boxes = layout_script_from_model_text(script)
+    assert again == script
+
+
+def test_blender_renders_four_grid_from_script():
+    from app.services.script_analysis_flow.environment_layout_blender import (
+        LayoutRenderError,
+        blender_executable,
+        render_white_model,
+    )
+    try:
+        blender_executable()
+    except LayoutRenderError:
+        return
+    binary = render_white_model(extract_layout_script(ROOM_SCRIPT))
+    assert binary.startswith(b"\x89PNG")
+    from PIL import Image, ImageStat
+    import io
+    image = Image.open(io.BytesIO(binary)).convert("L")
+    assert image.size == (1280, 720)
+    assert ImageStat.Stat(image).stddev[0] > 12

@@ -93,6 +93,7 @@ def start_shot_media_batch_job(
         "overwrite_existing": bool(req.overwrite_existing),
         "draft_mode": bool(req.draft_mode),
         "sd2_auto_duration": bool(req.sd2_auto_duration),
+        "inject_multi_panel_preview": bool(req.inject_multi_panel_preview),
         "total": len(shot_ids),
         "completed": 0,
         "success": 0,
