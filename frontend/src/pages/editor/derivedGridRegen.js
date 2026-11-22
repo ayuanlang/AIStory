@@ -719,14 +719,43 @@ export function quadSharedHeader(mainPrompt) {
     return raw.slice(quadAt, end).trim();
 }
 
+const MARKED_HEADING_RE = /【(?:定位|主体外形|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|四向拼图)】/;
+
 function markedSection(text, name) {
     const source = String(text || '');
     const start = source.indexOf(`【${name}】`);
     if (start < 0) return '';
     const rest = source.slice(start + `【${name}】`.length);
-    const next = rest.search(/【(?:定位|主体外形|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|四向拼图)】/);
+    const next = rest.search(MARKED_HEADING_RE);
     const body = next < 0 ? rest : rest.slice(0, next);
     return `【${name}】${body}`.trim();
+}
+
+function dropMarkedSections(text, names) {
+    let source = String(text || '');
+    names.forEach((name) => {
+        const heading = `【${name}】`;
+        let start = source.indexOf(heading);
+        while (start >= 0) {
+            const rest = source.slice(start + heading.length);
+            const next = rest.search(MARKED_HEADING_RE);
+            const end = next < 0 ? source.length : start + heading.length + next;
+            source = `${source.slice(0, start)}${source.slice(end)}`;
+            start = source.indexOf(heading);
+        }
+    });
+    return source.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function stripHttpUrls(text) {
+    const cleaned = String(text || '')
+        .replace(/https?:\/\/\S+/g, '')
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    const body = cleaned.replace(/^【[^】]+】/, '').trim();
+    return body ? cleaned : '';
 }
 
 export function quadImagePrompt(text) {
@@ -735,14 +764,19 @@ export function quadImagePrompt(text) {
     if (index < 0) return raw.trim();
     const style = raw.slice(0, index).match(/\[Global Style\]\([^)]*\)\.?/);
     const prefix = style ? style[0].trim() : '';
-    const quad = raw.slice(index).trim();
-    const kept = [prefix, markedSection(raw, '定位'), markedSection(raw, '主体外形'), markedSection(raw, '色彩说明'), quad]
+    const locating = markedSection(raw, '定位');
+    const subjects = markedSection(raw, '主体外形');
+    const color = stripHttpUrls(markedSection(raw, '色彩说明'));
+    const quad = dropMarkedSections(raw.slice(index), ['定位', '主体外形', '色彩说明']);
+    return [prefix, locating, quad, subjects, color]
         .map((part) => String(part || '').trim())
-        .filter(Boolean);
-    return kept.join('\n\n');
+        .filter(Boolean)
+        .join('\n\n');
 }
 
-export const WHITE_MODEL_QUAD_NOTE = '第一张参考图是同一处的白模，只锁四格切分和每一具的体块、落点、宽面窄面、门洞。左上望北，右上望东，左下望南，右下望西。颜色、材质、纹样和光只听后面的文字。不要把白模的灰色和棚光画进成图。文字里点名、白模上没有的枕、杯、盏按文字补上。';
+export const WHITE_MODEL_QUAD_NOTE = '弱参考：第一张参考图是同一处的白模。格子的分界与这张参考图重合，正中十字仍在画面正中，四格一样大。每一具在本格里的宽、高、占画面的比例照这张白模，近大远小的程度也照它。左上望北，右上望东，左下望南，右下望西。宽面窄面和门的开闭照白模。颜色、材质、纹样和光按后面的文字画，不把白模的灰色、棚光和素模表面画进成图。文字里点名、白模上没有的枕、杯、盏按文字补上。';
+
+const WHITE_MODEL_NOTE_RE = /^(?:弱参考：)?第一张参考图是同一处的白模[\s\S]*?(?=\n\n|$)/;
 
 export function whiteModelReferenceUrl(entity) {
     return String(readAttrs(entity).layout_image_url || '').trim();
@@ -750,12 +784,11 @@ export function whiteModelReferenceUrl(entity) {
 
 export function applyWhiteModelQuadReference(prompt, refs, entity) {
     const url = whiteModelReferenceUrl(entity);
-    const text = String(prompt || '').trim();
+    const text = String(prompt || '').trim().replace(WHITE_MODEL_NOTE_RE, '').trim();
     const list = [...new Set((refs || []).map((item) => String(item || '').trim()).filter(Boolean))];
     if (!url) return { prompt: text, refs: list };
-    const noted = text.includes(WHITE_MODEL_QUAD_NOTE) ? text : `${WHITE_MODEL_QUAD_NOTE}\n\n${text}`.trim();
     return {
-        prompt: noted,
+        prompt: `${WHITE_MODEL_QUAD_NOTE}\n\n${text}`.trim(),
         refs: [url, ...list.filter((item) => item !== url)],
     };
 }

@@ -31,7 +31,7 @@ import sys
 
 import bmesh
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 OUT = sys.argv[sys.argv.index("--") + 1]
 SCRIPT = base64.b64decode("{script_b64}").decode("utf-8")
@@ -95,30 +95,42 @@ def covers(host, east, north):
     return abs(east - host["east"]) <= host["along_east"] / 2 + 0.08 and abs(north - host["north"]) <= host["along_north"] / 2 + 0.08
 
 def punch(host, east, north, along_east, along_north, height, bottom):
-    cutter = add_box(host["name"] + "口", "window", east, north, bottom, max(along_east, 0.05), max(along_north, 0.05), height)
-    depth = min(host["along_east"], host["along_north"]) + 0.3
+    thick = min(host["along_east"], host["along_north"])
+    depth = thick + 0.8
     if along_east >= along_north:
-        cutter.scale.y = depth / max(along_north, 0.02)
+        cutter_east, cutter_north = max(along_east, 0.05) * 1.04, depth
     else:
-        cutter.scale.x = depth / max(along_east, 0.02)
-    for obj in list(bpy.context.view_layer.objects):
-        if obj is not None:
-            obj.select_set(False)
-    bpy.context.view_layer.objects.active = host["obj"]
-    host["obj"].select_set(True)
+        cutter_east, cutter_north = depth, max(along_north, 0.05) * 1.04
+    cutter = add_box(host["name"] + "口", "window", east, north, bottom - 0.02, cutter_east, cutter_north, max(height, 0.05) * 1.04)
+    bpy.context.view_layer.update()
     modifier = host["obj"].modifiers.new(name="Opening", type="BOOLEAN")
     modifier.operation = "DIFFERENCE"
     modifier.object = cutter
     try:
-        modifier.solver = "FLOAT"
+        modifier.solver = "EXACT"
     except Exception:
         pass
-    try:
-        bpy.ops.object.modifier_apply(modifier=modifier.name)
-    except Exception:
-        host["obj"].modifiers.remove(modifier)
-    host["obj"].select_set(False)
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    baked = bpy.data.meshes.new_from_object(host["obj"].evaluated_get(depsgraph))
+    old = host["obj"].data
+    host["obj"].modifiers.remove(modifier)
+    host["obj"].data = baked
+    bpy.data.meshes.remove(old)
     bpy.data.objects.remove(cutter, do_unlink=True)
+
+
+def swing_half(item, outward):
+    obj = item["obj"]
+    wide_east = item["along_east"] >= item["along_north"]
+    if wide_east:
+        hinge = Vector((obj.location.x - item["along_east"] / 2.0, obj.location.y, obj.location.z))
+        angle = math.radians(60.0 if outward.y > 0 else -60.0)
+    else:
+        hinge = Vector((obj.location.x, obj.location.y - item["along_north"] / 2.0, obj.location.z))
+        angle = math.radians(60.0 if outward.x < 0 else -60.0)
+    turned = Matrix.Rotation(angle, 4, "Z")
+    obj.location = hinge + turned @ (obj.location - hinge)
+    obj.rotation_euler.z += angle
 
 floors = [item for item in MADE if item["kind"] == "floor"]
 if floors:
@@ -137,17 +149,27 @@ for item in list(MADE):
     opened = item["state"] in {{"全开", "open"}}
     if item["kind"] == "window" or opened:
         bpy.data.objects.remove(item["obj"], do_unlink=True)
+        MADE.remove(item)
         continue
-    inward_x = room[0] - item["east"]
-    inward_y = room[1] - item["north"]
-    span = math.hypot(inward_x, inward_y) or 1.0
-    shift = min(item["along_east"], item["along_north"]) / 2 + 0.06
-    item["obj"].location.x += inward_x / span * shift
-    item["obj"].location.y += inward_y / span * shift
+    inward = Vector((room[0] - item["east"], room[1] - item["north"], 0.0))
+    if inward.length < 1e-6:
+        inward = Vector((0.0, 1.0, 0.0))
+    inward = inward.normalized()
     if item["state"] in {{"半开", "half"}}:
-        item["obj"].scale.x *= 0.5
+        swing_half(item, -inward)
+    else:
+        shift = min(item["along_east"], item["along_north"]) / 2 + 0.02
+        item["obj"].location.x += inward.x * shift
+        item["obj"].location.y += inward.y * shift
 
 bpy.context.view_layer.update()
+
+def still_here(item):
+    try:
+        return item["obj"].name in bpy.data.objects
+    except ReferenceError:
+        return False
+
 meshes = [obj for obj in bpy.data.objects if obj.type == "MESH"]
 if not meshes:
     raise RuntimeError("脚本没有生成白模")
@@ -161,12 +183,8 @@ for obj in meshes:
         high.x, high.y, high.z = max(high.x, point.x), max(high.y, point.y), max(high.z, point.z)
 center_x = (low.x + high.x) / 2
 center_y = (low.y + high.y) / 2
-room_h = max(0.8, high.z - low.z)
-eye = 1.6 if room_h >= 2.2 else max(1.15, room_h * 0.55)
-eye = min(max(low.z + 1.05, eye), high.z - 0.2)
-depth = max(0.8, high.y - low.y)
-width = max(0.8, high.x - low.x)
-walls = [item for item in MADE if item["kind"] == "wall" and item["obj"].name in bpy.data.objects]
+room_h = max(0.3, high.z - low.z)
+walls = [item for item in MADE if item["kind"] == "wall" and still_here(item)]
 inside = len(walls) >= 2
 
 def camera(name, location, target):
@@ -185,41 +203,168 @@ def camera(name, location, target):
 
 half_h = math.atan(18.0 / focal)
 half_v = math.atan((36.0 * 9.0 / 16.0 / 2.0) / focal)
+tan_h = math.tan(half_h)
+tan_v = math.tan(half_v)
+mid_z = (low.z + high.z) / 2.0
 
-def world_corners(obj):
-    return [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+def fill_distance(span_w, span_h):
+    wide = max(float(span_w), 0.3)
+    tall = max(float(span_h), 0.3)
+    return max(0.35, min((wide / 2.0) / tan_h, (tall / 2.0) / tan_v))
 
-def in_frame(cam, target, points):
-    forward = (Vector(target) - Vector(cam))
-    if forward.length < 0.05:
+def opening_for(look):
+    finite = [item for item in MADE if item["kind"] == "floor" and item["along_east"] <= 20 and item["along_north"] <= 20]
+    ceilings = [item for item in MADE if item["kind"] == "ceiling" and still_here(item) and item["along_east"] <= 20 and item["along_north"] <= 20]
+    wall_top = max((item["bottom"] + item["height"]) for item in walls) if walls else high.z
+    ceil = min((item["bottom"] for item in ceilings), default=wall_top)
+    if finite:
+        slab = finite[0]
+        floor_top = slab["bottom"] + slab["height"]
+        height = max(0.3, ceil - floor_top)
+        if abs(look.y) > 0.5:
+            width = slab["along_east"]
+            near = slab["north"] - math.copysign(slab["along_north"] / 2.0, look.y)
+            far = slab["north"] + math.copysign(slab["along_north"] / 2.0, look.y)
+            sideways = slab["east"]
+        else:
+            width = slab["along_north"]
+            near = slab["east"] - math.copysign(slab["along_east"] / 2.0, look.x)
+            far = slab["east"] + math.copysign(slab["along_east"] / 2.0, look.x)
+            sideways = slab["north"]
+        return near, far, width, floor_top, height, sideways
+    floor_top = low.z
+    height = max(0.3, ceil - floor_top)
+    if abs(look.y) > 0.5:
+        rear = min(walls, key=lambda item: item["north"]) if look.y > 0 else max(walls, key=lambda item: item["north"])
+        far_wall = max(walls, key=lambda item: item["north"]) if look.y > 0 else min(walls, key=lambda item: item["north"])
+        near = rear["north"] + math.copysign(rear["along_north"] / 2.0, look.y)
+        far = far_wall["north"] - math.copysign(far_wall["along_north"] / 2.0, look.y)
+        faces = []
+        for item in walls:
+            if item["along_east"] < item["along_north"]:
+                sign = 1.0 if item["east"] >= center_x else -1.0
+                faces.append(item["east"] - sign * item["along_east"] / 2.0)
+        width = (max(faces) - min(faces)) if len(faces) >= 2 else max(0.3, high.x - low.x)
+        return near, far, width, floor_top, height, center_x
+    rear = min(walls, key=lambda item: item["east"]) if look.x > 0 else max(walls, key=lambda item: item["east"])
+    far_wall = max(walls, key=lambda item: item["east"]) if look.x > 0 else min(walls, key=lambda item: item["east"])
+    near = rear["east"] + math.copysign(rear["along_east"] / 2.0, look.x)
+    far = far_wall["east"] - math.copysign(far_wall["along_east"] / 2.0, look.x)
+    faces = []
+    for item in walls:
+        if item["along_north"] < item["along_east"]:
+            sign = 1.0 if item["north"] >= center_y else -1.0
+            faces.append(item["north"] - sign * item["along_north"] / 2.0)
+    width = (max(faces) - min(faces)) if len(faces) >= 2 else max(0.3, high.y - low.y)
+    return near, far, width, floor_top, height, center_y
+
+def clamp_inside(value, rear, far, look_sign):
+    inner_rear = rear + look_sign * 0.25
+    inner_far = far - look_sign * 0.25
+    if look_sign > 0:
+        if inner_rear > inner_far:
+            return (rear + far) / 2.0
+        return min(max(value, inner_rear), inner_far)
+    if inner_rear < inner_far:
+        return (rear + far) / 2.0
+    return max(min(value, inner_rear), inner_far)
+
+def occupies(item, point):
+    if item["kind"] not in {{"furniture", "lamp", "door"}}:
         return False
-    forward.normalize()
-    right = forward.cross(Vector((0.0, 0.0, 1.0)))
-    if right.length < 1e-5:
-        right = Vector((1.0, 0.0, 0.0))
-    right.normalize()
-    up = right.cross(forward).normalized()
-    for point in points:
-        rel = Vector(point) - Vector(cam)
-        depth_in = rel.dot(forward)
-        if depth_in < 0.2:
-            return False
-        if abs(rel.dot(right)) > depth_in * math.tan(half_h) * 0.90:
-            return False
-        if abs(rel.dot(up)) > depth_in * math.tan(half_v) * 0.86:
-            return False
-    return True
+    if not still_here(item):
+        return False
+    corners = [item["obj"].matrix_world @ Vector(corner) for corner in item["obj"].bound_box]
+    pad = 0.12
+    return (
+        min(corner.x for corner in corners) - pad < point.x < max(corner.x for corner in corners) + pad
+        and min(corner.y for corner in corners) - pad < point.y < max(corner.y for corner in corners) + pad
+        and min(corner.z for corner in corners) - pad < point.z < max(corner.z for corner in corners) + pad
+    )
+
+def clear_props(cam, look, rear, far, skipped):
+    hidden_names = {{item["obj"].name for item in skipped if still_here(item)}}
+    for _step in range(16):
+        if not any(still_here(item) and occupies(item, cam) and item["obj"].name not in hidden_names for item in MADE):
+            return cam
+        nxt = cam + look * 0.25
+        if abs(look.y) > 0.5:
+            nxt.y = clamp_inside(nxt.y, rear, far, look.y)
+        else:
+            nxt.x = clamp_inside(nxt.x, rear, far, look.x)
+        if (nxt - cam).length < 0.02:
+            return cam
+        cam = nxt
+    return cam
+
+def on_wall(item, wall):
+    return abs(item["east"] - wall["east"]) <= wall["along_east"] / 2 + 0.2 and abs(item["north"] - wall["north"]) <= wall["along_north"] / 2 + 0.2
 
 def rear_of(axis, sign):
-    walls = [item for item in MADE if item["kind"] == "wall" and item["obj"].name in bpy.data.objects]
+    walls = [item for item in MADE if item["kind"] == "wall" and still_here(item)]
     if not walls:
         return []
     edge = max(walls, key=lambda item: item[axis]) if sign > 0 else min(walls, key=lambda item: item[axis])
     chosen = [edge]
     for item in MADE:
-        if item["kind"] in {{"door", "window"}} and item["obj"].name in bpy.data.objects and covers(edge, item["east"], item["north"]):
+        if not still_here(item):
+            continue
+        if item["kind"] in {{"door", "window", "furniture"}} and on_wall(item, edge):
             chosen.append(item)
     return chosen
+
+def central_subject():
+    finite = [item for item in MADE if item["kind"] == "floor" and item["along_east"] <= 20 and item["along_north"] <= 20]
+    origin = (finite[0]["east"], finite[0]["north"]) if finite else (center_x, center_y)
+    items = [item for item in MADE if item["kind"] == "furniture" and still_here(item)]
+    if not items:
+        return None
+    return min(items, key=lambda item: (item["east"] - origin[0]) ** 2 + (item["north"] - origin[1]) ** 2)
+
+def interior_pose(look):
+    near, far, width, floor_top, height, sideways = opening_for(look)
+    ceil = floor_top + height
+    cam_z = min(max(floor_top + 1.05, floor_top + height * 0.68), ceil - 0.22)
+    subject = central_subject()
+    component = look.y if abs(look.y) > 0.5 else look.x
+    if subject is None:
+        dist = fill_distance(width, height)
+        return near - component * dist, cam_z, far, cam_z, sideways
+    if abs(look.y) > 0.5:
+        front = subject["north"] - math.copysign(subject["along_north"] / 2.0, look.y)
+    else:
+        front = subject["east"] - math.copysign(subject["along_east"] / 2.0, look.x)
+    front_top = subject["bottom"] + subject["height"]
+
+    def measure(stand):
+        cam_axis = near - component * stand
+        d_front = (front - cam_axis) * component
+        d_far = (far - cam_axis) * component
+        return cam_axis, d_front, d_far
+
+    for step in range(0, 48):
+        stand = -0.4 + step * 0.18
+        cam_axis, d_front, d_far = measure(stand)
+        d_floor = d_front - 0.35
+        if d_floor < 0.55 or d_far < d_front + 0.4:
+            continue
+        ang_floor = math.atan((floor_top - cam_z) / d_floor)
+        ang_ceil = math.atan((ceil - cam_z) / d_far)
+        if ang_ceil - ang_floor < (2.0 * half_v) - 0.16:
+            aim_z = cam_z + math.tan((ang_ceil + ang_floor) / 2.0) * d_far
+            return cam_axis, cam_z, far, aim_z, sideways
+    for step in range(0, 48):
+        stand = -0.4 + step * 0.18
+        cam_axis, d_front, d_far = measure(stand)
+        if d_front < 0.7 or d_far < d_front + 0.4:
+            continue
+        ang_front = math.atan((front_top - cam_z) / d_front)
+        ang_ceil = math.atan((ceil - cam_z) / d_far)
+        if ang_ceil - ang_front < (2.0 * half_v) - 0.08:
+            aim_z = cam_z + math.tan((ang_ceil + ang_front) / 2.0) * d_far
+            return cam_axis, cam_z, far, aim_z, sideways
+    dist = fill_distance(width, height)
+    return near - component * dist, cam_z, far, cam_z, sideways
 
 views = (
     ("north", "north", -1, Vector((0.0, 1.0, 0.0))),
@@ -230,44 +375,52 @@ views = (
 posts = []
 for view_name, axis, sign, cardinal in views:
     hidden = rear_of(axis, sign) if inside else []
-    skip = {{item["obj"].name for item in hidden}}
-    points = []
-    for obj in meshes:
-        if obj.name not in skip:
-            points.extend(world_corners(obj))
-    if not points:
-        points = [Vector((center_x, center_y, eye))]
-    target = sum(points, Vector()) / len(points)
-    target.z = min(max(float(target.z), 0.85), eye)
-    if inside and hidden:
-        wall = hidden[0]
-        if axis == "east":
-            outside = wall["east"] + sign * (wall["along_east"] / 2 + 0.4)
-            cam = Vector((outside, target.y, eye))
+    look = cardinal.normalized()
+    if abs(look.y) > 0.5:
+        span_w = high.x - low.x
+        far = high.y if look.y > 0 else low.y
+        rear = low.y if look.y > 0 else high.y
+        if inside:
+            cam_axis, cam_z, aim_axis, aim_z, sideways = interior_pose(look)
+            center_x = sideways
         else:
-            outside = wall["north"] + sign * (wall["along_north"] / 2 + 0.4)
-            cam = Vector((target.x, outside, eye))
+            near = low.y if look.y > 0 else high.y
+            cam_axis = near - look.y * fill_distance(span_w, room_h)
+            cam_z = mid_z
+            aim_axis = center_y
+            aim_z = mid_z
+        cam = clear_props(Vector((center_x, cam_axis, cam_z)), look, rear, far, hidden)
+        aim = Vector((center_x, aim_axis, aim_z))
     else:
-        cam = Vector((target.x, target.y, eye)) - cardinal * (max(width, depth, room_h) + 1.2)
-    for _step in range(40):
-        if in_frame(cam, target, points):
-            break
-        cam = cam - cardinal * 0.4
-    posts.append((view_name, (cam.x, cam.y, cam.z), (target.x, target.y, target.z), hidden))
+        span_w = high.y - low.y
+        far = high.x if look.x > 0 else low.x
+        rear = low.x if look.x > 0 else high.x
+        if inside:
+            cam_axis, cam_z, aim_axis, aim_z, sideways = interior_pose(look)
+            center_y = sideways
+        else:
+            near = low.x if look.x > 0 else high.x
+            cam_axis = near - look.x * fill_distance(span_w, room_h)
+            cam_z = mid_z
+            aim_axis = center_x
+            aim_z = mid_z
+        cam = clear_props(Vector((cam_axis, center_y, cam_z)), look, rear, far, hidden)
+        aim = Vector((aim_axis, center_y, aim_z))
+    posts.append((view_name, (cam.x, cam.y, cam.z), (aim.x, aim.y, aim.z), hidden))
 
 scene = bpy.context.scene
 scene.render.engine = "BLENDER_WORKBENCH"
 scene.view_settings.view_transform = "Standard"
-scene.view_settings.exposure = 0.4
+scene.view_settings.exposure = 0.0
 scene.render.resolution_x = 640
 scene.render.resolution_y = 360
 scene.render.resolution_percentage = 100
 scene.render.film_transparent = False
 scene.render.image_settings.file_format = "PNG"
 shading = scene.display.shading
-shading.light = "STUDIO"
+shading.light = "FLAT"
 shading.color_type = "MATERIAL"
-for attr, value in (("show_object_outline", True), ("show_cavity", True), ("show_shadows", True)):
+for attr, value in (("show_object_outline", True), ("show_cavity", False), ("show_shadows", True), ("shadow_intensity", 0.25)):
     if hasattr(shading, attr):
         setattr(shading, attr, value)
 if hasattr(shading, "background_type"):

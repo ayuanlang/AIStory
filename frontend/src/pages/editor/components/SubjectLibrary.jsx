@@ -634,6 +634,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return () => window.removeEventListener('keydown', onKey);
     }, [assetRefPreview]);
     const [inheritAppearance, setInheritAppearance] = useState(true);
+    const [whiteModelAsReference, setWhiteModelAsReference] = useState(true);
     const [derivedImageGenMode, setDerivedImageGenMode] = useState('crop');
     const [gridRegenPreparing, setGridRegenPreparing] = useState(false);
     const [gridRegenPromptDrafts, setGridRegenPromptDrafts] = useState({});
@@ -6990,7 +6991,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 uniqueRefs = await applyCroppedCellReference(activeEntity, allEntities, uniqueRefs);
             }
 
-            if (!qualityRegen && !imageEditOnly && isMainEnvironmentEntity(activeEntity)) {
+            if (!qualityRegen && !imageEditOnly && whiteModelAsReference && isMainEnvironmentEntity(activeEntity)) {
                 const laidOut = applyWhiteModelQuadReference('', uniqueRefs, activeEntity);
                 uniqueRefs = laidOut.refs;
             }
@@ -7012,7 +7013,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             let imagePrompt = (!qualityRegen && !imageEditOnly && isMainEnvironmentEntity(activeEntity))
                 ? quadImagePrompt(effectiveFinalPrompt)
                 : effectiveFinalPrompt;
-            if (!qualityRegen && !imageEditOnly && isMainEnvironmentEntity(activeEntity)) {
+            if (!qualityRegen && !imageEditOnly && whiteModelAsReference && isMainEnvironmentEntity(activeEntity)) {
                 imagePrompt = applyWhiteModelQuadReference(imagePrompt, uniqueRefs, activeEntity).prompt;
             }
             const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = imageEditOnly
@@ -7036,7 +7037,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 prompt_language: effectivePromptSubmitLang,
                 asset_type: 'subject',
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                ...(!qualityRegen && !imageEditOnly && isMainEnvironmentEntity(activeEntity) && whiteModelReferenceUrl(activeEntity)
+                ...(!qualityRegen && !imageEditOnly && whiteModelAsReference && isMainEnvironmentEntity(activeEntity) && whiteModelReferenceUrl(activeEntity)
                     ? { aspect_ratio: '16:9' }
                     : {}),
                 negative_prompt: entityNegativePrompt,
@@ -8228,8 +8229,24 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const openWhiteModelPreview = (entity) => {
         const url = whiteModelReferenceUrl(entity);
         if (!url) return;
+        const full = getFullUrl(url);
         const label = String(entity?.name || entity?.name_en || '').trim();
-        openAssetRefPreview(url, label ? `${label} · ${t('白模', 'White model')}` : t('白模', 'White model'));
+        const title = label ? `${label} · ${t('白模', 'White model')}` : t('白模', 'White model');
+        const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (ch) => (
+            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+        ));
+        const winName = `whiteModel_${String(entity?.id || 'preview').replace(/[^\w-]/g, '_')}`;
+        const popup = window.open('', winName, 'popup=yes,width=1320,height=820');
+        if (!popup) return;
+        popup.document.open();
+        popup.document.write(
+            `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>`
+            + '<style>html,body{margin:0;height:100%;background:#111}body{display:flex;align-items:center;justify-content:center}'
+            + 'img{max-width:100%;max-height:100%;object-fit:contain}</style></head><body>'
+            + `<img src="${escapeHtml(full)}" alt="${escapeHtml(title)}"></body></html>`
+        );
+        popup.document.close();
+        popup.focus();
     };
 
     const handleGenerateLayout = async (entity) => {
@@ -8254,14 +8271,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         try {
             const res = await generateEnvironmentLayout(target.id, { signal: controller.signal });
             if (controller.signal.aborted) return;
-            const url = String(res?.image_url || '').trim();
+            const url = String(res?.custom_attributes?.layout_image_url || res?.image_url || '').trim();
             if (!url) throw new Error(t('布局没有返回图片', 'Layout returned no image'));
-            applySubjectEntityImageLocally(stableId, url);
+            const returnedAttrs = res?.custom_attributes && typeof res.custom_attributes === 'object'
+                ? res.custom_attributes
+                : {};
             const localPatch = {
-                image_url: url,
-                ...(res?.custom_attributes && typeof res.custom_attributes === 'object'
-                    ? { custom_attributes: res.custom_attributes }
-                    : {}),
+                custom_attributes: {
+                    ...returnedAttrs,
+                    layout_image_url: url,
+                },
             };
             if (selectedEntity && String(selectedEntity.id) === stableId) {
                 setSelectedEntity((prev) => ({ ...(prev || {}), ...localPatch }));
@@ -8280,8 +8299,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             );
             showSubjectNotification(
                 t(
-                    '白模已放到这张资产图上。生成四宫格时，这张白模只锁四格和体块，颜色和光仍听提示词。',
-                    'The white model is now this asset image. Four-grid generation uses it only for the grid and the masses. Color and light still follow the prompt.'
+                    '白模已单独保存，当前资产图没有更换。勾选「以白模为参考图」后，四宫格的比例照白模，颜色按文字。',
+                    'The white model is saved on its own. The current asset image is unchanged. When “Use white model as reference” is checked, the four-grid uses it for the masses.'
                 ),
                 'success'
             );
@@ -8808,7 +8827,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     uniqueRefs = [cropUrl, ...uniqueRefs.filter((url) => url !== cropUrl)];
                 }
 
-                if (!regenPlan && isMainEnvironmentEntity(entity)) {
+                if (!regenPlan && whiteModelAsReference && isMainEnvironmentEntity(entity)) {
                     const laidOut = applyWhiteModelQuadReference(finalPrompt, uniqueRefs, entity);
                     finalPrompt = laidOut.prompt;
                     uniqueRefs = laidOut.refs;
@@ -8846,7 +8865,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         prompt_language: resolvedPromptSubmitLang,
                         asset_type: 'subject',
                         ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                        ...((regenPlan || whiteModelReferenceUrl(entity)) ? { aspect_ratio: '16:9' } : {}),
+                        ...((regenPlan || (whiteModelAsReference && whiteModelReferenceUrl(entity))) ? { aspect_ratio: '16:9' } : {}),
                         negative_prompt: entityNegativePrompt,
                         // When account parallel slots are full, poll-wait (1 min) and resubmit;
                         // cancel promptly if the batch is stopped.
@@ -10150,6 +10169,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                     >
                                         <Eye size={16} />
                                     </button>
+                                    <label
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="flex items-center gap-1 rounded-full bg-black/50 px-2 py-1 text-[10px] text-white backdrop-blur-md"
+                                        title={t('生成四宫格时，格子和各具比例照白模，颜色材质按文字', 'Four-grid proportions follow the white model; color and material follow the text')}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={whiteModelAsReference}
+                                            onChange={(e) => setWhiteModelAsReference(e.target.checked)}
+                                            className="rounded bg-black/40 border-white/10"
+                                        />
+                                        {t('白模参考', 'Clay ref')}
+                                    </label>
                                     </>
                                 )}
                                 
@@ -11776,6 +11808,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                             <Eye size={16} />
                                             {t('查看白模', 'View white model')}
                                         </button>
+                                        <label className="flex items-center gap-2 px-2 text-sm text-white cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={whiteModelAsReference}
+                                                onChange={(e) => setWhiteModelAsReference(e.target.checked)}
+                                                className="rounded bg-black/40 border-white/10"
+                                            />
+                                            {t('以白模为参考图', 'Use white model as reference')}
+                                        </label>
                                         </>
                                     )}
                                     {viewingEntityTab === 'generate' && (
@@ -12467,6 +12508,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                     <Eye size={18} />
                                                     <span>{t('查看白模', 'View white model')}</span>
                                                 </button>
+                                                <label className="flex items-center gap-2 px-2 text-sm text-white cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={whiteModelAsReference}
+                                                        onChange={(e) => setWhiteModelAsReference(e.target.checked)}
+                                                        className="rounded bg-black/40 border-white/10"
+                                                    />
+                                                    <span>{t('以白模为参考图', 'Use white model as reference')}</span>
+                                                </label>
                                                 </>
                                             )}
                                             <button

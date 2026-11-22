@@ -2570,10 +2570,14 @@ export function buildEntityNegativePrompt(sourceText = '', primaryEntity = null,
     return negatives.join(', ');
 }
 
+function stripTrailingNegativePrompt(prompt = '') {
+    return String(prompt || '').replace(/(?:\n|\r\n)*\s*negative prompt:\s*[\s\S]*$/i, '').trim();
+}
+
 export function buildEntityImageGenerationPrompts(prompt = '', sourceText = '', primaryEntity = null, entityPool = []) {
     const negative_prompt = buildEntityNegativePrompt(sourceText, primaryEntity, entityPool);
     return {
-        prompt: appendNegativePromptToImagePrompt(prompt, negative_prompt),
+        prompt: stripTrailingNegativePrompt(prompt),
         negative_prompt,
     };
 }

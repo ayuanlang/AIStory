@@ -1518,7 +1518,7 @@ async def generate_entity_layout(
 ):
     """Ask the text model for a Blender white-model script, then render the four-grid sheet.
 
-    The image model is not called. The opening is not changed.
+    The image model is not called. The opening is not changed. The asset image stays put.
     """
     import math
     import os
@@ -1538,6 +1538,7 @@ async def generate_entity_layout(
         layout_box_records,
         layout_messages,
         layout_script_from_model_text,
+        layout_script_gaps,
     )
     from app.services.script_analysis_flow.environment_layout_blender import (
         LayoutRenderError,
@@ -1626,14 +1627,17 @@ async def generate_entity_layout(
         llm_response = await llm_service.chat_completion_with_fallback(messages, call_config)
         result_content = str((llm_response or {}).get("content", "") or "")
         usage = (llm_response or {}).get("usage", {}) if isinstance(llm_response, dict) else {}
-        try:
-            script, boxes = layout_script_from_model_text(result_content)
-        except LayoutError as first_error:
-            retry = await llm_service.chat_completion_with_fallback(
-                layout_messages(opening, str(first_error)),
-                call_config,
-            )
-            retry_usage = (retry or {}).get("usage", {}) if isinstance(retry, dict) else {}
+        def _read_layout(content: str):
+            script_text, layout_boxes = layout_script_from_model_text(content)
+            gap = layout_script_gaps(opening, layout_boxes)
+            if gap:
+                raise LayoutError(gap)
+            return script_text, layout_boxes
+
+        def _merge_usage(response):
+            nonlocal usage, llm_response
+            llm_response = response
+            retry_usage = (response or {}).get("usage", {}) if isinstance(response, dict) else {}
             if isinstance(usage, dict) and isinstance(retry_usage, dict):
                 for key in ("prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens"):
                     if key in retry_usage:
@@ -1641,9 +1645,38 @@ async def generate_entity_layout(
                             usage[key] = int(usage.get(key, 0) or 0) + int(retry_usage.get(key, 0) or 0)
                         except Exception:
                             pass
-            llm_response = retry
-            script, boxes = layout_script_from_model_text(str((retry or {}).get("content", "") or ""))
-        binary = render_white_model(script)
+
+        try:
+            script, boxes = _read_layout(result_content)
+        except LayoutError as first_error:
+            retry = await llm_service.chat_completion_with_fallback(
+                layout_messages(opening, str(first_error)),
+                call_config,
+            )
+            _merge_usage(retry)
+            try:
+                script, boxes = _read_layout(str((retry or {}).get("content", "") or ""))
+            except LayoutError as retry_error:
+                raise HTTPException(status_code=422, detail=str(retry_error)) from retry_error
+        try:
+            binary = render_white_model(script)
+        except LayoutRenderError as render_error:
+            tail = " ".join(str(render_error).split())[:500]
+            logger.warning(
+                "environment_layout blender failed, revising entity_id=%s error=%s",
+                entity_id,
+                tail,
+            )
+            revised = await llm_service.chat_completion_with_fallback(
+                layout_messages(opening, f"白模渲染报错：{tail}", script),
+                call_config,
+            )
+            _merge_usage(revised)
+            try:
+                script, boxes = _read_layout(str((revised or {}).get("content", "") or ""))
+            except LayoutError as retry_error:
+                raise HTTPException(status_code=422, detail=str(retry_error)) from retry_error
+            binary = render_white_model(script)
         count = len(boxes)
         box_records = layout_box_records(boxes)
 
@@ -1678,14 +1711,10 @@ async def generate_entity_layout(
             url = f"{external}{relative}" if external else relative
 
         attrs = dict(entity.custom_attributes) if isinstance(entity.custom_attributes, dict) else {}
-        previous = str(entity.image_url or "").strip()
-        if previous and previous != str(attrs.get("layout_image_url") or "").strip():
-            attrs["beauty_image_url"] = previous
         attrs["layout_image_url"] = url
         attrs["layout_boxes"] = box_records
         entity.custom_attributes = attrs
         flag_modified(entity, "custom_attributes")
-        entity.image_url = url
         db.commit()
         db.refresh(entity)
         billing_details = _build_standard_billing_details(
@@ -1725,11 +1754,15 @@ async def generate_entity_layout(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LayoutRenderError as exc:
         _cancel_reservation_quietly(db, reservation_tx_id, str(exc))
-        raise HTTPException(status_code=502, detail="白模渲染失败，开篇没有改动。") from exc
+        tail = " ".join(str(exc).split())[:180]
+        detail = "白模渲染失败，开篇没有改动。"
+        if tail:
+            detail = f"{detail} {tail}"
+        raise HTTPException(status_code=500, detail=detail) from exc
     except HTTPException as exc:
         _cancel_reservation_quietly(db, reservation_tx_id, str(exc.detail))
         raise
     except Exception as exc:
         logger.error("Environment layout failed: %s", exc, exc_info=True)
         _cancel_reservation_quietly(db, reservation_tx_id, str(exc))
-        raise HTTPException(status_code=502, detail="布局生成失败，开篇没有改动。") from exc
+        raise HTTPException(status_code=500, detail="布局生成失败，开篇没有改动。") from exc

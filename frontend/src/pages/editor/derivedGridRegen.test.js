@@ -24,6 +24,7 @@ import {
     singleCellEditInstruction,
     stripProjectStyleInjection,
     applyWhiteModelQuadReference,
+    quadImagePrompt,
 } from './derivedGridRegen.js';
 
 describe('saved quad cells', () => {
@@ -562,6 +563,35 @@ describe('main environment quad rerun drafts', () => {
     });
 });
 
+describe('quad image prompt', () => {
+    const draft = [
+        '[Global Style](写实电影感).',
+        '【四向拼图】',
+        '[0度格-左上·北]',
+        '正面：墙。',
+        '【主体外形】',
+        '- [@保险台]（M-001）外形=实心台体，颜色=深青哑光。',
+        '【色彩说明】',
+        '- 主色=深青冷灰。https://cdn.example/sheet.png?sig=1',
+        '【主体外形】',
+        '- [@保险台]（M-001）外形=实心台体，颜色=深青哑光。',
+        '【色彩说明】',
+        '- 主色=深青冷灰。https://cdn.example/sheet.png?sig=1',
+    ].join('\n');
+
+    it('keeps the material table once after the four-grid and drops image urls', () => {
+        const prompt = quadImagePrompt(draft);
+        assert.equal(prompt.indexOf('【四向拼图】') < prompt.indexOf('【主体外形】'), true);
+        assert.equal(prompt.indexOf('【主体外形】') < prompt.indexOf('【色彩说明】'), true);
+        assert.equal(prompt.match(/【主体外形】/g).length, 1);
+        assert.equal(prompt.match(/【色彩说明】/g).length, 1);
+        assert.match(prompt, /^\[Global Style\]\(写实电影感\)\./);
+        assert.match(prompt, /\[0度格-左上·北\]/);
+        assert.doesNotMatch(prompt, /https?:\/\//);
+        assert.match(prompt, /主色=深青冷灰。/);
+    });
+});
+
 describe('white model reference for the four-grid', () => {
     it('puts the clay sheet first and keeps color in the written prompt', () => {
         const entity = {
@@ -572,13 +602,28 @@ describe('white model reference for the four-grid', () => {
             ['https://cdn.example/style.png', 'https://cdn.example/clay.png'],
             entity
         );
-        assert.match(applied.prompt, /^第一张参考图是同一处的白模/);
-        assert.match(applied.prompt, /颜色、材质、纹样和光只听后面的文字/);
+        assert.match(applied.prompt, /^弱参考：第一张参考图是同一处的白模/);
+        assert.match(applied.prompt, /占画面的比例照这张白模/);
+        assert.match(applied.prompt, /颜色、材质、纹样和光按后面的文字画/);
         assert.match(applied.prompt, /【主体外形】青砖墙/);
         assert.deepEqual(applied.refs, [
             'https://cdn.example/clay.png',
             'https://cdn.example/style.png',
         ]);
+    });
+
+    it('replaces an older lock instruction with the weak reference', () => {
+        const entity = {
+            custom_attributes: { layout_image_url: 'https://cdn.example/clay.png' },
+        };
+        const applied = applyWhiteModelQuadReference(
+            '第一张参考图是同一处的白模，只锁四格切分和每一具的体块。\n\n【四向拼图】左上望北。',
+            [],
+            entity
+        );
+        assert.match(applied.prompt, /^弱参考：/);
+        assert.doesNotMatch(applied.prompt, /只锁四格/);
+        assert.match(applied.prompt, /【四向拼图】左上望北/);
     });
 
     it('leaves the prompt and refs unchanged when no white model exists', () => {

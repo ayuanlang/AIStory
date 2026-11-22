@@ -853,30 +853,146 @@ def supplement_layout_boxes(opening: str, boxes: Sequence[LayoutBox], meta: Dict
     return kept
 
 
-_LAYOUT_SYSTEM = """你写白模脚本。只输出 Python。不要 Markdown，不要解释。
-禁止输出 JSON。禁止写 wall_h、boxes、focal_mm、span_north。第一个字符不能是 {。
-脚本在 Blender 里执行。你只调用 mass()，并可以写一行 FOCAL_MM = 数字。不要 import，不要建相机，不要渲染，不要写 bpy。
-一行一个调用。east 东为正，north 北为正，高度向上。east 和 north 是这一具的中心。
+_UNLIMITED_AXIS = 24.0
+
+_LAYOUT_SYSTEM = """你写白模脚本。只输出脚本。不要复述开篇，不要 Markdown，不要解释。
+禁止输出 JSON。禁止写 wall_h、boxes、focal_mm、span_north。第一个字符是 F。
+第一行只写 FOCAL_MM = 数字。每个 mass() 单独占一行。FOCAL_MM 和 mass 不能写在同一行。
+不要 import，不要建相机，不要渲染，不要写 bpy。
+east 东为正，north 北为正，高度向上。east 和 north 是这一具的中心。
 along_east 是东西向全长，along_north 是南北向全长，单位米。height 是竖直高度。bottom 是底面离地。
-规划锁进开篇的是白模：只搭有独立轮廓的具。名字、米、朝向、开闭从开篇抄，不要改米，不要加开篇没有的具。纹样、颜色、材质不写进脚本。
-北墙或南墙：沿墙长写入 along_east，厚写入 along_north，height 用墙高，bottom=0。东墙或西墙：沿墙长写入 along_north，厚写入 along_east。
-地面 kind="floor"，height=0.04，bottom=0。墙皮 kind="wall"。门 kind="door"，窗 kind="window"，并写 state="全关"、"半开"或"全开"，只抄开篇的开闭。灯 kind="lamp"。桌、椅、凳、床、台 kind="furniture"。
-家具占地三个数时，最后一个是 height。只有长×宽时也要写：台、桌、案 height=0.75，床、榻 height=0.55，椅 height=0.9，凳 height=0.45。写了离平地，bottom 就等于那个米。
-上=写了高度的帐顶、穹顶、天花、顶棚、梁架写成 kind="ceiling"，bottom 等于这个高度，height=0.08，along_east 和 along_north 抄地面。
+有距原点、并且高、厚、沿墙长里至少有一个写成米的具，必须各写一行。壁关系=墙皮和壁关系=门洞即使距原点相同，也各写一行。写了门不能代替这面墙皮。
+某一轴写成无限制时，不要把这一具整行删掉。无限制的那一轴写 24，只给白模盒子用。写成米的轴照抄，不改。
+北墙或南墙：沿墙长写入 along_east，厚写入 along_north。东墙或西墙：沿墙长写入 along_north，厚写入 along_east。height 用这一具自己的高，墙皮用墙高，门用门高。bottom=0。
+地面 kind="floor"，height=0.04，bottom=0。两轴都是无限制时 along_east=24，along_north=24。墙皮 kind="wall"。门 kind="door"，窗 kind="window"，并写 state="全关"、"半开"或"全开"，只抄开篇的开闭。
+天空、远景，以及高、厚、沿墙长都没有米的具，不写。
+纹样、颜色、材质不写进脚本。不要加开篇没有的具。
+家具占地三个数时，最后一个是 height。只有长×宽时也要写：台、桌、案 height=0.75，床、榻 height=0.55，椅 height=0.9，凳 height=0.45。写了离平地，bottom 就等于那个米。灯 kind="lamp"。桌、椅、凳、床、台 kind="furniture"。
+上=写了高度米数的帐顶、穹顶、天花、顶棚、梁架写成 kind="ceiling"，bottom 等于这个高度，height=0.08，along_east 和 along_north 抄地面。高度=无限制的不上这一行。
 楼梯写低端和高端：kind="ramp"，再写 low_east、low_north、high_east、high_north、low_z、high_z。
-没有距原点、也没有大小的不写。有距原点和占地的家具、有高度的顶必须写。
-四宫格不由你摆：程序用同一批白模渲四格，左上望北，右上望东，左下望南，右下望西，16:9 的 2×2，不写字，不写角标。焦段从开篇抄进 FOCAL_MM，没有就写 35。
-mass("注册名", "kind", east=0, north=0, along_east=1, along_north=1, height=1, bottom=0)"""
+四宫格不由你摆。焦段从开篇的毫米数抄进 FOCAL_MM，没有就写 35。
+FOCAL_MM = 35
+mass("注册名", "wall", east=0, north=0, along_east=24, along_north=2, height=12, bottom=0)
+mass("注册名", "door", east=0, north=0, along_east=4, along_north=2, height=6, bottom=0, state="全开")"""
 
 
-def layout_messages(opening: str, missing: str = "") -> List[Dict[str, str]]:
+_FOOTPRINT_RE = re.compile(
+    r"占地=沿墙(?:无限制|(-?\d+(?:\.\d+)?)米)×高(-?\d+(?:\.\d+)?)米×厚(-?\d+(?:\.\d+)?)米"
+)
+_GROUND_SPAN_RE = re.compile(
+    r"尺度=南北(?:无限制|(-?\d+(?:\.\d+)?)米)×东西(?:无限制|(-?\d+(?:\.\d+)?)米)"
+)
+_RELATION_RE = re.compile(r"壁关系=(墙皮|门洞|窗洞)")
+
+
+def _script_lines(text: str) -> List[str]:
+    lines: List[str] = []
+    for raw in str(text or "").splitlines():
+        line = raw.strip().rstrip(",")
+        if "mass(" in line and not line.startswith("mass("):
+            parts = re.split(r"(?=mass\()", line)
+            lines.extend(part.strip() for part in parts if part.strip())
+        elif line:
+            lines.append(line)
+    return lines
+
+
+def _clause_name(text: str, pos: int) -> str:
+    start = max(text.rfind("\n", 0, pos), text.rfind("。", 0, pos))
+    chunk = text[start + 1:pos]
+    names = [(item.end(), item.group(1).strip()) for item in _NAME_RE.finditer(chunk)]
+    names.extend((item.end(), item.group(1).strip()) for item in _SHORT_NAME_RE.finditer(chunk))
+    if not names:
+        return ""
+    names.sort(key=lambda item: item[0])
+    return names[-1][1]
+
+
+def _required_from_opening(opening: str) -> List[Dict[str, Any]]:
+    text = str(opening or "")
+    required: List[Dict[str, Any]] = []
+    for item in _FOOTPRINT_RE.finditer(text):
+        window = text[max(0, item.start() - 500):item.start()]
+        origins = list(_ORIGIN_RE.finditer(window))
+        if not origins:
+            continue
+        north = float(origins[-1].group(1))
+        east = float(origins[-1].group(2))
+        relations = list(_RELATION_RE.finditer(window))
+        relation = relations[-1].group(1) if relations else "墙皮"
+        kind = {"门洞": "door", "窗洞": "window"}.get(relation, "wall")
+        length = _UNLIMITED_AXIS if item.group(1) is None else float(item.group(1))
+        height = float(item.group(2))
+        thick = float(item.group(3))
+        name = _clause_name(text, item.start()) or relation
+        required.append({
+            "name": name,
+            "kind": kind,
+            "north": north,
+            "east": east,
+            "length": length,
+            "height": height,
+            "thick": thick,
+            "unlimited": item.group(1) is None,
+        })
+    for item in _GROUND_SPAN_RE.finditer(text):
+        window = text[max(0, item.start() - 500):item.start()]
+        origins = list(_ORIGIN_RE.finditer(window))
+        if not origins:
+            continue
+        north_span = _UNLIMITED_AXIS if item.group(1) is None else float(item.group(1))
+        east_span = _UNLIMITED_AXIS if item.group(2) is None else float(item.group(2))
+        required.append({
+            "name": _clause_name(text, item.start()) or "地面",
+            "kind": "floor",
+            "north": float(origins[-1].group(1)),
+            "east": float(origins[-1].group(2)),
+            "length": north_span,
+            "height": 0.04,
+            "thick": east_span,
+            "unlimited": item.group(1) is None or item.group(2) is None,
+        })
+    return required
+
+
+def layout_script_gaps(opening: str, boxes: Sequence[LayoutBox]) -> str:
+    """Name subjects the opening already sized, when the script left them out."""
+    missing: List[str] = []
+    for item in _required_from_opening(opening):
+        present = any(
+            box.kind == item["kind"]
+            and abs(box.cx - item["east"]) <= 1.5
+            and abs(box.cy - item["north"]) <= 1.5
+            for box in boxes
+        )
+        if present:
+            continue
+        axis = "沿墙无限制写成24" if item["unlimited"] and item["kind"] != "floor" else "米照抄"
+        if item["kind"] == "floor" and item["unlimited"]:
+            axis = "无限制的轴写24"
+        missing.append(
+            f"{item['name']}（{item['kind']}，北{item['north']:g}东{item['east']:g}，"
+            f"高{item['height']:g}，{axis}）"
+        )
+    if not missing:
+        return ""
+    return "缺这些具：" + "；".join(missing) + "。墙皮和门各写一行。FOCAL_MM 单独一行。"
+
+
+def layout_messages(opening: str, missing: str = "", previous: str = "") -> List[Dict[str, str]]:
     text = str(opening or "").strip()
     if not text:
         raise LayoutError("没有开篇，不能生成布局。")
     user = "以下是开篇原文。规划已经把白模的米、朝向和开闭写在里面。只根据这些写脚本：\n" + text[:80000]
     note = str(missing or "").strip()
+    prior = str(previous or "").strip()
     if note:
-        user += "\n\n上一份脚本没有通过：" + note[:800] + "。仍只根据上面的开篇重写脚本。"
+        closing = "。仍只根据上面的开篇重写脚本。"
+        if prior:
+            closing = "。仍只根据上面的开篇重写脚本。米、朝向、开闭照开篇，不新造米。"
+        user += "\n\n上一份脚本没有通过：" + note[:800] + closing
+    if prior:
+        user += "\n上一份脚本：\n" + prior[:6000]
     return [
         {"role": "system", "content": _LAYOUT_SYSTEM},
         {"role": "user", "content": user},
@@ -1081,9 +1197,8 @@ def extract_layout_script(text: str) -> str:
     cleaned = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL | re.IGNORECASE)
     cleaned = re.sub(r"```(?:python)?", "", cleaned, flags=re.IGNORECASE)
     kept: List[str] = []
-    for raw in cleaned.splitlines():
-        line = raw.strip().rstrip(",")
-        if not line or line.startswith("#"):
+    for line in _script_lines(cleaned):
+        if line.startswith("#"):
             continue
         if _FOCAL_LINE.match(line) or _MASS_CALL.match(line):
             kept.append(line)

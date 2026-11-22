@@ -9,6 +9,7 @@ from app.services.script_analysis_flow.environment_layout import (
     boxes_from_layout_script,
     extract_layout_script,
     layout_script_from_model_text,
+    layout_script_gaps,
     layout_messages,
     parse_layout_boxes,
     parse_layout_model_text,
@@ -208,6 +209,16 @@ def test_missing_height_names_the_piece_and_ramp_uses_its_ends():
     assert messages[1]["content"].startswith("以下是开篇原文")
     assert "占地=1.8米×0.9米×0.75米" in messages[1]["content"]
     assert "第2件家具的高" in messages[1]["content"]
+    assert "上一份脚本：" not in messages[1]["content"]
+    revised = layout_messages(
+        "【六面一次】\n距原点=北0米东0米｜占地=1.8米×0.9米×0.75米",
+        "白模渲染报错：ReferenceError",
+        'FOCAL_MM = 35\nmass("案", "furniture", east=0, north=0, along_east=1.8, along_north=0.9, height=0.75, bottom=0)',
+    )
+    revised_user = revised[1]["content"]
+    assert "白模渲染报错：ReferenceError" in revised_user
+    assert "不新造米" in revised_user
+    assert 'mass("案"' in revised_user
 
 
 def test_model_payload_lifts_plaque_and_ramps_the_stair():
@@ -331,6 +342,44 @@ def test_box_json_becomes_a_blender_script():
     assert again == script
 
 
+GATE = """
+城门号=#3｜壁关系=墙皮｜距原点=北2.0米东0米｜占地=沿墙无限制×高12.0米×厚2.0米。
+单孔城门券洞号=#4｜壁关系=门洞｜距原点=北2.0米东0米｜占地=沿墙4.0米×高6.0米×厚2.0米｜开闭=全开。
+下=墨色留白地面满铺｜距原点=北0米东0米｜尺度=南北无限制×东西无限制。
+天空号=#9｜高度=无限制。
+"""
+
+DOOR_ONLY = '''开篇先丢掉。
+FOCAL_MM = 24 mass("单孔城门券洞", "door", east=0, north=2, along_east=4, along_north=2, height=6, bottom=0, state="全开")
+'''
+
+GATE_SCRIPT = """
+FOCAL_MM = 24
+mass("地面", "floor", east=0, north=0, along_east=24, along_north=24, height=0.04, bottom=0)
+mass("城门", "wall", east=0, north=2, along_east=24, along_north=2, height=12, bottom=0)
+mass("单孔城门券洞", "door", east=0, north=2, along_east=4, along_north=2, height=6, bottom=0, state="全开")
+"""
+
+
+def test_unlimited_wall_stays_in_the_white_model_script():
+    system = layout_messages(GATE)[0]["content"]
+    assert "无限制的那一轴写 24" in system
+    assert "写了门不能代替这面墙皮" in system
+    assert "FOCAL_MM 和 mass 不能写在同一行" in system
+    script = extract_layout_script(DOOR_ONLY)
+    assert script.splitlines()[0] == "FOCAL_MM = 24"
+    assert script.splitlines()[1].startswith("mass(")
+    boxes, _meta = boxes_from_layout_script(script)
+    gap = layout_script_gaps(GATE, boxes)
+    assert "城门" in gap
+    assert "地面" in gap
+    assert "天空" not in gap
+    full_boxes, _full_meta = boxes_from_layout_script(extract_layout_script(GATE_SCRIPT))
+    assert layout_script_gaps(GATE, full_boxes) == ""
+    wall = next(box for box in full_boxes if box.kind == "wall")
+    assert abs(wall.sz - 12) < 0.01 and abs(wall.sy - 2) < 0.01
+
+
 def test_blender_renders_four_grid_from_script():
     from app.services.script_analysis_flow.environment_layout_blender import (
         LayoutRenderError,
@@ -345,6 +394,8 @@ def test_blender_renders_four_grid_from_script():
     assert binary.startswith(b"\x89PNG")
     from PIL import Image, ImageStat
     import io
-    image = Image.open(io.BytesIO(binary)).convert("L")
+    image = Image.open(io.BytesIO(binary)).convert("RGB")
     assert image.size == (1280, 720)
-    assert ImageStat.Stat(image).stddev[0] > 12
+    assert ImageStat.Stat(image.convert("L")).stddev[0] > 12
+    center = image.getpixel((320, 180))
+    assert sum(center) > 280, center
