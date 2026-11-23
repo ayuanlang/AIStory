@@ -20,6 +20,7 @@ npm-debug.log
 *.webm
 !frontend/public/woola-transparent.png
 backend/uploads/
+backend/.blender/
 backend/data/uploads/
 backend/logs/
 data/queue_config.json

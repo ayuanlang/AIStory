@@ -414,6 +414,19 @@ def test_unlimited_wall_stays_in_the_white_model_script():
     assert abs(wall.sz - 12) < 0.01 and abs(wall.sy - 2) < 0.01
 
 
+def test_blender_process_env_prefers_tree_lib(tmp_path):
+    import os
+
+    from app.services.script_analysis_flow.environment_layout_blender import blender_process_env
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    exe = tmp_path / "blender"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    env = blender_process_env(str(exe))
+    assert env["LD_LIBRARY_PATH"].split(os.pathsep)[0] == str(lib)
+
+
 def test_blender_renders_four_grid_from_script():
     from app.services.script_analysis_flow.environment_layout_blender import (
         LayoutRenderError,

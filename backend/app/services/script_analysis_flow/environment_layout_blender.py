@@ -486,6 +486,36 @@ for name, location, target, hidden in posts:
 """
 
 
+def _windows_blender_exes() -> List[str]:
+    roots: List[str] = []
+    for key in ("ProgramW6432", "ProgramFiles"):
+        value = str(os.environ.get(key) or "").strip()
+        if value and value not in roots:
+            roots.append(value)
+    if r"C:\Program Files" not in roots:
+        roots.append(r"C:\Program Files")
+    found: List[str] = []
+    for root in roots:
+        base = os.path.join(root, "Blender Foundation")
+        if not os.path.isdir(base):
+            continue
+        for name in os.listdir(base):
+            path = os.path.join(base, name, "blender.exe")
+            if os.path.isfile(path):
+                found.append(path)
+    return sorted(set(found))
+
+
+def _bundled_blender() -> str:
+    """Official Linux build unpacked by scripts/install_blender_linux.sh."""
+    backend = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    for name in ("blender-launcher", "blender"):
+        path = os.path.join(backend, ".blender", name)
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
 def blender_executable() -> str:
     env = str(os.environ.get("BLENDER_EXE") or "").strip().strip('"')
     if env and os.path.isfile(env):
@@ -493,17 +523,23 @@ def blender_executable() -> str:
     found = shutil.which("blender")
     if found:
         return found
-    root = os.environ.get("ProgramFiles", r"C:\Program Files")
-    base = os.path.join(root, "Blender Foundation")
-    found_paths: List[str] = []
-    if os.path.isdir(base):
-        for name in os.listdir(base):
-            path = os.path.join(base, name, "blender.exe")
-            if os.path.isfile(path):
-                found_paths.append(path)
-    if not found_paths:
-        raise LayoutRenderError("本机没有 Blender，不能生成白模。")
-    return sorted(found_paths)[-1]
+    bundled = _bundled_blender()
+    if bundled:
+        return bundled
+    windows = _windows_blender_exes()
+    if windows:
+        return windows[-1]
+    raise LayoutRenderError("本机没有 Blender，不能生成白模。")
+
+
+def blender_process_env(exe: str) -> dict:
+    """Prefer the Blender tree's lib/ so a machine without X11 can still start it."""
+    env = os.environ.copy()
+    lib_dir = os.path.join(os.path.dirname(os.path.abspath(exe)), "lib")
+    if os.path.isdir(lib_dir):
+        previous = str(env.get("LD_LIBRARY_PATH") or "")
+        env["LD_LIBRARY_PATH"] = lib_dir if not previous else lib_dir + os.pathsep + previous
+    return env
 
 
 def render_white_model(script: str) -> bytes:
@@ -521,6 +557,7 @@ def render_white_model(script: str) -> bytes:
                 capture_output=True,
                 timeout=180,
                 check=False,
+                env=blender_process_env(exe),
             )
         except subprocess.TimeoutExpired as exc:
             raise LayoutRenderError("白模渲染超时。") from exc

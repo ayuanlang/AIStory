@@ -1687,7 +1687,7 @@ async def generate_project_episode_scripts_from_global_framework(
             f"Project Title: {project_title}\n"
             f"Base Positioning: {str(gi_basic_info.get('base_positioning') or project_global_info.get('base_positioning') or '').strip()}\n"
             f"{format_project_season_prompt(getattr(req, 'season_occurrence', None), gi)}\n"
-            f"Episode Number: {'预告片' if call_is_trailer else idx}\n"
+            f"Episode Number: {'预告片。本集集号已提供。这不是正片续写，不要上一集正文，不要 EMERGENCY_RECOVERY_BLOCK。' if call_is_trailer else idx}\n"
             f"Episode Title (current DB value): {ep_title}\n"
             f"Extra Notes: {req.extra_notes or ''}\n\n"
             f"{episode_product_specs_block}"
@@ -1695,6 +1695,7 @@ async def generate_project_episode_scripts_from_global_framework(
             f"{generation_scope_block}"
             f"{episode_title_policy_block}"
             f"{prev_episode_block}"
+            f"{'【全局故事大纲】【分集规划】以下正文就是这两份，已经提供。\n' if call_is_trailer else ''}"
             f"Global Story DNA (Markdown):\n{framework_block}\n\n"
             f"Character Canon (Markdown):\n{character_canon_md}\n\n"
             f"{relationships_block}"
@@ -1744,7 +1745,11 @@ async def generate_project_episode_scripts_from_global_framework(
             user_prompt += reference_plot_block + "\n"
         else:
             episode_llm_config = llm_config
-        user_prompt += "Write the episode script draft now."
+        user_prompt += (
+            "Write this trailer now. The outline, the episode plan, and this trailer's brief are already above. Do not ask for them again."
+            if call_is_trailer
+            else "Write the episode script draft now."
+        )
 
         try:
             sys_prompt_episode = sys_prompt.format(episode_number=idx, episode_title=ep_title)

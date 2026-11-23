@@ -48,6 +48,9 @@ def test_prompt_locks_range_and_focus():
         episode_from=3,
         episode_to=8,
     )
+    assert "【全局故事大纲】【分集规划】【本集】已经在本条提示词里" in block
+    assert "禁止回复「尚未提供」" in block
+    assert "EMERGENCY_RECOVERY_BLOCK 不适用" in block
     assert "取材范围=第3集到第8集" in block
     assert "侧重点=感情线" in block
     assert "does not replace any earlier trailer" in block

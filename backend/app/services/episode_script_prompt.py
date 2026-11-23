@@ -427,6 +427,11 @@ def build_trailer_generation_prompt_block(
         focus_block = "侧重点=未指定。比重按建置、娱乐时间、反派逼近来分，娱乐时间最重。其余节拍都可以进入。成片留哪些，由剪辑裁。\n"
     return (
         "【预告片生成 / Trailer — HIGHEST PRIORITY】\n"
+        "【全局故事大纲】【分集规划】【本集】已经在本条提示词里，不要再向用户索取。\n"
+        "全局故事大纲 = 下方 Global Story DNA、剧本框架和结构化预填。分集规划 = 其中的第 9 节和本条取材范围。\n"
+        "本集集号=预告片。本集剧情=取材范围内已经写下的大纲情节，加上本条允许切进的全集高光。\n"
+        "这不是正片续写。上一集正文和 EMERGENCY_RECOVERY_BLOCK 不适用。没有它们不是缺口。\n"
+        "禁止回复「尚未提供」。禁止要求用户再贴大纲、分集规划、集号或交接块。禁止把停笔说明当成成稿。读完已注入的大纲后直接写这条预告。\n"
         "This call writes ONE new trailer. It does not replace any earlier trailer or any series episode. "
         "It is not a compressed episode, and not a highlight reel pasted without a throughline.\n"
         "Story-circle completeness, previous-episode handoff, and next-episode setup do not apply.\n"

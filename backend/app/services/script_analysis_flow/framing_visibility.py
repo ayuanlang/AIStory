@@ -911,7 +911,10 @@ def _blender_payload(parsed: Dict[str, Any]) -> Dict[str, Any]:
 
 def measure_with_blender(parsed: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     try:
-        from app.services.script_analysis_flow.environment_layout_blender import blender_executable
+        from app.services.script_analysis_flow.environment_layout_blender import (
+            blender_executable,
+            blender_process_env,
+        )
 
         exe = blender_executable()
     except Exception as exc:
@@ -930,6 +933,7 @@ def measure_with_blender(parsed: Dict[str, Any]) -> Optional[List[Dict[str, Any]
                 capture_output=True,
                 timeout=120,
                 check=False,
+                env=blender_process_env(exe),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             logger.info("visibility blender failed: %s", exc)
