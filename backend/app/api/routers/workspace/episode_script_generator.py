@@ -1679,6 +1679,11 @@ async def generate_project_episode_scripts_from_global_framework(
         )
         prefill_block = build_structured_prefill_prompt_block(gi_story_input, trailer=call_is_trailer)
         framework_block = build_framework_prompt_block(global_md, gi_story_input)
+        trailer_outline_line = (
+            "【全局故事大纲】【分集规划】以下正文就是这两份，已经提供。\n"
+            if call_is_trailer
+            else ""
+        )
         user_prompt = (
             f"{series_ip_block}"
             f"{trailer_block}"
@@ -1695,7 +1700,7 @@ async def generate_project_episode_scripts_from_global_framework(
             f"{generation_scope_block}"
             f"{episode_title_policy_block}"
             f"{prev_episode_block}"
-            f"{'【全局故事大纲】【分集规划】以下正文就是这两份，已经提供。\n' if call_is_trailer else ''}"
+            f"{trailer_outline_line}"
             f"Global Story DNA (Markdown):\n{framework_block}\n\n"
             f"Character Canon (Markdown):\n{character_canon_md}\n\n"
             f"{relationships_block}"

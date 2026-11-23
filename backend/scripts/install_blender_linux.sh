@@ -52,10 +52,27 @@ mkdir -p "$LIB"
 export LD_LIBRARY_PATH="$LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 echo "[blender] fetching shared libraries"
-mkdir -p "$TMP/debs" "$TMP/broot"
+# Render's /var/lib/apt is read-only, so apt state stays under /tmp.
+APT_ROOT="$TMP/apt"
+mkdir -p "$APT_ROOT/lists/partial" "$APT_ROOT/archives/partial" "$TMP/debs" "$TMP/broot"
+chmod 755 "$TMP" "$APT_ROOT" "$APT_ROOT/lists" "$APT_ROOT/lists/partial" "$APT_ROOT/archives" "$APT_ROOT/archives/partial"
+STATUS="/var/lib/dpkg/status"
+if [ ! -r "$STATUS" ]; then
+  STATUS="$APT_ROOT/status"
+  : > "$STATUS"
+fi
+cat > "$APT_ROOT/apt.conf" <<EOF
+Dir::State "$APT_ROOT";
+Dir::State::lists "lists/";
+Dir::State::status "$STATUS";
+Dir::Cache "$APT_ROOT";
+Dir::Cache::archives "archives/";
+APT::Sandbox::User "root";
+EOF
 (
   cd "$TMP/debs"
   export DEBIAN_FRONTEND=noninteractive
+  export APT_CONFIG="$APT_ROOT/apt.conf"
   apt-get update -qq
   apt-get download $PKGS
 )
