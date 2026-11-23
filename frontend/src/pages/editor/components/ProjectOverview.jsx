@@ -32,6 +32,7 @@ import {
     applyStructuredPrefill,
     episodeOutlineProgress,
 } from '../storyPrefill';
+import { formatPersistedClock, latestPersistIso } from '../persistVersion';
 
 import { 
     fetchProject, 
@@ -541,6 +542,14 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         try {
             const status = await getProjectEpisodeScriptsStatus(id);
             setEpisodeScriptsProgress(status || null);
+            const persistedAt = String(status?.persisted_at || '').trim();
+            if (persistedAt) {
+                setInfo((prev) => (
+                    prev?.episode_scripts_persisted_at === persistedAt
+                        ? prev
+                        : { ...prev, episode_scripts_persisted_at: persistedAt }
+                ));
+            }
             return status || null;
         } catch (error) {
             console.warn('Failed to poll episode scripts status', error);
@@ -1897,6 +1906,10 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             const emotionDriven = isEmotionDrivenScriptMode(globalStoryInput.script_mode);
             storyInputEpochRef.current += 1;
             setGlobalStoryInput(prev => applyStructuredPrefill(prev, structured, emotionDriven));
+            const frameworkPersistedAt = String(structured?.story_framework_persisted_at || '').trim();
+            if (frameworkPersistedAt) {
+                setInfo((prev) => ({ ...prev, story_framework_persisted_at: frameworkPersistedAt }));
+            }
             setStoryGenFocusStep('structure_prefill');
             alert(emotionDriven
                 ? t('剧本框架已写成。请核对：同一事实只落一处，前提能否被终局证明，八阶是否盖住全部事件。这里不写分集。', 'The script framework is written. Check that each fact lives once, the premise can be proved, and the eight steps cover every event. Episode outlines are not written here.')
@@ -2737,6 +2750,26 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const globalFrameworkReady = Boolean(String(info?.story_dna_global_md || '').trim());
     const outlineProgress = episodeOutlineProgress(info?.story_dna_global_md, globalStoryInput?.episodes_count);
     const episodeScriptsGeneratedCount = Number(episodeScriptsProgress?.generated || 0);
+    const episodeScriptResultStamps = Array.isArray(episodeScriptsProgress?.results)
+        ? episodeScriptsProgress.results.map((row) => row?.persisted_at)
+        : [];
+    const episodeScriptsPersistedAt = latestPersistIso(
+        info?.episode_scripts_persisted_at,
+        episodeScriptsProgress?.persisted_at,
+        episodeScriptResultStamps,
+    );
+    const renderPersistedClock = (iso) => {
+        const clock = formatPersistedClock(iso);
+        if (!clock) return null;
+        return (
+            <span
+                className="text-[10px] text-white/45 tabular-nums"
+                title={t('入库时间，用来确定这一版', 'Stored time, used as this version')}
+            >
+                {t('入库', 'Stored')} {clock}
+            </span>
+        );
+    };
     const episodeScriptsReady = !episodeScriptsRunning
         && (episodeScriptsGeneratedCount > 0
             || failedEpisodeRows.length > 0
@@ -3853,6 +3886,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                             structurePrefillReady ? (
                                                                 <div className="flex items-center gap-1 flex-wrap justify-center">
                                                                     <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
+                                                                    {renderPersistedClock(info?.story_framework_persisted_at)}
                                                                     <button type="button" onClick={() => scrollToStoryGenStep('structure_prefill')} className={stepBtnClass}>
                                                                         {t('编辑', 'Edit')}
                                                                     </button>
@@ -3897,6 +3931,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                             globalFrameworkReady ? (
                                                                 <div className="flex items-center gap-1 flex-wrap justify-center">
                                                                     <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
+                                                                    {renderPersistedClock(info?.story_outline_persisted_at)}
                                                                     <button type="button" onClick={() => scrollToStoryGenStep('global_framework')} className={stepBtnClass}>
                                                                         {t('编辑', 'Edit')}
                                                                     </button>
@@ -3966,6 +4001,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                                             {t(`已生成 ${episodeScriptsGeneratedCount}`, `Generated ${episodeScriptsGeneratedCount}`)}
                                                                         </span>
                                                                     ) : null}
+                                                                    {renderPersistedClock(episodeScriptsPersistedAt)}
                                                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                                                         <button
                                                                             type="button"
@@ -4130,6 +4166,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                         <div className="text-sm font-semibold text-white">{emotionDrivenMode
                                             ? t('剧本框架（埃格里 · 前提 · 上升冲突八阶）', 'Script Framework (Egri · Premise · Eight Rising Steps)')
                                             : t('剧本框架（核心建置 · 人物弧光 · 救猫咪15拍）', 'Script Framework (Concept · Character · 15 Beats)')}</div>
+                                        {renderPersistedClock(info?.story_framework_persisted_at)}
                                     </div>
                                     <div className="text-xs text-muted-foreground mt-1">
                                         {emotionDrivenMode
@@ -4499,6 +4536,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 <div className="flex items-center gap-2">
                                     <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${globalFrameworkReady ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>3</span>
                                     <label className="text-xs text-muted-foreground uppercase font-bold block">{seriesIpMode ? t('已生成全剧信息（Markdown）', 'Generated Series Bible (Markdown)') : t('分集大纲（Markdown）', 'Episode Outlines (Markdown)')}</label>
+                                    {renderPersistedClock(info?.story_outline_persisted_at)}
                                 </div>
                                 <div className="flex items-center gap-2 flex-wrap justify-end">
                                     {!seriesIpMode && globalFrameworkReady && (
@@ -4618,6 +4656,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center border ${(episodeScriptsReady && episodeScriptsGeneratedCount > 0) ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-white/5 border-white/20 text-white/60'}`}>4</span>
                                     <div>
                                         <div className="text-sm font-semibold text-white">{t('分集剧本生成', 'Episode Script Generation')}</div>
+                                        {renderPersistedClock(episodeScriptsPersistedAt)}
                                         <div className="text-[11px] text-muted-foreground mt-0.5">
                                             {seriesIpMode
                                                 ? t('按集写。填写这一集的基本剧情、冲突和亮点；此前各集摘要会自动作为下一集的输入。不预写全部分集。', 'Write one episode at a time. Give this episode’s plot, conflict, and highlights. Summaries of earlier episodes are fed into the next one. Episode frameworks are not prewritten.')
@@ -5074,7 +5113,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                             : status === 'skipped'
                                                                 ? 'bg-yellow-500/20 text-yellow-200 border-yellow-500/30'
                                                                 : 'bg-white/10 text-white/80 border-white/20';
+                                                const resultClock = status === 'generated' ? formatPersistedClock(row?.persisted_at) : '';
                                                 const resultText = row?.error || row?.reason || (row?.output_chars ? `${row.output_chars} ${t('字符', 'chars')}` : (status === 'pending' ? t('等待中', 'Waiting') : '-'));
+                                                const resultWithClock = resultClock ? `${resultText} · ${t('入库', 'Stored')} ${resultClock}` : resultText;
                                                 const titleMismatchSuffix = row?.title_mismatch ? ` · ${t('标题/编号不一致', 'Title/number mismatch')}` : '';
                                                 const statusLabel =
                                                     status === 'generated'
@@ -5106,7 +5147,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                         <div className="col-span-2">
                                                             <span className={`px-2 py-0.5 rounded text-xs border ${statusClass}`}>{statusLabel}</span>
                                                         </div>
-                                                        <div className="col-span-3 text-xs text-white/70 truncate" title={resultText}>{resultText}</div>
+                                                        <div className="col-span-3 text-xs text-white/70 truncate" title={resultWithClock}>{resultWithClock}</div>
                                                         <div className="col-span-2 text-right">
                                                             {row?.episode_id ? (
                                                                 <button

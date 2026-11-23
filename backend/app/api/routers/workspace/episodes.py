@@ -1199,7 +1199,9 @@ async def generate_episode_story_dna(
             gi["story_dna_global_updated_at"] = now_iso
         project.global_info = gi
         db.add(project)
+        outline_persisted = global_kind != "promo"
     else:
+        outline_persisted = False
         episode = db.merge(episode)
         ei = _episode_info_from_episode(episode)
         ei["story_generator_episode_input"] = story_input
@@ -1213,6 +1215,13 @@ async def generate_episode_story_dna(
 
     db.commit()
     db.refresh(episode)
+    if outline_persisted:
+        from app.core.persist_version import (  # noqa: E402
+            STORY_OUTLINE_PERSISTED_AT,
+            safe_stamp_project_persisted_at,
+        )
+
+        safe_stamp_project_persisted_at(db, project, STORY_OUTLINE_PERSISTED_AT)
     return episode
 
 

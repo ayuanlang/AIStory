@@ -74,6 +74,7 @@ import {
     isAssetFromEpisode,
 } from '../reuseEnvAssets';
 import { hasSuccessfulPipelineNode, isStoryboardQueuedPlaceholderNode, isThisRunPipelineNode, pickDiagnosticPipelineNode, pickNewestPipelineNode, resolveAssetCategoryDiagnosticState, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff, storyboardAutoKickoffAlreadyCovered, storyboardShotsLanded, derivedEnvironmentRegenDisabled } from '../analysisRestartGuards';
+import { formatPersistedClock, latestPersistIso } from '../persistVersion';
 
 import { 
     fetchProject, 
@@ -38493,6 +38494,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 </div>
                             );
                         };
+                        const scriptOptimizationPersistedAt = nodeKey => {
+                            if (nodeKey !== 'scene_split' && nodeKey !== 'script_optimization') return '';
+                            const nodes = Array.isArray(diagnosticsPipelineNodes) ? diagnosticsPipelineNodes : [];
+                            const stamps = nodes
+                                .filter((node) => {
+                                    const name = String(node?.node_name || '').trim();
+                                    return name === 'scene_split' || name === 'script_optimization';
+                                })
+                                .map((node) => node?.runtime_meta?.persisted_at);
+                            return latestPersistIso(
+                                stamps,
+                                activeEpisode?.episode_info?.script_optimization_persisted_at,
+                            );
+                        };
                         const renderPipelineNodeStep = (stepKey, state, number, nodeKey) => (
                             <div className="flex flex-col items-center gap-2 relative min-w-[78px]">
                                 <div
@@ -38572,6 +38587,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     : t('等待中', 'Waiting')}
                                     </span>
                                     {state.failed ? renderFailedReasonPreview(state) : null}
+                                    {state.ready ? (() => {
+                                        const clock = formatPersistedClock(scriptOptimizationPersistedAt(nodeKey));
+                                        if (!clock) return null;
+                                        return (
+                                            <span
+                                                className="text-[10px] text-white/45 tabular-nums"
+                                                title={t('入库时间，用来确定这一版', 'Stored time, used as this version')}
+                                            >
+                                                {t('入库', 'Stored')} {clock}
+                                            </span>
+                                        );
+                                    })() : null}
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         {state.failed
                                             ? renderFailedReasonButton(() => openInspectFromNode(stepKey, state, {

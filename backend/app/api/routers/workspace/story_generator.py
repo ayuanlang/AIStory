@@ -457,6 +457,13 @@ async def generate_project_story_dna_global(
     db.add(project)
     db.commit()
     db.refresh(project)
+    if generator_kind != "promo":
+        from app.core.persist_version import (  # noqa: E402
+            STORY_OUTLINE_PERSISTED_AT,
+            safe_stamp_project_persisted_at,
+        )
+
+        safe_stamp_project_persisted_at(db, project, STORY_OUTLINE_PERSISTED_AT)
 
     # Populate response aliases to match other endpoints
     try:
@@ -816,7 +823,8 @@ def import_project_story_generator_global_package(
         gi["story_generator_global_input"] = normalized_input
         gi["story_generator_global_input_updated_at"] = now_iso
 
-    if req.story_dna_global_md is not None:
+    outline_written = req.story_dna_global_md is not None
+    if outline_written:
         gi["story_dna_global_md"] = req.story_dna_global_md or ""
         gi["story_dna_global_updated_at"] = now_iso
 
@@ -825,6 +833,13 @@ def import_project_story_generator_global_package(
     db.add(project)
     db.commit()
     db.refresh(project)
+    if outline_written and str(req.story_dna_global_md or "").strip():
+        from app.core.persist_version import (  # noqa: E402
+            STORY_OUTLINE_PERSISTED_AT,
+            safe_stamp_project_persisted_at,
+        )
+
+        safe_stamp_project_persisted_at(db, project, STORY_OUTLINE_PERSISTED_AT)
 
     # Populate response aliases to match other endpoints
     try:
@@ -878,7 +893,7 @@ from app.services.story_generator_llm import (  # noqa: E402,F401
     _run_structure_llm_call,
 )
 
-def _persist_structure_prefill(db, project, normalized, creative_text: str) -> None:
+def _persist_structure_prefill(db, project, normalized, creative_text: str) -> str:
     """Keep the script framework on the project so the outline prompt can read it."""
     try:
         gi = dict(project.global_info or {})
@@ -905,6 +920,13 @@ def _persist_structure_prefill(db, project, normalized, creative_text: str) -> N
             db.rollback()
         except Exception:
             pass
+        return ""
+    from app.core.persist_version import (  # noqa: E402
+        STORY_FRAMEWORK_PERSISTED_AT,
+        safe_stamp_project_persisted_at,
+    )
+
+    return safe_stamp_project_persisted_at(db, project, STORY_FRAMEWORK_PERSISTED_AT)
 
 
 @router.post("/projects/{project_id}/story_generator/structure_creative_input", response_model=Dict[str, Any])
@@ -1191,7 +1213,9 @@ async def structure_project_creative_input_to_story_fields(
     fresh_project = db.query(Project).filter(Project.id == int(project_id)).first()
     if fresh_project is not None:
         project = fresh_project
-    _persist_structure_prefill(db, project, normalized, creative_text)
+    framework_persisted_at = _persist_structure_prefill(db, project, normalized, creative_text)
+    if framework_persisted_at:
+        normalized["story_framework_persisted_at"] = framework_persisted_at
     return normalized
 
 

@@ -2013,6 +2013,25 @@ async def generate_project_episode_scripts_from_global_framework(
                 persist_db.add(ep_db)
                 persist_db.commit()
                 persist_db.refresh(ep_db)
+                from app.core.persist_version import stamp_episode_script_persisted_at  # noqa: E402
+
+                episode_script_persisted_at = ""
+                try:
+                    episode_script_persisted_at = stamp_episode_script_persisted_at(
+                        persist_db,
+                        ep_db,
+                        project_id=int(project_id),
+                    )
+                except Exception:
+                    logger.warning(
+                        "[generate_episode_scripts] persist clock failed episode_id=%s",
+                        ep_id,
+                        exc_info=True,
+                    )
+                    try:
+                        persist_db.rollback()
+                    except Exception:
+                        pass
 
                 persisted_episode_info = _episode_runtime_info_from_episode(ep_db)
                 logger.info(
@@ -2051,10 +2070,12 @@ async def generate_project_episode_scripts_from_global_framework(
                 "generated": True,
                 "skipped": False,
                 "output_chars": len(content),
+                "persisted_at": episode_script_persisted_at,
             })
             run_status["processed"] = int(run_status.get("processed") or 0) + 1
             run_status["generated"] = int(run_status.get("generated") or 0) + 1
             run_status["updated_at"] = now_bj_iso()
+            run_status["persisted_at"] = episode_script_persisted_at
             run_status["results"].append({
                 "episode_id": ep_id,
                 "episode_number": idx,
@@ -2065,6 +2086,7 @@ async def generate_project_episode_scripts_from_global_framework(
                 "title_mismatch": title_mismatch,
                 "status": "generated",
                 "output_chars": len(content),
+                "persisted_at": episode_script_persisted_at,
             })
             _persist_run_status(run_status)
         except HTTPException:

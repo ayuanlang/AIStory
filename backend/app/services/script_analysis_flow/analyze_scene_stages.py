@@ -904,6 +904,9 @@ def persist_reextracted_list(
         db.refresh(episode)
     except Exception:
         pass
+    from app.core.persist_version import safe_stamp_script_optimization_persisted_at
+
+    safe_stamp_script_optimization_persisted_at(db, episode)
 
 
 def persist_script_optimization_stage(
@@ -964,19 +967,26 @@ def persist_script_optimization_stage(
         db.refresh(episode)
     except Exception:
         pass
+    persisted_at = ""
+    if str(node_output_key or "").strip() in {"", "script_optimization", "scene_split"}:
+        from app.core.persist_version import safe_stamp_script_optimization_persisted_at
+
+        persisted_at = safe_stamp_script_optimization_persisted_at(db, episode)
     logger.info(
-        "[analyze_scene.persist] stage=%s episode_id=%s field=ai_scene_analysis_adaptation chars=%s raw_chars=%s visual_backfill_chars=%s",
+        "[analyze_scene.persist] stage=%s episode_id=%s field=ai_scene_analysis_adaptation chars=%s raw_chars=%s visual_backfill_chars=%s persisted_at=%s",
         STAGE_SCRIPT_OPTIMIZATION,
         getattr(episode, "id", None),
         len(adapted_script or ""),
         len(result_content or ""),
         len(visual_backfill_json or ""),
+        persisted_at,
     )
     return {
         "stage_key": STAGE_SCRIPT_OPTIMIZATION,
         "saved_field": "ai_scene_analysis_adaptation",
         "saved_chars_readback": _read_persisted_chars(episode, "ai_scene_analysis_adaptation"),
         "saved_visual_backfill_chars": len(visual_backfill_json or ""),
+        "persisted_at": persisted_at,
     }
 
 
